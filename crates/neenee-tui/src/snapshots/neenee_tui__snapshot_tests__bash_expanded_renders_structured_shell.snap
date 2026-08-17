@@ -3,7 +3,7 @@ source: crates/neenee-tui/src/snapshot_tests.rs
 assertion_line: 281
 expression: "render_grid(&m, 80, 40)"
 ---
-- Run cargo test · failed 0ms
+▾ Run cargo test · failed 0ms
   $ cargo test
   running 3 tests
   ...

@@ -1,10 +1,10 @@
 //! Session-level AI title: domain vocabulary for the titling envoy
 //! (ADR-0022).
 //!
-//! Mirrors the split established by `session_review` (ADR-0016 / ADR-0018):
+//! Follows the bounded-envoy split of the retired `session_review` (ADR-0016):
 //! domain types and pure helpers live here in `neenee-contracts`, while the
 //! LLM-backed runner that drives the [`TITLE`](crate::TITLE) profile lives in
-//! `neenee-agent`. There is no trait here (unlike `SessionReview`) because a
+//! `neenee-agent`. There is no trait here because a
 //! title is a single concept rather than a set of extensible dimensions — the
 //! only shared logic is the pure post-processing that turns a model's free-form
 //! answer into a valid title string.

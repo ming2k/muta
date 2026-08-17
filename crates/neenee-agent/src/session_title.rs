@@ -1,10 +1,10 @@
 //! Session-level AI title runner (ADR-0022): the LLM-backed side of the
 //! [`TITLE`] profile.
 //!
-//! Mirrors the split established by [`crate::session_review`]: the domain
+//! Follows the bounded-envoy split (as the retired `session_review` did): the domain
 //! vocabulary and the pure post-processing ([`clean_title`]) live in
 //! `neenee-contracts`, while the provider call lives here next to the `Agent`.
-//! Like `session_review` this runs a bounded envoy of the primary agent,
+//! This runs a bounded envoy of the primary agent,
 //! but the title task is pure text-in/text-out — it needs no tools and no
 //! ReAct loop — so the runner is a single `Provider::chat` call framed by
 //! the [`TITLE`] profile's system prompt, not a full
@@ -53,10 +53,9 @@ impl Agent {
     /// and empty/unparseable answers all return `None` so the caller can leave
     /// the stored title untouched.
     ///
-    /// Runs against the session's own provider (`self.provider`), matching how
-    /// `run_session_review` shares the primary provider — neenee's catalog has
-    /// no "small model" concept, so a dedicated cheap channel is out of scope
-    /// (ADR-0022).
+    /// Runs against the session's own provider (`self.provider`) — neenee's
+    /// catalog has no "small model" concept, so a dedicated cheap channel is
+    /// out of scope (ADR-0022).
     pub async fn generate_title(&self, transcript: &[Message]) -> Option<String> {
         let excerpt = serialize_for_title(transcript, TRANSCRIPT_BUDGET_CHARS);
         if excerpt.trim().is_empty() {

@@ -584,7 +584,7 @@ impl EnvoyTool {
         // Resolve the bound profile's write grant (ADR-0028) against the
         // session's workspace root (falling back to the process cwd when no
         // root was captured) and set it on the child. All built-in profiles
-        // (EXPLORE/REVIEW/TITLE: empty `write_paths`) resolve to
+        // (EXPLORE/TITLE: empty `write_paths`) resolve to
         // `WriteScope::None`, consistent with their admission (no write tools
         // admitted anyway). The INTERACTIVE role carries an unrestricted
         // scope via its `Write` ceiling.

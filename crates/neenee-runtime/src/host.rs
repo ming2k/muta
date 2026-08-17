@@ -292,14 +292,16 @@ async fn run_inner(
         uds_path: bound_uds.clone(),
         version: Some(crate::serve::daemon_version().to_string()),
     };
-    let mut discovery_lease =
-        discovery::DiscoveryLease::new(match discovery::write_global(&record) {
+    let mut discovery_lease = discovery::DiscoveryLease::new(
+        match discovery::write_global(&record) {
             Ok(p) => Some(p),
             Err(e) => {
                 tracing::warn!(%e, "neenee serve: could not write discovery file");
                 None
             }
-        });
+        },
+        record.pid,
+    );
 
     // Foreground banner: where the daemon listens and how to reach it, on
     // stderr so piping stays clean.

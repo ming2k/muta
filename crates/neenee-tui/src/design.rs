@@ -11,6 +11,21 @@ pub(crate) const TRANSCRIPT_H_INSET: u16 = 2;
 /// inset rect.
 pub(crate) const TRANSCRIPT_BODY_LEADING_INDENT: u16 = 2;
 
+// ── Command card (ADR-0109) ────────────────────────────────────────────────
+// A command row is a *card*, not flat prose: it paints a full-width band
+// (`Theme::command_surface`) with a thick `┃` identity bar in the family
+// tone — the same card grammar the user-message panel, the code band, and
+// the notice card already speak. The geometry tokens below are that card's
+// shared contract, so every phase/layout of the command component renders
+// inside the same frame.
+
+/// Columns of card chrome before the disclosure marker / glyph: the `┃`
+/// identity bar (1) plus one gutter column (1). The marker column is
+/// reserved *inside* the card at a fixed offset for every phase — pending
+/// rows render a blank there — so a row never shifts horizontally when its
+/// reply settles or its layout class changes.
+pub(crate) const COMMAND_CARD_LEAD_COLS: usize = 2;
+
 /// Minimum readable width for compact expandable step header rows.
 pub(crate) const STEP_MIN_WIDTH: usize = 8;
 
@@ -28,6 +43,16 @@ pub(crate) const MESSAGE_GAP_ROWS: usize = 1;
 /// header labels the group but is not part of the component stack, so one row
 /// preserves the hierarchy without giving every child its own top margin.
 pub(crate) const TURN_HEADER_BODY_GAP_ROWS: usize = 1;
+
+/// Blank surface gap rows between a user message header (`< round N · HH:MM`)
+/// and its message body panel.
+pub(crate) const USER_MESSAGE_HEADER_BODY_GAP_ROWS: usize = 1;
+
+/// Lead glyph for sent user message headers, representing Unix stdin redirection (`<`).
+pub(crate) const USER_MESSAGE_GUTTER_GLYPH: &str = "<";
+
+/// Lead glyph for assistant turn headers, representing Unix stdout redirection (`>`).
+pub(crate) const AI_OUTPUT_LEAD_GLYPH: &str = ">";
 
 /// Vertical chrome rows around a sent user message panel: one top transition
 /// row and one bottom transition row.

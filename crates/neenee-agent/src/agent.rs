@@ -253,10 +253,6 @@ pub struct Agent {
     /// permission broker so broad approvals such as `bash *` cannot silently
     /// authorize destructive commands like `git reset --hard`.
     bash_policy: std::sync::RwLock<crate::bash_policy::BashPolicy>,
-    /// Registered review dimensions evaluated by the on-demand diagnostic
-    /// envoy (`/review`). Defaults to [`crate::default_reviews`] (looping);
-    /// empty on envoys (which have no `/review` path).
-    reviews: Vec<Arc<dyn SessionReview>>,
     /// Runtime operation boundary for this agent (ADR-0028). The main agent is
     /// unrestricted ([`neenee_contracts::OperationScope::unrestricted`]); an envoy
     /// carries the scope resolved from its profile's `write_paths` and
@@ -911,7 +907,6 @@ impl Agent {
             allow_model_stdin: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             skip_interactive_input: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             bash_policy: std::sync::RwLock::new(crate::bash_policy::BashPolicy::default()),
-            reviews: crate::default_reviews(),
             operation_scope: std::sync::Mutex::new(neenee_contracts::OperationScope::unrestricted()),
             hooks: crate::hook_runner::HookRunner::new(),
             inbox_tx: std::sync::Mutex::new(None),
@@ -1138,18 +1133,6 @@ impl Agent {
             .hard_stop_turns
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// The review dimensions effective for this agent: its registered set, or
-    /// the built-in defaults ([`crate::default_reviews`]) when none are
-    /// registered. Centralizes the "empty → default" fallback so the runner in
-    /// `session_review` does not touch private fields.
-    pub(crate) fn effective_reviews(&self) -> Vec<Arc<dyn SessionReview>> {
-        if self.reviews.is_empty() {
-            crate::default_reviews()
-        } else {
-            self.reviews.to_vec()
-        }
     }
 
     /// Replace the live doom-guard configuration atomically. The next round
@@ -3209,9 +3192,6 @@ impl Agent {
     /// a terminal `HarnessError` via [`Self::hard_stop_error`]. The default
     /// budget (`0`) keeps the round uncapped, exactly matching ADR-0009.
     ///
-    /// Session review no longer fires automatically from the loop: it is on-demand via
-    /// `/review` ([`Self::review_now`]), which runs the diagnostic envoy
-    /// against the live transcript and reports a verdict without aborting.
     fn check_hard_stop(&self, turns: usize) -> std::ops::ControlFlow<()> {
         let budget = self.get_hard_stop_turns();
         if budget > 0 && turns >= budget {
@@ -3232,59 +3212,6 @@ impl Agent {
              turns was reached. This budget is opt-in (`hard_stop_turns`); \
              raise it or set it to 0 (the default) for an uncapped round."
         ))
-    }
-
-    /// Collapse a set of review verdicts into one human-facing alert string.
-    /// Empty when every dimension is healthy (the TUI treats empty as "clear
-    /// any prior alert"). Otherwise the worst status wins, with each
-    /// non-healthy dimension's detail folded in. The turn count gives the user
-    /// a sense of how long the round has run. Associated (no `&self`) so
-    /// the `/review` handler and tests can call it without an `Agent` handle.
-    pub fn render_review_alert(verdicts: &[ReviewVerdict], turns: usize) -> String {
-        let worst = verdicts.iter().map(|v| v.status).max();
-        match worst {
-            None | Some(ReviewStatus::Healthy) => String::new(),
-            Some(status) => {
-                let label = status.label();
-                let turn_unit = if turns == 1 { "turn" } else { "turns" };
-                let details: Vec<&str> = verdicts
-                    .iter()
-                    .filter(|v| v.status != ReviewStatus::Healthy && !v.detail.trim().is_empty())
-                    .map(|v| v.detail.trim())
-                    .collect();
-                if details.is_empty() {
-                    format!("review: {label} · {turns} {turn_unit} — Esc to interrupt")
-                } else {
-                    format!(
-                        "review: {label} · {turns} {turn_unit} — {} — Esc to interrupt",
-                        details.join("; ")
-                    )
-                }
-            }
-        }
-    }
-
-    /// On-demand session review (ADR-0018): run the bounded read-only
-    /// diagnostic envoy against `messages` and return one verdict per
-    /// registered dimension. Driven by the `/review` command — the harness no
-    /// longer fires review on a turn cadence. Safe to call while a round is
-    /// running: the reviewer is an independent child agent that only reads a
-    /// transcript snapshot and cannot mutate the parent's round state.
-    pub async fn review_now(&self, messages: &[Message]) -> Vec<ReviewVerdict> {
-        let turns = Self::estimate_completed_turns(messages);
-        self.run_session_review(messages, turns).await
-    }
-
-    /// Rough count of tool-carrying turns represented by `messages`: the
-    /// number of assistant messages that carry tool calls. Used to label
-    /// on-demand review output with a sense of how long the round has run.
-    pub fn estimate_completed_turns(messages: &[Message]) -> usize {
-        messages
-            .iter()
-            .filter(|m| {
-                m.role == Role::Assistant && m.tool_calls.as_ref().is_some_and(|c| !c.is_empty())
-            })
-            .count()
     }
 
     /// Emit a [`AgentEvent::TodosUpdated`] snapshot whenever a tool mutates

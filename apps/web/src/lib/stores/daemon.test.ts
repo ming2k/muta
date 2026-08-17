@@ -499,7 +499,7 @@ describe("DaemonStore wire protocol", () => {
   });
 
   describe("state events", () => {
-    it("folds HarnessState/AutopilotChanged/RoundCompleted/Activity/SessionReview/Compacted", () => {
+    it("folds HarnessState/AutopilotChanged/RoundCompleted/Activity/Compacted", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
@@ -535,11 +535,6 @@ describe("DaemonStore wire protocol", () => {
       });
       expect(store.roundCounter).toBe(1);
       expect(store.activity).toBeNull();
-
-      roundEvent(session, { SessionReview: { alert: "looping" } });
-      expect(store.reviewAlert).toBe("looping");
-      roundEvent(session, { SessionReview: { alert: "" } });
-      expect(store.reviewAlert).toBeNull(); // empty alert clears the banner
 
       roundEvent(session, {
         Compacted: { archived_messages: 3, before_chars: 1000, after_chars: 200 },

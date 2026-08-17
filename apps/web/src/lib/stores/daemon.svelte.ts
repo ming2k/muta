@@ -289,8 +289,6 @@ export class DaemonStore {
   public currentTurn = $state<number | null>(null);
   /** Per-round accounting from the last naturally completed round. */
   public lastRound = $state<RoundSummary | null>(null);
-  /** Retained session-review alert; `null` when no concern is active. */
-  public reviewAlert = $state<string | null>(null);
 
   /** Current provider/model from Welcome, updated by ProviderSwitched. */
   public providerInfo = $state<{ provider: string; model: string } | null>(null);
@@ -843,9 +841,6 @@ export class DaemonStore {
         "Context compacted",
         `${c.archived_messages} messages archived (${c.before_chars} → ${c.after_chars} chars).`,
       );
-    } else if ("SessionReview" in event) {
-      // Empty alert clears any prior banner.
-      this.reviewAlert = event.SessionReview.alert || null;
     } else if ("RetryScheduled" in event) {
       const r = event.RetryScheduled;
       this.pushToast(
@@ -989,11 +984,6 @@ export class DaemonStore {
   private handleNotice(notice: AgentNotice) {
     const severity =
       notice.severity === "error" ? "error" : notice.severity === "warning" ? "warning" : "info";
-    if (notice.kind === "review_alert") {
-      // Review alerts are retained banners, not transient toasts.
-      this.reviewAlert = notice.body ?? notice.title;
-      return;
-    }
     this.pushToast(severity, notice.title, notice.body);
   }
 
@@ -1132,10 +1122,6 @@ export class DaemonStore {
     this.toasts = this.toasts.filter((t) => t.id !== id);
   }
 
-  public dismissReviewAlert() {
-    this.reviewAlert = null;
-  }
-
   private feedKey(): string {
     return `f${this.nextFeedKey++}`;
   }
@@ -1167,7 +1153,6 @@ export class DaemonStore {
     this.activity = null;
     this.currentTurn = null;
     this.lastRound = null;
-    this.reviewAlert = null;
     this.providerInfo = null;
     this.providerPicker = null;
     this.providerKeys = [];

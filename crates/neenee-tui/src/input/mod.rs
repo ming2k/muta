@@ -1434,6 +1434,11 @@ pub fn process_event(
                                     "/tools" => InputAction::OpenTools,
                                     "/mcp" => InputAction::OpenMcp,
                                     "/skills" => InputAction::OpenSkills,
+                                    // Bare `/config` opens the manager modal
+                                    // locally; `/config reload` (and any other
+                                    // argument form) is a backend command —
+                                    // it falls through to SendSlash like
+                                    // `/skills reload` does.
                                     "/config" => InputAction::OpenConfig,
                                     "/exit" => InputAction::Quit,
                                     _ => InputAction::SendSlash(text),

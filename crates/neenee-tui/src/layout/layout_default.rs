@@ -18,10 +18,10 @@
 //! a single-line header:
 //!
 //! ```text
-//! ◆ turn 2 · sonnet
+//! > turn 2 · sonnet
 //! ```
 //!
-//! rendered in an info-tone bold for the `◆ turn N` anchor and muted for the
+//! rendered in an info-tone bold for the `> turn N` anchor and muted for the
 //! rest, using foreground color only — no background band. The header is
 //! composed from the shared `MetaStrip` component
 //! (`render/components/meta_strip.rs`), so this two-tone "anchor · detail"
@@ -33,6 +33,7 @@
 use neenee_tui_engine::Rect;
 
 use crate::components::meta_strip::{MetaStrip, MetaTone};
+use crate::design::AI_OUTPUT_LEAD_GLYPH;
 use crate::model::document::TranscriptMessage;
 use crate::time::sent_time_label;
 
@@ -87,7 +88,7 @@ impl TranscriptLayout for Default {
     }
 }
 
-/// Paint the turn header row: `◆ turn N · model · HH:MM`, info-tone bold
+/// Paint the turn header row: `> turn N · model · HH:MM`, info-tone bold
 /// anchor with muted metadata, no background band. The caller inserts the
 /// standard header-to-body gap before the group's first component.
 fn draw_turn_header(stream: &mut Stream<'_, '_>, turn: u64, msg: &TranscriptMessage) {
@@ -104,12 +105,13 @@ fn draw_turn_header(stream: &mut Stream<'_, '_>, turn: u64, msg: &TranscriptMess
 
     let band = stream.band;
 
-    // Two-tone label, no background band: `◆ turn N` is the info-tone
+    // Two-tone label, no background band: `> turn N` is the info-tone
     // anchor, the rest (model, send time) reads as muted metadata on the
     // same line. The strip component keeps this treatment shared with sent
     // user-message headers.
+    let lead = format!("{AI_OUTPUT_LEAD_GLYPH} ");
     let mut strip = MetaStrip::new()
-        .lead("◆ ", MetaTone::Accent)
+        .lead(lead, MetaTone::Accent)
         .anchor(format!("turn {}", turn));
 
     if let Some(name) = msg

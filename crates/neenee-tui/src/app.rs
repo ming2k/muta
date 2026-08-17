@@ -470,10 +470,6 @@ pub struct App {
     /// from the response listener; shown in the Activity modal as
     /// `round N · turn M · <status>`.
     pub current_turn: u64,
-    /// Session-review alert (ADR-0016), or empty when inactive. While
-    /// non-empty the activity bar appends a `⚠ <alert> — Esc to interrupt`
-    /// segment. Mirrored each frame from the response listener.
-    pub review_alert: String,
     /// Wall-clock instant the current round started, or `None` between rounds.
     /// Drives the muted `<elapsed>` segment in the activity bar.
     pub round_started_at: Option<std::time::Instant>,

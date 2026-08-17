@@ -397,12 +397,12 @@ fn command_rows_tail_when_dialogue_has_no_timestamps() {
         TranscriptMessage::new(Role::Assistant, "reply"),
     ];
     let commands = crate::transcript::transcript_commands_from_ledger(vec![
-        neenee_contracts::CommandRecord::new("review", "").with_timestamp(123),
+        neenee_contracts::CommandRecord::new("compact", "").with_timestamp(123),
     ]);
 
     let merged = merge_command_rows(dialogue, commands);
     let texts: Vec<&str> = merged.iter().map(|m| m.raw.as_str()).collect();
-    assert_eq!(texts, vec!["prompt", "reply", "/review"]);
+    assert_eq!(texts, vec!["prompt", "reply", "/compact"]);
 }
 
 #[test]
@@ -871,9 +871,9 @@ fn resolved_slash_len_matches_builtin_command_without_args() {
 
 #[test]
 fn resolved_slash_len_covers_only_the_command_token_not_args() {
-    // `/session new` — only `/session` (8 bytes) is the resolved command;
+    // `/sessions abc` — only `/sessions` (9 bytes) is the resolved command;
     // the argument tail is excluded so the accent stops at the token.
-    assert_eq!(resolved_slash_command_len("/session new", &[]), Some(8));
+    assert_eq!(resolved_slash_command_len("/sessions abc", &[]), Some(9));
 }
 
 #[test]
@@ -945,14 +945,14 @@ fn completions_trigger_word_suggestion_precedes_prefix_matches() {
 }
 
 #[test]
-fn completions_continue_trigger_suggests_resume() {
+fn completions_continue_trigger_suggests_sessions() {
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
     app.input = "/continue".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     assert_eq!(
         completions.first().map(|c| c.label.as_str()),
-        Some("/resume")
+        Some("/sessions")
     );
 }
 
@@ -1338,7 +1338,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         todos: None,
         round_count: 0,
         current_turn: 0,
-        review_alert: String::new(),
         round_started_at: None,
         activity_tab: ActivityTab::Activity,
         activity_scroll: 0,
@@ -2940,6 +2939,80 @@ fn recall_queued_latches_completion_dismissal() {
     assert!(
         !app.completions().is_empty(),
         "`/help` should have candidates"
+    );
+}
+
+/// ADR-0110: dispatching a slash command must not arm the activity bar's
+/// liveness surface. A command is a synchronous control-plane operation
+/// outside the round state machine — no `is_responding`, no optimistic
+/// `"queued"` label (which would also fabricate an `Esc Esc interrupt`
+/// affordance over a dispatch that cannot be interrupted), and no running-
+/// session bookkeeping. The pending command row is the command's in-flight
+/// feedback (ADR-0108); this locks the bar against ever lighting for it.
+#[tokio::test]
+async fn slash_dispatch_never_arms_activity_state() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+    let session = crate::SessionSource::Remote {
+        session_id: "session-a".to_string(),
+    };
+
+    super::event_loop::handle_send_slash(&mut app, &runtime, &session, "/autopilot on".to_string())
+        .await;
+
+    assert!(
+        !runtime
+            .is_responding
+            .load(std::sync::atomic::Ordering::SeqCst),
+        "a command must not arm is_responding"
+    );
+    assert!(
+        runtime.activity_status.lock().await.is_empty(),
+        "a command must not paint an optimistic activity label"
+    );
+    assert!(
+        !app.running_sessions.contains("session-a"),
+        "a command must not mark the session as running"
+    );
+    // The in-flight feedback is the pending command row, not the bar.
+    let messages = runtime.messages.read().await.clone();
+    assert!(
+        messages
+            .last()
+            .is_some_and(|message| message.is_command_result()
+                && message.command_result_phase()
+                    == Some(crate::model::document::CommandPhase::Pending)),
+        "dispatch must push the pending command row (ADR-0108)"
+    );
+}
+
+/// ADR-0110, `/serve` branch: the frontend-only interception also performs no
+/// activity-state retirement, because nothing was ever armed — and the row it
+/// settles completes inline rather than lingering as a promise.
+#[tokio::test]
+async fn serve_interception_completes_row_without_activity_retirement() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+    let session = crate::SessionSource::Remote {
+        session_id: "session-a".to_string(),
+    };
+
+    super::event_loop::handle_send_slash(&mut app, &runtime, &session, "/serve".to_string()).await;
+
+    assert!(
+        !runtime
+            .is_responding
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
+    assert!(runtime.activity_status.lock().await.is_empty());
+    let messages = runtime.messages.read().await.clone();
+    assert!(
+        messages
+            .last()
+            .is_some_and(|message| message.is_command_result()
+                && message.command_result_phase()
+                    == Some(crate::model::document::CommandPhase::Completed)),
+        "`/serve` settles its row inline with the reply"
     );
 }
 

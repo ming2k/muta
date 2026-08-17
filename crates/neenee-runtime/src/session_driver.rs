@@ -242,10 +242,13 @@ impl SessionDriver {
             // Requests that own the round lifecycle close their own activity
             // resolution: the round task (or the shell-command round) always
             // emits a terminal `HarnessState(Idle)` on exit. Every other
-            // request is a control-plane op that does not, so the TUI's
-            // optimistic "queued" state (set at dispatch time) would stick
-            // forever unless the driver reconciles it. See the reconcile
-            // below the match and ADR-0091.
+            // request is a control-plane op that does not. The TUI no longer
+            // arms optimistic activity state for control-plane dispatches at
+            // all (ADR-0110: a command is outside the round state machine),
+            // but other frontends may still paint their own optimistic
+            // state, so the driver keeps reconciling every non-round request
+            // back to the authoritative harness state — see the reconcile
+            // below the match and ADR-0091/0110.
             let reconcile_activity = needs_activity_reconcile(&req, &lifecycle).await;
             match req {
                 AgentRequest::Interrupt => {
@@ -675,20 +678,19 @@ impl SessionDriver {
             }
 
             // ── Activity-state reconcile (ADR-0091) ──────────────────────
-            // The TUI optimistically marks a dispatch "queued" (is_responding
-            // + activity_status) at send time. Round-owned requests resolve
-            // themselves via the round task's terminal `HarnessState(Idle)`.
-            // Control-plane requests must be resolved here instead: re-publish
-            // the authoritative harness state now that the handler has run.
-            // When a round is live the reconcile is a no-op (the round's own
-            // events own the display — and re-emitting a running snapshot
-            // would reset the TUI's round timer/turn counters); when idle it
-            // is `HarnessState(Idle)`, which the TUI maps to "collapse the
-            // activity bar". This makes "every dispatched request lands the
-            // harness back in its authoritative state" a structural invariant
-            // rather than a per-handler courtesy (the previous design left a
-            // handler that emitted no terminal event — e.g. `/autopilot`'s
-            // toast-only reply — with the bar stuck on "● queued").
+            // Round-owned requests resolve themselves via the round task's
+            // terminal `HarnessState(Idle)`. Control-plane requests must be
+            // resolved here instead: re-publish the authoritative harness
+            // state now that the handler has run. When a round is live the
+            // reconcile is a no-op (the round's own events own the display —
+            // and re-emitting a running snapshot would reset the TUI's round
+            // timer/turn counters); when idle it is `HarnessState(Idle)`,
+            // which the TUI maps to "collapse the activity bar". This keeps
+            // "every dispatched request lands the harness back in its
+            // authoritative state" a structural invariant regardless of what
+            // a frontend optimistically painted (the TUI itself no longer
+            // arms anything for control-plane dispatches — ADR-0110 — so for
+            // it this reconcile is a no-op safety net).
             if reconcile_activity {
                 send_harness_state(&resp_tx, &session.id().await, &agent, LoopStatus::Idle);
             }

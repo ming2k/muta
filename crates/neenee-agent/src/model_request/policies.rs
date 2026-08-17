@@ -13,8 +13,6 @@
 //! that need a visual gap include a leading `\n` in their own `render`, so
 //! joining on a single `\n` preserves a stable layout.
 use crate::{SystemPromptContext, SystemPromptRegistry, SystemPromptSection};
-use neenee_contracts::{REVIEW, SessionReview};
-use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Default system-prompt sections.
@@ -242,110 +240,5 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(AutopilotGuidance);
     registry.register(DelegationGuidance);
     registry.register(FileEditingGuidance);
-    registry
-}
-
-// ---------------------------------------------------------------------------
-// Session-review system-prompt sections (ADR-0039 stage 6).
-//
-// The `/review` diagnostic spawns a read-only reviewer envoy that used to
-// pre-seed its system message (`build_reviewer_system_prompt`) and then run
-// the streaming turn loop. Request assembly projects any pre-seeded system
-// message out, so the seeded persona + dimensions + JSON contract were
-// replaced by the default registry's tone+todo and never reached the model —
-// the feature limped along only because verdict parsing degrades gracefully.
-// Give the reviewer a dedicated registry whose composition IS the review
-// prompt, so the request-scoped message is correct by construction.
-// ---------------------------------------------------------------------------
-
-/// The [`REVIEW`] role framing.
-struct ReviewPersona;
-
-impl SystemPromptSection for ReviewPersona {
-    fn id(&self) -> &'static str {
-        "review.persona"
-    }
-    fn rank(&self) -> u32 {
-        10
-    }
-    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
-        Some(String::from(REVIEW.system_prompt))
-    }
-}
-
-/// The list of registered review dimensions to evaluate, pre-rendered from
-/// the live `[SessionReview]` set. Carried as owned text because the dimension
-/// list is bespoke per `/review` run and does not fit the shared
-/// [`SystemPromptContext`].
-struct ReviewDimensions {
-    body: String,
-}
-
-impl SystemPromptSection for ReviewDimensions {
-    fn id(&self) -> &'static str {
-        "review.dimensions"
-    }
-    fn rank(&self) -> u32 {
-        20
-    }
-    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
-        Some(self.body.clone())
-    }
-}
-
-/// The exact JSON verdict contract the runner parses. Pinned here so prompting
-/// and parsing stay in sync.
-struct ReviewJsonContract;
-
-const REVIEW_JSON_CONTRACT: &str = "Return ONLY a JSON object (no markdown, no prose) of this exact shape:\n\
-     {\"verdicts\":[{\"dimension\":\"<id>\",\"status\":\"healthy|watch|stuck\",\
-     \"detail\":\"<one short sentence>\"}]}\n\
-     Use status \"healthy\" when there is no concern, \"watch\" when progress is \
-     slow or risky but not stuck, and \"stuck\" only when the agent is clearly \
-     looping without converging. Include one entry per dimension.";
-
-impl SystemPromptSection for ReviewJsonContract {
-    fn id(&self) -> &'static str {
-        "review.json_contract"
-    }
-    fn rank(&self) -> u32 {
-        30
-    }
-    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
-        Some(String::from(REVIEW_JSON_CONTRACT))
-    }
-}
-
-/// Render the registered dimensions as the bulleted list the reviewer sees
-/// between the persona and the JSON contract.
-fn render_review_dimensions(dimensions: &[Arc<dyn SessionReview>]) -> String {
-    let mut body = String::from(
-        "You are evaluating the health of another agent's turn. Assess each of \
-         these dimensions:\n\n",
-    );
-    for dim in dimensions {
-        body.push_str(&format!(
-            "- `{}` — {}. {}\n",
-            dim.id(),
-            dim.label(),
-            dim.instruction()
-        ));
-    }
-    body
-}
-
-/// Build the reviewer envoy's prompt registry: persona + dimensions + JSON
-/// contract. Installed on the reviewer via
-/// [`crate::AgentBuilder::with_system_prompt_registry`] so its head system message —
-/// rebuilt every round — is the review composition.
-pub(crate) fn reviewer_system_prompt_registry(
-    dimensions: &[Arc<dyn SessionReview>],
-) -> SystemPromptRegistry {
-    let mut registry = SystemPromptRegistry::new();
-    registry.register(ReviewPersona);
-    registry.register(ReviewDimensions {
-        body: render_review_dimensions(dimensions),
-    });
-    registry.register(ReviewJsonContract);
     registry
 }

@@ -80,7 +80,6 @@ pub mod host;
 pub mod monitor;
 pub mod project;
 pub mod registry;
-pub mod review;
 pub mod serve;
 pub mod serve_discovery;
 pub mod serve_http;

@@ -51,6 +51,7 @@ moves. See [ADR-0008](../../adr/0008-single-breathing-anchor.md).
 | Idle | No — the row returns to the transcript (the task list lives on the [todo bar](todo-bar.md)) |
 | Streaming assistant text ("responding") | Yes — the bar stays up across the whole round lifecycle, sustaining the breathing-dot liveness anchor (ADR-0008) through the longest phase |
 | Running tool / queued / waiting | Yes |
+| Slash command dispatched (harness idle) | No — a command is a synchronous control-plane operation outside the round state machine, so it never arms the bar; its in-flight state is the pending command row in the transcript ([ADR-0110](../../adr/0110-commands-do-not-trigger-the-activity-bar.md)) |
 | Overlay modal open | No |
 
 The bar persists from round start (user submits) through every phase —
@@ -78,7 +79,7 @@ session.
 
 | Tool / phase | Label |
 |--------------|-------|
-| Queued | `queued` |
+| Queued (a chat round admitted, not yet running) | `queued` |
 | Waiting for provider | `waiting for model` |
 | `read_file` / `list_dir` / `use_skill` | `exploring` |
 | `grep` | `searching codebase` |

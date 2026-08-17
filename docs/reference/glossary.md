@@ -64,7 +64,6 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **profile** | A declarative bundle (name, system-prompt fragment, and a `ToolPolicy`) that scopes an envoy's behavior; bound by reference by dispatch tools. [Envoys](../explanation/agent-design/envoys.md) |
 | **`EXPLORE` profile** | Research role: `Read` ceiling, no write grant; pure read tools. Bound by the `envoy` tool. [Envoys](../explanation/agent-design/envoys.md) |
 | **`CODE` profile** | Coding role: write-capable (admits `bash`/`edit_file`/`write_file`). Runs autopilot like every built-in envoy — the delegation via `envoy_code` is the authorization. Bound by the `envoy_code` tool. [ADR-0087](../adr/0087-code-envoy-runs-autopilot.md) |
-| **`REVIEW` profile** | Read-only transcript auditor role used by the session-review diagnostic. [ADR-0016](../adr/0016-session-review-over-round-counting.md) |
 | **`TITLE` profile** | Read-only role used to generate a session title in a single model call. [ADR-0022](../adr/0022-session-level-ai-title.md) |
 | **full-duplex** | An envoy is not fire-and-forget: requests travel up to the parent, replies travel down to the exact child. [ADR-0029](../adr/0029-full-duplex-subagent-communication.md) |
 

@@ -1042,7 +1042,6 @@ components:
         - { $ref: '#/components/schemas/EventHarnessState' }
         - { $ref: '#/components/schemas/EventTodosUpdated' }
         - { $ref: '#/components/schemas/EventAutopilotChanged' }
-        - { $ref: '#/components/schemas/EventSessionReview' }
         - { $ref: '#/components/schemas/EventRetryScheduled' }
         - { $ref: '#/components/schemas/EventActivity' }
         - { $ref: '#/components/schemas/EventTurnStarted' }
@@ -1155,16 +1154,6 @@ components:
       properties: { TodosUpdated: { $ref: '#/components/schemas/TodoList' } }
       additionalProperties: false
     EventAutopilotChanged: { type: object, required: [AutopilotChanged], properties: { AutopilotChanged: { type: boolean } }, additionalProperties: false }
-    EventSessionReview:
-      type: object
-      required: [SessionReview]
-      properties:
-        SessionReview:
-          type: object
-          required: [alert]
-          properties: { alert: { type: string } }
-          additionalProperties: false
-      additionalProperties: false
     EventRetryScheduled:
       type: object
       required: [RetryScheduled]

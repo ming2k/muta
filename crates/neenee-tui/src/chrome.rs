@@ -148,7 +148,6 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 pub fn draw_activity_bar(
     frame: &mut Frame,
     rect: Rect,
-    review_alert: &str,
     round_started_at: Option<Instant>,
     status: &str,
     awaiting_permission: bool,
@@ -156,7 +155,7 @@ pub fn draw_activity_bar(
     theme: &Theme,
 ) -> Option<Rect> {
     // The bar is a single transient LEFT segment (spinner + shimmering status
-    // + elapsed/interrupt hint + pursuit + review alert) shown only while a
+    // + elapsed/interrupt hint + pursuit) shown only while a
     // turn is active. With nothing to report it is hidden entirely.
     let status_active = !status.is_empty() && status != "idle";
     let dim = Style::default().fg(theme.muted());
@@ -254,33 +253,6 @@ pub fn draw_activity_bar(
         spans.push(keycap_span(theme, Key::ESC.display()));
         spans.push(Span::styled(" ", dim));
         spans.push(keycap_span(theme, Key::ESC.display()));
-    }
-
-    // Session-review alert (ADR-0016): surfaced when a periodic diagnostic
-    // judged the turn watch-worthy or stuck. Rendered with the same breathing
-    // luminance sweep as the running-indicator dot so the alert pulses gently
-    // rather than sitting as a flat warning chip — the motion draws the eye
-    // without being frantic. The interrupt hint before it already tells the
-    // user how to stop the turn. Empty alert = clear (nothing rendered).
-    if !review_alert.is_empty() {
-        let warn = breathing_color(spinner_phase, theme.warning, theme.surface());
-        // U+FE0E (text presentation selector) forces the warning sign to
-        // render as a 1-cell text glyph; without it some terminals pick
-        // emoji presentation (2 cells) while `unicode-width` counts 1,
-        // leaving a stray cell / misaligned right-pin.
-        let alert = format!("⚠\u{FE0E} {review_alert}");
-        let alert_width = UnicodeWidthStr::width("  ") + UnicodeWidthStr::width(alert.as_str());
-        let used_width: usize = spans
-            .iter()
-            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-            .sum();
-        if used_width + alert_width <= available_width {
-            spans.push(Span::raw("  "));
-            spans.push(Span::styled(
-                alert,
-                Style::default().fg(warn).add_modifier(Modifier::BOLD),
-            ));
-        }
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
@@ -1337,7 +1309,6 @@ mod tests {
             draw_activity_bar(
                 frame,
                 Rect::new(0, 0, width, 1),
-                "",
                 None,
                 status,
                 false,
@@ -1362,7 +1333,6 @@ mod tests {
             draw_activity_bar(
                 frame,
                 Rect::new(0, 0, width, 1),
-                "",
                 None,
                 status,
                 awaiting,
@@ -1541,7 +1511,6 @@ mod tests {
             draw_activity_bar(
                 frame,
                 Rect::new(0, 0, 80, 1),
-                "",
                 None,
                 "Working",
                 false,
@@ -1566,7 +1535,6 @@ mod tests {
             draw_activity_bar(
                 frame,
                 Rect::new(0, 0, 36, 1),
-                "",
                 None,
                 "retrying a provider request after a detailed transient failure",
                 false,

@@ -157,22 +157,15 @@ The guard is deterministic bookkeeping with no model call, but signature
 normalization is intentionally conservative: operations on the same target may
 collide even when secondary arguments differ. It is therefore an advanced,
 default-off policy configured through `[principal.nudge]`, not a routine TUI
-preference. Envoys and `/review` force it off. See the
+preference. Envoys force it off. See the
 [Configuration Reference](../../reference/configuration.md#agent-behavior).
 
-### Session review (ADR-0016)
-
-Because an uncapped loop can still *appear* stuck, `/review` runs an
-**on-demand session-review** diagnostic over the current round. It spawns a
-bounded read-only `REVIEW` envoy, returns one verdict per registered dimension,
-and never aborts or automatically steers the live round. There is no periodic
-review cadence and legacy `[agent.review]` settings are ignored.
+### Execution bounds
 
 The only execution cap is an explicit, opt-in `hard_stop_turns` (default **0**
 = off); a finite value is a user-declared budget and the sole thing that
-hard-stops a round. Envoys do not expose their own `/review` path.
-
-Invoke it with the no-argument `/review` slash command.
+hard-stops a round. (The former `/review` on-demand diagnostic — a read-only
+reviewer envoy over the live transcript — has been retired.)
 
 These are execution bounds, not a security sandbox. Tool permission policy is
 a separate future layer.
@@ -227,13 +220,13 @@ branch snapshots under `sessions/<id>.json`:
 - Commit replaces shared history and writes the full tool/assistant result.
 - Startup restores visible messages, reconstructing native tool-call entries
   while filtering system and hidden harness prompts.
-- `/session fork` creates a child with the same transcript and clears its loop
-  checkpoint; `/session list` and `/session open <id-prefix>` allow branch
-  navigation.
+- `/fork` creates a child with the same transcript and clears its loop
+  checkpoint; `/sessions <id-prefix>` opens a prior branch directly, and the
+  `/sessions` picker is the browse surface.
 - Each round records its admission session id and refuses a late commit after a
   session switch.
 
-`/session new` cancels old work and creates a fresh session id.
+`/new` cancels old work and creates a fresh session id.
 
 ## Context projection
 

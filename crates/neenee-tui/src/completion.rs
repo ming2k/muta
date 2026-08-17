@@ -526,20 +526,35 @@ impl App {
             .collect();
         }
 
-        if let Some(after) = current.strip_prefix("/session ") {
+        if let Some(after) = current.strip_prefix("/config ") {
             return [
-                ("/session status", "Show session id and loop checkpoint"),
-                ("/session list", "List durable session branches"),
                 (
-                    "/session resume",
-                    "Resume the most recent or selected session",
+                    "/config reload",
+                    "Re-read config.toml and apply the diff live (MCP, permissions, bash policy, hooks)",
                 ),
-                ("/session fork", "Fork the current conversation"),
-                ("/session new", "Start a new durable session"),
             ]
             .iter()
             .filter(|(cmd, _)| {
-                cmd.strip_prefix("/session ")
+                cmd.strip_prefix("/config ")
+                    .map(|sub| sub.starts_with(after))
+                    .unwrap_or(false)
+            })
+            .map(|(cmd, desc)| Completion::whole_input(cmd, desc, self.input.len()))
+            .collect();
+        }
+
+        if let Some(after) = current.strip_prefix("/sessions ") {
+            // `/sessions <id>`: no canned subcommand list — the argument is a
+            // session id (prefix), and the picker is the id-discovery surface.
+            // Only the bare command is offered so `Tab` completes the command
+            // itself, never a fabricated id.
+            return [(
+                "/sessions",
+                "Browse past sessions; /sessions <id> opens that session",
+            )]
+            .iter()
+            .filter(|(cmd, _)| {
+                cmd.strip_prefix("/sessions")
                     .map(|sub| sub.starts_with(after))
                     .unwrap_or(false)
             })

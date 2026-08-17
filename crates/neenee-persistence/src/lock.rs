@@ -33,28 +33,75 @@ impl ProcessLock {
     pub fn acquire(path: &Path) -> Result<Self, String> {
         #[cfg(unix)]
         {
+            use std::fs::OpenOptions;
+            use std::io::{Seek, SeekFrom, Write};
             use std::os::unix::io::AsRawFd;
 
-            let file = File::create(path).map_err(|error| {
-                format!("could not open lock file {}: {}", path.display(), error)
-            })?;
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(path)
+                .map_err(|error| {
+                    format!("could not open lock file {}: {}", path.display(), error)
+                })?;
             let fd = file.as_raw_fd();
             let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
             if rc < 0 {
                 let err = std::io::Error::last_os_error();
+                let holder = Self::probe_holder(path)
+                    .map(|pid| format!("; held by pid {pid}"))
+                    .unwrap_or_default();
                 return Err(format!(
-                    "could not acquire advisory lock on {}: {} \
+                    "could not acquire advisory lock on {}: {}{holder} \
                      (another neenee instance may already be running for this project)",
                     path.display(),
                     err
                 ));
             }
+            let _ = file.set_len(0);
+            let _ = file.seek(SeekFrom::Start(0));
+            let _ = writeln!(file, "{}", std::process::id());
+            let _ = file.flush();
             Ok(Self { file })
         }
         #[cfg(not(unix))]
         {
             let _ = path;
             Ok(Self { _marker: () })
+        }
+    }
+
+    /// Read the PID stored inside `path` by the acquiring process, if readable.
+    pub fn probe_holder(path: &Path) -> Option<u32> {
+        let s = std::fs::read_to_string(path).ok()?;
+        s.trim().parse::<u32>().ok()
+    }
+
+    /// Probe whether `path` is currently locked by testing a non-blocking `flock`.
+    pub fn is_locked(path: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            use std::fs::OpenOptions;
+            use std::os::unix::io::AsRawFd;
+            if let Ok(file) = OpenOptions::new().read(true).write(true).open(path) {
+                let fd = file.as_raw_fd();
+                let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+                if rc == 0 {
+                    let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
+                    false
+                } else {
+                    true
+                }
+            } else {
+                false
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            false
         }
     }
 
@@ -155,6 +202,25 @@ mod tests {
             ProcessLock::acquire_with_timeout(&path, std::time::Duration::from_millis(150));
         assert!(second.is_err(), "contended acquire should time out");
         drop(held);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_holder_and_is_locked_report_state() {
+        let dir = std::env::temp_dir().join(format!("neenee-lock-probe-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("daemon.lock");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(!ProcessLock::is_locked(&path));
+        assert_eq!(ProcessLock::probe_holder(&path), None);
+
+        let lock = ProcessLock::acquire(&path).expect("acquire lock");
+        assert!(ProcessLock::is_locked(&path));
+        assert_eq!(ProcessLock::probe_holder(&path), Some(std::process::id()));
+
+        drop(lock);
+        assert!(!ProcessLock::is_locked(&path));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

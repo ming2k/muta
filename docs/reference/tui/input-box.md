@@ -114,12 +114,12 @@ The rows `↑`/`↓` walk are **bound to the session, not the client window**:
   backfill** — the genuine chat prompts of the conversation on screen, rebuilt
   from the session file. The backfill is derived state and never persisted: the
   session file already is the durable record.
-- **Resuming restores history.** After `neenee resume`, `/resume`,
-  `/session open`, or picking a session from `/sessions`, the transcript's own
+- **Resuming restores history.** After `neenee resume`, `/sessions <id>`, or
+  picking a session from `/sessions`, the transcript's own
   prompts are backfilled automatically — including turns typed in another
   client or before this client's `history.json` existed. `↑` in a resumed
   session recalls that session's prompts immediately.
-- **Switching never carries state across.** `/new`, `/resume`, `/session open`,
+- **Switching never carries state across.** `/new`, `/sessions <id>`,
   and `/fork` reset the pointer, the stashed draft, and the staged attachments:
   the new conversation's composer starts from a clean slate, and what you were
   typing in the previous conversation never leaks into it. Slash commands are

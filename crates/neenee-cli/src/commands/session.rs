@@ -24,6 +24,7 @@ pub async fn run(
                     watch,
                     json,
                     include_idle,
+                    diagnostic: false,
                 },
             )
             .await?;

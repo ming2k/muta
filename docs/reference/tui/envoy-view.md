@@ -48,7 +48,7 @@ Finished:
 | Attribute | Value |
 |-----------|-------|
 | Background | `theme.surface()` (`app_bg`), inset 2 cols (`TRANSCRIPT_H_INSET`) |
-| Marker | None — the step navigates; disclosure is conveyed by Enter/click, not `+`/`-` |
+| Marker | None — the step navigates; disclosure is conveyed by Enter/click, not `▸`/`▾` |
 | Role badge | `[PROFILE]` (uppercased) in `theme.brand()` (falls back to `[ENVOY]` before the `Started` event lands); two plain spaces separate badge and summary (R2 peers) |
 | Summary color | `summary_text_color(accent, Collapsed, Hovered?)` via the shared [step state machine](step-state.md); `Running` reads as a steady `info` accent (no per-step breathing — see [ADR-0008](../../adr/0008-single-breathing-anchor.md)) |
 | Second row | Always prefixed `  └ ` in `theme.muted()`. **Peek** (running): `theme.info()`, current activity + live elapsed. **Outcome** (terminal): `theme.muted()`, the envoy's conclusion. The whole row is part of the same clickable summary so clicking anywhere enters the zoom |

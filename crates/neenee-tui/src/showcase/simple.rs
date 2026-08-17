@@ -648,7 +648,6 @@ pub fn activity() -> io::Result<()> {
                         user_prompt: Some("Build a showcase for all TUI components"),
                         round_count: 3,
                         current_turn: 2,
-                        review_alert: "",
                         current_model: "claude-sonnet-4-5",
                         round_started_at: Some(s.started),
                         activity: "running envoy · exploring the codebase",

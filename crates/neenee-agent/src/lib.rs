@@ -132,7 +132,6 @@ mod permission_policy;
 mod permission_store;
 pub mod round_lifecycle;
 pub use round_lifecycle::{RoundBegin, RoundLifecycle};
-pub mod session_review;
 pub mod session_title;
 mod shell_input;
 use neenee_skills as skills;
@@ -148,7 +147,6 @@ pub use model_request::system_prompt::{
     SystemPromptContext, SystemPromptRegistry, SystemPromptRegistryError, SystemPromptSection,
 };
 pub use no_provider::{NO_PROVIDER_ID, NoProvider};
-pub use session_review::{LoopingReview, default_reviews};
 
 #[cfg(test)]
 mod tests;

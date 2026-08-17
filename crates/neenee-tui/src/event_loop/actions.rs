@@ -32,11 +32,14 @@ mod mouse;
 
 pub(super) use commands::split_command_word;
 
+#[cfg(test)]
+pub(crate) use commands::handle_send_slash;
+
 /// How the event loop proceeds after a dispatched action. Arms that ended in
 /// `continue` (skip to the next drained input event) or `return Ok(())` (exit
 /// the loop) when the match was inline in `run_app_loop` return these instead;
 /// the call site maps them back onto the same control flow.
-pub(super) enum ActionFlow {
+pub(crate) enum ActionFlow {
     /// Action handled; the drain loop proceeds to the next statement.
     Handled,
     /// `continue` the input-drain loop.
@@ -92,8 +95,7 @@ pub(super) async fn dispatch_action(
             commands::handle_insert_into_round(app, viewed_session_id);
         }
         input::InputAction::SendSlash(cmd) => {
-            return commands::handle_send_slash(app, runtime, session, viewed_session_id, cmd)
-                .await;
+            return commands::handle_send_slash(app, runtime, session, cmd).await;
         }
         input::InputAction::ProviderPickerActivate => {
             // Activate is a Models-only action: the flat (provider,
@@ -864,7 +866,7 @@ pub(super) async fn dispatch_action(
                 app.startup_overlay = crate::StartupOverlay::None;
                 let _ = app
                     .tx
-                    .send(AgentRequest::SlashCommand(format!("/session open {}", id)));
+                    .send(AgentRequest::SlashCommand(format!("/sessions {}", id)));
             }
         }
         input::InputAction::HostPreviewSelected => {
@@ -1012,9 +1014,7 @@ pub(super) async fn dispatch_action(
         input::InputAction::CreateNewSession => {
             app.startup_overlay = crate::StartupOverlay::None;
             app.active_modal = Modal::None;
-            let _ = app
-                .tx
-                .send(AgentRequest::SlashCommand("/session new".to_string()));
+            let _ = app.tx.send(AgentRequest::SlashCommand("/new".to_string()));
         }
         input::InputAction::OpenSessionInfo => {
             // Drill into the session-info sub-view for the highlighted

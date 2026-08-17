@@ -17,7 +17,7 @@ use std::path::Path;
 use neenee_contracts::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,
 };
-use neenee_runtime::client::{self, upsert_session_row};
+use neenee_runtime::client::{self, DaemonDiagnostics, upsert_session_row};
 
 /// How `neenee status` renders its stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,15 +25,26 @@ pub struct StatusOptions {
     pub watch: bool,
     pub json: bool,
     pub include_idle: bool,
+    pub diagnostic: bool,
 }
 
 pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String> {
+    if opts.diagnostic {
+        let diag = client::diagnose_daemon();
+        render_diagnostics(&diag, opts.json);
+        if opts.watch {
+            return Err("cannot watch static diagnostic output".to_string());
+        }
+        if client::discover(project_root).is_none() {
+            return Ok(());
+        }
+        println!();
+    }
+
     let Some(info) = client::discover(project_root) else {
-        return Err(format!(
-            "no neenee session daemon is running for {}. Start one with `neenee serve` \
-             (or `neenee attach`, which spawns one on demand).",
-            project_root.display()
-        ));
+        let diag = client::diagnose_daemon();
+        render_diagnostics(&diag, opts.json);
+        return Ok(());
     };
     if !client::versions_compatible(&info) {
         return Err(client::version_mismatch(&info));
@@ -77,6 +88,124 @@ pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String>
         render(&state, opts);
     }
     Ok(())
+}
+
+fn render_diagnostics(diag: &DaemonDiagnostics, json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(diag).unwrap_or_else(|_| "{}".to_string())
+        );
+    } else {
+        print!("{}", format_diagnostics(diag));
+    }
+}
+
+/// The human-readable daemon diagnostics output.
+pub(crate) fn format_diagnostics(diag: &DaemonDiagnostics) -> String {
+    let mut out = String::new();
+    out.push_str("neenee daemon — system status & diagnostics:\n");
+
+    // Discovery record
+    out.push_str("  Discovery Record: ");
+    match &diag.discovery_record {
+        Some(rec) => {
+            let ver = rec.version.as_deref().unwrap_or("unknown");
+            let alive_tag = if client::is_process_alive(rec.pid) {
+                "alive"
+            } else {
+                "dead/stale"
+            };
+            out.push_str(&format!(
+                "present (PID {}, {}, v{}, port {})\n",
+                rec.pid, alive_tag, ver, rec.port
+            ));
+            out.push_str(&format!("    • Path: {}\n", diag.discovery_path.display()));
+        }
+        None => {
+            out.push_str(&format!("missing ({})\n", diag.discovery_path.display()));
+        }
+    }
+
+    // Instance Lock
+    out.push_str("  Instance Lock:    ");
+    if diag.lock_held {
+        if let Some(pid) = diag.lock_holder_pid {
+            let alive_tag = if diag.lock_holder_alive {
+                "alive"
+            } else {
+                "dead"
+            };
+            out.push_str(&format!("HELD by PID {pid} (process {alive_tag})\n"));
+        } else {
+            out.push_str("HELD by another process\n");
+        }
+        out.push_str(&format!("    • Path: {}\n", diag.lock_path.display()));
+    } else {
+        out.push_str(&format!("free ({})\n", diag.lock_path.display()));
+    }
+
+    // Endpoints
+    out.push_str("  Control Endpoints:\n");
+    if diag.uds_exists {
+        let uds_status = if diag.uds_connectable {
+            "active (connectable)"
+        } else {
+            "unresponsive"
+        };
+        out.push_str(&format!(
+            "    • UDS: unix://{} ({uds_status})\n",
+            diag.uds_path.display()
+        ));
+    } else {
+        out.push_str(&format!(
+            "    • UDS: unix://{} (not created)\n",
+            diag.uds_path.display()
+        ));
+    }
+
+    let tcp_status = if diag.tcp_listening {
+        "listening"
+    } else {
+        "closed"
+    };
+    out.push_str(&format!(
+        "    • TCP: ws://127.0.0.1:{} ({tcp_status})\n",
+        diag.tcp_port
+    ));
+
+    // Startup Log
+    if let Some(last_log) = &diag.last_startup_log {
+        out.push_str("  Recent Startup Log:\n");
+        for line in last_log.lines().take(5) {
+            out.push_str(&format!("    | {line}\n"));
+        }
+    }
+
+    // High level diagnosis
+    out.push_str("  Diagnosis:        ");
+    if diag.discovery_valid && diag.tcp_listening {
+        out.push_str("Daemon is running and healthy. (Observe with `neenee status --watch`, drive with `neenee attach`)\n");
+    } else if diag.lock_held && diag.discovery_record.is_none() {
+        out.push_str(
+            "Ghost daemon detected: Instance lock is held but discovery record is missing.\n",
+        );
+        out.push_str("                    Run `neenee stop` or kill the locking PID, then start with `neenee serve`.\n");
+    } else if !diag.lock_held && diag.discovery_record.is_some() {
+        out.push_str("Stale discovery record: Process is gone but discovery record remains.\n");
+        out.push_str(
+            "                    Start a new daemon with `neenee serve` or `neenee attach`.\n",
+        );
+    } else if !diag.lock_held {
+        out.push_str("No session daemon is running.\n");
+        out.push_str(
+            "                    Start one with `neenee serve` (or `neenee attach` on demand).\n",
+        );
+    } else {
+        out.push_str("Daemon state is transitioning or unresponsive.\n");
+    }
+
+    out
 }
 
 fn render(snapshot: &MonitorSnapshot, opts: StatusOptions) {
@@ -297,5 +426,63 @@ mod tests {
         assert_eq!(fmt_elapsed(9_000), "9s");
         assert_eq!(fmt_elapsed(83_000), "1m23s");
         assert_eq!(fmt_elapsed(3_900_000), "1h05m");
+    }
+
+    #[test]
+    fn diagnostics_formatter_renders_healthy_state() {
+        let diag = DaemonDiagnostics {
+            discovery_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.json"),
+            discovery_record: Some(neenee_runtime::client::DaemonInfo {
+                pid: 12345,
+                port: 9800,
+                token: None,
+                project_root: String::new(),
+                started_at: 1000,
+                uds_path: Some(std::path::PathBuf::from(
+                    "/run/user/1000/neenee/daemon.sock",
+                )),
+                version: Some("0.25.1".to_string()),
+            }),
+            discovery_valid: true,
+            lock_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.lock"),
+            lock_held: true,
+            lock_holder_pid: Some(12345),
+            lock_holder_alive: true,
+            uds_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.sock"),
+            uds_exists: true,
+            uds_connectable: true,
+            tcp_port: 9800,
+            tcp_listening: true,
+            startup_log_path: std::path::PathBuf::from("/tmp/startup.log"),
+            last_startup_log: None,
+        };
+        let text = format_diagnostics(&diag);
+        assert!(text.contains("PID 12345"), "{text}");
+        assert!(text.contains("HELD by PID 12345"), "{text}");
+        assert!(text.contains("Daemon is running and healthy"), "{text}");
+    }
+
+    #[test]
+    fn diagnostics_formatter_detects_ghost_daemon() {
+        let diag = DaemonDiagnostics {
+            discovery_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.json"),
+            discovery_record: None,
+            discovery_valid: false,
+            lock_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.lock"),
+            lock_held: true,
+            lock_holder_pid: Some(9999),
+            lock_holder_alive: true,
+            uds_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.sock"),
+            uds_exists: true,
+            uds_connectable: false,
+            tcp_port: 9800,
+            tcp_listening: false,
+            startup_log_path: std::path::PathBuf::from("/tmp/startup.log"),
+            last_startup_log: Some("panic: something went wrong".to_string()),
+        };
+        let text = format_diagnostics(&diag);
+        assert!(text.contains("Ghost daemon detected"), "{text}");
+        assert!(text.contains("HELD by PID 9999"), "{text}");
+        assert!(text.contains("panic: something went wrong"), "{text}");
     }
 }

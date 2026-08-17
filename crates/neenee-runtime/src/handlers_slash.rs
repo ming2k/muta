@@ -29,8 +29,8 @@ use neenee_agent::orchestration::{
 };
 use neenee_contracts::{
     AgentNotice, AgentRequest, AgentResponse, CommandRecord, CommandResult, CronExpr, LoopStatus,
-    Message, NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface, Provider, RoundEvent,
-    Schedule, ScheduledJob, Tool, estimate_bytes, estimate_tokens, repeat::parse_schedule_arg,
+    Message, Provider, RoundEvent, Schedule, ScheduledJob, Tool, estimate_bytes, estimate_tokens,
+    repeat::parse_schedule_arg,
 };
 use neenee_mcp::McpRuntime;
 use neenee_persistence::{
@@ -44,7 +44,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::agent_setup::active_context_window;
-use crate::session_view::{build_sessions_overview, resume_session, short_session_id};
+use crate::session_view::{build_sessions_overview, short_session_id};
 use crate::side::{
     SideRegistry, SideSession, publish_btw_list, spawn_parent_status_watcher, start_active_turn,
 };
@@ -98,10 +98,10 @@ pub(crate) async fn teardown_sides_for_session_switch(
 }
 
 /// Start a brand-new empty session and switch the live session to it — the
-/// shared body of `/new` and `/session new`.
+/// shared body of `/new` and the legacy `/session new`.
 ///
 /// The outgoing session's file is left untouched on disk (nothing is wiped;
-/// it stays resumable via `/sessions` / `/session open`). `SessionStore::reset`
+/// it stays resumable via `/sessions` or `/sessions <id>`). `SessionStore::reset`
 /// mints a fresh id and defers persistence so an unused fresh session leaves
 /// no empty file behind. Any in-flight round and pending prompts are
 /// superseded, the live round counter is rebased to the fresh store, and the
@@ -173,6 +173,40 @@ async fn start_fresh_session(
 /// `source` is surfaced to SessionStart hooks (`Startup` vs `Resume`) so a
 /// hook can branch — opening a prior session from the picker is a resume.
 ///
+/// Fork the current session into a child branch — the shared body of `/fork`
+/// and the legacy `/session fork`. The parent's file is untouched; the store
+/// repoints at the child, the live round counter follows, and the loop
+/// checkpoint is superseded so the child starts its own rounds.
+async fn fork_current_session(
+    lifecycle: &Arc<RoundLifecycle>,
+    agent: &Agent,
+    session: &Arc<SessionStore>,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
+    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    name: &str,
+    args: &str,
+) {
+    supersede_for_session_switch(lifecycle, agent, resp_tx).await;
+    teardown_sides_for_session_switch(side, resp_tx).await;
+    match session.fork().await {
+        Ok((id, parent_id)) => {
+            agent.restore_round_count(session.round_counter().await);
+            record_command(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::Text(format!("Forked session {} from {}.", id, parent_id)),
+            )
+            .await;
+            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
+        }
+        Err(error) => {
+            record_error(session, resp_tx, name, args, error).await;
+        }
+    }
+}
+
 /// Emits the restored todos as a `TodosUpdated` event so the frontend's sticky
 /// panel appears the moment the user enters the picked session.
 async fn restore_session_runtime(
@@ -362,6 +396,47 @@ async fn record_error_with_duration(
     let _ = resp_tx.send(AgentResponse::Error(message));
 }
 
+/// Where a `/sessions`-family invocation routes. `/sessions` and the retired
+/// `/resume` / `/session` spellings all resolve through
+/// [`BuiltinCmd::Sessions`]; this enum is the pure grammar decision, so the
+/// mapping is unit-testable apart from the dispatch plumbing.
+#[derive(Debug, PartialEq, Eq)]
+enum SessionRoute<'a> {
+    /// Open a session by id (or `None` for the picker).
+    Open(Option<&'a str>),
+    /// Start a fresh session (`/new` semantics; legacy `/session new`).
+    New,
+    /// Fork the current session (legacy `/session fork`).
+    Fork,
+    /// Legacy `/session status` — retired with guidance, no action.
+    Status,
+}
+
+/// Decide [`SessionRoute`] for a `/sessions`-family command. `name` is the
+/// command word without the slash (`sessions`, `resume`, or `session`);
+/// `parts` is the whitespace-split invocation with `parts[0]` the command.
+/// `Err` carries the unknown-legacy-subcommand message.
+fn session_route<'a>(name: &str, parts: &'a [&str]) -> Result<SessionRoute<'a>, String> {
+    if name != "session" {
+        // Canonical `/sessions <id?>` (and legacy `/resume <id?>`, whose id
+        // sits in the same slot).
+        return Ok(SessionRoute::Open(parts.get(1).copied()));
+    }
+    match parts.get(1).copied().unwrap_or("") {
+        // The id moved one slot right in the legacy spelling.
+        "open" | "resume" => Ok(SessionRoute::Open(parts.get(2).copied())),
+        "" => Ok(SessionRoute::Open(None)),
+        "list" => Ok(SessionRoute::Open(None)),
+        "new" => Ok(SessionRoute::New),
+        "fork" => Ok(SessionRoute::Fork),
+        "status" => Ok(SessionRoute::Status),
+        unknown => Err(format!(
+            "Unknown session command '{unknown}'. /session is retired: use /sessions to browse \
+             or open, /new, or /fork."
+        )),
+    }
+}
+
 /// `AgentRequest::SlashCommand` — parse the command, dispatch to the matching
 /// built-in handler, or fall through to the user-defined project-command path.
 #[allow(clippy::too_many_arguments)]
@@ -402,10 +477,119 @@ pub async fn dispatch(
             // Handled in TUI
         }
         Some(BuiltinCmd::Config) => {
-            // Handled in the TUI: `/config` opens the config manager modal
-            // locally for presentation settings (intercepted in input.rs as
-            // `InputAction::OpenConfig`), so it is never forwarded here as a
-            // SlashCommand.
+            // Bare `/config` is handled in the TUI: it opens the config
+            // manager modal locally for presentation settings (intercepted in
+            // input.rs as `InputAction::OpenConfig`), so it never arrives
+            // here. What does arrive is `/config reload` (and the legacy
+            // `/reload` alias): re-read config.toml and apply the diff live
+            // (ADR-0085 §6) — MCP servers (diff + reconnect), project
+            // MCP/hooks (trust-gated), bash policy, hooks registry,
+            // permissions, principal settings, tool variants, and the prune
+            // threshold. User-triggered, no fs-watch.
+            if parts.get(1) != Some(&"reload") {
+                record_error(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    "Unknown /config command. Use /config reload to re-read config.toml and \
+                     apply it live.",
+                )
+                .await;
+                return;
+            }
+
+            // ADR-0085 §6: re-read config.toml and apply the diff live, so
+            // editing the MCP servers / permissions / bash policy / hooks no
+            // longer requires a restart. Reload is user-triggered (not
+            // fs-watch): only the user knows when their edit is complete, and
+            // a half-written file would otherwise tear down live sessions.
+            let mut reloaded = Config::load();
+            // Re-apply the project-scope MCP AND hooks layer (ADR-0085 §2/§3 +
+            // hooks extension): a project `.neenee/config.toml` edit is exactly
+            // the kind of change `/reload` exists to surface without a restart.
+            // Both are still gated by trust (§5): untrusted projects load
+            // nothing here.
+            let project_trusted = trust_gate.is_trusted(project_root_for_side);
+            let project_mcp = Config::load_project_mcp(project_root_for_side);
+            if project_trusted && !project_mcp.is_empty() {
+                reloaded.merge_project_mcp(project_mcp);
+            }
+            let project_hooks = Config::load_project_hooks(project_root_for_side);
+            if project_trusted && !project_hooks.is_empty() {
+                reloaded.merge_project_hooks(project_hooks);
+            }
+            // MCP: diff + (re)connect/disconnect. The next request picks up the
+            // new tool set automatically (visible_tools recomputes each turn).
+            let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
+
+            // Re-apply the agent-scoped config sections that are otherwise
+            // seeded only at startup. Each setter is replace-style and safe to
+            // re-run; permissions seeding is additive (new allow-rules take
+            // effect; removed rules are noted but not revoked this session).
+            // Bash policy: harden for untrusted projects (P2). Mirrors the
+            // bootstrap decision: a config edit must not drop the untrusted
+            // `confirm` rule mid-run.
+            let effective_bash_policy = if project_trusted {
+                reloaded.bash_policy.clone()
+            } else {
+                reloaded.bash_policy.clone().with_untrusted_hardening()
+            };
+            agent.set_bash_policy(&effective_bash_policy);
+            agent.set_hard_stop_turns(reloaded.principal.hard_stop_turns);
+            agent.set_doom_guard_config(reloaded.principal.nudge);
+            agent.set_allow_model_stdin(reloaded.principal.allow_model_stdin);
+            agent.set_skip_interactive_input(reloaded.principal.skip_interactive_input);
+            agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
+            agent.seed_permissions_from_config(&reloaded.permissions.allow);
+            crate::agent_setup::reseed_prune_threshold(agent, &reloaded);
+            crate::agent_setup::reseed_tool_variants(agent, &reloaded);
+
+            let mut lines = Vec::new();
+            if report.removed.is_empty()
+                && report.connected.is_empty()
+                && report.unchanged.is_empty()
+            {
+                lines.push("No MCP servers configured.".to_string());
+            } else {
+                if !report.unchanged.is_empty() {
+                    lines.push(format!("MCP unchanged: {}", report.unchanged.join(", ")));
+                }
+                if !report.connected.is_empty() {
+                    let ok: Vec<&str> = report
+                        .connected
+                        .iter()
+                        .filter(|(_, ok)| *ok)
+                        .map(|(n, _)| n.as_str())
+                        .collect();
+                    let fail: Vec<&str> = report
+                        .connected
+                        .iter()
+                        .filter(|(_, ok)| !*ok)
+                        .map(|(n, _)| n.as_str())
+                        .collect();
+                    if !ok.is_empty() {
+                        lines.push(format!("MCP connected: {}", ok.join(", ")));
+                    }
+                    if !fail.is_empty() {
+                        lines.push(format!("MCP failed to connect: {}", fail.join(", ")));
+                    }
+                }
+                if !report.removed.is_empty() {
+                    lines.push(format!("MCP removed: {}", report.removed.join(", ")));
+                }
+            }
+            lines.push("Re-applied bash policy, hooks, principal, and permissions.".to_string());
+            record_command_with_duration(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::ConfigReload { details: lines },
+                Some(start_instant.elapsed().as_millis() as u64),
+            )
+            .await;
+            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Tools) => {
             // Handled in TUI (`/tools` opens the tools manager modal
@@ -453,13 +637,11 @@ pub async fn dispatch(
             // (ADR-0091). The `AutopilotChanged` event below still refreshes
             // the badge so the new state stays visible long after the toast
             // fades.
-            let ack = format!(
-                "Autopilot {}: the agent {} run without human intervention — the question \
-                     tool is reclaimed, tool permissions auto-approve, and no prompts or \
-                     questions can pause the session.",
-                if enabled { "ON" } else { "OFF" },
-                if enabled { "will" } else { "won't" },
-            );
+            let ack = if enabled {
+                "Autopilot ON\n• Auto-approve tool permissions\n• Run continuously without prompting".to_string()
+            } else {
+                "Autopilot OFF\n• Manual tool approvals required\n• Session pauses for prompts and questions".to_string()
+            };
             record_command(
                 session,
                 resp_tx,
@@ -541,86 +723,6 @@ pub async fn dispatch(
                 },
             }
         }
-        Some(BuiltinCmd::Review) => {
-            // /review — on-demand session review (ADR-0018,
-            // superseding the periodic ADR-0016 design).
-            // Runs the bounded read-only REVIEW envoy
-            // against the current transcript and reports the
-            // verdict(s). Review no longer fires on a round
-            // schedule; it only runs when asked. Takes no
-            // arguments.
-            if parts.iter().skip(1).any(|t| !t.trim().is_empty()) {
-                record_error(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    "`/review` takes no arguments. Usage: `/review` runs an \
-                                     on-demand diagnostic of the current round.",
-                )
-                .await;
-                return;
-            }
-            let transcript = session.full_transcript().await;
-            let turns = Agent::estimate_completed_turns(&transcript);
-            if turns == 0 {
-                record_command(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    CommandResult::Text(
-                        "Nothing to review yet — no ReAct turns in the current \
-                         round."
-                            .to_string(),
-                    ),
-                )
-                .await;
-                return;
-            }
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::Activity("running session review…".to_string()),
-            ));
-            let verdicts = agent.review_now(&transcript).await;
-            // Mirror the worst verdict into the activity-bar
-            // banner (empty alert clears it when healthy).
-            let alert = Agent::render_review_alert(&verdicts, turns);
-            if !alert.trim().is_empty() {
-                let _ = resp_tx.send(round_response(
-                    &session.id().await,
-                    RoundEvent::Notice(
-                        AgentNotice::new(
-                            NoticeKind::ReviewAlert,
-                            NoticeSeverity::Warning,
-                            "Session review needs attention",
-                            NoticeSource::Review,
-                        )
-                        .with_body(alert.clone())
-                        .with_surface(NoticeSurface::Banner),
-                    ),
-                ));
-            }
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::SessionReview { alert },
-            ));
-            // The typed review result is both the durable record and the
-            // command-block reply (ADR-0091); the verdicts render through
-            // `CommandResult::to_text`, which mirrors `format_review_report`.
-            record_command_with_duration(
-                session,
-                resp_tx,
-                name,
-                args,
-                CommandResult::Review {
-                    verdicts,
-                    turns: turns as u64,
-                },
-                Some(start_instant.elapsed().as_millis() as u64),
-            )
-            .await;
-        }
         Some(BuiltinCmd::Search) => {
             let query = cmd.strip_prefix("/search").unwrap_or("").trim();
             if query.is_empty() {
@@ -701,261 +803,130 @@ pub async fn dispatch(
                 }
             }
         }
-        Some(BuiltinCmd::Resume) => {
-            supersede_for_session_switch(lifecycle, agent, resp_tx).await;
-            teardown_sides_for_session_switch(side, resp_tx).await;
-            match resume_session(session, parts.get(1).copied()).await {
-                Ok((id, transcript)) => {
-                    // Full restore: todos, disabled tools, round counter, and
-                    // SessionStart hooks. `/resume` is a resume.
-                    restore_session_runtime(
+        Some(BuiltinCmd::Sessions) => {
+            // `/sessions` opens the picker; `/sessions <id>` opens that
+            // session directly. The retired `/resume` and `/session`
+            // spellings resolve here through the alias table, so their legacy
+            // grammar is translated first:
+            //   `/resume [id]`             → picker, or open <id>
+            //   `/session`                  → picker
+            //   `/session open|resume <id>`  → open <id> (picker without one)
+            //   `/session list`             → picker
+            //   `/session new`              → fresh session (same as `/new`)
+            //   `/session fork`             → fork (same as `/fork`)
+            //   `/session status`           → retired; error with guidance
+            let route = match session_route(name, &parts) {
+                Ok(route) => route,
+                Err(message) => {
+                    record_error(session, resp_tx, name, args, message).await;
+                    return;
+                }
+            };
+            match route {
+                SessionRoute::New => {
+                    start_fresh_session(
+                        side,
                         session,
+                        config,
                         agent,
+                        lifecycle,
                         resp_tx,
-                        neenee_contracts::SessionSource::Resume,
-                    )
-                    .await;
-                    let _ = resp_tx.send(AgentResponse::ConversationReplaced {
-                        session_id: session.id().await,
-                        messages: transcript,
-                        commands: session.commands().await,
-                    });
-                    record_command(
-                        session,
-                        resp_tx,
+                        provider_for_task,
+                        provider_usage,
                         name,
                         args,
-                        CommandResult::Text(format!("Resumed session {}.", short_session_id(&id))),
-                    )
-                    .await;
-                    send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
-                }
-                Err(error) => {
-                    record_error(session, resp_tx, name, args, error).await;
-                }
-            }
-        }
-        Some(BuiltinCmd::Session) => match parts.get(1).copied().unwrap_or("status") {
-            "status" => {
-                let id = session.id().await;
-                let parent_id = session.parent_id().await;
-                let message_count = session.model_window().await.len();
-                let archived_count = session.archived_transcript_count().await;
-                let last_projection = session.last_projection().await;
-                record_command(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    CommandResult::SessionStatus {
-                        id,
-                        parent_id,
-                        message_count,
-                        archived_count,
-                        last_projection: last_projection.map(|item| {
-                            format!(
-                                "{:?}: {} -> {} chars",
-                                item.operation, item.before_chars, item.after_chars
-                            )
-                        }),
-                    },
-                )
-                .await;
-            }
-            "list" => match session.list().await {
-                Ok(sessions) => {
-                    let lines = sessions
-                        .into_iter()
-                        .map(|item| {
-                            format!(
-                                "- {}{}  messages={}  parent={}",
-                                short_session_id(&item.id),
-                                if item.active { " [active]" } else { "" },
-                                item.message_count,
-                                item.parent_id
-                                    .map(|id| short_session_id(&id).to_string())
-                                    .unwrap_or_else(|| "none".to_string())
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    record_command(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        CommandResult::Text(format!("Sessions:\n{}", lines.join("\n"))),
                     )
                     .await;
                 }
-                Err(error) => {
-                    record_error(session, resp_tx, name, args, error).await;
-                }
-            },
-            "fork" => {
-                supersede_for_session_switch(lifecycle, agent, resp_tx).await;
-                teardown_sides_for_session_switch(side, resp_tx).await;
-                match session.fork().await {
-                    Ok((id, parent_id)) => {
-                        agent.restore_round_count(session.round_counter().await);
-                        record_command(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            CommandResult::Text(format!(
-                                "Forked session {} from {}.",
-                                id, parent_id
-                            )),
-                        )
+                SessionRoute::Fork => {
+                    fork_current_session(lifecycle, agent, session, side, resp_tx, name, args)
                         .await;
-                        send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
-                    }
-                    Err(error) => {
-                        record_error(session, resp_tx, name, args, error).await;
-                    }
                 }
-            }
-            "open" => {
-                let Some(id) = parts.get(2) else {
+                SessionRoute::Status => {
                     record_error(
                         session,
                         resp_tx,
                         name,
                         args,
-                        "Usage: /session open <session-id>",
+                        "/session status is retired. Session id, counts, and timestamps now live \
+                         in the /sessions info view (press i in the picker).",
                     )
                     .await;
-                    return;
-                };
-                supersede_for_session_switch(lifecycle, agent, resp_tx).await;
-                teardown_sides_for_session_switch(side, resp_tx).await;
-                match session.open(id).await {
-                    Ok(()) => {
-                        // Full restore of the session-scoped runtime the
-                        // bootstrap skipped in Picker mode: todos, disabled
-                        // tools, round counter, and SessionStart hooks.
-                        // Opening a prior session is a resume.
-                        restore_session_runtime(
-                            session,
-                            agent,
-                            resp_tx,
-                            neenee_contracts::SessionSource::Resume,
-                        )
-                        .await;
-                        let transcript = session.full_transcript().await;
-                        let _ = resp_tx.send(AgentResponse::ConversationReplaced {
-                            session_id: session.id().await,
-                            messages: transcript,
-                            commands: session.commands().await,
-                        });
-                        // C6: the live provider tracks the opened session's own
-                        // provider pin (or the global default if it has none).
-                        crate::handlers_provider::reapply_session_selection(
-                            config,
-                            agent,
-                            provider_for_task,
-                            session,
-                            resp_tx,
-                            provider_usage,
-                        )
-                        .await;
-                        record_command(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            CommandResult::Text(format!("Opened session {}.", id)),
-                        )
-                        .await;
-                        send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
-                    }
-                    Err(error) => {
-                        record_error(session, resp_tx, name, args, error).await;
-                    }
                 }
-            }
-            "resume" => {
-                supersede_for_session_switch(lifecycle, agent, resp_tx).await;
-                teardown_sides_for_session_switch(side, resp_tx).await;
-                match resume_session(session, parts.get(2).copied()).await {
-                    Ok((id, transcript)) => {
-                        // Full restore: todos, disabled tools, round counter,
-                        // and SessionStart hooks (`/resume` is a resume).
-                        restore_session_runtime(
-                            session,
-                            agent,
-                            resp_tx,
-                            neenee_contracts::SessionSource::Resume,
-                        )
-                        .await;
-                        let _ = resp_tx.send(AgentResponse::ConversationReplaced {
-                            session_id: session.id().await,
-                            messages: transcript,
-                            commands: session.commands().await,
-                        });
-                        // C6: the live provider tracks the resumed session's own
-                        // provider pin (or the global default if it has none).
-                        crate::handlers_provider::reapply_session_selection(
-                            config,
-                            agent,
-                            provider_for_task,
-                            session,
-                            resp_tx,
-                            provider_usage,
-                        )
-                        .await;
-                        record_command(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            CommandResult::Text(format!(
-                                "Resumed session {}.",
-                                short_session_id(&id)
-                            )),
-                        )
-                        .await;
-                        send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
+                SessionRoute::Open(target_id) => match target_id {
+                    // `/sessions <id>` (and the legacy `/resume <id>`,
+                    // `/session open <id>`, `/session list`) — the same flow
+                    // the picker's Enter key drives. Without an id, the
+                    // picker (the old "resume most recent" guess is gone).
+                    Some(id) => {
+                        supersede_for_session_switch(lifecycle, agent, resp_tx).await;
+                        teardown_sides_for_session_switch(side, resp_tx).await;
+                        match session.open(id).await {
+                            Ok(()) => {
+                                // Full restore of the session-scoped runtime the
+                                // bootstrap skipped in Picker mode: todos,
+                                // disabled tools, round counter, and SessionStart
+                                // hooks. Opening a prior session is a resume.
+                                restore_session_runtime(
+                                    session,
+                                    agent,
+                                    resp_tx,
+                                    neenee_contracts::SessionSource::Resume,
+                                )
+                                .await;
+                                let transcript = session.full_transcript().await;
+                                let _ = resp_tx.send(AgentResponse::ConversationReplaced {
+                                    session_id: session.id().await,
+                                    messages: transcript,
+                                    commands: session.commands().await,
+                                });
+                                // The live provider tracks the opened session's
+                                // own provider pin (or the global default).
+                                crate::handlers_provider::reapply_session_selection(
+                                    config,
+                                    agent,
+                                    provider_for_task,
+                                    session,
+                                    resp_tx,
+                                    provider_usage,
+                                )
+                                .await;
+                                record_command(
+                                    session,
+                                    resp_tx,
+                                    name,
+                                    args,
+                                    CommandResult::Text(format!(
+                                        "Opened session {}.",
+                                        short_session_id(&session.id().await)
+                                    )),
+                                )
+                                .await;
+                                send_harness_state(
+                                    resp_tx,
+                                    &session.id().await,
+                                    agent,
+                                    LoopStatus::Idle,
+                                );
+                            }
+                            Err(error) => {
+                                record_error(session, resp_tx, name, args, error).await;
+                            }
+                        }
                     }
-                    Err(error) => {
-                        record_error(session, resp_tx, name, args, error).await;
+                    None => {
+                        // No id (bare `/sessions`, `/session list`, or a
+                        // legacy open/resume without one): open the picker.
+                        record_invocation(session, name, args).await;
+                        let _ = resp_tx.send(AgentResponse::SessionsOverview(
+                            build_sessions_overview(session).await,
+                        ));
                     }
-                }
+                },
             }
-            "new" => {
-                start_fresh_session(
-                    side,
-                    session,
-                    config,
-                    agent,
-                    lifecycle,
-                    resp_tx,
-                    provider_for_task,
-                    provider_usage,
-                    name,
-                    args,
-                )
-                .await;
-            }
-            other => {
-                record_error(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    format!(
-                        "Unknown session command '{}'. Use status, list, resume, fork, open, or new.",
-                        other
-                    ),
-                )
-                .await;
-            }
-        },
-        Some(BuiltinCmd::Sessions) => {
-            record_invocation(session, name, args).await;
-            let _ = resp_tx.send(AgentResponse::SessionsOverview(
-                build_sessions_overview(session).await,
-            ));
+        }
+        Some(BuiltinCmd::Fork) => {
+            fork_current_session(lifecycle, agent, session, side, resp_tx, name, args).await;
         }
         Some(BuiltinCmd::Dashboard) => {
             record_invocation(session, name, args).await;
@@ -1055,10 +1026,13 @@ pub async fn dispatch(
             let settings =
                 ContextProjectionSettings::from_config(config, active_context_window(agent))
                     .for_request(agent.estimate_next_request_tokens(&current));
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::Activity("compacting context".to_string()),
-            ));
+            // No `RoundEvent::Activity` here: a slash command is a
+            // control-plane operation outside the round state machine
+            // (ADR-0110), and the TUI's activity-bar listener arms
+            // `is_responding` on every Activity event — a command must not
+            // be able to light the round liveness surface (or overwrite a
+            // live round's label). The typed result below ("Compacted N
+            // messages …") is the feedback.
             let extra = agent.fire_pre_compact().await;
             match compact_round_history(
                 &mut current,
@@ -1360,99 +1334,6 @@ pub async fn dispatch(
                 }
             }
         }
-        Some(BuiltinCmd::Reload) => {
-            // ADR-0085 §6: re-read config.toml and apply the diff live, so
-            // editing the MCP servers / permissions / bash policy / hooks no
-            // longer requires a restart. Reload is user-triggered (not
-            // fs-watch): only the user knows when their edit is complete, and
-            // a half-written file would otherwise tear down live sessions.
-            let mut reloaded = Config::load();
-            // Re-apply the project-scope MCP AND hooks layer (ADR-0085 §2/§3 +
-            // hooks extension): a project `.neenee/config.toml` edit is exactly
-            // the kind of change `/reload` exists to surface without a restart.
-            // Both are still gated by trust (§5): untrusted projects load
-            // nothing here.
-            let project_trusted = trust_gate.is_trusted(project_root_for_side);
-            let project_mcp = Config::load_project_mcp(project_root_for_side);
-            if project_trusted && !project_mcp.is_empty() {
-                reloaded.merge_project_mcp(project_mcp);
-            }
-            let project_hooks = Config::load_project_hooks(project_root_for_side);
-            if project_trusted && !project_hooks.is_empty() {
-                reloaded.merge_project_hooks(project_hooks);
-            }
-            // MCP: diff + (re)connect/disconnect. The next request picks up the
-            // new tool set automatically (visible_tools recomputes each turn).
-            let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
-
-            // Re-apply the agent-scoped config sections that are otherwise
-            // seeded only at startup. Each setter is replace-style and safe to
-            // re-run; permissions seeding is additive (new allow-rules take
-            // effect; removed rules are noted but not revoked this session).
-            // Bash policy: harden for untrusted projects (P2). Mirrors the
-            // bootstrap decision: a config edit must not drop the untrusted
-            // `confirm` rule mid-run.
-            let effective_bash_policy = if project_trusted {
-                reloaded.bash_policy.clone()
-            } else {
-                reloaded.bash_policy.clone().with_untrusted_hardening()
-            };
-            agent.set_bash_policy(&effective_bash_policy);
-            agent.set_hard_stop_turns(reloaded.principal.hard_stop_turns);
-            agent.set_doom_guard_config(reloaded.principal.nudge);
-            agent.set_allow_model_stdin(reloaded.principal.allow_model_stdin);
-            agent.set_skip_interactive_input(reloaded.principal.skip_interactive_input);
-            agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
-            agent.seed_permissions_from_config(&reloaded.permissions.allow);
-            crate::agent_setup::reseed_prune_threshold(agent, &reloaded);
-            crate::agent_setup::reseed_tool_variants(agent, &reloaded);
-
-            let mut lines = Vec::new();
-            if report.removed.is_empty()
-                && report.connected.is_empty()
-                && report.unchanged.is_empty()
-            {
-                lines.push("No MCP servers configured.".to_string());
-            } else {
-                if !report.unchanged.is_empty() {
-                    lines.push(format!("MCP unchanged: {}", report.unchanged.join(", ")));
-                }
-                if !report.connected.is_empty() {
-                    let ok: Vec<&str> = report
-                        .connected
-                        .iter()
-                        .filter(|(_, ok)| *ok)
-                        .map(|(n, _)| n.as_str())
-                        .collect();
-                    let fail: Vec<&str> = report
-                        .connected
-                        .iter()
-                        .filter(|(_, ok)| !*ok)
-                        .map(|(n, _)| n.as_str())
-                        .collect();
-                    if !ok.is_empty() {
-                        lines.push(format!("MCP connected: {}", ok.join(", ")));
-                    }
-                    if !fail.is_empty() {
-                        lines.push(format!("MCP failed to connect: {}", fail.join(", ")));
-                    }
-                }
-                if !report.removed.is_empty() {
-                    lines.push(format!("MCP removed: {}", report.removed.join(", ")));
-                }
-            }
-            lines.push("Re-applied bash policy, hooks, principal, and permissions.".to_string());
-            record_command_with_duration(
-                session,
-                resp_tx,
-                name,
-                args,
-                CommandResult::ConfigReload { details: lines },
-                Some(start_instant.elapsed().as_millis() as u64),
-            )
-            .await;
-            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
-        }
         Some(BuiltinCmd::Trust) => {
             // ADR-0085 §5 (+ hooks/skills/commands extension): grant trust for
             // this project, then activate its project-scope MCP servers, hooks,
@@ -1491,7 +1372,7 @@ pub async fn dispatch(
                 reloaded.merge_project_hooks(project_hooks);
                 let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
                 // Re-seed the hook registry so newly-trusted project hooks take
-                // effect immediately (same path as `/reload`).
+                // effect immediately (same path as `/config reload`).
                 agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
                 // Trust granted: re-seed bash policy with the RAW (un-hardened)
                 // config so the untrusted `confirm` rule is dropped now that the
@@ -2350,6 +2231,86 @@ mod schedule_spec_tests {
     /// convenience wrapper so the tests read like the public parse path
     fn split_schedule_arg(rest: &str) -> (String, String) {
         split_schedule_spec(rest).unwrap_or(("".into(), "".into()))
+    }
+}
+
+#[cfg(test)]
+mod session_route_tests {
+    use super::{SessionRoute, session_route};
+
+    fn parts(cmd: &str) -> Vec<&str> {
+        cmd.split_whitespace().collect()
+    }
+
+    #[test]
+    fn canonical_sessions_forms() {
+        assert_eq!(
+            session_route("sessions", &parts("/sessions")),
+            Ok(SessionRoute::Open(None))
+        );
+        assert_eq!(
+            session_route("sessions", &parts("/sessions abc123")),
+            Ok(SessionRoute::Open(Some("abc123")))
+        );
+    }
+
+    #[test]
+    fn legacy_resume_keeps_its_id_slot() {
+        assert_eq!(
+            session_route("resume", &parts("/resume")),
+            Ok(SessionRoute::Open(None))
+        );
+        assert_eq!(
+            session_route("resume", &parts("/resume abc123")),
+            Ok(SessionRoute::Open(Some("abc123")))
+        );
+    }
+
+    #[test]
+    fn legacy_session_subcommands_translate() {
+        // The id sits one slot right in the legacy spelling.
+        assert_eq!(
+            session_route("session", &parts("/session open abc123")),
+            Ok(SessionRoute::Open(Some("abc123")))
+        );
+        assert_eq!(
+            session_route("session", &parts("/session resume abc123")),
+            Ok(SessionRoute::Open(Some("abc123")))
+        );
+        // Without an id these fall back to the picker.
+        assert_eq!(
+            session_route("session", &parts("/session")),
+            Ok(SessionRoute::Open(None))
+        );
+        assert_eq!(
+            session_route("session", &parts("/session open")),
+            Ok(SessionRoute::Open(None))
+        );
+        assert_eq!(
+            session_route("session", &parts("/session list")),
+            Ok(SessionRoute::Open(None))
+        );
+        assert_eq!(
+            session_route("session", &parts("/session new")),
+            Ok(SessionRoute::New)
+        );
+        assert_eq!(
+            session_route("session", &parts("/session fork")),
+            Ok(SessionRoute::Fork)
+        );
+        assert_eq!(
+            session_route("session", &parts("/session status")),
+            Ok(SessionRoute::Status)
+        );
+    }
+
+    #[test]
+    fn unknown_legacy_subcommand_is_an_error() {
+        let err = session_route("session", &parts("/session frobnicate")).unwrap_err();
+        assert!(
+            err.contains("/session is retired"),
+            "error should steer away from the retired command: {err}"
+        );
     }
 }
 

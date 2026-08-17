@@ -35,8 +35,6 @@ pub struct ActivityModalView<'a> {
     /// Current tool turn within the round (1-indexed; `0` before the first
     /// model request).
     pub current_turn: u64,
-    /// Session-review alert (ADR-0016), or empty when inactive.
-    pub review_alert: &'a str,
     /// Display id of the currently active model.
     pub current_model: &'a str,
     /// Wall-clock instant the current round started, or `None` between rounds.
@@ -61,7 +59,6 @@ pub fn draw_activity_modal(
         user_prompt,
         round_count,
         current_turn,
-        review_alert,
         current_model,
         round_started_at,
         activity,
@@ -164,16 +161,7 @@ pub fn draw_activity_modal(
                 body_width,
                 status_style,
             ));
-            if !review_alert.is_empty() {
-                lines.extend(indented_wrapped_lines(
-                    &format!("⚠ {review_alert}"),
-                    MODAL_BODY_LEADING_INDENT,
-                    body_width,
-                    Style::default().fg(theme.warn()),
-                ));
-            }
         }
-
         crate::modal::ActivityTab::Todos => {
             if let Some(list) = todos.filter(|l| !l.items.is_empty()) {
                 // Hanging indent: the status glyph leads the first visual row;

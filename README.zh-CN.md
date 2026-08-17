@@ -88,7 +88,7 @@ daemon 默认通过 Unix socket 提供一条可读写的控制平面协议（创
 |------|------|
 | `/schedule <when> <提示>` | 按 cron（周期性）或倒计时 / 绝对时间（一次性）调度提示 |
 | `/compact` | 压缩上下文以释放空间 |
-| `/session list` | 浏览和恢复历史会话 |
+| `/sessions` | 浏览和打开历史会话 |
 | `/export` | 将对话导出为 Markdown |
 | `/mcp` | 查看 MCP 服务器连接状态 |
 

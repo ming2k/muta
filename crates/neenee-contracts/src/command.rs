@@ -14,8 +14,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::session_review::ReviewVerdict;
-
 /// Terminal status of a slash-command invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
@@ -278,7 +276,7 @@ fn review_to_text(verdicts: &[ReviewVerdict], turns: u64) -> String {
                 "Session review (~{turns} {turn_unit}): no review dimensions registered."
             );
         }
-        Some(crate::session_review::ReviewStatus::Healthy) => {
+        Some(ReviewStatus::Healthy) => {
             format!("Session review (~{turns} {turn_unit}): no concerns found.")
         }
         Some(status) => {
@@ -308,6 +306,43 @@ fn review_to_text(verdicts: &[ReviewVerdict], turns: u64) -> String {
     }
     lines.push("Interrupt the turn with Esc if it looks stuck.".to_string());
     lines.join("\n")
+}
+
+/// The outcome of one review dimension, as persisted by the retired `/review`
+/// command's ledger records. The command (and the diagnostic subsystem behind
+/// it) is gone, but old session files still carry these — the types stay so
+/// `CommandResult::Review` keeps deserializing for resume/export.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct ReviewVerdict {
+    /// The reviewed dimension's id (e.g. `"looping"`).
+    pub dimension: String,
+    pub status: ReviewStatus,
+    pub detail: String,
+}
+
+/// The diagnostic's judgement for a dimension (ledger-compatibility type for
+/// the retired `/review` command). Ordered so the worst verdict wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum ReviewStatus {
+    /// No concern detected.
+    Healthy,
+    /// Progressing but slowly, repetitively, or riskily.
+    Watch,
+    /// Appears stuck (e.g. looping without converging).
+    Stuck,
+}
+
+impl ReviewStatus {
+    /// One short human-facing word, lowercased.
+    pub fn label(self) -> &'static str {
+        match self {
+            ReviewStatus::Healthy => "ok",
+            ReviewStatus::Watch => "watch",
+            ReviewStatus::Stuck => "stuck",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -345,7 +380,11 @@ mod tests {
                 last_projection: Some("compact: 100 -> 50 chars".to_string()),
             },
             CommandResult::Review {
-                verdicts: vec![ReviewVerdict::healthy("progress")],
+                verdicts: vec![ReviewVerdict {
+                    dimension: "progress".to_string(),
+                    status: ReviewStatus::Healthy,
+                    detail: String::new(),
+                }],
                 turns: 2,
             },
             CommandResult::Scheduled {

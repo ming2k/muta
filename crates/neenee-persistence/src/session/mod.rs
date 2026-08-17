@@ -202,18 +202,20 @@ impl Default for SessionData {
 impl SessionData {
     /// The single authority for "this session has no substantive content yet"
     /// (ADR-0018). A session is empty while it carries neither dialogue
-    /// (active `model_window` or `archived_transcript`), nor a command-ledger
-    /// entry, nor any *substantive* piece of session state — a non-empty todo
-    /// list, at least one scheduled job, a non-empty disabled-tool mask, or a
-    /// started round counter. Any one of those is a real user action worth
-    /// durably recording, so it materialises the session.
+    /// (active `model_window` or `archived_transcript`), nor any *substantive*
+    /// piece of session state — a non-empty todo list, at least one scheduled job,
+    /// a non-empty disabled-tool mask, or a started round counter. Any one of
+    /// those is a real user action worth durably recording, so it materialises
+    /// the session.
     ///
-    /// Two kinds of state deliberately do **not** count on their own, matching
-    /// the long-standing lazy contract: the **title** (a title on an
-    /// otherwise-empty session is still an empty record in the picker) and the
-    /// **provider selection** (pinning `/models` must not surface a
-    /// never-used session). Both ride along once anything else has made the
-    /// session real.
+    /// Auxiliary state deliberately does **not** count on their own, matching
+    /// the lazy contract: the **title** (a title on an otherwise-empty session
+    /// is still an empty record in the picker), the **provider selection**
+    /// (pinning `/models` must not surface a never-used session), and the
+    /// **commands ledger** (navigational / informational slash commands like
+    /// `/sessions`, `/models`, `/dashboard`, `/help` executed before any dialogue
+    /// must not materialize an empty session). All of these ride along once
+    /// substantive dialogue or state makes the session real.
     ///
     /// Every guarded write path consults this (via
     /// [`SessionStore::should_skip_persist`]) instead of re-deriving the
@@ -222,7 +224,6 @@ impl SessionData {
     fn is_user_facing_empty(&self) -> bool {
         self.model_window.is_empty()
             && self.archived_transcript.is_empty()
-            && self.commands.is_empty()
             && self.todos.is_empty()
             && self.scheduled_jobs.is_empty()
             && self.disabled_tools.is_empty()
@@ -1053,7 +1054,7 @@ impl SessionStore {
         &self,
         records: Vec<neenee_contracts::RequestUsageRecord>,
     ) -> Result<(), String> {
-        let (path, data) = {
+        let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
             if records
                 .iter()
@@ -1086,16 +1087,22 @@ impl SessionStore {
                 .collect::<Vec<_>>();
             state.data.request_usage_records = records.clone();
             state.data.updated_at = unix_timestamp();
-            ensure_event_log_started(&state.event_log, &state.data)?;
-            for record in changed {
-                state
-                    .event_log
-                    .append(SessionEvent::RequestUsageUpsert { record })?;
+            let empty_unpersisted = Self::should_skip_persist(&state);
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                for record in changed {
+                    state
+                        .event_log
+                        .append(SessionEvent::RequestUsageUpsert { record })?;
+                }
             }
-            (state.path.clone(), state.data.clone())
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
-        self.persist_off_runtime(path, data, self.blob_store.clone())
-            .await
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
     }
 
     /// The session-scoped provider + model pin (C6). `None` means "follow the
@@ -1220,11 +1227,10 @@ impl SessionStore {
     /// (ADR-0091, ADR-0048 single-write-path). `f` may push, pop, edit, or
     /// replace freely; the resulting list becomes the durable snapshot.
     ///
-    /// The empty-session deferral mirrors `mutate_messages`: a brand-new
-    /// session that is still empty after the mutation stays in memory. A real
-    /// command record makes the session non-empty, so it DOES persist —
-    /// preserving the "first command persists the session" contract that
-    /// ADR-0050's command echo used to carry.
+    /// The empty-session deferral mirrors other auxiliary setters: a brand-new
+    /// session that is still empty after command mutation stays in memory.
+    /// Commands ride along into the snapshot and event log once substantive
+    /// dialogue or state materializes the session.
     pub async fn mutate_commands<F>(&self, f: F) -> Result<(), String>
     where
         F: FnOnce(&mut Vec<neenee_contracts::CommandRecord>),
@@ -1233,11 +1239,10 @@ impl SessionStore {
             let mut state = self.state.lock().await;
             f(&mut state.data.commands);
             state.data.updated_at = unix_timestamp();
-            // The empty-session deferral mirrors `mutate_messages`: a brand-new
-            // session that is still empty after the mutation stays in memory. A
-            // real command record makes the session non-empty, so it DOES
-            // persist — preserving the "first command persists the session"
-            // contract that ADR-0050's command echo used to carry.
+            // The empty-session deferral mirrors other auxiliary setters: a
+            // brand-new session that is still empty after command mutation stays
+            // in memory. Commands ride along into the snapshot and event log
+            // once substantive dialogue or state materializes the session.
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
@@ -1690,6 +1695,16 @@ impl SessionStore {
                     let Ok(session) = serde_json::from_str::<SessionHeader>(&content) else {
                         continue;
                     };
+                    // Empty sessions (no dialogue messages in model_window or
+                    // archived_transcript) are never valid history records.
+                    // Skip them, and prune legacy stale empty files from disk.
+                    if session.model_window.is_empty() && session.archived_transcript.is_empty() {
+                        if session.id != active_id {
+                            let _ = fs::remove_file(&path);
+                            let _ = fs::remove_file(path.with_extension("jsonl"));
+                        }
+                        continue;
+                    }
                     summaries.push(summary_header(&session, session.id == active_id));
                 }
             }
@@ -3284,6 +3299,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_filters_and_prunes_empty_sessions_on_disk() {
+        let directory =
+            std::env::temp_dir().join(format!("neenee-prune-empty-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+
+        // Create an empty session snapshot and event log directly on disk
+        let empty_session_path = directory.join("empty-archived.json");
+        let empty_session_jsonl = directory.join("empty-archived.jsonl");
+        let empty_data = SessionData {
+            id: "empty-archived".to_string(),
+            project_root: directory.clone(),
+            ..Default::default()
+        };
+        fs::write(
+            &empty_session_path,
+            serde_json::to_string(&empty_data).unwrap(),
+        )
+        .unwrap();
+        fs::write(&empty_session_jsonl, "").unwrap();
+
+        // And create a substantive session
+        let substantive = SessionData {
+            id: "real-session".to_string(),
+            project_root: directory.clone(),
+            model_window: vec![Message::new(neenee_contracts::Role::User, "real dialogue")],
+            ..Default::default()
+        };
+        store.persist_archive(&substantive).unwrap();
+
+        let sessions = store.list().await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "real-session");
+
+        // The empty archived file should have been pruned from disk
+        assert!(
+            !empty_session_path.exists(),
+            "empty session file on disk must be pruned"
+        );
+        assert!(
+            !empty_session_jsonl.exists(),
+            "empty session jsonl file on disk must be pruned"
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
     async fn list_reads_overview_and_count_without_decoding_message_bodies() {
         // `list()` builds the `/sessions` picker rows. It must extract the
         // message count and the first-user-message overview *without* decoding
@@ -3850,6 +3914,15 @@ mod tests {
             .await
             .unwrap();
 
+        // Dialogue materialises the session and its auxiliary command records.
+        store
+            .replace_messages(vec![Message::new(
+                neenee_contracts::Role::User,
+                "first message",
+            )])
+            .await
+            .unwrap();
+
         let loaded = SessionStore::for_path(path.clone());
         let commands = loaded.commands().await;
         assert_eq!(commands.len(), 2);
@@ -3868,25 +3941,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mutate_commands_persists_first_command_in_empty_session() {
-        // ADR-0091: a command record is "real content" — a brand-new session
-        // whose first action is a command must persist (the contract ADR-0050's
-        // command echo used to carry), so the command survives restart.
+    async fn mutate_commands_does_not_persist_an_empty_session_snapshot() {
+        // Navigational / inspection slash commands (/sessions, /models, /dashboard)
+        // on an otherwise-empty session must remain lazy in memory and not materialize
+        // an empty session file on disk.
         let directory =
-            std::env::temp_dir().join(format!("neenee-commands-first-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("neenee-commands-lazy-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         store
             .mutate_commands(|commands| {
-                commands.push(neenee_contracts::CommandRecord::new("session", "status"));
+                commands.push(neenee_contracts::CommandRecord::new("sessions", ""));
             })
             .await
             .unwrap();
 
-        assert!(path.exists(), "a first command must persist the session");
+        assert!(store.is_empty_unpersisted().await);
+        assert!(
+            !path.exists(),
+            "commands alone must not persist an empty session"
+        );
+
+        // Once real dialogue content arrives, commands are persisted together with the snapshot.
+        store
+            .replace_messages(vec![Message::new(
+                neenee_contracts::Role::User,
+                "first message",
+            )])
+            .await
+            .unwrap();
+
+        assert!(!store.is_empty_unpersisted().await);
+        assert!(
+            path.exists(),
+            "dialogue content materializes the session with its commands"
+        );
 
         let loaded = SessionStore::for_path(path.clone());
         assert_eq!(loaded.commands().await.len(), 1);
+        assert_eq!(loaded.commands().await[0].name, "sessions");
+        assert_eq!(loaded.model_window().await.len(), 1);
 
         let _ = fs::remove_dir_all(directory);
     }
@@ -4118,7 +4212,7 @@ mod tests {
     /// guards against the per-setter drift the predicate was extracted to fix.
     #[tokio::test]
     async fn substantive_state_materialises_but_title_and_provider_do_not() {
-        // Title + provider selection alone stay unpersisted.
+        // Title + provider selection + commands alone stay unpersisted.
         let directory =
             std::env::temp_dir().join(format!("neenee-unified-guard-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
@@ -4131,8 +4225,15 @@ mod tests {
             }))
             .await
             .unwrap();
+        store
+            .mutate_commands(|c| c.push(neenee_contracts::CommandRecord::new("sessions", "")))
+            .await
+            .unwrap();
         assert!(store.is_empty_unpersisted().await);
-        assert!(!path.exists(), "title/provider alone never materialise");
+        assert!(
+            !path.exists(),
+            "title/provider/commands alone never materialise"
+        );
 
         // A substantive todo list materialises the same session.
         let mut todos = neenee_contracts::TodoList::new();
@@ -4176,6 +4277,8 @@ mod tests {
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
         let session_id = store.id().await;
+        // Materialise the active session with an active round counter
+        store.set_round_counter(2).await.unwrap();
         let record = neenee_contracts::RequestUsageRecord {
             key: neenee_contracts::RequestUsageKey {
                 session_id,

@@ -805,11 +805,6 @@ pub enum RoundEvent {
     /// `/autopilot` so the TUI can refresh its badge without waiting for the
     /// next harness snapshot.
     AutopilotChanged(bool),
-    /// Mirrors [`AgentEvent::SessionReview`]. The TUI renders a non-modal
-    /// alert with `alert` (or clears it when `alert` is empty).
-    SessionReview {
-        alert: String,
-    },
     RetryScheduled {
         attempt: usize,
         max_attempts: usize,
@@ -1255,16 +1250,6 @@ pub enum AgentEvent {
     TodosUpdated(crate::todos::TodoList),
     /// The autopilot toggle changed (via `/autopilot`).
     AutopilotChanged(bool),
-    /// An on-demand session-review diagnostic ran (ADR-0018, superseding the
-    /// periodic ADR-0016 design). `alert` is a pre-rendered, human-facing
-    /// summary of the worst verdict across all review dimensions (empty string
-    /// when the reviewed round is healthy — the TUI treats empty as "clear any prior
-    /// alert"). Surfaced as a non-modal banner so the user can decide whether
-    /// to interrupt; it does not abort the round unless an opt-in
-    /// `hard_stop_turns` budget is configured.
-    SessionReview {
-        alert: String,
-    },
     PermissionRequest(PermissionRequest),
     UserQuestionRequest(UserQuestionRequest),
     /// An interactive `bash` command needs a line of input from the operator

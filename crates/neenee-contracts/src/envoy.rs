@@ -293,35 +293,8 @@ handful of turns, then answer.",
     allow_model_stdin: false,
 };
 
-/// The diagnostic role used by session review (ADR-0016). Read-only,
-/// non-interactive, non-recursive — like [`EXPLORE`] in capability, but framed
-/// as a health auditor that reasons over a handed-off transcript snapshot and
-/// returns structured verdicts rather than free-form research findings. Bound
-/// by `EnvoyTool`-style machinery in `neenee-agent` (`Agent::run_session_review`),
-/// never by a model tool call.
-pub const REVIEW: EnvoyProfile = EnvoyProfile {
-    name: "review",
-    system_prompt: "\
-You are a session-health diagnostic envoy. You are handed a snapshot of \
-another agent's live transcript and asked whether it is making progress or \
-stuck. Judge from what you see — the sequence of tool calls, whether the same \
-ground is being revisited, whether edits or commands are actually landing. \
-You may read files to check a claim. You are \
-non-interactive: never ask a question; if you cannot tell, say so. Answer with \
-the requested structured verdict only, no preamble.",
-    tool_policy: ToolPolicy {
-        allowed_tools: Some(READ_ONLY_TOOLS),
-        allow_user_interaction: false,
-        write_paths: &[],
-        command_allowlist: &[],
-    },
-    variant_pins: &[],
-    autopilot: true,
-    allow_model_stdin: false,
-};
-
-/// The session-titling role (ADR-0022). Read-only and non-interactive like
-/// [`REVIEW`], but its task is pure text-in/text-out — it admits no tool loop at
+/// The session-titling role (ADR-0022). Read-only and non-interactive, its
+/// task is pure text-in/text-out — it admits no tool loop at
 /// all. The runner (`Agent::generate_title`) makes a single `provider.chat()`
 /// framed by this prompt and normalizes the reply via `clean_title`. Declared as
 /// a profile (not an ad-hoc call) so the capability-axis vocabulary stays the

@@ -166,8 +166,8 @@ The loop has **no default per-round turn cap**. The earlier
 model emits a final assistant message with no tool call, with the deterministic
 read-loop guard
 ([ADR-0034](../adr/0034-range-aware-pruning-and-deterministic-read-loop-guard.md))
-and context compaction as backstops. `/review` is an on-demand diagnostic, not
-an automatic transition or termination condition.
+and context compaction as backstops. (The former on-demand `/review`
+diagnostic has been retired; nothing fires a model call on turn counts.)
 
 ### Tool dispatch
 

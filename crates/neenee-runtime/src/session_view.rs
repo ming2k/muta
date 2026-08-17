@@ -7,22 +7,10 @@
 use neenee_agent::Agent;
 use neenee_agent::catalog;
 use neenee_contracts::{
-    McpConnectionStatus, McpServerInfo, Message, ModelInfo, SessionContextSnapshot, SessionOverview,
+    McpConnectionStatus, McpServerInfo, ModelInfo, SessionContextSnapshot, SessionOverview,
 };
 use neenee_persistence::{config::Config, session::SessionStore};
 use neenee_skills::SkillRegistry;
-
-/// Resume a session by id (or the active one when `id` is `None`). The session
-/// store is the single source of truth (ADR-0048), so resuming only needs to
-/// repoint the store; there is no parallel history mirror to refresh. Returns
-/// the resumed id plus the transcript for any caller that wants to display it.
-pub async fn resume_session(
-    session: &SessionStore,
-    id: Option<&str>,
-) -> Result<(String, Vec<Message>), String> {
-    let id = session.resume(id).await?;
-    Ok((id, session.full_transcript().await))
-}
 
 /// First 8 characters of a session id — short enough for picker rows while
 /// still disambiguating in practice.

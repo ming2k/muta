@@ -6,7 +6,7 @@
 
 use neenee_contracts::{EnvoyEvent, Role};
 
-use crate::design::JOIN_MODIFY;
+use crate::design::{COMMAND_CARD_LEAD_COLS, JOIN_MODIFY};
 use unicode_width::UnicodeWidthStr;
 
 /// Lifecycle of a tool step, stored explicitly (not inferred from `output`)
@@ -188,7 +188,7 @@ pub enum CommandPhase {
 /// How a command row presents its result — derived at render time from the
 /// result's shape, not stored. Commands are operations, not conversation:
 /// most replies are one short line that should simply *be* the row, with no
-/// disclosure marker at all. Only a genuinely long reply earns the `+`/`-`
+/// disclosure marker at all. Only a genuinely long reply earns the `▸`/`▾`
 /// affordance. See ADR-0106.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandRowLayout {
@@ -200,15 +200,27 @@ pub enum CommandRowLayout {
     /// there is no second view to disclose.
     Inline,
     /// A multi-line or long reply (`/search`, `/session status`, `/review`,
-    /// …): the disclosure pattern is correct — a `+`/`-` header row that
+    /// …): the disclosure pattern is correct — a `▸`/`▾` header row that
     /// expands to the body.
     Disclose,
 }
+
+/// Width of the trailing sent-time label ` · HH:MM` appended to a command
+/// card when `sent_at_ms` is present — reserved by
+/// [`TranscriptMessage::command_row_layout`] before the inline/Disclose
+/// classification so a timestamped row never flips to Disclose at render
+/// time.
+pub const SENT_TIME_LABEL_COLS: usize = 8;
 
 /// The single classifier for [`CommandRowLayout`]: a reply joins inline when
 /// it is exactly one line and fits beside the invocation; otherwise it
 /// discloses. `available_width` is the row's usable columns (the terminal
 /// band minus gutters), not the full terminal width.
+///
+/// The classifier subtracts the fixed command-card chrome (identity bar +
+/// marker slot + family glyph, ADR-0109) from the budget: the inline join
+/// has to fit *inside the card*, not merely inside the terminal.
+pub const COMMAND_ROW_CHROME_COLS: usize = COMMAND_CARD_LEAD_COLS + 2 /* marker slot */ + 2 /* glyph */;
 pub fn command_row_layout(
     result: Option<&neenee_contracts::CommandResult>,
     invocation: &str,
@@ -223,8 +235,12 @@ pub fn command_row_layout(
     }
     // The inline join is `invocation` + JOIN_MODIFY (` · `) + reply; the row
     // must hold both without truncation for the reply to read as an
-    // attribute, not a fragment.
-    let used = invocation.width() + JOIN_MODIFY.width() + text.width();
+    // attribute, not a fragment. The card chrome (identity bar + marker slot
+    // + glyph, ADR-0109) and the trailing timestamp eat into the same row, so
+    // the budget subtracts them — but the time label is render-time state the
+    // classifier cannot see, so the classifier subtracts only the fixed
+    // chrome and the renderer's clamp guards the timestamp.
+    let used = COMMAND_ROW_CHROME_COLS + invocation.width() + JOIN_MODIFY.width() + text.width();
     if used <= available_width {
         CommandRowLayout::Inline
     } else {
@@ -1125,17 +1141,22 @@ impl TranscriptMessage {
     /// invocation, `Disclose` otherwise. A `Pending` row has no result yet and
     /// always classifies `Plain` — the phase owns its presentation until the
     /// reply settles. `available_width` is the row's usable columns.
+    ///
+    /// A present `sent_at_ms` renders a trailing `· HH:MM` (always 8 columns),
+    /// so the method reserves that span before classifying — the free
+    /// classifier stays purely shape-based and timestamp-blind.
     pub fn command_row_layout(&self, available_width: usize) -> Option<CommandRowLayout> {
         match &self.kind {
             MessageKind::CommandResult { result, phase, .. } => {
                 if *phase == CommandPhase::Pending {
                     return Some(CommandRowLayout::Plain);
                 }
-                Some(command_row_layout(
-                    result.as_deref(),
-                    &self.raw,
-                    available_width,
-                ))
+                let usable = if self.sent_at_ms.is_some() {
+                    available_width.saturating_sub(SENT_TIME_LABEL_COLS)
+                } else {
+                    available_width
+                };
+                Some(command_row_layout(result.as_deref(), &self.raw, usable))
             }
             _ => None,
         }

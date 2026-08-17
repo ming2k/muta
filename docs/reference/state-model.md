@@ -154,7 +154,6 @@ tables.
 |------------|---------|-----------|
 | MCP connection status | One configured server | Connecting may settle Connected or Failed; disable is a session policy; reconnect starts a new attempt |
 | Todo status | One editable task-list item | Model-authored workflow label; updates may revise earlier labels, so no monotonic global transition graph is promised |
-| Review status | One diagnostic dimension | Ordered verdict Healthy < Watch < Stuck; a later review may move either direction |
 | Tool status | One rendered tool call | Projection of execution outcome; terminal values do not transition again |
 | Modal identity | The currently open TUI overlay | Exclusive routing discriminant, not one lifecycle shared by all modal contents |
 | OAuth/outbox progress | One frontend operation | Local workflow state scoped to that operation, not session execution state |

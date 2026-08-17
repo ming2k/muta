@@ -240,27 +240,23 @@ pub(super) fn handle_insert_into_round(app: &mut App, viewed_session_id: &str) {
 }
 
 /// Loop stage (input dispatch): the `SendSlash` arm of the action match
-/// (including the frontend-only `/serve` interception).
-pub(super) async fn handle_send_slash(
+/// (including the frontend-only `/serve` interception). `pub(crate)` so the
+/// behavior-lock tests in `crate::tests` can drive it directly (ADR-0110).
+pub(crate) async fn handle_send_slash(
     app: &mut App,
     runtime: &UiRuntime,
     _session: &crate::SessionSource,
-    viewed_session_id: &str,
     cmd: String,
 ) -> ActionFlow {
     app.suggestion_index = None;
     app.input_scroll = 0;
-    // A running round owns the activity surface. Do not paint
-    // an optimistic "queued" over its live label, and do not
-    // arm the responding flag for a control-plane command the
-    // round did not ask for: the round's own events keep the
-    // bar truthful, and the command's reply must not be able
-    // to leave a fabricated "queued" behind.
-    let session_busy = app.running_sessions.contains(viewed_session_id);
-    if !session_busy {
-        runtime.is_responding.store(true, Ordering::SeqCst);
-        *runtime.activity_status.lock().await = "queued".to_string();
-    }
+    // A command is a synchronous control-plane operation, not a round
+    // (ADR-0110): it never enters the round state machine, so it must not
+    // arm the activity bar's liveness surface — no `is_responding`, no
+    // optimistic "queued", no fabricated `Esc Esc interrupt` affordance over
+    // a dispatch that cannot be interrupted. The pending command row pushed
+    // below (ADR-0108) is the in-flight feedback for a command; a running
+    // round keeps owning the bar through its own events.
     app.follow_bottom = true;
     app.pin_summary_line = None;
     let sent_at_ms = now_epoch_ms();
@@ -295,10 +291,8 @@ pub(super) async fn handle_send_slash(
             &cmd,
             neenee_contracts::CommandResult::Text(reply),
         );
-        if !session_busy {
-            runtime.is_responding.store(false, Ordering::SeqCst);
-            runtime.activity_status.lock().await.clear();
-        }
+        // No activity-state retirement here: a command never armed it
+        // (ADR-0110) — there is nothing to reconcile.
         return ActionFlow::NextEvent;
     }
     let _ = app.tx.send(AgentRequest::SlashCommand(cmd));

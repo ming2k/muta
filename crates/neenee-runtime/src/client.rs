@@ -26,7 +26,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 pub use crate::serve::AttachAction;
 pub use crate::serve_discovery::Discovery as DaemonInfo;
 
-const LIVENESS_TIMEOUT: Duration = Duration::from_millis(200);
+const LIVENESS_TIMEOUT: Duration = Duration::from_millis(500);
 const SERVER_START_TIMEOUT: Duration = Duration::from_secs(10);
 const SERVER_START_POLL: Duration = Duration::from_millis(100);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -35,14 +35,72 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// argument is accepted for source compatibility but no longer scopes the
 /// lookup — the daemon serves every project.
 pub fn discover(_project_root: &Path) -> Option<DaemonInfo> {
-    discover_at(&discovery::global_discovery_path())
+    let global_path = discovery::global_discovery_path();
+    if let Some(info) = discover_at(&global_path) {
+        return Some(info);
+    }
+
+    // Self-healing fallback: if daemon.json is missing or unlinked,
+    // but a live daemon holds the instance lock and is responsive on UDS/TCP:
+    let lock_path = discovery::global_lock_path();
+    if neenee_persistence::lock::ProcessLock::is_locked(&lock_path) {
+        if let Some(pid) = neenee_persistence::lock::ProcessLock::probe_holder(&lock_path) {
+            if is_process_alive(pid) {
+                #[cfg(unix)]
+                let uds = discovery::default_uds_path();
+                #[cfg(unix)]
+                let uds_connectable = if uds.exists() {
+                    std::os::unix::net::UnixStream::connect(&uds).is_ok()
+                } else {
+                    false
+                };
+                #[cfg(not(unix))]
+                let uds_connectable = false;
+
+                let tcp_addr = std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    crate::startup::DEFAULT_SERVE_PORT,
+                ));
+                let tcp_connectable =
+                    std::net::TcpStream::connect_timeout(&tcp_addr, Duration::from_millis(300))
+                        .is_ok();
+
+                if uds_connectable || tcp_connectable {
+                    let recovered = DaemonInfo {
+                        pid,
+                        port: crate::startup::DEFAULT_SERVE_PORT,
+                        token: None,
+                        project_root: String::new(),
+                        started_at: 0,
+                        #[cfg(unix)]
+                        uds_path: if uds.exists() { Some(uds) } else { None },
+                        #[cfg(not(unix))]
+                        uds_path: None,
+                        version: Some(crate::serve::daemon_version().to_string()),
+                    };
+                    // Restore discovery file so future lookups are immediate
+                    let _ = discovery::write_global(&recovered);
+                    tracing::info!(
+                        pid,
+                        "discover: recovered discovery record from live lock holder"
+                    );
+                    return Some(recovered);
+                }
+            }
+        }
+    }
+
+    None
 }
 
 fn discover_at(path: &Path) -> Option<DaemonInfo> {
     let bytes = std::fs::read(path).ok()?;
     let info: DaemonInfo = serde_json::from_slice(&bytes).ok()?;
-    if !is_alive(&info) {
+    if !is_process_alive(info.pid) {
         discovery::remove(path);
+        return None;
+    }
+    if !is_alive(&info) {
         return None;
     }
     Some(info)
@@ -128,6 +186,9 @@ pub fn versions_compatible(info: &DaemonInfo) -> bool {
 /// Liveness probe: prefer the UDS (the daemon's primary local channel),
 /// fall back to the TCP port. Either reachable means the daemon is up.
 fn is_alive(info: &DaemonInfo) -> bool {
+    if !is_process_alive(info.pid) {
+        return false;
+    }
     #[cfg(unix)]
     if let Some(uds) = &info.uds_path {
         use std::os::unix::net::UnixStream;
@@ -140,7 +201,7 @@ fn is_alive(info: &DaemonInfo) -> bool {
 }
 
 /// Whether a process with `pid` exists and can receive signals.
-fn is_process_alive(pid: u32) -> bool {
+pub fn is_process_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
         unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
@@ -211,7 +272,7 @@ pub async fn stop(info: &DaemonInfo) -> Result<(), String> {
     }
 
     // Tier 4: Cleanup discovery record & socket
-    discovery::remove(&discovery::global_discovery_path());
+    discovery::remove_if_matching_pid(&discovery::global_discovery_path(), info.pid);
     #[cfg(unix)]
     if let Some(uds) = &info.uds_path {
         let _ = std::fs::remove_file(uds);
@@ -222,6 +283,12 @@ pub async fn stop(info: &DaemonInfo) -> Result<(), String> {
     } else {
         Err(format!("could not stop daemon (pid {})", info.pid))
     }
+}
+
+/// Path to the daemon startup stderr log file.
+pub fn startup_log_path() -> PathBuf {
+    let dirs = neenee_persistence::paths::get();
+    dirs.state_dir.join("log").join("daemon-startup.log")
 }
 
 pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
@@ -245,12 +312,62 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
                 "ensure_daemon: running daemon is older than this client; restarting daemon"
             );
             let _ = stop(&info).await;
+            let _ = wait_for_process_exit(info.pid, Duration::from_secs(2)).await;
         } else {
             // Client is older than running daemon; return info so caller can surface actionable upgrade error.
             return Ok(info);
         }
     }
-    spawn_daemon()?;
+
+    // Check if another daemon is holding the instance lock
+    let lock_path = discovery::global_lock_path();
+    if neenee_persistence::lock::ProcessLock::is_locked(&lock_path) {
+        if let Some(holder_pid) = neenee_persistence::lock::ProcessLock::probe_holder(&lock_path) {
+            if is_process_alive(holder_pid) {
+                tracing::info!(
+                    holder_pid,
+                    "ensure_daemon: daemon instance lock held; waiting for startup or draining"
+                );
+                let init_deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while std::time::Instant::now() < init_deadline {
+                    tokio::time::sleep(SERVER_START_POLL).await;
+                    if let Some(info) = discover(project_root) {
+                        if versions_compatible(&info) {
+                            return Ok(info);
+                        }
+                    }
+                    if !is_process_alive(holder_pid) {
+                        break;
+                    }
+                }
+
+                // If still locked and discover() failed, the process holding the lock is deadlocked or unresponsive.
+                // Clear the deadlock by stopping the unresponsive process.
+                if is_process_alive(holder_pid) {
+                    tracing::warn!(
+                        holder_pid,
+                        "ensure_daemon: process holding lock is unresponsive; clearing deadlock"
+                    );
+                    let ghost = DaemonInfo {
+                        pid: holder_pid,
+                        port: crate::startup::DEFAULT_SERVE_PORT,
+                        token: None,
+                        project_root: String::new(),
+                        started_at: 0,
+                        #[cfg(unix)]
+                        uds_path: Some(discovery::default_uds_path()),
+                        #[cfg(not(unix))]
+                        uds_path: None,
+                        version: None,
+                    };
+                    let _ = stop(&ghost).await;
+                    let _ = wait_for_process_exit(holder_pid, Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+
+    let mut child = spawn_daemon()?;
     let deadline = std::time::Instant::now() + SERVER_START_TIMEOUT;
     loop {
         tokio::time::sleep(SERVER_START_POLL).await;
@@ -259,23 +376,66 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
                 return Ok(info);
             }
         }
+        if let Ok(Some(status)) = child.try_wait() {
+            let log_text = std::fs::read_to_string(startup_log_path()).unwrap_or_default();
+            let log_trimmed = log_text.trim();
+            if !log_trimmed.is_empty() {
+                return Err(format!(
+                    "neenee daemon exited prematurely ({status}): {log_trimmed}"
+                ));
+            } else {
+                return Err(format!("neenee daemon exited prematurely with {status}"));
+            }
+        }
         if std::time::Instant::now() >= deadline {
-            return Err(format!(
-                "timed out after {}s waiting for neenee daemon to start",
-                SERVER_START_TIMEOUT.as_secs(),
-            ));
+            let log_text = std::fs::read_to_string(startup_log_path()).unwrap_or_default();
+            let log_trimmed = log_text.trim();
+            let lock_info = if neenee_persistence::lock::ProcessLock::is_locked(&lock_path) {
+                neenee_persistence::lock::ProcessLock::probe_holder(&lock_path)
+                    .map(|pid| format!(" (instance lock held by PID {pid})"))
+                    .unwrap_or_else(|| " (instance lock is held)".to_string())
+            } else {
+                String::new()
+            };
+            if !log_trimmed.is_empty() {
+                return Err(format!(
+                    "timed out after {}s waiting for neenee daemon to start{lock_info}: {log_trimmed}",
+                    SERVER_START_TIMEOUT.as_secs(),
+                ));
+            } else {
+                return Err(format!(
+                    "timed out after {}s waiting for neenee daemon to start{lock_info}. \
+                     Run `neenee daemon status` to inspect server state or view logs in ~/.local/state/neenee/log/",
+                    SERVER_START_TIMEOUT.as_secs(),
+                ));
+            }
         }
     }
 }
 
-fn spawn_daemon() -> Result<(), String> {
+fn spawn_daemon() -> Result<std::process::Child, String> {
     let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("neenee"));
     let mut command = std::process::Command::new(&program);
     command.arg("serve");
     command
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stdout(std::process::Stdio::null());
+
+    let startup_log = startup_log_path();
+    if let Some(parent) = startup_log.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&startup_log)
+    {
+        command.stderr(file);
+    } else {
+        command.stderr(std::process::Stdio::null());
+    }
+
     // Pin the daemon's cwd to a stable, always-existing directory instead of
     // inheriting this client's project. ADR-0096 made the daemon the host for
     // *every* project's sessions, so a project directory inherited from the
@@ -295,8 +455,87 @@ fn spawn_daemon() -> Result<(), String> {
     }
     command
         .spawn()
-        .map_err(|error| format!("could not spawn {}: {error}", program.display()))?;
-    Ok(())
+        .map_err(|error| format!("could not spawn {}: {error}", program.display()))
+}
+
+/// Comprehensive diagnostics for the daemon control plane and system status.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DaemonDiagnostics {
+    pub discovery_path: PathBuf,
+    pub discovery_record: Option<DaemonInfo>,
+    pub discovery_valid: bool,
+    pub lock_path: PathBuf,
+    pub lock_held: bool,
+    pub lock_holder_pid: Option<u32>,
+    pub lock_holder_alive: bool,
+    pub uds_path: PathBuf,
+    pub uds_exists: bool,
+    pub uds_connectable: bool,
+    pub tcp_port: u16,
+    pub tcp_listening: bool,
+    pub startup_log_path: PathBuf,
+    pub last_startup_log: Option<String>,
+}
+
+/// Perform a diagnostic probe of the daemon environment without modifying state.
+pub fn diagnose_daemon() -> DaemonDiagnostics {
+    let discovery_path = discovery::global_discovery_path();
+    let discovery_record = discover_at(&discovery_path);
+    let raw_record: Option<DaemonInfo> = std::fs::read(&discovery_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let lock_path = discovery::global_lock_path();
+    let lock_held = neenee_persistence::lock::ProcessLock::is_locked(&lock_path);
+    let lock_holder_pid = neenee_persistence::lock::ProcessLock::probe_holder(&lock_path);
+    let lock_holder_alive = lock_holder_pid.map(is_process_alive).unwrap_or(false);
+
+    #[cfg(unix)]
+    let uds_path = discovery::default_uds_path();
+    #[cfg(not(unix))]
+    let uds_path = PathBuf::from("");
+
+    let uds_exists = uds_path.exists();
+    #[cfg(unix)]
+    let uds_connectable = if uds_exists {
+        std::os::unix::net::UnixStream::connect(&uds_path).is_ok()
+    } else {
+        false
+    };
+    #[cfg(not(unix))]
+    let uds_connectable = false;
+
+    let port = discovery_record
+        .as_ref()
+        .map(|d| d.port)
+        .or_else(|| raw_record.as_ref().map(|d| d.port))
+        .unwrap_or(9800);
+
+    let tcp_addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let tcp_listening =
+        std::net::TcpStream::connect_timeout(&tcp_addr, Duration::from_millis(200)).is_ok();
+
+    let startup_log = startup_log_path();
+    let last_startup_log = std::fs::read_to_string(&startup_log)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    DaemonDiagnostics {
+        discovery_path,
+        discovery_record: discovery_record.or(raw_record),
+        discovery_valid: discover_at(&discovery::global_discovery_path()).is_some(),
+        lock_path,
+        lock_held,
+        lock_holder_pid,
+        lock_holder_alive,
+        uds_path,
+        uds_exists,
+        uds_connectable,
+        tcp_port: port,
+        tcp_listening,
+        startup_log_path: startup_log,
+        last_startup_log,
+    }
 }
 
 pub enum Handshake {
@@ -764,7 +1003,7 @@ mod tests {
 
     fn record(port: u16, token: Option<String>) -> DaemonInfo {
         DaemonInfo {
-            pid: std::process::id(),
+            pid: 99999999, // Unused/dead pid
             port,
             token,
             project_root: "/tmp/proj".to_string(),
@@ -778,7 +1017,7 @@ mod tests {
         l.local_addr().unwrap().port()
     }
     #[test]
-    fn discover_at_returns_none_and_removes_stale_record() {
+    fn discover_at_returns_none_and_removes_stale_record_for_dead_pid() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("serve.json");
         std::fs::write(
@@ -787,7 +1026,30 @@ mod tests {
         )
         .unwrap();
         assert!(discover_at(&path).is_none());
-        assert!(!path.exists());
+        assert!(
+            !path.exists(),
+            "stale discovery file with dead PID must be removed"
+        );
+    }
+    #[test]
+    fn discover_at_preserves_record_if_pid_is_still_alive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("serve.json");
+        let live_rec = DaemonInfo {
+            pid: std::process::id(),
+            port: dead_port(),
+            token: None,
+            project_root: "/tmp/proj".to_string(),
+            started_at: 0,
+            uds_path: None,
+            version: None,
+        };
+        std::fs::write(&path, serde_json::to_vec(&live_rec).unwrap()).unwrap();
+        assert!(discover_at(&path).is_none());
+        assert!(
+            path.exists(),
+            "discovery file for living PID must NOT be deleted on transient probe fail"
+        );
     }
     #[test]
     fn discover_at_tolerates_missing_and_corrupt_files() {

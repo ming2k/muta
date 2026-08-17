@@ -282,11 +282,6 @@ pub async fn run_tui(
     // modal renders it as `turn M` alongside the round number.
     let current_turn: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
     let current_turn_clone = current_turn.clone();
-    // Session-review alert (ADR-0016). Updated when a `SessionReview`
-    // response lands; cleared (empty) on round reset so the activity bar's
-    // `⚠ <alert>` segment clears between rounds.
-    let review_alert: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-    let review_alert_clone = review_alert.clone();
     // Wall-clock instant the current round started. Stamped on a "running"
     // HarnessState so the activity bar can render a live `<elapsed>` segment.
     let round_started_at: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
@@ -1228,9 +1223,8 @@ pub async fn run_tui(
                                     // A new round resets the turn counter; it stays 0
                                     // until the first `TurnStarted` of the round lands.
                                     *current_turn_clone.lock().await = 0;
-                                    // Reset the review alert and stamp the round timer so the
-                                    // activity bar can render a live `<elapsed>` segment.
-                                    *review_alert_clone.lock().await = String::new();
+                                    // Stamp the round timer so the activity bar can render a
+                                    // live `<elapsed>` segment.
                                     *round_started_at_clone.lock().await =
                                         Some(std::time::Instant::now());
                                 }
@@ -1250,7 +1244,6 @@ pub async fn run_tui(
                                     }
                                     activity_clone.lock().await.clear();
                                     *current_turn_clone.lock().await = 0;
-                                    *review_alert_clone.lock().await = String::new();
                                     *round_started_at_clone.lock().await = None;
                                 }
                             }
@@ -1312,17 +1305,6 @@ pub async fn run_tui(
                             if !routes_to_side {
                                 ir_clone.store(false, Ordering::SeqCst);
                                 activity_clone.lock().await.clear();
-                            }
-                        }
-                        RoundEvent::SessionReview { alert } => {
-                            if !routes_to_side {
-                                // Mirror the latest review verdict into the runtime cell
-                                // so the activity bar's `⚠ <alert>` segment shows the
-                                // diagnostic's summary (or clears it when `alert` is
-                                // empty — a healthy review). The frame loop copies this
-                                // into `App::review_alert`, which `draw_activity_bar`
-                                // reads.
-                                *review_alert_clone.lock().await = alert;
                             }
                         }
                     } // end inner `match event`
@@ -1634,7 +1616,6 @@ pub async fn run_tui(
         todos: None,
         round_count: 0,
         current_turn: 0,
-        review_alert: String::new(),
         round_started_at: None,
         activity_tab: ActivityTab::Activity,
         activity_scroll: 0,
@@ -1815,7 +1796,6 @@ pub async fn run_tui(
             todos,
             round_count,
             current_turn,
-            review_alert,
             round_started_at,
             unsent_input_signal,
             notice_toast_signal,

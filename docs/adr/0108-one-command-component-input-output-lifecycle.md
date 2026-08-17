@@ -6,6 +6,8 @@
   (placement and per-row view state are unchanged; the row's *identity* and
   live lifecycle are revised), and the live-echo part of
   [ADR-0091](0091-command-ledger-and-typed-results.md) D4
+- **Revised by:** [ADR-0109](0109-command-card-and-triangle-disclosure.md)
+  §1 (the row becomes a card)
 
 ## Context
 

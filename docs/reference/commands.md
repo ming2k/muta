@@ -19,23 +19,20 @@ Project and user-defined commands are covered under
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/autopilot [on\|off]` | Toggle autopilot mode (agent runs without human intervention) |
 | `/principal <code\|architect\|reviewer\|security>` | Switch the principal role — changes persona and capability scope |
-| `/review` | Run an on-demand session-review diagnostic of the current round |
 | `/search <query>` | Semantic search over the project's session history |
-| `/session [status\|list\|resume\|fork\|open\|new]` | Manage durable sessions |
-| `/sessions` | Browse past sessions |
+| `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
+| `/fork` | Fork the current conversation into a child session |
 | `/dashboard` | Open the session dashboard — a full-screen live view over every daemon session (console + sessions dock), with preview / attach / interrupt / prompt / create (ADR-0096; layout per ADR-0097). `/host` is a hidden alias |
 | `/btw [prompt\|list]` | Open a background aside conversation — asides keep running when you leave (`Ctrl+C` detaches, `Esc` interrupts, `F5` lists) |
-| `/resume [id]` | Resume the most recent or selected session |
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/init [path]` | Initialize a `.neenee/` config tree |
-| `/reload` | Re-read config.toml and apply changes live (MCP servers, permissions, bash policy, hooks) |
 | `/trust` | Trust this project's `.neenee/` contributions (MCP servers, hooks, project skills, project commands) and load them |
 | `/untrust` | Revoke trust for this project (disconnects MCP, unloads hooks, skills, and commands) |
 | `/skills [list\|reload]` | List or reload available skills |
 | `/skill <name>` | Load a skill by name |
 | `/tools` | Toggle individual session tools on or off |
-| `/config` | Open user configuration |
+| `/config` | Open user configuration; `/config reload` re-reads config.toml and applies it live |
 | `/export` | Export the current conversation to the clipboard as Markdown |
 | `/debug trace [on\|off]` | Toggle per-project provider round-trip tracing for debugging |
 | `/debug preview` | Dry-run the next request body to a file (no provider call) |
@@ -58,7 +55,7 @@ rewrites the input to it:
 |----------|-----------|-----|
 | `/clear` | `/new` | Clearing the transcript in place was removed; a fresh session keeps the old one on disk |
 | `/reset` | `/new` | Same fresh-session semantics |
-| `/continue` | `/resume` | Picks a session up where it left off |
+| `/continue` | `/sessions` | Picks a session up where it left off |
 
 The mapping is presentation-only and lives in one table
 (`TRIGGER_WORD_SUGGESTIONS` in `neenee-runtime/src/startup.rs`); adding a
@@ -112,16 +109,18 @@ clock-driven scheduler for autopilot, reminders, and one-shot timers.
 `/repeat` is retained as a cron-only alias for `/schedule`. Use `/schedule` for
 countdown (`10m`) or absolute-time (`14:00`, `tomorrow 09:00`) one-shots.
 
-### `/session`
+### `/sessions`
 
 | Form | Effect |
 |------|--------|
-| `/session status` | Show session id, parent, counts, checkpoint, compaction |
-| `/session list` | List durable session branches |
-| `/session resume [id]` | Resume the most recent or selected session |
-| `/session fork` | Fork the current conversation into a child session |
-| `/session open <id-prefix>` | Open a session by id or id prefix |
-| `/session new` | Start a new durable session |
+| `/sessions` | Open the sessions picker (Enter opens, `i` info, `d` delete, `n` new) |
+| `/sessions <id-prefix>` | Open that session immediately |
+
+`/resume` and `/session` are retired hidden aliases of `/sessions`; legacy
+grammar still resolves (`/resume <id>` and `/session open <id>` open the
+session, `/session list` opens the picker, `/session new` and
+`/session fork` behave like `/new` and `/fork`). `/session status` is gone —
+session id, counts, and timestamps live in the picker's `i` info view.
 
 ### `/permissions`
 
@@ -148,6 +147,7 @@ backend.
 | Form | Effect |
 |------|--------|
 | `/config` | Open the Settings overlay |
+| `/config reload` | Re-read `config.toml` and apply changes live |
 
 The Settings overlay exposes Appearance and Layout. Appearance offers the
 `zen`, `midnight`, `nord`, `catppuccin`, and `paper` presets. The Custom option
@@ -213,16 +213,6 @@ it never appears in the list or `/sessions`
 ([ADR-0103](../adr/0103-btw-background-asides.md), which extends
 [ADR-0017](../adr/0017-side-conversations.md)).
 
-### `/review`
-
-On-demand only — triggers a bounded read-only `REVIEW` envoy that
-diagnoses the current round and reports verdicts. `/review` takes no
-arguments. The original periodic-cadence design
-([ADR-0016](../adr/0016-session-review-over-round-counting.md)) was
-superseded by on-demand review plus in-loop steering
-([ADR-0030](../adr/0030-early-loop-intervention-and-round-hook.md));
-ADR-0016 itself remains Accepted.
-
 ### `/search`
 
 | Form | Effect |
@@ -251,15 +241,6 @@ Returns the most relevant past messages for the query (see the
 | Form | Effect |
 |------|--------|
 | `/init [path]` | Initialize a `.neenee/` config tree; `path` defaults to `.` |
-
-### `/reload`
-
-| Form | Effect |
-|------|--------|
-| `/reload` | Re-read `config.toml` and apply changes live |
-
-Re-loads configuration without restarting: MCP servers, permissions,
-`bash_policy`, and hooks are all applied to the live process.
 
 ### `/trust` and `/untrust`
 

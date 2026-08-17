@@ -14,14 +14,13 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{Disclosure, Interaction, summary_text_color};
 
-use crate::model::document::{Block, Inline, MessageKind, TranscriptMessage};
+use crate::model::document::{Block, CommandPhase, Inline, MessageKind, TranscriptMessage};
 use crate::model::layout::{
     BlockRegion, COMMAND_RESULT_BLOCK_IDX, LayoutMap, PROVIDER_RETRY_BLOCK_IDX, THINKING_BLOCK_IDX,
 };
 use crate::model::selection::{CellDragInfo, SelectionState};
 
 use crate::message_body::draw_message_body;
-use crate::model::document::{CommandPhase, CommandRowLayout};
 use crate::text_layout::{
     WrappedLine, block_selection_range, code_gutter_line, line_selection, line_spans,
     line_spans_rich, padded_tail, wrap_text,
@@ -34,7 +33,7 @@ use crate::view::{
     TRANSCRIPT_BODY_LEADING_INDENT, Theme,
 };
 
-use crate::design::JOIN_MODIFY;
+use crate::design::TURN_HEADER_BODY_GAP_ROWS;
 
 /// Cursor + environment carried through the tool-step body renderers.
 ///
@@ -218,7 +217,11 @@ pub fn draw_provider_retry(
         theme,
     );
     let bg = theme.surface();
-    let marker = if *expanded { "-" } else { "+" };
+    let marker = if *expanded {
+        MARKER_EXPANDED
+    } else {
+        MARKER_COLLAPSED
+    };
     let full_width = transcript_area.width as usize;
     let mut ctx = RenderCtx::from_cursor(
         frame,
@@ -373,7 +376,11 @@ fn draw_step_summary(
     summary_color: Color,
     bg: Color,
 ) -> usize {
-    let expand = if expanded { "-" } else { "+" };
+    let expand = if expanded {
+        MARKER_EXPANDED
+    } else {
+        MARKER_COLLAPSED
+    };
     let summary_line_idx = *ctx.content_lines;
 
     let line = tool_summary_line(expand, summary, summary_color, bg, ctx.full_width);
@@ -2036,11 +2043,15 @@ fn draw_reasoning_summary(
     focused: bool,
     block_idx: usize,
 ) -> usize {
-    let marker = marker_override.unwrap_or(if expanded { "-" } else { "+" });
+    let marker = marker_override.unwrap_or(if expanded {
+        MARKER_EXPANDED
+    } else {
+        MARKER_COLLAPSED
+    });
     let summary_line_idx = *ctx.content_lines;
     // A reasoning trace's lifecycle is carried by the summary text (duration
     // omitted while streaming), never by the marker, which is always the
-    // disclosure `+`/`-`. So no accent is supplied and the summary color is
+    // disclosure `▸`/`▾`. So no accent is supplied and the summary color is
     // the pure disclosure × interaction weight from the shared state machine:
     // expanded → primary foreground; collapsed + hovered/focused →
     // intermediate hover tone; collapsed + idle → muted.
@@ -2139,7 +2150,7 @@ pub fn draw_reasoning_trace(
             &mut ctx,
             mi,
             expanded,
-            // Always use the disclosure marker (`+`/`-`), never a streaming
+            // Always use the disclosure marker (`▸`/`▾`), never a streaming
             // `●`. With the activity bar as the single breathing anchor
             // (ADR 0008), nothing about the marker needs to change between
             // streaming and finished — the lifecycle reads from the summary
@@ -2258,116 +2269,59 @@ pub fn draw_reasoning_trace(
     }
 }
 
-/// The disclosure marker for a command component, by phase and layout
-/// (ADR-0108). `+`/`-` appears **only** when there is a body to expand into —
-/// the same truthfulness rule ADR-0106 introduced, now phase-gated: a pending
-/// row has no output yet, so it shows no marker at all.
-fn command_marker(layout: CommandRowLayout, phase: CommandPhase, expanded: bool) -> &'static str {
-    match phase {
-        // The output half does not exist yet — no affordance may promise it.
-        CommandPhase::Pending => "",
-        CommandPhase::Cancelled => "",
-        CommandPhase::Completed => match layout {
-            CommandRowLayout::Plain | CommandRowLayout::Inline => "",
-            CommandRowLayout::Disclose => {
-                if expanded {
-                    "-"
-                } else {
-                    "+"
-                }
-            }
-        },
-    }
-}
-
-/// Build the one-row header of a command component: `⌘ /cmd args · 21:39`,
-/// optionally joined with its inline reply (` · Started new session: …`).
-/// Span grammar everywhere (ADR-0108): marker (invocation tone) · glyph (tone
-/// by family) · invocation (accent or muted while running) · muted trailing
-/// meta (` · HH:MM`) · ` · reply` when the output joins inline. The tail is
-/// padded so the whole row is the hover/click target.
+/// The disclosure marker pair (ADR-0109): `▸` collapsed, `▾` expanded.
 ///
-/// The trailing meta never inherits an interaction weight it did not earn —
-/// the row's tone ladder is carried by the invocation (and marker) alone.
-#[allow(clippy::too_many_arguments)]
-fn command_summary_line(
-    marker: &str,
+/// `+`/`-` is **reserved for diff signs** (and the `+1 -1` counts in edit
+/// summaries) — the old marker overloaded it, so an expanded edit step read
+/// as "minus a line" at first glance. A triangle is directional, unclaimed
+/// by any other glyph in the transcript, and matches the web panel's
+/// disclosure chevron.
+pub(crate) const MARKER_COLLAPSED: &str = "▸";
+pub(crate) const MARKER_EXPANDED: &str = "▾";
+
+/// Build the one-row header of a command entry: `⌘ command · 21:39`.
+/// The `⌘` (or `❯`) glyph and `command` label are rendered in the same
+/// indicator tone (BOLD), followed by the muted trailing timestamp ` · HH:MM`.
+fn command_header_line(
     lead_symbol: &str,
-    lead_tone: Color,
-    invocation: &str,
-    invocation_color: Color,
+    family_tone: Color,
     time_label: Option<&str>,
-    inline_reply: Option<&str>,
     muted: Color,
     full_width: usize,
 ) -> Line<'static> {
-    let mut spans = Vec::with_capacity(8);
+    let mut spans = Vec::with_capacity(4);
     let mut used = 0usize;
-    if !marker.is_empty() {
-        let marker_text = format!("{marker} ");
-        used += marker_text.width();
-        spans.push(Span::styled(
-            marker_text,
-            Style::default().fg(invocation_color),
-        ));
-    }
-    used += lead_symbol.width();
+
+    // Indicator tag: `⌘ command` or `❯ command` in family_tone + BOLD.
+    let tag = format!("{lead_symbol}command");
+    used += tag.width();
     spans.push(Span::styled(
-        lead_symbol.to_string(),
-        Style::default().fg(lead_tone).add_modifier(Modifier::BOLD),
-    ));
-    used += invocation.width();
-    spans.push(Span::styled(
-        invocation.to_string(),
+        tag,
         Style::default()
-            .fg(invocation_color)
+            .fg(family_tone)
             .add_modifier(Modifier::BOLD),
     ));
+
+    // Trailing timestamp: ` · HH:MM` in muted color.
     if let Some(time) = time_label {
         let time_span = format!(" · {time}");
-        used += time_span.width();
-        spans.push(Span::styled(time_span, Style::default().fg(muted)));
-    }
-    if let Some(reply) = inline_reply {
-        let join = JOIN_MODIFY.to_string();
-        used += join.width();
-        spans.push(Span::styled(join, Style::default().fg(muted)));
-        // Clamped to the remaining columns so the row never spills; the
-        // width-aware classifier guarantees a fitting reply is never a
-        // fragment, this only guards degenerate widths.
         let budget = full_width.saturating_sub(used);
-        let clamped = truncate_to_width(reply, budget);
-        used += clamped.width();
-        spans.push(Span::styled(clamped, Style::default().fg(invocation_color)));
+        if time_span.width() <= budget {
+            used += time_span.width();
+            spans.push(Span::styled(time_span, Style::default().fg(muted)));
+        }
     }
-    spans.push(Span::styled(
-        padded_tail(full_width, used),
-        Style::default(),
-    ));
+
     Line::from(spans)
 }
 
-/// Draw a slash-command invocation as one component that owns its input and
-/// its output (ADR-0108, revising ADR-0091/0106).
+/// Draw a slash or shell command as a top-level **Entry** owning its input
+/// and output (ADR-0111, revising ADR-0109/0108/0106).
 ///
-/// The row is the *whole* command: `⌘` (slash) or `❯` (shell) introduces the
-/// typed invocation — which is also the input echo, so a command is never
-/// additionally rendered as a user bubble — and the result lands on the same
-/// row (`invocation · reply`) or as its expandable body. It exists in two
-/// states:
-///
-/// - **Pending** (`⌘ /autopilot` in the muted running tone): dispatched, no
-///   reply yet. The input half is durable; no marker, no reply.
-/// - **Completed** (`⌘ /new · Started new session: a1b2c3`): the reply joins
-///   inline when one line fits beside the invocation; a long or multi-line
-///   reply (`/search`, `/session status`, `/review`) takes the `+`/`-`
-///   disclosure and expands to the typed body through the shared block
-///   renderer, so lists/code/tables survive. A `Cancelled` row renders like a
-///   result-less completed one.
-///
-/// Tone follows the shared ladder (muted while running or idle, hover on
-/// pointer/focus, primary foreground while expanded) so the row reads as
-/// quietly interactive wherever it is.
+/// Every command entry is structured identically to a turn entry:
+/// - **Header**: `⌘ command · HH:MM` (generic descriptor with shared indicator tone)
+/// - **Gap**: 1 blank row separating header and content body (`TURN_HEADER_BODY_GAP_ROWS`)
+/// - **Body**: The concrete invocation (e.g. `/autopilot on`) followed by result output blocks.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_command_result(
     frame: &mut Frame,
@@ -2381,13 +2335,12 @@ pub fn draw_command_result(
     skip_rows: &mut usize,
     current_y: &mut u16,
     content_lines: &mut usize,
-    hovered: bool,
-    focused: bool,
+    _hovered: bool,
+    _focused: bool,
 ) {
     let Some(invocation) = msg.command_result_summary() else {
         return;
     };
-    let expanded = msg.command_result_expanded() == Some(true);
     let phase = msg
         .command_result_phase()
         .unwrap_or(CommandPhase::Completed);
@@ -2411,47 +2364,15 @@ pub fn draw_command_result(
         return;
     }
 
-    let layout = msg
-        .command_row_layout(full_width)
-        .unwrap_or(CommandRowLayout::Plain);
-
     let is_shell = invocation.starts_with('!') || msg.raw.starts_with('!');
     let lead_symbol = if is_shell { "❯ " } else { "⌘ " };
-    let lead_tone = if is_shell { theme.ok() } else { theme.info() };
+    let family_tone = if is_shell { theme.ok() } else { theme.info() };
     let time_label = msg.sent_at_ms.map(crate::time::sent_time_label);
-    let marker = command_marker(layout, phase, expanded);
 
-    // The invocation carries the row's whole disclosure × interaction weight:
-    // running → muted (a pending command is in flight, not attention-seeking);
-    // expanded → primary foreground; collapsed + hovered/focused → the
-    // intermediate hover tone; collapsed + idle → muted. The marker shares
-    // that color so the affordance reads as one visual unit with the
-    // invocation — the same rule reasoning summaries and tool steps use.
-    let invocation_color = summary_text_color(
-        None,
-        Disclosure::from_expanded(expanded && phase == CommandPhase::Completed),
-        Interaction::from_hover_focused(hovered, focused),
-        theme,
-    );
-
-    // The output half joins the input half on the same row when the reply is
-    // one line that fits beside the invocation (the R1 attribute dot: the
-    // reply is the outcome of the invocation). A Pending/Cancelled row, a
-    // Disclose row, or an expanded row (the reply is in the body) joins
-    // nothing.
-    let inline_reply =
-        (phase == CommandPhase::Completed && layout == CommandRowLayout::Inline && !expanded)
-            .then(|| msg.command_result_text())
-            .flatten();
-
-    let line = command_summary_line(
-        marker,
+    let header_line = command_header_line(
         lead_symbol,
-        lead_tone,
-        &invocation,
-        invocation_color,
+        family_tone,
         time_label.as_deref(),
-        inline_reply.as_deref(),
         theme.muted(),
         full_width,
     );
@@ -2466,10 +2387,7 @@ pub fn draw_command_result(
             current_y,
             content_lines,
         );
-        if let Some(rect) = ctx.paint(line) {
-            // The rect is recorded for every row (not only disclosing ones):
-            // hovering lights the row up (the shared hover affordance), and
-            // keyboard focus navigation can still land on it.
+        if let Some(rect) = ctx.paint(header_line) {
             ctx.layout_map.push(BlockRegion {
                 message_idx: mi,
                 block_idx: COMMAND_RESULT_BLOCK_IDX,
@@ -2483,17 +2401,50 @@ pub fn draw_command_result(
         }
     }
 
-    if expanded && phase == CommandPhase::Completed && msg.command_result_text().is_some() {
-        advance_plain_blank_rows(
+    // 1-row blank gap between entry header and body
+    advance_plain_blank_rows(
+        transcript_area,
+        TURN_HEADER_BODY_GAP_ROWS,
+        skip_rows,
+        current_y,
+        content_lines,
+    );
+
+    // Concrete command invocation inside the entry body
+    let invocation_style = if phase == CommandPhase::Pending {
+        Style::default()
+            .fg(theme.muted())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme.fg())
+            .add_modifier(Modifier::BOLD)
+    };
+
+    let invocation_line = Line::from(vec![Span::styled(invocation, invocation_style)]);
+    {
+        let mut ctx = RenderCtx::from_cursor(
+            frame,
             transcript_area,
-            REASONING_TRACE_BODY_TOP_GAP_ROWS,
+            full_width,
+            theme,
+            layout_map,
             skip_rows,
             current_y,
             content_lines,
         );
-        // `blocks` holds the parsed result text (`CommandResult::to_text`),
-        // empty when the record carried no result — then there is nothing to
-        // expand into, and `draw_message_body` advances zero rows.
+        ctx.paint(invocation_line);
+    }
+
+    // Result body blocks
+    if phase == CommandPhase::Completed && msg.command_result_text().is_some() {
+        advance_plain_blank_rows(
+            transcript_area,
+            1,
+            skip_rows,
+            current_y,
+            content_lines,
+        );
         draw_message_body(
             frame,
             transcript_area,
@@ -2545,7 +2496,7 @@ pub fn draw_sticky_summary_if_needed(
         );
         frame.render_widget(
             Paragraph::new(tool_summary_line(
-                "-",
+                MARKER_EXPANDED,
                 &step.summary,
                 summary_color,
                 bg,
@@ -2563,7 +2514,7 @@ pub fn draw_sticky_summary_if_needed(
         );
         frame.render_widget(
             Paragraph::new(reasoning_summary_line(
-                "-",
+                MARKER_EXPANDED,
                 &step.summary,
                 step.color,
                 summary_color,

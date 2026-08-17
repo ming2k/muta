@@ -1262,24 +1262,6 @@ pub fn relay_agent_event(
         AgentEvent::AutopilotChanged(enabled) => {
             round_response(session_id, RoundEvent::AutopilotChanged(enabled))
         }
-        AgentEvent::SessionReview { alert } => {
-            if !alert.trim().is_empty() {
-                let _ = tx.send(round_response(
-                    session_id,
-                    RoundEvent::Notice(
-                        neenee_contracts::AgentNotice::new(
-                            neenee_contracts::NoticeKind::ReviewAlert,
-                            neenee_contracts::NoticeSeverity::Warning,
-                            "Session review needs attention",
-                            neenee_contracts::NoticeSource::Review,
-                        )
-                        .with_body(alert.clone())
-                        .with_surface(neenee_contracts::NoticeSurface::Banner),
-                    ),
-                ));
-            }
-            round_response(session_id, RoundEvent::SessionReview { alert })
-        }
         AgentEvent::PermissionRequest(request) => {
             round_response(session_id, RoundEvent::PermissionRequest(request))
         }

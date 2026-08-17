@@ -79,8 +79,8 @@ flag on the message that gates automatic transitions:
 
 | State | Marker | Body | Summary weight (no accent) |
 |-------|--------|------|-----------------------------|
-| `Collapsed` | `+` | hidden | `theme.muted()`, or `theme.hover()` under the pointer |
-| `Expanded` | `-` | visible | `theme.fg()` — expansion dominates every interaction |
+| `Collapsed` | `▸` | hidden | `theme.muted()`, or `theme.hover()` under the pointer |
+| `Expanded` | `▾` | visible | `theme.fg()` — expansion dominates every interaction |
 
 ### The `user_pinned` invariant
 
@@ -140,7 +140,7 @@ The accent color a renderer passes to `summary_text_color`, by source:
 | Tool | `Denied` | `Some(theme.warn)` — distinct from a runtime failure | `draw_tool_step`, `draw_envoy_bar` |
 | Tool | `Cancelled` | `Some(theme.dim)` — reads as inert, not as a fresh failure | `draw_tool_step`, `draw_envoy_bar` |
 | Tool | `Ok` | `None` — hands control to the weight channel | `draw_tool_step`, `draw_envoy_bar` |
-| Reasoning | streaming / finished | `None` — lifecycle reads from the summary text (duration omitted while streaming); the marker is always `+`/`-` | `draw_reasoning_trace` |
+| Reasoning | streaming / finished | `None` — lifecycle reads from the summary text (duration omitted while streaming); the marker is always `▸`/`▾` | `draw_reasoning_trace` |
 
 A `Some(accent)` supplies the dominant hue, then blends toward the
 disclosure/interaction weight. Collapsed idle leaves the accent unchanged;

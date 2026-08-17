@@ -382,56 +382,6 @@ fn provider_prompt_hints_are_injected_into_system_prompt() {
     assert!(messages[0].content.contains("Provider protocol hint."));
 }
 
-/// Regression for ADR-0039 stage 6: the `/review` reviewer envoy's head
-/// system message must actually carry the review composition (REVIEW persona +
-/// registered dimensions + JSON contract). Previously the reviewer pre-seeded
-/// a system message that request projection replaced on round 1, so none of it
-/// reached the model; the reviewer now carries a dedicated registry whose
-/// composition is assembled on every request.
-#[test]
-fn reviewer_system_message_carries_persona_dimensions_and_contract() {
-    use neenee_contracts::{REVIEW, Role};
-
-    let dimensions = crate::session_review::default_reviews();
-    let reviewer = Agent::builder(
-        Arc::new(TestProvider),
-        Vec::new(),
-        crate::AgentIdentity::default(),
-    )
-    .with_system_prompt_registry(crate::model_request::reviewer_system_prompt_registry(
-        &dimensions,
-    ))
-    .build();
-
-    // Drive the same placement path the streaming loop uses: the registry
-    // composes the head system message from the reviewer's sections.
-    let mut messages: Vec<Message> = vec![Message::new(Role::User, "transcript snapshot")];
-    reviewer.prepare_request_messages_debug(&mut messages);
-
-    let system = &messages[0];
-    assert_eq!(system.role, Role::System);
-    assert!(
-        system.content.starts_with(REVIEW.system_prompt),
-        "system message should open with the REVIEW persona"
-    );
-    assert!(
-        system.content.contains("Assess each of these dimensions"),
-        "the dimensions preamble composes in"
-    );
-    assert!(
-        system.content.contains("`looping`"),
-        "the registered 'looping' dimension is listed"
-    );
-    assert!(
-        system.content.contains("Return ONLY a JSON object"),
-        "the JSON verdict contract composes in"
-    );
-    assert_eq!(
-        system.origin.as_ref().map(|o| o.kind),
-        Some(neenee_contracts::InjectionKind::SystemPrompt)
-    );
-}
-
 /// Golden layout test for ADR-0039 stage 2: the registry-assembled system
 /// message must reproduce the legacy `parts.join("\n")` layout byte-for-byte
 /// for a representative state (identity set, no skills). The always-on
@@ -1588,9 +1538,6 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
                 format!("tool-cancelled {name}")
             }
             AgentEvent::AutopilotChanged(enabled) => format!("autopilot {enabled}"),
-            AgentEvent::SessionReview { alert } => {
-                format!("session-review alert={alert:?}")
-            }
             AgentEvent::PermissionRequest(request) => {
                 format!("permission-request {} {}", request.tool, request.scope)
             }
@@ -2360,15 +2307,9 @@ async fn round_runs_uncapped_until_model_emits_text() {
         crate::AgentIdentity::default(),
     ));
 
-    let (events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Always).await;
+    let (_events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Always).await;
 
     assert_eq!(outcome.unwrap().message.content, "all done");
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, AgentEvent::SessionReview { .. })),
-        "the ReAct loop must not emit review events; review is on-demand only"
-    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2402,64 +2343,6 @@ fn hard_stop_turns_getter_round_trips_setter() {
     assert_eq!(agent.get_hard_stop_turns(), 0);
 }
 
-#[test]
-fn render_review_alert_collapses_verdicts() {
-    use crate::agent::Agent;
-    // All healthy → empty string (clears the activity-bar alert).
-    let healthy = vec![ReviewVerdict::healthy("looping")];
-    assert_eq!(Agent::render_review_alert(&healthy, 64), "");
-    // Stuck dominates Watch; both non-healthy details fold in, turn count
-    // surfaces, and the worst status label wins.
-    let mixed = vec![
-        ReviewVerdict {
-            dimension: "looping".into(),
-            status: ReviewStatus::Watch,
-            detail: "slow".into(),
-        },
-        ReviewVerdict {
-            dimension: "other".into(),
-            status: ReviewStatus::Stuck,
-            detail: "re-reading f.rs".into(),
-        },
-    ];
-    let alert = Agent::render_review_alert(&mixed, 80);
-    assert!(alert.starts_with("review: stuck"), "{alert}");
-    assert!(alert.contains("80 turns"), "{alert}");
-    assert!(alert.contains("re-reading f.rs"), "{alert}");
-    assert!(alert.contains("slow"), "{alert}");
-}
-
-#[test]
-fn estimate_completed_turns_counts_assistant_tool_call_messages() {
-    use crate::agent::Agent;
-    // No messages → 0.
-    assert_eq!(Agent::estimate_completed_turns(&[]), 0);
-    let mut msgs = vec![
-        Message::new(Role::User, "go"),
-        Message::new(Role::Assistant, "thinking"),
-    ];
-    // Assistant without tool calls → not a completed tool-bearing turn.
-    assert_eq!(Agent::estimate_completed_turns(&msgs), 0);
-    // Two assistant messages carrying tool calls → two completed turns; a plain text
-    // assistant message in between does not inflate the count.
-    let mut with_calls = msgs[1].clone();
-    with_calls.tool_calls = Some(vec![neenee_contracts::ToolCall {
-        id: "c1".into(),
-        name: "read_text".into(),
-        arguments: "{}".into(),
-    }]);
-    msgs[1] = with_calls;
-    msgs.push(Message::new(Role::Assistant, "more text"));
-    let mut third = Message::new(Role::Assistant, String::new());
-    third.tool_calls = Some(vec![neenee_contracts::ToolCall {
-        id: "c2".into(),
-        name: "edit_file".into(),
-        arguments: "{}".into(),
-    }]);
-    msgs.push(third);
-    assert_eq!(Agent::estimate_completed_turns(&msgs), 2);
-}
-
 #[tokio::test]
 async fn hard_stop_aborts_when_budget_configured() {
     // hard_stop_turns is the only opt-in execution cap. With it set to 3, the
@@ -2487,45 +2370,6 @@ async fn hard_stop_aborts_when_budget_configured() {
         message.contains("hard-stop budget of 3"),
         "error must name the budget, got: {message}"
     );
-}
-
-#[tokio::test]
-async fn review_now_runs_diagnostic_and_returns_verdict() {
-    // On-demand review (`/review` → `Agent::review_now`) feeds the transcript
-    // to the REVIEW envoy, which shares the scripted provider. The next
-    // scripted turn is the reviewer's verdict JSON; `review_now` parses it
-    // back into a `ReviewVerdict` keyed to the `looping` dimension.
-    let verdict_json =
-        r#"{"verdicts":[{"dimension":"looping","status":"stuck","detail":"re-reading"}]}"#;
-    let tool = RecordingTool::read("alpha", "A-out");
-    let agent = Arc::new(Agent::new(
-        Arc::new(ScriptedProvider::new(vec![text_turn(verdict_json)])),
-        vec![Arc::new(tool)],
-        crate::AgentIdentity::default(),
-    ));
-
-    // A transcript with one tool-bearing turn so the estimate is meaningful.
-    let mut transcript = vec![Message::new(Role::User, "go")];
-    let mut assistant = Message::new(Role::Assistant, String::new());
-    assistant.tool_calls = Some(vec![neenee_contracts::ToolCall {
-        id: "c1".into(),
-        name: "read_text".into(),
-        arguments: "{\"path\":\"f\"}".into(),
-    }]);
-    transcript.push(assistant);
-
-    let verdicts = agent.review_now(&transcript).await;
-    assert_eq!(verdicts.len(), 1);
-    assert_eq!(verdicts[0].dimension, "looping");
-    assert_eq!(verdicts[0].status, ReviewStatus::Stuck);
-    assert_eq!(verdicts[0].detail, "re-reading");
-    // The on-demand alert renders with the estimated turn count.
-    let alert = crate::agent::Agent::render_review_alert(
-        &verdicts,
-        crate::agent::Agent::estimate_completed_turns(&transcript),
-    );
-    assert!(alert.contains("review: stuck"), "{alert}");
-    assert!(alert.contains("1 turn"), "{alert}");
 }
 
 #[test]

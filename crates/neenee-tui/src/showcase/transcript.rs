@@ -64,7 +64,6 @@ pub fn run() -> io::Result<()> {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,

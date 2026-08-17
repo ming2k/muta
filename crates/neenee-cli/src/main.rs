@@ -179,6 +179,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 watch,
                 json,
                 include_idle,
+                diagnostic,
             } => {
                 let project_root = project_override.clone().unwrap_or_else(|| {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -189,6 +190,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         watch,
                         json,
                         include_idle,
+                        diagnostic,
                     },
                 )
                 .await
@@ -270,6 +272,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         watch,
         json,
         include_idle,
+        diagnostic,
     } = &mode
     {
         let project_root = project_override
@@ -281,6 +284,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 watch: *watch,
                 json: *json,
                 include_idle: *include_idle,
+                diagnostic: *diagnostic,
             },
         )
         .await
@@ -405,9 +409,33 @@ fn print_panel_url() -> Result<(), Box<dyn std::error::Error>> {
 /// Stopping a daemon that is not running (or whose record is stale) is a
 /// success — the operator's desired end state ("no daemon") is already true.
 async fn stop_daemon() -> Result<(), String> {
-    let Some(info) = client::discover(std::path::Path::new(".")) else {
-        eprintln!("neenee: no daemon is running.");
-        return Ok(());
+    let info = match client::discover(std::path::Path::new(".")) {
+        Some(info) => info,
+        None => {
+            let lock_path = neenee_runtime::serve_discovery::global_lock_path();
+            if let Some(pid) = neenee_persistence::lock::ProcessLock::probe_holder(&lock_path) {
+                if client::is_process_alive(pid) {
+                    client::DaemonInfo {
+                        pid,
+                        port: neenee_runtime::startup::DEFAULT_SERVE_PORT,
+                        token: None,
+                        project_root: String::new(),
+                        started_at: 0,
+                        #[cfg(unix)]
+                        uds_path: Some(neenee_runtime::serve_discovery::default_uds_path()),
+                        #[cfg(not(unix))]
+                        uds_path: None,
+                        version: None,
+                    }
+                } else {
+                    eprintln!("neenee: no daemon is running.");
+                    return Ok(());
+                }
+            } else {
+                eprintln!("neenee: no daemon is running.");
+                return Ok(());
+            }
+        }
     };
     client::stop(&info).await?;
     eprintln!("neenee: daemon stopped (pid {}).", info.pid);

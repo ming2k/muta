@@ -33,7 +33,7 @@ The `envoy` tool is the one built-in tool whose result is not a single value
 but a streamed investigation. It takes a short description and a prompt, both
 required, and returns a payload carrying the envoy's summary, its full
 transcript, and its token usage. The parent persists that transcript as the
-tool step's children, so `/resume` rebuilds the nested view later.
+tool step's children, so resuming a session rebuilds the nested view later.
 
 Because the envoy's progress is interesting in real time (not just its final
 answer), the tool streams live rather than blocking until completion: every
@@ -73,15 +73,15 @@ vocabulary; the dispatch tools bind them by reference.
 |---------|----------|---------|-------------|------|
 | `EXPLORE` | `envoy` tool | `Read` | none | Pure read tools (`read_file`, `grep`, `glob`, `list_dir`, …) |
 | `CODE` | `envoy_code` tool | `Write` | none | Read tools + `bash`, `edit_file`, `write_file`, `todo*` — a full coding surface; runs on autopilot, so the delegation *is* the authorization |
-| `REVIEW` | harness session-review diagnostic | `Read` | none | Pure read tools, run on a transcript snapshot |
 | `TITLE` | harness title generation | `Read` | none | No tools — a single `provider.chat()` call |
 | `INTERACTIVE` | (reserved, no dispatch tool yet) | `Read` | none | Pure read tools, with `ask_user` forwarded up |
 
-All five are non-recursive (recursion is excluded absolutely, not per-profile
+All are non-recursive (recursion is excluded absolutely, not per-profile
 — see [Tool admission](#tool-admission)). `EXPLORE` (the default `envoy` tool)
 and `CODE` (the `envoy_code` tool) are the two profiles reachable from a
-model tool call today; `REVIEW`, `TITLE`, and `INTERACTIVE` are internal
-roles. `CODE` and `INTERACTIVE` opt into `allow_user_interaction: true` so an
+model tool call today; `TITLE` and `INTERACTIVE` are internal
+roles. (A fourth internal role, `REVIEW` — the retired `/review`
+diagnostic — has been removed.) `CODE` and `INTERACTIVE` opt into `allow_user_interaction: true` so an
 `ask_user` request surfaces to the parent through the full-duplex channel.
 Every built-in envoy runs `autopilot: true` — including `CODE`: the
 principal's act of calling `envoy_code` is the authorization for the
@@ -236,7 +236,7 @@ When zoomed in:
 - `Esc` pops back up the focus stack; `[` and `]` cycle sibling `envoy`
   steps at the current depth.
 
-On `/resume`, persisted child transcripts repopulate the step's children, so the
+On session resume (`/sessions <id>` or the picker), persisted child transcripts repopulate the step's children, so the
 zoom view rebuilds from disk. The live event stream always wins over the
 snapshot. The detailed rendering reference is
 [Envoy view](../../reference/tui/envoy-view.md).

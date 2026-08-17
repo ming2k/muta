@@ -8,7 +8,7 @@
 //! network. It keeps only contracts shared by independent layers: domain
 //! values
 //! (`TokenUsage`, `ScheduledJob`, `TodoList`, …), wire DTOs, and
-//! capability traits (`Provider`, `Tool`, `Hook`, `SessionReview`). Pure logic
+//! capability traits (`Provider`, `Tool`, `Hook`). Pure logic
 //! owned only by the agent belongs in `neenee-agent` (ADR-0057).
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
@@ -78,7 +78,6 @@ pub use token_ledger::{
 };
 pub mod doom_guard_config;
 pub mod secret;
-pub mod session_review;
 pub mod session_title;
 pub mod skills_config;
 pub mod tool_registry;
@@ -91,7 +90,7 @@ pub use catalog::{Channel, ProviderEntry, Transport};
 pub use channel_auth::{ChannelAuth, LoginMethod};
 pub use doom_guard_config::DoomGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink};
-pub use envoy::{CODE, EXPLORE, EnvoyProfile, INTERACTIVE, QUANT, REVIEW, TITLE, ToolPolicy};
+pub use envoy::{CODE, EXPLORE, EnvoyProfile, INTERACTIVE, QUANT, TITLE, ToolPolicy};
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,
     ContextTokenSnapshot, ContextTokenSource, EnvoyEvent, HarnessSnapshot, InputReply,
@@ -123,7 +122,6 @@ pub use pressure::{
 };
 pub use principal::{PrincipalProfile, PrincipalRole, PrincipalRuntimeConfig};
 pub use secret::SecretString;
-pub use session_review::{DEFAULT_REVIEWER_HARD_STOP, ReviewStatus, ReviewVerdict, SessionReview};
 pub use session_title::{TITLE_MAX_LEN, clean_title};
 pub use skills_config::SkillsConfig;
 pub use tool_output::truncate_utf8;

@@ -55,6 +55,7 @@ a slash/path suggestion when one is open); it is not a focus toggle.
 | [Assistant text](assistant-text.md) | Regular markdown text, 4-space indent |
 | [Code block](code-block.md) | Borderless code with `┃` bar + line-number gutter |
 | [Expandable step](expandable-step.md) | Shared shape for collapsible transcript entries |
+| [Command card](command-card.md) | One-row card (`┃` bar + band) owning a command's input and output, with a pending→completed lifecycle |
 | [Tool step](tool-step.md) | Expandable step for tool calls |
 | [Thinking step](thinking-step.md) | Expandable step for reasoning text |
 | [Step state machine](step-state.md) | The three orthogonal axes (Lifecycle × Disclosure × Interaction) and the accent/weight color channels |

@@ -15,8 +15,9 @@ use crate::model::selection::{
 
 use super::design::{
     BLOCK_SURFACE_H_INSET, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH, CODE_BAND_LEFT_INDENT,
-    MATH_MARKER_GAP_COLS, USER_MESSAGE_OUTER_GUTTER_COLS, USER_MESSAGE_RIGHT_PAD_COLS,
-    USER_MESSAGE_TEXT_GAP_COLS, USER_MESSAGE_TRANSITION_ROWS,
+    MATH_MARKER_GAP_COLS, USER_MESSAGE_GUTTER_GLYPH, USER_MESSAGE_HEADER_BODY_GAP_ROWS,
+    USER_MESSAGE_OUTER_GUTTER_COLS, USER_MESSAGE_RIGHT_PAD_COLS, USER_MESSAGE_TEXT_GAP_COLS,
+    USER_MESSAGE_TRANSITION_ROWS,
 };
 use super::markdown_table::{TableRowInfo, build_table_render, push_table_segment};
 use super::text_layout::{
@@ -38,10 +39,8 @@ fn display_width_u16(s: &str) -> u16 {
 ///
 /// The whole header row is composed from the shared `MetaStrip` component
 /// (`render/components/meta_strip.rs`) — the same two-tone "anchor · detail"
-/// treatment the assistant turn header uses. Because a user round is the
-/// larger, user-perceived scope, the strip leads with a `▌` gutter rail (accent
-/// tone) before the anchor, giving it a stronger visual anchor than the
-/// in-round turn band.
+/// treatment the assistant turn header uses. The strip leads with a `<` gutter rail (accent
+/// tone) representing Unix stdin redirection, matching the Unix pipeline visual language.
 ///
 fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
     // The anchor is the first token of the header (the round provenance), drawn
@@ -310,11 +309,11 @@ pub fn draw_message_body(
                 let user_content_w = full_width.saturating_sub(2 * USER_MESSAGE_OUTER_GUTTER_COLS);
 
                 if is_user {
-                    // Header: the send-metadata label (turn no. + time, or a
+                    // Header: the send-metadata label (round no. + time, or a
                     // pending marker for queued messages) sits OUTSIDE the
-                    // user-message panel, on plain `surface`, directly above
-                    // it. The panel's full panel-bg top padding provides the
-                    // visual separator, so no extra blank row is needed.
+                    // user-message panel, on plain `surface`. A blank gap row
+                    // (`USER_MESSAGE_HEADER_BODY_GAP_ROWS`) is placed between
+                    // the header and the user-message panel.
                     if bi == 0 {
                         *content_lines += 1;
                         if *skip_rows > 0 {
@@ -323,20 +322,19 @@ pub fn draw_message_body(
                             // Two-tone label, no background band (matches the
                             // turn header row in `layout_default`): the round
                             // anchor is info-tone bold, the time reads as
-                            // muted metadata. Because a user round is the larger
-                            // user-visible scope, it gets an explicit gutter
-                            // rail before the anchor. Use a filled left half
-                            // block (`▌`) rather than a box-drawing line: it
-                            // reads as a stronger visual guide without looking
-                            // like a border. The rail consumes the same width
-                            // as the old text gap, so `round N` / `⏸ Queued`
-                            // stay aligned with the message body.
+                            // muted metadata. The header leads with a `<` gutter
+                            // rail (Unix stdin redirection). The rail consumes
+                            // the same width as `USER_MESSAGE_TEXT_GAP_COLS`, so
+                            // `round N` / `⏸ Queued` stay aligned with the message body.
                             let round_gutter = if USER_MESSAGE_TEXT_GAP_COLS == 0 {
                                 String::new()
                             } else {
                                 format!(
-                                    "▌{}",
-                                    " ".repeat(USER_MESSAGE_TEXT_GAP_COLS.saturating_sub(1))
+                                    "{}{}",
+                                    USER_MESSAGE_GUTTER_GLYPH,
+                                    " ".repeat(USER_MESSAGE_TEXT_GAP_COLS.saturating_sub(
+                                        display_width_u16(USER_MESSAGE_GUTTER_GLYPH) as usize,
+                                    ))
                                 )
                             };
                             let strip = if is_queued {
@@ -360,6 +358,20 @@ pub fn draw_message_body(
                             let rect = Rect::new(area.x, *current_y, area.width, 1);
                             strip.render(frame, rect, theme);
                             *current_y += 1;
+                        }
+
+                        for _ in 0..USER_MESSAGE_HEADER_BODY_GAP_ROWS {
+                            *content_lines += 1;
+                            if *skip_rows > 0 {
+                                *skip_rows = skip_rows.saturating_sub(1);
+                            } else if *current_y < area.y + area.height {
+                                let rect = Rect::new(area.x, *current_y, area.width, 1);
+                                frame.render_widget(
+                                    Paragraph::new("").style(Style::default().bg(theme.surface())),
+                                    rect,
+                                );
+                                *current_y += 1;
+                            }
                         }
                     }
                     for _ in 0..USER_MESSAGE_TRANSITION_ROWS {

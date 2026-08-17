@@ -668,24 +668,20 @@ default_id: string, rows: Array<ProviderPickerRow>, };
 export type QueuedUserInput = { id: string, text: string, display_text?: string, images?: Array<ImagePart>, sent_at_ms?: number, };
 
 /**
- * The diagnostic's judgement for a dimension.
- *
- * Ordered so that the worst verdict across dimensions wins when the runner
- * collapses the set into one alert (`Stuck` dominates `Watch` dominates
- * `Healthy`).
+ * The diagnostic's judgement for a dimension (ledger-compatibility type for
+ * the retired `/review` command). Ordered so the worst verdict wins.
  */
 export type ReviewStatus = "Healthy" | "Watch" | "Stuck";
 
 /**
- * The outcome of one review dimension.
- *
- * `detail` is the diagnostic's own explanation, surfaced verbatim in the TUI
- * alert so the user can judge whether to interrupt. Kept free-form because
- * the valuable signal is the reviewer's reasoning, not a rigid schema.
+ * The outcome of one review dimension, as persisted by the retired `/review`
+ * command's ledger records. The command (and the diagnostic subsystem behind
+ * it) is gone, but old session files still carry these — the types stay so
+ * `CommandResult::Review` keeps deserializing for resume/export.
  */
 export type ReviewVerdict = { 
 /**
- * Matches the [`SessionReview::id`] this verdict answers.
+ * The reviewed dimension's id (e.g. `"looping"`).
  */
 dimension: string, status: ReviewStatus, detail: string, };
 
@@ -700,7 +696,7 @@ name: string,
 /**
  * Raw argument remainder after the command word.
  */
-args: string, result: CommandResult, } } | { "Error": string } | { "ToolCall": { id: string, name: string, arguments: string, } } | { "ToolResult": { id: string, name: string, output: string, structured: ToolOutput, duration_ms: number, } } | { "ToolStream": { id: string, stream: ToolStreamFrame, } } | { "ToolCancelled": { id: string, name: string, } } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "InputRequest": InputRequest } | { "Compacted": { archived_messages: number, before_chars: number, after_chars: number, } } | { "HarnessState": HarnessSnapshot } | { "TodosUpdated": TodoList } | { "AutopilotChanged": boolean } | { "SessionReview": { alert: string, } } | { "RetryScheduled": { attempt: number, max_attempts: number, delay_ms: number, message: string, } } | { "Activity": string } | { "TurnStarted": { 
+args: string, result: CommandResult, } } | { "Error": string } | { "ToolCall": { id: string, name: string, arguments: string, } } | { "ToolResult": { id: string, name: string, output: string, structured: ToolOutput, duration_ms: number, } } | { "ToolStream": { id: string, stream: ToolStreamFrame, } } | { "ToolCancelled": { id: string, name: string, } } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "InputRequest": InputRequest } | { "Compacted": { archived_messages: number, before_chars: number, after_chars: number, } } | { "HarnessState": HarnessSnapshot } | { "TodosUpdated": TodoList } | { "AutopilotChanged": boolean } | { "RetryScheduled": { attempt: number, max_attempts: number, delay_ms: number, message: string, } } | { "Activity": string } | { "TurnStarted": { 
 /**
  * 1-indexed enclosing user round.
  */

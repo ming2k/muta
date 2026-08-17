@@ -83,8 +83,10 @@ pub enum InjectionKind {
     /// `EnvoySteer`, this opens the child transcript rather than steering an
     /// already-running child. Site: `EnvoyTool::run`.
     EnvoyTask,
-    /// The visible transcript snapshot handed to the bounded session-review
-    /// envoy. Site: `Agent::run_session_review`.
+    /// Legacy: the transcript snapshot once handed to the bounded
+    /// session-review envoy (the `/review` diagnostic, now retired). No
+    /// production site constructs it anymore; the variant stays so old
+    /// session files carrying injected rows still deserialize.
     SessionReviewInput,
     /// Implicit skill auto-load: the latest user round mentioned a skill name,
     /// so the skill body was injected in-context. Site:

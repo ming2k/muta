@@ -101,19 +101,20 @@ pub fn global_lock_path() -> PathBuf {
 #[must_use = "dropping the lease removes the discovery record"]
 pub struct DiscoveryLease {
     path: Option<PathBuf>,
+    pid: u32,
 }
 
 impl DiscoveryLease {
     /// Wrap an already-written record. `None` (write failed) still yields a
     /// guard — a no-op one — so callers need no branching.
-    pub fn new(path: Option<PathBuf>) -> Self {
-        Self { path }
+    pub fn new(path: Option<PathBuf>, pid: u32) -> Self {
+        Self { path, pid }
     }
 
     /// Remove the record now (the explicit early step of a graceful drain).
     pub fn release(&mut self) {
         if let Some(path) = self.path.take() {
-            remove(&path);
+            remove_if_matching_pid(&path, self.pid);
         }
     }
 }
@@ -145,7 +146,7 @@ mod lease_tests {
             },
         )
         .unwrap();
-        let mut lease = DiscoveryLease::new(Some(path.clone()));
+        let mut lease = DiscoveryLease::new(Some(path.clone()), 1);
         lease.release(); // explicit early removal
         assert!(!path.exists());
         drop(lease); // Drop's own removal must tolerate the missing file
@@ -155,9 +156,43 @@ mod lease_tests {
     fn drop_alone_removes_the_record() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon.json");
-        std::fs::write(&path, "{}").unwrap();
-        drop(DiscoveryLease::new(Some(path.clone())));
+        neenee_persistence::fsutil::atomic_write_json(
+            &path,
+            &Discovery {
+                pid: 42,
+                port: 2,
+                token: None,
+                project_root: String::new(),
+                started_at: 3,
+                uds_path: None,
+                version: None,
+            },
+        )
+        .unwrap();
+        drop(DiscoveryLease::new(Some(path.clone()), 42));
         assert!(!path.exists(), "Drop must remove the record");
+    }
+
+    #[test]
+    fn drop_does_not_remove_newer_daemon_record() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.json");
+        neenee_persistence::fsutil::atomic_write_json(
+            &path,
+            &Discovery {
+                pid: 99,
+                port: 2,
+                token: None,
+                project_root: String::new(),
+                started_at: 3,
+                uds_path: None,
+                version: None,
+            },
+        )
+        .unwrap();
+        // Lease from older daemon PID 42 dropped while path contains PID 99
+        drop(DiscoveryLease::new(Some(path.clone()), 42));
+        assert!(path.exists(), "Drop must NOT remove newer daemon's record");
     }
 }
 
@@ -203,6 +238,19 @@ pub fn remove(path: &Path) {
             "serve discovery: could not remove discovery file"
         );
     }
+}
+
+/// Remove `path` only if the discovery record inside belongs to `expected_pid`.
+/// Prevents an older daemon from unlinking a newer daemon's discovery file.
+pub fn remove_if_matching_pid(path: &Path, expected_pid: u32) {
+    if let Ok(bytes) = std::fs::read(path) {
+        if let Ok(record) = serde_json::from_slice::<Discovery>(&bytes) {
+            if record.pid != expected_pid {
+                return;
+            }
+        }
+    }
+    remove(path);
 }
 
 /// The path-resolution rule, split from [`paths::get`] so tests can supply

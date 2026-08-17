@@ -108,7 +108,7 @@ and [ADR-0096](docs/adr/0096-unified-session-daemon.md).
 |---------|-------------|
 | `/schedule <when> <prompt>` | Schedule a prompt on a cron (recurring) or a countdown/absolute time (one-shot) |
 | `/compact` | Compact context to free up space |
-| `/session list` | Browse and resume past sessions |
+| `/sessions` | Browse and open past sessions |
 | `/export` | Export conversation as Markdown |
 | `/mcp` | Inspect MCP server connections |
 

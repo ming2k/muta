@@ -79,15 +79,6 @@
       onOpenModels={() => (modelsOpen = true)}
     />
 
-    {#if daemon.reviewAlert}
-      <div class="review-banner" role="alert">
-        <pre>{daemon.reviewAlert}</pre>
-        <button class="dismiss" aria-label="Dismiss review alert" onclick={() => daemon.dismissReviewAlert()}>
-          ×
-        </button>
-      </div>
-    {/if}
-
     <section class="transcript" bind:this={transcriptEl} onscroll={handleScroll}>
       {#if daemon.feed.length === 0 && !daemon.streamingAssistantText && Object.keys(daemon.liveTools).length === 0}
         <div class="empty-hero">
@@ -172,44 +163,6 @@
     min-width: 0;
   }
 
-  .review-banner {
-    margin: 10px 24px 0;
-    padding: 10px 12px;
-    border: 1px solid rgba(210, 153, 34, 0.4);
-    border-left: 3px solid var(--accent-warning);
-    border-radius: var(--radius-md);
-    background: rgba(210, 153, 34, 0.08);
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-
-  .review-banner pre {
-    flex: 1;
-    margin: 0;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--text-secondary);
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 120px;
-    overflow-y: auto;
-  }
-
-  .review-banner .dismiss {
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    font-size: 16px;
-    cursor: pointer;
-    line-height: 1;
-  }
-
-  .review-banner .dismiss:hover {
-    color: var(--text-primary);
-  }
-
   .transcript {
     flex: 1;
     overflow-y: auto;
@@ -287,10 +240,6 @@
   @media (max-width: 900px) {
     .transcript {
       padding: 14px;
-    }
-
-    .review-banner {
-      margin: 8px 14px 0;
     }
   }
 </style>

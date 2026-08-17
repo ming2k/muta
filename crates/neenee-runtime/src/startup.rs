@@ -63,22 +63,19 @@ define_builtin_commands! {
     Compact     = "/compact"      : "Compact older complete rounds now",
     New         = "/new"          : "Start a new session, keeping the current one in history",
     Permissions = "/permissions"  : "Show or clear always-allowed tool rules",
-    Config      = "/config"       : "Open user configuration",
+    Config      = "/config"       : "Open user configuration; /config reload re-reads config.toml and applies it live",
     Autopilot  = "/autopilot"   : "Toggle autopilot mode — agent runs without human intervention (on|off; no argument toggles)",
     Principal   = "/principal"    : "Switch the principal role (code|architect|reviewer|security) — changes persona and capability scope",
-    Review      = "/review"       : "Run an on-demand session-review diagnostic of the current round",
     Search      = "/search"       : "Semantic search over the project's session history",
-    Session     = "/session"      : "Manage durable sessions (status|list|resume|fork|open|new)",
-    Sessions    = "/sessions"     : "Browse past sessions",
+    Sessions    = "/sessions"     : "Browse past sessions; /sessions <id> opens that session",
+    Fork        = "/fork"         : "Fork the current conversation into a child session",
     Dashboard   = "/dashboard"    : "Session dashboard — live status and control over every daemon session",
     Btw         = "/btw"          : "Open a side conversation: /btw [prompt] or /btw list (asides keep running when you leave)",
-    Resume      = "/resume"       : "Resume the most recent or selected session",
     Repeat      = "/repeat"       : "Schedule a prompt on a cron: /repeat <cron> <prompt>",
     Schedule    = "/schedule"     : "Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot). /schedule <when> <prompt>",
     Skills      = "/skills"       : "List or reload available skills (list|reload)",
     Skill       = "/skill"        : "Load a skill by name",
     Init        = "/init"         : "Initialize a .neenee/ config tree",
-    Reload      = "/reload"       : "Re-read config.toml and apply changes live (MCP servers, permissions, bash policy, hooks)",
     Trust       = "/trust"        : "Trust this project and load its MCP servers, hooks, project skills and commands",
     Untrust     = "/untrust"      : "Revoke trust for this project (disconnects MCP, unloads hooks, project skills and commands)",
     Export      = "/export"       : "Export this conversation to the clipboard as Markdown",
@@ -96,6 +93,23 @@ impl BuiltinCmd {
             // `/host` was the pre-dashboard name (it leaked the daemon "host"
             // concept, ADR-0096); the surface is now the session dashboard.
             "/host" => Some(BuiltinCmd::Dashboard),
+            // `/resume` was a second spelling of `/session resume` — an
+            // identical help line with no ADR justifying the duplication, and
+            // an arm that skipped the provider-pin reapply. Retired as an
+            // alias of `/sessions`: bare `/resume` opens the picker, and
+            // `/resume <id>` opens that session.
+            "/resume" => Some(BuiltinCmd::Sessions),
+            // `/session` grew subcommands that all duplicate better surfaces:
+            // `status`/`list` are read-only reports, `resume`/`open` fold
+            // into `/sessions`, `new` is `/new`, and `fork` is now
+            // top-level. The alias keeps old invocations working (the
+            // handler translates the legacy grammar).
+            "/session" => Some(BuiltinCmd::Sessions),
+            // `/reload` was a misleading name for what it does — re-read
+            // config.toml and apply the diff live (ADR-0085 §6). The action is
+            // config-scoped, so it now lives under `/config reload`; the bare
+            // old spelling keeps working.
+            "/reload" => Some(BuiltinCmd::Config),
             _ => None,
         }
     }
@@ -135,8 +149,8 @@ pub const TRIGGER_WORD_SUGGESTIONS: &[(&str, &str, &str)] = &[
     ),
     (
         "continue",
-        "/resume",
-        "/resume picks the session up where it left off",
+        "/sessions",
+        "/sessions picks the session up where it left off",
     ),
 ];
 
@@ -221,6 +235,7 @@ pub enum DaemonAction {
         watch: bool,
         json: bool,
         include_idle: bool,
+        diagnostic: bool,
     },
 }
 
@@ -263,11 +278,12 @@ pub enum StartupMode {
     /// `neenee panel`: print the web panel's URL (with the bearer token, when
     /// the daemon requires one) for the running daemon (ADR-0105).
     Panel,
-    /// `neenee status [--watch] [--json] [--all]`: observe the session daemon.
+    /// `neenee status [--watch] [--json] [--all] [--diagnostic]`: observe the session daemon.
     Status {
         watch: bool,
         json: bool,
         include_idle: bool,
+        diagnostic: bool,
     },
     /// `neenee dashboard`: open the full-screen session dashboard directly.
     Dashboard,
@@ -423,7 +439,7 @@ Commands:
   start [OPTIONS]     start the daemon (--port, --public, --detach, --idle-exit, --grace,
                       --no-local-auth)
   stop                gracefully stop the running daemon
-  status [OPTIONS]    show daemon session status (--watch, --json, --all)
+  status [OPTIONS]    show daemon session status (--watch, --json, --all, --diagnostic)
 ";
 
 const CONFIG_HELP: &str = "\
@@ -990,6 +1006,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
                     watch: false,
                     json,
                     include_idle: false,
+                    diagnostic: false,
                 }));
             }
             let sub = &extra[0];
@@ -1051,11 +1068,13 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
                     let mut watch = false;
                     let mut json_out = json;
                     let mut include_idle = false;
+                    let mut diagnostic = false;
                     for flag in sub_extra {
                         match flag.as_str() {
                             "--watch" => watch = true,
                             "--json" => json_out = true,
                             "--all" => include_idle = true,
+                            "--diagnostic" | "--diag" | "--doctor" => diagnostic = true,
                             other => return unexpected(other),
                         }
                     }
@@ -1063,6 +1082,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
                         watch,
                         json: json_out,
                         include_idle,
+                        diagnostic,
                     }))
                 }
                 other => unexpected(other),
@@ -1090,11 +1110,13 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
             let mut watch = false;
             let mut json_out = json;
             let mut include_idle = false;
+            let mut diagnostic = false;
             for flag in extra {
                 match flag.as_str() {
                     "--watch" => watch = true,
                     "--json" => json_out = true,
                     "--all" => include_idle = true,
+                    "--diagnostic" | "--diag" | "--doctor" => diagnostic = true,
                     other => return unexpected(other),
                 }
             }
@@ -1102,6 +1124,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliArgs, String> {
                 watch,
                 json: json_out,
                 include_idle,
+                diagnostic,
             })
         }
         "serve" => {
@@ -1340,7 +1363,7 @@ mod tests {
         );
         assert_eq!(
             crate::startup::suggest_for_trigger("continue").map(|(t, _)| t),
-            Some("/resume")
+            Some("/sessions")
         );
         assert!(crate::startup::suggest_for_trigger("cle").is_none());
         assert!(crate::startup::suggest_for_trigger("new").is_none());
@@ -1582,15 +1605,17 @@ mod tests {
             StartupMode::Status {
                 watch: false,
                 json: false,
-                include_idle: false
+                include_idle: false,
+                diagnostic: false,
             }
         ));
         assert!(matches!(
-            parse(&["status", "--watch", "--json", "--all"]).mode,
+            parse(&["status", "--watch", "--json", "--all", "--diagnostic"]).mode,
             StartupMode::Status {
                 watch: true,
                 json: true,
-                include_idle: true
+                include_idle: true,
+                diagnostic: true,
             }
         ));
         let parsed = parse(&["--project", "/p", "status", "--watch"]);

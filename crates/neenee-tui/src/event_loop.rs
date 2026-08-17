@@ -40,6 +40,9 @@ use tokio::sync::Mutex;
 mod actions;
 mod render;
 
+#[cfg(test)]
+pub(crate) use actions::handle_send_slash;
+
 /// Shared runtime state crossing the response-listener / event-loop boundary.
 /// Each field is the single source of truth for one piece of live harness
 /// state; the listener writes, the loop reads (after acquiring the per-field
@@ -300,10 +303,6 @@ pub(super) struct UiRuntime {
     /// Set from `RoundEvent::TurnStarted`; reset to 0 at the round
     /// boundary so the pre-request phase does not show a stale turn.
     pub current_turn: Arc<Mutex<u64>>,
-    /// Session-review alert (ADR-0016), or empty when inactive. Mirrored into
-    /// `App::review_alert` each frame; while non-empty the activity bar appends
-    /// a `⚠ <alert>` segment.
-    pub review_alert: Arc<Mutex<String>>,
     /// Wall-clock instant the current round started, or `None` between rounds.
     /// Set by the response listener on a "running" `HarnessState` and cleared
     /// on idle; drives the muted `<elapsed>` segment in the activity bar.
@@ -324,6 +323,65 @@ pub(super) struct UiRuntime {
     /// Ordered protocol acknowledgements for the compact outbox. The response
     /// listener cannot mutate `App`, so it forwards only these small signals.
     pub outbox_signals: Arc<Mutex<VecDeque<OutboxSignal>>>,
+}
+
+impl UiRuntime {
+    /// Minimal runtime for unit tests: every cell starts empty/idle so a
+    /// test can drive one action and assert on exactly the cells it cares
+    /// about (e.g. that a slash dispatch leaves `activity_status` and
+    /// `is_responding` untouched — ADR-0110).
+    #[cfg(test)]
+    pub(super) fn minimal_for_test() -> Self {
+        Self {
+            current_provider: Arc::new(Mutex::new(String::new())),
+            current_model: Arc::new(Mutex::new(String::new())),
+            context_tokens: Arc::new(Mutex::new(HashMap::new())),
+            round_tps: Arc::new(Mutex::new(HashMap::new())),
+            harness: Arc::new(Mutex::new(HarnessSnapshot {
+                loop_status: LoopStatus::Idle,
+                round_counter: 0,
+                autopilot: false,
+            })),
+            activity_status: Arc::new(Mutex::new(String::new())),
+            provider_retry: Arc::new(Mutex::new(None)),
+            pending_permission: Arc::new(Mutex::new(VecDeque::new())),
+            pending_question: Arc::new(Mutex::new(VecDeque::new())),
+            pending_input: Arc::new(Mutex::new(VecDeque::new())),
+            is_responding: Arc::new(AtomicBool::new(false)),
+            dirty: Arc::new(AtomicBool::new(false)),
+            dirty_notify: Arc::new(tokio::sync::Notify::new()),
+            envoy_permission_parent: Arc::new(Mutex::new(HashMap::new())),
+            envoy_question_parent: Arc::new(Mutex::new(HashMap::new())),
+            messages: Arc::new(Versioned::new(Vec::new())),
+            side_messages: Arc::new(Versioned::new(Vec::new())),
+            parent_status: Arc::new(Mutex::new(ParentStatus::Idle)),
+            side_view_signal: Arc::new(Mutex::new(None)),
+            btw_list: Arc::new(Mutex::new(Vec::new())),
+            open_btw: Arc::new(AtomicBool::new(false)),
+            viewed_session_id: Arc::new(Mutex::new(None)),
+            live_session_id: Arc::new(Mutex::new(String::new())),
+            key_status: Arc::new(Mutex::new(HashMap::new())),
+            provider_picker: Arc::new(Mutex::new(Default::default())),
+            sessions_overview: Arc::new(Mutex::new(Vec::new())),
+            sessions_overview_rev: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            session_detail: Arc::new(Mutex::new(None)),
+            token_report: Arc::new(Mutex::new(None)),
+            open_sessions: Arc::new(AtomicBool::new(false)),
+            host_sessions: Arc::new(Mutex::new(Vec::new())),
+            host_sessions_rev: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            open_host: Arc::new(AtomicBool::new(false)),
+            oauth_add_signal: Arc::new(Mutex::new(None)),
+            awaiting_oauth_add: Arc::new(AtomicBool::new(false)),
+            session_context: Arc::new(Mutex::new(None)),
+            todos: Arc::new(Mutex::new(None)),
+            round_count: Arc::new(Mutex::new(0)),
+            current_turn: Arc::new(Mutex::new(0)),
+            round_started_at: Arc::new(Mutex::new(None)),
+            unsent_input_signal: Arc::new(Mutex::new(None)),
+            notice_toast_signal: Arc::new(Mutex::new(None)),
+            outbox_signals: Arc::new(Mutex::new(VecDeque::new())),
+        }
+    }
 }
 
 /// A toast-surfaced notice forwarded across the listener → loop boundary.
@@ -838,7 +896,6 @@ async fn sync_runtime_state(
     app.todos = runtime.todos.lock().await.clone();
     app.round_count = *runtime.round_count.lock().await;
     app.current_turn = *runtime.current_turn.lock().await;
-    app.review_alert = runtime.review_alert.lock().await.clone();
     app.round_started_at = *runtime.round_started_at.lock().await;
     app.pending_permission = runtime.pending_permission.lock().await.front().cloned();
     app.key_status = runtime.key_status.lock().await.clone();

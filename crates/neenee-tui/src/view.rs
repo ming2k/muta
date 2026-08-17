@@ -202,10 +202,6 @@ pub struct TranscriptView<'a> {
     /// summary: tag · progress · current item); the full per-item breakdown
     /// lives in the Activity modal.
     pub todos: Option<&'a neenee_contracts::TodoList>,
-    /// Session-review alert (ADR-0016), or empty when inactive. While
-    /// non-empty the activity bar appends a `⚠ <alert> — Esc to interrupt`
-    /// segment.
-    pub review_alert: String,
     /// Wall-clock instant the current round started, or `None` between rounds.
     /// Drives the muted `<elapsed>` segment in the activity bar.
     pub round_started_at: Option<std::time::Instant>,
@@ -411,7 +407,6 @@ pub fn draw_transcript(
         page_hints,
         session_head,
         todos,
-        review_alert,
         round_started_at,
         hovered_step,
         focused_target,
@@ -857,7 +852,6 @@ pub fn draw_transcript(
             draw_activity_bar(
                 frame,
                 rect,
-                &review_alert,
                 round_started_at,
                 activity,
                 awaiting_permission,
@@ -949,8 +943,7 @@ mod tests {
                         page_hints: None,
                     session_head: None,
                         todos: None,
-                        review_alert: String::new(),
-                        round_started_at: None,
+                                        round_started_at: None,
                         hovered_step: None,
                         focused_target: None,
                         logo: None,
@@ -1270,7 +1263,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -1373,7 +1365,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -1421,7 +1412,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -1521,7 +1511,6 @@ mod tests {
                         page_hints: None,
                         session_head: None,
                         todos: None,
-                        review_alert: String::new(),
                         round_started_at: None,
                         hovered_step: None,
                         focused_target: None,
@@ -1629,7 +1618,6 @@ mod tests {
                         page_hints: None,
                         session_head: None,
                         todos: None,
-                        review_alert: String::new(),
                         round_started_at: None,
                         hovered_step: None,
                         focused_target: None,
@@ -1850,7 +1838,6 @@ mod tests {
                         page_hints: None,
                         session_head: None,
                         todos: None,
-                        review_alert: String::new(),
                         round_started_at: None,
                         hovered_step: None,
                         focused_target: None,
@@ -1922,7 +1909,6 @@ mod tests {
                         page_hints: None,
                         session_head: None,
                         todos: None,
-                        review_alert: String::new(),
                         round_started_at: None,
                         hovered_step: None,
                         focused_target: None,
@@ -2021,7 +2007,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: Some(&todos),
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -2150,7 +2135,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -2353,14 +2337,14 @@ mod tests {
     #[test]
     fn draw_composer_highlight_clamps_at_wrap_boundary() {
         let theme = Theme::default();
-        let mut terminal = neenee_tui_engine::TestTerminal::new(12, 6);
-        // 8-column text area (12 - 2 prefix - 2 right pad): `/session` fills
-        // row 0 exactly; ` new` wraps to row 1.
-        let input = "/session new";
+        let mut terminal = neenee_tui_engine::TestTerminal::new(13, 6);
+        // 10-column text area (13 - 2 prefix - 2 right pad + 1): `/sessions`
+        // fills row 0 exactly; ` abc` wraps to row 1.
+        let input = "/sessions abc";
         terminal.draw(|f| {
             draw_composer_highlighted(
                 f,
-                Rect::new(0, 0, 12, 5),
+                Rect::new(0, 0, 13, 5),
                 input,
                 input.len(),
                 true,
@@ -2370,7 +2354,7 @@ mod tests {
                 false,
                 &mut 0,
                 &SelectionState::None,
-                "/session".len(),
+                "/sessions".len(),
                 0,
                 0,
             );
@@ -2378,11 +2362,11 @@ mod tests {
         let buf = terminal.buffer();
         let row1_y = crate::design::COMPOSER_TEXT_ROW_OFFSET + 1;
         // The continuation row keeps the two-column prompt indent before the
-        // wrapped text (`/session` + the trailing space fill row 0 exactly).
+        // wrapped text (`/sessions` fills row 0 exactly).
         let cell = buf
             .get(COMPOSER_PROMPT_PREFIX_COLS as u16 + 1, row1_y)
             .expect("continuation cell");
-        assert_eq!(cell.symbol(), "n", "continuation row should start with 'n'");
+        assert_eq!(cell.symbol(), "a", "continuation row should start with 'a'");
         assert_eq!(
             cell.fg,
             theme.fg(),
@@ -3105,7 +3089,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -3325,7 +3308,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -3411,7 +3393,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -3950,7 +3931,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -4016,7 +3996,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -4088,7 +4067,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -4150,7 +4128,6 @@ mod tests {
                         autopilot: false,
                     }),
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -4271,7 +4248,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -4340,7 +4316,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -4424,7 +4399,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -4504,7 +4478,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,
@@ -4586,7 +4559,6 @@ mod tests {
                     page_hints: None,
                     session_head: None,
                     todos: None,
-                    review_alert: String::new(),
                     round_started_at: None,
                     hovered_step: None,
                     focused_target: None,

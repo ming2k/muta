@@ -9,16 +9,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Custom OpenAI provider template — any OpenAI-compatible endpoint.**
-  - A new entry in Connections → `＋ Add connection` for third-party relays, self-hosted gateways, and subscription bundles that expose an OpenAI-compatible `/v1/chat/completions` surface (e.g. `https://chatapi.weixin.qq.com/openai/v1/chat/completions`).
+- **Custom OpenAI provider template — any OpenAI-compatible endpoint.**  - A new entry in Connections → `＋ Add connection` for third-party relays, self-hosted gateways, and subscription bundles that expose an OpenAI-compatible `/v1/chat/completions` surface (e.g. `https://chatapi.weixin.qq.com/openai/v1/chat/completions`).
   - Unlike the curated templates it seeds no model list: the editor shows a free-text **Model** field (registry-known OpenAI ids as fuzzy suggestions, plus the raw typed id as a custom value), so the exact model id the endpoint expects becomes the seeded channel. More models are added afterwards from the Models picker.
   - Model ids travel verbatim: case-sensitive ids (the WeChat endpoint serves `GLM-5.2` / `Deepseek-v4-flash` and rejects the lowercase spellings with `invalid model`) round-trip unmodified through the editor, config, and requests. Baseline metadata (200K context) is registered for those two cased ids.
   - Instances stay pure-custom in reconciliation terms: the typed model is never re-seeded or replaced by a template snapshot at startup.
 - **`neenee run` now prints streamed assistant text.**
   - Streaming providers (the common case) deliver text as `StreamDelta` events; the headless runner previously matched only the non-streamed `Text` backstop, so a streamed round completed with an empty `response`. Both JSON and plain modes now emit the deltas live and the final `round_completed.response` carries the full text.
+- **`/fork` is a top-level command.** Forking the current conversation into a
+  child session no longer hides behind `/session fork` — the form two docs
+  already referenced. `/session fork` keeps working as legacy grammar.
+- **`/config reload`.** The config hot-reload action (ADR-0085 §6) moved to
+  `/config reload`, where its semantics are explicit. Bare `/config` still
+  opens the Settings overlay; the retired `/reload` spelling resolves through
+  the hidden-alias table. Completion offers the `reload` subcommand.
 
 ### Changed
 
+- **Removed `/review` and the session-review subsystem.**
+  - `/review` was the sole trigger for an otherwise-unreachable subsystem: the
+    376-line `session_review` runner (a bounded read-only `REVIEW` envoy over
+    a transcript snapshot), the reviewer prompt registry, the `REVIEW` envoy
+    profile, the `SessionReview` round/agent events, and the review-banner
+    plumbing in both the TUI and the web panel. Nothing else — autopilot,
+    round-end diagnostics, the doom guard — reads its output (ADR-0034
+    explicitly declined to wire it in), and the loop-stuck cases it watched
+    for are covered by the deterministic read-loop guard plus `Esc`.
+  - Ledger compatibility is preserved: `CommandResult::Review`,
+    `ReviewVerdict`/`ReviewStatus`, and `InjectionKind::SessionReviewInput`
+    stay in `neenee-contracts` so old session files still deserialize and
+    their recorded review results still render on resume.
+- **Command rows are cards; the disclosure glyph is `▸`/`▾` (ADR-0109).** A
+  command component now paints a full-width band
+  (`Theme::command_surface`) with a thick `┃` identity bar in the family
+  tone — the card grammar the user-message panel, code blocks, and notice
+  cards already speak — so an operation is separated from prose by *shape*
+  before color is even read (a muted `⌘ /cmd` line could read as just
+  another sentence). The band lifts to `command_surface_hover` under
+  pointer/focus, and the `▸`/`▾` marker column is reserved even when empty,
+  so a pending row settling with its reply never shifts horizontally.
+  Alongside, **every** disclosure site (tool steps, reasoning traces,
+  provider retries, command cards, sticky pins) migrates `+`/`-` → `▸`/`▾`:
+  `+`/`-` is now reserved exclusively for diff signs and the `+1 -1` counts
+  in edit summaries, removing the old collision where an expanded edit step
+  began with `- Edit a.rs +1 -1` — four sign characters, three of them diff
+  semantics. The triangle also matches the web panel's chevrons, so both
+  front ends share one disclosure vocabulary. The inline/Disclose
+  classifier now budgets the card chrome and the trailing `· HH:MM`, so a
+  joined reply genuinely fits inside the card.
+- **Commands no longer trigger the activity bar (ADR-0110).** A slash command is a synchronous control-plane operation outside the round state machine, so dispatching one performs no activity-bar arming: no transient `queued` label, no breathing dot, and no fabricated `Esc Esc interrupt` affordance over a dispatch that cannot be interrupted (previously every command flashed the bar while idle). Command handlers also stop borrowing `RoundEvent::Activity` for their progress (`/compact`'s "compacting context"), which — dispatched mid-round — could overwrite the running round's live label. The pending command row (`⌘ /cmd`, ADR-0108) is a command's in-flight feedback; round-owned emitters (including the automatic in-round `compacting context` step) keep the activity surface. The driver's post-dispatch reconcile (ADR-0092) stays as a frontend-agnostic safety net.
+- **Retired `/resume` and `/session`; `/sessions` absorbs them.**
+  - `/resume` was a verbatim duplicate of `/session resume` (identical help
+    line, no ADR justifying a second spelling) whose arm *also* skipped the
+    provider-pin reapply, so it silently misbehaved next to its twin. `/session`
+    grew six subcommands that all duplicate better surfaces.
+  - `/sessions` now takes an optional id: bare `/sessions` opens the picker,
+    `/sessions <id>` opens that session immediately. The picker's Enter key
+    drives the same path (it used to synthesize `/session open <id>`, now
+    `/sessions <id>`), and the sessions-modal `n` key sends `/new` instead of
+    `/session new`.
+  - Both retired spellings remain hidden aliases (the `/host` → `/dashboard`
+    pattern): `/resume <id>` and `/session open <id>` still open the session,
+    `/session list` opens the picker, `/session new` / `/session fork` behave
+    like `/new` / `/fork`. `/session status` is retired — its id/counts/
+    timestamps live in the picker's `i` info view; the `/continue` trigger now
+    suggests `/sessions`.
+  - The `/session <Tab>` canned subcommand list is gone along with the command
+    (the argument of `/sessions <id>` is a session id, discovered via the
+    picker); `/sessions <Tab>` completes the bare command only.
 - **Envoy task steps now show what they are doing, not just that they are busy.**
   - The live peek row (the `└`-edged second line of a running `[EXPLORE]`-style task step) now leads with `running` followed by the current activity — `running thinking`, `running Grep "session"`, `running waiting for model` — instead of a bare `starting`/tool name. A long model call no longer reads as "possibly stuck".
   - `EnvoyEvent::Activity` reports (e.g. `waiting for model`, `waiting to retry (3s)`) were previously discarded by the TUI; they now drive the peek during stretches with no child events, so the row provably advances even before the first tool call lands.

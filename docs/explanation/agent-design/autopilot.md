@@ -92,7 +92,8 @@ deadlock) with the behavioral one (the model is steered away from deferring).
 See [User questions](user-questions.md) for the interactive counterpart.
 
 The flag is **live and process-local**. It is not persisted to the session, not
-carried across `/resume`, and not part of any envoy profile that reloads from
+carried across resuming a session (`/sessions <id>` or the picker), and not
+part of any envoy profile that reloads from
 disk. Toggling it mid-round takes effect on the very next broker check.
 
 ## What autopilot is not

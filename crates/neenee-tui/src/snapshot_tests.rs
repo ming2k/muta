@@ -536,7 +536,6 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
                 page_hints: None,
                 session_head: None,
                 todos: None,
-                review_alert: String::new(),
                 round_started_at: None,
                 hovered_step: None,
                 focused_target: None,
@@ -614,7 +613,7 @@ fn collapsed_tool_steps_stack_flush() {
     let header_idx: Vec<usize> = grid
         .lines()
         .enumerate()
-        .filter(|(_, l)| l.contains("Read ") && (l.contains('+') || l.contains('-')))
+        .filter(|(_, l)| l.contains("Read ") && (l.contains('▸') || l.contains('▾')))
         .map(|(i, _)| i)
         .collect();
     assert_eq!(header_idx.len(), 3, "expected three Read headers:\n{grid}");
@@ -702,7 +701,7 @@ fn user_message_before_tool_step_has_single_separator_row() {
         .expect("user text row must render");
     let tool_idx = rows
         .iter()
-        .position(|row| row.contains("Read ") && row.contains('+'))
+        .position(|row| row.contains("Read ") && row.contains('▸'))
         .expect("collapsed tool header must render");
 
     // User row + one bottom transition row + one blank separator row + header.
@@ -738,24 +737,14 @@ fn sent_user_header_has_one_metadata_separator() {
     );
 }
 
-/// ADR-0106: command rows render by shape. A short single-line reply joins
-/// inline (` · `, no marker), a result-less record renders plain, and a
-/// multi-line reply keeps the `+`/`-` disclosure — no row shows `⚙`, and no
-/// row shows `+` unless a body exists to expand into.
+/// ADR-0111: command entries render a generic header (`⌘ command · HH:MM`)
+/// followed directly by their invocation and unfolded result body.
 #[test]
-fn command_rows_render_by_shape_without_false_markers() {
+fn command_entries_render_header_and_direct_body_without_folding() {
     let messages = vec![
-        // Inline: `/new`'s single-line confirmation.
-        TranscriptMessage::command_result(
-            "new",
-            "",
-            Some(neenee_contracts::CommandResult::Text(
-                "Started new session: a1b2c3".to_string(),
-            )),
-        ),
         // Plain: shell passthrough, no persisted result.
         TranscriptMessage::command_result("shell", "!ls -la", None),
-        // Disclose: multi-line permission list.
+        // Completed: multi-line permission list rendered directly.
         TranscriptMessage::command_result(
             "permissions",
             "",
@@ -768,121 +757,118 @@ fn command_rows_render_by_shape_without_false_markers() {
     let grid = render_transcript_grid(&messages, 72, 18);
     let rows: Vec<&str> = grid.lines().collect();
 
-    let inline_idx = rows
-        .iter()
-        .position(|row| row.contains("/new ·"))
-        .unwrap_or_else(|| panic!("inline reply must join with the R1 dot:\n{grid}"));
-    assert!(
-        rows[inline_idx].contains("Started new session: a1b2c3"),
-        "the inline reply text must be on the same row:\n{grid}"
-    );
-    assert!(
-        !rows[inline_idx].trim_start().starts_with('+'),
-        "an inline row must not carry the disclosure marker:\n{grid}"
-    );
-
     let plain_idx = rows
         .iter()
-        .position(|row| row.contains("!ls -la"))
-        .expect("shell passthrough must render its invocation");
+        .position(|row| row.contains("❯ command"))
+        .expect("shell passthrough must render generic entry header ❯ command");
     assert!(
-        !rows[plain_idx].contains('·') || plain_idx == inline_idx,
-        "a plain row carries no join:\n{grid}"
+        rows[plain_idx].trim_start().starts_with("❯ command"),
+        "a shell passthrough renders generic header with leading ok glyph ❯:\n{grid}"
+    );
+    assert!(
+        !rows[plain_idx].contains('┃'),
+        "entry header uses no card bar ┃:\n{grid}"
+    );
+    assert!(
+        grid.contains("!ls -la"),
+        "shell invocation must be displayed in the entry body:\n{grid}"
     );
 
-    let disclose_idx = rows
+    let permissions_idx = rows
         .iter()
-        .position(|row| row.contains("/permissions"))
-        .unwrap_or_else(|| panic!("multi-line result must keep its header:\n{grid}"));
+        .position(|row| row.contains("⌘ command"))
+        .unwrap_or_else(|| panic!("command entry must render its header ⌘ command:\n{grid}"));
     assert!(
-        rows[disclose_idx].trim_start().starts_with('+'),
-        "a multi-line result keeps the disclosure affordance:\n{grid}"
+        rows[permissions_idx].trim_start().starts_with("⌘ command"),
+        "a command entry renders its header with leading ⌘ glyph:\n{grid}"
+    );
+    assert!(
+        !grid.contains('▸') && !grid.contains('▾'),
+        "command entries never show collapsible folding markers (ADR-0111):\n{grid}"
     );
 
-    for (i, row) in rows.iter().enumerate() {
-        assert!(
-            !row.contains('⚙'),
-            "no command row may show the gear glyph (row {i}):\n{grid}"
-        );
-    }
-}
-
-/// ADR-0106: expanding a Disclose command row reveals the typed result body
-/// through the shared block renderer, and pinning is respected. ADR-0108: the
-/// disclosure marker now leads the row *with* the command glyph — the two
-/// halves of one component, never a naked `+ /cmd`.
-#[test]
-fn command_row_disclose_expands_to_result_body() {
-    let mut message = TranscriptMessage::command_result(
-        "permissions",
-        "",
-        Some(neenee_contracts::CommandResult::PermissionList {
-            allowed: vec!["bash".to_string()],
-        }),
-    );
-    message.pin_command_result_expanded(true);
-
-    let grid = render_transcript_grid(&[message], 72, 18);
+    // Verify 1-line gap between header and body
     assert!(
-        grid.contains("- ⌘ /permissions"),
-        "an expanded row shows the open marker with the command glyph:\n{grid}"
+        rows.get(permissions_idx + 1).is_some_and(|r| r.trim().is_empty()),
+        "there must be a 1-row gap between command header and body:\n{grid}"
+    );
+
+    assert!(
+        grid.contains("/permissions"),
+        "concrete command name must render in body:\n{grid}"
     );
     assert!(
         grid.contains("Always-allowed tools:"),
-        "the expanded body must render:\n{grid}"
+        "the command result body renders directly unfolded:\n{grid}"
     );
     assert!(
         grid.contains("• bash"),
-        "the body's list must render through the block renderer:\n{grid}"
+        "the body's list renders through the block renderer:\n{grid}"
     );
 }
 
-/// ADR-0106: the inline layout is width-aware — a reply that cannot fit
-/// beside its invocation without truncation must fall back to the disclosure
-/// layout rather than render a fragment.
+/// ADR-0111: concurrent rendering across different entry types.
+/// An in-progress / streaming turn entry and a command entry render together.
+/// As the turn entry expands in vertical height (more streaming lines), the
+/// command entry below it naturally shifts down by the turn's actual height.
 #[test]
-fn command_row_inline_falls_back_to_disclose_when_narrow() {
-    // A reply long enough that `invocation · reply` overflows even a
-    // conversational band.
-    let message = TranscriptMessage::command_result(
-        "search",
-        "the integration flag",
-        Some(neenee_contracts::CommandResult::Text(
-            "Relevant history (most similar first): the integration flag was introduced in round 7"
-                .to_string(),
-        )),
+fn concurrent_turn_and_command_entries_render_and_expand_dynamically() {
+    // Stage 1: User prompt + assistant turn with 2 list items + pending command entry.
+    let user_msg = TranscriptMessage::new(neenee_contracts::Role::User, "Calculate the plan");
+    let assistant_v1 = TranscriptMessage::new(
+        neenee_contracts::Role::Assistant,
+        "- Step 1: Inspecting files.\n- Step 2: Checking configs.",
     );
+    let cmd_msg = TranscriptMessage::pending_command("status", "");
 
-    // Wide: inline join.
-    let wide = render_transcript_grid(std::slice::from_ref(&message), 120, 18);
-    assert!(
-        wide.contains("/search the integration flag ·"),
-        "a fitting reply joins inline:\n{wide}"
+    let msgs_v1 = vec![user_msg.clone(), assistant_v1, cmd_msg.clone()];
+    let grid_v1 = render_transcript_grid(&msgs_v1, 80, 24);
+    let rows_v1: Vec<&str> = grid_v1.lines().collect();
+
+    let cmd_pos_v1 = rows_v1
+        .iter()
+        .position(|row| row.contains("⌘ command"))
+        .expect("command entry header must be present in v1");
+
+    // Stage 2: Assistant turn receives more streaming tokens (4 extra list items).
+    let assistant_v2 = TranscriptMessage::new(
+        neenee_contracts::Role::Assistant,
+        "- Step 1: Inspecting files.\n- Step 2: Checking configs.\n- Step 3: Running benchmarks.\n- Step 4: Compiling binary.\n- Step 5: Verifying checksums.\n- Step 6: Ready.",
     );
+    let msgs_v2 = vec![user_msg, assistant_v2, cmd_msg];
+    let grid_v2 = render_transcript_grid(&msgs_v2, 80, 24);
+    let rows_v2: Vec<&str> = grid_v2.lines().collect();
 
-    // Narrow: the reply cannot fit, so the row must disclose instead.
-    let narrow = render_transcript_grid(&[message], 40, 18);
+    let cmd_pos_v2 = rows_v2
+        .iter()
+        .position(|row| row.contains("⌘ command"))
+        .expect("command entry header must be present in v2");
+
     assert!(
-        narrow.contains("+ ⌘ /search"),
-        "a non-fitting reply discloses (marker + glyph) rather than truncating inline:\n{narrow}"
+        cmd_pos_v2 > cmd_pos_v1,
+        "command entry must shift down as preceding turn expands (v1 pos: {cmd_pos_v1}, v2 pos: {cmd_pos_v2}):\nv1:\n{grid_v1}\nv2:\n{grid_v2}"
+    );
+    assert_eq!(
+        cmd_pos_v2 - cmd_pos_v1,
+        4,
+        "height delta must exactly equal the 4 added lines of turn output"
     );
 }
 
-/// ADR-0108: the command component exists in two states. A pending row shows
-/// the invocation alone — the input half — with no marker (there is no output
-/// to disclose yet) and no reply; settling it in place with the typed result
-/// reuses the same row and produces the completed inline form.
+/// ADR-0108 / ADR-0111: the command component exists in two states. A pending entry shows
+/// the header and invocation with no reply; settling it in place with the typed result
+/// reveals the completed result body.
 #[test]
 fn command_component_pending_then_completed() {
     let mut message = TranscriptMessage::pending_command("autopilot", "on");
 
     let pending = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
     assert!(
-        pending.contains("⌘ /autopilot on"),
-        "a pending row shows the invocation with its glyph:\n{pending}"
+        pending.contains("⌘ command") && pending.contains("/autopilot on"),
+        "a pending row shows generic header with invocation in body:\n{pending}"
     );
     assert!(
-        !pending.trim_start().starts_with('+') && !pending.contains("\n+"),
+        !pending.contains('▸') && !pending.contains('▾'),
         "a pending row shows no disclosure marker:\n{pending}"
     );
     assert!(
@@ -899,8 +885,8 @@ fn command_component_pending_then_completed() {
     );
     let completed = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
     assert!(
-        completed.contains("⌘ /autopilot on · Autopilot ON"),
-        "the settled row joins the reply inline on the same row:\n{completed}"
+        completed.contains("⌘ command") && completed.contains("/autopilot on") && completed.contains("Autopilot ON"),
+        "the settled entry renders its header, invocation, and result body:\n{completed}"
     );
 
     // Settling is one-shot: a second reply must not mutate the component.
@@ -1062,11 +1048,11 @@ fn default_turn_header_has_one_gap_before_first_tool() {
     let rows: Vec<&str> = grid.lines().collect();
     let turn_idx = rows
         .iter()
-        .position(|row| row.contains("◆ turn 7"))
+        .position(|row| row.contains("> turn 7"))
         .expect("turn header must render");
     let tool_idx = rows
         .iter()
-        .position(|row| row.contains("Read ") && row.contains('+'))
+        .position(|row| row.contains("Read ") && row.contains('▸'))
         .expect("tool header must render");
 
     assert_eq!(
@@ -1117,7 +1103,7 @@ fn same_turn_segments_have_gaps_but_parallel_tools_stay_flush() {
     let rows: Vec<&str> = grid.lines().collect();
     let turn_idx = rows
         .iter()
-        .position(|row| row.contains("◆ turn 7"))
+        .position(|row| row.contains("> turn 7"))
         .expect("turn header must render");
     let thinking_idx = rows
         .iter()
@@ -1126,7 +1112,7 @@ fn same_turn_segments_have_gaps_but_parallel_tools_stay_flush() {
     let tool_idx: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.contains("Read ") && row.contains('+'))
+        .filter(|(_, row)| row.contains("Read ") && row.contains('▸'))
         .map(|(index, _)| index)
         .collect();
 
@@ -1166,13 +1152,13 @@ fn different_tool_turns_have_one_vertical_gap() {
     let turn_rows: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.contains("◆ turn"))
+        .filter(|(_, row)| row.contains("> turn"))
         .map(|(index, _)| index)
         .collect();
     let tool_rows: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.contains("Read ") && row.contains('+'))
+        .filter(|(_, row)| row.contains("Read ") && row.contains('▸'))
         .map(|(index, _)| index)
         .collect();
 
@@ -1205,18 +1191,18 @@ fn command_component_renders_lead_symbols_and_timestamps() {
         TranscriptMessage::command_result("shell", "!cargo check", None).with_sent_at_ms(epoch_ms),
     ];
 
-    let grid = render_transcript_grid(&messages, 80, 18);
+    let grid = render_transcript_grid(&messages, 140, 18);
     assert!(
-        grid.contains("⌘ /autopilot on"),
-        "slash command must render with ⌘ lead:\n{grid}"
+        grid.contains("⌘ command") && grid.contains("/autopilot on"),
+        "slash command must render with ⌘ command header and invocation in body:\n{grid}"
     );
     assert!(
         grid.contains("Autopilot ON: agent will run without intervention"),
-        "ack title must render inline:\n{grid}"
+        "ack title must render in body:\n{grid}"
     );
     assert!(
-        grid.contains("❯ !cargo check"),
-        "shell command must render with ❯ lead:\n{grid}"
+        grid.contains("❯ command") && grid.contains("!cargo check"),
+        "shell command must render with ❯ command header and invocation in body:\n{grid}"
     );
     assert!(
         !grid.contains("▌ Sent"),
@@ -1235,18 +1221,29 @@ fn user_messages_render_timestamps_and_never_sent_marker() {
 
     let grid_round = render_transcript_grid(&[round_msg], 72, 18);
     assert!(
-        grid_round.contains("round 1"),
-        "must render round number:\n{grid_round}"
+        grid_round.contains("< round 1"),
+        "must render '< round 1' with Unix stdin glyph:\n{grid_round}"
     );
     assert!(
         !grid_round.contains("Sent"),
         "must not contain Sent fallback:\n{grid_round}"
     );
 
+    // Verify the blank line between `< round 1` header and the user message panel.
+    let rows: Vec<&str> = grid_round.lines().collect();
+    let header_idx = rows
+        .iter()
+        .position(|r| r.contains("< round 1"))
+        .expect("must contain header");
+    assert!(
+        rows[header_idx + 1].trim().is_empty(),
+        "must have an empty line below header:\n{grid_round}"
+    );
+
     let grid_prompt = render_transcript_grid(&[prompt_msg], 72, 18);
     assert!(
-        grid_prompt.contains("prompt"),
-        "must render prompt anchor:\n{grid_prompt}"
+        grid_prompt.contains("< prompt"),
+        "must render prompt anchor with Unix stdin glyph:\n{grid_prompt}"
     );
     assert!(
         !grid_prompt.contains("Sent"),

@@ -44,7 +44,7 @@ There is one attribute orthogonal to role: **visibility**. A message can be
 marked hidden, which means the model still receives it (it enters the request)
 but the terminal UI does not render it. This opens a control channel that
 drives the model as a `user` request without polluting the visible transcript
-— used for autonomous-loop iteration prompts, session-review reflection
+— used for autonomous-loop iteration prompts, steering
 nudges, and skill injection. Visibility is a neenee concept; the API itself
 has no notion of it.
 
@@ -96,9 +96,7 @@ protocol, not policy. neenee adds guards on top (a repeated-call limit and
 an optional hard stop), but the loop's existence and termination
 condition come from the contract. See
 [ADR-0009](../adr/0009-uncapped-agentic-loop.md) for why the per-round turn
-count was left uncapped to match this, and
-[Slash commands](../reference/commands.md#review) for the on-demand
-session-review diagnostic.
+count was left uncapped to match this.
 
 Two protocol constraints shape the harness:
 

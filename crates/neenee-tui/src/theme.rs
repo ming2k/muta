@@ -174,6 +174,14 @@ pub struct Theme {
     /// the exact edited word sits on this brighter surface.
     pub diff_add_hl: Color,
     pub diff_del_hl: Color,
+    /// Command-card band (ADR-0109). A slash/shell command row is a *card*,
+    /// not flat prose: `body_surface` is its idle band, `body_hover` the
+    /// band while the row is under the pointer or keyboard focus — the same
+    /// element_bg → input_bg_active hover ladder the notice card uses. The
+    /// pair is derived (not two more literals) so every scheme gets a
+    /// coherent step for free; see [`Theme::command_surface`].
+    pub command_band_bg: Color,
+    pub command_band_bg_hover: Color,
 }
 
 impl Default for Theme {
@@ -225,6 +233,12 @@ impl Default for Theme {
             diff_del_bg: Color::Rgb(32, 20, 20),
             diff_add_hl: Color::Rgb(42, 64, 48),
             diff_del_hl: Color::Rgb(64, 40, 40),
+            // Command card (ADR-0109): idle band sits one step above the
+            // page (`menu_bg`, the body surface) and hover lifts it to the
+            // same active tone the notice card hovers to — the card reads
+            // as a quiet but unmistakable object on every scheme.
+            command_band_bg: Color::Rgb(17, 19, 18),
+            command_band_bg_hover: Color::Rgb(26, 28, 27),
         }
     }
 }
@@ -401,6 +415,7 @@ impl Theme {
         let light = luminance(background) > 150.0;
         let code_bg = mix(background, text, if light { 0.06 } else { 0.05 });
         let user_bg = mix(surface, accent, if light { 0.08 } else { 0.10 });
+        let menu_bg = mix(background, surface, 0.72);
         Self {
             user_fg: mix(text, accent, 0.18),
             error_fg: error,
@@ -427,7 +442,7 @@ impl Theme {
             user_panel_bg: user_bg,
             user_panel_bg_queued: mix(background, user_bg, 0.45),
             element_bg: mix(surface, text, if light { 0.035 } else { 0.05 }),
-            menu_bg: mix(background, surface, 0.72),
+            menu_bg,
             backdrop: mix(background, Color::Black, if light { 0.45 } else { 0.55 }),
             modal_dim_factor: if light { 0.72 } else { 0.5 },
             primary: accent,
@@ -438,6 +453,14 @@ impl Theme {
             diff_del_bg: mix(background, error, if light { 0.10 } else { 0.14 }),
             diff_add_hl: mix(background, success, if light { 0.24 } else { 0.34 }),
             diff_del_hl: mix(background, error, if light { 0.22 } else { 0.32 }),
+            // Command card (ADR-0109): derive the pair from the body/raised
+            // surfaces so the card inherits each scheme's elevation ladder
+            // rather than a fixed literal. Idle is the menu surface lifted a
+            // hair off the page; hover is the same scheme-wide active tone
+            // (`input_bg_active`) the notice card hovers to, so "an
+            // interactive card is lit up" reads identically everywhere.
+            command_band_bg: mix(background, surface, 0.72),
+            command_band_bg_hover: mix(surface, text, if light { 0.06 } else { 0.08 }),
         }
     }
 
@@ -575,6 +598,17 @@ impl Theme {
     pub fn diff_del_hl(&self) -> Color {
         self.diff_del_hl
     }
+    /// Command-card band (ADR-0109): the full-width surface a command row
+    /// paints its card on while idle. Distinct from the page background in
+    /// every scheme so a command never reads as flat prose.
+    pub fn command_surface(&self) -> Color {
+        self.command_band_bg
+    }
+    /// Command-card band while the row is hovered or keyboard-focused —
+    /// the shared "interactive card lit up" tone.
+    pub fn command_surface_hover(&self) -> Color {
+        self.command_band_bg_hover
+    }
     pub fn heading(&self) -> Color {
         self.heading_fg
     }
@@ -691,6 +725,42 @@ mod tests {
             assert_ne!(
                 active, inactive,
                 "{scheme:?}: active and inactive input must be distinct colors"
+            );
+        }
+    }
+
+    /// ADR-0109: the command card must read as a *card* in every scheme —
+    /// both its idle band and its hover band have to clear the page
+    /// background by a visible margin (otherwise the row collapses back
+    /// into "flat prose", the exact defect the card exists to fix), and the
+    /// hover step must itself be visible. Derived for every preset via
+    /// `from_semantic`, asserted here so a future scheme cannot silently
+    /// flatten it.
+    #[test]
+    fn command_card_bands_stay_visible_in_every_scheme() {
+        const MIN_STEP: f32 = 2.0;
+        let custom = ColorSchemeConfig::default();
+        for scheme in COLOR_SCHEMES {
+            let theme = Theme::from_color_scheme(scheme.id, &custom);
+            let idle = theme.command_surface();
+            let hover = theme.command_surface_hover();
+            let base = theme.surface();
+
+            let idle_step = (luminance(idle) - luminance(base)).abs();
+            let hover_step = (luminance(hover) - luminance(base)).abs();
+            let hover_idle_step = (luminance(hover) - luminance(idle)).abs();
+
+            assert!(
+                idle_step >= MIN_STEP,
+                "{scheme:?}: idle command band only {idle_step:.1} from app_bg"
+            );
+            assert!(
+                hover_step >= MIN_STEP,
+                "{scheme:?}: hover command band only {hover_step:.1} from app_bg"
+            );
+            assert!(
+                hover_idle_step >= MIN_STEP,
+                "{scheme:?}: command hover only {hover_idle_step:.1} above its idle band"
             );
         }
     }
