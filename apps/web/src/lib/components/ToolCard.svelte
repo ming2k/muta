@@ -82,7 +82,7 @@
           <button class="envoy-header" onclick={() => (envoyExpanded = !envoyExpanded)}>
             <span class="envoy-icon">⎇</span>
             <span class="envoy-title">envoy — {envoySummary(envoy)}</span>
-            <span class="chevron">{envoyExpanded ? "▾" : "▸"}</span>
+            <span class="chevron">{envoyExpanded ? "-" : "+"}</span>
           </button>
           {#if envoyExpanded}
             <div class="envoy-content">

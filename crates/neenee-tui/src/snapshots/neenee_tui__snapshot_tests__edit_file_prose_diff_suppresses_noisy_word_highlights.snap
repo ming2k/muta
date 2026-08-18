@@ -1,9 +1,8 @@
 ---
 source: crates/neenee-tui/src/snapshot_tests.rs
-assertion_line: 379
 expression: "render_grid(&m, 100, 30)"
 ---
-▾ Edit docs/explanation/tui.md +1 -1
+- Edit docs/explanation/tui.md +1 -1
          @@ -1 +1 @@
    1   - Because the frame is a pure function of state, anything that changes state — a streamed tok
          en, a permission request, a mouse drag — shows up on the very next frame with no manual inv

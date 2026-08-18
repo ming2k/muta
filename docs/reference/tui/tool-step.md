@@ -15,13 +15,13 @@ The default state. Header only — no preview, no body. The whole point of
 collapsing is to keep noisy tool I/O out of the transcript until you ask for it.
 
 ```text
-  ▸ Read crates/main.rs · 0ms
+  + Read crates/main.rs · 0ms
 ```
 
 | Attribute | Value |
 |-----------|-------|
 | Background | `app_bg` (flat — no band), inset 2 cols (`TRANSCRIPT_H_INSET`) |
-| Marker | `▸` (collapsed) / `▾` (expanded), BOLD (ADR-0109; `+`/`-` is reserved for diff signs) |
+| Marker | `+` (collapsed) / `-` (expanded), BOLD |
 | Status indicator | Conveyed by header color only — no glyph. Resolved through the shared [step state machine](step-state.md): `Ok` falls through to the disclosure × interaction weight ladder; `Running` / `Failed` / `Denied` / `Cancelled` each supply a steady accent (`info` / `error_fg` / `warn` / `text_muted`) that wins outright |
 | Header text | Human-readable description + duration, BOLD |
 
@@ -35,7 +35,7 @@ There are **no** `Tool` / `Arguments` / `Result` labels and no surrounding
 distinct panel against the app background.
 
 ```text
-  ▾ Read crates/main.rs · 0ms
+  - Read crates/main.rs · 0ms
     1  fn main() {
     2      ...
 ```

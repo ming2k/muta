@@ -87,7 +87,7 @@
 <style>
   .header {
     padding: 14px 24px;
-    background-color: var(--bg-sidebar);
+    background-color: var(--bg-header);
     border-bottom: 1px solid var(--border-subtle);
     display: flex;
     justify-content: space-between;

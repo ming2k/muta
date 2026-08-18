@@ -1,13 +1,14 @@
-//! Transcript notice component (System / Infrastructure notices & error cards).
+//! Transcript notice component (System / Infrastructure notices as top-level transcript entries).
 
 use neenee_tui_engine::{
     Color, Frame, Modifier, Paragraph, Rect, Style, {Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
 
+use crate::design::{TRANSCRIPT_BODY_LEADING_INDENT, TURN_HEADER_BODY_GAP_ROWS};
 use crate::model::document::{MessageKind, NoticeSeverity, TranscriptMessage};
 use crate::model::layout::{BlockRegion, LayoutMap, NOTICE_BLOCK_IDX};
-use crate::text_layout::{padded_tail, wrap_text};
+use crate::text_layout::wrap_text;
 
 use super::super::Theme;
 
@@ -20,13 +21,6 @@ impl<'a> NoticeView<'a> {
         match &self.message.kind {
             MessageKind::Notice { severity, .. } => Some(*severity),
             _ => None,
-        }
-    }
-
-    fn expanded(&self) -> bool {
-        match &self.message.kind {
-            MessageKind::Notice { expanded, .. } => *expanded,
-            _ => false,
         }
     }
 }
@@ -87,38 +81,39 @@ pub fn parse_notice_content(raw: &str) -> NoticeContent {
     }
 }
 
-fn notice_colors(
-    severity: NoticeSeverity,
-    theme: &Theme,
-    hovered: bool,
-    focused: bool,
-) -> (Color, Color) {
-    match severity {
-        NoticeSeverity::Error => {
-            let bg = if hovered || focused {
-                theme.diff_del_hl
-            } else {
-                theme.diff_del_bg
-            };
-            (theme.err(), bg)
-        }
-        NoticeSeverity::Warning => {
-            let bg = if hovered || focused {
-                theme.input_bg_active
-            } else {
-                theme.element_bg
-            };
-            (theme.warn(), bg)
-        }
-        NoticeSeverity::Info => {
-            let bg = if hovered || focused {
-                theme.input_bg_active
-            } else {
-                theme.element_bg
-            };
-            (theme.info(), bg)
+/// Build the one-row header of a notification entry: `! notification · 21:39`.
+/// The lead glyph (`! `, `▲ `, `ℹ `) and `notification` label are rendered in the
+/// severity indicator tone (BOLD), followed by the optional muted trailing timestamp ` · HH:MM`.
+fn notice_header_line(
+    lead_symbol: &str,
+    severity_tone: Color,
+    time_label: Option<&str>,
+    muted: Color,
+    full_width: usize,
+) -> Line<'static> {
+    let mut spans = Vec::with_capacity(4);
+    let mut used = 0usize;
+
+    // Indicator tag: `! notification`, `▲ notification`, `ℹ notification` in severity_tone + BOLD.
+    let tag = format!("{lead_symbol}notification");
+    used += tag.width();
+    spans.push(Span::styled(
+        tag,
+        Style::default()
+            .fg(severity_tone)
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    // Trailing timestamp: ` · HH:MM` in muted color.
+    if let Some(time) = time_label {
+        let time_span = format!(" · {time}");
+        let budget = full_width.saturating_sub(used);
+        if time_span.width() <= budget {
+            spans.push(Span::styled(time_span, Style::default().fg(muted)));
         }
     }
+
+    Line::from(spans)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -132,131 +127,123 @@ pub(crate) fn draw_notice_view(
     current_y: &mut u16,
     content_lines: &mut usize,
     theme: &Theme,
-    hovered: bool,
-    focused: bool,
+    _hovered: bool,
+    _focused: bool,
 ) {
     let Some(severity) = notice.severity() else {
         return;
     };
-    let (tag_color, card_bg) = notice_colors(severity, theme, hovered, focused);
+    let (lead_symbol, tag_color) = match severity {
+        NoticeSeverity::Error => ("! ", theme.err()),
+        NoticeSeverity::Warning => ("▲ ", theme.warn()),
+        NoticeSeverity::Info => ("ℹ ", theme.info()),
+    };
     let parsed = parse_notice_content(&notice.message.raw);
     let full_width = area.width as usize;
+    let time_label = notice.message.sent_at_ms.map(crate::time::sent_time_label);
 
-    let header_style = Style::default()
-        .bg(card_bg)
-        .fg(tag_color)
-        .add_modifier(Modifier::BOLD);
+    // 1. Notification Entry Header
+    let header_line = notice_header_line(
+        lead_symbol,
+        tag_color,
+        time_label.as_deref(),
+        theme.muted(),
+        full_width,
+    );
 
-    let left_pad = "  ";
-    let header_wrap_width = full_width.saturating_sub(left_pad.width() + 2).max(1);
-    let header_lines = wrap_text(&parsed.header, header_wrap_width);
-
-    *content_lines += header_lines.len().max(1);
-
-    let has_detail = parsed.detail.is_some();
-    let action_hint = if has_detail {
-        if notice.expanded() {
-            Some("click to collapse")
-        } else {
-            Some("click to expand")
-        }
-    } else {
-        None
-    };
-
-    for (idx, wl) in header_lines.iter().enumerate() {
-        if *skip_rows > 0 {
-            *skip_rows = skip_rows.saturating_sub(1);
-            continue;
-        }
-        if *current_y >= area.y + area.height {
-            break;
-        }
-
-        let mut spans = Vec::new();
-        let mut used = 0;
-
-        let pad = if idx == 0 { "  " } else { "    " };
-        spans.push(Span::styled(pad, Style::default().bg(card_bg)));
-        used += pad.width();
-
-        spans.push(Span::styled(wl.text.clone(), header_style));
-        used += wl.text.width();
-
-        if idx == 0
-            && let Some(hint) = action_hint
-        {
-            let hint_len = hint.width();
-            if full_width >= used + hint_len + 3 {
-                let space_cols = full_width.saturating_sub(used + hint_len + 2);
-                spans.push(Span::styled(
-                    " ".repeat(space_cols),
-                    Style::default().bg(card_bg),
-                ));
-                spans.push(Span::styled(
-                    hint,
-                    Style::default().bg(card_bg).fg(theme.muted()),
-                ));
-                spans.push(Span::styled("  ", Style::default().bg(card_bg)));
-            } else {
-                spans.push(Span::styled(
-                    padded_tail(full_width, used),
-                    Style::default().bg(card_bg),
-                ));
-            }
-        } else {
-            spans.push(Span::styled(
-                padded_tail(full_width, used),
-                Style::default().bg(card_bg),
-            ));
-        }
-
+    *content_lines += 1;
+    if *skip_rows > 0 {
+        *skip_rows -= 1;
+    } else if *current_y < area.y + area.height {
         let line_rect = Rect::new(area.x, *current_y, area.width, 1);
-        frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
+        frame.render_widget(Paragraph::new(header_line), line_rect);
 
         layout_map.push(BlockRegion {
             message_idx: mi,
             block_idx: NOTICE_BLOCK_IDX,
             start_byte: 0,
-            end_byte: parsed.header.len(),
-            text: parsed.header.clone(),
-            prefix_cols: pad.width() as u16,
+            end_byte: 0,
+            text: String::new(),
+            prefix_cols: 0,
             rect: line_rect,
             hidden_ranges: Vec::new(),
         });
         *current_y += 1;
     }
 
-    if notice.expanded()
-        && let Some(detail) = parsed.detail.as_ref()
-    {
-        let detail_indent = "    ";
-        let detail_wrap_width = full_width.saturating_sub(detail_indent.width() + 2).max(1);
+    // 2. 1-row blank gap between entry header and body
+    for _ in 0..TURN_HEADER_BODY_GAP_ROWS {
+        *content_lines += 1;
+        if *skip_rows > 0 {
+            *skip_rows -= 1;
+        } else if *current_y < area.y + area.height {
+            *current_y += 1;
+        }
+    }
+
+    // 3. Notice body: header text
+    let body_wrap_width = full_width
+        .saturating_sub(TRANSCRIPT_BODY_LEADING_INDENT as usize)
+        .max(1);
+    let body_lines = wrap_text(&parsed.header, body_wrap_width);
+
+    for wl in body_lines {
+        *content_lines += 1;
+        if *skip_rows > 0 {
+            *skip_rows -= 1;
+            continue;
+        }
+        if *current_y >= area.y + area.height {
+            break;
+        }
+
+        let line_rect = Rect::new(area.x, *current_y, area.width, 1);
+        let spans = vec![Span::styled(
+            wl.text.clone(),
+            Style::default().fg(theme.fg()),
+        )];
+        frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
+
+        layout_map.push(BlockRegion {
+            message_idx: mi,
+            block_idx: NOTICE_BLOCK_IDX,
+            start_byte: 0,
+            end_byte: wl.text.len(),
+            text: wl.text,
+            prefix_cols: 0,
+            rect: line_rect,
+            hidden_ranges: Vec::new(),
+        });
+        *current_y += 1;
+    }
+
+    // 4. Detail body: formatted detail (unfolded direct rendering)
+    if let Some(detail) = parsed.detail.as_ref() {
+        let detail_indent = "  ";
+        let detail_wrap_width = full_width
+            .saturating_sub(detail_indent.width() + 2)
+            .max(1);
 
         for line_str in detail.lines() {
             let wrapped_detail = wrap_text(line_str, detail_wrap_width);
-            *content_lines += wrapped_detail.len().max(1);
-
             for dwl in wrapped_detail {
+                *content_lines += 1;
                 if *skip_rows > 0 {
-                    *skip_rows = skip_rows.saturating_sub(1);
+                    *skip_rows -= 1;
                     continue;
                 }
                 if *current_y >= area.y + area.height {
                     break;
                 }
 
-                let used = detail_indent.width() + dwl.text.width();
+                let line_rect = Rect::new(area.x, *current_y, area.width, 1);
                 let spans = vec![
-                    Span::styled(detail_indent, Style::default().bg(card_bg)),
+                    Span::styled(detail_indent, Style::default()),
                     Span::styled(
                         dwl.text.clone(),
-                        Style::default().bg(card_bg).fg(theme.text),
+                        Style::default().fg(theme.muted()),
                     ),
-                    Span::styled(padded_tail(full_width, used), Style::default().bg(card_bg)),
                 ];
-
-                let line_rect = Rect::new(area.x, *current_y, area.width, 1);
                 frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
 
                 layout_map.push(BlockRegion {
@@ -317,5 +304,52 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
             parsed.detail,
             Some("Details:\nhost unreachable".to_string())
         );
+    }
+
+    #[test]
+    fn draw_notice_view_renders_as_entry_with_header_gap_and_body() {
+        let theme = Theme::default();
+        let mut grid = neenee_tui_engine::Grid::new(60, 10);
+        let mut frame = Frame::new(&mut grid);
+        let area = Rect::new(0, 0, 60, 10);
+        let msg = TranscriptMessage::notice(NoticeSeverity::Error, "Connection refused");
+        let notice = NoticeView { message: &msg };
+        let mut layout_map = LayoutMap::default();
+        let mut skip_rows = 0;
+        let mut current_y = 0;
+        let mut content_lines = 0;
+
+        draw_notice_view(
+            &mut frame,
+            area,
+            notice,
+            0,
+            &mut layout_map,
+            &mut skip_rows,
+            &mut current_y,
+            &mut content_lines,
+            &theme,
+            false,
+            false,
+        );
+
+        // Header (row 0) + 1-row gap (row 1) + Body (row 2) = 3 content lines
+        assert_eq!(content_lines, 3);
+        assert_eq!(current_y, 3);
+
+        // Verify row 0 contains "! notification"
+        let buf = frame.buffer_mut();
+        let mut row0 = String::new();
+        for x in 0..20 {
+            row0.push_str(buf[(x, 0)].symbol());
+        }
+        assert!(row0.starts_with("! notification"));
+
+        // Verify row 2 contains "Connection refused"
+        let mut row2 = String::new();
+        for x in 0..25 {
+            row2.push_str(buf[(x, 2)].symbol());
+        }
+        assert!(row2.contains("Connection refused"));
     }
 }

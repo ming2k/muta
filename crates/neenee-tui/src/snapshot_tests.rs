@@ -613,7 +613,7 @@ fn collapsed_tool_steps_stack_flush() {
     let header_idx: Vec<usize> = grid
         .lines()
         .enumerate()
-        .filter(|(_, l)| l.contains("Read ") && (l.contains('▸') || l.contains('▾')))
+        .filter(|(_, l)| l.contains("Read ") && (l.contains('+') || l.contains('-')))
         .map(|(i, _)| i)
         .collect();
     assert_eq!(header_idx.len(), 3, "expected three Read headers:\n{grid}");
@@ -701,7 +701,7 @@ fn user_message_before_tool_step_has_single_separator_row() {
         .expect("user text row must render");
     let tool_idx = rows
         .iter()
-        .position(|row| row.contains("Read ") && row.contains('▸'))
+        .position(|row| row.contains("Read ") && row.contains('+'))
         .expect("collapsed tool header must render");
 
     // User row + one bottom transition row + one blank separator row + header.
@@ -783,7 +783,7 @@ fn command_entries_render_header_and_direct_body_without_folding() {
         "a command entry renders its header with leading ⌘ glyph:\n{grid}"
     );
     assert!(
-        !grid.contains('▸') && !grid.contains('▾'),
+        !rows[permissions_idx].trim_start().starts_with('+') && !rows[permissions_idx].trim_start().starts_with('-'),
         "command entries never show collapsible folding markers (ADR-0111):\n{grid}"
     );
 
@@ -868,7 +868,7 @@ fn command_component_pending_then_completed() {
         "a pending row shows generic header with invocation in body:\n{pending}"
     );
     assert!(
-        !pending.contains('▸') && !pending.contains('▾'),
+        !pending.trim_start().starts_with('+') && !pending.contains("\n+"),
         "a pending row shows no disclosure marker:\n{pending}"
     );
     assert!(
@@ -1052,7 +1052,7 @@ fn default_turn_header_has_one_gap_before_first_tool() {
         .expect("turn header must render");
     let tool_idx = rows
         .iter()
-        .position(|row| row.contains("Read ") && row.contains('▸'))
+        .position(|row| row.contains("Read ") && row.contains('+'))
         .expect("tool header must render");
 
     assert_eq!(
@@ -1112,7 +1112,7 @@ fn same_turn_segments_have_gaps_but_parallel_tools_stay_flush() {
     let tool_idx: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.contains("Read ") && row.contains('▸'))
+        .filter(|(_, row)| row.contains("Read ") && row.contains('+'))
         .map(|(index, _)| index)
         .collect();
 
@@ -1158,7 +1158,7 @@ fn different_tool_turns_have_one_vertical_gap() {
     let tool_rows: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.contains("Read ") && row.contains('▸'))
+        .filter(|(_, row)| row.contains("Read ") && row.contains('+'))
         .map(|(index, _)| index)
         .collect();
 

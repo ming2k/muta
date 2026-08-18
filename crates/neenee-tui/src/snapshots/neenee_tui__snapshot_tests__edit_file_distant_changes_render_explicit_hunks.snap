@@ -1,9 +1,8 @@
 ---
 source: crates/neenee-tui/src/snapshot_tests.rs
-assertion_line: 418
 expression: "render_grid(&m, 80, 40)"
 ---
-▾ Edit a.rs +2 -2
+- Edit a.rs +2 -2
          @@ -1,6 +1,6 @@
    1  1  line  1
    2  2  line  2

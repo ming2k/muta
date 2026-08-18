@@ -256,7 +256,7 @@ with the transcript content above.
 | `┃` bar column | 2 (after 2-col gutter) | User messages, code blocks, input |
 | Assistant text indent | 4 cols (left) + 2-col right gutter | `TRANSCRIPT_BODY_PREFIX_COLS`; wraps at `area.width - 6` |
 | Code block indent | 2 cols (inside band) + `┃` + space | `code_gutter_line(left_indent=2)` |
-| Step marker column | 2 (inside `TRANSCRIPT_H_INSET` band) | `▸` / `▾` at col 0 of the inset region |
+| Step marker column | 2 (inside `TRANSCRIPT_H_INSET` band) | `+` / `-` at col 0 of the inset region |
 | Step header text column | 4 (2 gutter + 2 after `+ `) | After `+ ` prefix |
 | Step body indent | 4 cols from transcript edge | `draw_tool_step`, `draw_reasoning_trace` |
 | Line-number gutter min width | 2 chars | `.max(2)` |

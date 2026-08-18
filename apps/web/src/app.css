@@ -3,6 +3,11 @@
   --bg-sidebar: #131720;
   --bg-surface: #181d28;
   --bg-surface-hover: #1f2533;
+  /* View-level header background: dedicated chrome surface for the main
+     view's top navigation bar. Sits distinctly above --bg-app and the sidebar
+     so the view header reads as a clear structural band, while remaining
+     subtly recessed beneath --bg-surface so interactive chips inside it pop. */
+  --bg-header: #171d29;
   /* Input-component background pair: two related but independent tokens
      (not derived from / shared with any other surface) so the input's
      active vs. inactive states are always distinguishable from each other

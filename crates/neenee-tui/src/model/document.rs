@@ -188,7 +188,7 @@ pub enum CommandPhase {
 /// How a command row presents its result — derived at render time from the
 /// result's shape, not stored. Commands are operations, not conversation:
 /// most replies are one short line that should simply *be* the row, with no
-/// disclosure marker at all. Only a genuinely long reply earns the `▸`/`▾`
+/// disclosure marker at all. Only a genuinely long reply earns the `+`/`-`
 /// affordance. See ADR-0106.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandRowLayout {
@@ -200,7 +200,7 @@ pub enum CommandRowLayout {
     /// there is no second view to disclose.
     Inline,
     /// A multi-line or long reply (`/search`, `/session status`, `/review`,
-    /// …): the disclosure pattern is correct — a `▸`/`▾` header row that
+    /// …): the disclosure pattern is correct — a `+`/`-` header row that
     /// expands to the body.
     Disclose,
 }

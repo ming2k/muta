@@ -27,7 +27,7 @@
     <button class="todo-header" onclick={() => (collapsed = !collapsed)}>
       <span class="title">Tasks</span>
       <span class="progress">{doneCount}/{items.length}</span>
-      <span class="chevron">{collapsed ? "▸" : "▾"}</span>
+      <span class="chevron">{collapsed ? "+" : "-"}</span>
     </button>
     {#if !collapsed}
       <ul class="todo-list">

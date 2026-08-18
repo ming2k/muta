@@ -22,7 +22,13 @@
   });
 
   let roleLabel = $derived(
-    message.role === "User" ? "You" : message.role === "Tool" ? "tool" : "Neenee",
+    message.role === "User"
+      ? "You"
+      : message.role === "Tool"
+        ? "tool"
+        : message.role === "System"
+          ? "notification"
+          : "Neenee",
   );
 </script>
 

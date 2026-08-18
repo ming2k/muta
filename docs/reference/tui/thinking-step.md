@@ -8,19 +8,19 @@ panel.
 ## Collapsed
 
 ```text
-  ▸ Thinking · 140 chars · 1.2s
+  + Thinking · 140 chars · 1.2s
 ```
 
 | Attribute | Value |
 |-----------|-------|
 | Background | `app_bg` (flat — no band), inset 2 cols (`TRANSCRIPT_H_INSET`) |
-| Marker | `▸` (collapsed) / `▾` (expanded), BOLD — same disclosure marker as a tool step (ADR-0109); the streaming state is conveyed by the summary text (duration omitted) and the steady `info` hue, never by the marker |
+| Marker | `+` (collapsed) / `-` (expanded), BOLD — same disclosure marker as a tool step; the streaming state is conveyed by the summary text (duration omitted) and the steady `info` hue, never by the marker |
 | Header text column | 4 from transcript edge (after the `+ ` prefix) |
 
 The summary color is the pure weight channel from the
 [state machine](step-state.md) — reasoning never carries a text accent, so
 the lifecycle is conveyed by the summary text (duration appears once the
-trace finishes) and the steady `info` hue. The marker is always `▸`/`▾`;
+trace finishes) and the steady `info` hue. The marker is always `+`/`-`;
 with the activity bar as the single breathing anchor
 ([ADR-0008](../../adr/0008-single-breathing-anchor.md)), nothing about the
 marker needs to change between streaming and finished.
@@ -35,7 +35,7 @@ marker needs to change between streaming and finished.
 ## Expanded
 
 ```text
-  ▾ Thinking · 140 chars · 1.2s
+  - Thinking · 140 chars · 1.2s
     reasoning text in text_muted...
 ```
 

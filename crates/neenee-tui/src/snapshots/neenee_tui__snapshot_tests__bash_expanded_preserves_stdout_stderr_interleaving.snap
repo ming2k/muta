@@ -1,9 +1,8 @@
 ---
 source: crates/neenee-tui/src/snapshot_tests.rs
-assertion_line: 319
 expression: "render_grid(&m, 80, 40)"
 ---
-▾ Run cargo build · 0ms
+- Run cargo build · 0ms
   $ cargo build
   Compiling a
   warning: b

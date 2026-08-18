@@ -4,14 +4,14 @@ Shared rendering shape used by collapsible transcript entries: a one-line
 summary header that toggles a body region open and closed. [Tool steps](tool-step.md)
 and [thinking steps](thinking-step.md) are the two concrete instances. Both
 render flat on the app background — there is no band or border; the header
-is just a `▸`/`▾` marker plus summary text, and the body is indented content.
+is just a `+`/`-` marker plus summary text, and the body is indented content.
 The color and toggle rules summarized below are the user-visible projection of
 the formal [step state machine](step-state.md).
 
 ## Header
 
 ```text
-  ▸ Read crates/main.rs · 0ms
+  + Read crates/main.rs · 0ms
 ```
 
 (The two leading spaces are the `app_bg` gutter shared by all transcript content.)
@@ -20,7 +20,7 @@ the formal [step state machine](step-state.md).
 |-----------|-------|
 | Background | `app_bg` (flat — no band, no border) |
 | Inset | 2 cols of `app_bg` on each side (`TRANSCRIPT_H_INSET`) |
-| Marker | `▸` (collapsed) / `▾` (expanded), BOLD, at column 2 (ADR-0109) |
+| Marker | `+` (collapsed) / `-` (expanded), BOLD, at column 2 |
 | Header text | Starts at column 4, BOLD, color set by the concrete step |
 | Padding | Spaces fill the rest of the line with `app_bg` |
 
@@ -32,7 +32,7 @@ frame.
 ## Body
 
 ```text
-  ▾ Read crates/main.rs · 0ms
+  - Read crates/main.rs · 0ms
     1  fn main() {
     2      ...
 ```
@@ -45,7 +45,7 @@ frame.
 | Visibility | Rendered only when expanded |
 
 The 2-col body indent is what makes the body line up with the header text in
-`▸ {header}`: the marker occupies column 2, the separating space column 3, and
+`+ {header}`: the marker occupies column 2, the separating space column 3, and
 the header text column 4 onward.
 
 ## Behavior
@@ -56,7 +56,7 @@ the header text column 4 onward.
 | `Enter` / `Space` on a focused **thinking** step | Toggle that step |
 | `Enter` on a focused **tool** step | Toggle the tool's [inline disclosure](tool-step.md#inline-disclosure) (ADR-0001); click a tool-step header to toggle it inline as well |
 | Click header | Focus and toggle that step |
-| Sticky pin | When an expanded step's body scrolls past the top of the viewport, its header pins to the top row of the transcript area (rendered with `▾`) |
+| Sticky pin | When an expanded step's body scrolls past the top of the viewport, its header pins to the top row of the transcript area (rendered with `-`) |
 | Narrow terminal (`< 8` cols) | Falls back to plain block rendering via `draw_message_body` |
 
 Keyboard focus is the single optional **focused step** (`App::focused_target`).

@@ -166,7 +166,9 @@
   .transcript {
     flex: 1;
     overflow-y: auto;
-    padding: 24px;
+    /* Extra breathing room at the top and bottom so the first and last message
+       never sit flush against the header or composer when scrolled to either end. */
+    padding: 36px 24px 44px;
     display: flex;
     flex-direction: column;
   }
@@ -239,7 +241,7 @@
 
   @media (max-width: 900px) {
     .transcript {
-      padding: 14px;
+      padding: 24px 14px 28px;
     }
   }
 </style>

@@ -2051,7 +2051,7 @@ fn draw_reasoning_summary(
     let summary_line_idx = *ctx.content_lines;
     // A reasoning trace's lifecycle is carried by the summary text (duration
     // omitted while streaming), never by the marker, which is always the
-    // disclosure `▸`/`▾`. So no accent is supplied and the summary color is
+    // disclosure `+`/`-`. So no accent is supplied and the summary color is
     // the pure disclosure × interaction weight from the shared state machine:
     // expanded → primary foreground; collapsed + hovered/focused →
     // intermediate hover tone; collapsed + idle → muted.
@@ -2150,7 +2150,7 @@ pub fn draw_reasoning_trace(
             &mut ctx,
             mi,
             expanded,
-            // Always use the disclosure marker (`▸`/`▾`), never a streaming
+            // Always use the disclosure marker (`+`/`-`), never a streaming
             // `●`. With the activity bar as the single breathing anchor
             // (ADR 0008), nothing about the marker needs to change between
             // streaming and finished — the lifecycle reads from the summary
@@ -2269,15 +2269,9 @@ pub fn draw_reasoning_trace(
     }
 }
 
-/// The disclosure marker pair (ADR-0109): `▸` collapsed, `▾` expanded.
-///
-/// `+`/`-` is **reserved for diff signs** (and the `+1 -1` counts in edit
-/// summaries) — the old marker overloaded it, so an expanded edit step read
-/// as "minus a line" at first glance. A triangle is directional, unclaimed
-/// by any other glyph in the transcript, and matches the web panel's
-/// disclosure chevron.
-pub(crate) const MARKER_COLLAPSED: &str = "▸";
-pub(crate) const MARKER_EXPANDED: &str = "▾";
+/// The disclosure marker pair: `+` collapsed, `-` expanded.
+pub(crate) const MARKER_COLLAPSED: &str = "+";
+pub(crate) const MARKER_EXPANDED: &str = "-";
 
 /// Build the one-row header of a command entry: `⌘ command · 21:39`.
 /// The `⌘` (or `❯`) glyph and `command` label are rendered in the same
@@ -2307,7 +2301,6 @@ fn command_header_line(
         let time_span = format!(" · {time}");
         let budget = full_width.saturating_sub(used);
         if time_span.width() <= budget {
-            used += time_span.width();
             spans.push(Span::styled(time_span, Style::default().fg(muted)));
         }
     }

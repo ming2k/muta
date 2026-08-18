@@ -137,7 +137,7 @@
         {#if record.duration_ms !== null && record.duration_ms !== undefined}
           <span class="badge">{record.duration_ms}ms</span>
         {/if}
-        <span class="chevron">{expanded ? "▾" : "▸"}</span>
+        <span class="chevron">{expanded ? "-" : "+"}</span>
       </span>
     </button>
     {#if expanded && resultText}
