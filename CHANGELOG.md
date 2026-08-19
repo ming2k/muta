@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-08-19
+
 ### Changed
 
 - **`credentials.toml` keys credentials by provider instance, not by
@@ -3562,7 +3564,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.26.1...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/ming2k/neenee/releases/tag/v0.27.0
 [0.26.1]: https://github.com/ming2k/neenee/releases/tag/v0.26.1
 [0.26.0]: https://github.com/ming2k/neenee/releases/tag/v0.26.0
 [0.25.2]: https://github.com/ming2k/neenee/releases/tag/v0.25.2
