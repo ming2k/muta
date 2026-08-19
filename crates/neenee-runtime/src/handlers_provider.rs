@@ -210,14 +210,14 @@ pub async fn add(
     // whitespace model ids are dropped.
     let channels: Vec<UserChannelConfig> = models
         .iter()
-        .map(|m| m.trim())
+        .map(|m| neenee_contracts::sanitize_model_id(m))
         .filter(|m| !m.is_empty())
         .map(|model| UserChannelConfig {
-            label: model.to_string(),
+            label: model.clone(),
             transport,
             api_key_env: None,
             api_key: api_key.clone(),
-            model: Some(model.to_string()),
+            model: Some(model),
             base_url: base_url.clone(),
             user_agent: user_agent.clone(),
             effort: None,
@@ -281,7 +281,7 @@ pub async fn add(
     // shows the account's real entitlements immediately rather than the seed
     // list. A failure keeps the seed; each failure is reported back as a
     // warning so the user knows the list may be incomplete.
-    if auth.is_oauth() {
+    if auth.is_oauth() && auth != neenee_contracts::ChannelAuth::AntigravityOAuth {
         let outcome = catalog::discover_provider_models(config).await;
         if outcome.changed {
             catalog::sync_fitted_model_registry(config);
@@ -596,6 +596,11 @@ pub async fn delete(
     if config.providers.len() == before {
         return;
     }
+    // Clean up any OAuth credentials stored specifically for this deleted instance
+    let mut auth_store = neenee_providers::oauth::AuthStore::load();
+    if auth_store.remove(&id).is_some() {
+        let _ = auth_store.save();
+    }
     // Prune the deleted provider's model ids from favorites (model-level) so
     // the picker never references a model that is no longer served.
     if !deleted_models.is_empty() {
@@ -740,7 +745,6 @@ pub async fn authorize(
     let Some(cfg) = auth
         .oauth_provider_id()
         .and_then(neenee_providers::oauth::config_by_provider_id)
-        .copied()
     else {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
             neenee_contracts::ConnectStatus::Failed {
@@ -780,10 +784,9 @@ pub async fn connect(
         .find(|r| r.id == provider_id)
         .map(|r| r.auth)
         .unwrap_or_default();
-    let Some(cfg) = auth_mode
+    let Some(mut cfg) = auth_mode
         .oauth_provider_id()
         .and_then(neenee_providers::oauth::config_by_provider_id)
-        .copied()
     else {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
             neenee_contracts::ConnectStatus::Failed {
@@ -793,6 +796,7 @@ pub async fn connect(
         ));
         return;
     };
+    cfg.provider_id = std::borrow::Cow::Owned(provider_id.clone());
     if !run_oauth(resp_tx, &provider_id, method, cfg).await {
         return;
     }
@@ -851,12 +855,12 @@ async fn run_oauth(
 ) -> bool {
     use neenee_providers::oauth::{AuthStore, OAuth};
 
-    let oauth = OAuth::new(cfg);
+    let oauth = OAuth::new(cfg.clone());
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    let result =
-        match method {
-            neenee_contracts::LoginMethod::Device => match cfg.device_flow {
+    let result = match method {
+        neenee_contracts::LoginMethod::Device => {
+            match cfg.device_flow {
                 neenee_providers::oauth::config::DeviceFlow::ChatGpt => {
                     let device = match neenee_providers::oauth::request_chatgpt_device_code(
                         oauth.client(),
@@ -932,36 +936,46 @@ async fn run_oauth(
                         .await
                         .map_err(|e| e.to_string())
                 }
-            },
-            neenee_contracts::LoginMethod::Browser => {
-                let login = match oauth.begin_browser_login().await {
-                    Ok(l) => l,
-                    Err(e) => {
-                        let msg = e.to_string();
-                        let _ = resp_tx.send(AgentResponse::ConnectStatus(
-                            neenee_contracts::ConnectStatus::Failed {
-                                provider: label.to_string(),
-                                message: msg,
-                            },
-                        ));
-                        return false;
-                    }
-                };
-                let _ = resp_tx.send(AgentResponse::ConnectStatus(
-                    neenee_contracts::ConnectStatus::Pending {
-                        provider: label.to_string(),
-                        url: login.url.clone(),
-                        user_code: String::new(),
-                        message: "Complete authorization in your browser (or open the link below)."
-                            .to_string(),
-                    },
-                ));
-                login
-                    .complete(oauth.client())
-                    .await
-                    .map_err(|e| e.to_string())
+                neenee_providers::oauth::config::DeviceFlow::Disabled => {
+                    let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                        neenee_contracts::ConnectStatus::Failed {
+                            provider: label.to_string(),
+                            message: "Device code flow is not supported for this provider. Please use browser login.".to_string(),
+                        },
+                    ));
+                    return false;
+                }
             }
-        };
+        }
+        neenee_contracts::LoginMethod::Browser => {
+            let login = match oauth.begin_browser_login().await {
+                Ok(l) => l,
+                Err(e) => {
+                    let msg = e.to_string();
+                    let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                        neenee_contracts::ConnectStatus::Failed {
+                            provider: label.to_string(),
+                            message: msg,
+                        },
+                    ));
+                    return false;
+                }
+            };
+            let _ = resp_tx.send(AgentResponse::ConnectStatus(
+                neenee_contracts::ConnectStatus::Pending {
+                    provider: label.to_string(),
+                    url: login.url.clone(),
+                    user_code: String::new(),
+                    message: "Complete authorization in your browser (or open the link below)."
+                        .to_string(),
+                },
+            ));
+            login
+                .complete(oauth.client())
+                .await
+                .map_err(|e| e.to_string())
+        }
+    };
 
     let tokens = match result {
         Ok(t) => t,
@@ -979,21 +993,52 @@ async fn run_oauth(
     // Capture the ChatGPT account id from the id_token/access_token so the
     // Responses transport can send the `ChatGPT-Account-Id` header. xAI tokens
     // carry no such claim, so this is `None` for them.
-    let account_id = tokens
+    let mut account_id = tokens
         .id_token
         .as_ref()
         .map(SecretString::expose_secret)
         .or(Some(tokens.access_token.expose_secret()))
         .and_then(neenee_providers::oauth::chatgpt_account_id);
 
+    let mut project_id = None;
+    let mut user_email = None;
+
+    if cfg.provider_id == "google-antigravity" || cfg.provider_id == "antigravity" {
+        if let Ok(project) = neenee_providers::oauth::resolve_antigravity_project(
+            oauth.client(),
+            tokens.access_token.expose_secret(),
+        )
+        .await
+            && !project.is_empty()
+        {
+            project_id = Some(project.clone());
+            if account_id.is_none() {
+                account_id = Some(project);
+            }
+        }
+        if let Ok(info) = neenee_providers::oauth::fetch_google_userinfo(
+            oauth.client(),
+            tokens.access_token.expose_secret(),
+        )
+        .await
+        {
+            user_email = info.email;
+        }
+    }
+
     let set = neenee_providers::oauth::TokenSet {
         access: tokens.access_token,
         refresh: tokens.refresh_token.unwrap_or_default(),
         expires_ms: now_ms + (tokens.expires_in.unwrap_or(3600) as i64) * 1000,
         account_id,
+        id_token: tokens.id_token,
+        token_type: tokens.token_type,
+        scope: tokens.scope,
+        project_id,
+        user_email,
     };
     let mut store = AuthStore::load();
-    store.set(cfg.provider_id, set);
+    store.set(&cfg.provider_id, set);
     if let Err(e) = store.save() {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
             neenee_contracts::ConnectStatus::Failed {
@@ -1009,37 +1054,39 @@ async fn run_oauth(
 async fn refresh_oauth_if_needed(config: &Config, provider_id: &str) {
     use neenee_providers::oauth::{AuthStore, OAuth};
 
-    // Resolve the channel's OAuth config (xAI or ChatGPT) from its auth mode.
-    let auth = config
-        .providers
-        .iter()
-        .find(|p| p.id == provider_id)
-        .and_then(|p| p.channels.first())
-        .map(|ch| ch.auth);
-    let Some(cfg) = auth
+    let provider = config.providers.iter().find(|p| p.id == provider_id);
+    let auth = provider.and_then(|p| p.channels.first()).map(|ch| ch.auth);
+    let template_id = provider.and_then(|p| p.template_id.as_deref());
+
+    let Some(mut cfg) = auth
         .and_then(|a| a.oauth_provider_id())
         .and_then(neenee_providers::oauth::config_by_provider_id)
-        .copied()
     else {
         return;
     };
-    let Some(stored) = AuthStore::load().get(cfg.provider_id).cloned() else {
+    cfg.provider_id = std::borrow::Cow::Owned(provider_id.to_string());
+
+    let store = AuthStore::load();
+    let Some(stored) = store
+        .get_for_provider(provider_id, template_id, auth.unwrap_or_default())
+        .cloned()
+    else {
         return;
     };
     if stored.access.is_empty() || stored.refresh.is_empty() {
         return;
     }
-    let oauth = OAuth::new(cfg);
+    let oauth = OAuth::new(cfg.clone());
     match oauth.resolve_access_token(stored).await {
         Ok((_access, tokens)) => {
             let mut store = AuthStore::load();
-            store.set(cfg.provider_id, tokens);
+            store.set(provider_id, tokens);
             let _ = store.save();
         }
         Err(e) => {
-            tracing::warn!(error = %e, provider = %cfg.provider_id, "OAuth: token refresh failed; clearing store");
+            tracing::warn!(error = %e, provider = %provider_id, "OAuth: token refresh failed; clearing store");
             let mut store = AuthStore::load();
-            store.remove(cfg.provider_id);
+            store.remove(provider_id);
             let _ = store.save();
         }
     }

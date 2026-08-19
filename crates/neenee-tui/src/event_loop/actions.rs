@@ -175,18 +175,36 @@ pub(super) async fn dispatch_action(
                 app.open_provider_template_chooser();
             }
         }
+        input::InputAction::CycleOauthSelection => {
+            if app.active_modal == Modal::OauthPending {
+                app.cycle_oauth_selection();
+            }
+        }
         input::InputAction::CopyOauthContent { target } => {
             // Copy the OAuth pending sheet's primary field to the
             // system clipboard. Mouse drag-select does not reach modal
             // body text (mouse events are captured), so these are the
-            // in-app copy affordances. Nothing else changes: the sheet
-            // stays open and keeps waiting for authorization.
-            let text = match target {
-                input::OauthCopyTarget::UserCode => app.oauth_pending_user_code.clone(),
-                input::OauthCopyTarget::Url => app.oauth_pending_url.clone(),
+            // in-app copy affordances.
+            let actual_target = match target {
+                input::OauthCopyTarget::Selected => app.oauth_selected_target(),
+                input::OauthCopyTarget::UserCode => input::OauthCopyTarget::UserCode,
+                input::OauthCopyTarget::Url => input::OauthCopyTarget::Url,
+            };
+            let (text, label) = match actual_target {
+                input::OauthCopyTarget::UserCode => (
+                    app.oauth_pending_user_code.clone(),
+                    "Code copied to clipboard",
+                ),
+                input::OauthCopyTarget::Url | input::OauthCopyTarget::Selected => {
+                    (app.oauth_pending_url.clone(), "Link copied to clipboard")
+                }
             };
             if !text.is_empty() {
                 clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
+                app.copy_toast_message = label.to_string();
+                app.copy_toast_failed = false;
+                app.copy_toast_until =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(1500));
             }
         }
         input::InputAction::CancelProviderTemplate => {
@@ -660,24 +678,32 @@ pub(super) async fn dispatch_action(
                                     if !app.config_custom_editing {
                                         app.config_custom_editing = true;
                                         app.custom_color_draft = app.custom_color_scheme.clone();
-                                        app.input = Theme::custom_color_value(&app.custom_color_draft, 0)
-                                            .unwrap_or("#000000")
-                                            .to_string();
+                                        app.input =
+                                            Theme::custom_color_value(&app.custom_color_draft, 0)
+                                                .unwrap_or("#000000")
+                                                .to_string();
                                         app.set_cursor_end();
                                     } else {
                                         // Save custom palette
                                         if Theme::set_custom_color_value(
                                             &mut app.custom_color_draft,
-                                            app.config_detail_index.saturating_sub(num_schemes).min(7),
+                                            app.config_detail_index
+                                                .saturating_sub(num_schemes)
+                                                .min(7),
                                             &app.input,
                                         ) {
-                                            app.custom_color_scheme = app.custom_color_draft.clone();
+                                            app.custom_color_scheme =
+                                                app.custom_color_draft.clone();
                                             app.color_scheme = "custom".to_string();
-                                            app.theme = Theme::from_color_scheme("custom", &app.custom_color_scheme);
-                                            let _ = app.tx.send(AgentRequest::UpdateTuiColorScheme {
-                                                name: app.color_scheme.clone(),
-                                                custom: app.custom_color_scheme.clone(),
-                                            });
+                                            app.theme = Theme::from_color_scheme(
+                                                "custom",
+                                                &app.custom_color_scheme,
+                                            );
+                                            let _ =
+                                                app.tx.send(AgentRequest::UpdateTuiColorScheme {
+                                                    name: app.color_scheme.clone(),
+                                                    custom: app.custom_color_scheme.clone(),
+                                                });
                                             app.config_custom_editing = false;
                                             app.input.clear();
                                             app.set_cursor(0);
@@ -688,7 +714,10 @@ pub(super) async fn dispatch_action(
                                     if let Some(scheme) = schemes.get(sel_idx) {
                                         let name = &scheme.id;
                                         app.color_scheme = name.to_string();
-                                        app.theme = Theme::from_color_scheme(name.as_ref(), &app.custom_color_scheme);
+                                        app.theme = Theme::from_color_scheme(
+                                            name.as_ref(),
+                                            &app.custom_color_scheme,
+                                        );
                                         let _ = app.tx.send(AgentRequest::UpdateTuiColorScheme {
                                             name: app.color_scheme.clone(),
                                             custom: app.custom_color_scheme.clone(),
@@ -702,11 +731,9 @@ pub(super) async fn dispatch_action(
                                     app.expand_auto_scroll = !app.expand_auto_scroll;
                                 }
                             }
-                            2 => {
+                            2 if app.config_detail_index == 0 => {
                                 // Behavior category:
-                                if app.config_detail_index == 0 {
-                                    app.click_outside_dismiss = !app.click_outside_dismiss;
-                                }
+                                app.click_outside_dismiss = !app.click_outside_dismiss;
                             }
                             _ => {}
                         }
@@ -718,7 +745,8 @@ pub(super) async fn dispatch_action(
             if app.active_modal == Modal::Config {
                 if app.config_custom_editing {
                     app.config_custom_editing = false;
-                    app.theme = Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
+                    app.theme =
+                        Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
                     app.custom_color_draft = app.custom_color_scheme.clone();
                     app.input.clear();
                     app.set_cursor(0);
@@ -1403,7 +1431,9 @@ pub(super) async fn dispatch_action(
                 && app.config_custom_editing
                 && Theme::set_custom_color_value(
                     &mut app.custom_color_draft,
-                    app.config_detail_index.saturating_sub(Theme::available_color_schemes().len()).min(7),
+                    app.config_detail_index
+                        .saturating_sub(Theme::available_color_schemes().len())
+                        .min(7),
                     &app.input,
                 )
             {
@@ -1430,7 +1460,9 @@ pub(super) async fn dispatch_action(
                 && app.config_custom_editing
                 && Theme::set_custom_color_value(
                     &mut app.custom_color_draft,
-                    app.config_detail_index.saturating_sub(Theme::available_color_schemes().len()).min(7),
+                    app.config_detail_index
+                        .saturating_sub(Theme::available_color_schemes().len())
+                        .min(7),
                     &app.input,
                 )
             {
@@ -1459,7 +1491,9 @@ pub(super) async fn dispatch_action(
                 && app.config_custom_editing
                 && Theme::set_custom_color_value(
                     &mut app.custom_color_draft,
-                    app.config_detail_index.saturating_sub(Theme::available_color_schemes().len()).min(7),
+                    app.config_detail_index
+                        .saturating_sub(Theme::available_color_schemes().len())
+                        .min(7),
                     &app.input,
                 )
             {

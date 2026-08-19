@@ -19,8 +19,8 @@ pub mod cron;
 pub use cron::CronExpr;
 pub mod color_scheme_config;
 pub use color_scheme_config::{
-    CommandThemeConfig, ComponentThemesConfig, CrateThemeConfig, DiffThemeConfig, InputThemeConfig,
-    ColorSchemeConfig, ThemeFile,
+    ColorSchemeConfig, CommandThemeConfig, ComponentThemesConfig, CrateThemeConfig,
+    DiffThemeConfig, InputThemeConfig, ThemeFile,
 };
 pub mod cache;
 pub use cache::CachePolicy;
@@ -112,7 +112,7 @@ pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
     BaselineModels, FittedModel, Model, ModelCapabilities, RemoteModelEndpoint,
     RemoteModelMetadata, WireFormat, baseline_models, model_by_id, register_fitted_models,
-    resolve as resolve_model,
+    resolve as resolve_model, sanitize_model_id,
 };
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,

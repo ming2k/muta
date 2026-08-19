@@ -277,7 +277,7 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_contracts::effort::EFFORT_OPENAI_GPT,
     },
-    // OpenAI sub2api relays can expose additional text aliases not used by the
+    // OpenAI relays and gateways can expose additional text aliases not used by the
     // official built-in template. Keep their metadata conservative when the
     // exact serving contract is relay-defined.
     Model {
@@ -356,6 +356,17 @@ const PRE_MIGRATION: &[Model] = &[
     // instead of a generic fallback. See ADR for the configurable
     // `google_base_url`.
     Model {
+        id: "gemini-3.7-flash",
+        family: "google",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: neenee_contracts::effort::EFFORT_GEMINI_LEVEL,
+    },
+    Model {
         id: "gemini-3.5-flash",
         family: "google",
         context_window: 1_000_000,
@@ -411,8 +422,8 @@ const PRE_MIGRATION: &[Model] = &[
         model_guidance: "",
         effort_levels: neenee_contracts::effort::EFFORT_GEMINI_LEVEL,
     },
-    // ── sub2api / antigravity relay models ────────────────────────────────
-    // Gemini-native 中转站 variants that advertise effort-tiered 3.1 Pro
+    // ── Antigravity / Google relay models ─────────────────────────────────
+    // Google-native variants that advertise effort-tiered 3.1 Pro
     // models (`-high`/`-low`) and a non-preview `gemini-3-flash`. Same REST
     // surface (`/v1beta/models/{id}:generateContent`), so the metadata mirrors
     // the Gemini family; the relay forwards the model id verbatim. The wire
@@ -716,7 +727,7 @@ const PRE_MIGRATION: &[Model] = &[
 
 #[test]
 fn resolve_matches_the_pre_migration_registry_for_every_model() {
-    assert_eq!(PRE_MIGRATION.len(), 57, "snapshot covers every known model");
+    assert_eq!(PRE_MIGRATION.len(), 58, "snapshot covers every known model");
     for expected in PRE_MIGRATION {
         let m = resolve_model(expected.id);
         assert_eq!(m.id, expected.id, "id");

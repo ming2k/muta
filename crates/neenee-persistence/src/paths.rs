@@ -20,7 +20,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-path-override"))]
 use std::sync::RwLock;
 
 use directories::ProjectDirs;
@@ -109,11 +109,20 @@ impl Dirs {
         self.config_dir.join("credentials.toml")
     }
 
-    /// OAuth token sets, keyed by provider id (`auth.toml`, 0600). Sibling of
-    /// `credentials.toml` for SuperGrok / future OAuth providers. See
-    /// `neenee_providers::oauth::store`.
+    /// OAuth token sets, keyed by provider id (`auth.toml`, 0600). Stored in
+    /// `$XDG_STATE_HOME/neenee/auth.toml` as dynamic runtime state.
     pub fn auth_file(&self) -> PathBuf {
+        self.state_dir.join("auth.toml")
+    }
+
+    /// Legacy location in config_dir for backward compatibility.
+    pub fn legacy_auth_file(&self) -> PathBuf {
         self.config_dir.join("auth.toml")
+    }
+
+    /// Cached model discovery lists and capability metadata (`$XDG_CACHE_HOME/neenee/models_discovery.json`).
+    pub fn discovery_cache_file(&self) -> PathBuf {
+        self.cache_dir.join("models_discovery.json")
     }
 
     /// Content-addressed blob store root. Large payloads are stored under
@@ -293,9 +302,10 @@ impl Dirs {
 /// is empty they fall back to the `OnceLock`, then to a fresh
 /// [`Dirs::system`] resolution.
 static DEFAULT: OnceLock<Dirs> = OnceLock::new();
-/// Test-only override. Marked `allow(dead_code)` because the non-test build
-/// compiles the static but never reads it (every accessor is `#[cfg(test)]`).
-#[cfg(test)]
+/// Test-only override. Marked `allow(dead_code)` because a production build
+/// compiles the static but never reads it (every accessor sits behind the
+/// same `test` / `test-path-override` gate).
+#[cfg(any(test, feature = "test-path-override"))]
 static TEST_OVERRIDE: RwLock<Option<Dirs>> = RwLock::new(None);
 
 /// Single process-wide lock that **every** test touching [`set_test_default`]
@@ -305,7 +315,7 @@ static TEST_OVERRIDE: RwLock<Option<Dirs>> = RwLock::new(None);
 /// concurrently and stomped the shared `TEST_OVERRIDE` — a flaky cross-test
 /// race. Routing all of them through one lock serialises the critical section
 /// regardless of which module the test lives in.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-path-override"))]
 pub static TEST_OVERRIDE_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Install the process-wide [`Dirs`]. Idempotent: subsequent calls in the same
@@ -327,9 +337,17 @@ pub fn set_default(dirs: Dirs) -> Result<Option<Dirs>, Dirs> {
 /// Production code MUST NOT call this — it exists purely so unit tests can run
 /// with isolated `data_dir`/`state_dir` roots without polluting the real
 /// filesystem or racing the `OnceLock`.
-#[cfg(test)]
+///
+/// Compiled under `#[cfg(any(test, feature = "test-path-override"))]`: the
+/// `test-path-override` feature exists so *other crates'* test suites (which
+/// cannot see this crate's `cfg(test)`) can install the same sandbox. A
+/// dev-dependency with `features = ["test-path-override"]` opts a crate into
+/// it without leaking the hook into production builds.
+#[cfg(any(test, feature = "test-path-override"))]
 pub fn set_test_default(dirs: Option<Dirs>) {
-    *TEST_OVERRIDE.write().unwrap() = dirs;
+    *TEST_OVERRIDE
+        .write()
+        .unwrap_or_else(|e| e.into_inner()) = dirs;
 }
 
 /// Access the process-wide [`Dirs`]. Falls back to [`Dirs::system`] when
@@ -337,8 +355,12 @@ pub fn set_test_default(dirs: Option<Dirs>) {
 /// invoked outside of `main`). When a test override is installed (via the
 /// test-only `set_test_default`), that value wins over the production install.
 pub fn get() -> Dirs {
-    #[cfg(test)]
-    if let Some(d) = TEST_OVERRIDE.read().unwrap().clone() {
+    #[cfg(any(test, feature = "test-path-override"))]
+    if let Some(d) = TEST_OVERRIDE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
         return d;
     }
     match DEFAULT.get() {

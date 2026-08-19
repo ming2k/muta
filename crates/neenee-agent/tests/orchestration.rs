@@ -278,7 +278,7 @@ fn context_overflow_detection_is_conservative() {
 async fn turn_retries_transient_provider_failure_before_tool_activity() {
     let directory =
         std::env::temp_dir().join(format!("neenee-retry-test-{}", uuid::Uuid::new_v4()));
-    let _ = std::fs::create_dir_all(&directory);
+    std::fs::create_dir_all(&directory).expect("create test directory");
     let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
     let agent = Arc::new(Agent::new(
         Arc::new(RetryOnceProvider(AtomicUsize::new(0))),

@@ -22,5 +22,11 @@ hex = "0.4"
 chrono = { workspace = true }
 inventory = { workspace = true }
 
+[features]
+# Exposes the test-only `paths::set_test_default` override to *other crates'*
+# test suites (a crate cannot see another crate's `cfg(test)`). Enabled via a
+# dev-dependency feature flag so the hook never exists in production builds.
+test-path-override = []
+
 [lints]
 workspace = true

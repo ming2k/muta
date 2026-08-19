@@ -142,22 +142,67 @@ impl FixedModalSpec {
     }
 
     // The template chooser shares the provider list's footprint.
-    pub const PROVIDER: Self = Self::new(72, 72);
+    pub const PROVIDER: Self = Self::new(76, 80);
     pub const QUESTION: Self = Self::new(78, 70);
-    pub const OAUTH_PENDING: Self = Self::new(72, 48);
-    pub const CUSTOM_PROVIDER: Self = Self::new(66, 66);
-    pub const HELP: Self = Self::new(58, 70);
-    pub const SESSIONS: Self = Self::new(80, 64);
-    pub const PERMISSIONS: Self = Self::new(64, 60);
-    pub const SKILLS: Self = Self::new(64, 60);
+    #[allow(dead_code)]
+    pub const OAUTH_PENDING: Self = Self::new(76, 75);
+    #[allow(dead_code)]
+    pub const CUSTOM_PROVIDER: Self = Self::new(72, 78);
+    pub const HELP: Self = Self::new(66, 78);
+    pub const SESSIONS: Self = Self::new(82, 78);
+    #[allow(dead_code)]
+    pub const PERMISSIONS: Self = Self::new(72, 75);
+    #[allow(dead_code)]
+    pub const SKILLS: Self = Self::new(72, 75);
+
+    /// Construct a modal spec with custom width and height percentages.
+    #[allow(dead_code)]
+    pub const fn custom(width_percent: u16, height_percent: u16) -> Self {
+        Self::new(width_percent, height_percent)
+    }
+
+    /// Return a new spec with modified height percentage.
+    #[allow(dead_code)]
+    pub const fn with_height(mut self, height_percent: u16) -> Self {
+        self.height_percent = height_percent;
+        self
+    }
+
+    /// Return a new spec with modified width percentage.
+    #[allow(dead_code)]
+    pub const fn with_width(mut self, width_percent: u16) -> Self {
+        self.spec.width_percent = width_percent;
+        self
+    }
+
+    /// The width percentage of the modal relative to the viewport.
+    #[allow(dead_code)]
+    pub const fn width_percent(&self) -> u16 {
+        self.spec.width_percent
+    }
+
+    /// The height percentage of the modal relative to the viewport.
+    #[allow(dead_code)]
+    pub const fn height_percent(&self) -> u16 {
+        self.height_percent
+    }
+
+    /// Calculate the exact columns and rows this modal occupies in `frame`.
+    #[allow(dead_code)]
+    pub fn exact_dimensions(&self, frame: &Frame) -> (u16, u16) {
+        let r = modal_area(frame, *self);
+        (r.width, r.height)
+    }
 }
 
-/// Geometry for a modal whose height follows its rendered content.
+/// Geometry for a modal whose height follows its rendered content up to max bounds.
 #[derive(Clone, Copy)]
 pub(crate) struct ContentModalSpec {
     spec: ModalSpec,
     min_rows: u16,
     max_viewport_percent: u16,
+    max_height_rows: Option<u16>,
+    max_width_cols: Option<u16>,
 }
 
 impl ContentModalSpec {
@@ -170,6 +215,8 @@ impl ContentModalSpec {
             },
             min_rows,
             max_viewport_percent,
+            max_height_rows: None,
+            max_width_cols: None,
         }
     }
 
@@ -189,6 +236,101 @@ impl ContentModalSpec {
     /// is a generous 60% purely as a ceiling; the real height is the content
     /// row count plus chrome, which never approaches it.
     pub const MODEL_EDITOR: Self = Self::new(66, 6, 60);
+    pub const OAUTH_PENDING: Self = Self::new(76, 7, 80);
+    pub const CUSTOM_PROVIDER: Self = Self::new(72, 8, 80);
+    pub const PERMISSIONS: Self = Self::new(72, 7, 80);
+    pub const SKILLS: Self = Self::new(72, 7, 80);
+    #[allow(dead_code)]
+    pub const HELP: Self = Self::new(66, 10, 84);
+
+    /// Construct a modal spec with custom max constraints.
+    #[allow(dead_code)]
+    pub const fn custom(width_percent: u16, min_rows: u16, max_viewport_percent: u16) -> Self {
+        Self::new(width_percent, min_rows, max_viewport_percent)
+    }
+
+    /// Set an explicit maximum row ceiling.
+    #[allow(dead_code)]
+    pub const fn with_max_rows(mut self, max_rows: u16) -> Self {
+        self.max_height_rows = Some(max_rows);
+        self
+    }
+
+    /// Set an explicit maximum column width.
+    #[allow(dead_code)]
+    pub const fn with_max_cols(mut self, max_cols: u16) -> Self {
+        self.max_width_cols = Some(max_cols);
+        self
+    }
+
+    /// Set maximum viewport height percentage.
+    #[allow(dead_code)]
+    pub const fn with_max_percent(mut self, max_viewport_percent: u16) -> Self {
+        self.max_viewport_percent = max_viewport_percent;
+        self
+    }
+
+    /// Set minimum row count.
+    #[allow(dead_code)]
+    pub const fn with_min_rows(mut self, min_rows: u16) -> Self {
+        self.min_rows = min_rows;
+        self
+    }
+
+    /// Set width percentage.
+    #[allow(dead_code)]
+    pub const fn with_width(mut self, width_percent: u16) -> Self {
+        self.spec.width_percent = width_percent;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub const fn width_percent(&self) -> u16 {
+        self.spec.width_percent
+    }
+
+    #[allow(dead_code)]
+    pub const fn max_viewport_percent(&self) -> u16 {
+        self.max_viewport_percent
+    }
+
+    #[allow(dead_code)]
+    pub const fn min_rows(&self) -> u16 {
+        self.min_rows
+    }
+
+    #[allow(dead_code)]
+    pub const fn max_height_rows(&self) -> Option<u16> {
+        self.max_height_rows
+    }
+
+    #[allow(dead_code)]
+    pub const fn max_width_cols(&self) -> Option<u16> {
+        self.max_width_cols
+    }
+
+    /// Calculate the exact dimensions (cols, rows) for a given desired row count in `frame`.
+    #[allow(dead_code)]
+    pub fn exact_dimensions(&self, frame: &Frame, desired_rows: u16) -> (u16, u16) {
+        let area = content_modal_area(frame, *self, desired_rows);
+        (area.width, area.height)
+    }
+
+    /// Calculate the maximum dimensions (cols, rows) this modal can occupy in `frame`.
+    #[allow(dead_code)]
+    pub fn max_dimensions(&self, frame: &Frame) -> (u16, u16) {
+        let viewport = viewport_rect(frame);
+        let mut max_h = ((viewport.height as u32 * self.max_viewport_percent as u32) / 100) as u16;
+        if let Some(limit) = self.max_height_rows {
+            max_h = max_h.min(limit);
+        }
+        let probe = content_modal_probe(frame, *self);
+        let mut w = probe.width;
+        if let Some(limit_w) = self.max_width_cols {
+            w = w.min(limit_w);
+        }
+        (w, max_h.max(self.min_rows))
+    }
 
     pub const fn modal_spec(self) -> ModalSpec {
         self.spec
@@ -215,7 +357,15 @@ pub(crate) fn modal_area(frame: &Frame, geometry: FixedModalSpec) -> Rect {
 }
 
 pub(crate) fn content_modal_probe(frame: &Frame, geometry: ContentModalSpec) -> Rect {
-    centered_rect(geometry.spec.width_percent, 100, viewport_rect(frame))
+    let viewport = viewport_rect(frame);
+    let mut rect = centered_rect(geometry.spec.width_percent, 100, viewport);
+    if let Some(max_cols) = geometry.max_width_cols
+        && rect.width > max_cols
+    {
+        let left = rect.x + (rect.width - max_cols) / 2;
+        rect = Rect::new(left, rect.y, max_cols, rect.height);
+    }
+    even_width(rect)
 }
 
 pub(crate) fn content_modal_area(
@@ -224,9 +374,19 @@ pub(crate) fn content_modal_area(
     desired_rows: u16,
 ) -> Rect {
     let viewport = viewport_rect(frame);
-    let max_h = ((viewport.height as u32 * geometry.max_viewport_percent as u32) / 100) as u16;
+    let mut max_h = ((viewport.height as u32 * geometry.max_viewport_percent as u32) / 100) as u16;
+    if let Some(limit) = geometry.max_height_rows {
+        max_h = max_h.min(limit);
+    }
     let height = desired_rows.clamp(geometry.min_rows, max_h.max(geometry.min_rows));
-    centered_rect_h(geometry.spec.width_percent, height, viewport)
+    let mut rect = centered_rect_h(geometry.spec.width_percent, height, viewport);
+    if let Some(max_cols) = geometry.max_width_cols
+        && rect.width > max_cols
+    {
+        let left = rect.x + (rect.width - max_cols) / 2;
+        rect = Rect::new(left, rect.y, max_cols, rect.height);
+    }
+    even_width(rect)
 }
 
 /// Recess the live surface behind a modal, per its [`Recess`] policy.
@@ -428,6 +588,81 @@ pub(crate) fn breadcrumb_parts<'a>(parent: &'a str, child: &'a str) -> [HeaderPa
         },
         HeaderPart::title(child),
     ]
+}
+
+/// The multi-level hierarchical breadcrumb builder with automatic front-truncation (`... › `).
+///
+/// When the available header width is insufficient to fit all segments (e.g. `Connections › Add › Google Antigravity`),
+/// it drops leftmost levels and replaces them with `... › `, e.g. `... › Add › Google Antigravity` or `... › Google Antigravity`.
+pub(crate) fn hierarchical_breadcrumb<'a>(
+    levels: &[&'a str],
+    max_width: usize,
+) -> Vec<HeaderPart<'a>> {
+    if levels.is_empty() {
+        return Vec::new();
+    }
+    if levels.len() == 1 {
+        return vec![HeaderPart::title(levels[0])];
+    }
+
+    let sep_w = 3; // " › "
+    let full_width: usize =
+        levels.iter().map(|s| s.chars().count()).sum::<usize>() + (levels.len() - 1) * sep_w;
+
+    if full_width <= max_width {
+        let mut parts = Vec::with_capacity(levels.len() * 2 - 1);
+        for (i, level) in levels.iter().enumerate() {
+            if i > 0 {
+                parts.push(HeaderPart::Text {
+                    text: BREADCRUMB_SEP,
+                    accent: false,
+                });
+            }
+            if i == levels.len() - 1 {
+                parts.push(HeaderPart::title(level));
+            } else {
+                parts.push(HeaderPart::Text {
+                    text: level,
+                    accent: false,
+                });
+            }
+        }
+        return parts;
+    }
+
+    // Progressively drop leftmost levels and prepend `...`
+    for start_idx in 1..levels.len() {
+        let remaining = &levels[start_idx..];
+        let rem_width: usize = 3 // "..."
+            + sep_w
+            + remaining.iter().map(|s| s.chars().count()).sum::<usize>()
+            + (remaining.len() - 1) * sep_w;
+
+        if rem_width <= max_width || start_idx == levels.len() - 1 {
+            let mut parts = Vec::with_capacity(remaining.len() * 2 + 1);
+            parts.push(HeaderPart::Text {
+                text: "...",
+                accent: false,
+            });
+            for (i, level) in remaining.iter().enumerate() {
+                parts.push(HeaderPart::Text {
+                    text: BREADCRUMB_SEP,
+                    accent: false,
+                });
+                if i == remaining.len() - 1 {
+                    parts.push(HeaderPart::title(level));
+                } else {
+                    parts.push(HeaderPart::Text {
+                        text: level,
+                        accent: false,
+                    });
+                }
+            }
+            return parts;
+        }
+    }
+
+    vec![HeaderPart::title(levels[levels.len() - 1])]
 }
 
 /// Paint the unified modal chrome and split the content area into sections.
@@ -722,8 +957,8 @@ mod tests {
     #[test]
     fn fixed_and_content_modal_specs_preserve_their_sizing_modes() {
         let fixed = FixedModalSpec::PROVIDER;
-        assert_eq!(fixed.spec.width_percent, 72);
-        assert_eq!(fixed.height_percent, 72);
+        assert_eq!(fixed.spec.width_percent, 76);
+        assert_eq!(fixed.height_percent, 80);
 
         let content = ContentModalSpec::TOOLS;
         assert_eq!(content.spec.width_percent, 64);
@@ -900,5 +1135,36 @@ mod tests {
             }
         ));
         assert!(matches!(parts[2], HeaderPart::Title("Info")));
+    }
+
+    #[test]
+    fn hierarchical_breadcrumb_handles_full_and_truncated_widths() {
+        let levels = ["Connections", "Add", "Google Antigravity"];
+        // Full width fitting
+        let full = hierarchical_breadcrumb(&levels, 60);
+        assert_eq!(full.len(), 5); // Connections, sep, Add, sep, Google Antigravity
+        assert!(matches!(
+            full[0],
+            HeaderPart::Text {
+                text: "Connections",
+                ..
+            }
+        ));
+        assert!(matches!(full[4], HeaderPart::Title("Google Antigravity")));
+
+        // Tight width dropping "Connections"
+        let truncated = hierarchical_breadcrumb(&levels, 32);
+        assert_eq!(truncated.len(), 5); // ..., sep, Add, sep, Google Antigravity
+        assert!(matches!(truncated[0], HeaderPart::Text { text: "...", .. }));
+        assert!(matches!(
+            truncated[4],
+            HeaderPart::Title("Google Antigravity")
+        ));
+
+        // Very tight width dropping "Add" as well
+        let tight = hierarchical_breadcrumb(&levels, 24);
+        assert_eq!(tight.len(), 3); // ..., sep, Google Antigravity
+        assert!(matches!(tight[0], HeaderPart::Text { text: "...", .. }));
+        assert!(matches!(tight[2], HeaderPart::Title("Google Antigravity")));
     }
 }

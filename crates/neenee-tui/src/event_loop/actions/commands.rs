@@ -332,6 +332,23 @@ pub(super) fn handle_ctrl_c(
         // as an empty-session file).
         tracing::info!(reason = "startup_picker_cancelled", "app exiting");
         app.should_quit.store(true, Ordering::SeqCst);
+    } else if app.active_modal == Modal::OauthPending {
+        let text = if !app.oauth_pending_url.is_empty() {
+            app.oauth_pending_url.clone()
+        } else if !app.oauth_pending_user_code.is_empty() {
+            app.oauth_pending_user_code.clone()
+        } else {
+            String::new()
+        };
+        if !text.is_empty() {
+            clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
+            show_local_toast(
+                app,
+                "Link copied to clipboard",
+                false,
+                std::time::Duration::from_millis(2000),
+            );
+        }
     } else if app.active_modal != Modal::None && app.active_modal != Modal::Permission {
         app.active_modal = Modal::None;
     } else if app.in_side_view {

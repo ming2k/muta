@@ -53,11 +53,14 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
             // reasoning is opted in per model from the Models
             // picker.
             let models: Vec<String> = if app.custom_fields.contains(&crate::CustomField::Model) {
-                vec![app.custom_model.trim().to_string()]
+                vec![neenee_contracts::sanitize_model_id(&app.custom_model)]
             } else {
-                app.custom_models.clone()
+                app.custom_models
+                    .iter()
+                    .map(|m| neenee_contracts::sanitize_model_id(m))
+                    .collect()
             };
-            let usable = models.iter().any(|m| !m.trim().is_empty());
+            let usable = models.iter().any(|m| !m.is_empty());
             if name.is_empty() || !usable {
                 app.load_custom_field();
             } else {
@@ -458,41 +461,41 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                 app.modal_index - 1
             };
         }
-        Modal::Config => {
-            match app.config_focus {
-                crate::overlays::ConfigFocus::Categories => {
-                    let count = 4usize;
-                    app.config_category = (app.config_category + count - 1) % count;
-                    app.config_detail_index = 0;
-                    app.config_detail_scroll = 0;
-                }
-                crate::overlays::ConfigFocus::Detail => {
-                    if app.config_category == 0 && app.config_custom_editing {
-                        let num_schemes = crate::view::COLOR_SCHEMES.len();
-                        let custom_field_idx = app.config_detail_index.saturating_sub(num_schemes).min(7);
-                        let _ = crate::view::Theme::set_custom_color_value(
-                            &mut app.custom_color_draft,
-                            custom_field_idx,
-                            &app.input,
-                        );
-                        let next_field = (custom_field_idx + 8 - 1) % 8;
-                        app.config_detail_index = num_schemes + next_field;
-                        app.input = crate::view::Theme::custom_color_value(&app.custom_color_draft, next_field)
+        Modal::Config => match app.config_focus {
+            crate::overlays::ConfigFocus::Categories => {
+                let count = 4usize;
+                app.config_category = (app.config_category + count - 1) % count;
+                app.config_detail_index = 0;
+                app.config_detail_scroll = 0;
+            }
+            crate::overlays::ConfigFocus::Detail => {
+                if app.config_category == 0 && app.config_custom_editing {
+                    let num_schemes = crate::view::COLOR_SCHEMES.len();
+                    let custom_field_idx =
+                        app.config_detail_index.saturating_sub(num_schemes).min(7);
+                    let _ = crate::view::Theme::set_custom_color_value(
+                        &mut app.custom_color_draft,
+                        custom_field_idx,
+                        &app.input,
+                    );
+                    let next_field = (custom_field_idx + 8 - 1) % 8;
+                    app.config_detail_index = num_schemes + next_field;
+                    app.input =
+                        crate::view::Theme::custom_color_value(&app.custom_color_draft, next_field)
                             .unwrap_or("#000000")
                             .to_string();
-                        app.set_cursor_end();
-                    } else {
-                        let count = match app.config_category {
-                            0 => crate::view::COLOR_SCHEMES.len(),
-                            1 => 2usize,
-                            2 => 1usize,
-                            _ => 4usize,
-                        };
-                        app.config_detail_index = (app.config_detail_index + count - 1) % count;
-                    }
+                    app.set_cursor_end();
+                } else {
+                    let count = match app.config_category {
+                        0 => crate::view::COLOR_SCHEMES.len(),
+                        1 => 2usize,
+                        2 => 1usize,
+                        _ => 4usize,
+                    };
+                    app.config_detail_index = (app.config_detail_index + count - 1) % count;
                 }
             }
-        }
+        },
         Modal::TokenReport => {
             if app.token_report_detail {
                 app.token_report_scroll = app.token_report_scroll.saturating_sub(1);
@@ -579,41 +582,41 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                 .max(1);
             app.modal_index = (app.modal_index + 1) % count;
         }
-        Modal::Config => {
-            match app.config_focus {
-                crate::overlays::ConfigFocus::Categories => {
-                    let count = 4usize;
-                    app.config_category = (app.config_category + 1) % count;
-                    app.config_detail_index = 0;
-                    app.config_detail_scroll = 0;
-                }
-                crate::overlays::ConfigFocus::Detail => {
-                    if app.config_category == 0 && app.config_custom_editing {
-                        let num_schemes = crate::view::COLOR_SCHEMES.len();
-                        let custom_field_idx = app.config_detail_index.saturating_sub(num_schemes).min(7);
-                        let _ = crate::view::Theme::set_custom_color_value(
-                            &mut app.custom_color_draft,
-                            custom_field_idx,
-                            &app.input,
-                        );
-                        let next_field = (custom_field_idx + 1) % 8;
-                        app.config_detail_index = num_schemes + next_field;
-                        app.input = crate::view::Theme::custom_color_value(&app.custom_color_draft, next_field)
+        Modal::Config => match app.config_focus {
+            crate::overlays::ConfigFocus::Categories => {
+                let count = 4usize;
+                app.config_category = (app.config_category + 1) % count;
+                app.config_detail_index = 0;
+                app.config_detail_scroll = 0;
+            }
+            crate::overlays::ConfigFocus::Detail => {
+                if app.config_category == 0 && app.config_custom_editing {
+                    let num_schemes = crate::view::COLOR_SCHEMES.len();
+                    let custom_field_idx =
+                        app.config_detail_index.saturating_sub(num_schemes).min(7);
+                    let _ = crate::view::Theme::set_custom_color_value(
+                        &mut app.custom_color_draft,
+                        custom_field_idx,
+                        &app.input,
+                    );
+                    let next_field = (custom_field_idx + 1) % 8;
+                    app.config_detail_index = num_schemes + next_field;
+                    app.input =
+                        crate::view::Theme::custom_color_value(&app.custom_color_draft, next_field)
                             .unwrap_or("#000000")
                             .to_string();
-                        app.set_cursor_end();
-                    } else {
-                        let count = match app.config_category {
-                            0 => crate::view::COLOR_SCHEMES.len(),
-                            1 => 2usize,
-                            2 => 1usize,
-                            _ => 4usize,
-                        };
-                        app.config_detail_index = (app.config_detail_index + 1) % count;
-                    }
+                    app.set_cursor_end();
+                } else {
+                    let count = match app.config_category {
+                        0 => crate::view::COLOR_SCHEMES.len(),
+                        1 => 2usize,
+                        2 => 1usize,
+                        _ => 4usize,
+                    };
+                    app.config_detail_index = (app.config_detail_index + 1) % count;
                 }
             }
-        }
+        },
         Modal::TokenReport => {
             if app.token_report_detail {
                 app.token_report_scroll = app.token_report_scroll.saturating_add(1);

@@ -969,6 +969,43 @@ fn completions_continue_trigger_suggests_sessions() {
 }
 
 #[test]
+fn completions_settings_triggers_and_subcommands() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+
+    // Typing /preferences steers to /settings
+    app.input = "/preferences".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    assert_eq!(
+        completions.first().map(|c| c.label.as_str()),
+        Some("/settings")
+    );
+
+    // Typing /theme steers to /settings
+    app.input = "/theme".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    assert_eq!(
+        completions.first().map(|c| c.label.as_str()),
+        Some("/settings")
+    );
+
+    // Typing /settings suggests /settings reload
+    app.input = "/settings ".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, vec!["/settings reload"]);
+
+    // Legacy /config <space> also suggests /settings reload
+    app.input = "/config ".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, vec!["/settings reload"]);
+}
+
+#[test]
 fn completions_subcommand_argument_never_triggers_suggestion() {
     // `clear` is a trigger word at the top level, but as a `/permissions`
     // argument it is a real subcommand and must not be steered away.
@@ -988,7 +1025,10 @@ fn completions_intent_keywords_suggest_canonical_command() {
     let completions = app.completions();
     assert_eq!(app.completion_kind(), CompletionKind::Slash);
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    assert!(labels.contains(&"/schedule"), "typing /timer should suggest /schedule");
+    assert!(
+        labels.contains(&"/schedule"),
+        "typing /timer should suggest /schedule"
+    );
 
     // Check intent suggestion kind and doc
     let schedule_cand = completions.iter().find(|c| c.label == "/schedule").unwrap();
@@ -1016,7 +1056,10 @@ fn completions_candidates_carry_rich_doc_for_inspector() {
     app.input = "/models".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
-    let models_cand = completions.iter().find(|c| c.label == "/models").expect("find /models");
+    let models_cand = completions
+        .iter()
+        .find(|c| c.label == "/models")
+        .expect("find /models");
     assert!(models_cand.doc.is_some());
     let doc = models_cand.doc.as_ref().unwrap();
     assert_eq!(doc.name, "/models");
@@ -1515,6 +1558,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         oauth_pending_url: String::new(),
         oauth_pending_user_code: String::new(),
         oauth_pending_error: None,
+        oauth_selected_item: 0,
         oauth_scroll: 0,
         custom_suggest_index: 0,
         custom_scroll: 0,
@@ -1606,30 +1650,28 @@ fn completions_autopilot_subcommand_offers_on_off() {
     assert!(app.completions().is_empty());
 }
 
-/// The OpenAI sub2api template (Name / Base URL / Token) seeds OpenAI text
-/// models directly.
+/// The official OpenAI template (Name / Token) seeds OpenAI text models directly.
 fn openai_template() -> &'static crate::providers::ProviderTemplate {
     crate::PROVIDER_TEMPLATES
         .iter()
-        .find(|t| t.label == "OpenAI (sub2api)")
-        .expect("openai sub2api template")
+        .find(|t| t.id == "openai")
+        .expect("openai template")
 }
 
-/// The Anthropic relay template (Name / Base URL / Token), which seeds the Claude
+/// The Anthropic template (Name / Base URL / Token), which seeds the Claude
 /// family and exposes no Model field.
 fn anthropic_template() -> &'static crate::providers::ProviderTemplate {
     crate::PROVIDER_TEMPLATES
         .iter()
-        .find(|t| t.protocol == "anthropic")
-        .expect("anthropic relay template")
+        .find(|t| t.id == "anthropic")
+        .expect("anthropic template")
 }
 
-/// The Antigravity (sub2api) relay template — a Google-native 中转站 with a
-/// pre-filled base URL and the three relay-specific model ids seeded.
+/// The Google Antigravity template — a Google-native subscription with seeded models.
 fn antigravity_template() -> &'static crate::providers::ProviderTemplate {
     crate::PROVIDER_TEMPLATES
         .iter()
-        .find(|t| t.label == "Antigravity (sub2api)")
+        .find(|t| t.id == "antigravity-oauth")
         .expect("antigravity template")
 }
 
@@ -1682,21 +1724,10 @@ fn antigravity_template_prefills_url_and_seeds_relay_models() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_custom_provider_editor(antigravity_template());
     assert_eq!(app.custom_protocol_wire, "google");
-    // The relay host is pre-filled so the user only types a name + token; an
-    // empty base_url would otherwise fall back to localhost in the catalog.
-    assert_eq!(
-        app.custom_base_url,
-        "https://relay.example.com/antigravity/v1beta"
-    );
-    // The three effort-tiered / non-preview ids are seeded as channels, with
-    // the working models first (AddProvider activates channels[0] by default).
+    assert_eq!(app.custom_base_url, "https://cloudcode-pa.googleapis.com");
     assert_eq!(
         app.custom_models,
-        vec![
-            "gemini-3-flash".to_string(),
-            "gemini-3.1-pro-low".to_string(),
-            "gemini-3.1-pro-high".to_string(),
-        ]
+        neenee_providers::ANTIGRAVITY_OAUTH_MODELS
     );
     // No free-text Model field — the closed Gemini family is the seed.
     assert!(!app.custom_fields.contains(&crate::CustomField::Model));
@@ -1708,8 +1739,12 @@ fn antigravity_template_prefills_url_and_seeds_relay_models() {
 #[test]
 fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_custom_provider_editor(openai_template());
-    // Fields: Name(0) / Base URL(1) / Token(2).
+    let custom_template = crate::PROVIDER_TEMPLATES
+        .iter()
+        .find(|t| t.id == "custom-openai")
+        .expect("custom-openai template");
+    app.open_custom_provider_editor(custom_template);
+    // Fields: Name(0) / Base URL(1) / Token(2) / Model(3).
     let n = app.custom_fields.len() as u8;
     // Type a name, then advance: the name is stashed and the Base URL field
     // loads its (empty) buffer.
@@ -1718,7 +1753,7 @@ fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
     assert_eq!(app.custom_field, 1);
     assert_eq!(app.custom_name, "My Relay");
     assert!(app.input.is_empty(), "Base URL buffer is empty");
-    // Wrap backward from Name (0) to the last field (Token).
+    // Wrap backward from Name (0) to the last field (Model).
     app.cycle_custom_field(false); // 1 -> 0
     assert_eq!(app.custom_field, 0);
     assert_eq!(app.input, "My Relay", "Name buffer reloads into the line");
@@ -1752,6 +1787,10 @@ fn custom_provider_model_filter_commits_and_offers_custom_id() {
     app.input = "my-private-model".to_string();
     app.on_custom_filter_changed();
     assert_eq!(app.custom_model, "my-private-model");
+    // A query with spaces is automatically sanitized to use hyphens.
+    app.input = "my custom private model".to_string();
+    app.on_custom_filter_changed();
+    assert_eq!(app.custom_model, "my-custom-private-model");
 }
 
 #[test]
@@ -4603,8 +4642,15 @@ fn range_selection_left_arrow_breaks_selection_at_release_position() {
 
     let action = relay_probe(&mut app, crossterm::event::KeyCode::Left);
     assert!(matches!(action, Some(crate::input::InputAction::None)));
-    assert_eq!(app.selection, SelectionState::None, "selection must be cancelled");
-    assert_eq!(app.cursor_position, 10, "caret steps left from release point 11");
+    assert_eq!(
+        app.selection,
+        SelectionState::None,
+        "selection must be cancelled"
+    );
+    assert_eq!(
+        app.cursor_position, 10,
+        "caret steps left from release point 11"
+    );
 
     // Backward drag: drag from 'd' (11) to 'w' (6): mouse released at 6.
     app.selection = SelectionState::Range {
@@ -4615,8 +4661,15 @@ fn range_selection_left_arrow_breaks_selection_at_release_position() {
 
     let action = relay_probe(&mut app, crossterm::event::KeyCode::Left);
     assert!(matches!(action, Some(crate::input::InputAction::None)));
-    assert_eq!(app.selection, SelectionState::None, "selection must be cancelled");
-    assert_eq!(app.cursor_position, 5, "caret steps left from release point 6");
+    assert_eq!(
+        app.selection,
+        SelectionState::None,
+        "selection must be cancelled"
+    );
+    assert_eq!(
+        app.cursor_position, 5,
+        "caret steps left from release point 6"
+    );
 }
 
 #[test]
@@ -4632,8 +4685,15 @@ fn range_selection_right_arrow_breaks_selection_at_release_position() {
 
     let action = relay_probe(&mut app, crossterm::event::KeyCode::Right);
     assert!(matches!(action, Some(crate::input::InputAction::None)));
-    assert_eq!(app.selection, SelectionState::None, "selection must be cancelled");
-    assert_eq!(app.cursor_position, 7, "caret steps right from release point 6");
+    assert_eq!(
+        app.selection,
+        SelectionState::None,
+        "selection must be cancelled"
+    );
+    assert_eq!(
+        app.cursor_position, 7,
+        "caret steps right from release point 6"
+    );
 }
 
 #[test]

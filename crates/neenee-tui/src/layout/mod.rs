@@ -29,6 +29,7 @@
 
 pub mod turn_band;
 
+use neenee_tui_engine::flex::{Flex, FlexItem};
 use neenee_tui_engine::{Frame, Rect};
 
 use crate::model::document::TranscriptMessage;
@@ -56,9 +57,8 @@ impl Strategy {
     /// erroring, so a typo never blocks startup.
     pub fn from_config(raw: &str) -> Self {
         match raw.trim().to_ascii_lowercase().as_str() {
-            "turn_band" | "turn-band" | "turnband" | "default" | "compact" | "flush" | "legacy" | "" => {
-                Self::TurnBand
-            }
+            "turn_band" | "turn-band" | "turnband" | "default" | "compact" | "flush" | "legacy"
+            | "" => Self::TurnBand,
             _ => Self::TurnBand,
         }
     }
@@ -145,6 +145,15 @@ impl VirtualLayoutIndex {
 /// height. While a live tail is still streaming the caller naturally falls
 /// back to the cache-only path; once that tail settles, the next draw upgrades
 /// to a fully virtualized transcript.
+///
+/// Geometry comes from the engine's flex solver (ADR-0114): the chunks are
+/// declared as a single vertical flex pass — `FlexItem::fixed(chunk_height)`
+/// per chunk, `Flex::column()` with no gap (inter-chunk spacing is already
+/// part of each chunk's height via `default_gap_before`) — and the solver
+/// yields every chunk's exact main-axis offset. The hand-rolled accumulation
+/// loop this replaces could drift from the painting path's cursor arithmetic;
+/// sharing one solver keeps the virtual index and the paint pass in lockstep
+/// by construction.
 pub fn build_virtual_index(
     messages: &[TranscriptMessage],
     cache: &HeightCache,
@@ -153,47 +162,94 @@ pub fn build_virtual_index(
     if messages.is_empty() {
         return None;
     }
-    let mut chunks = Vec::new();
-    let mut line = 0usize;
-    let mut index = 0usize;
-    while index < messages.len() {
-        let start = index;
-        let height = match strategy {
-            Strategy::TurnBand => {
-                let message = &messages[index];
-                let mut height = default_gap_before(messages, index);
-                if let Some(end) = default_group_end(messages, index) {
-                    height += 1 + TURN_HEADER_BODY_GAP_ROWS;
-                    for (offset, message) in messages[index..end].iter().enumerate() {
-                        if offset > 0 {
-                            height += default_boundary_gap(&messages[index + offset - 1], message);
-                        }
-                        height += cached_height(cache, message)?;
-                    }
-                    index = end;
-                    height
-                } else {
-                    height += cached_height(cache, message)?;
-                    index += 1;
-                    height
-                }
-            }
-        };
-        chunks.push(VirtualChunk {
-            message_start: start,
-            message_end: index,
-            start_line: line,
-            end_line: line + height,
-        });
-        line += height;
+    // Chunk planning is strategy-specific; heights resolve through the cache.
+    let plans: Vec<VirtualChunkPlan> = match strategy {
+        Strategy::TurnBand => plan_turn_band(messages, cache)?,
+    };
+    if plans.is_empty() {
+        return None;
     }
+
+    // Single flex solve for the whole transcript's chunk geometry. The
+    // container's main axis is intentionally unbounded (usize::MAX): the
+    // transcript can exceed any u16 row count, so there must be no shrinking
+    // and no clamping — every chunk keeps its exact planned height.
+    let items: Vec<FlexItem> = plans
+        .iter()
+        .map(|p| {
+            // A single chunk taller than 65535 rows is pathological (a whole
+            // turn group spanning 65k+ lines); clamp rather than silently
+            // truncate. Totals stay usize-exact via `used_main`.
+            FlexItem::fixed(u16::try_from(p.height).unwrap_or(u16::MAX))
+        })
+        .collect();
+    let solved = Flex::column().solve_with(Rect::new(0, 0, 0, u16::MAX), &items, &|_, _| 0);
+
+    let chunks: Vec<VirtualChunk> = plans
+        .iter()
+        .enumerate()
+        .map(|(i, p)| VirtualChunk {
+            message_start: p.message_start,
+            message_end: p.message_end,
+            start_line: solved.main_offset(i),
+            end_line: solved.main_offset(i) + solved.main_exact(i),
+        })
+        .collect();
+    let total_lines = solved.used_main;
+    debug_assert_eq!(
+        total_lines,
+        chunks.last().map(|c| c.end_line).unwrap_or(0),
+        "flex solve must reproduce the exact chunk extents"
+    );
+
     Some(VirtualLayoutIndex {
         strategy,
         source_ptr: messages.as_ptr() as usize,
         source_len: messages.len(),
         chunks,
-        total_lines: line,
+        total_lines,
     })
+}
+
+/// A planned chunk before geometry: message range + resolved height. Heights
+/// resolve to `None` (aborting the whole index) whenever any message lacks a
+/// cached height, preserving the "virtualize only fully settled transcripts"
+/// invariant.
+struct VirtualChunkPlan {
+    message_start: usize,
+    message_end: usize,
+    height: usize,
+}
+
+fn plan_turn_band(
+    messages: &[TranscriptMessage],
+    cache: &HeightCache,
+) -> Option<Vec<VirtualChunkPlan>> {
+    let mut plans = Vec::new();
+    let mut index = 0usize;
+    while index < messages.len() {
+        let start = index;
+        let mut height = default_gap_before(messages, index);
+        if let Some(end) = default_group_end(messages, index) {
+            height += 1 + TURN_HEADER_BODY_GAP_ROWS;
+            for (offset, message) in messages[index..end].iter().enumerate() {
+                if offset > 0 {
+                    height += default_boundary_gap(&messages[index + offset - 1], message);
+                }
+                height += cached_height(cache, message)?;
+            }
+            index = end;
+        } else {
+            height += cached_height(cache, &messages[index])?;
+            index += 1;
+        }
+        plans.push(VirtualChunkPlan {
+            message_start: start,
+            message_end: index,
+            height,
+        });
+    }
+    Some(plans)
 }
 
 fn cached_height(cache: &HeightCache, message: &TranscriptMessage) -> Option<usize> {

@@ -148,52 +148,11 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_contracts::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
-        id: "anthropic-sub2api",
-        label: "Anthropic (sub2api)",
-        description: "Anthropic sub2api relay",
-        protocol: "anthropic",
-        models: neenee_providers::ANTHROPIC_BUILTIN_MODELS,
-        needs_url: true,
-        url_hint: "https://relay.example.com/v1/messages",
-        needs_model: false,
-        default_url: None,
-        user_agent: None,
-        auth: neenee_contracts::ChannelAuth::ApiKey,
-    },
-    ProviderTemplate {
-        id: "antigravity-sub2api",
-        label: "Antigravity (sub2api)",
-        description: "Antigravity sub2api relay",
-        protocol: "google",
-        models: neenee_providers::ANTIGRAVITY_SUB2API_MODELS,
-        needs_url: true,
-        url_hint: "https://relay.example.com/antigravity/v1beta",
-        needs_model: false,
-        default_url: Some("https://relay.example.com/antigravity/v1beta"),
-        user_agent: None,
-        auth: neenee_contracts::ChannelAuth::ApiKey,
-    },
-    ProviderTemplate {
-        id: "antigravity-oauth",
-        label: "Antigravity OAuth",
-        description: "Gemini 3.x / Antigravity models via Google OAuth subscription",
-        protocol: "google",
-        models: neenee_providers::GOOGLE_BUILTIN_MODELS,
-        needs_url: false,
-        url_hint: "https://generativelanguage.googleapis.com/v1beta",
-        needs_model: false,
-        default_url: Some("https://generativelanguage.googleapis.com/v1beta"),
-        user_agent: None,
-        auth: neenee_contracts::ChannelAuth::AntigravityOAuth,
-    },
-    ProviderTemplate {
         id: "chatgpt-oauth",
-        label: "ChatGPT OAuth",
+        label: "ChatGPT",
         description: "GPT-5.x via ChatGPT Pro/Plus subscription (browser OAuth)",
         protocol: "openai",
         models: neenee_providers::CHATGPT_BUILTIN_MODELS,
-        // The Responses backend URL is fixed and pre-filled; the editor hides
-        // the Base URL field. Auth completes via OAuth before the name editor.
         needs_url: false,
         url_hint: "https://chatgpt.com/backend-api/codex/responses",
         needs_model: false,
@@ -202,30 +161,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_contracts::ChannelAuth::ChatGptOAuth,
     },
     ProviderTemplate {
-        id: "copilot-oauth",
-        label: "Copilot OAuth",
-        description: "GPT-4o/5.x via GitHub Copilot subscription (device OAuth)",
-        protocol: "openai",
-        models: neenee_providers::COPILOT_SEED_MODELS,
-        // Copilot's chat-completions backend is fixed and universally available
-        // (every plan incl. Free/Student can speak it); the editor hides the
-        // Base URL field. Login is the GitHub device flow.
-        needs_url: false,
-        url_hint: "https://api.githubcopilot.com/chat/completions",
-        needs_model: false,
-        default_url: Some("https://api.githubcopilot.com/chat/completions"),
-        user_agent: None,
-        auth: neenee_contracts::ChannelAuth::CopilotOAuth,
-    },
-    ProviderTemplate {
         id: "custom-openai",
-        label: "Custom OpenAI",
-        description: "Any OpenAI-compatible endpoint — third-party relay or self-hosted gateway",
+        label: "Custom Provider",
+        description: "Any OpenAI-compatible endpoint — custom relay or self-hosted gateway",
         protocol: "openai",
-        // No seeded models: the free-text Model field supplies the one id
-        // (with registry-known OpenAI ids as fuzzy suggestions plus the raw
-        // typed id as a custom value). More models are added later from the
-        // Models picker.
         models: &[],
         needs_url: true,
         url_hint: "https://relay.example.com/v1/chat/completions",
@@ -240,9 +179,6 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         description: "DeepSeek V4 Flash (0731) + Pro (0813) over the OpenAI Responses API",
         protocol: "openai-responses",
         models: neenee_providers::DEEPSEEK_BUILTIN_MODELS,
-        // Official endpoint: the base URL is fixed and pre-filled from
-        // `default_url`, so the editor hides the Base URL field — the user
-        // only supplies a name and token.
         needs_url: false,
         url_hint: "https://api.deepseek.com/v1/responses",
         needs_model: false,
@@ -251,8 +187,21 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_contracts::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
+        id: "copilot-oauth",
+        label: "GitHub Copilot",
+        description: "GPT-4o/5.x via GitHub Copilot subscription (device OAuth)",
+        protocol: "openai",
+        models: neenee_providers::COPILOT_SEED_MODELS,
+        needs_url: false,
+        url_hint: "https://api.githubcopilot.com/chat/completions",
+        needs_model: false,
+        default_url: Some("https://api.githubcopilot.com/chat/completions"),
+        user_agent: None,
+        auth: neenee_contracts::ChannelAuth::CopilotOAuth,
+    },
+    ProviderTemplate {
         id: "google",
-        label: "Google",
+        label: "Google AI Studio",
         description: "Native Google API — Google AI Studio or compatible relay",
         protocol: "google",
         models: neenee_providers::GOOGLE_BUILTIN_MODELS,
@@ -264,12 +213,24 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         auth: neenee_contracts::ChannelAuth::ApiKey,
     },
     ProviderTemplate {
+        id: "antigravity-oauth",
+        label: "Google Antigravity",
+        description: "Gemini 3.x / Antigravity models via Google subscription",
+        protocol: "google",
+        models: neenee_providers::ANTIGRAVITY_OAUTH_MODELS,
+        needs_url: false,
+        url_hint: "https://cloudcode-pa.googleapis.com",
+        needs_model: false,
+        default_url: Some("https://cloudcode-pa.googleapis.com"),
+        user_agent: Some("antigravity/1.23.2 windows/amd64"),
+        auth: neenee_contracts::ChannelAuth::AntigravityOAuth,
+    },
+    ProviderTemplate {
         id: "kimi-code",
         label: "Kimi Code",
         description: "Moonshot Kimi coding-plan endpoint",
         protocol: "openai",
         models: neenee_providers::KIMI_CODE_MODELS,
-        // Official endpoint: base URL is fixed and pre-filled, no field shown.
         needs_url: false,
         url_hint: "https://api.kimi.com/coding/v1/chat/completions",
         needs_model: false,
@@ -283,28 +244,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         description: "OpenAI API — GPT-5.5 family",
         protocol: "openai",
         models: neenee_providers::OPENAI_BUILTIN_MODELS,
-        // Official endpoint: the base URL is fixed and pre-filled from
-        // `default_url`, so the editor hides the Base URL field. The model
-        // collection (`OPENAI_BUILTIN_MODELS`) is seeded as channels — the
-        // user only supplies a name and token, and the Models picker lists
-        // the served models.
         needs_url: false,
         url_hint: "https://api.openai.com/v1/chat/completions",
         needs_model: false,
         default_url: Some("https://api.openai.com/v1/chat/completions"),
-        user_agent: None,
-        auth: neenee_contracts::ChannelAuth::ApiKey,
-    },
-    ProviderTemplate {
-        id: "openai-sub2api",
-        label: "OpenAI (sub2api)",
-        description: "OpenAI sub2api relay",
-        protocol: "openai",
-        models: neenee_providers::OPENAI_SUB2API_MODELS,
-        needs_url: true,
-        url_hint: "https://relay.example.com/v1/chat/completions",
-        needs_model: false,
-        default_url: None,
         user_agent: None,
         auth: neenee_contracts::ChannelAuth::ApiKey,
     },
@@ -327,7 +270,6 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         description: "Zhipu BigModel / Z.AI coding-plan endpoint (CN)",
         protocol: "openai",
         models: neenee_providers::ZAI_CODE_MODELS,
-        // Official endpoint: base URL is fixed and pre-filled, no field shown.
         needs_url: false,
         url_hint: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
         needs_model: false,
@@ -335,23 +277,9 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: Some(neenee_providers::ZCODE_USER_AGENT),
         auth: neenee_contracts::ChannelAuth::ApiKey,
     },
-    // Antigravity — a sub2api-style Google-native 中转站. The relay forwards
-    // model ids verbatim to the Google REST surface, so the `google` protocol
-    // reaches it unchanged. The base URL is editable and pre-filled with a
-    // documentation-safe example; users can replace it with their relay host.
-    // The three effort-tiered / non-preview ids are seeded as channels — they
-    // resolve in the model registry, so the Models picker and add-model overlay
-    // see real metadata.
-    //
-    // Model order is deliberate: `AddProvider` activates the FIRST seeded
-    // model as the default, and `gemini-3.1-pro-high` is known to be rejected
-    // by some relays for every request shape (HTTP 400 INVALID_ARGUMENT — a
-    // relay-side defect, not a config issue; `-low` and `flash` often work).
-    // So the generally compatible models lead and `-high` sits last, still
-    // selectable from the Models picker the moment the relay accepts it.
     ProviderTemplate {
         id: "xai-oauth",
-        label: "xAI OAuth",
+        label: "xAI",
         description: "Grok 4.x via SuperGrok subscription (browser OAuth)",
         protocol: "openai",
         models: neenee_providers::XAI_BUILTIN_MODELS,
@@ -593,6 +521,10 @@ pub fn models_flat_filtered_from(
 ) -> Vec<RankedModel> {
     let mut rows: Vec<RankedModel> = Vec::new();
     for prow in &picker.rows {
+        // Daily-driver model picker only shows models from ready/authenticated connections.
+        if !prow.key_ready {
+            continue;
+        }
         // The provider-name fallback match is computed once per provider: when
         // it hits, every model of that provider is included (unhighlighted)
         // even if its own id does not match the query.
@@ -810,6 +742,7 @@ mod tests {
         // excluded (an agent only consumes the text generateContent surface).
         let google = protocol_model_candidates("google");
         for id in [
+            "gemini-3.7-flash",
             "gemini-3.5-flash",
             "gemini-3-pro-preview",
             "gemini-3-flash-preview",
@@ -847,51 +780,43 @@ mod tests {
 
     #[test]
     fn antigravity_template_is_offered_with_prefilled_url_and_seeded_models() {
-        // The Antigravity (sub2api) relay ships as a curated template so a user
-        // adds it from "＋ Add connection" without editing config.toml. Its host
-        // is fixed, so the base URL is pre-filled (`default_url`); the three
-        // effort-tiered / non-preview ids are seeded; and it speaks the google
-        // protocol (no free-text Model field — the closed family is the seed).
         let tmpl = PROVIDER_TEMPLATES
             .iter()
-            .find(|t| t.label == "Antigravity (sub2api)")
+            .find(|t| t.id == "antigravity-oauth")
             .expect("antigravity template offered in the chooser");
+        assert_eq!(tmpl.label, "Google Antigravity");
         assert_eq!(tmpl.protocol, "google");
-        assert_eq!(tmpl.models, neenee_providers::ANTIGRAVITY_SUB2API_MODELS);
+        assert_eq!(tmpl.models, neenee_providers::ANTIGRAVITY_OAUTH_MODELS);
         assert_eq!(
             tmpl.default_url,
-            Some("https://relay.example.com/antigravity/v1beta")
+            Some("https://cloudcode-pa.googleapis.com")
         );
-        assert!(tmpl.needs_url, "exposes a Base URL field (pre-filled)");
+        assert!(!tmpl.needs_url, "OAuth template hides Base URL field");
         assert!(
             !tmpl.needs_model,
             "no free-text Model field — models are seeded"
         );
-        // The editor fields are Name / Base URL / Token (no Model).
-        assert_eq!(
-            tmpl.fields(),
-            vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
-        );
+        assert_eq!(tmpl.fields(), vec![CustomField::Name]);
     }
 
     #[test]
-    fn openai_sub2api_template_seeds_openai_text_models() {
+    fn openai_template_seeds_openai_text_models() {
         let tmpl = PROVIDER_TEMPLATES
             .iter()
-            .find(|t| t.label == "OpenAI (sub2api)")
-            .expect("openai sub2api template offered in the chooser");
+            .find(|t| t.id == "openai")
+            .expect("openai template offered in the chooser");
         assert_eq!(tmpl.protocol, "openai");
-        assert_eq!(tmpl.models, neenee_providers::OPENAI_SUB2API_MODELS);
-        assert!(tmpl.needs_url, "relay URL is user-supplied");
+        assert_eq!(tmpl.models, neenee_providers::OPENAI_BUILTIN_MODELS);
+        assert!(
+            !tmpl.needs_url,
+            "official endpoint URL is prefilled and hidden"
+        );
         assert!(
             !tmpl.needs_model,
             "model list is seeded; add-model handles custom ids"
         );
-        assert_eq!(
-            tmpl.fields(),
-            vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
-        );
-        for id in ["gpt-5.5", "gpt-5.2", "gpt-5.2-chat-latest"] {
+        assert_eq!(tmpl.fields(), vec![CustomField::Name, CustomField::Token]);
+        for id in ["gpt-5.5", "gpt-5.4", "gpt-5.6-sol"] {
             assert!(
                 protocol_model_candidates("openai").contains(&id),
                 "OpenAI candidate set missing {id}"
@@ -901,22 +826,18 @@ mod tests {
 
     #[test]
     fn builtin_templates_prefill_official_urls_generic_relays_do_not() {
-        // Provider-kind templates are now first-class instance templates and
-        // pre-fill their official endpoint. Generic relay templates still leave
-        // the URL empty because the user supplies the host.
         let builtin_labels = [
             "OpenAI",
             "Anthropic",
-            "Google",
+            "Google AI Studio",
             "DeepSeek",
-            "xAI OAuth",
-            "ChatGPT OAuth",
-            "Copilot OAuth",
-            "Antigravity OAuth",
+            "xAI",
+            "ChatGPT",
+            "GitHub Copilot",
+            "Google Antigravity",
             "Kimi Code",
             "ZAI Code (CN)",
             "OpenCode Go",
-            "Antigravity (sub2api)",
         ];
         for t in PROVIDER_TEMPLATES {
             if builtin_labels.contains(&t.label) {
@@ -1189,5 +1110,15 @@ mod tests {
 
         let chatgpt = edit_fields("chatgpt", ChannelAuth::ChatGptOAuth);
         assert_eq!(chatgpt, vec![CustomField::Name]);
+    }
+
+    #[test]
+    fn flat_rows_exclude_unready_providers() {
+        let mut snapshot = sample();
+        // Mark openai as not key_ready
+        snapshot.rows[1].key_ready = false;
+        let rows = models_flat_filtered_from(&snapshot, "", "", "");
+        assert!(!rows.iter().any(|r| r.provider_id == "openai"));
+        assert!(rows.iter().any(|r| r.provider_id == "kimi-code"));
     }
 }

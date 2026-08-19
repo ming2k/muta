@@ -20,8 +20,30 @@ pub(crate) enum ModalPageSize {
     Content(ContentModalSpec),
 }
 
+impl ModalPageSize {
+    #[allow(dead_code)]
+    pub fn exact_dimensions(&self, frame: &Frame) -> (u16, u16) {
+        match self {
+            ModalPageSize::Fixed(geometry) => geometry.exact_dimensions(frame),
+            ModalPageSize::Content(geometry) => {
+                let probe = content_modal_probe(frame, *geometry);
+                (probe.width, probe.height)
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn max_dimensions(&self, frame: &Frame) -> (u16, u16) {
+        match self {
+            ModalPageSize::Fixed(geometry) => geometry.exact_dimensions(frame),
+            ModalPageSize::Content(geometry) => geometry.max_dimensions(frame),
+        }
+    }
+}
+
 pub(crate) enum ModalHeader<'a> {
     Title(&'a str),
+    #[allow(dead_code)]
     Parts(&'a [HeaderPart<'a>]),
 }
 
@@ -30,6 +52,7 @@ impl<'a> ModalHeader<'a> {
         Self::Title(title)
     }
 
+    #[allow(dead_code)]
     pub(crate) const fn parts(parts: &'a [HeaderPart<'a>]) -> Self {
         Self::Parts(parts)
     }

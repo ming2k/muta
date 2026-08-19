@@ -17,7 +17,6 @@ use crate::{
 
 mod anthropic;
 mod antigravity_oauth;
-mod antigravity_sub2api;
 mod chatgpt;
 mod copilot;
 mod custom_openai;
@@ -25,20 +24,18 @@ mod deepseek;
 mod google;
 mod kimi;
 mod openai;
-mod openai_sub2api;
 mod opencode_go;
 mod xai;
 mod zai;
 
 pub use anthropic::ANTHROPIC_BUILTIN_MODELS;
-pub use antigravity_sub2api::ANTIGRAVITY_SUB2API_MODELS;
+pub use antigravity_oauth::ANTIGRAVITY_OAUTH_MODELS;
 pub use chatgpt::CHATGPT_BUILTIN_MODELS;
 pub use copilot::COPILOT_SEED_MODELS;
 pub use deepseek::DEEPSEEK_BUILTIN_MODELS;
 pub use google::GOOGLE_BUILTIN_MODELS;
 pub use kimi::KIMI_CODE_MODELS;
 pub use openai::OPENAI_BUILTIN_MODELS;
-pub use openai_sub2api::OPENAI_SUB2API_MODELS;
 pub use opencode_go::{OPENCODE_GO_MODELS, OPENCODE_GO_SERVED_MODELS};
 pub use xai::XAI_BUILTIN_MODELS;
 pub use zai::ZAI_CODE_MODELS;
@@ -171,9 +168,6 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
     kimi::TEMPLATE_SPEC,
     zai::TEMPLATE_SPEC,
     opencode_go::TEMPLATE_SPEC,
-    anthropic::SUB2API_TEMPLATE_SPEC,
-    openai_sub2api::TEMPLATE_SPEC,
-    antigravity_sub2api::TEMPLATE_SPEC,
     antigravity_oauth::TEMPLATE_SPEC,
     // The generic escape hatch: no seeded models — the Model field supplies
     // the one id, so an arbitrary OpenAI-compatible endpoint (third-party
@@ -243,19 +237,22 @@ pub fn build_provider_for_channel(
             base_url,
             user_agent,
             effort,
+            project_id,
         } => {
             let capabilities = channel.capabilities();
-            Arc::new(
-                GoogleProvider::with_base_url_and_user_agent(
-                    channel.api_key.expose_secret().to_string(),
-                    channel.model.clone(),
-                    base_url,
-                    user_agent,
-                )
-                .with_reasoning_effort(*effort)
-                .with_model_capabilities(capabilities)
-                .with_id(entry_id.to_string()),
+            let mut provider = GoogleProvider::with_base_url_and_user_agent(
+                channel.api_key.expose_secret().to_string(),
+                channel.model.clone(),
+                base_url,
+                user_agent,
             )
+            .with_reasoning_effort(*effort)
+            .with_model_capabilities(capabilities)
+            .with_id(entry_id.to_string());
+            if let Some(pid) = project_id {
+                provider = provider.with_project_id(pid.clone());
+            }
+            Arc::new(provider)
         }
         Transport::Anthropic {
             base_url,
@@ -521,11 +518,6 @@ mod build_tests {
                     .map(|id| (id, WireFormat::OpenAi)),
             )
             .chain(
-                crate::OPENAI_SUB2API_MODELS
-                    .iter()
-                    .map(|id| (id, WireFormat::OpenAi)),
-            )
-            .chain(
                 crate::KIMI_CODE_MODELS
                     .iter()
                     .map(|id| (id, WireFormat::OpenAi)),
@@ -541,7 +533,7 @@ mod build_tests {
                     .map(|id| (id, WireFormat::OpenAi)),
             )
             .chain(
-                crate::ANTIGRAVITY_SUB2API_MODELS
+                crate::ANTIGRAVITY_OAUTH_MODELS
                     .iter()
                     .map(|id| (id, WireFormat::Google)),
             )

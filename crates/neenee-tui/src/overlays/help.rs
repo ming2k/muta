@@ -105,7 +105,7 @@ pub fn draw_help_modal(
         row("/tools", "manage tools"),
         row("/skills", "browse skills"),
         row("/permissions", "manage permissions"),
-        row("/config", "configuration"),
+        row("/settings", "settings & appearance"),
         row("/", "slash commands"),
         Line::from(""),
         Line::from(section("Modes")),

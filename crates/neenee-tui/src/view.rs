@@ -43,11 +43,11 @@ pub use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as Provid
 #[allow(unused_imports)]
 pub use crate::overlays::{
     ActivityModalView, BtwModalView, ConfigFocus, ConfigViewProps, ContextUsageView,
-    CustomEditorView, HelpBinding, QueueModalView, draw_activity_modal, draw_armed_toast, draw_btw_modal,
-    draw_config_view, draw_connections_modal, draw_copy_toast,
+    CustomEditorView, HelpBinding, QueueModalView, draw_activity_modal, draw_armed_toast,
+    draw_btw_modal, draw_config_view, draw_connections_modal, draw_copy_toast,
     draw_custom_provider_editor, draw_dashboard, draw_help_modal, draw_history_panel,
-    draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal,
-    draw_notice_toast, draw_oauth_pending, draw_permission_sheet, draw_permissions_manager,
+    draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal, draw_notice_toast,
+    draw_oauth_pending, draw_permission_sheet, draw_permissions_manager,
     draw_provider_delete_confirm, draw_provider_template_chooser, draw_question_modal,
     draw_queue_modal, draw_session_preview, draw_sessions_modal, draw_skills_modal,
     draw_token_report_modal, draw_tools_modal, token_report_round_count,
@@ -1194,6 +1194,17 @@ mod tests {
                 },
             );
         });
+        assert!(grid_row(&terminal, 0).contains("SETTINGS"));
+        assert!(grid_row(&terminal, 0).contains("Appearance"));
+        assert!(
+            grid_row(&terminal, 1).trim().is_empty(),
+            "Row 1 must be an empty spacer line"
+        );
+        assert!(
+            !grid_row(&terminal, 2).contains("CATEGORIES"),
+            "Panel title row must be removed"
+        );
+
         terminal.draw(|frame| {
             draw_config_view(
                 frame,
@@ -1217,6 +1228,7 @@ mod tests {
                 },
             );
         });
+        assert!(grid_row(&terminal, 0).contains("SETTINGS"));
     }
 
     /// Render both the compact Envoy step (root view) and the zoomed-in

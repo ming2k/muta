@@ -7,16 +7,19 @@ use neenee_tui_engine::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::model::layout::LayoutMap;
+use crate::model::layout::{BlockRegion, LayoutMap, MODAL_DOC_MSG_IDX};
+use crate::model::selection::{SelectionState, floor_grapheme_boundary, inclusive_grapheme_end};
+use crate::text_layout::block_selection_range;
 
 use super::common::{caret_column, field_viewport, truncate_ellipsis};
 use crate::components::options::{ChoiceTone, choice_style, push_wrapped_styled};
 use crate::components::row::{GROUP_GAP, GUTTER, ListRow, RowGroup, RowStyledAtom};
 use crate::primitives::{
     ContentModalSpec, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
-    breadcrumb_parts, content_modal_area, content_modal_probe, keymap_body_lines,
-    keymap_page_footer_hints, keyvocab, modal_area, modal_chrome_rows, modal_frame, modal_header,
-    modal_header_parts, render_body, render_modal_footer, render_modal_footer_with_more,
+    breadcrumb_parts, content_modal_area, content_modal_probe, hierarchical_breadcrumb,
+    keymap_body_lines, keymap_page_footer_hints, keyvocab, modal_area, modal_chrome_rows,
+    modal_frame, modal_header, modal_header_parts, render_body, render_modal_footer,
+    render_modal_footer_with_more,
 };
 use crate::providers::{
     CustomField, PROVIDER_TEMPLATES, ProviderTemplate, RankedModel, RankedProvider,
@@ -235,8 +238,14 @@ pub fn draw_models_modal(
         FooterHint::primary(keyvocab::ENTER, "activate"),
         FooterHint::always(keyvocab::ESC, "clear search"),
     ];
+    let empty_hints: [FooterHint; 2] = [
+        FooterHint::primary("a", "add connection"),
+        FooterHint::always(keyvocab::ESC, "close"),
+    ];
     let (hints, extra): (&[FooterHint], &[FooterHintWithBand]) = if search {
         (&search_hints, &[])
+    } else if models.is_empty() {
+        (&empty_hints, &[])
     } else {
         (&browse_hints, &[])
     };
@@ -1051,80 +1060,138 @@ pub fn draw_oauth_pending(
     url: &str,
     user_code: &str,
     error: Option<&str>,
+    _selected_item: usize,
     frame: &mut Frame,
     theme: &Theme,
     scroll: &mut usize,
+    hit_map: Option<&mut crate::model::layout::ModalHitMap>,
+    selection: &SelectionState,
+    mut layout_map: Option<&mut LayoutMap>,
 ) -> neenee_tui_engine::Rect {
-    let area = modal_area(frame, FixedModalSpec::OAUTH_PENDING);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
+    let geometry = ContentModalSpec::OAUTH_PENDING;
+    let probe = content_modal_probe(frame, geometry);
+    let probe_w = (probe.width as usize).saturating_sub(6).max(20);
 
-    if let Some(h) = f.header {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    title.to_string(),
-                    Style::default()
-                        .fg(theme.brand())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(" · authorizing…", Style::default().fg(theme.muted())),
-            ])),
-            h,
-        );
-    }
+    let mut raw_lines: Vec<(String, Style)> = Vec::new();
+    let mut estimated_rows: u16 = 0;
 
-    let mut body: Vec<Line> = Vec::new();
     if let Some(err) = error {
-        body.push(Line::from(Span::styled(
+        raw_lines.push((
             format!("✗ {err}"),
-            Style::default().fg(theme.err()),
-        )));
-        body.push(Line::from(""));
-        body.push(Line::from(Span::styled(
-            "Esc to go back and try again.",
+            Style::default()
+                .fg(theme.err())
+                .add_modifier(Modifier::BOLD),
+        ));
+        raw_lines.push((String::new(), Style::default()));
+        raw_lines.push((
+            "Press Esc to go back and try again.".to_string(),
             Style::default().fg(theme.muted()),
-        )));
+        ));
+        estimated_rows += 3;
     } else {
         if !message.is_empty() {
-            body.push(Line::from(Span::styled(
-                message.to_string(),
-                Style::default().fg(theme.fg()),
-            )));
-            body.push(Line::from(""));
+            raw_lines.push((message.to_string(), Style::default().fg(theme.fg())));
+            raw_lines.push((String::new(), Style::default()));
+            let msg_wrapped = (message.len().saturating_sub(1) / probe_w) as u16;
+            estimated_rows += 2 + msg_wrapped;
         }
+
         if !url.is_empty() {
-            body.push(Line::from(Span::styled(
-                "Open this link if the browser did not open:",
+            raw_lines.push((
+                "Open this link in your browser if it did not open automatically:".to_string(),
                 Style::default().fg(theme.muted()),
-            )));
-            body.push(Line::from(Span::styled(
+            ));
+            raw_lines.push((
                 url.to_string(),
                 Style::default()
                     .fg(theme.brand())
                     .add_modifier(Modifier::UNDERLINED),
-            )));
-            body.push(Line::from(""));
+            ));
+            raw_lines.push((String::new(), Style::default()));
+            let url_wrapped = (url.len().saturating_sub(1) / probe_w) as u16;
+            estimated_rows += 3 + url_wrapped;
         } else {
-            body.push(Line::from(Span::styled(
-                "Starting authorization…",
+            raw_lines.push((
+                "Starting authorization…".to_string(),
                 Style::default().fg(theme.muted()),
-            )));
-            body.push(Line::from(""));
+            ));
+            raw_lines.push((String::new(), Style::default()));
+            estimated_rows += 2;
         }
+
         if !user_code.is_empty() {
-            body.push(Line::from(vec![
-                Span::styled("Code: ", Style::default().fg(theme.muted())),
-                Span::styled(
-                    user_code.to_string(),
-                    Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            body.push(Line::from(""));
+            raw_lines.push((
+                format!("Verification Code: {user_code}"),
+                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
+            ));
+            raw_lines.push((String::new(), Style::default()));
+            estimated_rows += 2;
         }
-        body.push(Line::from(Span::styled(
-            "Waiting for authorization…",
+
+        raw_lines.push((
+            "Waiting for authorization to complete in browser…".to_string(),
             Style::default().fg(theme.muted()),
-        )));
+        ));
+        estimated_rows += 1;
+    }
+
+    let desired =
+        estimated_rows.max(raw_lines.len() as u16) + modal_chrome_rows(geometry.modal_spec());
+    let area = content_modal_area(frame, geometry, desired);
+    let f = modal_frame(frame, area, theme.panel(), true, true);
+
+    if let Some(map) = hit_map {
+        map.set_oauth_modal_rect(area);
+        map.set_oauth_url_rect(f.body);
+    }
+
+    if let Some(h) = f.header {
+        let parts = hierarchical_breadcrumb(&["Connections", "Add", title], h.width as usize);
+        modal_header_parts(frame, Some(h), &parts, theme);
+    }
+
+    let mut body: Vec<Line> = Vec::with_capacity(raw_lines.len());
+    for (i, (text, style)) in raw_lines.iter().enumerate() {
+        let line_rendered = if let Some((s_byte, maybe_e_byte)) =
+            block_selection_range(selection, MODAL_DOC_MSG_IDX, i)
+        {
+            let s = floor_grapheme_boundary(text, s_byte).min(text.len());
+            let e = maybe_e_byte
+                .map(|b| inclusive_grapheme_end(text, b))
+                .unwrap_or(text.len())
+                .min(text.len());
+            if s < e {
+                let mut spans = Vec::new();
+                if s > 0 {
+                    spans.push(Span::styled(text[..s].to_string(), *style));
+                }
+                let sel_style = style.bg(theme.selected()).fg(theme.fg());
+                spans.push(Span::styled(text[s..e].to_string(), sel_style));
+                if e < text.len() {
+                    spans.push(Span::styled(text[e..].to_string(), *style));
+                }
+                Line::from(spans)
+            } else {
+                Line::from(Span::styled(text.clone(), *style))
+            }
+        } else {
+            Line::from(Span::styled(text.clone(), *style))
+        };
+        body.push(line_rendered);
+
+        if let Some(ref mut lm) = layout_map {
+            let row_y = f.body.y + i as u16;
+            lm.push(BlockRegion {
+                message_idx: MODAL_DOC_MSG_IDX,
+                block_idx: i,
+                start_byte: 0,
+                end_byte: text.len(),
+                text: text.clone(),
+                prefix_cols: 0,
+                rect: Rect::new(f.body.x, row_y, f.body.width, 1),
+                hidden_ranges: Vec::new(),
+            });
+        }
     }
 
     render_body(
@@ -1139,17 +1206,13 @@ pub fn draw_oauth_pending(
     );
 
     if let Some(fo) = f.footer {
-        // The copy affordances are only useful when the relevant field is
-        // populated: the device code once the device-code request has returned,
-        // and the URL alongside it. On the error branch neither is offered, so
-        // only the cancel hint shows.
         let mut hints: Vec<FooterHint> = Vec::new();
         if error.is_none() {
-            if !user_code.is_empty() {
-                hints.push(FooterHint::secondary("c", "copy code"));
-            }
             if !url.is_empty() {
                 hints.push(FooterHint::secondary("u", "copy url"));
+            }
+            if !user_code.is_empty() {
+                hints.push(FooterHint::secondary("c", "copy code"));
             }
         }
         hints.push(FooterHint::always(keyvocab::ESC, "cancel"));
@@ -1184,9 +1247,6 @@ impl TemplateRow {
     }
 }
 
-/// The auth-scheme badge glyph. A keyhole reads as "credential" without
-/// pretending to be a lock (which would over-claim security).
-const AUTH_BADGE_GLYPH: &str = "⚿";
 /// Widest badge label both variants render ("oauth" and "token" are 5).
 const AUTH_BADGE_WIDTH: usize = 5;
 
@@ -1218,15 +1278,20 @@ impl TemplateRow {
 
         let mut row = ListRow::new(style, self.body_width).group(identity);
 
-        // Trailing badge: `⚿ oauth` / `⚿ token`, right-pinned so the two
+        // Trailing badge: `⚡ oauth` / `⚿ token`, right-pinned so the two
         // columns spread across the row. On a brand-filled focused row it
         // lifts to the contrast foreground.
         let badge_fg = if focused { row.fill_fg() } else { style.dim };
-        row = row.group(
-            RowGroup::trailing()
-                .glyph(AUTH_BADGE_GLYPH, badge_fg, 0)
-                .text(template.auth_badge(), badge_fg, 1),
-        );
+        let glyph = if template.auth.is_oauth() {
+            "⚡"
+        } else {
+            "⚿"
+        };
+        row = row.group(RowGroup::trailing().glyph(glyph, badge_fg, 0).text(
+            template.auth_badge(),
+            badge_fg,
+            1,
+        ));
 
         if !focused {
             return vec![row.finish()];
@@ -1277,7 +1342,10 @@ pub fn draw_provider_template_chooser(
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
-    let header = breadcrumb_parts("Connections", "Add connection");
+    let header = hierarchical_breadcrumb(
+        &["Connections", "Add Provider"],
+        f.header.map(|h| h.width as usize).unwrap_or(80),
+    );
     modal_header_parts(frame, f.header, &header, theme);
 
     let policy = TemplateRow {
@@ -1374,7 +1442,15 @@ pub fn draw_custom_provider_editor(
         cursor_position,
     } = view;
 
-    let area = modal_area(frame, FixedModalSpec::CUSTOM_PROVIDER);
+    let geometry = ContentModalSpec::CUSTOM_PROVIDER;
+    let model_focused = fields.get(field as usize) == Some(&CustomField::Model);
+    let suggest_count = if model_focused && !suggestions.is_empty() {
+        (suggestions.len().min(8) as u16) + 2
+    } else {
+        0
+    };
+    let desired = (fields.len() as u16) + suggest_count + modal_chrome_rows(geometry.modal_spec());
+    let area = content_modal_area(frame, geometry, desired);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     const LABEL_W: usize = 9;
@@ -1447,7 +1523,13 @@ pub fn draw_custom_provider_editor(
         Line::from(vec![field_label("Model", focused), value])
     };
 
-    let header = breadcrumb_parts("Connections", title);
+    let header_width = f.header.map(|h| h.width as usize).unwrap_or(80);
+    let levels: Vec<&str> = if editing {
+        vec!["Connections", "Edit", title]
+    } else {
+        vec!["Connections", "Add", title]
+    };
+    let header = hierarchical_breadcrumb(&levels, header_width);
     modal_header_parts(frame, f.header, &header, theme);
 
     let token_hint = if editing {
@@ -1884,7 +1966,7 @@ mod tests {
         let rows: Vec<&str> = text.lines().collect();
         let body_rows = rows
             .iter()
-            .filter(|l| l.contains("OAuth") || l.contains("sub2api") || l.contains("OpenAI"))
+            .filter(|l| l.contains("GitHub") || l.contains("OpenAI") || l.contains("Anthropic"))
             .collect::<Vec<_>>();
         assert!(
             body_rows.iter().all(|l| !l.contains('›')),
@@ -1896,8 +1978,6 @@ mod tests {
     fn template_chooser_marks_the_auth_scheme_without_a_dot_join() {
         // The focused row carries an auth badge: `oauth` for browser flows,
         // `token` for API keys — separated from the title by whitespace only.
-        // xAI OAuth (oauth) is somewhere mid-list; find a focused render of
-        // an oauth template and of an api-key template.
         let xai_idx = PROVIDER_TEMPLATES
             .iter()
             .position(|t| t.id == "xai-oauth")
@@ -1905,7 +1985,7 @@ mod tests {
         let text = render_template_chooser(xai_idx, 100, 32);
         let row = text
             .lines()
-            .find(|l| l.contains("xAI OAuth"))
+            .find(|l| l.contains("xAI"))
             .expect("focused xAI row");
         assert!(row.contains("oauth"), "oauth badge: {row:?}");
         assert!(

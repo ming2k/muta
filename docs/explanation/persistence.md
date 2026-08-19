@@ -41,9 +41,24 @@ matching XDG category.
 
 `$XDG_CONFIG_HOME/neenee/` (default `~/.config/neenee/`).
 
-The only file here today is `config.toml`, the hand-edited configuration.
-Losing it is lossy: it captures user preferences and provider setup.
-Restoring from backup is the right move.
+`config.toml` is the hand-edited configuration, and `credentials.toml`
+(0600) is its secret half: API keys split out so the config file can be
+shared or version-controlled without leaking them. OAuth token sets do
+**not** live here — they are runtime state (see State below). Losing
+either file is lossy: it captures user preferences, provider setup, and
+keys. Restoring from backup is the right move.
+
+Why API keys are *config* and not *state*: the XDG spec defines
+`$XDG_STATE_HOME` for data "not important or portable enough to the user"
+— histories, layouts, undo stacks. A user-supplied key is the opposite on
+every axis: important (re-collecting it means visiting every provider),
+portable (a new machine wants it), and manually editable by design (the
+load path resolves `env > credentials.toml > config inline`). This is also
+where the ecosystem puts them — cargo, gh, gcloud, aws, npm, kubectl,
+docker. Security is orthogonal to the category: both directories get the
+same 0600 treatment, so moving a secret to State would hide a
+user-editable input inside a program-owned directory and buy nothing.
+See [ADR-0115](../adr/0115-credential-placement-config-vs-state.md).
 
 ### Data — persistent, program-generated, must survive restart
 
@@ -66,8 +81,19 @@ projects astronomically unlikely.
 
 Slash-command history, per-model usage telemetry that orders the provider
 picker by recency, advisory lock files when no runtime directory is
-available. Loss is non-fatal: it flattens sort order or forces a
-re-prompt, but no conversation or skill is lost.
+available, and `auth.toml` (0600) — the OAuth access/refresh token sets
+per provider login. Loss is non-fatal: it flattens sort order or forces a
+re-prompt, but no conversation or skill is lost; losing `auth.toml` costs
+a re-login per OAuth provider, nothing more.
+
+`auth.toml` is state rather than config *because the program owns its
+lifecycle*: the daemon rewrites it on every token refresh, its contents
+are ephemeral-derived (access tokens expire in ~1h), and its loss is
+recoverable by re-login rather than by user re-collection. A
+credentials *backup/export* feature must still include it alongside
+`credentials.toml` — the refresh token is the durable secret of an OAuth
+login — the categories describe ownership and churn, not backup-worthiness
+([ADR-0115](../adr/0115-credential-placement-config-vs-state.md)).
 
 ### Cache — derived, deletable, repopulated on demand
 

@@ -15,6 +15,8 @@ pub const PROVIDER_RETRY_BLOCK_IDX: usize = usize::MAX - 2;
 pub const COMMAND_RESULT_BLOCK_IDX: usize = usize::MAX - 3;
 /// Expandable notice header rows (e.g. provider error with formatted JSON).
 pub const NOTICE_BLOCK_IDX: usize = usize::MAX - 4;
+/// Sentinel message index for text regions inside modal overlays.
+pub const MODAL_DOC_MSG_IDX: usize = usize::MAX - 5;
 
 /// Identifies a specific position inside the document model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -157,6 +159,9 @@ pub struct ModalHitMap {
     question_options: Vec<QuestionOptionHit>,
     permission_actions: Vec<PermissionActionHit>,
     permission_sheet: Option<Rect>,
+    pub oauth_url_rect: Option<Rect>,
+    pub oauth_code_rect: Option<Rect>,
+    pub oauth_modal_rect: Option<Rect>,
 }
 
 /// A visible row range belonging to one selectable question option.
@@ -232,6 +237,61 @@ impl LayoutMap {
     }
 
     /// The visible transcript content rect, if any content was drawn this frame.
+    /// Extract the rendered text covered by a selection range from recorded regions.
+    pub fn extract_text_for_range(
+        &self,
+        sel: &crate::model::selection::SelectionState,
+    ) -> Option<String> {
+        let (start, end) = sel.active_normalized_range()?;
+        let mut result = Vec::new();
+        let mut current_block: Option<usize> = None;
+        let mut block_text = String::new();
+
+        for region in &self.regions {
+            let here = (region.message_idx, region.block_idx);
+            if here < (start.message_idx, start.block_idx)
+                || here > (end.message_idx, end.block_idx)
+            {
+                continue;
+            }
+
+            let s_byte = if here == (start.message_idx, start.block_idx) {
+                start.byte_offset.min(region.text.len())
+            } else {
+                0
+            };
+            let e_byte = if here == (end.message_idx, end.block_idx) {
+                end.byte_offset.min(region.text.len())
+            } else {
+                region.text.len()
+            };
+
+            let s_byte = crate::model::selection::floor_grapheme_boundary(&region.text, s_byte);
+            let e_byte = crate::model::selection::inclusive_grapheme_end(&region.text, e_byte);
+            let e_byte = e_byte.min(region.text.len());
+
+            if s_byte < e_byte {
+                if current_block != Some(region.block_idx) {
+                    if current_block.is_some() && !block_text.is_empty() {
+                        result.push(std::mem::take(&mut block_text));
+                    }
+                    current_block = Some(region.block_idx);
+                }
+                block_text.push_str(&region.text[s_byte..e_byte]);
+            }
+        }
+
+        if !block_text.is_empty() {
+            result.push(block_text);
+        }
+
+        if result.is_empty() {
+            None
+        } else {
+            Some(result.join("\n"))
+        }
+    }
+
     /// Clicks inside this rect that don't resolve to a specific region still
     /// switch keyboard focus to Browse (see the `SelectionStart` handler).
     pub fn transcript_content_rect(&self) -> Option<Rect> {
@@ -414,6 +474,9 @@ impl ModalHitMap {
         self.question_options.clear();
         self.permission_actions.clear();
         self.permission_sheet = None;
+        self.oauth_url_rect = None;
+        self.oauth_code_rect = None;
+        self.oauth_modal_rect = None;
     }
 
     pub fn push_question_option(&mut self, hit: QuestionOptionHit) {
@@ -426,6 +489,18 @@ impl ModalHitMap {
 
     pub fn set_permission_sheet(&mut self, rect: Rect) {
         self.permission_sheet = Some(rect);
+    }
+
+    pub fn set_oauth_url_rect(&mut self, rect: Rect) {
+        self.oauth_url_rect = Some(rect);
+    }
+
+    pub fn set_oauth_code_rect(&mut self, rect: Rect) {
+        self.oauth_code_rect = Some(rect);
+    }
+
+    pub fn set_oauth_modal_rect(&mut self, rect: Rect) {
+        self.oauth_modal_rect = Some(rect);
     }
 
     pub fn question_option_at(&self, x: u16, y: u16) -> Option<QuestionOptionHit> {
@@ -444,6 +519,20 @@ impl ModalHitMap {
 
     pub fn permission_sheet_contains(&self, x: u16, y: u16) -> bool {
         self.permission_sheet
+            .is_some_and(|rect| contains(rect, x, y))
+    }
+
+    pub fn oauth_url_contains(&self, x: u16, y: u16) -> bool {
+        self.oauth_url_rect.is_some_and(|rect| contains(rect, x, y))
+    }
+
+    pub fn oauth_code_contains(&self, x: u16, y: u16) -> bool {
+        self.oauth_code_rect
+            .is_some_and(|rect| contains(rect, x, y))
+    }
+
+    pub fn oauth_modal_contains(&self, x: u16, y: u16) -> bool {
+        self.oauth_modal_rect
             .is_some_and(|rect| contains(rect, x, y))
     }
 }

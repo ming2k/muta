@@ -634,8 +634,8 @@ pub(crate) fn probe_input_selection_relay(
         }
         (KeyCode::Home, _) => {
             if let Some((start, _)) = app.selection.active_normalized_range() {
-                let byte = floor_grapheme_boundary(&app.input, start.byte_offset)
-                    .min(app.input.len());
+                let byte =
+                    floor_grapheme_boundary(&app.input, start.byte_offset).min(app.input.len());
                 let pos = app.input[..byte].chars().count();
                 app.selection = SelectionState::None;
                 app.drag.cancel();
@@ -647,8 +647,7 @@ pub(crate) fn probe_input_selection_relay(
         }
         (KeyCode::End, _) => {
             if let Some((_, end)) = app.selection.active_normalized_range() {
-                let byte = inclusive_grapheme_end(&app.input, end.byte_offset)
-                    .min(app.input.len());
+                let byte = inclusive_grapheme_end(&app.input, end.byte_offset).min(app.input.len());
                 let pos = app.input[..byte].chars().count();
                 app.selection = SelectionState::None;
                 app.drag.cancel();
@@ -2352,6 +2351,23 @@ pub(super) fn extract_selection_text(
     layout_map: &crate::model::layout::LayoutMap,
     cell_info: Option<&CellDragInfo>,
 ) -> Option<String> {
+    let on_modal = match sel {
+        SelectionState::None => false,
+        SelectionState::Block { message_idx, .. } => {
+            *message_idx == crate::model::layout::MODAL_DOC_MSG_IDX
+        }
+        SelectionState::TableCell { message_idx, .. } => {
+            *message_idx == crate::model::layout::MODAL_DOC_MSG_IDX
+        }
+        SelectionState::Range { anchor, head } => {
+            anchor.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX
+                || head.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX
+        }
+    };
+    if on_modal {
+        return layout_map.extract_text_for_range(sel);
+    }
+
     let on_input = match sel {
         SelectionState::None => false,
         SelectionState::Block { message_idx, .. } => *message_idx == crate::view::INPUT_MSG_IDX,

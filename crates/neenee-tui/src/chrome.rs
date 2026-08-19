@@ -492,7 +492,9 @@ pub fn draw_completion_menu(
     // Left menu is a pure, compact command list without inline descriptions
     let max_menu_width = ((viewport.width as usize) * 3 / 5).max(24);
     let content_width = (max_cmd + 2).max(18);
-    let menu_width = (content_width.min(max_menu_width).min(viewport.width as usize)) as u16;
+    let menu_width = (content_width
+        .min(max_menu_width)
+        .min(viewport.width as usize)) as u16;
 
     // Position of the primary completion menu (above the input box)
     let mut y = anchor.y.saturating_sub(menu_height);
@@ -522,7 +524,10 @@ pub fn draw_completion_menu(
                     .bg(row_bg)
                     .fg(contrast_fg(theme.brand()))
                     .add_modifier(Modifier::BOLD)
-            } else if matches!(c.kind, crate::completion::CompletionItemKind::IntentSuggestion { .. }) {
+            } else if matches!(
+                c.kind,
+                crate::completion::CompletionItemKind::IntentSuggestion { .. }
+            ) {
                 Style::default()
                     .bg(row_bg)
                     .fg(theme.info())
@@ -541,12 +546,10 @@ pub fn draw_completion_menu(
                 _ => c.label.clone(),
             };
 
-            let spans = vec![
-                Span::styled(
-                    format!("{:<width$}", label_text, width = menu_w),
-                    cmd_style,
-                ),
-            ];
+            let spans = vec![Span::styled(
+                format!("{:<width$}", label_text, width = menu_w),
+                cmd_style,
+            )];
             Line::from(spans)
         })
         .collect();
@@ -555,7 +558,8 @@ pub fn draw_completion_menu(
 
     // Right-side Hover Documentation Flyout Window with line wrapping and distinct background
     if let Some(doc) = active_doc {
-        let space_on_right = (viewport.right() as usize).saturating_sub(menu_area.right() as usize + 1);
+        let space_on_right =
+            (viewport.right() as usize).saturating_sub(menu_area.right() as usize + 1);
         let space_on_left = (menu_area.x as usize).saturating_sub(viewport.x as usize + 1);
 
         let (doc_x, doc_width) = if space_on_right >= 26 {
@@ -674,7 +678,9 @@ pub fn draw_completion_menu(
                 }
             }
 
-            let max_flyout_h = (viewport.height as usize).saturating_sub(anchor.y as usize).max(12).min(16) as u16;
+            let max_flyout_h = (viewport.height as usize)
+                .saturating_sub(anchor.y as usize)
+                .clamp(12, 16) as u16;
             let doc_height = (insp_lines.len() as u16).max(menu_height).min(max_flyout_h);
             let mut doc_y = anchor.y.saturating_sub(doc_height);
             if doc_y == 0 && anchor.y < doc_height {
@@ -2379,20 +2385,21 @@ mod tests {
             summary: "Schedule a prompt".to_string(),
             description: "Schedule a prompt on a cron or countdown".to_string(),
             usage: vec!["/schedule <when> <prompt>".to_string()],
-            examples: vec![("/schedule 15m \"test\"".to_string(), "Run in 15m".to_string())],
+            examples: vec![(
+                "/schedule 15m \"test\"".to_string(),
+                "Run in 15m".to_string(),
+            )],
             intent_keywords: vec!["timer".to_string()],
             category: Some("Automation".to_string()),
         };
-        let completions = vec![
-            crate::completion::Completion {
-                label: "/schedule".to_string(),
-                description: "Schedule a prompt".to_string(),
-                replace_start: 0,
-                replace_end: 2,
-                kind: crate::completion::CompletionItemKind::Slash,
-                doc: Some(doc),
-            },
-        ];
+        let completions = vec![crate::completion::Completion {
+            label: "/schedule".to_string(),
+            description: "Schedule a prompt".to_string(),
+            replace_start: 0,
+            replace_end: 2,
+            kind: crate::completion::CompletionItemKind::Slash,
+            doc: Some(doc),
+        }];
 
         // 1. Unselected (selected = None): No right-side doc window is rendered
         let mut term_unselected = neenee_tui_engine::TestTerminal::new(80, 12);
@@ -2410,10 +2417,12 @@ mod tests {
         });
         let buf_unselected = term_unselected.buffer();
         let panel_bg = theme.panel();
-        let has_panel_unselected = (0..80u16).any(|x| {
-            buf_unselected.get(x, 9).map(|c| c.bg) == Some(panel_bg)
-        });
-        assert!(!has_panel_unselected, "unselected completion must not render hover doc flyout");
+        let has_panel_unselected =
+            (0..80u16).any(|x| buf_unselected.get(x, 9).map(|c| c.bg) == Some(panel_bg));
+        assert!(
+            !has_panel_unselected,
+            "unselected completion must not render hover doc flyout"
+        );
 
         // 2. Selected (selected = Some(0)): Right-side doc window is rendered with panel_bg
         let mut term_selected = neenee_tui_engine::TestTerminal::new(80, 12);
@@ -2430,10 +2439,12 @@ mod tests {
             );
         });
         let buf_selected = term_selected.buffer();
-        let has_panel_selected = (0..80u16).any(|x| {
-            buf_selected.get(x, 9).map(|c| c.bg) == Some(panel_bg)
-        });
-        assert!(has_panel_selected, "selected completion must render hover doc flyout with panel bg");
+        let has_panel_selected =
+            (0..80u16).any(|x| buf_selected.get(x, 9).map(|c| c.bg) == Some(panel_bg));
+        assert!(
+            has_panel_selected,
+            "selected completion must render hover doc flyout with panel bg"
+        );
     }
 
     /// Read back the one-row bar as joined text for assertion.

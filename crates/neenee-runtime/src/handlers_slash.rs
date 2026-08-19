@@ -46,8 +46,8 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 use crate::agent_setup::active_context_window;
 use crate::session_view::{build_sessions_overview, short_session_id};
 use crate::side::{
-    SideRegistry, SideSession, publish_btw_list, refuse_if_no_provider, spawn_parent_status_watcher,
-    start_active_turn,
+    SideRegistry, SideSession, publish_btw_list, refuse_if_no_provider,
+    spawn_parent_status_watcher, start_active_turn,
 };
 use crate::slash_handler::{SlashCommandRegistry, SlashContext};
 use crate::startup::{BuiltinCmd, StartupMode, split_custom_command};
@@ -236,13 +236,13 @@ async fn restore_session_runtime(
         .iter()
         .rev()
         .find_map(|rec| {
-            if rec.name == "autopilot" {
-                if let Some(CommandResult::Ack { title }) = &rec.result {
-                    if title.contains("Autopilot ON") {
-                        return Some(true);
-                    } else if title.contains("Autopilot OFF") {
-                        return Some(false);
-                    }
+            if rec.name == "autopilot"
+                && let Some(CommandResult::Ack { title }) = &rec.result
+            {
+                if title.contains("Autopilot ON") {
+                    return Some(true);
+                } else if title.contains("Autopilot OFF") {
+                    return Some(false);
                 }
             }
             None
@@ -477,12 +477,12 @@ pub async fn dispatch(
         Some(BuiltinCmd::Models) | Some(BuiltinCmd::Connections) => {
             // Handled in TUI
         }
-        Some(BuiltinCmd::Config) => {
-            // Bare `/config` is handled in the TUI: it opens the config
-            // manager modal locally for presentation settings (intercepted in
+        Some(BuiltinCmd::Settings) => {
+            // Bare `/settings` (and `/config`) is handled in the TUI: it opens the
+            // settings manager modal locally for presentation settings (intercepted in
             // input.rs as `InputAction::OpenConfig`), so it never arrives
-            // here. What does arrive is `/config reload` (and the legacy
-            // `/reload` alias): re-read config.toml and apply the diff live
+            // here. What does arrive is `/settings reload` (and the legacy
+            // `/config reload` / `/reload` aliases): re-read config.toml and apply the diff live
             // (ADR-0085 §6) — MCP servers (diff + reconnect), project
             // MCP/hooks (trust-gated), bash policy, hooks registry,
             // permissions, principal settings, tool variants, and the prune
@@ -493,7 +493,7 @@ pub async fn dispatch(
                     resp_tx,
                     name,
                     args,
-                    "Unknown /config command. Use /config reload to re-read config.toml and \
+                    "Unknown /settings command. Use /settings reload to re-read config.toml and \
                      apply it live.",
                 )
                 .await;

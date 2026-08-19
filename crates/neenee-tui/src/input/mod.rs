@@ -109,9 +109,7 @@ impl InputContext {
 /// user isn't editing.
 fn edits_input_field(context: &InputContext) -> bool {
     match context.active_modal {
-        super::Modal::None
-        | super::Modal::ModelEditor
-        | super::Modal::InputInjection => true,
+        super::Modal::None | super::Modal::ModelEditor | super::Modal::InputInjection => true,
         super::Modal::Config => context.config_custom_editing,
         super::Modal::Models | super::Modal::Connections => context.model_searching,
         super::Modal::HistorySearch => context.history_searching,
@@ -199,6 +197,7 @@ fn scrolls_own_body(modal: super::Modal) -> bool {
 pub enum OauthCopyTarget {
     UserCode,
     Url,
+    Selected,
 }
 
 /// Result of processing an input event.
@@ -266,13 +265,14 @@ pub enum InputAction {
     SelectProviderTemplate,
     /// Cancel the provider-template chooser and return to the Connections list.
     CancelProviderTemplate,
-    /// Cancel the OAuth pending sheet (back to the template chooser).
+    /// Cancel the "+ Add provider → OAuth" browser flow (`Esc` while
+    /// `Modal::OauthPending` is active).
     CancelOauthPending,
+    /// Cycle focus between copyable targets (URL and device code) in OAuth pending sheet (`Tab`/`Left`/`Right`).
+    CycleOauthSelection,
     /// Copy the OAuth pending sheet's primary content. `user_code` copies the
     /// device-verification code the user must paste at github.com/login/device;
-    /// `url` copies the verification URL. Lets the user copy without leaving
-    /// the modal, since neenee captures mouse events so terminal-native
-    /// drag-select does not reach modal body text.
+    /// `url` copies the verification URL; `Selected` copies the focused card.
     CopyOauthContent {
         target: OauthCopyTarget,
     },
@@ -1010,7 +1010,9 @@ pub fn process_event(
                     ) {
                         drag.start(SemanticCursor::new(0, 0, 0));
                         InputAction::SelectionStart { x, y }
-                    } else if context.active_modal == super::Modal::Question {
+                    } else if context.active_modal == super::Modal::Question
+                        || context.active_modal == super::Modal::OauthPending
+                    {
                         InputAction::SelectionStart { x, y }
                     } else if context.active_modal.dismissable_by_outside_click() {
                         // A dismissable modal owns this click — forward it as
@@ -1028,7 +1030,9 @@ pub fn process_event(
                     if drag.active
                         && matches!(
                             context.active_modal,
-                            super::Modal::None | super::Modal::Permission
+                            super::Modal::None
+                                | super::Modal::Permission
+                                | super::Modal::OauthPending
                         )
                     {
                         InputAction::SelectionUpdate { x, y }
@@ -1359,7 +1363,9 @@ pub fn process_event(
                         super::Modal::Connections => InputAction::None,
                         super::Modal::ModelEditor => InputAction::SubmitModelEditor,
                         super::Modal::ProviderTemplate => InputAction::SelectProviderTemplate,
-                        super::Modal::OauthPending => InputAction::None,
+                        super::Modal::OauthPending => InputAction::CopyOauthContent {
+                            target: OauthCopyTarget::Selected,
+                        },
                         super::Modal::CustomProvider => InputAction::SubmitCustomProvider,
                         super::Modal::HistorySearch => InputAction::HistoryInsert,
                         super::Modal::Sessions if context.session_info_detail => InputAction::None,
@@ -1427,12 +1433,12 @@ pub fn process_event(
                                     "/tools" => InputAction::OpenTools,
                                     "/mcp" => InputAction::OpenMcp,
                                     "/skills" => InputAction::OpenSkills,
-                                    // Bare `/config` opens the manager modal
-                                    // locally; `/config reload` (and any other
+                                    // Bare `/settings` (or `/config`) opens the manager modal
+                                    // locally; `/settings reload` (and any other
                                     // argument form) is a backend command —
                                     // it falls through to SendSlash like
                                     // `/skills reload` does.
-                                    "/config" => InputAction::OpenConfig,
+                                    "/settings" | "/config" => InputAction::OpenConfig,
                                     "/exit" => InputAction::Quit,
                                     _ => InputAction::SendSlash(text),
                                 }
@@ -1480,6 +1486,8 @@ pub fn process_event(
                         // The dashboard has two panes: Tab moves focus between
                         // the session list and the detail read-out.
                         InputAction::HostFocusToggle
+                    } else if context.active_modal == super::Modal::OauthPending {
+                        InputAction::CycleOauthSelection
                     } else {
                         // No completion open and no modal field to cycle: Tab
                         // is a no-op. (There is no zone switching: focus is
@@ -1497,6 +1505,8 @@ pub fn process_event(
                         InputAction::ConfigFocusToggle
                     } else if context.active_modal == super::Modal::Question {
                         InputAction::QuestionPrevious
+                    } else if context.active_modal == super::Modal::OauthPending {
+                        InputAction::CycleOauthSelection
                     } else {
                         InputAction::None
                     }
@@ -1742,6 +1752,12 @@ pub fn process_event(
                             target: OauthCopyTarget::Url,
                         };
                     }
+                    if context.active_modal == super::Modal::OauthPending && (c == ' ' || c == 'y')
+                    {
+                        return InputAction::CopyOauthContent {
+                            target: OauthCopyTarget::Selected,
+                        };
+                    }
                     // `r` in the skills modal reloads the skill registry.
                     if context.active_modal == super::Modal::Skills && c == 'r' {
                         return InputAction::SkillsReload;
@@ -1786,11 +1802,13 @@ pub fn process_event(
                         // search sub-layer `*` is a query char; the Connections
                         // list has no favorite concept.
                         InputAction::ProviderPickerToggleFavorite
-                    } else if context.active_modal == super::Modal::Connections
-                        && !context.model_searching
+                    } else if matches!(
+                        context.active_modal,
+                        super::Modal::Connections | super::Modal::Models
+                    ) && !context.model_searching
                         && c == 'a'
                     {
-                        // Connections browse mode: `a` opens the add-provider
+                        // Connections / Models browse mode: `a` opens the add-provider
                         // template chooser (the first step of adding a
                         // connection). In the search sub-layer `a` is a query
                         // char.
@@ -1938,8 +1956,7 @@ pub fn process_event(
                 KeyCode::Backspace => {
                     if context.active_modal == super::Modal::Question {
                         InputAction::QuestionBackspace
-                    } else if edits_input_field(&context) && *cursor_position > 0
-                    {
+                    } else if edits_input_field(&context) && *cursor_position > 0 {
                         // Alt+Backspace / Ctrl+Backspace delete the previous
                         // whitespace-delimited word in one stroke, matching
                         // readline's `backward-kill-word`. Plain Backspace
@@ -2014,8 +2031,7 @@ pub fn process_event(
                 // keystroke, mirroring the chip-aware Backspace. The caret
                 // does not move (forward delete only shortens the text).
                 KeyCode::Delete => {
-                    if edits_input_field(&context) && *cursor_position < input.chars().count()
-                    {
+                    if edits_input_field(&context) && *cursor_position < input.chars().count() {
                         let byte_cursor = input
                             .char_indices()
                             .map(|(i, _)| i)
@@ -2054,8 +2070,7 @@ pub fn process_event(
                     }
                     // In the provider editor every field borrows the composer
                     // line, so ←/→ move the caret within the focused field.
-                    if edits_input_field(&context) && *cursor_position > 0
-                    {
+                    if edits_input_field(&context) && *cursor_position > 0 {
                         // Ctrl+Left (and Alt+Left on terminals that translate
                         // it) jumps back one whitespace-delimited word,
                         // matching readline's `backward-word`.
@@ -2080,8 +2095,7 @@ pub fn process_event(
                     {
                         return InputAction::ModelEditorEffortCycle { delta: 1 };
                     }
-                    if edits_input_field(&context) && *cursor_position < input.chars().count()
-                    {
+                    if edits_input_field(&context) && *cursor_position < input.chars().count() {
                         // Ctrl+Right (and Alt+Right) jump forward one word.
                         if key
                             .modifiers

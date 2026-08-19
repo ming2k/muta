@@ -26,11 +26,31 @@ User-edited configuration. Lossy; back it up.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `config.toml` | User-edited configuration (`[principal]`, `[[providers]]`, `[permissions]`, `[bash_policy]`, `[tui]`, `[input_history]`, `[tool_variants]`, `[model_reasoning]`, `[[hooks]]`, `[skills]`, `[websearch]`, `[mcp.<server>]`, ...) | Yes |
-| `credentials.toml` | Secret API keys, split out of `config.toml` (written `rw-------`) — the built-in `*_api_key` fields and per-channel keys | Yes |
-| `auth.toml` | OAuth token sets for SuperGrok and other OAuth providers (0600); sibling of `credentials.toml` | Yes |
+| `credentials.toml` | Token-auth secrets, split out of `config.toml` (written `rw-------`), keyed by **provider instance**: `[builtins.<id>] api_key` for the built-in providers, `[user.<id>] api_key` for user-defined instances. OAuth logins do not live here — see the note below. A credential belongs to the instance; every channel of that instance resolves it. | Yes |
 | `logo.txt` | Optional user-supplied ASCII logo; when present its lines replace the built-in wordmark on the welcome screen | Rebuildable |
 
 Default location: `~/.config/neenee/`.
+
+OAuth token sets (`auth.toml`, 0600) are **runtime state, not user
+config** — they live under `$XDG_STATE_HOME/neenee/auth.toml` (see the
+State section below). A legacy `~/.config/neenee/auth.toml` from older
+releases is still read as a fallback (`legacy_auth_file`) and migrated on
+first save.
+
+The two credential kinds, side by side:
+
+| Kind | File | Keyed by | Contents |
+|------|------|----------|----------|
+| token (API key) | `~/.config/neenee/credentials.toml` | provider instance (`[user.<id>]` / `[builtins.<id>]`) | `api_key` |
+| oauth (subscription login) | `~/.local/state/neenee/auth.toml` | provider instance (`[tokens.<provider>]`) | `access` / `refresh` / `expires_ms` / `account_id` |
+
+The category split follows the XDG spec's own test ("important or portable
+enough to the user?") rather than the fact that both files hold secrets: a
+user-supplied API key is important, portable, and hand-editable — config —
+while an OAuth token set is daemon-rewritten on every refresh and recoverable
+by re-login — state. Both files are 0600 with private temp writes, so the
+placement buys no security either way. Rationale and alternatives:
+[ADR-0115](../adr/0115-credential-placement-config-vs-state.md).
 
 ## Data — `$XDG_DATA_HOME/neenee/`
 
@@ -64,6 +84,8 @@ re-prompts; no conversation is lost.
 | `history.json` | Slash-command input history | Rebuildable |
 | `trusted_projects.json` | The per-project trust grant set (which projects' `.neenee/config.toml` external tools are loaded) | Rebuildable (re-trust) |
 | `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |
+| `model_usage.json` | Per-model token usage telemetry | Rebuildable |
+| `auth.toml` | OAuth token sets per provider id (`[tokens.<provider>]`, 0600) — access/refresh/expiry for SuperGrok, ChatGPT, Copilot, and Google Antigravity logins. Rebuildable only by re-logging in (the refresh tokens are the durable secret; losing the file means re-auth, so back it up if rotating logins is costly) | Re-auth on loss |
 | `neenee.lock` | Cross-process advisory lock when no runtime directory is available | Rebuildable |
 | `log/` | Structured rolling-log appender output (reserved) | Rebuildable |
 
@@ -133,3 +155,21 @@ The override stack is identical; only the fallback locations differ.
 | Reset one project's history | `rm -rf $XDG_DATA_HOME/neenee/projects/<bucket>` |
 | Factory reset (keep config) | `rm -rf $XDG_DATA_HOME/neenee $XDG_STATE_HOME/neenee $XDG_CACHE_HOME/neenee` |
 | Full wipe (including config) | Add `rm -rf $XDG_CONFIG_HOME/neenee` to the above |
+
+## Legacy stray files
+
+Files written by releases whose subsystems no longer exist. Safe to delete;
+listed here because they may still sit in an older installation's
+directories:
+
+| File | Written by | Removed by |
+|------|-----------|------------|
+| `$XDG_CONFIG_HOME/neenee/goals.db` | the pre-ADR-0082 goal scheduler (SQLite) | any release after the SQLite removal |
+| `$XDG_CONFIG_HOME/neenee/session.json` | the pre-ADR-0096 single-session layout | ADR-0096 (per-project buckets) |
+| `$XDG_STATE_HOME/neenee/model_usage.json` | the pre-ADR-0024 usage telemetry (SQLite era) | ADR-0024's supersession; `provider_usage.json` is the live file |
+| `$XDG_DATA_HOME/neenee/repeat.db` | the pre-ADR-0082 `/repeat` scheduler (SQLite) | any release after the SQLite removal |
+| `$XDG_CACHE_HOME/neenee/models-dev.json` | an older remote-models cache format | the discovery cache (`models_discovery.json`) replaced it |
+
+None of these are read by the current code; deleting them changes nothing at
+runtime. They are *not* removed automatically — a tool silently deleting
+files from a user's home directory is worse than a stale file.

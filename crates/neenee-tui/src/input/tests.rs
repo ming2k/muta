@@ -1929,7 +1929,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 question_other_highlighted: false,
                 history_clear_confirm: false,
                 host_prompting: false,
-            config_custom_editing: false,
+                config_custom_editing: false,
             },
             &mut drag,
         )
@@ -3599,6 +3599,47 @@ fn oauth_key(c: char) -> InputAction {
     )
 }
 
+fn oauth_keycode(code: KeyCode) -> InputAction {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    process_event(
+        Event::Key(KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::Modal::OauthPending,
+            session_info_detail: false,
+            is_responding: false,
+            completion_kind: crate::CompletionKind::Slash,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            model_searching: false,
+            modal_keymap_open: false,
+            editor_field: None,
+            custom_provider_field: None,
+            question_other_highlighted: false,
+            history_clear_confirm: false,
+            host_prompting: false,
+            config_custom_editing: false,
+        },
+        &mut drag,
+    )
+}
+
 #[test]
 fn oauth_pending_c_copies_user_code() {
     assert_eq!(
@@ -3620,6 +3661,36 @@ fn oauth_pending_u_copies_url() {
 }
 
 #[test]
+fn oauth_pending_enter_and_space_and_y_copy_selected() {
+    assert_eq!(
+        oauth_keycode(KeyCode::Enter),
+        InputAction::CopyOauthContent {
+            target: OauthCopyTarget::Selected,
+        }
+    );
+    assert_eq!(
+        oauth_key(' '),
+        InputAction::CopyOauthContent {
+            target: OauthCopyTarget::Selected,
+        }
+    );
+    assert_eq!(
+        oauth_key('y'),
+        InputAction::CopyOauthContent {
+            target: OauthCopyTarget::Selected,
+        }
+    );
+    assert_eq!(
+        oauth_keycode(KeyCode::Tab),
+        InputAction::CycleOauthSelection,
+    );
+    assert_eq!(
+        oauth_keycode(KeyCode::BackTab),
+        InputAction::CycleOauthSelection,
+    );
+}
+
+#[test]
 fn text_modal_commands_resolve_and_consume_composer() {
     // Slash commands that open an interactive modal are intercepted locally:
     // they resolve to a data-less `Open*` action (not `SendSlash`) and consume
@@ -3634,6 +3705,7 @@ fn text_modal_commands_resolve_and_consume_composer() {
         ("/tools", InputAction::OpenTools),
         ("/mcp", InputAction::OpenMcp),
         ("/skills", InputAction::OpenSkills),
+        ("/settings", InputAction::OpenConfig),
         ("/config", InputAction::OpenConfig),
     ] {
         let mut input = cmd.to_string();

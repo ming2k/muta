@@ -54,6 +54,10 @@ pub struct GoogleProvider {
     /// onto `thinkingConfig` (`thinkingLevel` for Gemini 3.x, a
     /// `thinkingBudget` bucket for Gemini 2.5) at request-build time.
     pub reasoning_effort: Option<neenee_contracts::Effort>,
+    /// Antigravity Google Cloud companion project ID (`cloudaicompanionProject`).
+    /// When set, the provider routes requests in `v1internal` envelope shape with
+    /// `Authorization: Bearer` authentication to the Antigravity backend.
+    pub project_id: Option<String>,
 }
 
 impl GoogleProvider {
@@ -91,6 +95,7 @@ impl GoogleProvider {
             last_text_thought_signature: Arc::new(Mutex::new(None)),
             capabilities,
             reasoning_effort: None,
+            project_id: None,
         }
     }
 
@@ -118,6 +123,99 @@ impl GoogleProvider {
     pub fn with_reasoning_effort(mut self, effort: Option<neenee_contracts::Effort>) -> Self {
         self.reasoning_effort = effort;
         self
+    }
+
+    /// Attach the Antigravity project ID (`cloudaicompanionProject`).
+    pub fn with_project_id(mut self, project_id: impl Into<String>) -> Self {
+        self.project_id = Some(project_id.into());
+        self
+    }
+
+    /// Whether this provider is configured for Google Antigravity `v1internal` protocol.
+    pub fn is_antigravity(&self) -> bool {
+        self.project_id.is_some()
+            || self
+                .endpoint
+                .base_url
+                .contains("cloudcode-pa.googleapis.com")
+    }
+
+    fn prepare_request(
+        &self,
+        request: ModelRequest,
+        is_stream: bool,
+    ) -> (String, reqwest::header::HeaderMap, serde_json::Value) {
+        let include_thoughts = self.capabilities.reasoning();
+        let thinking = request::resolve_thinking(
+            self.reasoning_effort,
+            &self.capabilities.effort_levels,
+            request::max_thinking_budget(&self.endpoint.model),
+        );
+        let (messages, tool_specs) = request.into_parts();
+        let raw_body = request::body(
+            messages,
+            request::BodyInput {
+                tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
+                include_thoughts,
+                thinking,
+            },
+        );
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Ok(ua) = self.endpoint.user_agent.parse() {
+            headers.insert("User-Agent", ua);
+        }
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+
+        if self.is_antigravity() {
+            let action = if is_stream {
+                "streamGenerateContent"
+            } else {
+                "generateContent"
+            };
+            let base = self.endpoint.base_url.trim_end_matches('/');
+            let base = base.strip_suffix("/v1internal").unwrap_or(base);
+            let url = if is_stream {
+                format!("{base}/v1internal:{action}?alt=sse")
+            } else {
+                format!("{base}/v1internal:{action}")
+            };
+
+            if !self.endpoint.api_key.is_empty()
+                && let Ok(bearer) = format!("Bearer {}", self.endpoint.api_key).parse()
+            {
+                headers.insert("Authorization", bearer);
+            }
+
+            let project = self.project_id.as_deref().unwrap_or("");
+            let wrapped_body = serde_json::json!({
+                "project": project,
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "userAgent": self.endpoint.user_agent,
+                "model": self.endpoint.model,
+                "request": raw_body
+            });
+
+            (url, headers, wrapped_body)
+        } else {
+            let url = if is_stream {
+                request::stream_url(
+                    &self.endpoint.base_url,
+                    &self.endpoint.model,
+                    &self.endpoint.api_key,
+                )
+            } else {
+                request::url(
+                    &self.endpoint.base_url,
+                    &self.endpoint.model,
+                    &self.endpoint.api_key,
+                )
+            };
+            (url, headers, raw_body)
+        }
     }
 
     // Accessors (base_url / model_id / user_agent / api_key / id) are forwarded
@@ -191,27 +289,7 @@ impl Provider for GoogleProvider {
 
     async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
         let client = self.client.http();
-        let url = request::url(
-            &self.endpoint.base_url,
-            &self.endpoint.model,
-            &self.endpoint.api_key,
-        );
-
-        let include_thoughts = self.capabilities.reasoning();
-        let thinking = request::resolve_thinking(
-            self.reasoning_effort,
-            &self.capabilities.effort_levels,
-            request::max_thinking_budget(&self.endpoint.model),
-        );
-        let (messages, tool_specs) = request.into_parts();
-        let body = request::body(
-            messages,
-            request::BodyInput {
-                tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
-                include_thoughts,
-                thinking,
-            },
-        );
+        let (url, headers, body) = self.prepare_request(request, false);
 
         // Non-streaming, sent through `Client::http` directly (the error
         // clarification below needs the raw helpers), so stamp the shared
@@ -220,7 +298,7 @@ impl Provider for GoogleProvider {
         // overall timeout (see the `client` module docs).
         let response = client
             .post(&url)
-            .header("User-Agent", &self.endpoint.user_agent)
+            .headers(headers)
             .json(&body)
             .timeout(self.client.request_timeout())
             .send()
@@ -231,8 +309,9 @@ impl Provider for GoogleProvider {
         })?;
 
         let response_json: serde_json::Value = decode_response_json(response, "Google").await?;
+        let root = response_json.get("response").unwrap_or(&response_json);
 
-        if let Some(err) = response_json.get("error") {
+        if let Some(err) = response_json.get("error").or_else(|| root.get("error")) {
             return Err(response::clarify_error(
                 format!("Google Error: {}", err),
                 &self.endpoint.model,
@@ -240,7 +319,7 @@ impl Provider for GoogleProvider {
             ));
         }
 
-        if let Some(usage) = response::usage(&response_json["usageMetadata"]) {
+        if let Some(usage) = response::usage(&root["usageMetadata"]) {
             self.turn.stash_usage(usage);
         }
 
@@ -252,31 +331,11 @@ impl Provider for GoogleProvider {
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let client = self.client.http();
-        let url = request::stream_url(
-            &self.endpoint.base_url,
-            &self.endpoint.model,
-            &self.endpoint.api_key,
-        );
-
-        let include_thoughts = self.capabilities.reasoning();
-        let thinking = request::resolve_thinking(
-            self.reasoning_effort,
-            &self.capabilities.effort_levels,
-            request::max_thinking_budget(&self.endpoint.model),
-        );
-        let (messages, tool_specs) = request.into_parts();
-        let body = request::body(
-            messages,
-            request::BodyInput {
-                tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
-                include_thoughts,
-                thinking,
-            },
-        );
+        let (url, headers, body) = self.prepare_request(request, true);
 
         let response = client
             .post(&url)
-            .header("User-Agent", &self.endpoint.user_agent)
+            .headers(headers)
             .json(&body)
             .send()
             .await
@@ -299,31 +358,11 @@ impl Provider for GoogleProvider {
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let client = self.client.http();
-        let url = request::stream_url(
-            &self.endpoint.base_url,
-            &self.endpoint.model,
-            &self.endpoint.api_key,
-        );
-
-        let include_thoughts = self.capabilities.reasoning();
-        let thinking = request::resolve_thinking(
-            self.reasoning_effort,
-            &self.capabilities.effort_levels,
-            request::max_thinking_budget(&self.endpoint.model),
-        );
-        let (messages, tool_specs) = request.into_parts();
-        let body = request::body(
-            messages,
-            request::BodyInput {
-                tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
-                include_thoughts,
-                thinking,
-            },
-        );
+        let (url, headers, body) = self.prepare_request(request, true);
 
         let response = client
             .post(&url)
-            .header("User-Agent", &self.endpoint.user_agent)
+            .headers(headers)
             .json(&body)
             .send()
             .await

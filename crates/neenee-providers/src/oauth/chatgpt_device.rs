@@ -54,7 +54,7 @@ pub async fn request_device_code(
     cfg: &OAuthConfig,
 ) -> Result<ChatGptDeviceCode, crate::oauth::AuthError> {
     let response = client
-        .post(cfg.device_authorization_url)
+        .post(cfg.device_authorization_url.as_ref())
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .json(&serde_json::json!({ "client_id": cfg.client_id }))
@@ -115,7 +115,7 @@ where
     let interval_ms = device.interval_ms();
     loop {
         let response = client
-            .post(cfg.device_token_url)
+            .post(cfg.device_token_url.as_ref())
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .json(&serde_json::json!({
@@ -134,7 +134,6 @@ where
                 crate::oauth::AuthError::Decode(format!("device token response parse failed: {e}"))
             });
         }
-        // Pending states: keep polling. Any other error is terminal.
         if status.as_u16() != 403 && status.as_u16() != 404 {
             return Err(crate::oauth::AuthError::TokenEndpoint {
                 status: status.as_u16(),
@@ -154,11 +153,11 @@ pub async fn exchange_device_code(
     let body = crate::oauth::token::percent_encode_form_pairs(&[
         ("grant_type", "authorization_code"),
         ("code", token.authorization_code.expose_secret()),
-        ("redirect_uri", cfg.device_redirect_uri),
-        ("client_id", cfg.client_id),
+        ("redirect_uri", cfg.device_redirect_uri.as_ref()),
+        ("client_id", cfg.client_id.as_ref()),
         ("code_verifier", token.code_verifier.expose_secret()),
     ]);
-    crate::oauth::token::post_form(client, cfg.token_url, &body).await
+    crate::oauth::token::post_form(client, cfg.token_url.as_ref(), &body).await
 }
 
 const OAUTH_POLLING_SAFETY_MARGIN_MS: u64 = 1_000;

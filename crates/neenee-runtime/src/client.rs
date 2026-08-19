@@ -43,50 +43,46 @@ pub fn discover(_project_root: &Path) -> Option<DaemonInfo> {
     // Self-healing fallback: if daemon.json is missing or unlinked,
     // but a live daemon holds the instance lock and is responsive on UDS/TCP:
     let lock_path = discovery::global_lock_path();
-    if neenee_persistence::lock::ProcessLock::is_locked(&lock_path) {
-        if let Some(pid) = neenee_persistence::lock::ProcessLock::probe_holder(&lock_path) {
-            if is_process_alive(pid) {
+    if neenee_persistence::lock::ProcessLock::is_locked(&lock_path)
+        && let Some(pid) = neenee_persistence::lock::ProcessLock::probe_holder(&lock_path)
+        && is_process_alive(pid)
+    {
+        #[cfg(unix)]
+        let uds = discovery::default_uds_path();
+        #[cfg(unix)]
+        let uds_connectable = if uds.exists() {
+            std::os::unix::net::UnixStream::connect(&uds).is_ok()
+        } else {
+            false
+        };
+        #[cfg(not(unix))]
+        let uds_connectable = false;
+
+        let tcp_addr =
+            std::net::SocketAddr::from(([127, 0, 0, 1], crate::startup::DEFAULT_SERVE_PORT));
+        let tcp_connectable =
+            std::net::TcpStream::connect_timeout(&tcp_addr, Duration::from_millis(300)).is_ok();
+
+        if uds_connectable || tcp_connectable {
+            let recovered = DaemonInfo {
+                pid,
+                port: crate::startup::DEFAULT_SERVE_PORT,
+                token: None,
+                project_root: String::new(),
+                started_at: 0,
                 #[cfg(unix)]
-                let uds = discovery::default_uds_path();
-                #[cfg(unix)]
-                let uds_connectable = if uds.exists() {
-                    std::os::unix::net::UnixStream::connect(&uds).is_ok()
-                } else {
-                    false
-                };
+                uds_path: if uds.exists() { Some(uds) } else { None },
                 #[cfg(not(unix))]
-                let uds_connectable = false;
-
-                let tcp_addr = std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    crate::startup::DEFAULT_SERVE_PORT,
-                ));
-                let tcp_connectable =
-                    std::net::TcpStream::connect_timeout(&tcp_addr, Duration::from_millis(300))
-                        .is_ok();
-
-                if uds_connectable || tcp_connectable {
-                    let recovered = DaemonInfo {
-                        pid,
-                        port: crate::startup::DEFAULT_SERVE_PORT,
-                        token: None,
-                        project_root: String::new(),
-                        started_at: 0,
-                        #[cfg(unix)]
-                        uds_path: if uds.exists() { Some(uds) } else { None },
-                        #[cfg(not(unix))]
-                        uds_path: None,
-                        version: Some(crate::serve::daemon_version().to_string()),
-                    };
-                    // Restore discovery file so future lookups are immediate
-                    let _ = discovery::write_global(&recovered);
-                    tracing::info!(
-                        pid,
-                        "discover: recovered discovery record from live lock holder"
-                    );
-                    return Some(recovered);
-                }
-            }
+                uds_path: None,
+                version: Some(crate::serve::daemon_version().to_string()),
+            };
+            // Restore discovery file so future lookups are immediate
+            let _ = discovery::write_global(&recovered);
+            tracing::info!(
+                pid,
+                "discover: recovered discovery record from live lock holder"
+            );
+            return Some(recovered);
         }
     }
 
@@ -177,10 +173,77 @@ pub fn version_mismatch(info: &DaemonInfo) -> String {
 /// rule 4). `None` on the record (a pre-versioning daemon) counts as a
 /// mismatch: the wire protocol has no negotiation, so guessing is exactly
 /// the failure mode the rule exists to prevent.
+///
+/// Version equality is *necessary but not sufficient* during development:
+/// `cargo run` in a dirty workspace rebuilds the daemon binary in place
+/// while an older daemon of the same `CARGO_PKG_VERSION` keeps serving,
+/// so the running image drifts from the client's without any version
+/// signal. [`daemon_image_is_current`] closes that gap by comparing the
+/// running daemon's executable against this client's own — a daemon whose
+/// `/proc/<pid>/exe` link has been replaced (or points elsewhere) is
+/// treated as incompatible so [`ensure_daemon`] recycles it.
 pub fn versions_compatible(info: &DaemonInfo) -> bool {
     info.version
         .as_deref()
         .is_some_and(|daemon| daemon == crate::serve::daemon_version())
+        && daemon_image_is_current(info.pid)
+}
+
+/// Whether the running daemon's executable is still the exact file this
+/// client was launched from. During a `cargo run` development loop the
+/// rebuilt binary *replaces* the file a running daemon was started from;
+/// the kernel keeps the old image alive under a `(deleted)` link while the
+/// discovery record still names the same path and version. Comparing the
+/// daemon's `/proc/<pid>/exe` realpath with this client's own executable
+/// detects that drift — the same-version stale-daemon case version checks
+/// cannot see.
+///
+/// Returns `true` when the check is unavailable (non-Linux, unreadable
+/// `/proc`, an unresolvable current exe): absence of evidence must not
+/// recycle a healthy production daemon. A daemon spawned by an *installed*
+/// binary (`/usr/bin/neenee`) matches an installed client exactly, and a
+/// client running from a different build root than the daemon (e.g. an
+/// installed client attaching to a dev daemon) intentionally counts as
+/// compatible — the version field above remains the wire-level guard, and
+/// `ensure_daemon` only recycles when the client is *newer or same-version
+/// and image-divergent*, never for a genuinely older client.
+pub fn daemon_image_is_current(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let Some(current) = std::env::current_exe().ok() else {
+            return true;
+        };
+        // `metadata` follows the /proc/<pid>/exe link to the inode the
+        // daemon is *actually executing* — which survives the on-disk file's
+        // replacement. Never stat the path the link spells: after a rebuild
+        // that path names the new file, and stat-ing it would report the
+        // client's own inode, hiding exactly the drift being probed for.
+        let exe_link = std::path::Path::new("/proc")
+            .join(pid.to_string())
+            .join("exe");
+        match (
+            std::fs::metadata(&exe_link),
+            std::fs::metadata(&current),
+        ) {
+            (Ok(daemon), Ok(client)) => same_inode(&daemon, &client),
+            // No /proc entry (non-Linux unix, or the pid vanished between the
+            // discovery read and here): cannot tell, do not disturb.
+            _ => true,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+/// `(dev, inode)` equality. A rebuilt binary legitimately occupies the same
+/// path with a new inode; path-string equality would hide exactly that.
+#[cfg(unix)]
+fn same_inode(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
 }
 
 /// Liveness probe: prefer the UDS (the daemon's primary local channel),
@@ -234,15 +297,14 @@ pub async fn stop(info: &DaemonInfo) -> Result<(), String> {
     let mut stopped = false;
 
     // Tier 1: Try graceful protocol shutdown if versions are compatible.
-    if versions_compatible(info) {
-        if let Ok(Ok(())) = tokio::time::timeout(
+    if versions_compatible(info)
+        && let Ok(Ok(())) = tokio::time::timeout(
             Duration::from_millis(1500),
             control(info, crate::serve::ControlRequest::Shutdown),
         )
         .await
-        {
-            stopped = wait_for_process_exit(info.pid, Duration::from_millis(2000)).await;
-        }
+    {
+        stopped = wait_for_process_exit(info.pid, Duration::from_millis(2000)).await;
     }
 
     // Tier 2 & 3: Fall back to OS signals if protocol did not stop it.
@@ -296,74 +358,85 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
         if versions_compatible(&info) {
             return Ok(info);
         }
-        // Discovered an outdated daemon (daemon version < client version, or unknown pre-0.24).
-        // Automatically stop the outdated daemon and spawn the current version on demand.
+        // Discovered an outdated daemon (daemon version < client version,
+        // unknown pre-0.24, or — the development-loop case — a same-version
+        // daemon whose executable has since been replaced by a rebuild).
+        // Automatically stop the outdated daemon and spawn the current
+        // version on demand.
+        let image_drifted = !daemon_image_is_current(info.pid);
         let is_client_newer = match info.version.as_deref() {
             Some(v) => {
                 compare_versions(crate::serve::daemon_version(), v) == VersionRelation::ClientNewer
             }
             None => true,
         };
-        if is_client_newer {
+        let client_is_older = info.version.as_deref().is_some_and(|v| {
+            compare_versions(crate::serve::daemon_version(), v) == VersionRelation::ClientOlder
+        });
+        // Recycle when the client is strictly newer, or when the versions
+        // match but the running image is no longer the file this client runs
+        // (a rebuilt `target/debug` binary). A strictly *older* client must
+        // never recycle a newer daemon — the version field stays
+        // authoritative for that direction.
+        if is_client_newer || (image_drifted && !client_is_older) {
             tracing::info!(
                 daemon_pid = info.pid,
                 daemon_ver = ?info.version,
                 client_ver = crate::serve::daemon_version(),
-                "ensure_daemon: running daemon is older than this client; restarting daemon"
+                image_drifted,
+                "ensure_daemon: running daemon is outdated; restarting daemon"
             );
             let _ = stop(&info).await;
             let _ = wait_for_process_exit(info.pid, Duration::from_secs(2)).await;
         } else {
-            // Client is older than running daemon; return info so caller can surface actionable upgrade error.
             return Ok(info);
         }
     }
 
     // Check if another daemon is holding the instance lock
     let lock_path = discovery::global_lock_path();
-    if neenee_persistence::lock::ProcessLock::is_locked(&lock_path) {
-        if let Some(holder_pid) = neenee_persistence::lock::ProcessLock::probe_holder(&lock_path) {
-            if is_process_alive(holder_pid) {
-                tracing::info!(
-                    holder_pid,
-                    "ensure_daemon: daemon instance lock held; waiting for startup or draining"
-                );
-                let init_deadline = std::time::Instant::now() + Duration::from_secs(2);
-                while std::time::Instant::now() < init_deadline {
-                    tokio::time::sleep(SERVER_START_POLL).await;
-                    if let Some(info) = discover(project_root) {
-                        if versions_compatible(&info) {
-                            return Ok(info);
-                        }
-                    }
-                    if !is_process_alive(holder_pid) {
-                        break;
-                    }
-                }
-
-                // If still locked and discover() failed, the process holding the lock is deadlocked or unresponsive.
-                // Clear the deadlock by stopping the unresponsive process.
-                if is_process_alive(holder_pid) {
-                    tracing::warn!(
-                        holder_pid,
-                        "ensure_daemon: process holding lock is unresponsive; clearing deadlock"
-                    );
-                    let ghost = DaemonInfo {
-                        pid: holder_pid,
-                        port: crate::startup::DEFAULT_SERVE_PORT,
-                        token: None,
-                        project_root: String::new(),
-                        started_at: 0,
-                        #[cfg(unix)]
-                        uds_path: Some(discovery::default_uds_path()),
-                        #[cfg(not(unix))]
-                        uds_path: None,
-                        version: None,
-                    };
-                    let _ = stop(&ghost).await;
-                    let _ = wait_for_process_exit(holder_pid, Duration::from_secs(2)).await;
-                }
+    if neenee_persistence::lock::ProcessLock::is_locked(&lock_path)
+        && let Some(holder_pid) = neenee_persistence::lock::ProcessLock::probe_holder(&lock_path)
+        && is_process_alive(holder_pid)
+    {
+        tracing::info!(
+            holder_pid,
+            "ensure_daemon: daemon instance lock held; waiting for startup or draining"
+        );
+        let init_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < init_deadline {
+            tokio::time::sleep(SERVER_START_POLL).await;
+            if let Some(info) = discover(project_root)
+                && versions_compatible(&info)
+            {
+                return Ok(info);
             }
+            if !is_process_alive(holder_pid) {
+                break;
+            }
+        }
+
+        // If still locked and discover() failed, the process holding the lock is deadlocked or unresponsive.
+        // Clear the deadlock by stopping the unresponsive process.
+        if is_process_alive(holder_pid) {
+            tracing::warn!(
+                holder_pid,
+                "ensure_daemon: process holding lock is unresponsive; clearing deadlock"
+            );
+            let ghost = DaemonInfo {
+                pid: holder_pid,
+                port: crate::startup::DEFAULT_SERVE_PORT,
+                token: None,
+                project_root: String::new(),
+                started_at: 0,
+                #[cfg(unix)]
+                uds_path: Some(discovery::default_uds_path()),
+                #[cfg(not(unix))]
+                uds_path: None,
+                version: None,
+            };
+            let _ = stop(&ghost).await;
+            let _ = wait_for_process_exit(holder_pid, Duration::from_secs(2)).await;
         }
     }
 
@@ -371,10 +444,10 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
     let deadline = std::time::Instant::now() + SERVER_START_TIMEOUT;
     loop {
         tokio::time::sleep(SERVER_START_POLL).await;
-        if let Some(info) = discover(project_root) {
-            if versions_compatible(&info) {
-                return Ok(info);
-            }
+        if let Some(info) = discover(project_root)
+            && versions_compatible(&info)
+        {
+            return Ok(info);
         }
         if let Ok(Some(status)) = child.try_wait() {
             let log_text = std::fs::read_to_string(startup_log_path()).unwrap_or_default();
@@ -977,6 +1050,69 @@ mod tests {
             compare_versions("not-a-semver", "0.25.0"),
             VersionRelation::Unknown
         );
+    }
+
+    #[test]
+    fn daemon_image_is_current_matches_this_process_exe() {
+        // The daemon being probed is *this* test process: its /proc/<pid>/exe
+        // is exactly the test binary this client code runs from, so the image
+        // check must report it current.
+        assert!(daemon_image_is_current(std::process::id()));
+    }
+
+    #[test]
+    fn daemon_image_is_current_rejects_a_replaced_exe() {
+        // Simulate the dev-loop drift: a daemon pid whose exe link names a
+        // *different* file than this client's own executable. Spawn `sleep`
+        // and confirm the check sees the divergence.
+        #[cfg(unix)]
+        {
+            use std::process::{Command, Stdio};
+            let mut child = Command::new("sleep")
+                .arg("30")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn sleep");
+            let diverged = !daemon_image_is_current(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+            assert!(diverged, "a different executable must count as drift");
+        }
+    }
+
+    #[test]
+    fn daemon_image_is_current_tolerates_missing_proc_entry() {
+        // A pid that does not exist (or /proc unavailable): no evidence of
+        // drift, so the daemon must not be disturbed.
+        assert!(daemon_image_is_current(u32::MAX - 1));
+    }
+
+    #[test]
+    fn same_inode_distinguishes_a_rebuilt_file_at_the_same_path() {
+        // The dev-loop case in miniature: replacing a path's content gives
+        // the same path a NEW inode — that is drift, not equality, even
+        // though the path strings are identical. The daemon-side metadata
+        // is captured before the replacement (as /proc does for a running
+        // process), the client-side after.
+        #[cfg(unix)]
+        {
+            let tmp = tempfile::tempdir().unwrap();
+            let bin = tmp.path().join("neenee");
+            std::fs::write(&bin, b"old image").unwrap();
+            let daemon_meta = std::fs::metadata(&bin).unwrap();
+            // cargo rebuild: temp + rename over the same path.
+            let staging = tmp.path().join(".neenee.tmp");
+            std::fs::write(&staging, b"new image").unwrap();
+            std::fs::rename(&staging, &bin).unwrap();
+            let client_meta = std::fs::metadata(&bin).unwrap();
+            assert!(
+                !same_inode(&daemon_meta, &client_meta),
+                "a rebuilt binary at the same path must not compare equal"
+            );
+            assert!(same_inode(&client_meta, &client_meta));
+        }
     }
 
     #[test]

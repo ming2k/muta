@@ -35,11 +35,31 @@ impl ColorSchemePreset {
 /// Built-in palettes plus the editable custom slot. Order is the UI order.
 pub const COLOR_SCHEMES: [ColorSchemePreset; 6] = [
     ColorSchemePreset::static_preset("zen", "Zen", "Quiet charcoal with sage accents", false),
-    ColorSchemePreset::static_preset("midnight", "Midnight", "Deep navy with crisp blue accents", false),
+    ColorSchemePreset::static_preset(
+        "midnight",
+        "Midnight",
+        "Deep navy with crisp blue accents",
+        false,
+    ),
     ColorSchemePreset::static_preset("nord", "Nord", "Cool arctic blues and soft contrast", false),
-    ColorSchemePreset::static_preset("catppuccin", "Catppuccin", "Warm mocha with lavender accents", false),
-    ColorSchemePreset::static_preset("paper", "Paper", "Warm light surface for bright terminals", false),
-    ColorSchemePreset::static_preset("custom", "Custom", "Your editable eight-color palette", true),
+    ColorSchemePreset::static_preset(
+        "catppuccin",
+        "Catppuccin",
+        "Warm mocha with lavender accents",
+        false,
+    ),
+    ColorSchemePreset::static_preset(
+        "paper",
+        "Paper",
+        "Warm light surface for bright terminals",
+        false,
+    ),
+    ColorSchemePreset::static_preset(
+        "custom",
+        "Custom",
+        "Your editable eight-color palette",
+        true,
+    ),
 ];
 
 // ── Default Styling Constants ──────────────────────────────────────────────
@@ -249,7 +269,9 @@ impl Theme {
         // 2. Custom files from themes_dir
         let themes_dir = neenee_persistence::paths::get().themes_dir();
         for file in neenee_persistence::config::load_theme_files(&themes_dir) {
-            if !list.iter().any(|item| item.id.eq_ignore_ascii_case(&file.id))
+            if !list
+                .iter()
+                .any(|item| item.id.eq_ignore_ascii_case(&file.id))
                 && !file.id.eq_ignore_ascii_case("custom")
             {
                 list.push(ColorSchemePreset {
@@ -361,10 +383,7 @@ impl Theme {
     }
 
     /// Apply component-specific overrides onto an existing theme.
-    pub fn apply_component_overrides(
-        &mut self,
-        overrides: &Option<ComponentThemesConfig>,
-    ) {
+    pub fn apply_component_overrides(&mut self, overrides: &Option<ComponentThemesConfig>) {
         let Some(components) = overrides else { return };
         if let Some(ref input) = components.input {
             if let Some(val) = input.bg_active.as_deref().and_then(Self::color_from_hex) {

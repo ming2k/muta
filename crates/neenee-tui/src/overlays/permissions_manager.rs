@@ -9,8 +9,8 @@ use neenee_tui_engine::{Frame, Line};
 
 use super::common::{placeholder, selectable_row};
 use crate::primitives::{
-    FixedModalSpec, FooterHint, SCROLL_EDGE_MARGIN, keyvocab, modal_area, modal_frame,
-    modal_header, render_body, render_modal_footer,
+    ContentModalSpec, FooterHint, SCROLL_EDGE_MARGIN, content_modal_area, keyvocab,
+    modal_chrome_rows, modal_frame, modal_header, render_body, render_modal_footer,
 };
 use crate::view::Theme;
 
@@ -25,7 +25,17 @@ pub fn draw_permissions_manager(
     scroll: &mut usize,
     theme: &Theme,
 ) -> neenee_tui_engine::Rect {
-    let area = modal_area(frame, FixedModalSpec::PERMISSIONS);
+    let geometry = ContentModalSpec::PERMISSIONS;
+    let rules = session_context
+        .map(|s| s.permissions.as_slice())
+        .unwrap_or(&[]);
+    let content_lines = if rules.is_empty() {
+        1
+    } else {
+        rules.len() as u16
+    };
+    let desired = content_lines + modal_chrome_rows(geometry.modal_spec());
+    let area = content_modal_area(frame, geometry, desired);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     // ── Header ──

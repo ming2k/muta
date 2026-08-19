@@ -273,7 +273,14 @@ pub fn models_endpoint_for(
             .strip_suffix("/messages")
             .or_else(|| trimmed.strip_suffix("/messages/"))
             .unwrap_or(trimmed),
-        DiscoveryProtocol::Google => trimmed.strip_suffix('/').unwrap_or(trimmed),
+        DiscoveryProtocol::Google => {
+            if trimmed.contains("cloudcode-pa.googleapis.com") {
+                return Err(ModelListError::BadEndpoint(
+                    "Google Antigravity endpoint does not provide a /models route (models are fixed by subscription)".to_string(),
+                ));
+            }
+            trimmed.strip_suffix('/').unwrap_or(trimmed)
+        }
     };
     let root = root.strip_suffix('/').unwrap_or(root);
 
@@ -670,6 +677,17 @@ mod tests {
             .unwrap(),
             "https://generativelanguage.googleapis.com/v1beta/models"
         );
+    }
+
+    #[test]
+    fn antigravity_endpoint_rejects_models_discovery() {
+        assert!(matches!(
+            models_endpoint_for(
+                DiscoveryProtocol::Google,
+                "https://cloudcode-pa.googleapis.com"
+            ),
+            Err(ModelListError::BadEndpoint(_))
+        ));
     }
 
     #[test]

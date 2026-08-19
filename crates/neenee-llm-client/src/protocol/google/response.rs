@@ -55,7 +55,8 @@ pub fn usage(usage: &Value) -> Option<TokenUsage> {
 /// `functionCall` parts become native tool calls. Errors when the response has
 /// no candidates or no `parts` array.
 pub fn message(response: &Value) -> Result<Message, String> {
-    let candidates = response
+    let root = response.get("response").unwrap_or(response);
+    let candidates = root
         .get("candidates")
         .and_then(|c| c.as_array())
         .ok_or_else(|| format!("Invalid Google response: {}", response))?;
@@ -154,13 +155,14 @@ pub fn stream_payload(payload: &str) -> StreamPayload {
             };
         }
     };
+    let root = value.get("response").unwrap_or(&value);
     let mut events = Vec::new();
     let mut thought_signatures = Vec::new();
     let mut text_thought_signature = None;
-    if let Some(usage) = usage(&value["usageMetadata"]) {
+    if let Some(usage) = usage(&root["usageMetadata"]) {
         events.push(ProviderStreamEvent::Usage(usage));
     }
-    if let Some(parts) = value
+    if let Some(parts) = root
         .get("candidates")
         .and_then(|candidates| candidates.as_array())
         .and_then(|candidates| candidates.first())
@@ -248,8 +250,33 @@ fn part_is_thought(part: &Value) -> bool {
 
 /// Augment a transport-layer error with model-specific guidance. For native
 /// Google, a `404 NOT_FOUND` almost always means the upstream does not serve
-/// this model id — not a transient fault. Other errors pass through unchanged.
+/// this model id — not a transient fault. `429 RESOURCE_EXHAUSTED` explains
+/// quota / rate limits. Other errors pass through unchanged.
+///
+/// The input may be a `[NEENEE_RETRYABLE]`-enveloped error (429/5xx from
+/// [`ensure_success`](crate::transport::ensure_success)); appending to the
+/// envelope verbatim would corrupt its JSON and strip the error of its
+/// retryable classification downstream, so the guidance is folded **into**
+/// the envelope's message and any `RetryInfo` delay Google embedded in the
+/// body is promoted to `retry_after_ms` when the envelope has none.
 pub fn clarify_error(err: String, model: &str, base_url: &str) -> String {
+    if let Some(mut retry) = neenee_contracts::parse_retryable_error(&err) {
+        // Extract the delay from the *raw* provider message before any
+        // guidance text is appended — afterwards the JSON body is no longer
+        // the tail of the string and brace-matching gets fragile.
+        let server_delay = google_retry_after_ms(&retry.message);
+        retry.message = clarify_message(retry.message, model, base_url);
+        if retry.retry_after_ms.is_none() {
+            retry.retry_after_ms = server_delay;
+        }
+        return neenee_contracts::retryable_error(retry.message, retry.retry_after_ms);
+    }
+    clarify_message(err, model, base_url)
+}
+
+/// The plain-message half of [`clarify_error`]: append guidance only, never
+/// touching any envelope structure.
+fn clarify_message(err: String, model: &str, base_url: &str) -> String {
     if err.contains("HTTP 404") || err.contains("\"status\": \"NOT_FOUND\"") {
         format!(
             "{err}\n\n\
@@ -259,9 +286,124 @@ pub fn clarify_error(err: String, model: &str, base_url: &str) -> String {
              relay actually serves (e.g. gemini-2.5-flash / gemini-2.5-pro), or pick a \
              different provider."
         )
+    } else if err.contains("HTTP 429") || err.contains("RESOURCE_EXHAUSTED") {
+        let quota_reset = google_quota_reset_hint(&err);
+        format!(
+            "{err}\n\n\
+             Google rate limit / quota exhausted (RESOURCE_EXHAUSTED).{quota_reset}"
+        )
     } else {
         err
     }
+}
+
+/// Extract Google's own reset hint when the error body carries one. Google
+/// attaches `details[]: [{...QuotaFailure}, {@type: RetryInfo, retryDelay:
+/// "45s"}]` to a 429; a `RetryInfo` delay is authoritative, so it is quoted
+/// verbatim. Legacy prose (the old fixed 45–60 minute guess) is not invented
+/// when Google said nothing — an invented number reads as a promise.
+fn google_quota_reset_hint(err: &str) -> String {
+    if let Some(milliseconds) = google_retry_after_ms(err) {
+        let seconds = milliseconds / 1000;
+        let human = if seconds >= 3600 {
+            format!("{}h {:02}m", seconds / 3600, (seconds % 3600) / 60)
+        } else if seconds >= 60 {
+            format!("{}m {:02}s", seconds / 60, seconds % 60)
+        } else {
+            format!("{seconds}s")
+        };
+        return format!("\nGoogle reports the quota resets in ~{human} (`RetryInfo.retryDelay`).");
+    }
+    "\nYour Google One / Antigravity request quota is exhausted; it resets at the \
+     start of the next window (5-hour or daily/weekly, whichever limit tripped)."
+        .to_string()
+}
+
+/// Parse `RetryInfo`'s `retryDelay` (or a plain `retryDelay`) out of a Google
+/// error body. Accepts `"45s"`, `"1.5s"`, `"2m30s"`-style durations plus a
+/// bare second count; returns milliseconds.
+fn google_retry_after_ms(err: &str) -> Option<u64> {
+    let value = serde_json::from_str::<serde_json::Value>(
+        err.split_once(": ").map(|(_, rest)| rest).unwrap_or(err),
+    )
+    .ok()
+    .or_else(|| {
+        // The body may be prefixed with provider framing; find the first
+        // `{` from the first `HTTP 429`/`RESOURCE_EXHAUSTED` mention onward.
+        err.find('{').and_then(|start| {
+            let end = err.rfind('}')?;
+            err.get(start..=end)
+                .map(str::to_string)
+                .and_then(|slice| serde_json::from_str::<serde_json::Value>(&slice).ok())
+        })
+    })?;
+    let retry_delay = find_retry_delay(&value)?;
+    parse_google_duration(&retry_delay)
+}
+
+/// Depth-first search for the first `retryDelay` string anywhere in the
+/// payload (Google nests it under `details[]` of the error).
+fn find_retry_delay(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(delay)) = map.get("retryDelay") {
+                return Some(delay.clone());
+            }
+            for child in map.values() {
+                if let Some(found) = find_retry_delay(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                if let Some(found) = find_retry_delay(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Parse a Google protobuf duration string (`"45s"`, `"1.500s"`, `"90m"`) or
+/// a bare number of seconds into milliseconds.
+fn parse_google_duration(raw: &str) -> Option<u64> {
+    let trimmed = raw.trim();
+    if let Ok(seconds) = trimmed.parse::<f64>() {
+        return Some((seconds.max(0.0) * 1000.0) as u64);
+    }
+    let mut total_seconds = 0.0f64;
+    let mut matched = false;
+    let mut rest = trimmed;
+    while let Some(pos) = rest.find(|c: char| c.is_ascii_digit() || c == '.') {
+        let digits: String = rest[pos..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        let unit_start = pos + digits.len();
+        let unit: String = rest[unit_start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .collect();
+        if digits.is_empty() || unit.is_empty() {
+            break;
+        }
+        let value: f64 = digits.parse().ok()?;
+        let multiplier = match unit.as_str() {
+            "h" => 3600.0,
+            "m" => 60.0,
+            "s" => 1.0,
+            "ms" => 0.001,
+            _ => return None,
+        };
+        total_seconds += value * multiplier;
+        matched = true;
+        rest = &rest[unit_start + unit.len()..];
+    }
+    matched.then(|| (total_seconds.max(0.0) * 1000.0) as u64)
 }
 
 #[cfg(test)]
@@ -455,5 +597,139 @@ mod tests {
         assert_eq!(u.prompt_tokens, 900);
         assert_eq!(u.cache_read_input_tokens, 600);
         assert_eq!(u.cache_creation_input_tokens, 0);
+    }
+
+    #[test]
+    fn parses_antigravity_wrapped_response_and_stream() {
+        let wrapped_json = serde_json::json!({
+            "response": {
+                "candidates": [{
+                    "content": {
+                        "parts": [
+                            {"text": "thinking deep", "thought": true},
+                            {"text": "Antigravity response"}
+                        ]
+                    }
+                }],
+                "usageMetadata": {
+                    "promptTokenCount": 100,
+                    "candidatesTokenCount": 20,
+                    "totalTokenCount": 120
+                }
+            },
+            "responseId": "resp-123"
+        });
+
+        let msg = super::message(&wrapped_json).unwrap();
+        assert_eq!(msg.content, "Antigravity response");
+        assert_eq!(msg.reasoning_content.as_deref(), Some("thinking deep"));
+
+        let stream_str = wrapped_json.to_string();
+        let payload = stream_payload(&stream_str);
+        assert_eq!(payload.events.len(), 3); // Usage + ReasoningDelta + TextDelta
+        assert_eq!(
+            payload.events[0],
+            ProviderStreamEvent::Usage(TokenUsage {
+                prompt_tokens: 100,
+                completion_tokens: 20,
+                total_tokens: 120,
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            payload.events[1],
+            ProviderStreamEvent::ReasoningDelta("thinking deep".to_string())
+        );
+        assert_eq!(
+            payload.events[2],
+            ProviderStreamEvent::TextDelta("Antigravity response".to_string())
+        );
+    }
+
+    #[test]
+    fn clarify_error_appends_guidance_inside_the_retryable_envelope() {
+        // A 429 arrives enveloped by `ensure_success`. The guidance must fold
+        // into the envelope's message — never appended after the JSON, which
+        // would corrupt the encoding and strip the error of its retryable
+        // classification downstream.
+        let raw = neenee_contracts::retryable_error(
+            "Google HTTP 429 Too Many Requests: {\"error\":{\"code\":429,\"status\":\"RESOURCE_EXHAUSTED\"}}",
+            None,
+        );
+        let clarified = super::clarify_error(
+            raw,
+            "gemini-3.7-flash",
+            "https://cloudcode-pa.googleapis.com",
+        );
+
+        let retry = neenee_contracts::parse_retryable_error(&clarified)
+            .expect("the envelope must still parse after clarification");
+        assert!(
+            retry.message.contains("RESOURCE_EXHAUSTED"),
+            "the provider body survives: {}",
+            retry.message
+        );
+        assert!(
+            retry
+                .message
+                .contains("Google rate limit / quota exhausted"),
+            "the guidance is attached: {}",
+            retry.message
+        );
+    }
+
+    #[test]
+    fn clarify_error_promotes_google_retryinfo_delay_into_retry_after_ms() {
+        // Google embeds `details[]: [{@type: RetryInfo, retryDelay: "45s"}]`
+        // in a 429 body. That delay is authoritative and must surface as the
+        // envelope's `retry_after_ms` so the backoff loop honors it.
+        let body = r#"{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"3620s"}]}}"#;
+        let raw = neenee_contracts::retryable_error(
+            format!("Google HTTP 429 Too Many Requests: {body}"),
+            None,
+        );
+        let clarified = super::clarify_error(raw, "gemini-3.7-flash", "https://x");
+        let retry = neenee_contracts::parse_retryable_error(&clarified).unwrap();
+        assert_eq!(retry.retry_after_ms, Some(3_620_000));
+        assert!(
+            retry.message.contains("~1h 00m"),
+            "the reset hint is humanized from Google's own delay: {}",
+            retry.message
+        );
+    }
+
+    #[test]
+    fn clarify_error_preserves_an_envelope_retry_after() {
+        // A `Retry-After` header captured by `ensure_success` wins over a
+        // body-embedded `RetryInfo` delay; the guidance must not clobber it.
+        let raw = neenee_contracts::retryable_error(
+            "Google HTTP 429: {\"error\":{\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"retryDelay\":\"45s\"}]}}",
+            Some(120_000),
+        );
+        let clarified = super::clarify_error(raw, "m", "https://x");
+        let retry = neenee_contracts::parse_retryable_error(&clarified).unwrap();
+        assert_eq!(retry.retry_after_ms, Some(120_000));
+    }
+
+    #[test]
+    fn clarify_error_passes_non_enveloped_errors_through_with_guidance() {
+        // A 404 is terminal (never enveloped); its guidance stays plain text.
+        let clarified =
+            super::clarify_error("Google HTTP 404 Not Found".to_string(), "m", "https://x");
+        assert!(clarified.starts_with("Google HTTP 404"));
+        assert!(clarified.contains("does not serve this model"));
+        assert!(neenee_contracts::parse_retryable_error(&clarified).is_none());
+    }
+
+    #[test]
+    fn parse_google_duration_accepts_protobuf_and_bare_forms() {
+        use super::parse_google_duration;
+        assert_eq!(parse_google_duration("45s"), Some(45_000));
+        assert_eq!(parse_google_duration("1.500s"), Some(1_500));
+        assert_eq!(parse_google_duration("2m30s"), Some(150_000));
+        assert_eq!(parse_google_duration("1h"), Some(3_600_000));
+        assert_eq!(parse_google_duration("0.5s"), Some(500));
+        assert_eq!(parse_google_duration("30"), Some(30_000));
+        assert_eq!(parse_google_duration("nonsense"), None);
     }
 }

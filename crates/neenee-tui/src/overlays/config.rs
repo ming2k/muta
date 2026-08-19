@@ -1,23 +1,22 @@
-//! Settings View (`/config`): a first-class, full-screen configuration center
+//! Settings View (`/settings`, formerly `/config`): a first-class, full-screen configuration center
 //! providing dual-pane (Master-Detail) navigation over all system settings.
 //!
 //! Layout:
-//! ┌─ ⚙ SETTINGS · ~/workspace ────────────────────── Appearance › Themes ────┐
-//! │ CATEGORIES               │ APPEARANCE                                    │
-//! │                          │                                               │
-//! │ › 1. Appearance          │ ● zen         Dark slate baseline (default) ■ │
-//! │   2. Transcript          │ ○ midnight    Deep obsidian dark            ■ │
-//! │   3. Behavior            │ ○ nord        Arctic blue-gray palette      ■ │
-//! │   4. System & Info       │ ○ catppuccin  Warm pastel mocha palette     ■ │
-//! │                          │ ○ paper       High-contrast warm light      ■ │
-//! │                          │ ○ custom      User-defined palette          ■ │
-//! │                          │                                               │
-//! │                          │ ── Preview ─────────────────────────────────  │
-//! │                          │   ◆ turn 1 · claude-3-7-sonnet · 15:30        │
-//! │                          │   ✓ read_file crates/neenee-tui/src/main.rs   │
-//! ├──────────────────────────┴───────────────────────────────────────────────┤
-//! │       [↑/↓] select   [Tab] switch pane   [Enter] apply   [Esc] close     │
-//! └──────────────────────────────────────────────────────────────────────────┘
+//! ┌─ ⚙ SETTINGS · ~/workspace ────────────────────── Appearance › Themes, palette swatches & custom colors ────┐
+//! │                                                                                                            │
+//! │ ┌──────────────────────┐ ┌───────────────────────────────────────────────────────────────────────────────┐ │
+//! │ │ › ◐ Appearance       │ │ Choose a palette. Presets apply instantly; Custom allows full hex editing.   │ │
+//! │ │   ≡ Transcript       │ │                                                                               │ │
+//! │ │   ⚙ Behavior         │ │ › ● zen         Dark slate baseline (default)   ■ ■ ■ ■ ■                     │ │
+//! │ │   ℹ System & Info    │ │   ○ midnight    Deep obsidian dark              ■ ■ ■ ■ ■                     │ │
+//! │ │                      │ │   ○ nord        Arctic blue-gray palette        ■ ■ ■ ■ ■                     │ │
+//! │ │                      │ │   ○ catppuccin  Warm pastel mocha palette       ■ ■ ■ ■ ■                     │ │
+//! │ │                      │ │   ○ paper       High-contrast warm light        ■ ■ ■ ■ ■                     │ │
+//! │ │                      │ │   ○ custom      User-defined palette            ■ ■ ■ ■ ■                     │ │
+//! │ └──────────────────────┘ └───────────────────────────────────────────────────────────────────────────────┘ │
+//! ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+//! │              [↑/↓] select   [Tab] switch pane   [Enter] apply   [Esc] close                                │
+//! └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 use neenee_contracts::ColorSchemeConfig;
 use neenee_tui_engine::{
@@ -26,7 +25,7 @@ use neenee_tui_engine::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::primitives::{SCROLL_EDGE_MARGIN, draw_scrollbar, resolve_scroll, viewport_rect};
+use crate::primitives::{SCROLL_EDGE_MARGIN, draw_scrollbar, resolve_scroll};
 use crate::view::{CUSTOM_COLOR_FIELDS, Theme};
 
 /// Which pane of the Settings View currently owns the keyboard.
@@ -124,7 +123,7 @@ pub struct ConfigViewProps<'a> {
 
 /// Draw the full-screen Settings View.
 pub fn draw_config_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> ConfigRects {
-    let area = viewport_rect(frame);
+    let area = frame.area();
     frame.render_widget(Clear, area);
 
     // Fill the full background with the canvas tone.
@@ -133,10 +132,11 @@ pub fn draw_config_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> Co
         area,
     );
 
-    // 3 vertical zones: Top Header (1 row), Center Body (flexible), Bottom Footer (3 rows).
+    // 4 vertical zones: Top Header (1 row), Blank Line (1 row), Center Body (flexible), Bottom Footer (3 rows).
     let vertical_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Min(8),
             Constraint::Length(3),
@@ -144,34 +144,30 @@ pub fn draw_config_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> Co
         .split(area);
 
     let header_rect = vertical_chunks[0];
-    let body_rect = vertical_chunks[1];
-    let footer_rect = vertical_chunks[2];
+    let body_rect = vertical_chunks[2];
+    let footer_rect = vertical_chunks[3];
 
     let category = ConfigCategory::from_index(props.category_index);
 
-    // 1. Top Header Row
+    // 1. Top Header Row (Line 1)
     draw_header(frame, header_rect, props.workspace, category, props.theme);
 
-    // 2. Center Two-Pane Master-Detail Area
-    let category_width = (body_rect.width / 4).clamp(24, 32);
+    // 2. Center Two-Pane Master-Detail Area (starting after blank spacer row)
+    let category_width = (body_rect.width / 4).clamp(20, 26);
     let horizontal_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Length(category_width),
+            Constraint::Length(1),
             Constraint::Min(30),
         ])
         .split(body_rect);
 
     let category_area = horizontal_chunks[0];
-    let detail_area = horizontal_chunks[1];
+    let detail_area = horizontal_chunks[2];
 
-    let (category_body, detail_body) = draw_panels(
-        frame,
-        category_area,
-        detail_area,
-        &mut props,
-        category,
-    );
+    let (category_body, detail_body) =
+        draw_panels(frame, category_area, detail_area, &mut props, category);
 
     // 3. Bottom Envoy-Style 3-Row Footer
     draw_footer(
@@ -209,24 +205,38 @@ fn draw_header(
     } else {
         format!(" · {workspace}")
     };
-    let right_title = format!("{} › {} ", category.title(), category.subtitle());
 
+    let cat_title = category.title();
+    let cat_sub = category.subtitle();
+    let right_len = cat_title.width() + 3 + cat_sub.width() + 1; // "Title › Subtitle "
     let left_len = left_title.width() + ws_text.width();
-    let right_len = right_title.width();
-    let gap = (rect.width as usize).saturating_sub(left_len + right_len);
+    let total_w = rect.width as usize;
 
     let mut spans = vec![
         Span::styled(left_title, brand_style),
         Span::styled(ws_text, muted_style),
-        Span::styled(" ".repeat(gap), fill),
     ];
-    if (rect.width as usize) > left_len + right_len + 4 {
+
+    if total_w > left_len + right_len + 2 {
+        let gap = total_w - left_len - right_len;
+        spans.push(Span::styled(" ".repeat(gap), fill));
         spans.push(Span::styled(
-            right_title,
-            fill.fg(theme.brand()).add_modifier(Modifier::BOLD),
+            cat_title,
+            fill.fg(theme.fg()).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(" › ", fill.fg(theme.dim())));
+        spans.push(Span::styled(format!("{cat_sub} "), fill.fg(theme.muted())));
+    } else if total_w > left_len + cat_title.width() + 3 {
+        let short_len = cat_title.width() + 1;
+        let gap = total_w - left_len - short_len;
+        spans.push(Span::styled(" ".repeat(gap), fill));
+        spans.push(Span::styled(
+            format!("{cat_title} "),
+            fill.fg(theme.fg()).add_modifier(Modifier::BOLD),
         ));
     } else {
-        spans.push(Span::styled(" ".repeat(right_len), fill));
+        let gap = total_w.saturating_sub(left_len);
+        spans.push(Span::styled(" ".repeat(gap), fill));
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
@@ -245,13 +255,7 @@ fn draw_panels(
     let is_det_focused = props.focus == ConfigFocus::Detail;
 
     // Left Panel: Categories
-    let (_, cat_body) = inset_panel(
-        frame,
-        category_area,
-        " CATEGORIES",
-        is_cat_focused,
-        props.theme,
-    );
+    let cat_body = inset_panel(frame, category_area, props.theme);
     draw_category_list(
         frame,
         cat_body,
@@ -262,59 +266,25 @@ fn draw_panels(
     );
 
     // Right Panel: Detail
-    let detail_title = format!(" {} › {}", category.title().to_uppercase(), category.subtitle());
-    let (_, det_body) = inset_panel(
-        frame,
-        detail_area,
-        &detail_title,
-        is_det_focused,
-        props.theme,
-    );
-
+    let det_body = inset_panel(frame, detail_area, props.theme);
     draw_category_detail(frame, det_body, props, category, is_det_focused);
 
     (cat_body, det_body)
 }
 
-fn inset_panel(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    focused: bool,
-    theme: &Theme,
-) -> (Rect, Rect) {
+fn inset_panel(frame: &mut Frame, area: Rect, theme: &Theme) -> Rect {
     frame.render_widget(
         RtBlock::default().style(Style::default().bg(theme.panel())),
         area,
     );
 
-    // Top Title
-    let title_rect = Rect {
-        x: area.x + 1,
-        y: area.y,
-        width: area.width.saturating_sub(2),
-        height: 1,
-    };
-    let title_style = if focused {
-        Style::default()
-            .fg(theme.brand())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.muted())
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(title.to_string(), title_style))),
-        title_rect,
-    );
-
     // Inner Body (inset by 1 cell on all sides)
-    let body = Rect {
+    Rect {
         x: area.x + 1,
         y: area.y + 1,
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
-    };
-    (area, body)
+    }
 }
 
 // ── Categories List Rendering ──────────────────────────────────────────────
@@ -337,7 +307,6 @@ fn draw_category_list(
         }
 
         let cursor = if is_sel { "›" } else { " " };
-        let num = i + 1;
         let icon = cat.icon();
         let name = cat.title();
 
@@ -346,34 +315,20 @@ fn draw_category_list(
                 .fg(theme.brand())
                 .add_modifier(Modifier::BOLD)
         } else if is_sel {
-            Style::default()
-                .fg(theme.fg())
-                .add_modifier(Modifier::BOLD)
+            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.muted())
         };
 
-        let cursor_style = Style::default().fg(if is_sel {
-            theme.brand()
-        } else {
-            theme.dim()
-        });
+        let cursor_style = Style::default().fg(if is_sel { theme.brand() } else { theme.dim() });
+
+        let icon_style = Style::default().fg(if is_sel { theme.brand() } else { theme.muted() });
 
         lines.push(Line::from(vec![
             Span::styled(format!(" {cursor} "), cursor_style),
-            Span::styled(format!("{icon} "), cursor_style),
-            Span::styled(format!("{num}. {name}"), name_style),
+            Span::styled(format!("{icon} "), icon_style),
+            Span::styled(name.to_string(), name_style),
         ]));
-
-        let desc = cat.subtitle();
-        lines.push(Line::from(vec![
-            Span::raw("     "),
-            Span::styled(
-                desc.to_string(),
-                Style::default().fg(if is_sel { theme.muted() } else { theme.dim() }),
-            ),
-        ]));
-        lines.push(Line::from(""));
     }
 
     render_scrollable(frame, body, lines, scroll, selected_line, theme);
@@ -447,7 +402,9 @@ fn draw_appearance_detail(
         };
 
         let label_w = 12usize;
-        let desc_w = (body.width as usize).saturating_sub(6 + label_w + 10 + 4).max(10);
+        let desc_w = (body.width as usize)
+            .saturating_sub(6 + label_w + 10 + 4)
+            .max(10);
         let desc = if scheme.description.width() > desc_w {
             format!("{}…", &scheme.description[..desc_w.saturating_sub(1)])
         } else {
@@ -495,16 +452,26 @@ fn draw_appearance_detail(
         )));
 
         for (f_idx, field) in CUSTOM_COLOR_FIELDS.iter().enumerate() {
-            let stored = Theme::custom_color_value(props.custom_color_draft, f_idx).unwrap_or("#000000");
-            let shown = if props.custom_editing { props.input } else { stored };
+            let stored =
+                Theme::custom_color_value(props.custom_color_draft, f_idx).unwrap_or("#000000");
+            let shown = if props.custom_editing {
+                props.input
+            } else {
+                stored
+            };
             let swatch = Theme::color_from_hex(shown).unwrap_or(props.theme.panel());
-            
-            let is_curr_field = props.custom_editing && (f_idx == props.detail_index.saturating_sub(num_schemes).min(7));
+
+            let is_curr_field = props.custom_editing
+                && (f_idx == props.detail_index.saturating_sub(num_schemes).min(7));
             let mut row_spans = vec![
                 Span::raw("    "),
                 Span::styled(
                     format!("{:<12}", field.label),
-                    Style::default().fg(if is_curr_field { props.theme.brand() } else { props.theme.fg() }),
+                    Style::default().fg(if is_curr_field {
+                        props.theme.brand()
+                    } else {
+                        props.theme.fg()
+                    }),
                 ),
                 Span::styled("  ", Style::default().bg(swatch)),
                 Span::raw(" "),
@@ -518,18 +485,35 @@ fn draw_appearance_detail(
                 } else {
                     (" ", "")
                 };
-                row_spans.push(Span::styled(left.to_string(), Style::default().fg(props.theme.brand())));
-                row_spans.push(Span::styled(mid.to_string(), Style::default().bg(props.theme.brand()).fg(props.theme.body())));
-                row_spans.push(Span::styled(right.to_string(), Style::default().fg(props.theme.brand())));
+                row_spans.push(Span::styled(
+                    left.to_string(),
+                    Style::default().fg(props.theme.brand()),
+                ));
+                row_spans.push(Span::styled(
+                    mid.to_string(),
+                    Style::default()
+                        .bg(props.theme.brand())
+                        .fg(props.theme.body()),
+                ));
+                row_spans.push(Span::styled(
+                    right.to_string(),
+                    Style::default().fg(props.theme.brand()),
+                ));
                 let pad = 9usize.saturating_sub(shown.len() + if right.is_empty() { 1 } else { 0 });
                 if pad > 0 {
                     row_spans.push(Span::raw(" ".repeat(pad)));
                 }
             } else {
-                row_spans.push(Span::styled(format!("{:<9}", shown), Style::default().fg(props.theme.brand())));
+                row_spans.push(Span::styled(
+                    format!("{:<9}", shown),
+                    Style::default().fg(props.theme.brand()),
+                ));
             }
 
-            row_spans.push(Span::styled(format!(" {}", field.hint), Style::default().fg(props.theme.dim())));
+            row_spans.push(Span::styled(
+                format!(" {}", field.hint),
+                Style::default().fg(props.theme.dim()),
+            ));
             lines.push(Line::from(row_spans));
         }
     }
@@ -559,24 +543,60 @@ fn draw_appearance_detail(
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled("✓ ", Style::default().fg(active_theme.ok())),
-        Span::styled("read_file", Style::default().fg(active_theme.fg()).add_modifier(Modifier::BOLD)),
-        Span::styled(" crates/neenee-tui/src/main.rs", Style::default().fg(active_theme.muted())),
+        Span::styled(
+            "read_file",
+            Style::default()
+                .fg(active_theme.fg())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " crates/neenee-tui/src/main.rs",
+            Style::default().fg(active_theme.muted()),
+        ),
         Span::styled(" (42 lines)", Style::default().fg(active_theme.dim())),
     ]));
     lines.push(Line::from(vec![
         Span::raw("  "),
         Span::styled("📦 ", Style::default().fg(active_theme.crate_tag())),
-        Span::styled("crate", Style::default().bg(active_theme.crate_badge()).fg(active_theme.crate_tag()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "crate",
+            Style::default()
+                .bg(active_theme.crate_badge())
+                .fg(active_theme.crate_tag())
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" neenee-contracts", Style::default().fg(active_theme.fg())),
     ]));
     lines.push(Line::from(vec![
         Span::raw("  "),
-        Span::styled("  Input: ", Style::default().bg(active_theme.input_surface()).fg(active_theme.fg())),
-        Span::styled("hello world", Style::default().bg(active_theme.input_surface()).fg(active_theme.fg())),
-        Span::styled("▍", Style::default().bg(active_theme.input_surface()).fg(active_theme.caret())),
+        Span::styled(
+            "  Input: ",
+            Style::default()
+                .bg(active_theme.input_surface())
+                .fg(active_theme.fg()),
+        ),
+        Span::styled(
+            "hello world",
+            Style::default()
+                .bg(active_theme.input_surface())
+                .fg(active_theme.fg()),
+        ),
+        Span::styled(
+            "▍",
+            Style::default()
+                .bg(active_theme.input_surface())
+                .fg(active_theme.caret()),
+        ),
     ]));
 
-    render_scrollable(frame, body, lines, props.detail_scroll, selected_line, props.theme);
+    render_scrollable(
+        frame,
+        body,
+        lines,
+        props.detail_scroll,
+        selected_line,
+        props.theme,
+    );
 }
 
 // 2. Transcript Detail Pane
@@ -597,11 +617,35 @@ fn draw_transcript_detail(
 
     let strategy_str = props.transcript_layout.as_str();
     let items = [
-        ("Layout Strategy", strategy_str, "Each tool-bearing ReAct turn grouped under a header"),
-        ("Expand Auto-Scroll", if props.expand_auto_scroll { "enabled [●]" } else { "disabled [○]" }, "Keep toggled card comfortably placed in viewport"),
-        ("Default Expanded: edit_file", "true [●]", "Show diff inspection cards open by default"),
-        ("Default Expanded: bash", "true [●]", "Show command execution cards open by default"),
-        ("Default Expanded: thinking", "false [○]", "Keep reasoning trace cards collapsed by default"),
+        (
+            "Layout Strategy",
+            strategy_str,
+            "Each tool-bearing ReAct turn grouped under a header",
+        ),
+        (
+            "Expand Auto-Scroll",
+            if props.expand_auto_scroll {
+                "enabled [●]"
+            } else {
+                "disabled [○]"
+            },
+            "Keep toggled card comfortably placed in viewport",
+        ),
+        (
+            "Default Expanded: edit_file",
+            "true [●]",
+            "Show diff inspection cards open by default",
+        ),
+        (
+            "Default Expanded: bash",
+            "true [●]",
+            "Show command execution cards open by default",
+        ),
+        (
+            "Default Expanded: thinking",
+            "false [○]",
+            "Keep reasoning trace cards collapsed by default",
+        ),
     ];
 
     for (i, (label, val, desc)) in items.iter().enumerate() {
@@ -633,7 +677,10 @@ fn draw_transcript_detail(
                 }),
             ),
             Span::styled(format!("{:<30}", label), row_style),
-            Span::styled(format!("{:<15}", val), Style::default().fg(props.theme.brand())),
+            Span::styled(
+                format!("{:<15}", val),
+                Style::default().fg(props.theme.brand()),
+            ),
         ]));
         lines.push(Line::from(vec![
             Span::raw("     "),
@@ -642,7 +689,14 @@ fn draw_transcript_detail(
         lines.push(Line::from(""));
     }
 
-    render_scrollable(frame, body, lines, props.detail_scroll, selected_line, props.theme);
+    render_scrollable(
+        frame,
+        body,
+        lines,
+        props.detail_scroll,
+        selected_line,
+        props.theme,
+    );
 }
 
 // 3. Behavior Detail Pane
@@ -662,8 +716,20 @@ fn draw_behavior_detail(
     lines.push(Line::from(""));
 
     let items = [
-        ("Click Outside Dismiss", if props.click_outside_dismiss { "enabled [●]" } else { "disabled [○]" }, "Click outside a modal backdrop to close it (mirrors Esc)"),
-        ("Confirmation Mode", "always confirm", "Ask for confirmation on high-impact external actions"),
+        (
+            "Click Outside Dismiss",
+            if props.click_outside_dismiss {
+                "enabled [●]"
+            } else {
+                "disabled [○]"
+            },
+            "Click outside a modal backdrop to close it (mirrors Esc)",
+        ),
+        (
+            "Confirmation Mode",
+            "always confirm",
+            "Ask for confirmation on high-impact external actions",
+        ),
     ];
 
     for (i, (label, val, desc)) in items.iter().enumerate() {
@@ -695,7 +761,10 @@ fn draw_behavior_detail(
                 }),
             ),
             Span::styled(format!("{:<26}", label), row_style),
-            Span::styled(format!("{:<15}", val), Style::default().fg(props.theme.brand())),
+            Span::styled(
+                format!("{:<15}", val),
+                Style::default().fg(props.theme.brand()),
+            ),
         ]));
         lines.push(Line::from(vec![
             Span::raw("     "),
@@ -704,7 +773,14 @@ fn draw_behavior_detail(
         lines.push(Line::from(""));
     }
 
-    render_scrollable(frame, body, lines, props.detail_scroll, selected_line, props.theme);
+    render_scrollable(
+        frame,
+        body,
+        lines,
+        props.detail_scroll,
+        selected_line,
+        props.theme,
+    );
 }
 
 // 4. System Detail Pane
@@ -724,7 +800,14 @@ fn draw_system_detail(
 
     let items = [
         ("Config File", "~/.config/neenee/config.toml"),
-        ("Workspace", if props.workspace.is_empty() { "(none)" } else { props.workspace }),
+        (
+            "Workspace",
+            if props.workspace.is_empty() {
+                "(none)"
+            } else {
+                props.workspace
+            },
+        ),
         ("TUI Engine", "In-House Grid-Diff Engine (ADR-0038)"),
         ("Version", env!("CARGO_PKG_VERSION")),
     ];
@@ -732,8 +815,16 @@ fn draw_system_detail(
     for (label, val) in items {
         lines.push(Line::from(vec![
             Span::raw("   "),
-            Span::styled(format!("{:<16}", label), Style::default().fg(props.theme.muted())),
-            Span::styled(val.to_string(), Style::default().fg(props.theme.fg()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{:<16}", label),
+                Style::default().fg(props.theme.muted()),
+            ),
+            Span::styled(
+                val.to_string(),
+                Style::default()
+                    .fg(props.theme.fg())
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]));
         lines.push(Line::from(""));
     }
@@ -827,13 +918,34 @@ fn draw_footer(
     row_spans.push(Span::styled(" ".repeat(pad_right), fill));
 
     // Paint 3 rows: blank row 1, content row 2, blank row 3.
-    let r1 = Rect { x: rect.x, y: rect.y, width: rect.width, height: 1 };
-    let r2 = Rect { x: rect.x, y: rect.y + 1, width: rect.width, height: 1 };
-    let r3 = Rect { x: rect.x, y: rect.y + 2, width: rect.width, height: 1 };
+    let r1 = Rect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: 1,
+    };
+    let r2 = Rect {
+        x: rect.x,
+        y: rect.y + 1,
+        width: rect.width,
+        height: 1,
+    };
+    let r3 = Rect {
+        x: rect.x,
+        y: rect.y + 2,
+        width: rect.width,
+        height: 1,
+    };
 
-    frame.render_widget(Paragraph::new(Line::from(Span::styled(" ".repeat(width), fill))), r1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(" ".repeat(width), fill))),
+        r1,
+    );
     frame.render_widget(Paragraph::new(Line::from(row_spans)), r2);
-    frame.render_widget(Paragraph::new(Line::from(Span::styled(" ".repeat(width), fill))), r3);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(" ".repeat(width), fill))),
+        r3,
+    );
 }
 
 // ── Shared Helpers ─────────────────────────────────────────────────────────
@@ -852,4 +964,3 @@ fn render_scrollable(
     frame.render_widget(para, body);
     draw_scrollbar(frame, body, *scroll, max_scroll, theme);
 }
-

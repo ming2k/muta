@@ -804,7 +804,11 @@ pub async fn run_tui(
                             let turn = position.map(|(_, turn)| turn);
                             *provider_retry_clone.lock().await = None;
                             let mut msgs = buf.write().await;
-                            if let Some(message) = msgs.last_mut().filter(|message| {
+                            // Identity-addressed (ADR-0114): a command entry
+                            // dispatched during the stream can sit between the
+                            // assistant-text entry and the transcript tail;
+                            // resolve by position, not by "is last".
+                            if let Some(message) = msgs.iter_mut().rfind(|message| {
                                 message.role == Role::Assistant
                                     && matches!(&message.kind, MessageKind::Text)
                                     && message.round == round
@@ -915,17 +919,17 @@ pub async fn run_tui(
                             let position = positions_by_session.get(&session_id).copied();
                             let round = position.map(|(round, _)| round);
                             let turn = position.map(|(_, turn)| turn);
-                            let changed = if let Some(last) = msgs.last_mut().filter(|message| {
-                                message.is_thinking()
-                                    && message.round == round
-                                    && message.turn == turn
-                            }) {
-                                last.push_stream(&delta);
-                                if let MessageKind::Thinking { content, .. } = &mut last.kind {
-                                    content.push_str(&delta);
-                                }
-                                Some(last.id)
-                            } else {
+                            // Identity-addressed append (ADR-0114): resolve the
+                            // streaming Thinking entry for *this* (round, turn)
+                            // by scanning backwards, not by "is last". A command
+                            // entry (`/autopilot`, shell passthrough) or a local
+                            // notice can be appended between reasoning deltas —
+                            // under `last_mut()` addressing the next delta would
+                            // fork the trace into a second Thinking entry. The
+                            // scan stops at the last Thinking message of this
+                            // position; older positions cannot match.
+                            let changed = append_reasoning_delta(&mut msgs, round, turn, &delta);
+                            if changed.is_none() {
                                 // The first disclosed reasoning delta creates the visible
                                 // reasoning component directly. `StreamStart` intentionally
                                 // creates no transcript placeholder, so hidden-chain models
@@ -955,8 +959,7 @@ pub async fn run_tui(
                                 ));
                                 msgs.push(thinking);
                                 reasoning_start = Some(std::time::Instant::now());
-                                None
-                            };
+                            }
                             if let Some(id) = changed {
                                 msgs.record_reasoning_delta(id, delta);
                             } else {
@@ -967,22 +970,22 @@ pub async fn run_tui(
                             let duration_ms = reasoning_start
                                 .take()
                                 .map(|started| started.elapsed().as_millis() as u64);
+                            let position = positions_by_session.get(&session_id).copied();
+                            let round = position.map(|(round, _)| round);
+                            let turn = position.map(|(_, turn)| turn);
                             let mut msgs = buf.write().await;
                             // The round closes with `AssistantEnd` *before* `ReasoningEnd`
                             // (see golden_reasoning_precedes_text_in_the_same_turn), so by
                             // the time this arrives the assistant's text message is usually
-                            // the literal last message. Scan backward for the most recent
-                            // Thinking message that is still streaming (`duration_ms: None`)
-                            // instead of relying on it being last — otherwise the trace's
-                            // duration never gets stamped and the spinner runs forever.
+                            // the literal last message. Resolve by position (ADR-0114) —
+                            // scanning backward for the most recent *streaming* Thinking
+                            // entry of this (round, turn) — so an entry appended after the
+                            // trace (command row, notice) cannot steal or orphan the
+                            // finalize, and the spinner never runs forever.
                             let target = msgs.iter_mut().rfind(|message| {
-                                matches!(
-                                    &message.kind,
-                                    MessageKind::Thinking {
-                                        duration_ms: None,
-                                        ..
-                                    }
-                                )
+                                message.is_thinking_streaming()
+                                    && message.round == round
+                                    && message.turn == turn
                             });
                             if let Some(last) = target {
                                 last.raw = content.clone();
@@ -1373,7 +1376,12 @@ pub async fn run_tui(
                         RoundEvent::Error(e) => {
                             *provider_retry_clone.lock().await = None;
                             let mut msgs = buf.write().await;
-                            push_local_notice(&mut msgs, NoticeSeverity::Error, e);
+                            // A terminal round error may still carry the raw
+                            // retryable-envelope encoding (e.g. a 429 that
+                            // exhausted its retry budget): strip it so the
+                            // user sees the message, never the wire framing.
+                            let message = neenee_contracts::public_error_message(&e);
+                            push_local_notice(&mut msgs, NoticeSeverity::Error, message);
                             if !routes_to_side {
                                 ir_clone.store(false, Ordering::SeqCst);
                                 activity_clone.lock().await.clear();
@@ -1806,6 +1814,7 @@ pub async fn run_tui(
         oauth_pending_url: String::new(),
         oauth_pending_user_code: String::new(),
         oauth_pending_error: None,
+        oauth_selected_item: 0,
         oauth_scroll: 0,
         custom_suggest_index: 0,
         custom_scroll: 0,
@@ -1965,17 +1974,50 @@ fn push_core_notice(messages: &mut Vec<TranscriptMessage>, notice: &neenee_contr
 /// transcript geometry.
 fn begin_stream(_messages: &mut Vec<TranscriptMessage>) {}
 
+/// Append a disclosed reasoning delta to the current turn's Thinking entry,
+/// creating the entry only when the first disclosed delta arrives (that
+/// structural path lives at the call site). Returning `Some(id)` permits the
+/// cheap per-message patch path; `None` means the caller must create the
+/// entry.
+///
+/// Identity-addressed (ADR-0114): resolves the target by scanning backwards
+/// for the Thinking entry matching `(round, turn)`, **not** by "is the last
+/// message". Command entries (`/autopilot`, shell passthrough) and local
+/// notices can be appended between reasoning deltas — under `last_mut()`
+/// addressing the next delta would fork the trace into a second Thinking
+/// entry (the "two Thinking blocks" bug).
+fn append_reasoning_delta(
+    messages: &mut [TranscriptMessage],
+    round: Option<u64>,
+    turn: Option<u64>,
+    delta: &str,
+) -> Option<u64> {
+    let target = messages
+        .iter_mut()
+        .rfind(|message| message.is_thinking() && message.round == round && message.turn == turn)?;
+    target.push_stream(delta);
+    if let MessageKind::Thinking { content, .. } = &mut target.kind {
+        content.push_str(delta);
+    }
+    Some(target.id)
+}
+
 /// Append a streamed assistant-text delta to the current turn, creating the
 /// message only when the first visible text arrives. Returning `None` means the
 /// caller must perform the structural insertion (and request a full transcript
 /// snapshot); returning an id permits the cheap per-message patch path.
+///
+/// Identity-addressed (ADR-0114): the target assistant-text entry is resolved
+/// by scanning backwards for the entry matching `(round, turn)`, **not** by
+/// "is the last message". Command entries and local notices appended between
+/// text deltas must not fork the stream into a second entry.
 fn append_stream_text_delta(
     messages: &mut [TranscriptMessage],
     round: Option<u64>,
     turn: Option<u64>,
     delta: &str,
 ) -> Option<u64> {
-    let message = messages.last_mut().filter(|message| {
+    let message = messages.iter_mut().rfind(|message| {
         message.role == Role::Assistant
             && matches!(&message.kind, MessageKind::Text)
             && message.round == round
@@ -2145,6 +2187,97 @@ mod describe_todos_change_tests {
         assert_eq!(
             describe_todos_change(None, Some(&TodoList::default())),
             None
+        );
+    }
+
+    // ── Identity-addressed streaming appends (ADR-0114) ──────────────────
+
+    fn thinking_entry(round: u64, turn: u64, content: &str) -> TranscriptMessage {
+        let mut m = TranscriptMessage::thinking(content);
+        m.round = Some(round);
+        m.turn = Some(turn);
+        m
+    }
+
+    #[test]
+    fn reasoning_delta_appends_across_an_intervening_command_entry() {
+        // Regression (ADR-0114): dispatching `/autopilot` mid-stream pushes a
+        // CommandResult entry after the still-streaming Thinking entry. The
+        // next reasoning delta must extend the *original* entry, not fork a
+        // second Thinking block.
+        let mut messages = vec![thinking_entry(8, 1, "the error chain is")];
+        messages.push(TranscriptMessage::pending_command("autopilot", "on").with_sent_at_ms(1_000));
+
+        let id = append_reasoning_delta(&mut messages, Some(8), Some(1), " now clear")
+            .expect("must resolve the original thinking entry");
+        assert_eq!(id, messages[0].id);
+        // Still exactly one Thinking entry…
+        assert_eq!(
+            messages.iter().filter(|m| m.is_thinking()).count(),
+            1,
+            "the delta must not fork a second Thinking entry"
+        );
+        // …and the delta landed inside it, in order.
+        let MessageKind::Thinking { content, .. } = &messages[0].kind else {
+            panic!("entry 0 must remain a Thinking entry");
+        };
+        assert_eq!(content, "the error chain is now clear");
+        // The command entry stays between the original position and the end,
+        // untouched.
+        assert!(messages[1].is_command_result());
+    }
+
+    #[test]
+    fn reasoning_delta_finds_latest_entry_of_same_turn() {
+        // Multiple thinking entries can share a position across retries; the
+        // backward scan must hit the newest one.
+        let mut messages = vec![
+            thinking_entry(2, 1, "first attempt"),
+            thinking_entry(2, 1, "second attempt"),
+        ];
+        let id = append_reasoning_delta(&mut messages, Some(2), Some(1), "…").unwrap();
+        assert_eq!(id, messages[1].id);
+        let MessageKind::Thinking { content, .. } = &messages[1].kind else {
+            panic!()
+        };
+        assert_eq!(content, "second attempt…");
+        let MessageKind::Thinking { content, .. } = &messages[0].kind else {
+            panic!()
+        };
+        assert_eq!(content, "first attempt");
+    }
+
+    #[test]
+    fn reasoning_delta_rejects_foreign_positions() {
+        // A delta for another turn must not graft onto an older turn's entry.
+        let mut messages = vec![thinking_entry(8, 1, "old")];
+        assert_eq!(
+            append_reasoning_delta(&mut messages, Some(8), Some(2), "new"),
+            None
+        );
+        assert_eq!(
+            append_reasoning_delta(&mut messages, Some(9), Some(1), "new"),
+            None
+        );
+    }
+
+    #[test]
+    fn text_delta_appends_across_an_intervening_command_entry() {
+        use neenee_contracts::Role;
+        let mut text = TranscriptMessage::new(Role::Assistant, "hello ");
+        text.round = Some(3);
+        text.turn = Some(1);
+        let mut messages = vec![text];
+        messages.push(TranscriptMessage::pending_command("autopilot", "on").with_sent_at_ms(1_000));
+
+        let id = append_stream_text_delta(&mut messages, Some(3), Some(1), "world")
+            .expect("must resolve the original text entry");
+        assert_eq!(id, messages[0].id);
+        assert!(messages[0].raw.contains("world"));
+        assert_eq!(
+            messages.iter().filter(|m| m.raw.contains("world")).count(),
+            1,
+            "the delta must not fork a second text entry"
         );
     }
 }

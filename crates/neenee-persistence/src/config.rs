@@ -745,9 +745,15 @@ const CREDENTIALED_BUILTINS: &[&str] = &[
 /// *keys*, so the config file can be shared, screenshotted, or
 /// version-controlled without leaking credentials.
 ///
-/// - `builtins`: `provider_id → api_key` for the seven built-in providers.
-/// - `user`: `provider_id → (channel_label → api_key)` so a multi-channel
-///   user-defined entry keeps each key addressable.
+/// Credentials are keyed by **provider instance**, never by channel — a
+/// channel is a model route, not a security principal. One instance has
+/// exactly one credential of each supported kind:
+///
+/// - `[builtins.<id>]` — the seven built-in providers (`api_key`).
+/// - `[user.<id>]` — a user-defined instance: `api_key` for token auth.
+///   OAuth logins do **not** live here; their access/refresh token sets are
+///   runtime state in `auth.toml` (`[tokens.<provider>]`), also keyed by
+///   provider instance.
 ///
 /// Both maps are `BTreeMap` for stable, diff-friendly serialisation. Resolution
 /// precedence is **env var > credentials.toml > config inline**:
@@ -759,7 +765,17 @@ pub struct Credentials {
     #[serde(default)]
     pub builtins: BTreeMap<String, SecretString>,
     #[serde(default)]
-    pub user: BTreeMap<String, BTreeMap<String, SecretString>>,
+    pub user: BTreeMap<String, UserCredential>,
+}
+
+/// The token-auth credential of one user-defined provider instance.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserCredential {
+    /// The instance's API key / bearer token. One per instance: channels
+    /// within an instance share the credential that owns them.
+    #[serde(default, skip_serializing_if = "SecretString::is_empty")]
+    pub api_key: SecretString,
 }
 
 impl Credentials {
@@ -795,6 +811,40 @@ impl Credentials {
     /// a clean target. Errors propagate to the caller ([`Config::save`]).
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let bytes = toml::to_string_pretty(self)?.into_bytes();
+        fsutil::atomic_write_bytes(&Self::path(), &bytes)?;
+        Ok(())
+    }
+}
+
+/// Discovered model lists and fitted capabilities cached under `$XDG_CACHE_HOME/neenee/models_discovery.json`.
+/// Stores transient / rebuildable discovery results in cache so they do not bloat or churn `config.toml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveryCache {
+    /// Cached discovered model lists, keyed by provider_id: provider_id -> Vec<String>
+    #[serde(default)]
+    pub provider_models: BTreeMap<String, Vec<String>>,
+    /// Fitted model capabilities, keyed by provider_id: provider_id -> (model_id -> FittedModelInfo)
+    #[serde(default)]
+    pub fitted_models: BTreeMap<String, BTreeMap<String, FittedModelInfo>>,
+}
+
+impl DiscoveryCache {
+    fn path() -> PathBuf {
+        paths::get().discovery_cache_file()
+    }
+
+    /// Read `models_discovery.json`, returning an empty value if missing or unparseable.
+    pub fn load() -> Self {
+        let path = Self::path();
+        let Ok(content) = fs::read_to_string(&path) else {
+            return Self::default();
+        };
+        serde_json::from_str(&content).unwrap_or_default()
+    }
+
+    /// Persist atomically to `$XDG_CACHE_HOME/neenee/models_discovery.json`.
+    pub fn save(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let bytes = serde_json::to_vec_pretty(self)?;
         fsutil::atomic_write_bytes(&Self::path(), &bytes)?;
         Ok(())
     }
@@ -1235,10 +1285,28 @@ impl Config {
 
     pub fn load() -> Self {
         let config_path = Self::config_file_path();
-        let mut config: Config = fs::read_to_string(&config_path)
-            .ok()
-            .and_then(|content| toml::from_str(&content).ok())
-            .unwrap_or_default();
+        let mut config: Config = match fs::read_to_string(&config_path) {
+            Ok(content) => match toml::from_str(&content) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    // A corrupt config must never block startup, but falling
+                    // back to defaults *silently* would discard the user's
+                    // entire setup with no trace of why. Warn loudly (the
+                    // log carries the file, the error, and the stakes) so a
+                    // typo'd config.toml is diagnosable instead of reading
+                    // as "neenee forgot my providers".
+                    tracing::error!(
+                        path = %config_path.display(),
+                        %error,
+                        "config.toml is unparseable; continuing with defaults \
+                         (fix the syntax error to restore the saved configuration)"
+                    );
+                    Config::default()
+                }
+            },
+            // Absent is the normal first-run condition; nothing to report.
+            Err(_) => Config::default(),
+        };
 
         // Fold `credentials.toml` over the inline key fields: a non-empty key
         // there overrides whatever was inline in `config.toml`. An env var
@@ -1258,13 +1326,15 @@ impl Config {
             }
         }
         for provider in &mut config.providers {
-            if let Some(channels) = creds.user.get(&provider.id) {
+            if let Some(credential) = creds.user.get(&provider.id)
+                && !credential.api_key.expose_secret().trim().is_empty()
+            {
+                // A credential belongs to the instance: every channel of this
+                // instance resolves the same key. (An OAuth channel resolves
+                // its bearer from auth.toml at runtime and ignores this.)
                 for channel in &mut provider.channels {
-                    if let Some(key) = channels
-                        .get(&channel.label)
-                        .filter(|k| !k.expose_secret().trim().is_empty())
-                    {
-                        channel.api_key = Some(key.clone());
+                    if !channel.auth.is_oauth() {
+                        channel.api_key = Some(credential.api_key.clone());
                     }
                 }
             }
@@ -1424,7 +1494,9 @@ impl Config {
         // ── secrets → credentials.toml (0600) ──────────────────────────────
         // Collect every resolved key into the secrets file so it is the single
         // home for credentials. Empty/whitespace keys are skipped — a keyless
-        // relay should not materialise a credentials entry.
+        // relay should not materialise a credentials entry. A user-defined
+        // instance stores ONE credential (its first non-empty channel key);
+        // channels are routes, not principals.
         let mut creds = Credentials::default();
         for id in CREDENTIALED_BUILTINS {
             if let Some(key) = self.builtin_api_key(id).filter(|k| !k.trim().is_empty()) {
@@ -1432,18 +1504,19 @@ impl Config {
             }
         }
         for provider in &self.providers {
-            for channel in &provider.channels {
-                if let Some(key) = channel
+            let key = provider.channels.iter().find_map(|channel| {
+                channel
                     .api_key
                     .as_ref()
                     .filter(|k| !k.expose_secret().trim().is_empty())
-                {
-                    creds
-                        .user
-                        .entry(provider.id.clone())
-                        .or_default()
-                        .insert(channel.label.clone(), key.clone());
-                }
+            });
+            if let Some(key) = key {
+                creds.user.insert(
+                    provider.id.clone(),
+                    UserCredential {
+                        api_key: key.clone(),
+                    },
+                );
             }
         }
         // Write secrets first: if this fails, `config.toml` stays untouched so
@@ -1549,17 +1622,16 @@ pub fn load_theme_files(themes_dir: &std::path::Path) -> Vec<neenee_contracts::T
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("toml") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(mut theme) = toml::from_str::<neenee_contracts::ThemeFile>(&content) {
-                    if theme.id.is_empty() {
-                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                            theme.id = stem.to_string();
-                        }
-                    }
-                    themes.push(theme);
-                }
+        if path.extension().and_then(|ext| ext.to_str()) == Some("toml")
+            && let Ok(content) = std::fs::read_to_string(&path)
+            && let Ok(mut theme) = toml::from_str::<neenee_contracts::ThemeFile>(&content)
+        {
+            if theme.id.is_empty()
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                theme.id = stem.to_string();
             }
+            themes.push(theme);
         }
     }
     themes.sort_by(|a, b| a.name.cmp(&b.name));
@@ -2056,8 +2128,54 @@ id = "kimi"
     }
 
     #[test]
-    fn reseeded_provider_credentials_survive_save_and_load() {
+    fn instance_credential_resolves_for_every_channel_of_the_instance() {
+        // The credentials file stores ONE api_key per user-defined provider
+        // instance. On load it must fan out to every channel of that
+        // instance (except OAuth channels, whose bearer lives in auth.toml).
         let (tmp, _guard, _override_guard) = sandbox_config_dir();
+        let credentials = r#"
+[builtins]
+
+[user.multi]
+api_key = "instance-secret"
+"#;
+        std::fs::write(tmp.join("credentials.toml"), credentials).unwrap();
+        let config_toml = r#"
+default_provider = "multi"
+
+[[providers]]
+id = "multi"
+name = "Multi"
+
+[[providers.channels]]
+label = "model-a"
+transport = "OpenAi"
+model = "model-a"
+
+[[providers.channels]]
+label = "model-b"
+transport = "OpenAi"
+model = "model-b"
+"#;
+        std::fs::write(tmp.join("config.toml"), config_toml).unwrap();
+
+        let config = Config::load();
+        assert_eq!(config.providers.len(), 1);
+        for channel in &config.providers[0].channels {
+            assert_eq!(
+                channel.api_key.as_ref().map(SecretString::expose_secret),
+                Some("instance-secret"),
+                "channel {} must resolve the instance credential",
+                channel.label
+            );
+        }
+
+        paths::set_test_default(None);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn reseeded_provider_credentials_survive_save_and_load() {        let (tmp, _guard, _override_guard) = sandbox_config_dir();
         let mut provider = configured_relay();
         assert!(
             provider.reseed_channels_from_models(
@@ -2080,9 +2198,13 @@ id = "kimi"
         }));
 
         let credentials = std::fs::read_to_string(tmp.join("credentials.toml")).unwrap();
-        assert!(credentials.contains("new-model-a"));
-        assert!(credentials.contains("new-model-b"));
+        // The credential is stored once per provider instance — not repeated
+        // per channel label. The instance id and the key must appear; the
+        // channel labels must NOT (they are routes, not principals).
+        assert!(credentials.contains("[user.relay]"));
         assert!(credentials.contains("relay-secret"));
+        assert!(!credentials.contains("new-model-a"));
+        assert!(!credentials.contains("new-model-b"));
 
         paths::set_test_default(None);
         std::fs::remove_dir_all(&tmp).ok();
@@ -2443,14 +2565,23 @@ fg = "#ff00ff"
         assert_eq!(loaded[1].id, "dracula");
         let cyberpunk_components = loaded[0].components.as_ref().unwrap();
         assert_eq!(
-            cyberpunk_components.input.as_ref().unwrap().caret.as_deref(),
+            cyberpunk_components
+                .input
+                .as_ref()
+                .unwrap()
+                .caret
+                .as_deref(),
             Some("#00ffff")
         );
         assert_eq!(
-            cyberpunk_components.crate_component.as_ref().unwrap().fg.as_deref(),
+            cyberpunk_components
+                .crate_component
+                .as_ref()
+                .unwrap()
+                .fg
+                .as_deref(),
             Some("#ff00ff")
         );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
-

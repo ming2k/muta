@@ -48,6 +48,7 @@ pub mod backend;
 pub use backend::Backend;
 mod cell;
 pub mod diff;
+pub mod flex;
 pub mod frame;
 pub mod grid;
 pub mod layout;
@@ -56,6 +57,7 @@ pub mod widgets;
 
 pub use cell::{Cell, Color, Modifier, Style};
 pub use diff::{Draw, DrawCmd};
+pub use flex::{AlignItem, Basis, Flex, FlexDirection, FlexItem, Justify, SolvedFlex};
 pub use frame::{CursorState, Frame, Terminal, TestTerminal, Widget};
 pub use grid::{Fit, Grid, Pos};
 pub use layout::{Constraint, Direction, Layout, Margin, Rect};

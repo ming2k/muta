@@ -150,17 +150,6 @@ pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     fitting: false,
 };
 
-pub(crate) const SUB2API_TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
-    id: "anthropic-sub2api",
-    baselines: MODELS,
-    protocol: "anthropic",
-    // A sub2api relay advertises whatever Claude models it forwards; live
-    // discovery surfaces the relay's actual set.
-    discovery: true,
-    fitting: false,
-    models: ANTHROPIC_BUILTIN_MODELS,
-};
-
 #[cfg(test)]
 mod tests {
     use crate::AnthropicMessagesProvider;

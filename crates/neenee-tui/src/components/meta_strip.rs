@@ -211,4 +211,3 @@ mod tests {
         assert_eq!(text, "> turn 13  glm-5.3 xhigh  13:51");
     }
 }
-

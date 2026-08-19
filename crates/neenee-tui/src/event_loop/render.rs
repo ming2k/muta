@@ -315,7 +315,7 @@ pub(super) fn render_frame(
                 .iter()
                 .rev()
                 .find(|m| !matches!(m.kind, MessageKind::CommandResult { .. }))
-                .map_or(false, |m| m.is_error_notice());
+                .is_some_and(|m| m.is_error_notice());
         app.hint_context_rect = view::draw_hint_bar(
             f,
             hint_rect,
@@ -734,9 +734,13 @@ pub(super) fn render_frame(
                 &app.oauth_pending_url,
                 &app.oauth_pending_user_code,
                 app.oauth_pending_error.as_deref(),
+                app.oauth_selected_item,
                 f,
                 &app.theme,
                 &mut app.oauth_scroll,
+                Some(&mut app.modal_hit_map),
+                &app.selection,
+                Some(&mut app.layout_map),
             ))
         }
         Modal::CustomProvider => {

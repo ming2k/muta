@@ -13,8 +13,8 @@ use neenee_tui_engine::{
 
 use super::common::{placeholder, selectable_row};
 use crate::primitives::{
-    FixedModalSpec, FooterHint, SCROLL_EDGE_MARGIN, keyvocab, modal_area, modal_frame,
-    modal_header, render_body, render_modal_footer,
+    ContentModalSpec, FooterHint, SCROLL_EDGE_MARGIN, content_modal_area, content_modal_probe,
+    keyvocab, modal_chrome_rows, modal_frame, modal_header, render_body, render_modal_footer,
 };
 use crate::view::Theme;
 
@@ -32,15 +32,14 @@ pub fn draw_skills_modal(
     scroll: &mut usize,
     theme: &Theme,
 ) -> neenee_tui_engine::Rect {
-    let area = modal_area(frame, FixedModalSpec::SKILLS);
-    let f = modal_frame(frame, area, theme.panel(), true, true);
-
-    // ── Header ──
-    modal_header(frame, f.header, "Skills", theme);
+    let geometry = ContentModalSpec::SKILLS;
+    let probe = content_modal_probe(frame, geometry);
+    let body_w = (probe.width as usize)
+        .saturating_sub(2 * crate::design::MODAL_INNER_H_PADDING as usize)
+        .max(20);
 
     // ── Body: the skill list with optional detail expansion ──
     let skills = session_context.map(|s| s.skills.as_slice()).unwrap_or(&[]);
-    let body_w = f.body.width as usize;
     let mut body: Vec<Line> = Vec::new();
 
     if skills.is_empty() {
@@ -102,6 +101,13 @@ pub fn draw_skills_modal(
             }
         }
     }
+
+    let desired = (body.len() as u16) + modal_chrome_rows(geometry.modal_spec());
+    let area = content_modal_area(frame, geometry, desired);
+    let f = modal_frame(frame, area, theme.panel(), true, true);
+
+    // ── Header ──
+    modal_header(frame, f.header, "Skills", theme);
 
     let follow = if skills.is_empty() {
         None

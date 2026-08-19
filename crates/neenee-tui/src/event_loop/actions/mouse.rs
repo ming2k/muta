@@ -41,6 +41,15 @@ pub(super) async fn handle_selection_start(
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
+    } else if app.active_modal == Modal::OauthPending {
+        if let Some(cursor) = app.layout_map.cursor_at(x, y) {
+            app.drag.start(cursor);
+            app.selection = SelectionState::start_range(cursor);
+        } else {
+            app.selection = SelectionState::None;
+            app.drag.cancel();
+        }
+        app.focused_target = None;
     } else if app.active_modal == Modal::Question {
         if let Some(hit) = app.modal_hit_map.question_option_at(x, y)
             && let Some(qm) = app.question.take()

@@ -229,6 +229,9 @@ pub async fn run_headless(
                     }
                 }
                 RoundEvent::Error(err) => {
+                    // Strip the retryable-envelope framing so machine and
+                    // human readers both see the message itself.
+                    let err = neenee_contracts::public_error_message(&err);
                     if json {
                         let event_obj = serde_json::json!({
                             "type": "error",

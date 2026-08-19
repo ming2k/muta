@@ -876,6 +876,8 @@ pub struct App {
     pub oauth_pending_url: String,
     pub oauth_pending_user_code: String,
     pub oauth_pending_error: Option<String>,
+    /// Selected copyable card in OAuth Pending modal (0 = URL, 1 = Code).
+    pub oauth_selected_item: usize,
     /// Scroll offset for the OAuth pending modal body. Reset when the modal
     /// opens or its content changes.
     pub oauth_scroll: usize,
@@ -1025,7 +1027,9 @@ impl App {
         }
         match &self.selection {
             SelectionState::Block { message_idx, .. } => *message_idx == crate::view::INPUT_MSG_IDX,
-            SelectionState::TableCell { message_idx, .. } => *message_idx == crate::view::INPUT_MSG_IDX,
+            SelectionState::TableCell { message_idx, .. } => {
+                *message_idx == crate::view::INPUT_MSG_IDX
+            }
             SelectionState::Range { anchor, head } => {
                 anchor.message_idx == crate::view::INPUT_MSG_IDX
                     && head.message_idx == crate::view::INPUT_MSG_IDX
@@ -1243,7 +1247,9 @@ impl App {
             Modal::Permissions => Some((&mut self.permissions_scroll, None)),
             Modal::Config => match self.config_focus {
                 crate::overlays::ConfigFocus::Categories => Some((&mut self.config_scroll, None)),
-                crate::overlays::ConfigFocus::Detail => Some((&mut self.config_detail_scroll, None)),
+                crate::overlays::ConfigFocus::Detail => {
+                    Some((&mut self.config_detail_scroll, None))
+                }
             },
             Modal::TokenReport => Some((&mut self.token_report_scroll, None)),
             Modal::OauthPending => Some((&mut self.oauth_scroll, None)),
@@ -2644,6 +2650,24 @@ impl App {
         self.set_cursor_end();
     }
 
+    /// Return which OAuth target is currently selected.
+    pub fn oauth_selected_target(&self) -> crate::input::OauthCopyTarget {
+        if self.oauth_selected_item == 1 && !self.oauth_pending_user_code.is_empty() {
+            crate::input::OauthCopyTarget::UserCode
+        } else {
+            crate::input::OauthCopyTarget::Url
+        }
+    }
+
+    /// Cycle selection between URL (0) and Code (1) in OAuth Pending sheet.
+    pub fn cycle_oauth_selection(&mut self) {
+        if !self.oauth_pending_user_code.is_empty() {
+            self.oauth_selected_item = if self.oauth_selected_item == 0 { 1 } else { 0 };
+        } else {
+            self.oauth_selected_item = 0;
+        }
+    }
+
     /// Auth mode of a provider picker row (for OAuth re-connect routing).
     pub fn provider_row_auth(&self, id: &str) -> neenee_contracts::ChannelAuth {
         self.provider_picker
@@ -2716,22 +2740,32 @@ impl App {
     /// raw typed text as a custom id when it is not already a candidate.
     pub fn custom_model_suggestions(&self) -> Vec<String> {
         let q = self.input.trim();
+        let q_clean = neenee_contracts::sanitize_model_id(q);
         let mut out: Vec<String> = self
             .custom_model_candidates()
             .into_iter()
             .filter(|id| {
-                q.is_empty() || id.contains(q) || crate::fuzzy::fuzzy_match(id, q).is_some()
+                q.is_empty()
+                    || id.contains(q)
+                    || (!q_clean.is_empty() && id.contains(&q_clean))
+                    || crate::fuzzy::fuzzy_match(id, q).is_some()
+                    || (!q_clean.is_empty() && crate::fuzzy::fuzzy_match(id, &q_clean).is_some())
             })
             .map(|s| s.to_string())
             .collect();
-        if !q.is_empty() && !out.iter().any(|m| m == q) {
-            out.push(q.to_string());
+        let custom_id = if !q_clean.is_empty() {
+            q_clean
+        } else {
+            q.to_string()
+        };
+        if !custom_id.is_empty() && !out.iter().any(|m| m == &custom_id) {
+            out.push(custom_id.clone());
         }
         // Stable sort: an exact match floats to the top so typing a known id
         // selects it rather than a longer id that merely contains it as a
         // substring (e.g. "gpt-4o" beats "gpt-4o-mini").
-        if !q.is_empty() {
-            out.sort_by_key(|m| m != q);
+        if !custom_id.is_empty() {
+            out.sort_by_key(|m| m != &custom_id && m != q);
         }
         out
     }

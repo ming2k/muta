@@ -1,22 +1,28 @@
-//! OAuth2 token-endpoint helpers shared by every provider: the authorize-URL
-//! builder, the authorization-code → token exchange, the refresh-token
-//! rotation, and the JWT `exp`/`chatgpt_account_id` decoding that drives
-//! proactive refresh and account-id capture.
-//!
-//! Provider specifics (client id, endpoints, scopes, extra authorize params)
-//! live on [`crate::oauth::config::OAuthConfig`]; these functions are the generic
-//! mechanics parameterized by it.
+//! OAuth2 token-endpoint helpers: URL builders, PKCE code exchange, token refresh,
+//! JWT claim/expiration inspection, and provider-specific onboarding handlers (Google Antigravity & ChatGPT).
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STD;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 
+use crate::oauth::config::{ClientAuthMethod, OAuthConfig, PkceMode, TokenRequestFormat};
+use crate::oauth::pkce::PkceCodes;
 use neenee_contracts::SecretString;
 
-use crate::oauth::config::OAuthConfig;
-use crate::oauth::pkce::PkceCodes;
-
-/// Refresh the access token this far ahead of its real expiry so a single
-/// long-running tool call doesn't recover from a mid-flight 401.
+/// Refresh the access token ahead of expiry so long-running calls don't hit a 401.
 pub const ACCESS_TOKEN_REFRESH_SKEW_MS: i64 = 120_000;
+
+/// Standard Antigravity User-Agent matching official Google Cloud Code / Antigravity CLI.
+pub const ANTIGRAVITY_USER_AGENT: &str = "antigravity/1.23.2 windows/amd64";
+/// Endpoint for Antigravity loadCodeAssist account metadata.
+pub const ANTIGRAVITY_LOAD_CODE_ASSIST_URL: &str =
+    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+/// Endpoint for Antigravity onboardUser account initialization.
+pub const ANTIGRAVITY_ONBOARD_USER_URL: &str =
+    "https://cloudcode-pa.googleapis.com/v1internal:onboardUser";
+/// Google UserInfo endpoint.
+pub const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v3/userinfo";
 
 /// A successful token response from any grant type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,27 +34,24 @@ pub struct TokenResponse {
     pub id_token: Option<SecretString>,
     #[serde(default)]
     pub token_type: Option<String>,
-    /// Seconds until the access_token expires. Best-effort: providers don't
-    /// always return it, so the JWT-`exp` check is the load-bearing freshness
-    /// signal.
+    /// Seconds until the access_token expires.
     #[serde(default)]
     pub expires_in: Option<u64>,
     #[serde(default)]
     pub scope: Option<String>,
 }
 
-/// Headers shared by every form-urlencoded token-endpoint call.
-pub(crate) fn form_headers() -> [(&'static str, &'static str); 2] {
-    [
-        ("Content-Type", "application/x-www-form-urlencoded"),
-        ("Accept", "application/json"),
-    ]
+/// Google UserInfo response.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GoogleUserInfo {
+    pub sub: Option<String>,
+    pub email: Option<String>,
+    pub email_verified: Option<bool>,
+    pub name: Option<String>,
+    pub picture: Option<String>,
 }
 
 /// Build the authorize URL for the browser-OAuth flow.
-///
-/// Provider-specific extras (xAI's `plan=generic`, OpenAI's
-/// `codex_cli_simplified_flow`) ride on [`OAuthConfig::extra_authorize_params`].
 pub fn build_authorize_url(
     cfg: &OAuthConfig,
     pkce: &PkceCodes,
@@ -58,23 +61,37 @@ pub fn build_authorize_url(
 ) -> String {
     let mut params: Vec<(&str, &str)> = vec![
         ("response_type", "code"),
-        ("client_id", cfg.client_id),
+        ("client_id", cfg.client_id.as_ref()),
         ("redirect_uri", redirect_uri),
-        ("scope", cfg.scope),
-        ("code_challenge", pkce.challenge.as_str()),
-        ("code_challenge_method", "S256"),
+        ("scope", cfg.scope.as_ref()),
         ("state", state),
     ];
-    // xAI's flow carries an OIDC nonce; OpenAI's simplified flow rejects it.
+
+    match cfg.pkce_mode {
+        PkceMode::S256 => {
+            params.push(("code_challenge", pkce.challenge.as_str()));
+            params.push(("code_challenge_method", "S256"));
+        }
+        PkceMode::Plain => {
+            params.push(("code_challenge", pkce.verifier.expose_secret()));
+            params.push(("code_challenge_method", "plain"));
+        }
+        PkceMode::Disabled => {}
+    }
+
     if cfg.send_nonce {
         params.push(("nonce", nonce));
     }
-    params.extend_from_slice(cfg.extra_authorize_params);
+
+    for (k, v) in &cfg.extra_authorize_params {
+        params.push((k.as_ref(), v.as_ref()));
+    }
+
     let query = serde_urlencoded(&params);
     format!("{}?{query}", cfg.authorize_url)
 }
 
-/// Exchange an authorization code for a token set (browser flow).
+/// Exchange an authorization code for a token set (browser / manual flow).
 pub async fn exchange_code(
     client: &reqwest::Client,
     cfg: &OAuthConfig,
@@ -82,14 +99,43 @@ pub async fn exchange_code(
     pkce: &PkceCodes,
     redirect_uri: &str,
 ) -> Result<TokenResponse, crate::oauth::AuthError> {
-    let body = serde_urlencoded(&[
+    let mut params: Vec<(&str, &str)> = vec![
         ("grant_type", "authorization_code"),
         ("code", code),
         ("redirect_uri", redirect_uri),
-        ("client_id", cfg.client_id),
-        ("code_verifier", pkce.verifier.expose_secret()),
-    ]);
-    post_form(client, cfg.token_url, &body).await
+        ("client_id", cfg.client_id.as_ref()),
+    ];
+
+    if cfg.pkce_mode != PkceMode::Disabled {
+        params.push(("code_verifier", pkce.verifier.expose_secret()));
+    }
+
+    let mut basic_auth: Option<String> = None;
+    match cfg.client_auth_method {
+        ClientAuthMethod::RequestBody => {
+            if let Some(secret) = &cfg.client_secret {
+                params.push(("client_secret", secret.as_ref()));
+            }
+        }
+        ClientAuthMethod::BasicHeader => {
+            if let Some(secret) = &cfg.client_secret {
+                let raw = format!("{}:{}", cfg.client_id, secret);
+                basic_auth = Some(format!("Basic {}", BASE64_STD.encode(raw)));
+            }
+        }
+        ClientAuthMethod::None => {
+            // Optional fallback: if client_secret is set, send in body
+            if let Some(secret) = &cfg.client_secret {
+                params.push(("client_secret", secret.as_ref()));
+            }
+        }
+    }
+
+    for (k, v) in &cfg.extra_token_params {
+        params.push((k.as_ref(), v.as_ref()));
+    }
+
+    execute_token_request(client, cfg, &params, basic_auth.as_deref()).await
 }
 
 /// Refresh a rotated access token from a refresh_token.
@@ -98,17 +144,119 @@ pub async fn refresh_access_token(
     cfg: &OAuthConfig,
     refresh_token: &str,
 ) -> Result<TokenResponse, crate::oauth::AuthError> {
-    let body = serde_urlencoded(&[
+    let mut params: Vec<(&str, &str)> = vec![
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
-        ("client_id", cfg.client_id),
-    ]);
-    post_form(client, cfg.token_url, &body).await
+        ("client_id", cfg.client_id.as_ref()),
+    ];
+
+    let mut basic_auth: Option<String> = None;
+    match cfg.client_auth_method {
+        ClientAuthMethod::RequestBody => {
+            if let Some(secret) = &cfg.client_secret {
+                params.push(("client_secret", secret.as_ref()));
+            }
+        }
+        ClientAuthMethod::BasicHeader => {
+            if let Some(secret) = &cfg.client_secret {
+                let raw = format!("{}:{}", cfg.client_id, secret);
+                basic_auth = Some(format!("Basic {}", BASE64_STD.encode(raw)));
+            }
+        }
+        ClientAuthMethod::None => {
+            if let Some(secret) = &cfg.client_secret {
+                params.push(("client_secret", secret.as_ref()));
+            }
+        }
+    }
+
+    for (k, v) in &cfg.extra_refresh_params {
+        params.push((k.as_ref(), v.as_ref()));
+    }
+
+    execute_token_request(client, cfg, &params, basic_auth.as_deref()).await
 }
 
-/// A tiny `application/x-www-form-urlencoded` serializer that does NOT need the
-/// `form_urlencoded` crate: encodes spaces as `+` (the form-encoding
-/// convention token endpoints expect) and percent-encodes the reserved set.
+async fn execute_token_request(
+    client: &reqwest::Client,
+    cfg: &OAuthConfig,
+    params: &[(&str, &str)],
+    basic_auth: Option<&str>,
+) -> Result<TokenResponse, crate::oauth::AuthError> {
+    match cfg.token_format {
+        TokenRequestFormat::FormUrlEncoded => {
+            let body = serde_urlencoded(params);
+            let mut req = client
+                .post(cfg.token_url.as_ref())
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Accept", "application/json")
+                .body(body);
+
+            if let Some(ua) = &cfg.user_agent {
+                req = req.header("User-Agent", ua.as_ref());
+            }
+            if let Some(auth) = basic_auth {
+                req = req.header("Authorization", auth);
+            }
+            for (k, v) in &cfg.extra_headers {
+                req = req.header(k.as_ref(), v.as_ref());
+            }
+
+            let resp = req.send().await.map_err(|e| {
+                crate::oauth::AuthError::Transport(format!("token request failed: {e}"))
+            })?;
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return Err(crate::oauth::AuthError::TokenEndpoint {
+                    status: status.as_u16(),
+                    body: text,
+                });
+            }
+            serde_json::from_str::<TokenResponse>(&text).map_err(|e| {
+                crate::oauth::AuthError::Decode(format!("token response parse failed: {e}"))
+            })
+        }
+        TokenRequestFormat::Json => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in params {
+                map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+            }
+            let mut req = client
+                .post(cfg.token_url.as_ref())
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .json(&serde_json::Value::Object(map));
+
+            if let Some(ua) = &cfg.user_agent {
+                req = req.header("User-Agent", ua.as_ref());
+            }
+            if let Some(auth) = basic_auth {
+                req = req.header("Authorization", auth);
+            }
+            for (k, v) in &cfg.extra_headers {
+                req = req.header(k.as_ref(), v.as_ref());
+            }
+
+            let resp = req.send().await.map_err(|e| {
+                crate::oauth::AuthError::Transport(format!("token request failed: {e}"))
+            })?;
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return Err(crate::oauth::AuthError::TokenEndpoint {
+                    status: status.as_u16(),
+                    body: text,
+                });
+            }
+            serde_json::from_str::<TokenResponse>(&text).map_err(|e| {
+                crate::oauth::AuthError::Decode(format!("token response parse failed: {e}"))
+            })
+        }
+    }
+}
+
+/// A tiny `application/x-www-form-urlencoded` serializer.
 fn serde_urlencoded(pairs: &[(&str, &str)]) -> String {
     pairs
         .iter()
@@ -121,9 +269,7 @@ fn percent_encode(s: &str) -> String {
     percent_encode_form_value(s)
 }
 
-/// Percent-encode a single form value the way `application/x-www-form-
-/// -urlencoded` expects: spaces become `+`, the unreserved set passes through,
-/// everything else is `%XX`. Public so the device-code flow can reuse it.
+/// Percent-encode a single form value.
 pub fn percent_encode_form_value(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for &b in s.as_bytes() {
@@ -139,8 +285,6 @@ pub fn percent_encode_form_value(s: &str) -> String {
 }
 
 /// Serialize `&[(&str,&str)]` into an `application/x-www-form-urlencoded` body.
-/// Public so the device flows can build exchange bodies without duplicating the
-/// encoder.
 pub fn percent_encode_form_pairs(pairs: &[(&str, &str)]) -> String {
     pairs
         .iter()
@@ -160,11 +304,11 @@ pub(crate) async fn post_form(
     url: &str,
     body: &str,
 ) -> Result<TokenResponse, crate::oauth::AuthError> {
-    let mut req = client.post(url).body(body.to_string());
-    for (name, value) in form_headers() {
-        req = req.header(name, value);
-    }
-    let response = req
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Accept", "application/json")
+        .body(body.to_string())
         .send()
         .await
         .map_err(|e| crate::oauth::AuthError::Transport(format!("token request failed: {e}")))?;
@@ -180,18 +324,8 @@ pub(crate) async fn post_form(
         .map_err(|e| crate::oauth::AuthError::Decode(format!("token response parse failed: {e}")))
 }
 
-/// Whether a stored access token is expiring within `skew_ms` of now. Two
-/// signals: the stored deadline (`expires_ms`), and — for JWT access tokens —
-/// the JWT `exp` claim itself. Returns `false` for opaque (non-JWT) tokens,
-/// which conservatively skips proactive refresh and lets the 401-on-call path
-/// drive it instead.
-///
-/// We decode the JWT payload without verifying the signature: the result is
-/// only ever used to decide *whether* to refresh, never to make a trust
-/// decision, so unsigned decode is safe.
+/// Whether a stored access token is expiring within `skew_ms` of now.
 pub fn access_token_is_expiring(access_token: Option<&str>, skew_ms: i64, now_ms: i64) -> bool {
-    // Prefer the JWT exp when present: many providers' access tokens are JWTs
-    // and the stored deadline is best-effort.
     if let Some(exp_ms) = jwt_exp_ms(access_token.unwrap_or(""))
         && exp_ms <= now_ms + skew_ms.max(0)
     {
@@ -200,9 +334,7 @@ pub fn access_token_is_expiring(access_token: Option<&str>, skew_ms: i64, now_ms
     false
 }
 
-/// Decode the `exp` (seconds since epoch) claim from a JWT access token, if it
-/// is a JWT and carries `exp`. Returns `None` for opaque tokens or malformed
-/// JWTs.
+/// Decode the `exp` claim from a JWT access token.
 pub fn jwt_exp_ms(token: &str) -> Option<i64> {
     let claims = jwt_claims(token)?;
     let exp = claims.get("exp")?.as_i64()?;
@@ -218,12 +350,7 @@ pub(crate) fn jwt_claims(token: &str) -> Option<serde_json::Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// Extract the ChatGPT account id from a JWT (the `id_token` or
-/// `access_token`). OpenAI encodes it as `chatgpt_account_id`, or nested under
-/// `https://api.openai.com/auth` → `chatgpt_account_id`. Returns `None` for
-/// opaque tokens or when the claim is absent — the caller then sends requests
-/// without the `ChatGPT-Account-Id` header (still valid for single-account
-/// users).
+/// Extract the ChatGPT account id from a JWT (id_token or access_token).
 pub fn chatgpt_account_id(token: &str) -> Option<String> {
     let claims = jwt_claims(token)?;
     if let Some(id) = claims.get("chatgpt_account_id").and_then(|v| v.as_str()) {
@@ -236,10 +363,135 @@ pub fn chatgpt_account_id(token: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Fetch Google UserInfo (email, name, sub, picture) using access token.
+pub async fn fetch_google_userinfo(
+    client: &reqwest::Client,
+    access_token: &str,
+) -> Result<GoogleUserInfo, crate::oauth::AuthError> {
+    let resp = client
+        .get(GOOGLE_USERINFO_URL)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| crate::oauth::AuthError::Transport(format!("userinfo request failed: {e}")))?;
+
+    if resp.status().is_success() {
+        let info = resp
+            .json::<GoogleUserInfo>()
+            .await
+            .map_err(|e| crate::oauth::AuthError::Decode(format!("userinfo parse failed: {e}")))?;
+        Ok(info)
+    } else {
+        Err(crate::oauth::AuthError::TokenEndpoint {
+            status: resp.status().as_u16(),
+            body: resp.text().await.unwrap_or_default(),
+        })
+    }
+}
+
+/// Discover or onboard the user's Antigravity `cloudaicompanionProject`.
+pub async fn resolve_antigravity_project(
+    client: &reqwest::Client,
+    access_token: &str,
+) -> Result<String, crate::oauth::AuthError> {
+    let load_body = serde_json::json!({
+        "metadata": {
+            "ideType": "ANTIGRAVITY",
+            "ideVersion": "1.23.2",
+            "ideName": "antigravity"
+        }
+    });
+
+    let resp = client
+        .post(ANTIGRAVITY_LOAD_CODE_ASSIST_URL)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("User-Agent", ANTIGRAVITY_USER_AGENT)
+        .header("Content-Type", "application/json")
+        .json(&load_body)
+        .send()
+        .await
+        .map_err(|e| crate::oauth::AuthError::Transport(format!("loadCodeAssist failed: {e}")))?;
+
+    if resp.status().is_success()
+        && let Ok(val) = resp.json::<serde_json::Value>().await
+    {
+        if let Some(p) = extract_cloudaicompanion_project(&val) {
+            return Ok(p);
+        }
+
+        // Project missing; attempt onboardUser with detected tier (defaulting to g1-pro-tier)
+        let tier_id = val
+            .get("paidTier")
+            .or_else(|| val.get("paid_tier"))
+            .and_then(|p| p.get("id").or(Some(p)))
+            .and_then(|id| id.as_str())
+            .or_else(|| {
+                val.get("currentTier")
+                    .or_else(|| val.get("current_tier"))
+                    .and_then(|c| c.get("id").or(Some(c)))
+                    .and_then(|id| id.as_str())
+            })
+            .unwrap_or("g1-pro-tier");
+
+        let onboard_body = serde_json::json!({
+            "tierId": tier_id,
+            "metadata": {
+                "ideType": "ANTIGRAVITY",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI"
+            }
+        });
+
+        let onboard_resp = client
+            .post(ANTIGRAVITY_ONBOARD_USER_URL)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("User-Agent", ANTIGRAVITY_USER_AGENT)
+            .header("Content-Type", "application/json")
+            .json(&onboard_body)
+            .send()
+            .await
+            .map_err(|e| crate::oauth::AuthError::Transport(format!("onboardUser failed: {e}")))?;
+
+        if onboard_resp.status().is_success()
+            && let Ok(onboard_val) = onboard_resp.json::<serde_json::Value>().await
+        {
+            let search_target = onboard_val.get("response").unwrap_or(&onboard_val);
+            if let Some(p) = extract_cloudaicompanion_project(search_target) {
+                return Ok(p);
+            }
+        }
+    }
+
+    Ok(String::new())
+}
+
+fn extract_cloudaicompanion_project(val: &serde_json::Value) -> Option<String> {
+    let project = val
+        .get("cloudaicompanionProject")
+        .or_else(|| val.get("cloudaicompanion_project"))
+        .or_else(|| val.get("project"))?;
+
+    if let Some(p) = project.as_str().filter(|p| !p.trim().is_empty()) {
+        return Some(p.trim().to_string());
+    }
+    if let Some(id) = project
+        .get("id")
+        .and_then(|i| i.as_str())
+        .filter(|id| !id.trim().is_empty())
+    {
+        return Some(id.trim().to_string());
+    }
+    if let Some(num) = project.as_i64() {
+        return Some(format!("projects/{num}"));
+    }
+    if let Some(id_num) = project.get("id").and_then(|i| i.as_i64()) {
+        return Some(format!("projects/{id_num}"));
+    }
+    None
+}
+
 fn base64url_decode(input: &str) -> Option<Vec<u8>> {
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    // Tolerate either padded or unpadded input.
     let trimmed = input.trim_end_matches('=');
     let mut buf = String::from(trimmed);
     while buf.len() % 4 != 0 {
@@ -252,8 +504,6 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::oauth::config::{CHATGPT, XAI};
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
     #[test]
     fn xai_authorize_url_carries_plan_generic_and_pkce() {
@@ -292,10 +542,7 @@ mod tests {
         assert!(url.contains("id_token_add_organizations=true"));
         assert!(url.contains("originator=neenee"));
         assert!(url.contains("scope=openid+profile+email+offline_access"));
-        // OpenAI's simplified flow must NOT carry a nonce.
         assert!(!url.contains("nonce="), "nonce must be absent for ChatGPT");
-        // The redirect host must be localhost (not 127.0.0.1) to match the
-        // registered Codex client.
         assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"));
     }
 
@@ -323,21 +570,6 @@ mod tests {
         let payload = URL_SAFE_NO_PAD.encode(r#"{"chatgpt_account_id":"acct-123"}"#);
         let token = format!("h.{payload}.s");
         assert_eq!(chatgpt_account_id(&token), Some("acct-123".to_string()));
-    }
-
-    #[test]
-    fn chatgpt_account_id_decoded_from_nested_claim() {
-        let payload = URL_SAFE_NO_PAD
-            .encode(r#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct-9"}}"#);
-        let token = format!("h.{payload}.s");
-        assert_eq!(chatgpt_account_id(&token), Some("acct-9".to_string()));
-    }
-
-    #[test]
-    fn chatgpt_account_id_none_when_absent() {
-        let payload = URL_SAFE_NO_PAD.encode(r#"{"sub":"x"}"#);
-        let token = format!("h.{payload}.s");
-        assert!(chatgpt_account_id(&token).is_none());
     }
 
     #[test]

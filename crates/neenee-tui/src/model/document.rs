@@ -1051,10 +1051,15 @@ impl TranscriptMessage {
                 );
             }
             EnvoyEvent::StreamDelta(delta) => {
-                if let Some(last) = children
-                    .last_mut()
-                    .filter(|m| m.role == Role::Assistant && matches!(m.kind, MessageKind::Text))
-                {
+                // Identity-addressed (ADR-0114): fold the delta into the
+                // latest assistant-text child of the *same* stream turn, not
+                // merely the last child — a tool-call/result child can be
+                // appended between two deltas and would otherwise fork the
+                // text into a second entry.
+                let target = children
+                    .iter_mut()
+                    .rfind(|m| m.role == Role::Assistant && matches!(m.kind, MessageKind::Text));
+                if let Some(last) = target {
                     last.push_stream(&sanitize_text(delta));
                 } else {
                     let mut msg = TranscriptMessage::new(Role::Assistant, "");
@@ -1063,7 +1068,10 @@ impl TranscriptMessage {
                 }
             }
             EnvoyEvent::StreamEnd(content) => {
-                if let Some(last) = children.last_mut().filter(|m| m.role == Role::Assistant) {
+                if let Some(last) = children
+                    .iter_mut()
+                    .rfind(|m| m.role == Role::Assistant && matches!(m.kind, MessageKind::Text))
+                {
                     last.raw = content.clone();
                     last.reparse();
                 } else {
@@ -1086,9 +1094,13 @@ impl TranscriptMessage {
                 );
             }
             EnvoyEvent::StreamReasoningDelta(delta) => {
+                // Identity-addressed (ADR-0114): fold into the latest still-
+                // streaming thinking child. `StreamReasoningStart` pushes a
+                // stamped Thinking child; a tool-call child landing between
+                // two deltas must not fork the trace into a second entry.
                 if let Some(last) = children
-                    .last_mut()
-                    .filter(|m| m.is_thinking() && m.is_thinking_streaming())
+                    .iter_mut()
+                    .rfind(|m| m.is_thinking() && m.is_thinking_streaming())
                 {
                     if let MessageKind::Thinking { content, .. } = &mut last.kind {
                         content.push_str(&sanitize_text(delta));
@@ -1100,12 +1112,15 @@ impl TranscriptMessage {
             }
             EnvoyEvent::StreamReasoningEnd(content) => {
                 if let Some(last) = children
-                    .last_mut()
-                    .filter(|m| m.is_thinking() && m.is_thinking_streaming())
+                    .iter_mut()
+                    .rfind(|m| m.is_thinking() && m.is_thinking_streaming())
                 {
                     last.raw = sanitize_text(&content.clone()).into_owned();
                     last.reparse();
-                    if let MessageKind::Thinking { content: current, .. } = &mut last.kind {
+                    if let MessageKind::Thinking {
+                        content: current, ..
+                    } = &mut last.kind
+                    {
                         *current = sanitize_text(content).into_owned();
                     }
                     // No wall clock is available on the folding path; 0 is

@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`credentials.toml` keys credentials by provider instance, not by
+  channel.** The old `[user.<id>]` table mapped `channel_label → api_key`,
+  duplicating a shared key once per model route; a channel is a model
+  route, not a security principal. The schema is now `[user.<id>] api_key`
+  (one credential per instance, fanning out to every channel on load,
+  OAuth channels excluded — their bearers live in `auth.toml`). The
+  struct is `deny_unknown_fields`, so a legacy per-channel file fails the
+  parse loudly (warn + empty, never a silent empty key) and is rewritten
+  in the new shape on the next save. `docs/reference/paths.md` now
+  documents both credential kinds side by side: token auth in
+  `~/.config/neenee/credentials.toml`, OAuth token sets in
+  `~/.local/state/neenee/auth.toml`, both keyed by provider instance.
+
+- **`neenee-agent`'s catalog split into a module directory.** The
+  3.5k-line `catalog.rs` is now `catalog/` with five focused files —
+  `translate.rs` (config→`Channel` mapping), `migrate.rs` (one-shot config
+  migrations), `discovery.rs` (live model discovery + template
+  reconciliation + fitted-model sync), `picker.rs` (the picker snapshot
+  the TUI renders), and `mod.rs` (facade + re-exports). All public symbols
+  re-export from `catalog::`, so callers are unchanged. Unit tests moved
+  to `catalog/tests.rs`.
+
+- **Catalog discovery tests no longer write into the developer's real
+  XDG cache.** `discover_provider_models` persists a `DiscoveryCache`
+  through `paths::get()`, so a test whose discovery reported a change
+  wrote `test-instance` rows into the real
+  `~/.cache/neenee/models_discovery.json`. The affected tests now sandbox
+  the process-wide `Dirs` via the new `test-path-override` feature on
+  `neenee-persistence` (a dev-dependency feature, absent from production
+  builds), which exposes `paths::set_test_default` to other crates' test
+  suites — a crate cannot see another crate's `cfg(test)`.
+
+- **Credential placement under XDG is now a recorded decision, not an
+  accident.** New
+  [ADR-0115](docs/adr/0115-credential-placement-config-vs-state.md): API
+  keys are *config* (user-supplied, portable, hand-editable — the spec's
+  own "important or portable enough" test says so) and OAuth token sets
+  are *state* (daemon-rewritten on refresh, recoverable by re-login).
+  `docs/explanation/persistence.md` and `docs/reference/paths.md` carry
+  the reasoning; `docs/reference/paths.md` also gained a "Legacy stray
+  files" section documenting the orphan files older releases left behind
+  (`goals.db`, `session.json`, `model_usage.json`, `repeat.db`,
+  `models-dev.json`) — none are read today, all safe to delete.
+
+### Fixed
+
+- **An unparseable `config.toml` fell back to defaults silently.** `load()`
+  swallowed the parse error, so a single syntax typo made every provider,
+  key, and preference vanish with no trace of why. The failure is still
+  non-fatal (startup continues with defaults) but now logs an `error!` with
+  the path, the parse error, and the stakes, matching the existing
+  `credentials.toml` handling.
+
+- **Google Antigravity OAuth login failed with HTTP 401 `invalid_client`.**
+  The `google_antigravity_preset()` bundled the `1071006060591-…` client id
+  with the wrong client secret: the two secrets shipped in the upstream
+  Antigravity client were paired with each other's client ids, so every
+  token exchange (and every later refresh) hit
+  `oauth2.googleapis.com/token` with credentials Google rejects. The preset
+  now carries the verified pairing — `1071006060591-…` authenticates with
+  `GOCSPX-K58F…` (confirmed live: the endpoint answers `invalid_grant`
+  instead of `invalid_client` for a dummy grant) — and the preset unit test
+  pins the corrected secret so the pairing cannot silently regress.
+
+- **429 quota errors lost their retry classification and dumped raw wire
+  framing into the transcript.** Google's `clarify_error` appended its
+  guidance text *after* the `[NEENEE_RETRYABLE]{…}` JSON envelope,
+  corrupting the encoding: `parse_retryable_error` could no longer decode
+  it, so the harness classified the 429 as terminal (`Other`) instead of
+  retryable, the backoff loop never honored it, and the mangled envelope
+  was shown verbatim to the user (`[NEENEE_RETRYABLE]{"message":"Google
+  HTTP 429 …` with `\\n`-escaped JSON inside). `clarify_error` now folds
+  the guidance *into* the envelope's message and — when Google embedded a
+  `RetryInfo.retryDelay` in the error body — promotes that delay to the
+  envelope's `retry_after_ms` (previously always `null`) so the backoff
+  loop backs off for Google's own quoted window instead of a guess. The
+  quota hint no longer invents a fixed "45–60 minutes" figure; it quotes
+  Google's delay when present and otherwise says the window resets at the
+  next period without a number. Terminal `RoundEvent::Error` consumers
+  (TUI transcript notice, headless CLI, session monitor) now strip the
+  envelope via `public_error_message`, so the framing never renders.
+
+- **Google channels never offered per-model reasoning-effort
+  configuration.** `channel_model_info`'s `Transport::Google` arm
+  hard-coded `effort: None`, so Gemini models that advertise a ladder
+  (`gemini-3.7-flash` → `thinkingLevel`, `gemini-2.5-pro` →
+  `thinkingBudget`) showed no effort in the Models picker and the `e`
+  per-model settings editor never opened. The arm now mirrors the OpenAI
+  arms: the channel's explicit override wins, else the model's ladder
+  default (`high` clamped to the ladder); models with no ladder stay
+  inert.
+
 ## [0.26.1] - 2026-08-19
 
 ### Added

@@ -13,6 +13,7 @@ use super::ProviderTemplateSpec;
 /// agent only consumes the `generateContent` text surface.
 pub const GOOGLE_BUILTIN_MODELS: &[&str] = &[
     // ── Gemini 3.x ──
+    "gemini-3.7-flash",
     "gemini-3.5-flash",
     "gemini-3-pro-preview",
     "gemini-3-flash-preview",
@@ -36,6 +37,17 @@ pub const MODELS: &[Model] = &[
     // gateways advertise — so a relay-served model resolves to real metadata
     // instead of a generic fallback. See ADR for the configurable
     // `google_base_url`.
+    Model {
+        id: "gemini-3.7-flash",
+        family: "google",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: EFFORT_GEMINI_LEVEL,
+    },
     Model {
         id: "gemini-3.5-flash",
         family: "google",

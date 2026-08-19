@@ -198,12 +198,12 @@ define_builtin_commands! {
         intent_keywords: ["permission", "allow", "rule", "policy", "security", "approve", "always-allow", "grant"],
         category: Config,
     },
-    Config = "/config" : {
-        summary: "Inspect or reload configuration",
-        description: "Open the Settings overlay (theme, appearance, layout) or reload config.toml live with '/config reload'.",
-        usage: ["/config", "/config reload"],
-        examples: [("/config", "Open Settings overlay"), ("/config reload", "Re-read and apply config.toml live")],
-        intent_keywords: ["config", "settings", "preferences", "theme", "reload", "options", "color", "appearance", "font"],
+    Settings = "/settings" : {
+        summary: "Inspect or reload settings",
+        description: "Open the Settings overlay (theme, appearance, layout) or reload config.toml live with '/settings reload'.",
+        usage: ["/settings", "/settings reload"],
+        examples: [("/settings", "Open Settings overlay"), ("/settings reload", "Re-read and apply config.toml live")],
+        intent_keywords: ["settings", "config", "preferences", "theme", "themes", "appearance", "options", "color", "layout", "reload", "conf", "setting", "setup"],
         category: Config,
     },
     Autopilot = "/autopilot" : {
@@ -381,11 +381,13 @@ impl BuiltinCmd {
             // top-level. The alias keeps old invocations working (the
             // handler translates the legacy grammar).
             "/session" => Some(BuiltinCmd::Sessions),
+            // `/config` was renamed to `/settings`; the legacy alias keeps old invocations working.
+            "/config" => Some(BuiltinCmd::Settings),
             // `/reload` was a misleading name for what it does — re-read
             // config.toml and apply the diff live (ADR-0085 §6). The action is
-            // config-scoped, so it now lives under `/config reload`; the bare
+            // config-scoped, so it now lives under `/settings reload`; the bare
             // old spelling keeps working.
-            "/reload" => Some(BuiltinCmd::Config),
+            "/reload" => Some(BuiltinCmd::Settings),
             _ => None,
         }
     }
@@ -427,6 +429,31 @@ pub const TRIGGER_WORD_SUGGESTIONS: &[(&str, &str, &str)] = &[
         "continue",
         "/sessions",
         "/sessions picks the session up where it left off",
+    ),
+    (
+        "preferences",
+        "/settings",
+        "/settings opens the Settings overlay (theme, layout, behavior)",
+    ),
+    (
+        "options",
+        "/settings",
+        "/settings opens the Settings overlay",
+    ),
+    (
+        "theme",
+        "/settings",
+        "/settings lets you select and customize color themes",
+    ),
+    (
+        "themes",
+        "/settings",
+        "/settings lets you select and customize color themes",
+    ),
+    (
+        "appearance",
+        "/settings",
+        "/settings lets you customize UI appearance and layout",
     ),
 ];
 
@@ -1595,6 +1622,24 @@ mod tests {
     }
 
     #[test]
+    fn settings_is_the_canonical_command() {
+        assert!(matches!(
+            BuiltinCmd::from_slash("/settings"),
+            Some(BuiltinCmd::Settings)
+        ));
+    }
+
+    #[test]
+    fn config_resolves_as_settings_alias_but_is_not_listed() {
+        assert!(matches!(
+            BuiltinCmd::from_slash("/config"),
+            Some(BuiltinCmd::Settings)
+        ));
+        assert!(!BuiltinCmd::ALL.iter().any(|(name, _)| *name == "/config"));
+        assert!(BuiltinCmd::ALL.iter().any(|(name, _)| *name == "/settings"));
+    }
+
+    #[test]
     fn trigger_words_never_execute() {
         // The retired `/clear` and friends are steering words, not commands:
         // none of them parse through dispatch, land in completion's canonical
@@ -1650,12 +1695,36 @@ mod tests {
     fn command_specs_are_complete_and_non_empty() {
         assert_eq!(BuiltinCmd::SPECS.len(), BuiltinCmd::ALL.len());
         for spec in BuiltinCmd::SPECS {
-            assert!(spec.name.starts_with('/'), "command name must start with slash: {}", spec.name);
-            assert!(!spec.summary.is_empty(), "summary must not be empty for {}", spec.name);
-            assert!(!spec.description.is_empty(), "description must not be empty for {}", spec.name);
-            assert!(!spec.usage.is_empty(), "usage must not be empty for {}", spec.name);
-            assert!(!spec.intent_keywords.is_empty(), "intent keywords must not be empty for {}", spec.name);
-            assert!(!spec.category.label().is_empty(), "category label must not be empty for {}", spec.name);
+            assert!(
+                spec.name.starts_with('/'),
+                "command name must start with slash: {}",
+                spec.name
+            );
+            assert!(
+                !spec.summary.is_empty(),
+                "summary must not be empty for {}",
+                spec.name
+            );
+            assert!(
+                !spec.description.is_empty(),
+                "description must not be empty for {}",
+                spec.name
+            );
+            assert!(
+                !spec.usage.is_empty(),
+                "usage must not be empty for {}",
+                spec.name
+            );
+            assert!(
+                !spec.intent_keywords.is_empty(),
+                "intent keywords must not be empty for {}",
+                spec.name
+            );
+            assert!(
+                !spec.category.label().is_empty(),
+                "category label must not be empty for {}",
+                spec.name
+            );
 
             // Spec lookup matches
             let found = BuiltinCmd::find_spec(spec.name).expect("find_spec must locate command");

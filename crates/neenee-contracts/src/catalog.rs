@@ -80,6 +80,7 @@ pub enum Transport {
         base_url: String,
         user_agent: String,
         effort: Option<crate::Effort>,
+        project_id: Option<String>,
     },
     /// OpenAI **Responses** API (`/responses` endpoint), used by the ChatGPT
     /// subscription backend (`chatgpt.com/backend-api/codex/responses`) and by

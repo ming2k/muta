@@ -708,6 +708,7 @@ mod tests {
         assert_eq!(max_thinking_budget("gemini-2.5-flash"), 24576);
         assert_eq!(max_thinking_budget("gemini-2.5-flash-lite"), 24576);
         // Gemini 3.x and non-reasoning models have no budget surface.
+        assert_eq!(max_thinking_budget("gemini-3.7-flash"), 0);
         assert_eq!(max_thinking_budget("gemini-3.5-flash"), 0);
         assert_eq!(max_thinking_budget("gemini-2.0-flash"), 0);
     }

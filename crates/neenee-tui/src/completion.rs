@@ -608,22 +608,37 @@ impl App {
             .collect();
         }
 
-        if let Some(after) = current.strip_prefix("/config ") {
-            return [
-                (
-                    "/config reload",
-                    "Re-read config.toml and apply the diff live (MCP, permissions, bash policy, hooks)",
-                ),
-            ]
+        if let Some(after) = current.strip_prefix("/settings ") {
+            return [(
+                "/settings reload",
+                "Re-read config.toml and apply the diff live (MCP, permissions, bash policy, hooks)",
+            )]
             .iter()
             .filter(|(cmd, _)| {
-                cmd.strip_prefix("/config ")
+                cmd.strip_prefix("/settings ")
                     .map(|sub| sub.starts_with(after))
                     .unwrap_or(false)
             })
             .map(|(cmd, desc)| {
                 let mut c = Completion::whole_input(cmd, desc, self.input.len());
-                if let Some(spec) = BuiltinCmd::find_spec("/config") {
+                if let Some(spec) = BuiltinCmd::find_spec("/settings") {
+                    c.doc = Some(CommandDoc::from_builtin(spec));
+                }
+                c
+            })
+            .collect();
+        }
+
+        if let Some(after) = current.strip_prefix("/config ") {
+            return [(
+                "/settings reload",
+                "Re-read config.toml and apply the diff live (MCP, permissions, bash policy, hooks)",
+            )]
+            .iter()
+            .filter(|_| "reload".starts_with(after))
+            .map(|(cmd, desc)| {
+                let mut c = Completion::whole_input(cmd, desc, self.input.len());
+                if let Some(spec) = BuiltinCmd::find_spec("/settings") {
                     c.doc = Some(CommandDoc::from_builtin(spec));
                 }
                 c
@@ -657,8 +672,8 @@ impl App {
             // is a known trigger (`/clear`, `/reset`, `/continue`, …) pin the
             // suggested command on top of the popup — ahead of any real
             // command the trigger merely prefixes.
-            let trigger_suggestion = neenee_runtime::startup::suggest_for_trigger(trigger)
-                .map(|(target, reason)| {
+            let trigger_suggestion =
+                neenee_runtime::startup::suggest_for_trigger(trigger).map(|(target, reason)| {
                     Completion::intent_suggestion(target, trigger, reason, self.input.len())
                 });
 
@@ -684,10 +699,12 @@ impl App {
                     .iter()
                     .filter(|spec| {
                         !spec.name.to_lowercase().starts_with(&current)
-                            && trigger_suggestion.as_ref().map(|s| s.label.as_str()) != Some(spec.name)
+                            && trigger_suggestion.as_ref().map(|s| s.label.as_str())
+                                != Some(spec.name)
                             && spec.intent_keywords.iter().any(|&kw| {
                                 kw.eq_ignore_ascii_case(trigger)
-                                    || (trigger.len() >= 3 && kw.to_lowercase().starts_with(trigger))
+                                    || (trigger.len() >= 3
+                                        && kw.to_lowercase().starts_with(trigger))
                             })
                     })
                     .map(|spec| {
@@ -696,12 +713,18 @@ impl App {
                             .iter()
                             .find(|&&kw| {
                                 kw.eq_ignore_ascii_case(trigger)
-                                    || (trigger.len() >= 3 && kw.to_lowercase().starts_with(trigger))
+                                    || (trigger.len() >= 3
+                                        && kw.to_lowercase().starts_with(trigger))
                             })
                             .copied()
                             .unwrap_or(trigger);
                         let reason = format!("(via '{matched_kw}') {}", spec.summary);
-                        Completion::intent_suggestion(spec.name, matched_kw, &reason, self.input.len())
+                        Completion::intent_suggestion(
+                            spec.name,
+                            matched_kw,
+                            &reason,
+                            self.input.len(),
+                        )
                     })
                     .collect()
             } else {

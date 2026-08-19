@@ -1,21 +1,17 @@
-//! The local-loopback OAuth callback server for the desktop browser flow.
+//! The local-loopback OAuth callback server for desktop browser authorization.
 //!
-//! Each OAuth provider registers a fixed loopback `redirect_uri` (host:port:path
-//! triple) with its consent screen — xAI's Grok-CLI client pins
-//! `127.0.0.1:56121/callback`, OpenAI's Codex client pins
-//! `127.0.0.1:1455/auth/callback` — so [`CallbackServer::start_for`] binds the
-//! triple from the provider's [`OAuthConfig`]. We accept only the registered
-//! callback path, validate PKCE `state` against the in-flight request, and
-//! surface a simple success/error HTML page.
+//! Features:
+//! - Flexible port binding strategies: Fixed port, Dynamic OS port (0), or Preferred-with-Dynamic-fallback.
+//! - Anti-CSRF PKCE `state` validation.
+//! - Modern HTML success & error response pages.
+//! - Manual code/URL injection support for seamless CLI paste integration.
 
+use crate::oauth::config::{OAuthConfig, PortMode};
 use std::sync::{Arc, Mutex};
-
 use tokio::sync::oneshot;
 
-use crate::oauth::config::OAuthConfig;
-
-/// The result the callback server resolves (or rejects with) once xAI
-/// redirects back.
+/// The outcome of an authorization attempt.
+#[derive(Debug, Clone)]
 pub enum CallbackOutcome {
     /// The authorization `code`, ready to exchange for tokens.
     Code(String),
@@ -23,37 +19,56 @@ pub enum CallbackOutcome {
     Failed(String),
 }
 
-/// The single in-flight callback we are waiting for. Only one authorize flow
-/// runs at a time; a new [`CallbackServer::start_for`] supersedes any prior pending one.
+/// The single in-flight callback we are waiting for.
 struct Pending {
     state: String,
     tx: oneshot::Sender<CallbackOutcome>,
 }
 
-/// Owns the loopback listener and its single pending-callback slot.
+/// Owns the loopback listener, the actual bound port, and its pending-callback slot.
 pub struct CallbackServer {
+    bound_port: u16,
     pending: Arc<Mutex<Option<Pending>>>,
     _handle: tokio::task::JoinHandle<()>,
 }
 
 impl CallbackServer {
-    /// Bind the provider's registered loopback host:port and start accepting.
-    /// Returns a server whose [`Self::wait_for_code`] resolves once the provider
-    /// redirects back with a matching `state`. Dropping the server stops
-    /// accepting.
+    /// Bind the loopback server according to the provider's [`PortMode`].
     pub async fn start_for(cfg: &OAuthConfig) -> Result<Self, std::io::Error> {
-        let host = cfg.oauth_host;
-        let port = cfg.oauth_port;
-        let path = cfg.oauth_path;
-        let label = cfg.provider_id;
+        let host = &cfg.oauth_host;
+        let path = cfg.oauth_path.to_string();
+        let label = cfg.provider_id.to_string();
         let pending = Arc::new(Mutex::new(None::<Pending>));
         let pending_for_task = Arc::clone(&pending);
 
-        let listener = tokio::net::TcpListener::bind((host, port)).await?;
+        let listener = match cfg.port_mode {
+            PortMode::Fixed(port) => tokio::net::TcpListener::bind((host.as_ref(), port)).await?,
+            PortMode::Dynamic => tokio::net::TcpListener::bind((host.as_ref(), 0)).await?,
+            PortMode::PreferredOrDynamic(preferred) => {
+                match tokio::net::TcpListener::bind((host.as_ref(), preferred)).await {
+                    Ok(l) => l,
+                    Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                        tracing::info!(
+                            preferred_port = preferred,
+                            provider = %label,
+                            "preferred port is busy, falling back to dynamic port"
+                        );
+                        tokio::net::TcpListener::bind((host.as_ref(), 0)).await?
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        };
+
+        let bound_port = listener.local_addr()?.port();
+        tracing::debug!(
+            provider = %label,
+            bound_port = bound_port,
+            "OAuth callback server listening"
+        );
+
         let handle = tokio::spawn(async move {
             loop {
-                // Accept errors (e.g. EMFILE) must not crash the agent; log and
-                // keep serving. A bind error is fatal and returned from start().
                 let (stream, _) = match listener.accept().await {
                     Ok(pair) => pair,
                     Err(e) => {
@@ -62,8 +77,8 @@ impl CallbackServer {
                     }
                 };
                 let pending = Arc::clone(&pending_for_task);
-                let path = path.to_string();
-                let label = label.to_string();
+                let path = path.clone();
+                let label = label.clone();
                 tokio::spawn(async move {
                     if let Err(e) = serve_one(stream, pending, &path, &label).await {
                         tracing::warn!(error = %e, "{label} oauth callback serve failed");
@@ -73,44 +88,64 @@ impl CallbackServer {
         });
 
         Ok(Self {
+            bound_port,
             pending,
             _handle: handle,
         })
     }
 
+    /// The actual port the loopback server bound to.
+    pub fn bound_port(&self) -> u16 {
+        self.bound_port
+    }
+
     /// Register an in-flight callback expectation for `state` and return a
     /// receiver that resolves with the outcome. Supersedes any prior pending
-    /// callback (its receiver gets a `Failed`).
+    /// callback.
     pub fn wait_for_code(&self, state: String) -> oneshot::Receiver<CallbackOutcome> {
         let (tx, rx) = oneshot::channel();
         let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-        // Supersede a prior in-flight flow: its receiver gets a rejection.
-        if let Some(prior) = guard.take()
-            && let _ = prior.tx.send(CallbackOutcome::Failed(
-                "superseded by a newer xAI authorize request".to_string(),
-            ))
-        {}
+        if let Some(prior) = guard.take() {
+            let _ = prior.tx.send(CallbackOutcome::Failed(
+                "superseded by a newer authorization request".to_string(),
+            ));
+        }
         *guard = Some(Pending { state, tx });
         rx
+    }
+
+    /// Manually inject an authorization code or failure (e.g. from terminal paste).
+    pub fn inject_outcome(&self, outcome: CallbackOutcome) -> bool {
+        let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(p) = guard.take() {
+            let _ = p.tx.send(outcome);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl Drop for CallbackServer {
+    fn drop(&mut self) {
+        self._handle.abort();
     }
 }
 
 /// Serve a single callback request. Parses `code`/`state`/`error`, resolves
-/// the pending callback if the state matches, and replies with a minimal HTML
-/// page so the browser shows the user a clear result.
+/// the pending callback if the state matches, and replies with a clean HTML page.
 async fn serve_one(
     mut stream: tokio::net::TcpStream,
     pending: Arc<Mutex<Option<Pending>>>,
     redirect_path: &str,
     label: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let mut buf = vec![0u8; 8192];
     let n = stream.read(&mut buf).await?;
     let request = String::from_utf8_lossy(&buf[..n]);
 
-    // Parse the request line: "GET /callback?code=..&state=.. HTTP/1.1".
     let request_line = request.lines().next().unwrap_or("");
     let path = request_line.split_whitespace().nth(1).unwrap_or("/");
     let (pathname, query) = path.split_once('?').unwrap_or((path, ""));
@@ -121,9 +156,6 @@ async fn serve_one(
     let error = params.get("error").cloned();
     let error_description = params.get("error_description").cloned();
 
-    // Resolve the pending callback (state must match) and craft the page.
-    // The mutex guard is NOT held across the `.await` below (Send), so resolve
-    // + drop it in a tight scope before touching the stream again.
     let body = {
         let mut guard = pending.lock().unwrap_or_else(|e| e.into_inner());
         let (outcome, body) = match (error.as_deref(), code.as_deref(), state.as_deref()) {
@@ -131,14 +163,14 @@ async fn serve_one(
                 let msg = error_description.unwrap_or_else(|| err.to_string());
                 (
                     Some(CallbackOutcome::Failed(msg.clone())),
-                    page(label, &msg, false),
+                    render_page(label, &msg, false),
                 )
             }
             (_, None, _) => {
                 let msg = "missing authorization code";
                 (
                     Some(CallbackOutcome::Failed(msg.to_string())),
-                    page(label, msg, false),
+                    render_page(label, msg, false),
                 )
             }
             (_, Some(c), Some(s)) => {
@@ -147,22 +179,33 @@ async fn serve_one(
                 {
                     (
                         Some(CallbackOutcome::Code(c.to_string())),
-                        page(
+                        render_page(
                             label,
-                            "Authorization complete. You may close this window.",
+                            "Authorization successful! You may now close this tab and return to the terminal.",
                             true,
                         ),
                     )
                 } else {
                     (
                         Some(CallbackOutcome::Failed(
-                            "invalid state - potential CSRF".to_string(),
+                            "invalid state - potential CSRF mismatch".to_string(),
                         )),
-                        page(label, "invalid state", false),
+                        render_page(
+                            label,
+                            "Security check failed: invalid authorization state.",
+                            false,
+                        ),
                     )
                 }
             }
-            _ => (None, page(label, "bad request", false)),
+            _ => (
+                None,
+                render_page(
+                    label,
+                    "Invalid or unrecognized authorization request.",
+                    false,
+                ),
+            ),
         };
         if let Some(p) = guard.take()
             && let Some(outcome) = outcome
@@ -172,7 +215,7 @@ async fn serve_one(
         body
     };
 
-    let response = if pathname == redirect_path {
+    let response = if pathname == redirect_path || redirect_path.ends_with(pathname) {
         format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
             body.len(),
@@ -220,16 +263,93 @@ fn decode(s: &str) -> String {
     out
 }
 
-fn page(label: &str, message: &str, ok: bool) -> String {
+fn render_page(label: &str, message: &str, ok: bool) -> String {
     let title = if ok {
-        format!("{label} login")
+        format!("{label} • Authorization Successful")
     } else {
-        format!("{label} login failed")
+        format!("{label} • Authorization Failed")
     };
+    let accent_color = if ok { "#10B981" } else { "#EF4444" };
+    let icon = if ok { "✓" } else { "✕" };
+
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title>\
-         <style>body{{font-family:system-ui,sans-serif;text-align:center;padding:3rem}}</style>\
-         </head><body><h2>{message}</h2></body></html>"
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title}</title>
+  <style>
+    :root {{
+      --bg: #090A0F;
+      --card: #131722;
+      --text: #F3F4F6;
+      --muted: #9CA3AF;
+      --accent: {accent_color};
+    }}
+    @media (prefers-color-scheme: light) {{
+      :root {{
+        --bg: #F8FAFC;
+        --card: #FFFFFF;
+        --text: #0F172A;
+        --muted: #64748B;
+        --accent: {accent_color};
+      }}
+    }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }}
+    .card {{
+      background: var(--card);
+      border-radius: 16px;
+      padding: 40px;
+      max-width: 460px;
+      margin: 20px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+      text-align: center;
+      border: 1px solid rgba(255,255,255,0.08);
+    }}
+    .icon {{
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #FFF;
+      font-size: 28px;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+    }}
+    h1 {{
+      font-size: 22px;
+      margin: 0 0 12px;
+      font-weight: 600;
+    }}
+    p {{
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.5;
+      margin: 0;
+    }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">{icon}</div>
+    <h1>{title}</h1>
+    <p>{message}</p>
+  </div>
+</body>
+</html>"#
     )
 }
 
@@ -246,5 +366,42 @@ mod tests {
             q.get("error_description").map(String::as_str),
             Some("bad request: denied")
         );
+    }
+
+    #[tokio::test]
+    async fn callback_server_drops_and_releases_port() {
+        let cfg = OAuthConfig::builder("test")
+            .oauth_host("127.0.0.1")
+            .oauth_port(59923)
+            .port_mode(PortMode::Fixed(59923))
+            .oauth_path("/callback")
+            .build();
+
+        let server1 = CallbackServer::start_for(&cfg).await.expect("bind 1");
+        let server2_err = CallbackServer::start_for(&cfg).await;
+        assert!(
+            server2_err.is_err(),
+            "must fail while first server is alive"
+        );
+
+        drop(server1);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let server3 = CallbackServer::start_for(&cfg)
+            .await
+            .expect("bind after drop");
+        drop(server3);
+    }
+
+    #[tokio::test]
+    async fn dynamic_port_binding_succeeds() {
+        let cfg = OAuthConfig::builder("test_dynamic")
+            .oauth_host("127.0.0.1")
+            .port_mode(PortMode::Dynamic)
+            .build();
+
+        let server = CallbackServer::start_for(&cfg).await.expect("dynamic bind");
+        assert!(server.bound_port() > 0);
+        drop(server);
     }
 }

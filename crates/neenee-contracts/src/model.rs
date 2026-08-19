@@ -425,6 +425,27 @@ pub fn register_fitted_models(models: impl IntoIterator<Item = FittedModel>) {
     }
 }
 
+/// Sanitize a raw model identifier string: trims surrounding whitespace,
+/// replaces internal whitespace sequences with single hyphens (`-`),
+/// and filters out ASCII control characters.
+pub fn sanitize_model_id(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let mut out = String::with_capacity(trimmed.len());
+    let mut in_ws = false;
+    for c in trimmed.chars() {
+        if c.is_whitespace() {
+            if !in_ws && !out.is_empty() {
+                out.push('-');
+                in_ws = true;
+            }
+        } else if !c.is_control() {
+            out.push(c);
+            in_ws = false;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,5 +617,16 @@ mod tests {
     #[test]
     fn fallback_format_is_openai_compat() {
         assert_eq!(fallback_model("anything").format, WireFormat::OpenAi);
+    }
+
+    #[test]
+    fn sanitize_model_id_replaces_whitespace_with_hyphen() {
+        assert_eq!(sanitize_model_id("gpt 5.5 preview"), "gpt-5.5-preview");
+        assert_eq!(
+            sanitize_model_id("  claude   3.7  sonnet  "),
+            "claude-3.7-sonnet"
+        );
+        assert_eq!(sanitize_model_id("gemini-3.1-pro"), "gemini-3.1-pro");
+        assert_eq!(sanitize_model_id("   "), "");
     }
 }

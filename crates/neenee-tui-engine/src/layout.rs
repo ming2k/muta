@@ -141,6 +141,13 @@ impl Layout {
     }
 
     /// Split `area` into sub-rects according to the constraints.
+    ///
+    /// Semantically equivalent to mapping the constraints onto flex children
+    /// and solving with [`crate::flex::Flex`]: `Length(l)`/`Percentage(p)`
+    /// → a fixed basis; `Min(m)` → basis m, grow 1, shrink 1 (surplus split
+    /// evenly, remainder to the earlier `Min` — matching the legacy
+    /// implementation). One legacy behavior is preserved: a zero width or
+    /// height yields an empty list.
     pub fn split(self, area: Rect) -> RcRects {
         let n = self.constraints.len();
         if n == 0 || area.width == 0 || area.height == 0 {
@@ -150,66 +157,30 @@ impl Layout {
             Direction::Vertical => area.height,
             Direction::Horizontal => area.width,
         };
-        let mut rects = Vec::with_capacity(n);
-
-        // First pass: compute fixed/percentage demands; count Min constraints.
-        let mut fixed_sum: u16 = 0;
-        let mut min_count: usize = 0;
-        let mut demands: Vec<u16> = Vec::with_capacity(n);
-        for c in &self.constraints {
-            let demand = match c {
-                Constraint::Length(l) => *l,
+        let items: Vec<crate::flex::FlexItem> = self
+            .constraints
+            .iter()
+            .map(|c| match c {
+                Constraint::Length(l) => crate::flex::FlexItem::fixed(*l),
                 Constraint::Percentage(p) => {
-                    // Round to nearest, like ratatui.
-                    ((*p as u32 * total as u32 + 50) / 100) as u16
+                    crate::flex::FlexItem::fixed(((*p as u32 * total as u32 + 50) / 100) as u16)
                 }
-                Constraint::Min(m) => {
-                    min_count += 1;
-                    *m
-                }
-            };
-            fixed_sum = fixed_sum.saturating_add(demand);
-            demands.push(demand);
-        }
-        // Distribute remaining space among Min constraints.
-        let remaining = total.saturating_sub(fixed_sum);
-        let min_extra_each = if min_count > 0 {
-            remaining / min_count as u16
-        } else {
-            0
+                // Min fills the remainder: basis m + an even split of the
+                // surplus (grow = 1), shrinkable.
+                Constraint::Min(m) => crate::flex::FlexItem::fixed(*m).with_grow(1).with_shrink(1),
+            })
+            .collect();
+        let flex = crate::flex::Flex {
+            direction: match self.direction {
+                Direction::Vertical => crate::flex::FlexDirection::Column,
+                Direction::Horizontal => crate::flex::FlexDirection::Row,
+            },
+            ..crate::flex::Flex::default()
         };
-        let mut min_leftover = if min_count > 0 {
-            remaining % min_count as u16
-        } else {
-            0
-        };
-        // Build final sizes.
-        let mut sizes = Vec::with_capacity(n);
-        for (i, c) in self.constraints.iter().enumerate() {
-            match c {
-                Constraint::Min(_) => {
-                    let mut s = demands[i].saturating_add(min_extra_each);
-                    if min_leftover > 0 {
-                        s = s.saturating_add(1);
-                        min_leftover -= 1;
-                    }
-                    sizes.push(s);
-                }
-                _ => sizes.push(demands[i]),
-            }
+        let solved = flex.solve_with(area, &items, &|_, _| 0);
+        RcRects {
+            rects: solved.iter().copied().collect(),
         }
-
-        // Position the rects along the relevant axis.
-        let mut offset = 0u16;
-        for &size in &sizes {
-            rects.push(match self.direction {
-                Direction::Vertical => Rect::new(area.x, area.y + offset, area.width, size),
-                Direction::Horizontal => Rect::new(area.x + offset, area.y, size, area.height),
-            });
-            offset = offset.saturating_add(size);
-        }
-
-        RcRects { rects }
     }
 }
 

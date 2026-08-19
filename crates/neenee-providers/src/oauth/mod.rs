@@ -1,18 +1,12 @@
-//! OAuth2 + PKCE authentication for providers that need it.
+//! OAuth2 + PKCE authentication engine & client emulator.
 //!
-//! neenee's API-key providers authenticate with a static key resolved from env
-//! → credentials.toml → inline config. Subscription providers — xAI SuperGrok
-//! and ChatGPT/Codex — authenticate via OAuth2: the user runs a login flow
-//! (browser loopback OAuth on a desktop, or a device-code flow on a headless
-//! box), and the harness thereafter refreshes the access token as it nears
-//! expiry. This module owns that flow; the harness calls
-//! [`OAuth::resolve_access_token`] at activate/switch time so the catalog
-//! snapshots a live bearer.
-//!
-//! Per-provider constants (client id, endpoints, scopes, redirect port) live on
-//! [`config::OAuthConfig`] (`config::XAI`, `config::CHATGPT`); the two login
-//! flows live in [`device`] (RFC 8628) / [`chatgpt_device`] (OpenAI JSON) and
-//! [`browser`]; the on-disk token store lives in [`store`].
+//! neenee's OAuth subsystem provides an ultra-flexible, industrial-grade architecture
+//! supporting:
+//! - Multi-provider presets (Google Antigravity, OpenAI Codex, xAI SuperGrok, GitHub Copilot)
+//! - Dynamic client emulation (custom client IDs, secrets, endpoints, headers, PKCE modes, port strategies)
+//! - Dynamic loopback port binding (with automatic fallback on busy ports)
+//! - Headless / SSH manual code and redirect URL parsing (solving Google OOB deprecation)
+//! - Automatic token refreshing with JWT exp inspection, skew margins, single-flight locking, and atomic persistence.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
@@ -20,6 +14,7 @@ pub mod browser;
 pub mod chatgpt_device;
 pub mod config;
 pub mod device;
+pub mod manual;
 pub mod pkce;
 pub mod store;
 pub mod token;
@@ -31,21 +26,26 @@ pub use chatgpt_device::{
     request_device_code as request_chatgpt_device_code,
     verification_url as chatgpt_verification_url,
 };
-pub use config::{CHATGPT, COPILOT, GOOGLE_ANTIGRAVITY, OAuthConfig, XAI, config_by_provider_id};
+pub use config::{
+    CHATGPT, COPILOT, ClientAuthMethod, DeviceFlow, GOOGLE_ANTIGRAVITY, OAuthConfig,
+    OAuthConfigBuilder, PkceMode, PortMode, TokenRequestFormat, XAI, chatgpt_preset,
+    config_by_provider_id, copilot_preset, google_antigravity_preset, xai_preset,
+};
 pub use device::{DeviceCodeResponse, poll_device_code, request_device_code};
+pub use manual::parse_authorization_response;
 pub use pkce::{PkceCodes, new_nonce, new_state};
 pub use store::{AuthStore, TokenSet};
 pub use token::{
-    ACCESS_TOKEN_REFRESH_SKEW_MS, TokenResponse, access_token_is_expiring, build_authorize_url,
-    chatgpt_account_id, exchange_code, jwt_exp_ms, refresh_access_token,
+    ACCESS_TOKEN_REFRESH_SKEW_MS, ANTIGRAVITY_LOAD_CODE_ASSIST_URL, ANTIGRAVITY_ONBOARD_USER_URL,
+    ANTIGRAVITY_USER_AGENT, GOOGLE_USERINFO_URL, GoogleUserInfo, TokenResponse,
+    access_token_is_expiring, build_authorize_url, chatgpt_account_id, exchange_code,
+    fetch_google_userinfo, jwt_exp_ms, refresh_access_token, resolve_antigravity_project,
 };
 
+use neenee_contracts::SecretString;
 use std::sync::{Arc, Mutex};
 
-use neenee_contracts::SecretString;
-
-/// Errors from the auth flows. `Display` is human-readable for surfacing in the
-/// login UI / CLI.
+/// Errors from the auth flows. Surfaced in user-facing CLI and logs.
 #[derive(Debug)]
 pub enum AuthError {
     Transport(String),
@@ -76,18 +76,13 @@ impl std::error::Error for AuthError {}
 /// Which login flow to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginMethod {
-    /// Browser loopback OAuth (desktop). Binds the provider's registered
-    /// loopback port, opens the authorize URL, and waits for the callback.
+    /// Browser loopback OAuth (desktop / local).
     Browser,
-    /// Device-code (headless / VPS / SSH / Docker). Prints a verification URL +
-    /// user code and long-polls the token endpoint.
+    /// Device-code (headless / VPS / SSH / Docker).
     Device,
 }
 
-/// The high-level OAuth entry point. Owns the provider [`OAuthConfig`], the
-/// HTTP client, and a single-flight refresh guard so concurrent channel builds
-/// collapse onto one refresh HTTP call (xAI rotates the refresh_token, so
-/// replaying it on two concurrent fetches would burn one of them).
+/// The high-level OAuth orchestrator.
 #[derive(Clone)]
 pub struct OAuth {
     config: OAuthConfig,
@@ -95,12 +90,10 @@ pub struct OAuth {
     refresh_in_flight: Arc<RefreshSlot>,
 }
 
-/// The single-flight refresh slot: `Some` while a refresh is in progress, with
-/// an inner mutex holding its result so concurrent waiters share one HTTP call.
 type RefreshSlot = Mutex<Option<Arc<tokio::sync::Mutex<Option<TokenSet>>>>>;
 
 impl OAuth {
-    /// Construct for a specific provider config.
+    /// Construct with a specific provider configuration.
     pub fn new(config: OAuthConfig) -> Self {
         let client = reqwest::Client::builder()
             .user_agent(concat!("neenee/", env!("CARGO_PKG_VERSION")))
@@ -113,24 +106,24 @@ impl OAuth {
         }
     }
 
-    /// Convenience constructor for the xAI SuperGrok provider.
-    pub fn xai() -> Self {
-        Self::new(XAI)
-    }
-
-    /// Convenience constructor for the ChatGPT/Codex subscription provider.
-    pub fn chatgpt() -> Self {
-        Self::new(CHATGPT)
-    }
-
-    /// Convenience constructor for the GitHub Copilot subscription provider.
-    pub fn copilot() -> Self {
-        Self::new(COPILOT)
-    }
-
-    /// Convenience constructor for the Google Antigravity subscription provider.
+    /// Convenience constructor for Google Antigravity.
     pub fn google_antigravity() -> Self {
-        Self::new(GOOGLE_ANTIGRAVITY)
+        Self::new(google_antigravity_preset())
+    }
+
+    /// Convenience constructor for xAI SuperGrok.
+    pub fn xai() -> Self {
+        Self::new(xai_preset())
+    }
+
+    /// Convenience constructor for ChatGPT/Codex.
+    pub fn chatgpt() -> Self {
+        Self::new(chatgpt_preset())
+    }
+
+    /// Convenience constructor for GitHub Copilot.
+    pub fn copilot() -> Self {
+        Self::new(copilot_preset())
     }
 
     /// The provider config this OAuth instance authenticates against.
@@ -138,14 +131,12 @@ impl OAuth {
         &self.config
     }
 
-    /// Borrow the HTTP client (the `login` CLI uses it for the device-code
-    /// request + poll so it can print the user code between the two steps).
+    /// Borrow the HTTP client.
     pub fn client(&self) -> &reqwest::Client {
         &self.client
     }
 
-    /// Run a login flow and return the resulting token response. Does NOT
-    /// persist; the caller writes the [`TokenSet`] to [`AuthStore`].
+    /// Run an OAuth login flow and return the resulting token response.
     pub async fn login(&self, method: LoginMethod) -> Result<TokenResponse, AuthError> {
         match method {
             LoginMethod::Browser => self.login_browser().await,
@@ -164,26 +155,34 @@ impl OAuth {
                 let token = poll_chatgpt_device_code(&self.client, &self.config, &device).await?;
                 exchange_chatgpt_device_code(&self.client, &self.config, &token).await
             }
+            config::DeviceFlow::Disabled => Err(AuthError::DeviceCode(
+                "device authorization flow is disabled for this provider".to_string(),
+            )),
         }
     }
 
-    /// Start the browser loopback flow and return the authorize URL the caller
-    /// should open (or surface to the user). The companion [`BrowserLogin`]
-    /// waits for the callback and exchanges the code.
+    /// Start the browser loopback flow and return the authorize URL.
     pub async fn begin_browser_login(&self) -> Result<BrowserLogin, AuthError> {
         let server = CallbackServer::start_for(&self.config)
             .await
             .map_err(|e| AuthError::Transport(format!("could not bind loopback server: {e}")))?;
+        let bound_port = server.bound_port();
+        let redirect = self.config.redirect_uri(Some(bound_port));
         let pkce = PkceCodes::generate();
         let state = new_state();
         let nonce = new_nonce();
-        let redirect = self.config.redirect_uri();
         let url = build_authorize_url(&self.config, &pkce, &state, &nonce, &redirect);
-        tracing::info!(url = %url, provider = %self.config.provider_id, "open this URL to authorize");
-        let rx = server.wait_for_code(state);
+        tracing::info!(
+            url = %url,
+            provider = %self.config.provider_id,
+            bound_port = bound_port,
+            "open this URL to authorize"
+        );
+        let rx = server.wait_for_code(state.clone());
         Ok(BrowserLogin {
-            config: self.config,
+            config: self.config.clone(),
             url,
+            state,
             pkce,
             redirect,
             rx,
@@ -196,19 +195,23 @@ impl OAuth {
         login.complete(&self.client).await
     }
 
+    /// Exchange an authorization code obtained manually (e.g. pasted into CLI in headless mode).
+    pub async fn exchange_manual_code(
+        &self,
+        code: &str,
+        pkce: &PkceCodes,
+        redirect_uri: &str,
+    ) -> Result<TokenResponse, AuthError> {
+        exchange_code(&self.client, &self.config, code, pkce, redirect_uri).await
+    }
+
     /// Resolve a live access token from a stored [`TokenSet`], refreshing it
-    /// if it is expiring (within the skew window, or per its JWT `exp`). The
-    /// refresh is single-flight: concurrent callers share one HTTP call and the
-    /// rotated token set it produces. Returns the access token to send as a
-    /// bearer, plus the (possibly updated) token set the caller should persist.
-    /// The `account_id` is carried through unchanged on refresh (OpenAI does
-    /// not rotate the account).
+    /// if expiring. Concurrency-safe: concurrent callers share one single-flight HTTP call.
     pub async fn resolve_access_token(
         &self,
         stored: TokenSet,
     ) -> Result<(SecretString, TokenSet), AuthError> {
         let now = now_ms();
-        // Cheap path: token is fresh.
         if !access_token_is_expiring(
             Some(stored.access.expose_secret()),
             ACCESS_TOKEN_REFRESH_SKEW_MS,
@@ -218,7 +221,6 @@ impl OAuth {
             return Ok((stored.access.clone(), stored));
         }
 
-        // Single-flight: grab the shared refresh slot, or join the in-flight one.
         let guard = {
             let mut slot = self
                 .refresh_in_flight
@@ -234,10 +236,10 @@ impl OAuth {
         };
 
         let mut inner = guard.lock().await;
-        // Another caller already completed the refresh while we waited.
         if let Some(refreshed) = inner.as_ref() {
             return Ok((refreshed.access.clone(), refreshed.clone()));
         }
+
         let refreshed =
             refresh_access_token(&self.client, &self.config, stored.refresh.expose_secret())
                 .await?;
@@ -247,25 +249,54 @@ impl OAuth {
             .filter(|r| !r.is_empty())
             .unwrap_or_else(|| stored.refresh.clone());
         let expires_ms = now + (refreshed.expires_in.unwrap_or(3600) as i64) * 1000;
-        // Preserve the captured account id across refresh; OpenAI's refresh
-        // response is an opaque JWT without the chatgpt_account_id claim, so
-        // the value captured at login is the durable source of truth.
-        let account_id = refreshed
+
+        let mut account_id = refreshed
             .id_token
             .as_ref()
             .map(SecretString::expose_secret)
             .or(Some(refreshed.access_token.expose_secret()))
             .and_then(chatgpt_account_id)
             .or(stored.account_id.clone());
+
+        let mut project_id = stored.project_id.clone();
+        let mut user_email = stored.user_email.clone();
+
+        if self.config.provider_id == "google-antigravity" {
+            if (project_id.is_none() || account_id.is_none())
+                && let Ok(project) = resolve_antigravity_project(
+                    &self.client,
+                    refreshed.access_token.expose_secret(),
+                )
+                .await
+                && !project.is_empty()
+            {
+                project_id = Some(project.clone());
+                if account_id.is_none() {
+                    account_id = Some(project);
+                }
+            }
+            if user_email.is_none()
+                && let Ok(info) =
+                    fetch_google_userinfo(&self.client, refreshed.access_token.expose_secret())
+                        .await
+            {
+                user_email = info.email;
+            }
+        }
+
         let tokens = TokenSet {
             access: refreshed.access_token.clone(),
             refresh: new_refresh,
             expires_ms,
             account_id,
+            id_token: refreshed.id_token.clone().or(stored.id_token),
+            token_type: refreshed.token_type.clone().or(stored.token_type),
+            scope: refreshed.scope.clone().or(stored.scope),
+            project_id,
+            user_email,
         };
+
         *inner = Some(tokens.clone());
-        // Clear the single-flight slot so the next stale token starts a fresh
-        // refresh rather than reusing a (now older) cached result.
         let mut slot = self
             .refresh_in_flight
             .lock()
@@ -276,21 +307,38 @@ impl OAuth {
     }
 }
 
-/// In-flight browser OAuth login: the authorize URL plus the state needed to
-/// finish the code exchange after the user consents.
+/// In-flight browser OAuth login session.
 pub struct BrowserLogin {
-    config: OAuthConfig,
-    /// Authorize URL the user (or `webbrowser::open`) should visit.
+    pub config: OAuthConfig,
+    /// Authorize URL the user should open.
     pub url: String,
-    pkce: PkceCodes,
-    redirect: String,
+    /// Expected CSRF state.
+    pub state: String,
+    /// Generated PKCE pair.
+    pub pkce: PkceCodes,
+    /// The exact registered redirect URI used for this session.
+    pub redirect: String,
     rx: tokio::sync::oneshot::Receiver<CallbackOutcome>,
-    /// Keep the loopback server alive until exchange completes.
     _server: CallbackServer,
 }
 
 impl BrowserLogin {
-    /// Wait for the loopback callback (up to 5 minutes) and exchange the code.
+    /// The port bound by the loopback server for this session.
+    pub fn bound_port(&self) -> u16 {
+        self._server.bound_port()
+    }
+
+    /// Manually inject a pasted authorization response (redirect URL or code).
+    pub fn inject_manual_input(&self, input: &str) -> Result<(), AuthError> {
+        let code = parse_authorization_response(input, Some(&self.state))?;
+        if self._server.inject_outcome(CallbackOutcome::Code(code)) {
+            Ok(())
+        } else {
+            Err(AuthError::Cancelled)
+        }
+    }
+
+    /// Wait for the callback (or manual input) and exchange the authorization code for tokens.
     pub async fn complete(self, client: &reqwest::Client) -> Result<TokenResponse, AuthError> {
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(5 * 60), self.rx)
             .await

@@ -676,7 +676,10 @@ fn render_footer(
                     .fg(theme.brand())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(prompt_text.to_string(), Style::default().bg(bg).fg(theme.fg())),
+            Span::styled(
+                prompt_text.to_string(),
+                Style::default().bg(bg).fg(theme.fg()),
+            ),
             Span::styled(hint.to_string(), Style::default().bg(bg).fg(theme.dim())),
         ]);
 

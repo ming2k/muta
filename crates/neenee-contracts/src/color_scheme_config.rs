@@ -159,4 +159,3 @@ badge_bg = "#283457"
         assert_eq!(crate_c.fg.as_deref(), Some("#bb9af7"));
     }
 }
-
