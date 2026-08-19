@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-08-19
+
+### Added
+
+- **Unified Configuration Modal**: Consolidated separate configuration dialogs
+  into a single multi-tab settings overlay for theme selection, custom colors,
+  layout options, and MCP configuration.
+- **Standalone Theme File Schemas**: Support loading `.toml` theme definitions
+  from `$XDG_CONFIG_HOME/neenee/themes/` with component-level overrides for input,
+  crates, diffs, and command cards.
+- **Expanded Builtin Command Specifications**: Full metadata, category tags,
+  usage definitions, examples, and intent keywords across all builtin slash commands.
+
+### Changed
+
+- **Turn-Band Layout**: Streamlined turn-band transcript layout with refined visual
+  hierarchy and removed legacy layout engine.
+
 ## [0.26.0] - 2026-08-19
 
 ### Added
@@ -3450,7 +3468,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.26.1...HEAD
+[0.26.1]: https://github.com/ming2k/neenee/releases/tag/v0.26.1
 [0.26.0]: https://github.com/ming2k/neenee/releases/tag/v0.26.0
 [0.25.2]: https://github.com/ming2k/neenee/releases/tag/v0.25.2
 [0.25.1]: https://github.com/ming2k/neenee/releases/tag/v0.25.1
