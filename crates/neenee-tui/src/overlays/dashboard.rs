@@ -30,8 +30,7 @@ use neenee_tui_engine::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::primitives::{
-    FooterHint, SCROLL_EDGE_MARGIN, keymap_body_lines, keymap_page_footer_hints, keyvocab,
-    render_modal_footer_with_more, resolve_scroll, viewport_rect,
+    FooterHint, SCROLL_EDGE_MARGIN, keymap_body_lines, keyvocab, resolve_scroll, viewport_rect,
 };
 use crate::view::Theme;
 
@@ -195,7 +194,7 @@ pub fn draw_dashboard(
             Constraint::Length(1),           // gap
             Constraint::Length(dock_height), // sessions dock
             Constraint::Length(1),           // gap
-            Constraint::Length(1),           // footer
+            Constraint::Length(3),           // 3-row Envoy-style footer
         ])
         .split(area);
     let header = chunks[0];
@@ -650,45 +649,150 @@ fn render_footer(
     theme: &Theme,
     keymap_page: bool,
 ) {
+    if rect.height == 0 || rect.width < 10 {
+        return;
+    }
+
+    let bg = theme.body();
+    let fill = Style::default().bg(bg);
+    let key_style = crate::components::keycap::keycap_style(theme).bg(bg);
+    let hint_style = fill.fg(theme.muted());
+    let width = rect.width as usize;
+
     if prompting {
-        // Inline prompt: a simple editable line (the composer is borrowed as
-        // the input buffer by the event loop). The label reflects whether this
-        // creates a session (`n`) or prompts the selected one (`p`).
+        // Inline prompt inside the 3-row Envoy-style bar:
         let (label, hint) = if prompt_create_new {
-            ("New session task: ", "   (Enter create · Esc cancel)")
+            ("New session task: ", " (Enter create · Esc cancel)")
         } else {
-            ("Send task: ", "   (Enter send · Esc cancel)")
+            ("Send task: ", " (Enter send · Esc cancel)")
         };
-        let line = Line::from(vec![
+
+        let prompt_line = Line::from(vec![
+            Span::styled("   ", fill),
             Span::styled(
                 label.to_string(),
                 Style::default()
+                    .bg(bg)
                     .fg(theme.brand())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(prompt_text.to_string(), Style::default().fg(theme.fg())),
-            Span::styled(hint.to_string(), Style::default().fg(theme.dim())),
+            Span::styled(prompt_text.to_string(), Style::default().bg(bg).fg(theme.fg())),
+            Span::styled(hint.to_string(), Style::default().bg(bg).fg(theme.dim())),
         ]);
-        frame.render_widget(Paragraph::new(line), rect);
+
+        let mid = rect.y + rect.height / 2;
+        let blank = Line::from(Span::styled(" ".repeat(width), fill));
+        for y in rect.y..rect.y + rect.height {
+            let line = if y == mid {
+                prompt_line.clone()
+            } else {
+                blank.clone()
+            };
+            frame.render_widget(Paragraph::new(line), Rect::new(rect.x, y, rect.width, 1));
+        }
         return;
     }
-    if keymap_page {
-        // The keymap page swaps in its own footer hints.
-        crate::primitives::render_modal_footer(frame, rect, &keymap_page_footer_hints(), theme);
-        return;
+
+    let pairs: Vec<(&'static str, &'static str)> = if keymap_page {
+        vec![("Esc", "close"), ("?", "close")]
+    } else {
+        match focus {
+            DashboardFocus::List => vec![
+                ("↑/↓", "navigate"),
+                ("Tab", "switch pane"),
+                ("Enter", "preview"),
+                ("a", "attach"),
+                ("p", "prompt"),
+                ("n", "new session"),
+                ("i", "interrupt"),
+                ("Esc", "close"),
+            ],
+            DashboardFocus::Detail => vec![
+                ("↑/↓", "scroll"),
+                ("Tab", "switch pane"),
+                ("n", "new session"),
+                ("p", "prompt"),
+                ("a", "attach"),
+                ("Esc", "close"),
+            ],
+        }
+    };
+
+    const PAIR_GAP: usize = 3;
+    const MARGIN_MIN: usize = 2;
+
+    // Filter pairs that fit into terminal width.
+    let content: Vec<(&'static str, &'static str)> = {
+        let mut chosen = pairs.clone();
+        loop {
+            let pairs_width: usize = chosen
+                .iter()
+                .map(|(key, label)| key.width() + 1 + label.width())
+                .sum();
+            let needed = pairs_width + PAIR_GAP * chosen.len().saturating_sub(1);
+            if needed <= width.saturating_sub(2 * MARGIN_MIN) || chosen.len() <= 1 {
+                break;
+            }
+            chosen.pop();
+        }
+        chosen
+    };
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (idx, (key, label)) in content.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled(" ".repeat(PAIR_GAP), fill));
+        }
+        spans.push(Span::styled(key.to_string(), key_style));
+        spans.push(Span::styled(format!(" {label}"), hint_style));
     }
-    render_modal_footer_with_more(frame, rect, &footer_hints(focus), &[], theme);
+
+    let content_len: usize = content
+        .iter()
+        .map(|(k, l)| k.width() + 1 + l.width())
+        .sum::<usize>()
+        + PAIR_GAP * content.len().saturating_sub(1);
+
+    let pad_left = (width.saturating_sub(content_len)) / 2;
+    let pad_right = width.saturating_sub(pad_left + content_len);
+
+    let mut row_spans = vec![Span::styled(" ".repeat(pad_left), fill)];
+    row_spans.extend(spans);
+    row_spans.push(Span::styled(" ".repeat(pad_right), fill));
+
+    let mid = rect.y + rect.height / 2;
+    let blank = Line::from(Span::styled(" ".repeat(width), fill));
+    for y in rect.y..rect.y + rect.height {
+        let line = if y == mid {
+            Line::from(row_spans.clone())
+        } else {
+            blank.clone()
+        };
+        frame.render_widget(Paragraph::new(line), Rect::new(rect.x, y, rect.width, 1));
+    }
 }
 
-fn footer_hints(_focus: DashboardFocus) -> [FooterHint; 6] {
-    [
-        FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-        FooterHint::primary(keyvocab::ENTER, "preview"),
-        FooterHint::always(keyvocab::TAB, "switch pane"),
-        FooterHint::secondary("a", "attach"),
-        FooterHint::secondary("i", "interrupt"),
-        FooterHint::secondary("p", "prompt"),
-    ]
+fn footer_hints(focus: DashboardFocus) -> Vec<FooterHint> {
+    match focus {
+        DashboardFocus::List => vec![
+            FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
+            FooterHint::always(keyvocab::TAB, "switch pane"),
+            FooterHint::primary(keyvocab::ENTER, "preview"),
+            FooterHint::secondary("a", "attach"),
+            FooterHint::secondary("p", "prompt"),
+            FooterHint::secondary("n", "new session"),
+            FooterHint::secondary("i", "interrupt"),
+            FooterHint::secondary("Esc", "close"),
+        ],
+        DashboardFocus::Detail => vec![
+            FooterHint::navigation(keyvocab::ARROWS_UD, "scroll"),
+            FooterHint::always(keyvocab::TAB, "switch pane"),
+            FooterHint::secondary("n", "new session"),
+            FooterHint::secondary("p", "prompt"),
+            FooterHint::secondary("a", "attach"),
+            FooterHint::secondary("Esc", "close"),
+        ],
+    }
 }
 
 fn status_style(status: SessionStatus, theme: &Theme) -> Style {

@@ -460,25 +460,8 @@ pub fn draw_completion_menu(
 
     const MAX_VISIBLE: usize = 6;
 
-    // Windowing: `suggestion_index` is the global index into the full list,
-    // but only `MAX_VISIBLE` rows fit on screen. Without a scroll offset the
-    // highlight would scroll off the bottom (and the up-arrow wrap path
-    // would land on a row that is never rendered). The offset is recomputed
-    // every frame from `selected_idx` so it tracks the cursor live:
-    //   - when the cursor moves below the visible window, scroll down one
-    //     row at a time so it stays on the last visible line;
-    //   - when the cursor moves above (e.g. ↑ wraps from 0 to len-1), jump
-    //     the window so the cursor sits on the last visible line;
-    //   - otherwise leave it alone so short up/down moves inside the window
-    //     don't jitter the list.
     let total = completions.len();
     let scroll_offset = match selected_idx {
-        // Once the cursor passes the first page (sel >= MAX_VISIBLE), pin it
-        // to the last visible row and slide the window up under it — that way
-        // every ↓ just brings the next candidate into view at the bottom.
-        // For the wrap path (↑ from 0 to len-1), `sel - (MAX_VISIBLE - 1)`
-        // also yields the correct bottom-anchored window. Below MAX_VISIBLE,
-        // the window stays at the top so short moves don't jitter the list.
         Some(sel) if sel >= MAX_VISIBLE && total > MAX_VISIBLE => {
             (sel - (MAX_VISIBLE - 1)).min(total - MAX_VISIBLE)
         }
@@ -486,90 +469,63 @@ pub fn draw_completion_menu(
     };
     let window_end = (scroll_offset + MAX_VISIBLE).min(total);
     let visible_rows = &completions[scroll_offset..window_end];
-    let visible_count = visible_rows.len();
-    let popup_height = visible_count as u16;
+    let menu_height = visible_rows.len() as u16;
 
     let viewport = viewport_rect(frame);
 
-    // Compute width from content. The description column is dropped entirely
-    // (separator + padding) when no candidate carries a description — the
-    // `@path` menu uses empty descriptions for a plain list of paths,
-    // matching opencode's minimal aesthetic. Width is derived from the full
-    // candidate list (not just the visible window) so the popup doesn't
-    // resize as the user scrolls.
-    let any_desc = completions.iter().any(|c| !c.description.is_empty());
+    // Active item & Detail Inspector: only show hover documentation when an entry is actively selected (selected_idx is Some)
+    let active_doc = selected_idx
+        .and_then(|idx| completions.get(idx))
+        .and_then(|c| c.doc.as_ref());
+
     let max_cmd = completions
         .iter()
-        .map(|c| c.label.width())
+        .map(|c| match &c.kind {
+            crate::completion::CompletionItemKind::IntentSuggestion { .. } => {
+                c.label.width() + 2 // "➜ " prefix
+            }
+            _ => c.label.width(),
+        })
         .max()
         .unwrap_or(0);
-    let max_desc = if any_desc {
-        completions
-            .iter()
-            .map(|c| c.description.width())
-            .max()
-            .unwrap_or(0)
-    } else {
-        0
-    };
-    // The popup never grows past a compact share of the viewport: the slash
-    // menu's longest description (e.g. /autopilot's) would otherwise fill
-    // the whole row on a standard 80-column terminal, pushing the popup's
-    // leading edge off the typed token and breaking the visual anchor.
-    // Over-long descriptions truncate with an ellipsis (see the row builder
-    // below) instead of stretching the menu.
-    let max_popup_width = ((viewport.width as usize) * 3 / 5).max(24);
-    // Text runs from edge to edge of the popup so the selection band can
-    // paint the row solid; a single right-edge padding cell keeps the last
-    // glyph off the frame boundary.
-    let content_width = if any_desc {
-        (max_cmd + 2 + max_desc).max(30)
-    } else {
-        (max_cmd + 1).max(20)
-    }
-    .min(max_popup_width);
-    let popup_width = content_width as u16;
 
-    // Position: try above the input box; if not enough room, clamp to top.
-    // Horizontally hang the menu off the typed token (`anchor_x`); when the
-    // token sits far right the popup shifts left just enough to stay on
-    // screen (right-clamped), like an editor completion widget.
-    let mut y = anchor.y.saturating_sub(popup_height);
-    if y == 0 && anchor.y < popup_height {
+    // Left menu is a pure, compact command list without inline descriptions
+    let max_menu_width = ((viewport.width as usize) * 3 / 5).max(24);
+    let content_width = (max_cmd + 2).max(18);
+    let menu_width = (content_width.min(max_menu_width).min(viewport.width as usize)) as u16;
+
+    // Position of the primary completion menu (above the input box)
+    let mut y = anchor.y.saturating_sub(menu_height);
+    if y == 0 && anchor.y < menu_height {
         y = 0;
     }
     let x = anchor_x
-        .min(viewport.right().saturating_sub(popup_width))
+        .min(viewport.right().saturating_sub(menu_width))
         .max(viewport.x);
 
-    let area = Rect::new(x, y, popup_width.min(viewport.right() - x), popup_height);
-    frame.render_widget(Clear, area);
+    let menu_area = Rect::new(x, y, menu_width, menu_height);
+    frame.render_widget(Clear, menu_area);
 
     let block = RtBlock::default().style(Style::default().bg(theme.body()));
+    let menu_w = menu_area.width as usize;
 
-    let popup_w = area.width as usize;
-    // The description column gets whatever the label column leaves inside
-    // the capped popup width; longer descriptions truncate with an ellipsis.
-    let desc_col = popup_w.saturating_sub(max_cmd + 2);
     let lines: Vec<Line> = visible_rows
         .iter()
         .enumerate()
         .map(|(row, c)| {
-            // `row` is the on-screen position (0..MAX_VISIBLE); recover the
-            // global index by adding the scroll offset so the highlight
-            // check matches the value passed in `selected_idx`.
             let global_idx = row + scroll_offset;
             let is_selected = Some(global_idx) == selected_idx;
             let body_bg = theme.body();
-            // Every span on the row shares the row background (`brand` when
-            // selected, `body` otherwise) and the trailing fill spans out to
-            // the popup's full width, so the highlight reads as one
-            // continuous band instead of per-segment blocks.
             let row_bg = if is_selected { theme.brand() } else { body_bg };
             let cmd_style = if is_selected {
                 Style::default()
                     .bg(row_bg)
                     .fg(contrast_fg(theme.brand()))
+                    .add_modifier(Modifier::BOLD)
+            } else if matches!(c.kind, crate::completion::CompletionItemKind::IntentSuggestion { .. }) {
+                Style::default()
+                    .bg(row_bg)
+                    .fg(theme.info())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -577,45 +533,182 @@ pub fn draw_completion_menu(
                     .fg(theme.fg())
                     .add_modifier(Modifier::BOLD)
             };
-            let desc_style = if is_selected {
-                Style::default()
-                    .bg(row_bg)
-                    .fg(contrast_fg(theme.brand()))
-                    .add_modifier(Modifier::DIM)
-            } else {
-                Style::default().bg(row_bg).fg(theme.muted())
-            };
-            let pad_style = Style::default().bg(row_bg);
 
-            // `command  description` in two padded columns separated by plain
-            // spaces — no `·` separator; weight (bold) and brightness
-            // (fg vs muted) carry the primary/secondary relationship.
-            let mut used = max_cmd;
-            let mut spans = vec![Span::styled(
-                format!("{:<width$}", c.label, width = max_cmd),
-                cmd_style,
-            )];
-            if any_desc {
-                spans.push(Span::styled("  ", pad_style));
-                let desc = if c.description.width() > desc_col {
-                    truncate_for_bar(&c.description, desc_col)
-                } else {
-                    format!("{:<width$}", c.description, width = desc_col)
-                };
-                spans.push(Span::styled(desc, desc_style));
-                used += 2 + desc_col;
-            }
-            // Solid fill to the popup edge so the selected row's highlight
-            // spans the whole width, not just the text it contains.
-            spans.push(Span::styled(
-                " ".repeat(popup_w.saturating_sub(used)),
-                pad_style,
-            ));
+            let label_text = match &c.kind {
+                crate::completion::CompletionItemKind::IntentSuggestion { .. } => {
+                    format!("➜ {}", c.label)
+                }
+                _ => c.label.clone(),
+            };
+
+            let spans = vec![
+                Span::styled(
+                    format!("{:<width$}", label_text, width = menu_w),
+                    cmd_style,
+                ),
+            ];
             Line::from(spans)
         })
         .collect();
 
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    frame.render_widget(Paragraph::new(lines).block(block), menu_area);
+
+    // Right-side Hover Documentation Flyout Window with line wrapping and distinct background
+    if let Some(doc) = active_doc {
+        let space_on_right = (viewport.right() as usize).saturating_sub(menu_area.right() as usize + 1);
+        let space_on_left = (menu_area.x as usize).saturating_sub(viewport.x as usize + 1);
+
+        let (doc_x, doc_width) = if space_on_right >= 26 {
+            let w = space_on_right.min(56) as u16;
+            (menu_area.right() + 1, w)
+        } else if space_on_left >= 26 {
+            let w = space_on_left.min(56) as u16;
+            (menu_area.x.saturating_sub(w + 1), w)
+        } else {
+            (0, 0)
+        };
+
+        if doc_width >= 20 {
+            let doc_bg = theme.panel();
+            let max_text_w = (doc_width as usize).saturating_sub(2).max(10);
+            let mut insp_lines = Vec::new();
+
+            // Line 1: Command name + [Category]
+            let cat_label = doc.category.as_deref().unwrap_or("Command");
+            let header_spans = vec![
+                Span::styled(" ", Style::default().bg(doc_bg)),
+                Span::styled(
+                    &doc.name,
+                    Style::default()
+                        .bg(doc_bg)
+                        .fg(theme.info())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  [{cat_label}]"),
+                    Style::default()
+                        .bg(doc_bg)
+                        .fg(theme.muted())
+                        .add_modifier(Modifier::DIM),
+                ),
+            ];
+            insp_lines.push(Line::from(header_spans));
+
+            // Line 2..: Summary (wrapped)
+            if !doc.summary.is_empty() {
+                for wl in crate::text_layout::wrap_text(&doc.summary, max_text_w) {
+                    insp_lines.push(Line::from(vec![
+                        Span::styled(" ", Style::default().bg(doc_bg)),
+                        Span::styled(
+                            wl.text.to_string(),
+                            Style::default()
+                                .bg(doc_bg)
+                                .fg(theme.fg())
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                }
+            }
+
+            // Line 3..: Detailed Description (wrapped)
+            if !doc.description.is_empty() && doc.description != doc.summary {
+                for wl in crate::text_layout::wrap_text(&doc.description, max_text_w) {
+                    insp_lines.push(Line::from(vec![
+                        Span::styled(" ", Style::default().bg(doc_bg)),
+                        Span::styled(
+                            wl.text.to_string(),
+                            Style::default().bg(doc_bg).fg(theme.muted()),
+                        ),
+                    ]));
+                }
+            }
+
+            // Line 4..: Usage (wrapped)
+            if !doc.usage.is_empty() {
+                let usage_str = format!("Usage: {}", doc.usage.join("  |  "));
+                for wl in crate::text_layout::wrap_text(&usage_str, max_text_w) {
+                    insp_lines.push(Line::from(vec![
+                        Span::styled(" ", Style::default().bg(doc_bg)),
+                        Span::styled(
+                            wl.text.to_string(),
+                            Style::default()
+                                .bg(doc_bg)
+                                .fg(theme.brand())
+                                .add_modifier(Modifier::DIM),
+                        ),
+                    ]));
+                }
+            }
+
+            // Line 5..: Examples (wrapped)
+            for (ex_cmd, ex_desc) in doc.examples.iter().take(2) {
+                let ex_str = format!("Ex: {ex_cmd} — {ex_desc}");
+                for wl in crate::text_layout::wrap_text(&ex_str, max_text_w) {
+                    insp_lines.push(Line::from(vec![
+                        Span::styled(" ", Style::default().bg(doc_bg)),
+                        Span::styled(
+                            wl.text.to_string(),
+                            Style::default()
+                                .bg(doc_bg)
+                                .fg(theme.muted())
+                                .add_modifier(Modifier::DIM),
+                        ),
+                    ]));
+                }
+            }
+
+            // Line 6..: Intent keywords (wrapped)
+            if !doc.intent_keywords.is_empty() {
+                let kw_str = format!("Intent: {}", doc.intent_keywords.join(", "));
+                for wl in crate::text_layout::wrap_text(&kw_str, max_text_w) {
+                    insp_lines.push(Line::from(vec![
+                        Span::styled(" ", Style::default().bg(doc_bg)),
+                        Span::styled(
+                            wl.text.to_string(),
+                            Style::default()
+                                .bg(doc_bg)
+                                .fg(theme.muted())
+                                .add_modifier(Modifier::DIM),
+                        ),
+                    ]));
+                }
+            }
+
+            let max_flyout_h = (viewport.height as usize).saturating_sub(anchor.y as usize).max(12).min(16) as u16;
+            let doc_height = (insp_lines.len() as u16).max(menu_height).min(max_flyout_h);
+            let mut doc_y = anchor.y.saturating_sub(doc_height);
+            if doc_y == 0 && anchor.y < doc_height {
+                doc_y = 0;
+            }
+
+            let doc_area = Rect::new(doc_x, doc_y, doc_width, doc_height);
+            frame.render_widget(Clear, doc_area);
+
+            let doc_w = doc_width as usize;
+            let padded_doc_lines: Vec<Line> = (0..doc_height as usize)
+                .map(|idx| {
+                    if let Some(mut line) = insp_lines.get(idx).cloned() {
+                        let cur_w = line.width();
+                        if cur_w < doc_w {
+                            line.spans.push(Span::styled(
+                                " ".repeat(doc_w - cur_w),
+                                Style::default().bg(doc_bg),
+                            ));
+                        }
+                        line
+                    } else {
+                        Line::from(vec![Span::styled(
+                            " ".repeat(doc_w),
+                            Style::default().bg(doc_bg),
+                        )])
+                    }
+                })
+                .collect();
+
+            let doc_block = RtBlock::default().style(Style::default().bg(doc_bg));
+            frame.render_widget(Paragraph::new(padded_doc_lines).block(doc_block), doc_area);
+        }
+    }
 }
 
 /// Inputs for [`draw_hint_bar`]. Carries the model + context-usage info that
@@ -2113,6 +2206,7 @@ mod tests {
                 replace_start: 0,
                 replace_end: 2,
                 kind: crate::completion::CompletionItemKind::Slash,
+                doc: None,
             },
             crate::completion::Completion {
                 label: "/permissions".to_string(),
@@ -2120,6 +2214,7 @@ mod tests {
                 replace_start: 0,
                 replace_end: 2,
                 kind: crate::completion::CompletionItemKind::Slash,
+                doc: None,
             },
         ];
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 12);
@@ -2186,11 +2281,9 @@ mod tests {
                 "cell ({x}, {y}) broke the selection band"
             );
         }
-        // The band spans further than the row's text: the longest candidate
-        // (`/permissions  Manage permissions`) ends well before the popup
-        // edge, and the highlight must still cover the fill.
+        // The band spans across the menu width for the candidate.
         assert!(
-            last - first >= 30,
+            last - first >= 12,
             "popup band too narrow: {first}..={last}"
         );
         // The unselected row keeps the popup body background across its full
@@ -2205,12 +2298,8 @@ mod tests {
         }
     }
 
-    /// A menu whose longest description would stretch to the viewport edge
-    /// must stay compact instead: the description truncates with an ellipsis
-    /// and the popup's leading edge keeps the anchor column (this is the
-    /// bare-`/` slash menu case — the full command table at 80 columns).
     #[test]
-    fn completion_menu_caps_width_and_truncates_long_descriptions() {
+    fn completion_menu_caps_width_and_stays_anchored() {
         let theme = Theme::default();
         let completions = [
             ("/models", "Switch the active model"),
@@ -2227,6 +2316,7 @@ mod tests {
             replace_start: 0,
             replace_end: 1,
             kind: crate::completion::CompletionItemKind::Slash,
+            doc: None,
         })
         .collect::<Vec<_>>();
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 12);
@@ -2256,16 +2346,14 @@ mod tests {
             (last - first + 1) as usize <= 80 * 3 / 5,
             "popup must not fill the viewport: {first}..={last}"
         );
-        // The truncated description ends with an ellipsis.
         let row_text: String = (first..=last)
             .filter_map(|x| buf.get(x, y).map(|c| c.symbol().to_string()))
             .collect();
-        assert!(row_text.trim_end().ends_with('…'), "row was {row_text:?}");
         assert!(row_text.starts_with("/autopilot"), "row was {row_text:?}");
     }
 
     #[test]
-    fn completion_menu_has_no_dot_separator_and_two_space_gap() {
+    fn completion_menu_renders_compact_entry_list_without_inline_descriptions() {
         let (terminal, popup) = paint_completion_menu(2, None);
         let buf = terminal.buffer();
         let row_text = |y: u16| -> String {
@@ -2274,14 +2362,78 @@ mod tests {
                 .collect()
         };
         let first = row_text(popup.y);
-        // Label and description sit in plain padded columns — no `·` (or any
-        // other ornament) between them; weight/brightness carry the hierarchy.
+        // Pure command entry in the left menu: no inline description text or separator
         assert!(first.contains("/repeat"), "row was {first:?}");
         assert!(
-            first.contains("Schedule a prompt on a cron"),
-            "row was {first:?}"
+            !first.contains("Schedule a prompt on a cron"),
+            "inline description should not appear in candidate list: {first:?}"
         );
         assert!(!first.contains('·'), "row was {first:?}");
+    }
+
+    #[test]
+    fn completion_menu_hover_doc_flyout_only_appears_when_entry_is_selected() {
+        let theme = Theme::default();
+        let doc = crate::completion::CommandDoc {
+            name: "/schedule".to_string(),
+            summary: "Schedule a prompt".to_string(),
+            description: "Schedule a prompt on a cron or countdown".to_string(),
+            usage: vec!["/schedule <when> <prompt>".to_string()],
+            examples: vec![("/schedule 15m \"test\"".to_string(), "Run in 15m".to_string())],
+            intent_keywords: vec!["timer".to_string()],
+            category: Some("Automation".to_string()),
+        };
+        let completions = vec![
+            crate::completion::Completion {
+                label: "/schedule".to_string(),
+                description: "Schedule a prompt".to_string(),
+                replace_start: 0,
+                replace_end: 2,
+                kind: crate::completion::CompletionItemKind::Slash,
+                doc: Some(doc),
+            },
+        ];
+
+        // 1. Unselected (selected = None): No right-side doc window is rendered
+        let mut term_unselected = neenee_tui_engine::TestTerminal::new(80, 12);
+        term_unselected.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            draw_completion_menu(
+                f,
+                &mut layout_map,
+                &completions,
+                None,
+                Rect::new(0, 10, 80, 2),
+                2,
+                &theme,
+            );
+        });
+        let buf_unselected = term_unselected.buffer();
+        let panel_bg = theme.panel();
+        let has_panel_unselected = (0..80u16).any(|x| {
+            buf_unselected.get(x, 9).map(|c| c.bg) == Some(panel_bg)
+        });
+        assert!(!has_panel_unselected, "unselected completion must not render hover doc flyout");
+
+        // 2. Selected (selected = Some(0)): Right-side doc window is rendered with panel_bg
+        let mut term_selected = neenee_tui_engine::TestTerminal::new(80, 12);
+        term_selected.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            draw_completion_menu(
+                f,
+                &mut layout_map,
+                &completions,
+                Some(0),
+                Rect::new(0, 10, 80, 2),
+                2,
+                &theme,
+            );
+        });
+        let buf_selected = term_selected.buffer();
+        let has_panel_selected = (0..80u16).any(|x| {
+            buf_selected.get(x, 9).map(|c| c.bg) == Some(panel_bg)
+        });
+        assert!(has_panel_selected, "selected completion must render hover doc flyout with panel bg");
     }
 
     /// Read back the one-row bar as joined text for assertion.

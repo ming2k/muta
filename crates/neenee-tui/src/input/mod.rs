@@ -87,6 +87,8 @@ pub struct InputContext {
     /// `n` new session). While true, printable keys edit the prompt text and
     /// Enter submits it. Mirrors `App::host_prompting`.
     pub host_prompting: bool,
+    /// Whether the custom color scheme hex editor in Settings is actively editing.
+    pub config_custom_editing: bool,
 }
 
 impl InputContext {
@@ -105,22 +107,17 @@ impl InputContext {
 /// active (`history_searching` / `model_searching`); in browse mode those keys
 /// are inert so `/` can open search and stray letters never mutate a buffer the
 /// user isn't editing.
-fn edits_input_field(
-    modal: super::Modal,
-    history_searching: bool,
-    model_searching: bool,
-    custom_text_field: bool,
-) -> bool {
-    match modal {
+fn edits_input_field(context: &InputContext) -> bool {
+    match context.active_modal {
         super::Modal::None
         | super::Modal::ModelEditor
-        | super::Modal::InputInjection
-        | super::Modal::ConfigThemeCustom => true,
-        super::Modal::Models | super::Modal::Connections => model_searching,
-        super::Modal::HistorySearch => history_searching,
+        | super::Modal::InputInjection => true,
+        super::Modal::Config => context.config_custom_editing,
+        super::Modal::Models | super::Modal::Connections => context.model_searching,
+        super::Modal::HistorySearch => context.history_searching,
         // The provider editor edits the composer line on every visible field
         // (Name / Base URL / Token / Model all borrow it).
-        super::Modal::CustomProvider => custom_text_field,
+        super::Modal::CustomProvider => context.custom_text_field_focused(),
         _ => false,
     }
 }
@@ -153,8 +150,6 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
             | super::Modal::Skills
             | super::Modal::Permissions
             | super::Modal::Config
-            | super::Modal::ConfigTheme
-            | super::Modal::ConfigLayout
             | super::Modal::Activity
             | super::Modal::Queue
             | super::Modal::TokenReport
@@ -181,9 +176,6 @@ fn scrolls_own_body(modal: super::Modal) -> bool {
             | super::Modal::Activity
             | super::Modal::Permissions
             | super::Modal::Config
-            | super::Modal::ConfigTheme
-            | super::Modal::ConfigThemeCustom
-            | super::Modal::ConfigLayout
             | super::Modal::TokenReport
             | super::Modal::OauthPending
             | super::Modal::ProviderTemplate
@@ -361,26 +353,12 @@ pub enum InputAction {
     /// Clear every cached "always allow" rule. Bound to `c` in the
     /// permissions manager modal.
     PermissionsClearAll,
-    /// Drill into the selected config category's sub-page (from
-    /// `Modal::Config`). Bound to `Enter` / `Space`.
+    /// Activate or toggle the selected item in the Settings View. Bound to `Enter` / `Space`.
     ConfigActivate,
-    /// Apply the selected built-in color scheme, or open the custom editor
-    /// when the Custom row is selected.
-    ConfigThemeActivate,
-    /// Move between custom semantic-color fields, committing the current field
-    /// only when it contains a valid `#RRGGBB` value.
-    ConfigThemeField {
-        delta: i32,
-    },
-    /// Save the custom palette, apply it live, and persist it.
-    ConfigThemeCustomSave,
-    /// Return from a config sub-page to the config root. Bound to `Esc`
-    /// inside a sub-page (a second `Esc` closes the modal).
+    /// Toggle focus between Categories and Detail in the Settings View. Bound to `Tab`.
+    ConfigFocusToggle,
+    /// Return focus to Categories or close the Settings View. Bound to `Esc`.
     ConfigBack,
-    /// Apply the selected transcript layout strategy in the layout sub-page.
-    /// Bound to `Enter` / `Space`. The harness persists the choice to
-    /// `config.toml` and replies with `AgentResponse::TuiLayoutUpdated`.
-    ConfigLayoutApply,
     /// Move the tool-selection cursor in the session-context dashboard when it
     /// still hosts the tools list, and in the tools manager modal otherwise.
     /// `forward` = down, else up.
@@ -1247,12 +1225,7 @@ pub fn process_event(
                         // drops the picker's search sub-layer back to the
                         // browse list; the next Esc (browse mode) closes.
                         InputAction::ModelExitSearch
-                    } else if context.active_modal == super::Modal::ConfigTheme
-                        || context.active_modal == super::Modal::ConfigThemeCustom
-                    {
-                        InputAction::ConfigBack
-                    } else if context.active_modal == super::Modal::ConfigLayout {
-                        // Esc in the layout sub-page returns to the config root.
+                    } else if context.active_modal == super::Modal::Config {
                         InputAction::ConfigBack
                     } else if context.active_modal != super::Modal::None {
                         InputAction::CloseModal
@@ -1410,9 +1383,6 @@ pub fn process_event(
                         super::Modal::Queue => InputAction::RecallQueuedSelected,
                         super::Modal::Btw => InputAction::BtwFocusSelected,
                         super::Modal::Config => InputAction::ConfigActivate,
-                        super::Modal::ConfigTheme => InputAction::ConfigThemeActivate,
-                        super::Modal::ConfigThemeCustom => InputAction::ConfigThemeCustomSave,
-                        super::Modal::ConfigLayout => InputAction::ConfigLayoutApply,
                         super::Modal::Activity => InputAction::CloseModal,
                         super::Modal::TokenReport => InputAction::TokenReportActivate,
                         super::Modal::None => {
@@ -1440,7 +1410,6 @@ pub fn process_event(
                             // below.
                             if let Some(i) = context.suggestion_index
                                 && context.completion_kind != super::CompletionKind::None
-                                && context.suggestion_count > 0
                             {
                                 return InputAction::CommitSuggestion(i.to_string());
                             }
@@ -1497,8 +1466,8 @@ pub fn process_event(
                         // Tab cycles focus between the editor's API-key and
                         // model-id fields.
                         InputAction::ModelEditorNextField
-                    } else if context.active_modal == super::Modal::ConfigThemeCustom {
-                        InputAction::ConfigThemeField { delta: 1 }
+                    } else if context.active_modal == super::Modal::Config {
+                        InputAction::ConfigFocusToggle
                     } else if context.active_modal == super::Modal::CustomProvider {
                         // Tab advances through the editor's visible fields.
                         InputAction::CustomProviderNextField
@@ -1524,8 +1493,8 @@ pub fn process_event(
                     // uses Ctrl+Up/Ctrl-Down, not Tab).
                     if context.active_modal == super::Modal::CustomProvider {
                         InputAction::CustomProviderPrevField
-                    } else if context.active_modal == super::Modal::ConfigThemeCustom {
-                        InputAction::ConfigThemeField { delta: -1 }
+                    } else if context.active_modal == super::Modal::Config {
+                        InputAction::ConfigFocusToggle
                     } else if context.active_modal == super::Modal::Question {
                         InputAction::QuestionPrevious
                     } else {
@@ -1552,12 +1521,7 @@ pub fn process_event(
                         // async paste path; the event loop applies the read to
                         // `QuestionModel::other_text`.
                         InputAction::Paste
-                    } else if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) {
+                    } else if edits_input_field(&context) {
                         InputAction::Paste
                     } else {
                         InputAction::None
@@ -1569,13 +1533,7 @@ pub fn process_event(
                 // is edited; a no-op elsewhere so it never inserts a literal
                 // 'b' or scrolls.
                 KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) && *cursor_position > 0
-                    {
+                    if edits_input_field(&context) && *cursor_position > 0 {
                         *cursor_position -= 1;
                     }
                     InputAction::None
@@ -1586,24 +1544,14 @@ pub fn process_event(
                 // modals. Outside those (Browse zone, read-only modals) it is
                 // a no-op so it never inserts a literal 'a' or scrolls.
                 KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) {
+                    if edits_input_field(&context) {
                         cursor_line_start(input, cursor_position);
                     }
                     InputAction::None
                 }
                 // Ctrl+E: move the caret to the end of the current line.
                 KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) {
+                    if edits_input_field(&context) {
                         cursor_line_end(input, cursor_position);
                     }
                     InputAction::None
@@ -1615,12 +1563,7 @@ pub fn process_event(
                 // No-op outside free-text surfaces so it never closes a
                 // modal or inserts a literal 'w'.
                 KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) {
+                    if edits_input_field(&context) {
                         let start = prev_word_start(input, *cursor_position);
                         if start < *cursor_position {
                             let start_byte = input
@@ -1645,12 +1588,7 @@ pub fn process_event(
                 // drafts only lose the current line; Ctrl+C still clears the
                 // whole buffer when the user wants a full wipe.
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) {
+                    if edits_input_field(&context) {
                         let mut start = *cursor_position;
                         cursor_line_start(input, &mut start);
                         if start < *cursor_position {
@@ -1675,12 +1613,7 @@ pub fn process_event(
                 // logical line (readline `kill-line`). Stops at the next
                 // newline so multi-line drafts keep their other lines.
                 KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) {
+                    if edits_input_field(&context) {
                         let mut end = *cursor_position;
                         cursor_line_end(input, &mut end);
                         if end > *cursor_position {
@@ -1702,24 +1635,14 @@ pub fn process_event(
                 }
                 // Alt+B: jump back one word (readline `backward-word`).
                 KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) {
+                    if edits_input_field(&context) {
                         *cursor_position = prev_word_start(input, *cursor_position);
                     }
                     InputAction::None
                 }
                 // Alt+F: jump forward one word (readline `forward-word`).
                 KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) {
+                    if edits_input_field(&context) {
                         *cursor_position = next_word_end(input, *cursor_position);
                     }
                     InputAction::None
@@ -1727,12 +1650,7 @@ pub fn process_event(
                 // Alt+D: delete the next whitespace-delimited word (readline
                 // `kill-word`). Symmetric counterpart to Ctrl+W.
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::ALT) => {
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) {
+                    if edits_input_field(&context) {
                         let end = next_word_end(input, *cursor_position);
                         if end > *cursor_position {
                             let start_byte = input
@@ -1768,12 +1686,7 @@ pub fn process_event(
                     if c == '?'
                         && context.active_modal != super::Modal::None
                         && supports_keymap_page(context.active_modal)
-                        && !edits_input_field(
-                            context.active_modal,
-                            context.history_searching,
-                            context.model_searching,
-                            context.custom_text_field_focused(),
-                        )
+                        && !edits_input_field(&context)
                     {
                         return InputAction::ToggleModalKeymap;
                     }
@@ -1838,18 +1751,11 @@ pub fn process_event(
                     if context.active_modal == super::Modal::Permissions && c == ' ' {
                         return InputAction::PermissionsActivate;
                     }
-                    // Space in the config root drills into the selected
-                    // category.
-                    if context.active_modal == super::Modal::Config && c == ' ' {
+                    if context.active_modal == super::Modal::Config
+                        && !context.config_custom_editing
+                        && c == ' '
+                    {
                         return InputAction::ConfigActivate;
-                    }
-                    if context.active_modal == super::Modal::ConfigTheme && c == ' ' {
-                        return InputAction::ConfigThemeActivate;
-                    }
-                    // Space in the layout sub-page applies the selected
-                    // strategy (same as Enter).
-                    if context.active_modal == super::Modal::ConfigLayout && c == ' ' {
-                        return InputAction::ConfigLayoutApply;
                     }
                     if context.active_modal == super::Modal::Question
                         && let Some(d) = c.to_digit(10)
@@ -1996,7 +1902,8 @@ pub fn process_event(
                         InputAction::ModelEditorEffortJump { index }
                     } else if context.active_modal == super::Modal::Question {
                         InputAction::QuestionInsertChar(c)
-                    } else if context.active_modal == super::Modal::ConfigThemeCustom
+                    } else if context.active_modal == super::Modal::Config
+                        && context.config_custom_editing
                         && c != '#'
                         && !c.is_ascii_hexdigit()
                     {
@@ -2004,13 +1911,9 @@ pub fn process_event(
                         // printable input instead of letting the user build an
                         // impossible value that can never be saved.
                         InputAction::None
-                    } else if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) && !(context.active_modal == super::Modal::ModelEditor
-                        && context.editor_field == Some(2))
+                    } else if edits_input_field(&context)
+                        && !(context.active_modal == super::Modal::ModelEditor
+                            && context.editor_field == Some(2))
                     {
                         // The key editor's thinking field (2) is a toggle, not
                         // a text field — don't let printable chars mutate the
@@ -2035,12 +1938,7 @@ pub fn process_event(
                 KeyCode::Backspace => {
                     if context.active_modal == super::Modal::Question {
                         InputAction::QuestionBackspace
-                    } else if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) && *cursor_position > 0
+                    } else if edits_input_field(&context) && *cursor_position > 0
                     {
                         // Alt+Backspace / Ctrl+Backspace delete the previous
                         // whitespace-delimited word in one stroke, matching
@@ -2116,12 +2014,7 @@ pub fn process_event(
                 // keystroke, mirroring the chip-aware Backspace. The caret
                 // does not move (forward delete only shortens the text).
                 KeyCode::Delete => {
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) && *cursor_position < input.chars().count()
+                    if edits_input_field(&context) && *cursor_position < input.chars().count()
                     {
                         let byte_cursor = input
                             .char_indices()
@@ -2161,12 +2054,7 @@ pub fn process_event(
                     }
                     // In the provider editor every field borrows the composer
                     // line, so ←/→ move the caret within the focused field.
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) && *cursor_position > 0
+                    if edits_input_field(&context) && *cursor_position > 0
                     {
                         // Ctrl+Left (and Alt+Left on terminals that translate
                         // it) jumps back one whitespace-delimited word,
@@ -2192,12 +2080,7 @@ pub fn process_event(
                     {
                         return InputAction::ModelEditorEffortCycle { delta: 1 };
                     }
-                    if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) && *cursor_position < input.chars().count()
+                    if edits_input_field(&context) && *cursor_position < input.chars().count()
                     {
                         // Ctrl+Right (and Alt+Right) jump forward one word.
                         if key
@@ -2284,11 +2167,6 @@ pub fn process_event(
                         }
                         super::Modal::Permissions => InputAction::ModalUp,
                         super::Modal::Config => InputAction::ModalUp,
-                        super::Modal::ConfigTheme => InputAction::ModalUp,
-                        super::Modal::ConfigThemeCustom => {
-                            InputAction::ConfigThemeField { delta: -1 }
-                        }
-                        super::Modal::ConfigLayout => InputAction::ModalUp,
                         super::Modal::ProviderTemplate => {
                             InputAction::MoveProviderTemplate { forward: false }
                         }
@@ -2363,11 +2241,6 @@ pub fn process_event(
                         }
                         super::Modal::Permissions => InputAction::ModalDown,
                         super::Modal::Config => InputAction::ModalDown,
-                        super::Modal::ConfigTheme => InputAction::ModalDown,
-                        super::Modal::ConfigThemeCustom => {
-                            InputAction::ConfigThemeField { delta: 1 }
-                        }
-                        super::Modal::ConfigLayout => InputAction::ModalDown,
                         super::Modal::ProviderTemplate => {
                             InputAction::MoveProviderTemplate { forward: true }
                         }
@@ -2435,12 +2308,7 @@ pub fn process_event(
                             && context.has_focused_target)
                     {
                         InputAction::ScrollTop
-                    } else if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) {
+                    } else if edits_input_field(&context) {
                         cursor_line_start(input, cursor_position);
                         InputAction::None
                     } else {
@@ -2453,12 +2321,7 @@ pub fn process_event(
                             && context.has_focused_target)
                     {
                         InputAction::ScrollBottom
-                    } else if edits_input_field(
-                        context.active_modal,
-                        context.history_searching,
-                        context.model_searching,
-                        context.custom_text_field_focused(),
-                    ) {
+                    } else if edits_input_field(&context) {
                         cursor_line_end(input, cursor_position);
                         InputAction::None
                     } else {
@@ -2478,12 +2341,7 @@ pub fn process_event(
                 // The "Other" field owns its own buffer; route the bracketed
                 // payload into it via the event loop's paste apply.
                 InputAction::BracketedPaste(text)
-            } else if edits_input_field(
-                context.active_modal,
-                context.history_searching,
-                context.model_searching,
-                context.custom_text_field_focused(),
-            ) {
+            } else if edits_input_field(&context) {
                 InputAction::BracketedPaste(text)
             } else {
                 InputAction::None

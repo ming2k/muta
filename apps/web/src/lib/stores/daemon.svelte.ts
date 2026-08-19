@@ -118,6 +118,9 @@ export interface EnvoyExecution {
   /** Completed envoy response text (accumulated across `StreamEnd`s). */
   text: string;
   streamingText: string;
+  /** Completed envoy reasoning traces (accumulated across `StreamReasoningEnd`s). */
+  reasoning: string[];
+  streamingReasoning: string;
   tools: EnvoyTool[];
 }
 
@@ -985,7 +988,15 @@ export class DaemonStore {
     }
     if (!parent) return; // stray envoy event for a tool we never saw
     if (!parent.envoy) {
-      parent.envoy = { profile: null, activity: null, text: "", streamingText: "", tools: [] };
+      parent.envoy = {
+        profile: null,
+        activity: null,
+        text: "",
+        streamingText: "",
+        reasoning: [],
+        streamingReasoning: "",
+        tools: [],
+      };
     }
     const envoy = parent.envoy;
 
@@ -1001,6 +1012,16 @@ export class DaemonStore {
       const finalText = event.StreamEnd || envoy.streamingText;
       envoy.text = envoy.text ? `${envoy.text}\n\n${finalText}` : finalText;
       envoy.streamingText = "";
+    } else if ("StreamReasoningStart" in event) {
+      envoy.streamingReasoning = "";
+    } else if ("StreamReasoningDelta" in event) {
+      envoy.streamingReasoning += event.StreamReasoningDelta;
+    } else if ("StreamReasoningEnd" in event) {
+      const finalReasoning = event.StreamReasoningEnd || envoy.streamingReasoning;
+      if (finalReasoning.trim()) {
+        envoy.reasoning = [...envoy.reasoning, finalReasoning];
+      }
+      envoy.streamingReasoning = "";
     } else if ("ToolCall" in event) {
       const call = event.ToolCall;
       envoy.tools.push({

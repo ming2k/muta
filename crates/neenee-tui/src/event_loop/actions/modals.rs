@@ -345,11 +345,12 @@ pub(super) fn handle_close_modal(app: &mut App, viewed_session_id: &str) {
             app.model_modal_follow = true;
             app.modal_index = 0;
             return_to = Some(Modal::Connections);
-        } else if app.active_modal == Modal::ConfigThemeCustom {
+        } else if app.active_modal == Modal::Config && app.config_custom_editing {
             // Click-outside closes the settings stack. Discard
             // the transactional custom preview before leaving.
             app.theme = Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
             app.custom_color_draft = app.custom_color_scheme.clone();
+            app.config_custom_editing = false;
             app.input.clear();
             app.set_cursor(0);
         }
@@ -458,18 +459,39 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
             };
         }
         Modal::Config => {
-            // Config root: cycle up through the category list.
-            // Count matches `categories()` in config.rs.
-            let count = 2usize;
-            app.modal_index = (app.modal_index + count - 1) % count;
-        }
-        Modal::ConfigTheme => {
-            let count = crate::view::overlays::config_theme::ROW_COUNT;
-            app.modal_index = (app.modal_index + count - 1) % count;
-        }
-        Modal::ConfigLayout => {
-            let count = crate::view::overlays::config_layout::ROW_COUNT;
-            app.modal_index = (app.modal_index + 1) % count;
+            match app.config_focus {
+                crate::overlays::ConfigFocus::Categories => {
+                    let count = 4usize;
+                    app.config_category = (app.config_category + count - 1) % count;
+                    app.config_detail_index = 0;
+                    app.config_detail_scroll = 0;
+                }
+                crate::overlays::ConfigFocus::Detail => {
+                    if app.config_category == 0 && app.config_custom_editing {
+                        let num_schemes = crate::view::COLOR_SCHEMES.len();
+                        let custom_field_idx = app.config_detail_index.saturating_sub(num_schemes).min(7);
+                        let _ = crate::view::Theme::set_custom_color_value(
+                            &mut app.custom_color_draft,
+                            custom_field_idx,
+                            &app.input,
+                        );
+                        let next_field = (custom_field_idx + 8 - 1) % 8;
+                        app.config_detail_index = num_schemes + next_field;
+                        app.input = crate::view::Theme::custom_color_value(&app.custom_color_draft, next_field)
+                            .unwrap_or("#000000")
+                            .to_string();
+                        app.set_cursor_end();
+                    } else {
+                        let count = match app.config_category {
+                            0 => crate::view::COLOR_SCHEMES.len(),
+                            1 => 2usize,
+                            2 => 1usize,
+                            _ => 4usize,
+                        };
+                        app.config_detail_index = (app.config_detail_index + count - 1) % count;
+                    }
+                }
+            }
         }
         Modal::TokenReport => {
             if app.token_report_detail {
@@ -503,7 +525,6 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
         | Modal::ProviderTemplate
         | Modal::OauthPending
         | Modal::CustomProvider
-        | Modal::ConfigThemeCustom
         | Modal::InputInjection
         | Modal::Tools
         | Modal::Mcp
@@ -559,18 +580,39 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
             app.modal_index = (app.modal_index + 1) % count;
         }
         Modal::Config => {
-            // Config root: cycle down through the category list.
-            // Count matches `categories()` in config.rs.
-            let count = 2usize;
-            app.modal_index = (app.modal_index + 1) % count;
-        }
-        Modal::ConfigTheme => {
-            let count = crate::view::overlays::config_theme::ROW_COUNT;
-            app.modal_index = (app.modal_index + 1) % count;
-        }
-        Modal::ConfigLayout => {
-            let count = crate::view::overlays::config_layout::ROW_COUNT;
-            app.modal_index = (app.modal_index + 1) % count;
+            match app.config_focus {
+                crate::overlays::ConfigFocus::Categories => {
+                    let count = 4usize;
+                    app.config_category = (app.config_category + 1) % count;
+                    app.config_detail_index = 0;
+                    app.config_detail_scroll = 0;
+                }
+                crate::overlays::ConfigFocus::Detail => {
+                    if app.config_category == 0 && app.config_custom_editing {
+                        let num_schemes = crate::view::COLOR_SCHEMES.len();
+                        let custom_field_idx = app.config_detail_index.saturating_sub(num_schemes).min(7);
+                        let _ = crate::view::Theme::set_custom_color_value(
+                            &mut app.custom_color_draft,
+                            custom_field_idx,
+                            &app.input,
+                        );
+                        let next_field = (custom_field_idx + 1) % 8;
+                        app.config_detail_index = num_schemes + next_field;
+                        app.input = crate::view::Theme::custom_color_value(&app.custom_color_draft, next_field)
+                            .unwrap_or("#000000")
+                            .to_string();
+                        app.set_cursor_end();
+                    } else {
+                        let count = match app.config_category {
+                            0 => crate::view::COLOR_SCHEMES.len(),
+                            1 => 2usize,
+                            2 => 1usize,
+                            _ => 4usize,
+                        };
+                        app.config_detail_index = (app.config_detail_index + 1) % count;
+                    }
+                }
+            }
         }
         Modal::TokenReport => {
             if app.token_report_detail {
@@ -604,7 +646,6 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
         | Modal::ProviderTemplate
         | Modal::OauthPending
         | Modal::CustomProvider
-        | Modal::ConfigThemeCustom
         | Modal::InputInjection
         | Modal::Tools
         | Modal::Mcp

@@ -1,56 +1,51 @@
 //! Color palette used across the renderer.
 
-use neenee_contracts::ColorSchemeConfig;
+use std::borrow::Cow;
+
+use neenee_contracts::{ColorSchemeConfig, ComponentThemesConfig, ThemeFile};
 use neenee_tui_engine::Color;
 
 /// Metadata for one color scheme shown by the Appearance config page.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ColorSchemePreset {
-    pub id: &'static str,
-    pub label: &'static str,
-    pub description: &'static str,
+    pub id: Cow<'static, str>,
+    pub label: Cow<'static, str>,
+    pub description: Cow<'static, str>,
     pub custom: bool,
+    pub is_file: bool,
+}
+
+impl ColorSchemePreset {
+    pub const fn static_preset(
+        id: &'static str,
+        label: &'static str,
+        description: &'static str,
+        custom: bool,
+    ) -> Self {
+        Self {
+            id: Cow::Borrowed(id),
+            label: Cow::Borrowed(label),
+            description: Cow::Borrowed(description),
+            custom,
+            is_file: false,
+        }
+    }
 }
 
 /// Built-in palettes plus the editable custom slot. Order is the UI order.
 pub const COLOR_SCHEMES: [ColorSchemePreset; 6] = [
-    ColorSchemePreset {
-        id: "zen",
-        label: "Zen",
-        description: "Quiet charcoal with sage accents",
-        custom: false,
-    },
-    ColorSchemePreset {
-        id: "midnight",
-        label: "Midnight",
-        description: "Deep navy with crisp blue accents",
-        custom: false,
-    },
-    ColorSchemePreset {
-        id: "nord",
-        label: "Nord",
-        description: "Cool arctic blues and soft contrast",
-        custom: false,
-    },
-    ColorSchemePreset {
-        id: "catppuccin",
-        label: "Catppuccin",
-        description: "Warm mocha with lavender accents",
-        custom: false,
-    },
-    ColorSchemePreset {
-        id: "paper",
-        label: "Paper",
-        description: "Warm light surface for bright terminals",
-        custom: false,
-    },
-    ColorSchemePreset {
-        id: "custom",
-        label: "Custom",
-        description: "Your editable eight-color palette",
-        custom: true,
-    },
+    ColorSchemePreset::static_preset("zen", "Zen", "Quiet charcoal with sage accents", false),
+    ColorSchemePreset::static_preset("midnight", "Midnight", "Deep navy with crisp blue accents", false),
+    ColorSchemePreset::static_preset("nord", "Nord", "Cool arctic blues and soft contrast", false),
+    ColorSchemePreset::static_preset("catppuccin", "Catppuccin", "Warm mocha with lavender accents", false),
+    ColorSchemePreset::static_preset("paper", "Paper", "Warm light surface for bright terminals", false),
+    ColorSchemePreset::static_preset("custom", "Custom", "Your editable eight-color palette", true),
 ];
+
+// ── Default Styling Constants ──────────────────────────────────────────────
+pub const DEFAULT_CRATE_FG: Color = Color::Rgb(180, 190, 254);
+pub const DEFAULT_CARET_FG: Color = Color::Rgb(213, 213, 205);
+pub const DEFAULT_INPUT_PLACEHOLDER_FG: Color = Color::Rgb(119, 125, 117);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CustomColorField {
@@ -182,6 +177,13 @@ pub struct Theme {
     /// coherent step for free; see [`Theme::command_surface`].
     pub command_band_bg: Color,
     pub command_band_bg_hover: Color,
+
+    // Component-specific tokens
+    pub caret_fg: Color,
+    pub input_selection_bg: Color,
+    pub input_placeholder_fg: Color,
+    pub crate_fg: Color,
+    pub crate_bg: Color,
 }
 
 impl Default for Theme {
@@ -204,14 +206,6 @@ impl Default for Theme {
             text_muted: Color::Rgb(119, 125, 117),
             text_hover: Color::Rgb(175, 180, 172),
             panel_bg: Color::Rgb(14, 15, 15),
-            // The input pair is tuned as a unit, independently of the other
-            // surface tokens: the inactive band sits just above `panel_bg`
-            // (readable but recessed), and the active band jumps another
-            // visible step above `element_bg` so the focused prompt is the
-            // single brightest interactive surface in the frame. A ±1-step
-            // tweak (the old `input_bg` (18,19,19)) was indistinguishable
-            // both from the app background and from the borrowed
-            // `user_panel_bg`, which is what motivated the dedicated pair.
             input_bg_active: Color::Rgb(26, 28, 27),
             input_bg_inactive: Color::Rgb(16, 17, 17),
             user_panel_bg: Color::Rgb(17, 22, 19),
@@ -219,26 +213,23 @@ impl Default for Theme {
             element_bg: Color::Rgb(21, 23, 22),
             menu_bg: Color::Rgb(17, 19, 18),
             backdrop: Color::Rgb(3, 4, 4),
-            // Halves surface luminance behind a dim-recess modal — clearly
-            // recessed for focus, still readable for context.
             modal_dim_factor: 0.5,
             primary: Color::Rgb(142, 161, 145),
             warning: Color::Rgb(181, 149, 93),
             success: Color::Rgb(117, 148, 117),
             info: Color::Rgb(128, 153, 156),
-            // Diff banding. Lifted from the ad-hoc literals that used to live
-            // inline in `draw_diff_content`; kept here as the single source so
-            // every block-level surface can share one design contract.
             diff_add_bg: Color::Rgb(18, 31, 22),
             diff_del_bg: Color::Rgb(32, 20, 20),
             diff_add_hl: Color::Rgb(42, 64, 48),
             diff_del_hl: Color::Rgb(64, 40, 40),
-            // Command card (ADR-0109): idle band sits one step above the
-            // page (`menu_bg`, the body surface) and hover lifts it to the
-            // same active tone the notice card hovers to — the card reads
-            // as a quiet but unmistakable object on every scheme.
             command_band_bg: Color::Rgb(17, 19, 18),
             command_band_bg_hover: Color::Rgb(26, 28, 27),
+
+            caret_fg: DEFAULT_CARET_FG,
+            input_selection_bg: Color::Rgb(38, 48, 44),
+            input_placeholder_fg: DEFAULT_INPUT_PLACEHOLDER_FG,
+            crate_fg: DEFAULT_CRATE_FG,
+            crate_bg: Color::Rgb(25, 27, 34),
         }
     }
 }
@@ -248,35 +239,66 @@ impl Default for Theme {
 /// names, so the palette can be retuned in one place. The fields stay `pub`
 /// for `Theme::default()` construction; new rendering code should prefer these.
 impl Theme {
+    /// Return all available color schemes: built-ins + custom theme files in `$XDG_CONFIG_HOME/neenee/themes` + custom slot.
+    pub fn available_color_schemes() -> Vec<ColorSchemePreset> {
+        let mut list = Vec::new();
+        // 1. Built-in presets (Zen, Midnight, Nord, Catppuccin, Paper)
+        for preset in COLOR_SCHEMES.iter().take(5) {
+            list.push(preset.clone());
+        }
+        // 2. Custom files from themes_dir
+        let themes_dir = neenee_persistence::paths::get().themes_dir();
+        for file in neenee_persistence::config::load_theme_files(&themes_dir) {
+            if !list.iter().any(|item| item.id.eq_ignore_ascii_case(&file.id))
+                && !file.id.eq_ignore_ascii_case("custom")
+            {
+                list.push(ColorSchemePreset {
+                    id: Cow::Owned(file.id),
+                    label: Cow::Owned(file.name),
+                    description: Cow::Owned(file.description),
+                    custom: false,
+                    is_file: true,
+                });
+            }
+        }
+        // 3. The Custom editor slot
+        list.push(COLOR_SCHEMES[5].clone());
+        list
+    }
+
     /// Canonicalize a persisted scheme id. Unknown and empty ids use Zen.
-    pub fn normalize_color_scheme(name: &str) -> &'static str {
-        COLOR_SCHEMES
+    pub fn normalize_color_scheme(name: &str) -> String {
+        let name = name.trim();
+        let schemes = Self::available_color_schemes();
+        schemes
             .iter()
-            .find(|scheme| scheme.id.eq_ignore_ascii_case(name.trim()))
-            .map(|scheme| scheme.id)
-            .unwrap_or("zen")
+            .find(|scheme| scheme.id.eq_ignore_ascii_case(name))
+            .map(|scheme| scheme.id.to_string())
+            .unwrap_or_else(|| "zen".to_string())
     }
 
     pub fn color_scheme_index(name: &str) -> usize {
-        let name = Self::normalize_color_scheme(name);
-        COLOR_SCHEMES
+        let name = name.trim();
+        let schemes = Self::available_color_schemes();
+        schemes
             .iter()
-            .position(|scheme| scheme.id == name)
+            .position(|scheme| scheme.id.eq_ignore_ascii_case(name))
             .unwrap_or(0)
     }
 
-    pub fn color_scheme_label(name: &str) -> &'static str {
-        let name = Self::normalize_color_scheme(name);
-        COLOR_SCHEMES
+    pub fn color_scheme_label(name: &str) -> String {
+        let name = name.trim();
+        let schemes = Self::available_color_schemes();
+        schemes
             .iter()
-            .find(|scheme| scheme.id == name)
-            .map(|scheme| scheme.label)
-            .unwrap_or("Zen")
+            .find(|scheme| scheme.id.eq_ignore_ascii_case(name))
+            .map(|scheme| scheme.label.to_string())
+            .unwrap_or_else(|| "Zen".to_string())
     }
 
-    /// Build a complete renderer theme from a preset id or custom semantics.
+    /// Build a complete renderer theme from a preset id, external theme file, or custom semantics.
     pub fn from_color_scheme(name: &str, custom: &ColorSchemeConfig) -> Self {
-        match Self::normalize_color_scheme(name) {
+        match name.trim().to_ascii_lowercase().as_str() {
             "midnight" => Self::from_semantic(
                 Color::Rgb(6, 10, 18),
                 Color::Rgb(14, 20, 32),
@@ -318,7 +340,78 @@ impl Theme {
                 Color::Rgb(177, 63, 58),
             ),
             "custom" => Self::from_custom(custom),
-            _ => Self::default(),
+            "zen" => Self::default(),
+            other => {
+                let themes_dir = neenee_persistence::paths::get().themes_dir();
+                let files = neenee_persistence::config::load_theme_files(&themes_dir);
+                if let Some(found) = files.into_iter().find(|t| t.id.eq_ignore_ascii_case(other)) {
+                    Self::from_theme_file(&found)
+                } else {
+                    Self::default()
+                }
+            }
+        }
+    }
+
+    /// Build a complete renderer theme from a parsed [`ThemeFile`].
+    pub fn from_theme_file(file: &ThemeFile) -> Self {
+        let mut theme = Self::from_custom(&file.colors);
+        theme.apply_component_overrides(&file.components);
+        theme
+    }
+
+    /// Apply component-specific overrides onto an existing theme.
+    pub fn apply_component_overrides(
+        &mut self,
+        overrides: &Option<ComponentThemesConfig>,
+    ) {
+        let Some(components) = overrides else { return };
+        if let Some(ref input) = components.input {
+            if let Some(val) = input.bg_active.as_deref().and_then(Self::color_from_hex) {
+                self.input_bg_active = val;
+            }
+            if let Some(val) = input.bg_inactive.as_deref().and_then(Self::color_from_hex) {
+                self.input_bg_inactive = val;
+            }
+            if let Some(val) = input.caret.as_deref().and_then(Self::color_from_hex) {
+                self.caret_fg = val;
+            }
+            if let Some(val) = input.selection.as_deref().and_then(Self::color_from_hex) {
+                self.input_selection_bg = val;
+            }
+            if let Some(val) = input.placeholder.as_deref().and_then(Self::color_from_hex) {
+                self.input_placeholder_fg = val;
+            }
+        }
+        if let Some(ref crate_c) = components.crate_component {
+            if let Some(val) = crate_c.fg.as_deref().and_then(Self::color_from_hex) {
+                self.crate_fg = val;
+            }
+            if let Some(val) = crate_c.badge_bg.as_deref().and_then(Self::color_from_hex) {
+                self.crate_bg = val;
+            }
+        }
+        if let Some(ref diff) = components.diff {
+            if let Some(val) = diff.add_bg.as_deref().and_then(Self::color_from_hex) {
+                self.diff_add_bg = val;
+            }
+            if let Some(val) = diff.del_bg.as_deref().and_then(Self::color_from_hex) {
+                self.diff_del_bg = val;
+            }
+            if let Some(val) = diff.add_hl.as_deref().and_then(Self::color_from_hex) {
+                self.diff_add_hl = val;
+            }
+            if let Some(val) = diff.del_hl.as_deref().and_then(Self::color_from_hex) {
+                self.diff_del_hl = val;
+            }
+        }
+        if let Some(ref command) = components.command {
+            if let Some(val) = command.idle_bg.as_deref().and_then(Self::color_from_hex) {
+                self.command_band_bg = val;
+            }
+            if let Some(val) = command.hover_bg.as_deref().and_then(Self::color_from_hex) {
+                self.command_band_bg_hover = val;
+            }
         }
     }
 
@@ -461,6 +554,11 @@ impl Theme {
             // interactive card is lit up" reads identically everywhere.
             command_band_bg: mix(background, surface, 0.72),
             command_band_bg_hover: mix(surface, text, if light { 0.06 } else { 0.08 }),
+            caret_fg: text,
+            input_selection_bg: mix(surface, accent, if light { 0.18 } else { 0.24 }),
+            input_placeholder_fg: muted,
+            crate_fg: mix(accent, Color::Rgb(180, 190, 254), 0.65),
+            crate_bg: mix(background, accent, if light { 0.08 } else { 0.12 }),
         }
     }
 
@@ -621,6 +719,26 @@ impl Theme {
     pub fn system_text(&self) -> Color {
         self.system_fg
     }
+    /// Caret / cursor insertion point color.
+    pub fn caret(&self) -> Color {
+        self.caret_fg
+    }
+    /// Input placeholder text color.
+    pub fn input_placeholder(&self) -> Color {
+        self.input_placeholder_fg
+    }
+    /// Input selection highlight color.
+    pub fn input_selection(&self) -> Color {
+        self.input_selection_bg
+    }
+    /// Crate identifier / tag foreground color.
+    pub fn crate_tag(&self) -> Color {
+        self.crate_fg
+    }
+    /// Crate badge background tint.
+    pub fn crate_badge(&self) -> Color {
+        self.crate_bg
+    }
 }
 
 fn normalize_hex(value: &str) -> Option<String> {
@@ -683,8 +801,61 @@ mod tests {
     #[test]
     fn every_preset_has_a_distinct_canonical_index() {
         for (index, scheme) in COLOR_SCHEMES.iter().enumerate() {
-            assert_eq!(Theme::color_scheme_index(scheme.id), index);
+            assert_eq!(Theme::color_scheme_index(&scheme.id), index);
         }
+    }
+
+    #[test]
+    fn component_overrides_apply_correctly() {
+        let raw = r##"
+name = "Cyberpunk"
+description = "Neon high-contrast"
+[colors]
+background = "#050505"
+surface = "#151515"
+text = "#ffffff"
+muted = "#808080"
+accent = "#00ffff"
+success = "#00ff00"
+warning = "#ffff00"
+error = "#ff0055"
+
+[components.input]
+bg_active = "#2a2a2a"
+bg_inactive = "#111111"
+caret = "#ff00ff"
+selection = "#333333"
+placeholder = "#777777"
+
+[components.crate]
+fg = "#00ffff"
+badge_bg = "#1a3333"
+
+[components.diff]
+add_bg = "#003300"
+del_bg = "#330011"
+add_hl = "#006600"
+del_hl = "#660022"
+
+[components.command]
+idle_bg = "#181818"
+hover_bg = "#282828"
+"##;
+        let file: ThemeFile = toml::from_str(raw).expect("should parse");
+        let theme = Theme::from_theme_file(&file);
+        assert_eq!(theme.input_surface(), Color::Rgb(42, 42, 42));
+        assert_eq!(theme.input_surface_inactive(), Color::Rgb(17, 17, 17));
+        assert_eq!(theme.caret(), Color::Rgb(255, 0, 255));
+        assert_eq!(theme.input_selection(), Color::Rgb(51, 51, 51));
+        assert_eq!(theme.input_placeholder(), Color::Rgb(119, 119, 119));
+        assert_eq!(theme.crate_tag(), Color::Rgb(0, 255, 255));
+        assert_eq!(theme.crate_badge(), Color::Rgb(26, 51, 51));
+        assert_eq!(theme.diff_add_bg(), Color::Rgb(0, 51, 0));
+        assert_eq!(theme.diff_del_bg(), Color::Rgb(51, 0, 17));
+        assert_eq!(theme.diff_add_hl(), Color::Rgb(0, 102, 0));
+        assert_eq!(theme.diff_del_hl(), Color::Rgb(102, 0, 34));
+        assert_eq!(theme.command_surface(), Color::Rgb(24, 24, 24));
+        assert_eq!(theme.command_surface_hover(), Color::Rgb(40, 40, 40));
     }
 
     /// The input box owns two dedicated background tokens (independent of the
@@ -698,8 +869,8 @@ mod tests {
     fn input_surfaces_stay_distinguishable_in_every_scheme() {
         const MIN_STEP: f32 = 4.0;
         let custom = ColorSchemeConfig::default();
-        for scheme in COLOR_SCHEMES {
-            let theme = Theme::from_color_scheme(scheme.id, &custom);
+        for scheme in &COLOR_SCHEMES {
+            let theme = Theme::from_color_scheme(&scheme.id, &custom);
             let active = theme.input_surface();
             let inactive = theme.input_surface_inactive();
             let base = theme.surface();
@@ -740,8 +911,8 @@ mod tests {
     fn command_card_bands_stay_visible_in_every_scheme() {
         const MIN_STEP: f32 = 2.0;
         let custom = ColorSchemeConfig::default();
-        for scheme in COLOR_SCHEMES {
-            let theme = Theme::from_color_scheme(scheme.id, &custom);
+        for scheme in &COLOR_SCHEMES {
+            let theme = Theme::from_color_scheme(&scheme.id, &custom);
             let idle = theme.command_surface();
             let hover = theme.command_surface_hover();
             let base = theme.surface();

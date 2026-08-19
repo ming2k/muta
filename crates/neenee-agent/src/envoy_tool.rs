@@ -647,6 +647,18 @@ impl EnvoyTool {
         // interruption, a hard terminal error, or a non-retryable one.
         let retry_config = *self.retry_config.lock().unwrap_or_else(|e| e.into_inner());
         let retry_limit = retry_config.max_attempts.clamp(1, 60);
+        // Hidden-chain gate, computed once at the source. A hidden-chain model
+        // (GPT-5.x, `ReasoningSummary`) surfaces only a reasoning *summary*,
+        // never its full chain, so streaming it upward would disclose text the
+        // principal's live path also refuses to show (the TUI drops
+        // `StreamReasoningDelta` for such models at message creation). The
+        // envoy shares the session's provider, so the parent's model is the
+        // envoy's model. Unknown ids default to disclosed — mirroring the
+        // `model_by_id` (not `resolve`) rule of both TUI gates — so local and
+        // user-defined models that reason still stream their chains.
+        let hidden_chain = !neenee_contracts::model_by_id(&self.provider.model())
+            .map(|model| model.thinking.chain_disclosed())
+            .unwrap_or(true);
         let mut round = envoy.begin_streaming_round();
         let mut attempt: usize = 0;
         let result = loop {
@@ -659,7 +671,7 @@ impl EnvoyTool {
                     {
                         position = (*round, *turn);
                     }
-                    Self::forward_event(event, position, &mut on_event)
+                    Self::forward_event(event, position, hidden_chain, &mut on_event)
                 })
                 .await;
             match run {
@@ -816,6 +828,7 @@ impl EnvoyTool {
     fn forward_event(
         event: neenee_contracts::AgentEvent,
         position: (u64, usize),
+        hidden_chain: bool,
         on_event: &mut dyn FnMut(neenee_contracts::EnvoyEvent),
     ) {
         match event {
@@ -841,6 +854,33 @@ impl EnvoyTool {
             }
             neenee_contracts::AgentEvent::AssistantEnd(content) => {
                 on_event(neenee_contracts::EnvoyEvent::StreamEnd(content));
+            }
+            // The envoy's reasoning chain, streamed live instead of surfacing
+            // only after a session reload. Without these arms the child's
+            // thinking fell into the catch-all `_ => {}` below — the durable
+            // transcript kept it (`Message::reasoning_content`) and a resumed
+            // session rendered it, but the run itself showed nothing: a live
+            // drill-in and a reloaded one disagreed about what the envoy did.
+            // Gated at the source for hidden-chain models so the summary-only
+            // chain is never disclosed (the caller computed `hidden_chain`
+            // once; the principal's live path applies the same gate).
+            neenee_contracts::AgentEvent::ReasoningDelta { delta, start } => {
+                if hidden_chain {
+                    return;
+                }
+                if start {
+                    on_event(neenee_contracts::EnvoyEvent::StreamReasoningStart {
+                        round: position.0,
+                        turn: position.1,
+                    });
+                }
+                on_event(neenee_contracts::EnvoyEvent::StreamReasoningDelta(delta));
+            }
+            neenee_contracts::AgentEvent::ReasoningEnd(content) => {
+                if hidden_chain {
+                    return;
+                }
+                on_event(neenee_contracts::EnvoyEvent::StreamReasoningEnd(content));
             }
             neenee_contracts::AgentEvent::ToolCall {
                 id,

@@ -20,17 +20,14 @@
 //! body itself always flows through `dispatch`.
 //!
 //! # Strategies
-//! - [`layout_default::Default`] — each tool-bearing ReAct turn is grouped
+//! - [`turn_band::TurnBand`] — each tool-bearing ReAct turn is grouped
 //!   under a labelled header (`◆ turn N · model`) and uses semantic boundary spacing. The
 //!   default.
-//! - [`legacy::Legacy`] — the original flush-stack behavior, preserved
-//!   verbatim.
 //!
 //! New strategies are added by implementing the trait and wiring a match arm
 //! in [`Strategy::build`].
 
-pub mod layout_default;
-pub mod legacy;
+pub mod turn_band;
 
 use neenee_tui_engine::{Frame, Rect};
 
@@ -46,12 +43,11 @@ use crate::design::{MESSAGE_GAP_ROWS, TURN_HEADER_BODY_GAP_ROWS};
 /// Which layout strategy to use for the transcript message stream.
 ///
 /// Selectable via `[tui] transcript_layout` in `config.toml`; the default is
-/// [`Strategy::Default`], which groups stamped ReAct turns.
+/// [`Strategy::TurnBand`], which groups stamped ReAct turns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Strategy {
     #[default]
-    Default,
-    Legacy,
+    TurnBand,
 }
 
 impl Strategy {
@@ -60,17 +56,24 @@ impl Strategy {
     /// erroring, so a typo never blocks startup.
     pub fn from_config(raw: &str) -> Self {
         match raw.trim().to_ascii_lowercase().as_str() {
-            "legacy" => Self::Legacy,
-            "default" | "compact" | "flush" | "" => Self::Default,
-            _ => Self::Default,
+            "turn_band" | "turn-band" | "turnband" | "default" | "compact" | "flush" | "legacy" | "" => {
+                Self::TurnBand
+            }
+            _ => Self::TurnBand,
+        }
+    }
+
+    /// The canonical configuration string for this strategy.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::TurnBand => "turn_band",
         }
     }
 
     /// Construct the concrete layout for this strategy.
     pub fn build(self) -> Box<dyn TranscriptLayout> {
         match self {
-            Self::Default => Box::new(layout_default::Default),
-            Self::Legacy => Box::new(legacy::Legacy),
+            Self::TurnBand => Box::new(turn_band::TurnBand),
         }
     }
 }
@@ -156,24 +159,7 @@ pub fn build_virtual_index(
     while index < messages.len() {
         let start = index;
         let height = match strategy {
-            Strategy::Legacy => {
-                let message = &messages[index];
-                let mut height = cached_height(cache, message)?;
-                let next = messages.get(index + 1);
-                let next_is_tool_step =
-                    next.is_some_and(|next| next.is_tool_step() || next.is_envoy_task());
-                let collapsed_tool_into_tool_step = message.is_tool_step()
-                    && message.tool_step_expanded() == Some(false)
-                    && next_is_tool_step;
-                if !collapsed_tool_into_tool_step
-                    && (message.role == neenee_contracts::Role::User || next.is_some())
-                {
-                    height += MESSAGE_GAP_ROWS;
-                }
-                index += 1;
-                height
-            }
-            Strategy::Default => {
+            Strategy::TurnBand => {
                 let message = &messages[index];
                 let mut height = default_gap_before(messages, index);
                 if let Some(end) = default_group_end(messages, index) {

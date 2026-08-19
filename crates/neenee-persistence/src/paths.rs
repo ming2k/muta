@@ -81,6 +81,13 @@ impl Dirs {
         self.config_dir.join("config.toml")
     }
 
+    /// User-supplied color scheme files (`$XDG_CONFIG_HOME/neenee/themes`).
+    /// Each `*.toml` in this directory defines a named theme with metadata
+    /// and semantic palette / component overrides.
+    pub fn themes_dir(&self) -> PathBuf {
+        self.config_dir.join("themes")
+    }
+
     /// User-supplied ASCII logo for the empty-state hero.
     /// `$XDG_CONFIG_HOME/neenee/logo.txt`. When present, its lines replace the
     /// built-in figlet wordmark on the welcome screen (see `empty_state`).

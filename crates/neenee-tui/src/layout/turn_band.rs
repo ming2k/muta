@@ -1,5 +1,5 @@
-//! The default transcript layout: each tool-bearing ReAct turn is grouped into
-//! a labelled band with a header row (`turn N · model · K calls`), so history reads
+//! The turn-band transcript layout: each tool-bearing ReAct turn is grouped into
+//! a labelled band with a header row (`> turn N  model [effort]  HH:MM`), so history reads
 //! as discrete model-request chunks instead of one flush stream.
 //!
 //! ## Grouping model
@@ -10,7 +10,7 @@
 //!
 //! Assistant-side components carry a 1-indexed ReAct `turn`, plus the enclosing
 //! user `round`. When a position is unknown (legacy sessions predating the
-//! stamps), it falls back to ordinary legacy-compatible flow,
+//! stamps), it falls back to ordinary unbanded flow,
 //! without a band, so old transcripts stay readable.
 //!
 //! ## Visual form
@@ -18,26 +18,26 @@
 //! a single-line header:
 //!
 //! ```text
-//! > turn 2 · sonnet
-//! > turn 3 · glm-5.3 · high          (channel exposing a reasoning effort)
+//! > turn 2  sonnet
+//! > turn 3  glm-5.3 xhigh          (channel exposing a reasoning effort)
 //! ```
 //!
 //! rendered in an info-tone bold for the `> turn N` anchor and muted for the
-//! rest (model, reasoning effort, send time), using foreground color only — no
-//! background band. The effort detail appears only when the turn actually ran
-//! with one (thinking-gated per protocol), so non-reasoning channels keep the
-//! shorter form. The header is
-//! composed from the shared `MetaStrip` component
-//! (`render/components/meta_strip.rs`), so this two-tone "anchor · detail"
-//! treatment is the same one the sent user-message header uses. This keeps the
-//! layout cheap (no per-cell background fill across the group's body, which
-//! would require repaint coordination with every drawer) while giving each
-//! turn a clear, labelled anchor.
+//! rest (model info, send time), using foreground color only — no background
+//! band. Model and reasoning depth form a single identity component
+//! (`glm-5.3 xhigh`), and components on the header row are separated entirely
+//! by spatial distance (two columns of whitespace, R2 enumeration) without `·`.
+//! The effort detail appears only when the turn actually ran with one
+//! (thinking-gated per protocol), so non-reasoning channels keep the shorter
+//! form. The header is composed from the shared `MetaStrip` component
+//! (`render/components/meta_strip.rs`), keeping this metadata treatment shared
+//! with transcript chrome while letting spatial distance express the semantic
+//! relationship.
 
 use neenee_tui_engine::Rect;
 
 use crate::components::meta_strip::{MetaStrip, MetaTone};
-use crate::design::AI_OUTPUT_LEAD_GLYPH;
+use crate::design::{AI_OUTPUT_LEAD_GLYPH, JOIN_ENUMERATE_COLS};
 use crate::model::document::TranscriptMessage;
 use crate::time::sent_time_label;
 
@@ -45,10 +45,10 @@ use super::{
     Stream, TranscriptLayout, default_boundary_gap, default_gap_before, default_group_end,
 };
 
-/// Turn-banded default layout. See module docs.
-pub struct Default;
+/// Turn-banded layout. See module docs.
+pub struct TurnBand;
 
-impl TranscriptLayout for Default {
+impl TranscriptLayout for TurnBand {
     fn run(&mut self, stream: &mut Stream<'_, '_>) {
         let messages_len = stream.message_end;
         let mut mi = stream.message_start;
@@ -92,9 +92,11 @@ impl TranscriptLayout for Default {
     }
 }
 
-/// Paint the turn header row: `> turn N · model · [effort] · HH:MM`,
-/// info-tone bold anchor with muted metadata, no background band. The caller
-/// inserts the standard header-to-body gap before the group's first component.
+/// Paint the turn header row: `> turn N  model [effort]  HH:MM`,
+/// info-tone bold anchor with muted metadata, no background band. Components
+/// are separated by spatial distance (R2 enumeration whitespace, no `·`), and
+/// model + effort form a single identity component. The caller inserts the
+/// standard header-to-body gap before the group's first component.
 fn draw_turn_header(stream: &mut Stream<'_, '_>, turn: u64, msg: &TranscriptMessage) {
     // Always account for one content line even when scrolled out of view, so
     // scroll height stays faithful to what a user scrolling back would see.
@@ -110,31 +112,32 @@ fn draw_turn_header(stream: &mut Stream<'_, '_>, turn: u64, msg: &TranscriptMess
     let band = stream.band;
 
     // Two-tone label, no background band: `> turn N` is the info-tone
-    // anchor, the rest (model, effort, send time) reads as muted metadata on
-    // the same line. The strip component keeps this treatment shared with sent
-    // user-message headers.
+    // anchor, the rest (model + effort component, send time) reads as muted metadata on
+    // the same line. Components are separated by plain whitespace (R2 enumeration,
+    // `JOIN_ENUMERATE_COLS`), never `·`.
     let lead = format!("{AI_OUTPUT_LEAD_GLYPH} ");
     let mut strip = MetaStrip::new()
+        .separator(" ".repeat(JOIN_ENUMERATE_COLS))
         .lead(lead, MetaTone::Accent)
         .anchor(format!("turn {}", turn));
 
-    if let Some(name) = msg
-        .model
-        .as_deref()
-        .filter(|m| !m.is_empty())
-        .map(str::to_string)
-    {
-        strip = strip.detail(name);
-    }
-    // Reasoning depth, when the channel ran this turn with one: an attribute
-    // of the model (`glm-5.3 · high`), same R1 modifier grammar the hint bar
-    // uses. Absent for non-reasoning channels — nothing to claim.
-    if let Some(effort) = msg
+    // Model and reasoning effort form a single identity component: `model effort`
+    // (e.g. `glm-5.3 xhigh`). Absent for non-reasoning channels — nothing to claim.
+    let model = msg.model.as_deref().filter(|m| !m.is_empty());
+    let effort = msg
         .effort
         .as_deref()
-        .filter(|e| !e.is_empty() && !e.eq_ignore_ascii_case("none"))
-    {
-        strip = strip.detail(effort.to_string());
+        .filter(|e| !e.is_empty() && !e.eq_ignore_ascii_case("none"));
+
+    let model_info = match (model, effort) {
+        (Some(m), Some(e)) => Some(format!("{m} {e}")),
+        (Some(m), None) => Some(m.to_string()),
+        (None, Some(e)) => Some(e.to_string()),
+        (None, None) => None,
+    };
+
+    if let Some(info) = model_info {
+        strip = strip.detail(info);
     }
     if let Some(sent_at_ms) = msg.sent_at_ms {
         strip = strip.detail(sent_time_label(sent_at_ms));

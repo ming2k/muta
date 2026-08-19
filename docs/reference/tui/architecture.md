@@ -154,8 +154,8 @@ nothing about higher ones:
   handling and action logic stay in the app shell.
 - **`disclosure/`** — the collapsible-step state machine (`Disclosure`,
   `Interaction`) and shared header rendering, reused by every `tools/*` renderer.
-- **`layout/`** — transcript arrangement strategies (`default`,
-  `legacy`) selected by `[tui] transcript_layout`.
+- **`layout/`** — transcript arrangement strategy (`turn_band`)
+  selected by `[tui] transcript_layout`.
 
 The leaves (`tools/*`, the per-modal overlays) are intentionally thin: they
 compose the mid-tier and base helpers rather than re-implementing wrapping,

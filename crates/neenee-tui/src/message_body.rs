@@ -325,7 +325,7 @@ pub fn draw_message_body(
                             *skip_rows = skip_rows.saturating_sub(1);
                         } else if *current_y < area.y + area.height {
                             // Two-tone label, no background band (matches the
-                            // turn header row in `layout_default`): the round
+                            // turn header row in `turn_band`): the round
                             // anchor is info-tone bold, the time reads as
                             // muted metadata. The header leads with a `<` gutter
                             // rail (Unix stdin redirection). The rail consumes

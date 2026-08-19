@@ -1027,7 +1027,10 @@ impl TranscriptMessage {
             | EnvoyEvent::ToolResult { .. }
             | EnvoyEvent::StreamStart { .. }
             | EnvoyEvent::StreamDelta(_)
-            | EnvoyEvent::StreamEnd(_) => *awaiting = false,
+            | EnvoyEvent::StreamEnd(_)
+            | EnvoyEvent::StreamReasoningStart { .. }
+            | EnvoyEvent::StreamReasoningDelta(_)
+            | EnvoyEvent::StreamReasoningEnd(_) => *awaiting = false,
             _ => {}
         }
         match event {
@@ -1065,6 +1068,53 @@ impl TranscriptMessage {
                     last.reparse();
                 } else {
                     children.push(TranscriptMessage::new(Role::Assistant, content.clone()));
+                }
+            }
+            // The envoy's live reasoning chain, folded into the same
+            // `MessageKind::Thinking` message a resumed session restores from
+            // `reasoning_content` — so a live drill-in and a reloaded one show
+            // the same children. Placement mirrors the wire order the child
+            // emits (reasoning precedes its turn's assistant text and tool
+            // calls), so the trace lands in the right turn band. Disclosed
+            // chains only: the sender gates hidden-chain models out at the
+            // source, so no phantom summary trace can appear here.
+            EnvoyEvent::StreamReasoningStart { round, turn } => {
+                children.push(
+                    TranscriptMessage::thinking("")
+                        .with_round(*round)
+                        .with_turn((*turn as u64) + 1),
+                );
+            }
+            EnvoyEvent::StreamReasoningDelta(delta) => {
+                if let Some(last) = children
+                    .last_mut()
+                    .filter(|m| m.is_thinking() && m.is_thinking_streaming())
+                {
+                    if let MessageKind::Thinking { content, .. } = &mut last.kind {
+                        content.push_str(&sanitize_text(delta));
+                    }
+                    last.raw.push_str(&sanitize_text(delta));
+                } else {
+                    children.push(TranscriptMessage::thinking(delta));
+                }
+            }
+            EnvoyEvent::StreamReasoningEnd(content) => {
+                if let Some(last) = children
+                    .last_mut()
+                    .filter(|m| m.is_thinking() && m.is_thinking_streaming())
+                {
+                    last.raw = sanitize_text(&content.clone()).into_owned();
+                    last.reparse();
+                    if let MessageKind::Thinking { content: current, .. } = &mut last.kind {
+                        *current = sanitize_text(content).into_owned();
+                    }
+                    // No wall clock is available on the folding path; 0 is
+                    // the same terminal stamp a resumed session applies, and
+                    // what matters is that the trace stops "streaming" so the
+                    // spinner freezes.
+                    last.set_thinking_duration(0);
+                } else if !content.is_empty() {
+                    children.push(TranscriptMessage::thinking(content));
                 }
             }
             EnvoyEvent::ToolCall {

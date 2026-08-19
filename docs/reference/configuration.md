@@ -243,7 +243,7 @@ interactively with `/config`.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `tui.transcript_layout` | `"default"` | Transcript grouping: `default` (turn bands) or `legacy` |
+| `tui.transcript_layout` | `"turn_band"` | Transcript grouping: `"turn_band"` (grouped ReAct turn bands) |
 | `tui.color_scheme` | `"zen"` | Active palette: `zen`, `midnight`, `nord`, `catppuccin`, `paper`, or `custom` |
 | `tui.click_outside_dismiss` | `true` | Click outside a modal to close it (mirrors Esc). On by default; the dismissable set excludes modals holding in-progress input, and the `neenee resume` startup picker's click-outside still quits. Set `false` to require Esc / Ctrl+C for every close. |
 | `tui.expand_auto_scroll` | `false` | Whether expanding/collapsing a disclosure (tool step, command result, thinking, provider retry, notice) auto-scrolls to keep the toggled card well-placed — on expand the header shifts toward the viewport top; on collapse a scrolled-past summary is kept visible. Off by default: a toggle is a read interaction and leaves your scroll position untouched. |
@@ -263,7 +263,7 @@ from these values.
 
 ```toml
 [tui]
-transcript_layout = "default"
+transcript_layout = "turn_band"
 color_scheme = "custom"
 click_outside_dismiss = true
 expand_auto_scroll = false

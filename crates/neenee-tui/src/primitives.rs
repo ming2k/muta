@@ -180,10 +180,6 @@ impl ContentModalSpec {
     /// like the queue overview it mirrors (list + footer legend).
     pub const BTW: Self = Self::new(66, 9, 84);
     pub const TOKEN_REPORT: Self = Self::new(66, 9, 80);
-    pub const CONFIG: Self = Self::new(62, 14, 84);
-    pub const CONFIG_LAYOUT: Self = Self::new(64, 9, 80);
-    pub const CONFIG_THEME: Self = Self::new(78, 14, 84);
-    pub const CONFIG_THEME_CUSTOM: Self = Self::new(70, 18, 90);
     pub const ACTIVITY: Self = Self::new(72, 8, 80);
     /// The unified provider/model editor (`draw_model_editor`). Sizes to its
     /// content — at most three rows (API key, reasoning effort, extended

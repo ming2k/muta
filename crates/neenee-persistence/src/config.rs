@@ -117,13 +117,12 @@ pub struct TuiConfig {
     /// ```
     pub default_expanded: HashMap<String, bool>,
     /// How the transcript message stream is arranged. Recognized values
-    /// (case-insensitive): `"default"` (default — each tool-bearing ReAct turn is grouped
-    /// into a labelled band with a header row) and `"legacy"` (the original
-    /// flush-stack layout). Unknown / empty values fall back to default.
+    /// (case-insensitive): `"turn_band"` (default — each tool-bearing ReAct turn is grouped
+    /// into a labelled band with a header row). Unknown / empty values fall back to default.
     ///
     /// ```toml
     /// [tui]
-    /// transcript_layout = "default"
+    /// transcript_layout = "turn_band"
     /// ```
     pub transcript_layout: String,
     /// Active color scheme id. Built-in values are `zen`, `midnight`, `nord`,
@@ -1537,6 +1536,36 @@ impl Config {
     }
 }
 
+/// Load all valid custom theme files (`*.toml`) from the given themes directory.
+///
+/// Each file defines a named theme with metadata (`name`, `description`, etc.)
+/// and full or partial color definitions. Errors reading individual files are
+/// ignored so a single malformed file does not break theme discovery.
+pub fn load_theme_files(themes_dir: &std::path::Path) -> Vec<neenee_contracts::ThemeFile> {
+    let mut themes = Vec::new();
+    let Ok(entries) = std::fs::read_dir(themes_dir) else {
+        return themes;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("toml") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(mut theme) = toml::from_str::<neenee_contracts::ThemeFile>(&content) {
+                    if theme.id.is_empty() {
+                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                            theme.id = stem.to_string();
+                        }
+                    }
+                    themes.push(theme);
+                }
+            }
+        }
+    }
+    themes.sort_by(|a, b| a.name.cmp(&b.name));
+    themes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2359,4 +2388,69 @@ openai = "creds-key"
         assert_eq!(global.hooks[0].command, "global-notify.sh");
         assert_eq!(global.hooks[1].command, ".neenee/hooks/lint.sh");
     }
+
+    #[test]
+    fn load_theme_files_reads_and_sorts_valid_toml() {
+        let root = scratch_project_root();
+        let themes_dir = root.join("themes");
+        std::fs::create_dir_all(&themes_dir).unwrap();
+
+        let theme_a = r##"
+name = "Dracula"
+description = "Vampire dark palette"
+[colors]
+background = "#282a36"
+surface = "#44475a"
+text = "#f8f8f2"
+muted = "#6272a4"
+accent = "#bd93f9"
+success = "#50fa7b"
+warning = "#ffb86c"
+error = "#ff5555"
+"##;
+
+        let theme_b = r##"
+name = "Cyberpunk"
+description = "Neon high-contrast"
+[colors]
+background = "#050505"
+surface = "#151515"
+text = "#ffffff"
+muted = "#808080"
+accent = "#00ffff"
+success = "#00ff00"
+warning = "#ffff00"
+error = "#ff0055"
+
+[components.input]
+bg_active = "#222222"
+caret = "#00ffff"
+
+[components.crate]
+fg = "#ff00ff"
+"##;
+
+        std::fs::write(themes_dir.join("dracula.toml"), theme_a).unwrap();
+        std::fs::write(themes_dir.join("cyberpunk.toml"), theme_b).unwrap();
+        std::fs::write(themes_dir.join("corrupt.toml"), "invalid [== toml").unwrap();
+        std::fs::write(themes_dir.join("readme.txt"), "not a theme").unwrap();
+
+        let loaded = load_theme_files(&themes_dir);
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].name, "Cyberpunk");
+        assert_eq!(loaded[0].id, "cyberpunk");
+        assert_eq!(loaded[1].name, "Dracula");
+        assert_eq!(loaded[1].id, "dracula");
+        let cyberpunk_components = loaded[0].components.as_ref().unwrap();
+        assert_eq!(
+            cyberpunk_components.input.as_ref().unwrap().caret.as_deref(),
+            Some("#00ffff")
+        );
+        assert_eq!(
+            cyberpunk_components.crate_component.as_ref().unwrap().fg.as_deref(),
+            Some("#ff00ff")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
+

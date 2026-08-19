@@ -401,10 +401,18 @@ pub struct App {
     /// time the modal opens; clamped and auto-followed to the selection by the
     /// renderer each frame.
     pub permissions_scroll: usize,
-    /// Body scroll offset of the config manager modal. Reset to 0 each time
-    /// the modal opens; clamped each frame by the renderer. Selection cursor
-    /// for the config root and its sub-pages reuses [`Self::modal_index`].
+    /// Body scroll offset of the config category list.
     pub config_scroll: usize,
+    /// Which pane of the `/config` Settings View currently owns the keyboard.
+    pub config_focus: crate::overlays::ConfigFocus,
+    /// Selected category in the `/config` Settings View (0..4).
+    pub config_category: usize,
+    /// Selected item/field index in the active category's detail pane.
+    pub config_detail_index: usize,
+    /// Scroll offset for the `/config` detail pane body.
+    pub config_detail_scroll: usize,
+    /// Whether the custom theme hex editor is actively focused for text entry.
+    pub config_custom_editing: bool,
     /// Index of the skills-modal row whose detail block is expanded
     /// (`Modal::Skills`), or `None` when every row is collapsed. `Enter`
     /// toggles the selected row; reset to `None` each time the modal opens.
@@ -1009,38 +1017,57 @@ impl App {
 
     /// Whether the active selection covers a piece of the composer's text —
     /// the precondition for the caret-relay and delete-selection behaviours.
-    /// Only whole-input selections count (`Block` on `INPUT_MSG_IDX`); a
-    /// partial `Range` never binds the composer because its endpoints come
-    /// from the general transcript selection model and are not guaranteed to
-    /// be byte offsets into `self.input`.
+    /// Supports whole-input selections (`Block` on `INPUT_MSG_IDX`) and
+    /// drag-selected ranges (`Range` on `INPUT_MSG_IDX`).
     pub fn has_input_selection(&self) -> bool {
-        matches!(
-            self.selection,
-            SelectionState::Block {
-                message_idx: crate::view::INPUT_MSG_IDX,
-                ..
+        if !self.selection.is_active() {
+            return false;
+        }
+        match &self.selection {
+            SelectionState::Block { message_idx, .. } => *message_idx == crate::view::INPUT_MSG_IDX,
+            SelectionState::TableCell { message_idx, .. } => *message_idx == crate::view::INPUT_MSG_IDX,
+            SelectionState::Range { anchor, head } => {
+                anchor.message_idx == crate::view::INPUT_MSG_IDX
+                    && head.message_idx == crate::view::INPUT_MSG_IDX
             }
-        )
+            SelectionState::None => false,
+        }
     }
 
-    /// Adopt the caret to the given edge of the whole-input selection and
-    /// drop the selection, restoring the (previously hidden) caret at that
-    /// edge. This is the relay hand-off: after a mouse drag selects the
-    /// input, the block cursor is hidden, but the position it *would* occupy
-    /// is remembered so that the first direction key continues from where the
-    /// mouse released — `caret_edge == Head` is the release point (nearest
-    /// the hidden caret), `Tail` the opposite end.
+    /// Adopt the caret to the given edge of the input selection and drop
+    /// the selection, restoring the (previously hidden) caret at that edge.
+    /// `Head` is the release point where the mouse drag finished, while `Tail`
+    /// is the anchor point where the drag began.
     ///
     /// No-op (returns `false`) unless [`Self::has_input_selection`].
     pub fn adopt_caret_from_input_selection(&mut self, edge: SelectionEdge) -> bool {
         if !self.has_input_selection() {
             return false;
         }
-        let pos = match edge {
-            SelectionEdge::Tail => 0,
-            SelectionEdge::Head => self.input.chars().count(),
+        let pos = match &self.selection {
+            SelectionState::Block { .. } => match edge {
+                SelectionEdge::Tail => 0,
+                SelectionEdge::Head => self.input.chars().count(),
+            },
+            SelectionState::Range { anchor, head } => {
+                let cursor = match edge {
+                    SelectionEdge::Tail => *anchor,
+                    SelectionEdge::Head => *head,
+                };
+                let byte = crate::model::selection::floor_grapheme_boundary(
+                    &self.input,
+                    cursor.byte_offset,
+                )
+                .min(self.input.len());
+                self.input[..byte].chars().count()
+            }
+            _ => match edge {
+                SelectionEdge::Tail => 0,
+                SelectionEdge::Head => self.cursor_position,
+            },
         };
         self.selection = SelectionState::None;
+        self.drag.cancel();
         self.set_cursor(pos.min(self.input.chars().count()));
         true
     }
@@ -1056,18 +1083,55 @@ impl App {
         self.has_input_selection() && self.caret_owner() == CaretOwner::Composer
     }
 
-    /// Delete the composer text the active whole-input selection covers
-    /// (the standard editor behaviour: Backspace/Del over a selection
-    /// replaces it). No-op (returns `false`) unless
-    /// [`Self::has_input_selection`].
+    /// Delete the composer text the active input selection covers (the standard
+    /// editor behaviour: Backspace/Del over a selection replaces it).
+    /// No-op (returns `false`) unless [`Self::has_input_selection`].
     pub fn delete_input_selection(&mut self) -> bool {
         if !self.has_input_selection() {
             return false;
         }
-        self.input.clear();
-        self.selection = SelectionState::None;
-        self.set_cursor(0);
-        true
+        match &self.selection {
+            SelectionState::Block { message_idx, .. }
+                if *message_idx == crate::view::INPUT_MSG_IDX =>
+            {
+                self.input.clear();
+                self.selection = SelectionState::None;
+                self.drag.cancel();
+                self.set_cursor(0);
+                true
+            }
+            SelectionState::Range { .. } => {
+                if let Some((start, end)) = self.selection.active_normalized_range() {
+                    let start_byte = crate::model::selection::floor_grapheme_boundary(
+                        &self.input,
+                        start.byte_offset,
+                    )
+                    .min(self.input.len());
+                    let end_byte = crate::model::selection::inclusive_grapheme_end(
+                        &self.input,
+                        end.byte_offset,
+                    )
+                    .min(self.input.len());
+                    if start_byte < end_byte {
+                        self.input.replace_range(start_byte..end_byte, "");
+                    }
+                    let new_cursor = self.input[..start_byte].chars().count();
+                    self.selection = SelectionState::None;
+                    self.drag.cancel();
+                    self.set_cursor(new_cursor);
+                    true
+                } else {
+                    self.selection = SelectionState::None;
+                    self.drag.cancel();
+                    false
+                }
+            }
+            _ => {
+                self.selection = SelectionState::None;
+                self.drag.cancel();
+                false
+            }
+        }
     }
 
     /// Record the composer's screen rect as observed during the latest draw, so
@@ -1177,9 +1241,10 @@ impl App {
             Modal::Help => Some((&mut self.help_scroll, None)),
             Modal::Activity => Some((&mut self.activity_scroll, None)),
             Modal::Permissions => Some((&mut self.permissions_scroll, None)),
-            Modal::Config | Modal::ConfigTheme | Modal::ConfigThemeCustom | Modal::ConfigLayout => {
-                Some((&mut self.config_scroll, None))
-            }
+            Modal::Config => match self.config_focus {
+                crate::overlays::ConfigFocus::Categories => Some((&mut self.config_scroll, None)),
+                crate::overlays::ConfigFocus::Detail => Some((&mut self.config_detail_scroll, None)),
+            },
             Modal::TokenReport => Some((&mut self.token_report_scroll, None)),
             Modal::OauthPending => Some((&mut self.oauth_scroll, None)),
             Modal::ProviderTemplate => Some((&mut self.template_scroll, None)),

@@ -18,7 +18,10 @@ pub use async_trait::async_trait;
 pub mod cron;
 pub use cron::CronExpr;
 pub mod color_scheme_config;
-pub use color_scheme_config::ColorSchemeConfig;
+pub use color_scheme_config::{
+    CommandThemeConfig, ComponentThemesConfig, CrateThemeConfig, DiffThemeConfig, InputThemeConfig,
+    ColorSchemeConfig, ThemeFile,
+};
 pub mod cache;
 pub use cache::CachePolicy;
 pub mod repeat;

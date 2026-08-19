@@ -633,11 +633,29 @@ pub(crate) fn probe_input_selection_relay(
             Some(input::InputAction::None)
         }
         (KeyCode::Home, _) => {
-            app.adopt_caret_from_input_selection(SelectionEdge::Tail);
+            if let Some((start, _)) = app.selection.active_normalized_range() {
+                let byte = floor_grapheme_boundary(&app.input, start.byte_offset)
+                    .min(app.input.len());
+                let pos = app.input[..byte].chars().count();
+                app.selection = SelectionState::None;
+                app.drag.cancel();
+                app.set_cursor(pos);
+            } else {
+                app.adopt_caret_from_input_selection(SelectionEdge::Tail);
+            }
             Some(input::InputAction::None)
         }
         (KeyCode::End, _) => {
-            app.adopt_caret_from_input_selection(SelectionEdge::Head);
+            if let Some((_, end)) = app.selection.active_normalized_range() {
+                let byte = inclusive_grapheme_end(&app.input, end.byte_offset)
+                    .min(app.input.len());
+                let pos = app.input[..byte].chars().count();
+                app.selection = SelectionState::None;
+                app.drag.cancel();
+                app.set_cursor(pos);
+            } else {
+                app.adopt_caret_from_input_selection(SelectionEdge::Head);
+            }
             Some(input::InputAction::None)
         }
         (KeyCode::Backspace | KeyCode::Delete, _) => {
@@ -2145,6 +2163,7 @@ pub(super) async fn run_app_loop(
                             .is_some_and(|q| q.is_other_highlighted()),
                         history_clear_confirm: app.history_clear_confirm,
                         host_prompting: app.host_prompting,
+                        config_custom_editing: app.config_custom_editing,
                     },
                     &mut app.drag,
                 )

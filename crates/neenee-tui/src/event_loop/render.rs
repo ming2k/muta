@@ -908,46 +908,30 @@ pub(super) fn render_frame(
             &mut app.permissions_scroll,
             &app.theme,
         )),
-        Modal::Config => Some(view::draw_config_modal(
-            f,
-            app.modal_index,
-            &mut app.config_scroll,
-            view::ConfigOverview {
-                color_scheme: &app.color_scheme,
-                layout: app.transcript_layout,
-            },
-            app.modal_keymap_open,
-            &app.theme,
-        )),
-        Modal::ConfigTheme => Some(view::draw_config_theme_modal(
-            f,
-            &app.color_scheme,
-            &app.custom_color_scheme,
-            app.modal_index
-                .min(crate::view::overlays::config_theme::ROW_COUNT - 1),
-            &mut app.config_scroll,
-            app.modal_keymap_open,
-            &app.theme,
-        )),
-        Modal::ConfigThemeCustom => Some(view::draw_config_theme_custom_modal(
-            f,
-            &app.custom_color_draft,
-            app.modal_index
-                .min(crate::view::overlays::config_theme_custom::ROW_COUNT - 1),
-            &app.input,
-            app.cursor_position,
-            &mut app.config_scroll,
-            &app.theme,
-        )),
-        Modal::ConfigLayout => Some(view::draw_config_layout_modal(
-            f,
-            app.transcript_layout,
-            app.modal_index
-                .min(crate::view::overlays::config_layout::ROW_COUNT - 1),
-            &mut app.config_scroll,
-            app.modal_keymap_open,
-            &app.theme,
-        )),
+        Modal::Config => {
+            let rects = view::draw_config_view(
+                f,
+                view::ConfigViewProps {
+                    category_index: app.config_category,
+                    detail_index: app.config_detail_index,
+                    focus: app.config_focus,
+                    color_scheme: &app.color_scheme,
+                    custom_color_scheme: &app.custom_color_scheme,
+                    custom_color_draft: &app.custom_color_draft,
+                    custom_editing: app.config_custom_editing,
+                    input: &app.input,
+                    cursor_position: app.cursor_position,
+                    transcript_layout: app.transcript_layout,
+                    expand_auto_scroll: app.expand_auto_scroll,
+                    click_outside_dismiss: app.click_outside_dismiss,
+                    workspace: &app.current_workspace,
+                    category_scroll: &mut app.config_scroll,
+                    detail_scroll: &mut app.config_detail_scroll,
+                    theme: &app.theme,
+                },
+            );
+            Some(rects.area)
+        }
         Modal::Activity => {
             let user_prompt: Option<String> = app
                 .focused_messages()

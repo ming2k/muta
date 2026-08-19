@@ -14,7 +14,10 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CustomCommand {
     pub name: String,
+    pub summary: Option<String>,
     pub description: Option<String>,
+    pub usage: Option<String>,
+    pub intent_keywords: Vec<String>,
     pub source: PathBuf,
     pub template: String,
 }
@@ -22,7 +25,11 @@ pub struct CustomCommand {
 #[derive(Debug, Deserialize, Default)]
 struct Frontmatter {
     name: Option<String>,
+    summary: Option<String>,
     description: Option<String>,
+    usage: Option<String>,
+    intent_keywords: Option<Vec<String>>,
+    aliases: Option<Vec<String>>,
 }
 
 /// A project-local command that overrode a same-named user-global command
@@ -165,9 +172,18 @@ fn parse_command_file(path: &Path) -> Option<CustomCommand> {
         return None;
     }
 
+    let summary = meta.summary.clone().or_else(|| meta.description.clone());
+    let mut intent_keywords = meta.intent_keywords.unwrap_or_default();
+    if let Some(aliases) = meta.aliases {
+        intent_keywords.extend(aliases);
+    }
+
     Some(CustomCommand {
         name,
+        summary,
         description: meta.description,
+        usage: meta.usage,
+        intent_keywords,
         source: path.to_path_buf(),
         template: body.trim().to_string(),
     })
@@ -207,7 +223,6 @@ fn split_arguments(input: &str) -> Vec<String> {
     let mut current = String::new();
     let mut quote = None;
     let mut escaped = false;
-
     for value in input.chars() {
         if escaped {
             current.push(value);
@@ -257,7 +272,10 @@ mod tests {
     fn expands_raw_and_positional_arguments() {
         let command = CustomCommand {
             name: "review".to_string(),
+            summary: None,
             description: None,
+            usage: None,
+            intent_keywords: Vec::new(),
             source: PathBuf::from("review.md"),
             template: "Review $1 against $2. Full: $ARGUMENTS".to_string(),
         };

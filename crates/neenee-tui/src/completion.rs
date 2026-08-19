@@ -9,6 +9,44 @@ use crate::App;
 use crate::composer::{composer_text_width, composer_wrapped_pos};
 use neenee_runtime::startup::BuiltinCmd;
 
+/// Detailed documentation and usage metadata for a command candidate.
+/// Shown in Part 3 (the detail inspector).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandDoc {
+    /// Full command signature / header name, e.g. "/schedule"
+    pub name: String,
+    /// Short summary (one line)
+    pub summary: String,
+    /// Detailed description
+    pub description: String,
+    /// Usage syntax lines
+    pub usage: Vec<String>,
+    /// Concrete examples: (command, explanation)
+    pub examples: Vec<(String, String)>,
+    /// Intent keywords / synonyms
+    pub intent_keywords: Vec<String>,
+    /// Category badge (e.g. "Automation", "Session", etc.)
+    pub category: Option<String>,
+}
+
+impl CommandDoc {
+    pub fn from_builtin(spec: &'static neenee_runtime::startup::CommandSpec) -> Self {
+        Self {
+            name: spec.name.to_string(),
+            summary: spec.summary.to_string(),
+            description: spec.description.to_string(),
+            usage: spec.usage.iter().map(|s| s.to_string()).collect(),
+            examples: spec
+                .examples
+                .iter()
+                .map(|(c, d)| (c.to_string(), d.to_string()))
+                .collect(),
+            intent_keywords: spec.intent_keywords.iter().map(|s| s.to_string()).collect(),
+            category: Some(spec.category.label().to_string()),
+        }
+    }
+}
+
 /// Kind of completion menu the input box is currently offering. Drives the
 /// keyboard shortcuts that cycle / accept entries: Tab, ↑/↓, and (for slash
 /// only) plain Enter on a unique prefix. Path mentions only complete via Tab
@@ -28,11 +66,16 @@ pub enum CompletionKind {
 /// semantics in `App::accept_completion`. Kept on the candidate itself (rather
 /// than re-derived from the label) so absolute-path mention labels (which
 /// legitimately start with `/`) are never confused with slash commands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum CompletionItemKind {
-    /// `/command` — replaces the whole input; a terminal accept (popup closes).
+    /// `/command` — exact or prefix match (Part 1).
     #[default]
     Slash,
+    /// Intent-suggested command (Part 2), guessed from intent keywords or trigger terms.
+    IntentSuggestion {
+        matched_intent: String,
+        reason: String,
+    },
     /// `@path` file mention — the leading `@` trigger is dropped on accept
     /// (the concrete path is what enters the message context) and a trailing
     /// space is appended; a terminal accept.
@@ -65,18 +108,43 @@ pub struct Completion {
     /// What this candidate is and how accepting it behaves. See
     /// [`CompletionItemKind`].
     pub kind: CompletionItemKind,
+    /// Detailed documentation and usage information for Part 3 Inspector.
+    pub doc: Option<CommandDoc>,
 }
 
 impl Completion {
     /// Build a slash-command style completion that replaces the whole input
     /// (`replace_start = 0`, `replace_end = input_len`).
     pub fn whole_input(label: &str, description: &str, input_len: usize) -> Completion {
+        let doc = BuiltinCmd::find_spec(label).map(CommandDoc::from_builtin);
         Completion {
             label: label.to_string(),
             description: description.to_string(),
             replace_start: 0,
             replace_end: input_len,
             kind: CompletionItemKind::Slash,
+            doc,
+        }
+    }
+
+    /// Build an intent-suggestion completion that steers the user to a canonical command.
+    pub fn intent_suggestion(
+        target: &str,
+        matched_intent: &str,
+        reason: &str,
+        input_len: usize,
+    ) -> Completion {
+        let doc = BuiltinCmd::find_spec(target).map(CommandDoc::from_builtin);
+        Completion {
+            label: target.to_string(),
+            description: reason.to_string(),
+            replace_start: 0,
+            replace_end: input_len,
+            kind: CompletionItemKind::IntentSuggestion {
+                matched_intent: matched_intent.to_string(),
+                reason: reason.to_string(),
+            },
+            doc,
         }
     }
 }
@@ -337,6 +405,7 @@ pub(super) fn path_completion(label: &str, at_start: usize, cursor_end: usize) -
         } else {
             CompletionItemKind::PathFile
         },
+        doc: None,
     }
 }
 
@@ -363,6 +432,7 @@ pub(super) fn path_completion_abs(
         replace_start: at_start + 1,
         replace_end: cursor_end,
         kind: CompletionItemKind::PathExplicit,
+        doc: None,
     }
 }
 
@@ -501,7 +571,13 @@ impl App {
                     .map(|sub| sub.starts_with(after))
                     .unwrap_or(false)
             })
-            .map(|(cmd, desc)| Completion::whole_input(cmd, desc, self.input.len()))
+            .map(|(cmd, desc)| {
+                let mut c = Completion::whole_input(cmd, desc, self.input.len());
+                if let Some(spec) = BuiltinCmd::find_spec("/permissions") {
+                    c.doc = Some(CommandDoc::from_builtin(spec));
+                }
+                c
+            })
             .collect();
         }
 
@@ -522,7 +598,13 @@ impl App {
                     .map(|sub| sub.starts_with(after))
                     .unwrap_or(false)
             })
-            .map(|(cmd, desc)| Completion::whole_input(cmd, desc, self.input.len()))
+            .map(|(cmd, desc)| {
+                let mut c = Completion::whole_input(cmd, desc, self.input.len());
+                if let Some(spec) = BuiltinCmd::find_spec("/autopilot") {
+                    c.doc = Some(CommandDoc::from_builtin(spec));
+                }
+                c
+            })
             .collect();
         }
 
@@ -539,15 +621,17 @@ impl App {
                     .map(|sub| sub.starts_with(after))
                     .unwrap_or(false)
             })
-            .map(|(cmd, desc)| Completion::whole_input(cmd, desc, self.input.len()))
+            .map(|(cmd, desc)| {
+                let mut c = Completion::whole_input(cmd, desc, self.input.len());
+                if let Some(spec) = BuiltinCmd::find_spec("/config") {
+                    c.doc = Some(CommandDoc::from_builtin(spec));
+                }
+                c
+            })
             .collect();
         }
 
         if let Some(after) = current.strip_prefix("/sessions ") {
-            // `/sessions <id>`: no canned subcommand list — the argument is a
-            // session id (prefix), and the picker is the id-discovery surface.
-            // Only the bare command is offered so `Tab` completes the command
-            // itself, never a fabricated id.
             return [(
                 "/sessions",
                 "Browse past sessions; /sessions <id> opens that session",
@@ -558,7 +642,13 @@ impl App {
                     .map(|sub| sub.starts_with(after))
                     .unwrap_or(false)
             })
-            .map(|(cmd, desc)| Completion::whole_input(cmd, desc, self.input.len()))
+            .map(|(cmd, desc)| {
+                let mut c = Completion::whole_input(cmd, desc, self.input.len());
+                if let Some(spec) = BuiltinCmd::find_spec("/sessions") {
+                    c.doc = Some(CommandDoc::from_builtin(spec));
+                }
+                c
+            })
             .collect();
         }
 
@@ -566,35 +656,66 @@ impl App {
             // Trigger-word steering ("did you mean …"): when the whole token
             // is a known trigger (`/clear`, `/reset`, `/continue`, …) pin the
             // suggested command on top of the popup — ahead of any real
-            // command the trigger merely prefixes (e.g. a future `/restart`
-            // must not outrank `/reset`'s steer to `/new`). The trigger
-            // itself is never executable: accepting the row rewrites the
-            // input to the target command. Only the bare top-level token is
-            // consulted, so subcommand arguments (`/permissions clear`) never
-            // trigger it.
-            let suggestion = neenee_runtime::startup::suggest_for_trigger(trigger)
-                .map(|(target, reason)| Completion::whole_input(target, reason, self.input.len()));
-            return suggestion
-                .into_iter()
-                .chain(BuiltinCmd::ALL.iter().filter_map(|(cmd, desc)| {
-                    if cmd.starts_with(&current) {
-                        Some(Completion::whole_input(cmd, desc, self.input.len()))
-                    } else {
-                        None
-                    }
-                }))
-                .chain(self.custom_commands.iter().filter_map(|(command, desc)| {
-                    if command.starts_with(&current) {
-                        Some(Completion::whole_input(
-                            command.as_str(),
-                            desc.as_str(),
-                            self.input.len(),
-                        ))
-                    } else {
-                        None
-                    }
-                }))
+            // command the trigger merely prefixes.
+            let trigger_suggestion = neenee_runtime::startup::suggest_for_trigger(trigger)
+                .map(|(target, reason)| {
+                    Completion::intent_suggestion(target, trigger, reason, self.input.len())
+                });
+
+            // Part 1: Exact / Prefix matches
+            let exact_builtins: Vec<Completion> = BuiltinCmd::SPECS
+                .iter()
+                .filter(|spec| spec.name.to_lowercase().starts_with(&current))
+                .map(|spec| Completion::whole_input(spec.name, spec.summary, self.input.len()))
                 .collect();
+
+            let exact_custom: Vec<Completion> = self
+                .custom_commands
+                .iter()
+                .filter(|(command, _)| command.to_lowercase().starts_with(&current))
+                .map(|(command, desc)| {
+                    Completion::whole_input(command.as_str(), desc.as_str(), self.input.len())
+                })
+                .collect();
+
+            // Part 2: Intent-based suggestions for synonyms / keywords
+            let intent_suggestions: Vec<Completion> = if !trigger.is_empty() {
+                BuiltinCmd::SPECS
+                    .iter()
+                    .filter(|spec| {
+                        !spec.name.to_lowercase().starts_with(&current)
+                            && trigger_suggestion.as_ref().map(|s| s.label.as_str()) != Some(spec.name)
+                            && spec.intent_keywords.iter().any(|&kw| {
+                                kw.eq_ignore_ascii_case(trigger)
+                                    || (trigger.len() >= 3 && kw.to_lowercase().starts_with(trigger))
+                            })
+                    })
+                    .map(|spec| {
+                        let matched_kw = spec
+                            .intent_keywords
+                            .iter()
+                            .find(|&&kw| {
+                                kw.eq_ignore_ascii_case(trigger)
+                                    || (trigger.len() >= 3 && kw.to_lowercase().starts_with(trigger))
+                            })
+                            .copied()
+                            .unwrap_or(trigger);
+                        let reason = format!("(via '{matched_kw}') {}", spec.summary);
+                        Completion::intent_suggestion(spec.name, matched_kw, &reason, self.input.len())
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            let mut out = Vec::new();
+            if let Some(sug) = trigger_suggestion {
+                out.push(sug);
+            }
+            out.extend(exact_builtins);
+            out.extend(exact_custom);
+            out.extend(intent_suggestions);
+            return out;
         }
 
         // Inline `@path` file mention completion.

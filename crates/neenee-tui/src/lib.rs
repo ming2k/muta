@@ -177,7 +177,8 @@ fn is_coalescible_stream_update(response: &AgentResponse) -> bool {
                 | RoundEvent::StreamReasoningDelta(_)
                 | RoundEvent::ToolStream { .. }
                 | RoundEvent::Envoy {
-                    event: neenee_contracts::EnvoyEvent::StreamDelta(_),
+                    event: neenee_contracts::EnvoyEvent::StreamDelta(_)
+                        | neenee_contracts::EnvoyEvent::StreamReasoningDelta(_),
                     ..
                 },
             ..
@@ -1201,21 +1202,29 @@ pub async fn run_tui(
                                 }
                                 _ => {}
                             }
-                            // Nested assistant deltas mutate a child of the
-                            // enclosing tool step. Like top-level tool streams,
-                            // they have no standalone height-cache entry.
-                            let mut msgs =
-                                if matches!(&event, neenee_contracts::EnvoyEvent::StreamDelta(_)) {
-                                    buf.write_streaming().await
-                                } else {
-                                    buf.write().await
-                                };
+                            // Nested assistant and reasoning deltas mutate a
+                            // child of the enclosing tool step. Like top-level
+                            // tool streams, they have no standalone
+                            // height-cache entry.
+                            let mut msgs = if matches!(
+                                &event,
+                                neenee_contracts::EnvoyEvent::StreamDelta(_)
+                                    | neenee_contracts::EnvoyEvent::StreamReasoningDelta(_)
+                            ) {
+                                buf.write_streaming().await
+                            } else {
+                                buf.write().await
+                            };
                             let applied = msgs
                                 .iter_mut()
                                 .find(|m| m.is_tool_step() && matches!(&m.kind, crate::model::document::MessageKind::ToolStep { id, .. } if id == &parent_call_id))
                                 .is_some_and(|message| message.push_envoy_event(&event));
                             if applied
-                                && matches!(&event, neenee_contracts::EnvoyEvent::StreamDelta(_))
+                                && matches!(
+                                    &event,
+                                    neenee_contracts::EnvoyEvent::StreamDelta(_)
+                                        | neenee_contracts::EnvoyEvent::StreamReasoningDelta(_)
+                                )
                             {
                                 msgs.record_envoy_event(parent_call_id, event);
                             }
@@ -1660,6 +1669,11 @@ pub async fn run_tui(
         session_info_scroll: 0,
         permissions_scroll: 0,
         config_scroll: 0,
+        config_focus: crate::overlays::ConfigFocus::Categories,
+        config_category: 0,
+        config_detail_index: 0,
+        config_detail_scroll: 0,
+        config_custom_editing: false,
         skills_expanded: None,
         history_scroll: 0,
         history_modal_follow: true,

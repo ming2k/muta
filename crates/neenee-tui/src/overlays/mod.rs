@@ -10,10 +10,7 @@
 //! - [`permission`] — permission sheet + question modal
 //! - [`history`] — history search modal
 //! - [`help`] — help / keybindings modal
-//! - [`config`] — config manager modal (root settings overlay)
-//! - [`config_layout`] — transcript layout sub-page of the config manager
-//! - [`config_theme`] — preset and custom color-scheme picker
-//! - [`config_theme_custom`] — custom semantic-color editor
+//! - [`config`] — full-screen dual-pane settings view
 //! - [`toast`] — copy / armed-action notice bubbles
 //! - [`common`] — shared helpers (time formatting, truncation, caret, glyphs)
 
@@ -21,9 +18,6 @@ pub mod activity;
 pub mod btw;
 pub mod common;
 pub mod config;
-pub mod config_layout;
-pub mod config_theme;
-pub mod config_theme_custom;
 pub mod dashboard;
 pub mod help;
 pub mod history;
@@ -41,10 +35,7 @@ pub mod tools;
 
 // Re-export the public API so `paint::overlays::draw_*` callers are unchanged.
 pub use activity::{ActivityModalView, draw_activity_modal};
-pub use config::{ConfigOverview, draw_config_modal};
-pub use config_layout::draw_config_layout_modal;
-pub use config_theme::draw_config_theme_modal;
-pub use config_theme_custom::draw_config_theme_custom_modal;
+pub use config::{ConfigFocus, ConfigViewProps, draw_config_view};
 pub use dashboard::{DashboardFocus, creation_order, draw_dashboard, draw_session_preview};
 // `DashboardRects` is used by the event loop via `draw_dashboard`'s return; it
 // is part of the module's public API surface.

@@ -318,13 +318,12 @@ pub enum AgentRequest {
     /// refreshed, and by the event loop to keep the header's aside count
     /// truthful.
     QueryBtwList,
-    /// Update the transcript layout preference (from the `/config` modal).
+    /// Update the transcript layout preference.
     /// The harness writes the new value to `config.toml`'s `[tui]
     /// transcript_layout` and replies with [`AgentResponse::TuiLayoutUpdated`]
-    /// carrying the persisted string so the modal re-renders from the
-    /// authoritative state. The value is a raw config string ("default" /
-    /// "legacy"); interpretation into a [`crate`] layout `Strategy`
-    /// happens in the renderer, keeping the core free of render types.
+    /// carrying the persisted string so the renderer updates its state. The value
+    /// is a raw config string (e.g. "turn_band"); interpretation into a [`crate`] layout
+    /// `Strategy` happens in the renderer, keeping the core free of render types.
     UpdateTuiLayout(String),
     /// Update the TUI color scheme preference (from the `/config` modal).
     /// The harness persists the selected preset id and the custom semantic
@@ -1131,6 +1130,29 @@ pub enum EnvoyEvent {
     StreamDelta(String),
     /// The envoy response stream finished with the final accumulated text.
     StreamEnd(String),
+    /// The envoy started a reasoning (thinking) stream. `round`/`turn`
+    /// identify the envoy's own ReAct position (see
+    /// [`EnvoyEvent::StreamStart`]) so the child thinking trace joins the
+    /// same turn band as its sibling assistant text and tool calls. Emitted
+    /// before the first [`EnvoyEvent::StreamReasoningDelta`] of a trace, so
+    /// frontends can place the trace without waiting for content.
+    ///
+    /// This closes a visibility gap, not a new capability: the envoy's
+    /// reasoning is already captured in its persisted transcript
+    /// (`Message::reasoning_content`) and renders after a session reload —
+    /// but before these events it was invisible while the envoy was actually
+    /// running, because the child's `AgentEvent::ReasoningDelta` had no
+    /// forwarding arm. The design principle is that no agent behaviour is
+    /// hidden from the user: what the principal discloses live, an envoy
+    /// discloses live too.
+    StreamReasoningStart { round: u64, turn: usize },
+    /// New reasoning token from the envoy (a disclosed chain only — the
+    /// sender gates hidden-chain models out at the source; see
+    /// [`crate::ThinkingSupport::chain_disclosed`]).
+    StreamReasoningDelta(String),
+    /// The envoy's reasoning stream finished with the final accumulated
+    /// reasoning text.
+    StreamReasoningEnd(String),
     /// The envoy invoked a tool. `round`/`turn` identify the envoy's own
     /// ReAct position (see [`EnvoyEvent::StreamStart`]) so the child tool
     /// step joins the same turn band as its sibling calls.

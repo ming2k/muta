@@ -11,12 +11,62 @@ use tracing_appender::non_blocking::WorkerGuard;
 
 use neenee_persistence::paths;
 
+/// Category of a slash command for grouping and visual badging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandCategory {
+    Session,
+    Model,
+    Config,
+    Tools,
+    Principal,
+    Automation,
+    Project,
+    System,
+    Debug,
+}
+
+impl CommandCategory {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Session => "Session",
+            Self::Model => "Model",
+            Self::Config => "Config",
+            Self::Tools => "Tools",
+            Self::Principal => "Principal",
+            Self::Automation => "Automation",
+            Self::Project => "Project",
+            Self::System => "System",
+            Self::Debug => "Debug",
+        }
+    }
+}
+
+/// Rich metadata and specification for a command.
+///
+/// Contains:
+/// - `name`: The canonical slash-prefixed name (e.g. `"/schedule"`)
+/// - `summary`: Short description for compact lists & scanning (<= 30-40 chars)
+/// - `description`: Detailed explanation for the inspector/help panel
+/// - `usage`: Syntax signatures and parameters
+/// - `examples`: Concrete practical invocations with inline explanations
+/// - `intent_keywords`: Synonyms and intent cues used to guess what command the user wants
+/// - `category`: Logical grouping
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandSpec {
+    pub name: &'static str,
+    pub summary: &'static str,
+    pub description: &'static str,
+    pub usage: &'static [&'static str],
+    pub examples: &'static [(&'static str, &'static str)],
+    pub intent_keywords: &'static [&'static str],
+    pub category: CommandCategory,
+}
+
 /// Single source of truth for the built-in slash-command vocabulary.
 ///
-/// Each entry `Variant = "/name" : "description"` generates a [`BuiltinCmd`]
-/// enum variant, a row in [`BuiltinCmd::ALL`] (consumed by input completion,
-/// `/help`, and the custom-command filter), and an arm of
-/// [`BuiltinCmd::from_slash`].
+/// Each entry generates a [`BuiltinCmd`] enum variant, a row in [`BuiltinCmd::ALL`]
+/// and [`BuiltinCmd::SPECS`] (consumed by input completion, `/help`, inspector,
+/// and the custom-command filter), and an arm of [`BuiltinCmd::from_slash`].
 ///
 /// The dispatch `match` in `main.rs` is over `Option<BuiltinCmd>` and is kept
 /// non-exhaustive (no `Some(_)` catch-all). Adding a variant here without a
@@ -24,7 +74,16 @@ use neenee_persistence::paths;
 /// `/help`, and dispatch can never drift — a command appears in all three or
 /// the build breaks.
 macro_rules! define_builtin_commands {
-    ( $( $variant:ident = $name:literal : $desc:literal ),+ $(,)? ) => {
+    ( $(
+        $variant:ident = $name:literal : {
+            summary: $summary:literal,
+            description: $desc:literal,
+            usage: [ $( $usage:literal ),* $(,)? ],
+            examples: [ $( ($ex_cmd:literal, $ex_desc:literal) ),* $(,)? ],
+            intent_keywords: [ $( $kw:literal ),* $(,)? ],
+            category: $cat:ident,
+        }
+    ),+ $(,)? ) => {
         /// The set of built-in slash commands. Generated from a single
         /// declarative list — see `define_builtin_commands`.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,20 +92,47 @@ macro_rules! define_builtin_commands {
         }
 
         impl BuiltinCmd {
-            /// Every built-in command as `(slash_name, description)`, in
-            /// declaration order. Completion, `/help`, and the custom-command
-            /// filter all read from this — it is the only place command
-            /// metadata is written.
-            pub const ALL: &[(&'static str, &'static str)] = &[ $( ($name, $desc) ),+ ];
+            /// Every built-in command as `(slash_name, summary)`, in
+            /// declaration order.
+            pub const ALL: &[(&'static str, &'static str)] = &[ $( ($name, $summary) ),+ ];
+
+            /// Every built-in command specification with detailed description,
+            /// usage signatures, examples, and intent keywords.
+            pub const SPECS: &'static [CommandSpec] = &[
+                $(
+                    CommandSpec {
+                        name: $name,
+                        summary: $summary,
+                        description: $desc,
+                        usage: &[ $( $usage ),* ],
+                        examples: &[ $( ($ex_cmd, $ex_desc) ),* ],
+                        intent_keywords: &[ $( $kw ),* ],
+                        category: CommandCategory::$cat,
+                    }
+                ),+
+            ];
+
+            /// Get the full specification for this command.
+            pub fn spec(self) -> &'static CommandSpec {
+                match self {
+                    $( BuiltinCmd::$variant => Self::find_spec($name).expect("builtin spec exists"), )+
+                }
+            }
+
+            /// Canonical slash command name (e.g. "/models").
+            pub fn slash_name(self) -> &'static str {
+                match self {
+                    $( BuiltinCmd::$variant => $name, )+
+                }
+            }
+
+            /// Find the command specification by its canonical slash name.
+            pub fn find_spec(name: &str) -> Option<&'static CommandSpec> {
+                Self::SPECS.iter().find(|s| s.name == name)
+            }
 
             /// Parse a `/<name>` token into a variant, or `None` when it is
-            /// not a built-in (i.e. a custom command). The dispatch `match`
-            /// consumes the `None` arm to run the custom-command path.
-            ///
-            /// Canonical names are matched against the declarative list;
-            /// backward-compatible aliases (renamed commands) are then matched
-            /// by `BuiltinCmd::from_alias` so old invocations keep working
-            /// without appearing in completion / `/help`.
+            /// not a built-in (i.e. a custom command).
             pub fn from_slash(input: &str) -> Option<Self> {
                 $( if input == $name { return Some(BuiltinCmd::$variant); } )+
                 Self::from_alias(input)
@@ -56,33 +142,222 @@ macro_rules! define_builtin_commands {
 }
 
 define_builtin_commands! {
-    Models      = "/models"       : "Switch the active model",
-    Connections = "/connections"  : "Manage LLM provider connections",
-    Tools       = "/tools"        : "Manage session tools (enable/disable)",
-    Mcp         = "/mcp"          : "Manage MCP servers (enable/disable, reconnect)",
-    Compact     = "/compact"      : "Compact older complete rounds now",
-    New         = "/new"          : "Start a new session, keeping the current one in history",
-    Permissions = "/permissions"  : "Show or clear always-allowed tool rules",
-    Config      = "/config"       : "Open user configuration; /config reload re-reads config.toml and applies it live",
-    Autopilot  = "/autopilot"   : "Toggle autopilot mode — agent runs without human intervention (on|off; no argument toggles)",
-    Principal   = "/principal"    : "Switch the principal role (code|architect|reviewer|security) — changes persona and capability scope",
-    Search      = "/search"       : "Semantic search over the project's session history",
-    Sessions    = "/sessions"     : "Browse past sessions; /sessions <id> opens that session",
-    Fork        = "/fork"         : "Fork the current conversation into a child session",
-    Dashboard   = "/dashboard"    : "Session dashboard — live status and control over every daemon session",
-    Btw         = "/btw"          : "Open a side conversation: /btw [prompt] or /btw list (asides keep running when you leave)",
-    Repeat      = "/repeat"       : "Schedule a prompt on a cron: /repeat <cron> <prompt>",
-    Schedule    = "/schedule"     : "Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot). /schedule <when> <prompt>",
-    Skills      = "/skills"       : "List or reload available skills (list|reload)",
-    Skill       = "/skill"        : "Load a skill by name",
-    Init        = "/init"         : "Initialize a .neenee/ config tree",
-    Trust       = "/trust"        : "Trust this project and load its MCP servers, hooks, project skills and commands",
-    Untrust     = "/untrust"      : "Revoke trust for this project (disconnects MCP, unloads hooks, project skills and commands)",
-    Export      = "/export"       : "Export this conversation to the clipboard as Markdown",
-    Debug       = "/debug"        : "Debug tools: /debug trace on|off, /debug preview (dry run)",
-    Retry       = "/retry"        : "Retry the last failed model request or turn",
-    Help        = "/help"         : "Show available commands and keybindings",
-    Exit        = "/exit"         : "Exit the program",
+    Models = "/models" : {
+        summary: "Switch the active model",
+        description: "Opens the interactive model switcher overlay or changes the active LLM provider and model for the session. Preserves conversation context across model switches.",
+        usage: ["/models"],
+        examples: [("/models", "Open model selector modal")],
+        intent_keywords: ["model", "llm", "switch", "provider", "gpt", "claude", "gemini", "deepseek", "change-model"],
+        category: Model,
+    },
+    Connections = "/connections" : {
+        summary: "Manage LLM provider connections",
+        description: "Inspect and configure upstream API endpoints, API keys, bearer tokens, and custom base URLs for supported LLM providers.",
+        usage: ["/connections"],
+        examples: [("/connections", "Open provider connection manager")],
+        intent_keywords: ["connection", "provider", "api-key", "auth", "endpoint", "credentials", "token", "login"],
+        category: Model,
+    },
+    Tools = "/tools" : {
+        summary: "Manage session tools (enable/disable)",
+        description: "Interactive overlay to toggle individual built-in and MCP tools on or off for the live session.",
+        usage: ["/tools"],
+        examples: [("/tools", "Open tool management overlay")],
+        intent_keywords: ["tools", "tool", "function", "bash", "toggle", "disable", "enable", "mcp-tools"],
+        category: Tools,
+    },
+    Mcp = "/mcp" : {
+        summary: "Manage MCP servers (enable/disable, reconnect)",
+        description: "Inspect Model Context Protocol (MCP) servers, view tool manifests, check status, and reconnect failed or modified servers.",
+        usage: ["/mcp"],
+        examples: [("/mcp", "Inspect and manage MCP servers")],
+        intent_keywords: ["mcp", "server", "protocol", "context", "reconnect", "mcp-server"],
+        category: Tools,
+    },
+    Compact = "/compact" : {
+        summary: "Compact older complete rounds now",
+        description: "Summarize and prune older conversation rounds into durable context memory, freeing context window space while retaining critical decisions.",
+        usage: ["/compact"],
+        examples: [("/compact", "Trigger immediate conversation compaction")],
+        intent_keywords: ["compact", "compress", "summarize", "prune", "truncate", "shrink", "clean-context", "context"],
+        category: Session,
+    },
+    New = "/new" : {
+        summary: "Start a new session, keeping history",
+        description: "Starts a fresh conversation session with an empty transcript while keeping previous sessions safe in persistent storage. Typing /clear or /reset guides you here.",
+        usage: ["/new"],
+        examples: [("/new", "Start a fresh session")],
+        intent_keywords: ["clear", "reset", "clean", "restart", "fresh", "cls", "wipe", "blank", "new-session"],
+        category: Session,
+    },
+    Permissions = "/permissions" : {
+        summary: "Show or clear always-allowed tool rules",
+        description: "Inspect active tool execution rules or clear process-local auto-approval permissions.",
+        usage: ["/permissions", "/permissions clear"],
+        examples: [("/permissions", "Show active permission rules"), ("/permissions clear", "Clear process-local auto-allow rules")],
+        intent_keywords: ["permission", "allow", "rule", "policy", "security", "approve", "always-allow", "grant"],
+        category: Config,
+    },
+    Config = "/config" : {
+        summary: "Inspect or reload configuration",
+        description: "Open the Settings overlay (theme, appearance, layout) or reload config.toml live with '/config reload'.",
+        usage: ["/config", "/config reload"],
+        examples: [("/config", "Open Settings overlay"), ("/config reload", "Re-read and apply config.toml live")],
+        intent_keywords: ["config", "settings", "preferences", "theme", "reload", "options", "color", "appearance", "font"],
+        category: Config,
+    },
+    Autopilot = "/autopilot" : {
+        summary: "Toggle autonomous execution mode",
+        description: "Toggles autopilot mode: runs without interactive confirmation prompts for tool actions, auto-approving tools and reclaiming question tools.",
+        usage: ["/autopilot", "/autopilot on", "/autopilot off"],
+        examples: [("/autopilot on", "Enable autonomous execution"), ("/autopilot off", "Return to interactive confirmation mode")],
+        intent_keywords: ["autopilot", "yolo", "auto", "autonomous", "unattended", "headless", "skip-confirm"],
+        category: Automation,
+    },
+    Principal = "/principal" : {
+        summary: "Switch principal agent persona and role",
+        description: "Switch between principal persona roles (code, architect, reviewer, security) to adjust persona tone, focus, and capability boundaries.",
+        usage: ["/principal", "/principal <role>"],
+        examples: [("/principal architect", "Switch to system design & analysis focus"), ("/principal reviewer", "Read-only code review mode")],
+        intent_keywords: ["principal", "role", "persona", "mode", "identity", "architect", "reviewer", "security", "switch-role"],
+        category: Principal,
+    },
+    Search = "/search" : {
+        summary: "Semantic search over session history",
+        description: "Search across the current project's past session transcripts and messages using semantic/vector search.",
+        usage: ["/search <query>"],
+        examples: [("/search auth token handling", "Find past discussions on authentication")],
+        intent_keywords: ["search", "find", "query", "grep", "history", "lookup", "recall", "past-messages"],
+        category: Session,
+    },
+    Sessions = "/sessions" : {
+        summary: "Browse or resume past sessions",
+        description: "Open the interactive session history picker to search, preview, resume, or delete stored sessions. Can also resume directly by ID prefix.",
+        usage: ["/sessions", "/sessions <id>"],
+        examples: [("/sessions", "Open interactive session picker"), ("/sessions 0195", "Resume session matching prefix")],
+        intent_keywords: ["sessions", "session", "resume", "continue", "history", "list", "reopen", "browse", "switch-session"],
+        category: Session,
+    },
+    Fork = "/fork" : {
+        summary: "Fork conversation into a child session",
+        description: "Fork the current conversation transcript into an independent child session for branching experiments or alternate approaches.",
+        usage: ["/fork"],
+        examples: [("/fork", "Branch current conversation into a child session")],
+        intent_keywords: ["fork", "branch", "clone", "duplicate", "split", "copy-session"],
+        category: Session,
+    },
+    Dashboard = "/dashboard" : {
+        summary: "Session daemon control dashboard",
+        description: "Open the full-screen session dashboard to monitor live daemon sessions, view activity, inspect logs, and manage connections.",
+        usage: ["/dashboard"],
+        examples: [("/dashboard", "Open full-screen session dashboard")],
+        intent_keywords: ["dashboard", "host", "daemon", "monitor", "status", "overview", "dock", "fleet"],
+        category: System,
+    },
+    Btw = "/btw" : {
+        summary: "Open a side conversation (aside)",
+        description: "Open an aside conversation forked from the current context that runs in the background without interrupting the main task.",
+        usage: ["/btw", "/btw <prompt>", "/btw list"],
+        examples: [("/btw explain this regex", "Ask a quick side question"), ("/btw list", "Open active asides list modal")],
+        intent_keywords: ["btw", "aside", "side", "subtask", "parallel", "quick", "note", "by-the-way"],
+        category: Session,
+    },
+    Repeat = "/repeat" : {
+        summary: "Schedule a recurring cron prompt",
+        description: "Schedule a prompt on a recurring 5-field cron pattern (e.g. '*/5 * * * *'). Runs first turn immediately and persists across restarts.",
+        usage: ["/repeat <cron> <prompt>", "/repeat list", "/repeat cancel <id>"],
+        examples: [("/repeat \"*/10 * * * *\" \"check health\"", "Schedule recurring health check")],
+        intent_keywords: ["repeat", "cron", "loop", "interval", "periodic", "recurring"],
+        category: Automation,
+    },
+    Schedule = "/schedule" : {
+        summary: "Schedule a prompt (cron or countdown)",
+        description: "Schedule a prompt: recurring cron ('0 9 * * 1-5'), countdown ('10m', '2h30m'), or absolute time ('14:00', 'tomorrow 09:00').",
+        usage: ["/schedule <when> <prompt>", "/schedule list", "/schedule cancel <id>"],
+        examples: [("/schedule 15m \"run test suite\"", "Run one-shot in 15 minutes"), ("/schedule \"0 9 * * 1-5\" \"standup\"", "Run every weekday morning")],
+        intent_keywords: ["schedule", "cron", "timer", "alarm", "later", "in", "countdown", "at", "remind", "delay"],
+        category: Automation,
+    },
+    Skills = "/skills" : {
+        summary: "List or reload available skills",
+        description: "Browse discovered project and user skills with their descriptions and paths, or rescan skill directories.",
+        usage: ["/skills", "/skills list", "/skills reload"],
+        examples: [("/skills", "List available skills"), ("/skills reload", "Rescan skill folders")],
+        intent_keywords: ["skills", "skill", "plugin", "extension", "capabilities", "reload-skills"],
+        category: Tools,
+    },
+    Skill = "/skill" : {
+        summary: "Load a skill by name",
+        description: "Load a specific skill into the current session context to activate specialized instructions and tool capabilities.",
+        usage: ["/skill <name>"],
+        examples: [("/skill rust-expert", "Load the rust-expert skill")],
+        intent_keywords: ["skill", "load-skill", "use-skill", "import-skill", "activate-skill"],
+        category: Tools,
+    },
+    Init = "/init" : {
+        summary: "Initialize a .neenee/ config tree",
+        description: "Scaffold a project-local .neenee/ directory structure for custom commands, skills, MCP servers, and hooks.",
+        usage: ["/init [path]"],
+        examples: [("/init", "Initialize .neenee in current directory")],
+        intent_keywords: ["init", "scaffold", "setup", "bootstrap", "create-config"],
+        category: Project,
+    },
+    Trust = "/trust" : {
+        summary: "Trust project's .neenee/ configuration",
+        description: "Grant trust to this project to enable its local MCP servers, lifecycle hooks, skills, and project slash commands.",
+        usage: ["/trust"],
+        examples: [("/trust", "Trust and activate project contributions")],
+        intent_keywords: ["trust", "allow-project", "approve-project", "enable-project", "grant-trust"],
+        category: Project,
+    },
+    Untrust = "/untrust" : {
+        summary: "Revoke trust for project configuration",
+        description: "Revoke trust for this project, immediately disconnecting local MCP servers and unloading hooks, skills, and commands.",
+        usage: ["/untrust"],
+        examples: [("/untrust", "Revoke trust for current project")],
+        intent_keywords: ["untrust", "revoke", "disallow", "disable-project", "deny"],
+        category: Project,
+    },
+    Export = "/export" : {
+        summary: "Export conversation to clipboard as Markdown",
+        description: "Renders the full conversation transcript (prompts, answers, tool calls and results) and copies it to the system clipboard.",
+        usage: ["/export"],
+        examples: [("/export", "Copy conversation markdown to clipboard")],
+        intent_keywords: ["export", "copy", "share", "clipboard", "markdown", "dump", "save"],
+        category: Session,
+    },
+    Debug = "/debug" : {
+        summary: "Debug tools (tracing & preview)",
+        description: "Developer tools: toggle network round-trip tracing with '/debug trace on|off' or dry-run next request body with '/debug preview'.",
+        usage: ["/debug trace on|off", "/debug preview"],
+        examples: [("/debug trace on", "Enable request tracing"), ("/debug preview", "Dry run next LLM request payload")],
+        intent_keywords: ["debug", "trace", "log", "dry-run", "inspect", "troubleshoot"],
+        category: Debug,
+    },
+    Retry = "/retry" : {
+        summary: "Retry last failed model request",
+        description: "Re-sends the last failed or interrupted request to the active model provider.",
+        usage: ["/retry"],
+        examples: [("/retry", "Retry last request")],
+        intent_keywords: ["retry", "again", "resend", "redo", "re-run"],
+        category: Session,
+    },
+    Help = "/help" : {
+        summary: "Show available commands and keybindings",
+        description: "Open the comprehensive help modal or display reference documentation for slash commands and keyboard shortcuts.",
+        usage: ["/help [topic]"],
+        examples: [("/help", "Open help guide"), ("/help schedule", "Show help for /schedule")],
+        intent_keywords: ["help", "man", "docs", "guide", "info", "usage", "?", "shortcuts", "keybindings"],
+        category: System,
+    },
+    Exit = "/exit" : {
+        summary: "Exit the program",
+        description: "Gracefully shut down the active session and exit the terminal application.",
+        usage: ["/exit"],
+        examples: [("/exit", "Exit application")],
+        intent_keywords: ["exit", "quit", "q", "leave", "bye", "shutdown"],
+        category: System,
+    },
 }
 
 impl BuiltinCmd {
@@ -1369,6 +1644,39 @@ mod tests {
         assert!(crate::startup::suggest_for_trigger("cle").is_none());
         assert!(crate::startup::suggest_for_trigger("new").is_none());
         assert!(crate::startup::suggest_for_trigger("").is_none());
+    }
+
+    #[test]
+    fn command_specs_are_complete_and_non_empty() {
+        assert_eq!(BuiltinCmd::SPECS.len(), BuiltinCmd::ALL.len());
+        for spec in BuiltinCmd::SPECS {
+            assert!(spec.name.starts_with('/'), "command name must start with slash: {}", spec.name);
+            assert!(!spec.summary.is_empty(), "summary must not be empty for {}", spec.name);
+            assert!(!spec.description.is_empty(), "description must not be empty for {}", spec.name);
+            assert!(!spec.usage.is_empty(), "usage must not be empty for {}", spec.name);
+            assert!(!spec.intent_keywords.is_empty(), "intent keywords must not be empty for {}", spec.name);
+            assert!(!spec.category.label().is_empty(), "category label must not be empty for {}", spec.name);
+
+            // Spec lookup matches
+            let found = BuiltinCmd::find_spec(spec.name).expect("find_spec must locate command");
+            assert_eq!(found.name, spec.name);
+            assert_eq!(found.summary, spec.summary);
+        }
+    }
+
+    #[test]
+    fn command_spec_intent_keywords_are_searchable() {
+        let schedule_spec = BuiltinCmd::find_spec("/schedule").expect("/schedule spec exists");
+        assert!(schedule_spec.intent_keywords.contains(&"timer"));
+        assert!(schedule_spec.intent_keywords.contains(&"cron"));
+
+        let models_spec = BuiltinCmd::find_spec("/models").expect("/models spec exists");
+        assert!(models_spec.intent_keywords.contains(&"switch"));
+        assert!(models_spec.intent_keywords.contains(&"llm"));
+
+        let new_spec = BuiltinCmd::find_spec("/new").expect("/new spec exists");
+        assert!(new_spec.intent_keywords.contains(&"clear"));
+        assert!(new_spec.intent_keywords.contains(&"reset"));
     }
 
     fn parse(tokens: &[&str]) -> CliArgs {

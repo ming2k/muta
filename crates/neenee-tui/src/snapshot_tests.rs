@@ -1144,8 +1144,8 @@ fn default_turn_header_has_one_gap_before_first_tool() {
         .expect("tool header must render");
 
     assert_eq!(
-        rows[turn_idx], "  > turn 7 · claude-sonnet · high",
-        "turn header renders anchor · model · effort:\n{grid}"
+        rows[turn_idx], "  > turn 7  claude-sonnet high",
+        "turn header renders anchor  model effort:\n{grid}"
     );
     assert_eq!(
         turn_idx, 1,
@@ -1184,8 +1184,44 @@ fn turn_header_omits_effort_when_absent() {
         .position(|row| row.contains("> turn 2"))
         .expect("turn header must render");
     assert_eq!(
-        rows[turn_idx], "  > turn 2 · gemini-3-pro",
-        "no-effort channel renders anchor · model only:\n{grid}"
+        rows[turn_idx], "  > turn 2  gemini-3-pro",
+        "no-effort channel renders anchor  model only:\n{grid}"
+    );
+}
+
+/// A turn header with model, reasoning effort, and timestamp separates components
+/// with spatial distance (2 spaces) and unifies model and effort as one component (1 space).
+#[test]
+fn turn_header_with_model_effort_and_timestamp() {
+    let mut step = tool_step_structured(
+        "read_text",
+        r#"{"path":"a.rs"}"#,
+        neenee_contracts::ToolOutput::Code {
+            lang: None,
+            text: "x".into(),
+            start_line: 1,
+            prefix: None,
+            suffix: None,
+        },
+        false,
+    )
+    .with_turn(13)
+    .with_attribution("zai", "glm-5.3")
+    .with_effort(Some("xhigh"));
+    // Set a known timestamp
+    step.sent_at_ms = Some(1_700_000_000_000);
+    let time_label = crate::time::sent_time_label(1_700_000_000_000);
+
+    let grid = render_transcript_grid(&[step], 72, 14);
+    let rows: Vec<&str> = grid.lines().collect();
+    let turn_idx = rows
+        .iter()
+        .position(|row| row.contains("> turn 13"))
+        .expect("turn header must render");
+    let expected = format!("  > turn 13  glm-5.3 xhigh  {time_label}");
+    assert_eq!(
+        rows[turn_idx], expected,
+        "turn header renders anchor  model effort  time:\n{grid}"
     );
 }
 

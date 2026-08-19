@@ -98,6 +98,12 @@ impl<'a> MetaStrip<'a> {
         self
     }
 
+    /// Override the inter-chip separator (defaults to [`crate::design::JOIN_MODIFY`]).
+    pub(crate) fn separator(mut self, sep: impl Into<Cow<'a, str>>) -> Self {
+        self.separator = sep.into();
+        self
+    }
+
     /// Add an arbitrary chip with no automatic separator.
     pub(crate) fn chip(mut self, text: impl Into<Cow<'a, str>>, tone: MetaTone) -> Self {
         let text = text.into();
@@ -173,3 +179,36 @@ impl<'a> MetaStrip<'a> {
         Line::from(spans)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_separator_uses_join_modify() {
+        let theme = Theme::default();
+        let strip = MetaStrip::new()
+            .lead("> ", MetaTone::Accent)
+            .anchor("turn 1")
+            .detail("detail 1")
+            .detail("detail 2");
+        let line = strip.into_line(80, &theme);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "> turn 1 · detail 1 · detail 2");
+    }
+
+    #[test]
+    fn custom_whitespace_separator_joins_with_spaces() {
+        let theme = Theme::default();
+        let strip = MetaStrip::new()
+            .separator("  ")
+            .lead("> ", MetaTone::Accent)
+            .anchor("turn 13")
+            .detail("glm-5.3 xhigh")
+            .detail("13:51");
+        let line = strip.into_line(80, &theme);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "> turn 13  glm-5.3 xhigh  13:51");
+    }
+}
+

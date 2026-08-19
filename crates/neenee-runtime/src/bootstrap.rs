@@ -591,8 +591,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 (
                     format!("/{}", command.name),
                     command
-                        .description
-                        .clone()
+                        .summary
+                        .as_ref()
+                        .or(command.description.as_ref())
+                        .cloned()
                         .unwrap_or_else(|| "Run project command".to_string()),
                 )
             })

@@ -130,6 +130,16 @@ next: string, } } | { "ConfigReload": { details: Array<string>, } } | { "Compact
  */
 export type CommandStatus = "success" | "error" | "user_cancelled";
 
+/**
+ * Component-specific override for command card rows.
+ */
+export type CommandThemeConfig = { idle_bg: string | null, hover_bg: string | null, };
+
+/**
+ * Specialized component theme overrides container.
+ */
+export type ComponentThemesConfig = { input: InputThemeConfig | null, crate: CrateThemeConfig | null, diff: DiffThemeConfig | null, command: CommandThemeConfig | null, };
+
 export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource, };
 
 /**
@@ -146,13 +156,23 @@ export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource,
 export type ContextTokenSource = "Api" | "Projection";
 
 /**
+ * Component-specific override for crate tags and package badges.
+ */
+export type CrateThemeConfig = { fg: string | null, badge_bg: string | null, };
+
+/**
+ * Component-specific override for diff rendering.
+ */
+export type DiffThemeConfig = { add_bg: string | null, del_bg: string | null, add_hl: string | null, del_hl: string | null, };
+
+/**
  * Events emitted by an envoy spawned through the `task` tool.
  *
  * These are forwarded from the child agent back to the parent harness so that
  * the TUI can render nested tool steps and streaming output inside the parent
  * tool step.
  */
-export type EnvoyEvent = { "Started": { profile: string, } } | { "Notice": AgentNotice } | { "StreamStart": { round: number, turn: number, } } | { "StreamDelta": string } | { "StreamEnd": string } | { "ToolCall": { id: string, name: string, arguments: string, round: number, turn: number, } } | { "ToolResult": { id: string, name: string, output: string, duration_ms: number, } } | { "Activity": string } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "InputRequest": InputRequest };
+export type EnvoyEvent = { "Started": { profile: string, } } | { "Notice": AgentNotice } | { "StreamStart": { round: number, turn: number, } } | { "StreamDelta": string } | { "StreamEnd": string } | { "StreamReasoningStart": { round: number, turn: number, } } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "ToolCall": { id: string, name: string, arguments: string, round: number, turn: number, } } | { "ToolResult": { id: string, name: string, output: string, duration_ms: number, } } | { "Activity": string } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "InputRequest": InputRequest };
 
 /**
  * Sidecar metadata for an envoy run. Lives next to
@@ -297,6 +317,11 @@ prompt: string,
  * Whether to mask the typed input (passwords/passphrases).
  */
 secret: boolean, };
+
+/**
+ * Component-specific override for the live prompt / input box.
+ */
+export type InputThemeConfig = { bg_active: string | null, bg_inactive: string | null, caret: string | null, selection: string | null, placeholder: string | null, };
 
 /**
  * Which OAuth login flow to run. Carried by [`crate::events::AgentRequest::
@@ -820,6 +845,11 @@ export type ShellStream = "Out" | "Err";
  * [`ShellTermination::Exited`].
  */
 export type ShellTermination = "Exited" | "IdleBlocked" | "InteractiveBlocked" | "Timeout" | "Cancelled";
+
+/**
+ * Full standalone theme file loaded from `$XDG_CONFIG_HOME/neenee/themes/<id>.toml`.
+ */
+export type ThemeFile = { id: string, name: string, description: string, author: string | null, version: string | null, colors: ColorSchemeConfig, components: ComponentThemesConfig | null, };
 
 /**
  * Stable, monotonic identifier for a single todo item. Opaque to callers —

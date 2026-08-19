@@ -621,135 +621,112 @@ pub(super) async fn dispatch_action(
             let _ = app.tx.send(AgentRequest::QuerySessionContext);
         }
         input::InputAction::OpenConfig => {
-            // The config manager modal. Reached via `/config`
-            // (intercepted locally, never sent to the backend). Lists
-            // the configurable categories; selecting one drills into
-            // its sub-page.
+            // Full-screen Settings View (`/config`): dual-pane configuration center.
             app.active_modal = Modal::Config;
             app.modal_keymap_open = false;
-            app.modal_index = 0;
+            app.config_focus = crate::overlays::ConfigFocus::Categories;
+            app.config_category = 0;
+            app.config_detail_index = Theme::color_scheme_index(&app.color_scheme);
+            app.config_custom_editing = false;
             app.config_scroll = 0;
+            app.config_detail_scroll = 0;
+        }
+        input::InputAction::ConfigFocusToggle => {
+            if app.active_modal == Modal::Config {
+                app.config_focus = match app.config_focus {
+                    crate::overlays::ConfigFocus::Categories => {
+                        crate::overlays::ConfigFocus::Detail
+                    }
+                    crate::overlays::ConfigFocus::Detail => {
+                        crate::overlays::ConfigFocus::Categories
+                    }
+                };
+            }
         }
         input::InputAction::ConfigActivate => {
-            // Drill into the selected config category's sub-page.
-            // Index matches `categories()` order in config.rs
-            // (0 = Appearance, 1 = Layout).
-            match app.modal_index {
-                0 => {
-                    app.active_modal = Modal::ConfigTheme;
-                    app.modal_keymap_open = false;
-                    app.modal_index = Theme::color_scheme_index(&app.color_scheme);
-                    app.config_scroll = 0;
+            if app.active_modal == Modal::Config {
+                match app.config_focus {
+                    crate::overlays::ConfigFocus::Categories => {
+                        app.config_focus = crate::overlays::ConfigFocus::Detail;
+                    }
+                    crate::overlays::ConfigFocus::Detail => {
+                        match app.config_category {
+                            0 => {
+                                // Appearance category:
+                                let num_schemes = crate::view::COLOR_SCHEMES.len();
+                                let sel_idx = app.config_detail_index % num_schemes;
+                                let is_custom = sel_idx == num_schemes - 1;
+                                if is_custom {
+                                    if !app.config_custom_editing {
+                                        app.config_custom_editing = true;
+                                        app.custom_color_draft = app.custom_color_scheme.clone();
+                                        app.input = Theme::custom_color_value(&app.custom_color_draft, 0)
+                                            .unwrap_or("#000000")
+                                            .to_string();
+                                        app.set_cursor_end();
+                                    } else {
+                                        // Save custom palette
+                                        if Theme::set_custom_color_value(
+                                            &mut app.custom_color_draft,
+                                            app.config_detail_index.saturating_sub(num_schemes).min(7),
+                                            &app.input,
+                                        ) {
+                                            app.custom_color_scheme = app.custom_color_draft.clone();
+                                            app.color_scheme = "custom".to_string();
+                                            app.theme = Theme::from_color_scheme("custom", &app.custom_color_scheme);
+                                            let _ = app.tx.send(AgentRequest::UpdateTuiColorScheme {
+                                                name: app.color_scheme.clone(),
+                                                custom: app.custom_color_scheme.clone(),
+                                            });
+                                            app.config_custom_editing = false;
+                                            app.input.clear();
+                                            app.set_cursor(0);
+                                        }
+                                    }
+                                } else {
+                                    let schemes = Theme::available_color_schemes();
+                                    if let Some(scheme) = schemes.get(sel_idx) {
+                                        let name = &scheme.id;
+                                        app.color_scheme = name.to_string();
+                                        app.theme = Theme::from_color_scheme(name.as_ref(), &app.custom_color_scheme);
+                                        let _ = app.tx.send(AgentRequest::UpdateTuiColorScheme {
+                                            name: app.color_scheme.clone(),
+                                            custom: app.custom_color_scheme.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                            1 => {
+                                // Transcript category:
+                                if app.config_detail_index == 1 {
+                                    app.expand_auto_scroll = !app.expand_auto_scroll;
+                                }
+                            }
+                            2 => {
+                                // Behavior category:
+                                if app.config_detail_index == 0 {
+                                    app.click_outside_dismiss = !app.click_outside_dismiss;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
-                1 => {
-                    app.active_modal = Modal::ConfigLayout;
-                    app.modal_keymap_open = false;
-                    app.modal_index = match app.transcript_layout {
-                        crate::view::layout::Strategy::Default => 0,
-                        crate::view::layout::Strategy::Legacy => 1,
-                    };
-                    app.config_scroll = 0;
-                }
-                _ => {}
             }
         }
         input::InputAction::ConfigBack => {
-            // The custom editor is one level deeper than the other
-            // pages. Esc cancels its preview and returns to Appearance;
-            // the other pages return to the settings index.
-            app.modal_keymap_open = false;
-            app.config_scroll = 0;
-            if app.active_modal == Modal::ConfigThemeCustom {
-                app.theme = Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
-                app.custom_color_draft = app.custom_color_scheme.clone();
-                app.input.clear();
-                app.set_cursor(0);
-                app.active_modal = Modal::ConfigTheme;
-                app.modal_index = Theme::color_scheme_index("custom");
-            } else {
-                app.modal_index = match app.active_modal {
-                    Modal::ConfigTheme => 0,
-                    Modal::ConfigLayout => 1,
-                    _ => 0,
-                };
-                app.active_modal = Modal::Config;
-            }
-        }
-        input::InputAction::ConfigThemeActivate => {
-            if let Some(name) = crate::view::overlays::config_theme::scheme_id_at(app.modal_index) {
-                if name == "custom" {
+            if app.active_modal == Modal::Config {
+                if app.config_custom_editing {
+                    app.config_custom_editing = false;
+                    app.theme = Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
                     app.custom_color_draft = app.custom_color_scheme.clone();
-                    app.active_modal = Modal::ConfigThemeCustom;
-                    app.modal_keymap_open = false;
-                    app.modal_index = 0;
-                    app.config_scroll = 0;
-                    app.input = Theme::custom_color_value(&app.custom_color_draft, 0)
-                        .unwrap_or("#000000")
-                        .to_string();
-                    app.set_cursor_end();
-                    app.theme = Theme::from_color_scheme("custom", &app.custom_color_draft);
+                    app.input.clear();
+                    app.set_cursor(0);
+                } else if app.config_focus == crate::overlays::ConfigFocus::Detail {
+                    app.config_focus = crate::overlays::ConfigFocus::Categories;
                 } else {
-                    app.color_scheme = name.to_string();
-                    app.theme = Theme::from_color_scheme(name, &app.custom_color_scheme);
-                    let _ = app.tx.send(AgentRequest::UpdateTuiColorScheme {
-                        name: app.color_scheme.clone(),
-                        custom: app.custom_color_scheme.clone(),
-                    });
+                    app.active_modal = Modal::None;
                 }
-            }
-        }
-        input::InputAction::ConfigThemeField { delta } => {
-            if app.active_modal == Modal::ConfigThemeCustom
-                && Theme::set_custom_color_value(
-                    &mut app.custom_color_draft,
-                    app.modal_index,
-                    &app.input,
-                )
-            {
-                app.theme = Theme::from_color_scheme("custom", &app.custom_color_draft);
-                let count = crate::view::overlays::config_theme_custom::ROW_COUNT as i32;
-                let next = (app.modal_index as i32 + delta).rem_euclid(count) as usize;
-                app.modal_index = next;
-                app.input = Theme::custom_color_value(&app.custom_color_draft, next)
-                    .unwrap_or("#000000")
-                    .to_string();
-                app.set_cursor_end();
-            }
-        }
-        input::InputAction::ConfigThemeCustomSave => {
-            if app.active_modal == Modal::ConfigThemeCustom
-                && Theme::set_custom_color_value(
-                    &mut app.custom_color_draft,
-                    app.modal_index,
-                    &app.input,
-                )
-            {
-                app.custom_color_scheme = app.custom_color_draft.clone();
-                app.color_scheme = "custom".to_string();
-                app.theme = Theme::from_color_scheme("custom", &app.custom_color_scheme);
-                let _ = app.tx.send(AgentRequest::UpdateTuiColorScheme {
-                    name: app.color_scheme.clone(),
-                    custom: app.custom_color_scheme.clone(),
-                });
-                app.input.clear();
-                app.set_cursor(0);
-                app.active_modal = Modal::ConfigTheme;
-                app.modal_index = Theme::color_scheme_index("custom");
-                app.config_scroll = 0;
-            }
-        }
-        input::InputAction::ConfigLayoutApply => {
-            // Apply the selected layout strategy. Persisted to
-            // config.toml by the harness; the optimistic local update
-            // makes the live transcript switch immediately, and the
-            // `TuiLayoutUpdated` reply re-seeds the authoritative value.
-            if let Some(value) =
-                crate::view::overlays::config_layout::config_value_at(app.modal_index)
-            {
-                app.transcript_layout = crate::view::layout::Strategy::from_config(value);
-                let _ = app
-                    .tx
-                    .send(AgentRequest::UpdateTuiLayout(value.to_string()));
             }
         }
         input::InputAction::McpToggle => {
@@ -1067,8 +1044,9 @@ pub(super) async fn dispatch_action(
                     app.session_scroll = 0;
                     app.session_modal_follow = true;
                 }
-                Modal::Config | Modal::ConfigTheme | Modal::ConfigLayout => {
+                Modal::Config => {
                     app.config_scroll = 0;
+                    app.config_detail_scroll = 0;
                 }
                 Modal::TokenReport => app.token_report_scroll = 0,
                 _ => {}
@@ -1421,10 +1399,11 @@ pub(super) async fn dispatch_action(
             // list as the query changes.
             if app.active_modal == Modal::CustomProvider {
                 app.on_custom_filter_changed();
-            } else if app.active_modal == Modal::ConfigThemeCustom
+            } else if app.active_modal == Modal::Config
+                && app.config_custom_editing
                 && Theme::set_custom_color_value(
                     &mut app.custom_color_draft,
-                    app.modal_index,
+                    app.config_detail_index.saturating_sub(Theme::available_color_schemes().len()).min(7),
                     &app.input,
                 )
             {
@@ -1447,10 +1426,11 @@ pub(super) async fn dispatch_action(
         input::InputAction::Backspace => {
             if app.active_modal == Modal::CustomProvider {
                 app.on_custom_filter_changed();
-            } else if app.active_modal == Modal::ConfigThemeCustom
+            } else if app.active_modal == Modal::Config
+                && app.config_custom_editing
                 && Theme::set_custom_color_value(
                     &mut app.custom_color_draft,
-                    app.modal_index,
+                    app.config_detail_index.saturating_sub(Theme::available_color_schemes().len()).min(7),
                     &app.input,
                 )
             {
@@ -1475,10 +1455,11 @@ pub(super) async fn dispatch_action(
             // forward delete may have orphaned a staged entry).
             if app.active_modal == Modal::CustomProvider {
                 app.on_custom_filter_changed();
-            } else if app.active_modal == Modal::ConfigThemeCustom
+            } else if app.active_modal == Modal::Config
+                && app.config_custom_editing
                 && Theme::set_custom_color_value(
                     &mut app.custom_color_draft,
-                    app.modal_index,
+                    app.config_detail_index.saturating_sub(Theme::available_color_schemes().len()).min(7),
                     &app.input,
                 )
             {

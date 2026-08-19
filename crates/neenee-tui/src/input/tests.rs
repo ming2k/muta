@@ -41,6 +41,7 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     )
@@ -91,6 +92,7 @@ fn enter_with_completion(
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     )
@@ -200,6 +202,7 @@ fn esc_closes_slash_completion_menu() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -245,6 +248,7 @@ fn esc_closes_path_completion_menu() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -289,6 +293,7 @@ fn esc_falls_through_when_no_completion_is_open() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -330,6 +335,7 @@ fn typing_in_compose_returns_insert_char() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -371,6 +377,7 @@ fn backspace_in_compose_returns_backspace_action() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -416,6 +423,7 @@ fn backspace_atomically_deletes_an_image_chip() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -461,6 +469,7 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -501,6 +510,7 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -573,6 +583,7 @@ fn enter_shell(input: &mut String) -> InputAction {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     )
@@ -614,6 +625,7 @@ fn escape_returns_from_always_confirmation() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -651,6 +663,7 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -691,6 +704,7 @@ fn star_in_models_modal_toggles_model_favorite() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -729,6 +743,7 @@ fn a_in_connections_modal_opens_template_chooser() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -769,6 +784,7 @@ fn enter_in_connections_modal_is_inert_no_activate_concept() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -808,6 +824,7 @@ fn esc_in_models_browse_closes_the_modal() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -846,6 +863,7 @@ fn esc_in_connections_browse_closes_the_modal() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -886,6 +904,7 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -926,6 +945,7 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -962,6 +982,7 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
         question_other_highlighted: false,
         history_clear_confirm: false,
         host_prompting: false,
+        config_custom_editing: false,
     };
     let letter = process_event(
         Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)),
@@ -1020,6 +1041,7 @@ fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -1053,6 +1075,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
         question_other_highlighted: false,
         history_clear_confirm: false,
         host_prompting: false,
+        config_custom_editing: false,
     };
     let action = process_event(
         Event::Key(crossterm::event::KeyEvent::new(
@@ -1097,6 +1120,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -1141,6 +1165,7 @@ fn key_in_side_view_with(
         question_other_highlighted: false,
         history_clear_confirm: false,
         host_prompting: false,
+        config_custom_editing: false,
     };
     tune(&mut context);
     process_event(
@@ -1186,6 +1211,7 @@ fn key_with_focus(code: KeyCode) -> InputAction {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     )
@@ -1251,6 +1277,7 @@ fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -1438,6 +1465,7 @@ fn escape_in_btw_modal_closes_the_modal() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -1479,6 +1507,7 @@ fn enter_in_btw_modal_focuses_the_selected_aside() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -1555,6 +1584,7 @@ fn run_key(
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     )
@@ -1691,9 +1721,6 @@ fn page_keys_scroll_every_scrollable_modal_body() {
         crate::Modal::Activity,
         crate::Modal::Permissions,
         crate::Modal::Config,
-        crate::Modal::ConfigTheme,
-        crate::Modal::ConfigThemeCustom,
-        crate::Modal::ConfigLayout,
         crate::Modal::TokenReport,
         crate::Modal::OauthPending,
         crate::Modal::ProviderTemplate,
@@ -1902,6 +1929,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 question_other_highlighted: false,
                 history_clear_confirm: false,
                 host_prompting: false,
+            config_custom_editing: false,
             },
             &mut drag,
         )
@@ -2594,6 +2622,7 @@ fn run_history_key(
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     )
@@ -2736,6 +2765,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -2772,6 +2802,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -2812,6 +2843,7 @@ fn up_with_queued(has_queued: bool) -> InputAction {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     )
@@ -2974,6 +3006,7 @@ fn queue_modal_char(c: char) -> InputAction {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     )
@@ -3011,6 +3044,7 @@ fn queue_modal_key(code: KeyCode) -> InputAction {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     )
@@ -3096,6 +3130,7 @@ fn up_arrow_in_browse_does_not_recall_queued() {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -3140,6 +3175,7 @@ fn run_paste(
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     )
@@ -3273,6 +3309,7 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     );
@@ -3556,6 +3593,7 @@ fn oauth_key(c: char) -> InputAction {
             question_other_highlighted: false,
             history_clear_confirm: false,
             host_prompting: false,
+            config_custom_editing: false,
         },
         &mut drag,
     )

@@ -981,6 +981,52 @@ fn completions_subcommand_argument_never_triggers_suggestion() {
 }
 
 #[test]
+fn completions_intent_keywords_suggest_canonical_command() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/timer".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    assert_eq!(app.completion_kind(), CompletionKind::Slash);
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+    assert!(labels.contains(&"/schedule"), "typing /timer should suggest /schedule");
+
+    // Check intent suggestion kind and doc
+    let schedule_cand = completions.iter().find(|c| c.label == "/schedule").unwrap();
+    assert!(matches!(
+        schedule_cand.kind,
+        crate::completion::CompletionItemKind::IntentSuggestion { .. }
+    ));
+    assert!(schedule_cand.doc.is_some());
+    let doc = schedule_cand.doc.as_ref().unwrap();
+    assert_eq!(doc.name, "/schedule");
+    assert_eq!(doc.category.as_deref(), Some("Automation"));
+
+    // /switch suggests /models and /principal
+    app.input = "/switch".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+    assert!(labels.contains(&"/models"));
+    assert!(labels.contains(&"/principal"));
+}
+
+#[test]
+fn completions_candidates_carry_rich_doc_for_inspector() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/models".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    let models_cand = completions.iter().find(|c| c.label == "/models").expect("find /models");
+    assert!(models_cand.doc.is_some());
+    let doc = models_cand.doc.as_ref().unwrap();
+    assert_eq!(doc.name, "/models");
+    assert!(!doc.description.is_empty());
+    assert!(!doc.usage.is_empty());
+    assert!(!doc.examples.is_empty());
+    assert_eq!(doc.category.as_deref(), Some("Model"));
+}
+
+#[test]
 fn mention_range_detects_inline_after_whitespace() {
     // `look at @src`: the `@` follows a space, so the range starts at the
     // `@` and ends at the cursor.
@@ -1345,6 +1391,11 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         session_info_scroll: 0,
         permissions_scroll: 0,
         config_scroll: 0,
+        config_focus: crate::overlays::ConfigFocus::Categories,
+        config_category: 0,
+        config_detail_index: 0,
+        config_detail_scroll: 0,
+        config_custom_editing: false,
         skills_expanded: None,
         history_scroll: 0,
         history_modal_follow: true,
@@ -3614,7 +3665,7 @@ fn caret_owner_modal_for_caret_modals() {
         Modal::Connections,
         Modal::ModelEditor,
         Modal::CustomProvider,
-        Modal::ConfigThemeCustom,
+        Modal::InputInjection,
     ] {
         app.active_modal = modal;
         assert_eq!(
@@ -3644,7 +3695,7 @@ fn caret_owner_none_for_read_only_and_decision_modals() {
         // ownership is conditional: see `caret_owner_question_owns_caret_only_on_other`.
         Modal::Question,
         Modal::Permission,
-        Modal::InputInjection,
+        Modal::Config,
     ] {
         app.active_modal = modal;
         assert_eq!(
@@ -3766,7 +3817,7 @@ fn modal_owns_caret_matches_renderer_set_cursor_sites() {
         Modal::Connections,
         Modal::ModelEditor,
         Modal::CustomProvider,
-        Modal::ConfigThemeCustom,
+        Modal::InputInjection,
     ];
     for m in owns {
         assert!(m.owns_caret(), "{m:?} must own the caret");
@@ -3781,7 +3832,7 @@ fn modal_owns_caret_matches_renderer_set_cursor_sites() {
         Modal::Activity,
         Modal::Question,
         Modal::Permission,
-        Modal::InputInjection,
+        Modal::Config,
         Modal::ProviderTemplate,
         Modal::HistorySearch,
     ];
@@ -4321,7 +4372,7 @@ fn app_with_input_selection(input: &str) -> App {
 }
 
 #[test]
-fn has_input_selection_detects_whole_input_block_only() {
+fn has_input_selection_detects_both_block_and_range() {
     let mut app = app_with_input_selection("hello");
     assert!(app.has_input_selection());
 
@@ -4335,11 +4386,17 @@ fn has_input_selection_detects_whole_input_block_only() {
         "transcript selections must not trigger the input caret relay"
     );
 
-    // A partial Range on INPUT_MSG_IDX is not byte-guaranteed against
-    // app.input, so it deliberately does not count either.
+    // An active Range on INPUT_MSG_IDX is an input selection.
     app.selection = SelectionState::Range {
         anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 0),
         head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 2),
+    };
+    assert!(app.has_input_selection());
+
+    // A collapsed Range (anchor == head) is not active and does not count.
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 0),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 0),
     };
     assert!(!app.has_input_selection());
 }
@@ -4364,6 +4421,24 @@ fn adopt_caret_head_and_tail_break_selection() {
     assert_eq!(app.cursor_position, 0, "tail edge = buffer start");
     assert_eq!(app.selection, SelectionState::None);
 
+    // Range selection: head is the release point, tail is the anchor point.
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 1),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 4),
+    };
+    assert!(app.adopt_caret_from_input_selection(SelectionEdge::Head));
+    assert_eq!(app.cursor_position, 4, "head edge adopts head cursor");
+    assert_eq!(app.selection, SelectionState::None);
+
+    // Backward drag: anchor is 4, head is 1 (mouse released at 1).
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 4),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 1),
+    };
+    assert!(app.adopt_caret_from_input_selection(SelectionEdge::Head));
+    assert_eq!(app.cursor_position, 1, "head edge adopts release position");
+    assert_eq!(app.selection, SelectionState::None);
+
     // No selection → no-op, reports false.
     assert!(!app.adopt_caret_from_input_selection(SelectionEdge::Head));
 }
@@ -4377,6 +4452,18 @@ fn delete_input_selection_clears_buffer_and_selection() {
     assert_eq!(app.selection, SelectionState::None);
     // Second call is a no-op.
     assert!(!app.delete_input_selection());
+
+    // Partial range deletion deletes only the selected slice.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello world".to_string();
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 10),
+    };
+    assert!(app.delete_input_selection());
+    assert_eq!(app.input, "hello ");
+    assert_eq!(app.cursor_position, 6);
+    assert_eq!(app.selection, SelectionState::None);
 }
 
 #[test]
@@ -4504,36 +4591,106 @@ fn relay_ignores_keys_without_selection_or_outside_family() {
 }
 
 #[test]
-fn partial_input_drag_parks_caret_for_normal_arrow_handling() {
-    // A drag over only part of the input leaves a Range selection: the relay
-    // probe deliberately declines (Ranges are not byte-guaranteed against
-    // app.input), but the drag already parked `cursor_position` at the
-    // release point, so the ordinary ←/→ handling continues from there.
+fn range_selection_left_arrow_breaks_selection_at_release_position() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello world".to_string();
+    // Drag forward from 'w' (6) to 'd' (10/11): mouse released at 11.
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 11),
+    };
+    app.cursor_position = 11;
+
+    let action = relay_probe(&mut app, crossterm::event::KeyCode::Left);
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.selection, SelectionState::None, "selection must be cancelled");
+    assert_eq!(app.cursor_position, 10, "caret steps left from release point 11");
+
+    // Backward drag: drag from 'd' (11) to 'w' (6): mouse released at 6.
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 11),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
+    };
+    app.cursor_position = 6;
+
+    let action = relay_probe(&mut app, crossterm::event::KeyCode::Left);
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.selection, SelectionState::None, "selection must be cancelled");
+    assert_eq!(app.cursor_position, 5, "caret steps left from release point 6");
+}
+
+#[test]
+fn range_selection_right_arrow_breaks_selection_at_release_position() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello world".to_string();
+    // Backward drag: drag from 'd' (11) to 'w' (6): mouse released at 6.
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 11),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
+    };
+    app.cursor_position = 6;
+
+    let action = relay_probe(&mut app, crossterm::event::KeyCode::Right);
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.selection, SelectionState::None, "selection must be cancelled");
+    assert_eq!(app.cursor_position, 7, "caret steps right from release point 6");
+}
+
+#[test]
+fn range_selection_up_and_down_restore_caret_at_release_position() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.input = "hello world".to_string();
     app.selection = SelectionState::Range {
-        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 0),
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 11),
         head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
     };
-    app.cursor_position = 6; // parked by handle_selection_end
-    assert!(
-        !app.has_input_selection(),
-        "a partial Range must not trigger the whole-input relay"
-    );
-    // Ordinary Left: process_event steps from the parked position.
-    let mut cursor = app.cursor_position;
-    let mut drag = SelectionDrag::default();
-    let mut text = app.input.clone();
-    let action = crate::input::process_event(
-        crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Left,
-            crossterm::event::KeyModifiers::NONE,
-        )),
-        &mut text,
-        &mut cursor,
-        crate::input::InputContext::default(),
-        &mut drag,
-    );
-    assert!(matches!(action, crate::input::InputAction::None));
-    assert_eq!(cursor, 5, "← continues from the parked release position");
+    app.cursor_position = 1; // stale
+
+    let action = relay_probe(&mut app, crossterm::event::KeyCode::Up);
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.selection, SelectionState::None);
+    assert_eq!(app.cursor_position, 6, "↑ restores caret at release point");
+}
+
+#[test]
+fn range_selection_home_and_end_jump_to_selection_edges() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello world".to_string();
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 10),
+    };
+
+    let action = relay_probe(&mut app, crossterm::event::KeyCode::Home);
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.selection, SelectionState::None);
+    assert_eq!(app.cursor_position, 6, "Home jumps to start of range");
+
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 10),
+    };
+
+    let action = relay_probe(&mut app, crossterm::event::KeyCode::End);
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.selection, SelectionState::None);
+    assert_eq!(app.cursor_position, 11, "End jumps to end of range");
+}
+
+#[test]
+fn range_selection_cjk_left_arrow_snaps_grapheme() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "你好世界".to_string();
+    // Drag backwards from '界' (byte 9..12, char 3..4) to '好' (byte 3..6, char 1..2).
+    // Mouse released at byte 3 (char 1).
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 12),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 3),
+    };
+    app.cursor_position = 1;
+
+    let action = relay_probe(&mut app, crossterm::event::KeyCode::Left);
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(app.selection, SelectionState::None);
+    assert_eq!(app.cursor_position, 0, "← steps left from char 1 to char 0");
 }

@@ -893,7 +893,7 @@ components:
     RequestUpdateTuiLayout:
       type: object
       required: [UpdateTuiLayout]
-      properties: { UpdateTuiLayout: { type: string, enum: [default, legacy] } }
+      properties: { UpdateTuiLayout: { type: string, enum: [turn_band, default] } }
       additionalProperties: false
     RequestRefreshProviderModels:
       type: object

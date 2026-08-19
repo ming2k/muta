@@ -1,11 +1,36 @@
-# Color palette
+# Color palette & Theme System
 
-All colors are defined in `Theme::default()` (`crates/neenee-tui/src/theme.rs`).
+All built-in colors are defined in `Theme::default()` (`crates/neenee-tui/src/theme.rs`).
 
-## Backgrounds
+## Design Token Architecture
 
-| Token | RGB | Purpose |
-|-------|-----|---------|
+The theme engine adheres to a **3-tier design token architecture**:
+
+```text
+┌──────────────────────────────────────────────────────────┐
+│ Tier 1: Foundation Palette (8 core semantic swatches)    │
+│ [colors]: background, surface, text, muted, accent, ...  │
+└────────────────────────────┬─────────────────────────────┘
+                             │
+                             ▼
+┌──────────────────────────────────────────────────────────┐
+│ Tier 2: Semantic Derivations                             │
+│ Luminance & chroma mixing (body, raised, panel, etc.)    │
+└────────────────────────────┬─────────────────────────────┘
+                             │
+                             ▼
+┌──────────────────────────────────────────────────────────┐
+│ Tier 3: Component Token Overrides (optional)             │
+│ [components.input], [components.crate], [components.diff]│
+└──────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 1. Backgrounds & Surfaces
+
+| Token | RGB (Zen Default) | Purpose |
+|-------|-------------------|---------|
 | `app_bg` | (7, 8, 8) | Darkest base; fills the entire frame |
 | `backdrop` | (3, 4, 4) | Dim overlay behind modals (darker than `app_bg`) |
 | `code_bg` | (17, 19, 18) | Code blocks and tool-step results |
@@ -18,10 +43,12 @@ All colors are defined in `Theme::default()` (`crates/neenee-tui/src/theme.rs`).
 | `element_bg` | (21, 23, 22) | Footer / option bars |
 | `selected_bg` | (38, 48, 44) | Semantic-selection highlight |
 
-## Foregrounds
+---
 
-| Token | RGB | Purpose |
-|-------|-----|---------|
+## 2. Foregrounds & Accents
+
+| Token | RGB (Zen Default) | Purpose |
+|-------|-------------------|---------|
 | `text` | (213, 213, 205) | Primary text (input box, selected); also assistant prose |
 | `text_muted` | (119, 125, 117) | Sent messages, labels, secondary text |
 | `text_hover` | (175, 180, 172) | Collapsed step header under pointer (between muted and fg) |
@@ -37,49 +64,82 @@ All colors are defined in `Theme::default()` (`crates/neenee-tui/src/theme.rs`).
 | `warning` | (181, 149, 93) | Warnings; context-usage indicator 70–90% |
 | `error_fg` | (190, 111, 104) | Failed tool status; context-usage indicator > 90% |
 
-## Modifiers
+---
 
-| Field | Default | Purpose |
-|-------|---------|---------|
-| `modal_dim_factor` | `0.5` | Brightness multiplier (0.0–1.0) applied to every cell of the live surface while a **Dim**-recess modal is open. The terminal cannot alpha-blend, so a dim-recess modal darkens the transcript/chrome in place by scaling each color by this factor — lower is darker. See [Modals](modals.md). |
+## 3. Dedicated Component Tokens
 
-## Background hierarchy
+Specialized UI components have dedicated tokens and fallback constants:
+
+| Component Token | Accessor | Default Constant | Purpose |
+|-----------------|----------|------------------|---------|
+| `caret_fg` | `theme.caret()` | `DEFAULT_CARET_FG` (213, 213, 205) | Caret / cursor insertion point color in the input field |
+| `input_selection_bg` | `theme.input_selection()` | Derived / (38, 48, 44) | Background highlight for selected text in input fields |
+| `input_placeholder_fg` | `theme.input_placeholder()` | `DEFAULT_INPUT_PLACEHOLDER_FG` (119, 125, 117) | Color for empty input placeholder prompts |
+| `crate_fg` | `theme.crate_tag()` | `DEFAULT_CRATE_FG` (180, 190, 254) | Foreground identifier for crate / cargo tags |
+| `crate_bg` | `theme.crate_badge()` | (25, 27, 34) | Background badge pill behind crate tags |
+
+---
+
+## 4. Custom Themes Directory & TOML Schema
+
+Neenee automatically loads all custom theme files located in the themes directory:
 
 ```text
-backdrop (3,4,4)              ← dimmest; modal overlay
-app_bg (7,8,8)                ← base; entire frame
-  code_bg (17,19,18)              ← code blocks / tool-step results
-  user_panel_bg (17,22,19)        ← sent messages (dimmer = read-only)
-  user_panel_bg_queued (9,12,11)  ← queued user messages (dimmer = pending)
-  panel_bg (14,15,15)             ← modals / sheets
-  input_bg_inactive (16,17,17)    ← input box, inert (step owns the keyboard)
-  menu_bg (17,19,18)              ← menus / suggestion popups
-  element_bg (21,23,22)           ← footer / option bars
-  input_bg_active (26,28,27)      ← input box, focused (brightest interactive)
-selected_bg (38,48,44)        ← selection highlight
+~/.config/neenee/themes/*.toml
 ```
 
-The input box owns its own **pair** of related but independent background
-tokens — `input_bg_inactive` / `input_bg_active` — rather than borrowing from
-or sharing with any other surface. `input_bg_inactive` rests just above the
-ambient surfaces; `input_bg_active` jumps clear of every other token so the
-focused prompt cannot be confused with the chrome around it. The two states
-differ by a full luminance step (~10/255), so "where does typing land" is
-legible from the background alone.
+Each theme file must adhere to the formal `ThemeFile` contract:
 
-The header is a floating half-block panel on its own surface tone, inset from
-the edges by `app_bg` gutters; no separator rules are drawn.
+### TOML Schema Structure
 
-## Diff banding
+```toml
+# Metadata
+name = "Cyberpunk Neon"
+description = "High-contrast neon cyberpunk palette"
 
-Every block-level code/text surface shares one design contract (see the
-disclosure module): colors flow through theme tokens rather than inline
-`Color::Rgb` literals, so retuning the palette in one place retunes every
-block.
+# 1. Foundation Palette (8 hex colors required)
+[colors]
+background = "#0d0f18"
+surface    = "#181b28"
+text       = "#f0f6fc"
+muted      = "#8b949e"
+accent     = "#00f0ff"
+success    = "#00ff88"
+warning    = "#ffe600"
+error      = "#ff0055"
 
-| Token | RGB | Purpose |
-|-------|-----|---------|
-| `diff_add_bg` | (18, 31, 22) | Low-chroma row tint for added blocks |
-| `diff_del_bg` | (32, 20, 20) | Low-chroma row tint for removed blocks |
-| `diff_add_hl` | (42, 64, 48) | Brighter per-word highlight on added rows |
-| `diff_del_hl` | (64, 40, 40) | Brighter per-word highlight on removed rows |
+# 2. Component Token Overrides (optional)
+[components.input]
+bg_active   = "#222638"
+bg_inactive = "#141622"
+caret       = "#00f0ff"
+selection   = "#333852"
+placeholder = "#6e7681"
+
+[components.crate]
+fg       = "#ff00a0"
+badge_bg = "#2a152e"
+
+[components.diff]
+add_bg = "#0d2b1a"
+del_bg = "#2b0d18"
+add_hl = "#1b5433"
+del_hl = "#541b30"
+
+[components.command]
+idle_bg  = "#1a1d2e"
+hover_bg = "#252940"
+```
+
+### Loading & Discovery
+
+1. Custom theme files placed in `~/.config/neenee/themes/` are dynamically parsed on launch.
+2. The stem of the filename (e.g. `dracula.toml` → `dracula`) becomes the unique theme ID.
+3. Themes appear automatically in the full-screen Settings View (`/config` › Appearance) with live transcript and component swatches.
+4. Themes can be selected directly or specified in `~/.config/neenee/config.toml`:
+
+```toml
+[tui]
+color_scheme = "cyberpunk"
+```
+

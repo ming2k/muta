@@ -99,6 +99,18 @@
                   {/if}
                 </div>
               {/each}
+              {#if envoy.streamingReasoning}
+                <details class="envoy-reasoning" open>
+                  <summary>thinking…</summary>
+                  <pre class="envoy-reasoning-text">{envoy.streamingReasoning}</pre>
+                </details>
+              {/if}
+              {#each envoy.reasoning as trace, i (i)}
+                <details class="envoy-reasoning">
+                  <summary>thinking</summary>
+                  <pre class="envoy-reasoning-text">{trace}</pre>
+                </details>
+              {/each}
               {#if envoy.streamingText}
                 <pre class="envoy-stream">{envoy.streamingText}</pre>
               {/if}
@@ -281,6 +293,20 @@
   .envoy-stream {
     color: var(--text-muted);
     max-height: 140px;
+    overflow-y: auto;
+  }
+
+  .envoy-reasoning summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 2px 0;
+    user-select: none;
+  }
+
+  .envoy-reasoning-text {
+    color: var(--text-muted);
+    max-height: 160px;
     overflow-y: auto;
   }
 

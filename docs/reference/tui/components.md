@@ -32,7 +32,7 @@ stays focused on geometry, panels, color helpers, and raw body rendering.
 | `components/footer.rs` | `FooterHint`, `render_modal_footer`, `modal_footer_text` | Modal component, legacy primitive re-export, direct modal renderers | One-line modal command strip with width-aware degradation |
 | `components/toast.rs` | `ToastBubble`, `ToastKind`, `draw_toast` | Toast overlay | Transient top-right notification bubble |
 | `components/notice.rs` | `NoticeView`, `draw_notice_view` | Transcript notice renderer | Transcript notice card (header with expand/collapse micro-affordance, severity palette, wrapping, and expandable formatted detail payloads) |
-| `components/meta_strip.rs` | `MetaStrip`, `MetaChip`, `MetaTone` | Turn header (`layout_default`), sent/queued user-message header (`message_body`) | One-row two-tone metadata strip (accent anchor · muted details, R1 attribute joins per the [join ladder](visual-language.md)), with optional left padding and background tail fill |
+| `components/meta_strip.rs` | `MetaStrip`, `MetaChip`, `MetaTone` | Turn header (`turn_band`), sent/queued user-message header (`message_body`) | One-row two-tone metadata strip (accent anchor · muted details, R1 attribute joins per the [join ladder](visual-language.md)), with optional left padding and background tail fill |
 | `components/options.rs` | `QuestionOptionRow` | Permission/question overlay | Wrapped option rows for single- and multi-select question surfaces |
 
 The symbols are crate-internal. They are intentionally exposed only inside the

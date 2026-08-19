@@ -110,26 +110,11 @@ pub enum Modal {
     /// inline real-time approval sheet).
     Permissions,
     /// Config manager modal: a centered, dismissable overlay listing the
-    /// configurable categories (Appearance and Layout). Opened with the
+    /// configurable categories (Appearance). Opened with the
     /// `/config` slash command (intercepted locally, never sent to the
-    /// backend). `Enter` / `Space` drills into a category's sub-page; `Esc`
-    /// closes.
+    /// Full-screen Settings View (`/config`): dual-pane configuration center.
+    /// `Tab` switches focus between categories and detail; `Esc` closes.
     Config,
-    /// Color-scheme picker reached from the Appearance row in [`Modal::Config`].
-    /// Built-in presets apply immediately; Custom opens
-    /// [`Modal::ConfigThemeCustom`].
-    ConfigTheme,
-    /// Eight-field `#RRGGBB` editor for the custom semantic palette. The field
-    /// borrows the composer input buffer and previews valid colors live.
-    ConfigThemeCustom,
-    /// Transcript layout sub-page of the config manager. Reached from
-    /// [`Modal::Config`] by selecting the "Layout" row. Lists the layout
-    /// strategies (Turn-band / Legacy); `Space` or `Enter` applies the
-    /// selected strategy, which is sent as `AgentRequest::UpdateTuiLayout`
-    /// and persisted to `config.toml`. The harness replies with
-    /// `AgentResponse::TuiLayoutUpdated`, which re-seeds
-    /// `App::transcript_layout`. `Esc` returns to the config root.
-    ConfigLayout,
     /// Activity overview: the current pursuit (objective + checklist), the live
     /// plan-progress breakdown, and the running round/turn/model/elapsed/
     /// status. Opened by clicking the activity bar. The body scrolls via
@@ -200,11 +185,10 @@ impl Modal {
             Modal::None | Modal::Question | Modal::Permission | Modal::HistorySearch => {
                 Recess::None
             }
-            // Context switch: the two surfaces that fully own the screen.
+            // Context switch: the surfaces that fully own the screen.
             // Sessions is a context-switch picker; Host is the session
-            // dashboard — a primary, first-class view, so it occludes the
-            // conversation surface rather than floating on it.
-            Modal::Sessions | Modal::Host => Recess::Takeover,
+            // dashboard; Config is the full-screen Settings View.
+            Modal::Sessions | Modal::Host | Modal::Config => Recess::Takeover,
             // Everything else recedes the surface for focus while keeping it
             // visible (transcript, chrome, and all).
             _ => Recess::Dim,
@@ -235,9 +219,6 @@ impl Modal {
                 | Modal::Skills
                 | Modal::Sessions
                 | Modal::Permissions
-                | Modal::Config
-                | Modal::ConfigTheme
-                | Modal::ConfigLayout
                 | Modal::Activity
                 | Modal::Queue
                 | Modal::HistorySearch
@@ -263,7 +244,7 @@ impl Modal {
                 | Modal::Connections
                 | Modal::ModelEditor
                 | Modal::CustomProvider
-                | Modal::ConfigThemeCustom
+                | Modal::InputInjection
         )
     }
 }

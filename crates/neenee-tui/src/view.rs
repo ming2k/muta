@@ -35,22 +35,22 @@ use crate::footer_stack;
 pub(crate) use crate::footer_stack::{
     FooterRow, FooterRowId, PlacedFooter, rect_of as footer_rect,
 };
-/// Transcript arrangement strategies (`default` / `legacy`).
+/// Transcript arrangement strategy (`turn_band`).
 pub(crate) use crate::layout;
 #[cfg(test)]
 use crate::markdown_table::{build_table_render, shrink_column_widths};
 pub use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
+#[allow(unused_imports)]
 pub use crate::overlays::{
-    ActivityModalView, BtwModalView, ConfigOverview, ContextUsageView, CustomEditorView,
-    HelpBinding, QueueModalView, draw_activity_modal, draw_armed_toast, draw_btw_modal,
-    draw_config_layout_modal, draw_config_modal, draw_config_theme_custom_modal,
-    draw_config_theme_modal, draw_connections_modal, draw_copy_toast, draw_custom_provider_editor,
-    draw_dashboard, draw_help_modal, draw_history_panel, draw_input_injection, draw_mcp_modal,
-    draw_model_editor, draw_models_modal, draw_notice_toast, draw_oauth_pending,
-    draw_permission_sheet, draw_permissions_manager, draw_provider_delete_confirm,
-    draw_provider_template_chooser, draw_question_modal, draw_queue_modal, draw_session_preview,
-    draw_sessions_modal, draw_skills_modal, draw_token_report_modal, draw_tools_modal,
-    token_report_round_count,
+    ActivityModalView, BtwModalView, ConfigFocus, ConfigViewProps, ContextUsageView,
+    CustomEditorView, HelpBinding, QueueModalView, draw_activity_modal, draw_armed_toast, draw_btw_modal,
+    draw_config_view, draw_connections_modal, draw_copy_toast,
+    draw_custom_provider_editor, draw_dashboard, draw_help_modal, draw_history_panel,
+    draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal,
+    draw_notice_toast, draw_oauth_pending, draw_permission_sheet, draw_permissions_manager,
+    draw_provider_delete_confirm, draw_provider_template_chooser, draw_question_modal,
+    draw_queue_modal, draw_session_preview, draw_sessions_modal, draw_skills_modal,
+    draw_token_report_modal, draw_tools_modal, token_report_round_count,
 };
 use crate::page_header;
 pub(crate) use crate::page_header::{
@@ -68,7 +68,7 @@ pub use crate::theme::{COLOR_SCHEMES, CUSTOM_COLOR_FIELDS, Theme};
 use neenee_tui_engine::text::{prohibited_line_end, prohibited_line_start};
 // Re-export the drawing sub-trees so consumers that used to reach them through
 // the old `paint` parent can drill in via this module (overlays/tools/…).
-pub(crate) use crate::{overlays, tools};
+pub(crate) use crate::tools;
 // Modules referenced by their bare name within this file (formerly declared
 // here as submodules; now siblings at the crate root).
 use crate::{composer, empty_state};
@@ -235,7 +235,7 @@ pub struct TranscriptView<'a> {
     pub carousel_index: usize,
     pub theme: &'a Theme,
     /// Which layout strategy to arrange messages with. Selectable via
-    /// `[tui] transcript_layout`; defaults to [`layout::Strategy::Default`].
+    /// `[tui] transcript_layout`; defaults to [`layout::Strategy::TurnBand`].
     pub layout: layout::Strategy,
     /// Per-message laid-out height cache (Stage 2). Lets the transcript pass
     /// skip the expensive text-wrapping of messages that are entirely outside
@@ -979,6 +979,7 @@ mod tests {
                             replace_start: 0,
                             replace_end: 0,
                             kind: crate::completion::CompletionItemKind::Slash,
+                            doc: None,
                         },
                     ],
                     Some(0),
@@ -1171,23 +1172,50 @@ mod tests {
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
 
         terminal.draw(|frame| {
-            draw_config_modal(
+            draw_config_view(
                 frame,
-                0,
-                &mut 0,
-                ConfigOverview {
+                ConfigViewProps {
+                    category_index: 0,
+                    detail_index: 0,
+                    focus: ConfigFocus::Categories,
                     color_scheme: "zen",
-                    layout: crate::layout::Strategy::Default,
+                    custom_color_scheme: &custom,
+                    custom_color_draft: &custom,
+                    custom_editing: false,
+                    input: "",
+                    cursor_position: 0,
+                    transcript_layout: crate::layout::Strategy::TurnBand,
+                    expand_auto_scroll: false,
+                    click_outside_dismiss: true,
+                    workspace: "~/workspace",
+                    category_scroll: &mut 0,
+                    detail_scroll: &mut 0,
+                    theme: &theme,
                 },
-                false,
-                &theme,
             );
         });
         terminal.draw(|frame| {
-            draw_config_theme_modal(frame, "nord", &custom, 2, &mut 0, false, &theme);
-        });
-        terminal.draw(|frame| {
-            draw_config_theme_custom_modal(frame, &custom, 4, "#8ea191", 7, &mut 0, &theme);
+            draw_config_view(
+                frame,
+                ConfigViewProps {
+                    category_index: 0,
+                    detail_index: 5,
+                    focus: ConfigFocus::Detail,
+                    color_scheme: "custom",
+                    custom_color_scheme: &custom,
+                    custom_color_draft: &custom,
+                    custom_editing: true,
+                    input: "#8ea191",
+                    cursor_position: 7,
+                    transcript_layout: crate::layout::Strategy::TurnBand,
+                    expand_auto_scroll: false,
+                    click_outside_dismiss: true,
+                    workspace: "~/workspace",
+                    category_scroll: &mut 0,
+                    detail_scroll: &mut 0,
+                    theme: &theme,
+                },
+            );
         });
     }
 
@@ -1686,7 +1714,7 @@ mod tests {
         }
 
         let window = cache
-            .virtual_window(&messages, crate::layout::Strategy::Default, 6, 3)
+            .virtual_window(&messages, crate::layout::Strategy::TurnBand, 6, 3)
             .expect("all message heights are cached");
         assert_eq!(window.message_start, 1);
         assert_eq!(window.message_end, 2);
@@ -1709,7 +1737,7 @@ mod tests {
         }
 
         let window = cache
-            .virtual_window(&messages, crate::layout::Strategy::Default, 0, 20)
+            .virtual_window(&messages, crate::layout::Strategy::TurnBand, 0, 20)
             .expect("all message heights are cached");
         assert_eq!(window.message_start, 0);
         assert_eq!(window.message_end, 3);
