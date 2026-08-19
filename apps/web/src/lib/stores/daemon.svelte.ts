@@ -613,6 +613,47 @@ export class DaemonStore {
     };
   }
 
+  /**
+   * End a hosted session (ADR-0112): the panel-side counterpart of the TUI's
+   * `/exit` — "I am done with this session", not "detach". Reuses the
+   * `kill_session` control verb (one-shot control connection, mirroring
+   * `newSession`), which tears the session down server-side and publishes
+   * `SessionRemoved`; the monitor stream then drops the row and, if it was
+   * the active session, `handleMonitorFrame` clears the view. Disk history
+   * is kept — ending is not deleting.
+   */
+  public endSession(id: string) {
+    const ws = this.openSocket();
+    ws.onopen = () => {
+      ws.send(
+        wireEnvelope(
+          {
+            control: {
+              verb: "kill_session",
+              session_id: id,
+            },
+          },
+          this.project,
+        ),
+      );
+    };
+    ws.onmessage = (event) => {
+      try {
+        const frame = JSON.parse(event.data as string) as Wire;
+        if (frame.type === "ControlReply" && !frame.ok) {
+          this.pushToast("error", "Could not end session", frame.error ?? "unknown error");
+        }
+      } catch (err) {
+        console.error("control frame parse error:", err, event.data);
+      }
+      this.detachSocketHandlers(ws);
+      ws.close();
+    };
+    ws.onerror = () => {
+      this.pushToast("error", "Could not end session", "control connection failed");
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Frame dispatch
   // -------------------------------------------------------------------------

@@ -58,6 +58,10 @@ pub(super) fn transcript_message_from_core(message: Message) -> Option<Transcrip
         let mut msg = TranscriptMessage::new(message.role, content);
         msg.provider = provider;
         msg.model = model;
+        msg.effort = message
+            .effort
+            .clone()
+            .filter(|effort| !effort.is_empty() && !effort.eq_ignore_ascii_case("none"));
         msg.sent_at_ms = sent_at_ms;
         // Infer the turn origin for restored user messages so a resumed
         // session's Activity modal still skips slash/shell turns. The durable
@@ -242,6 +246,13 @@ fn transcript_from_core_inner(
         // models still shows which model produced each turn.
         let provider = message.provider.clone();
         let model = message.model.clone();
+        // Reasoning depth is assistant-turn attribution too: keep it alongside
+        // provider/model, dropping the empty/`none` spellings (a channel whose
+        // effort resolved to the `None` tier renders no depth chip).
+        let effort = message
+            .effort
+            .clone()
+            .filter(|effort| !effort.is_empty() && !effort.eq_ignore_ascii_case("none"));
         let message_sent_at_ms = message.sent_at_ms.or_else(|| {
             message
                 .timestamp
@@ -280,6 +291,7 @@ fn transcript_from_core_inner(
                 let mut thinking = TranscriptMessage::thinking(reasoning);
                 thinking.provider = provider.clone();
                 thinking.model = model.clone();
+                thinking.effort = effort.clone();
                 if track_rounds {
                     thinking.round = Some(restored_round);
                     thinking.turn = Some(restored_turn);
@@ -304,6 +316,7 @@ fn transcript_from_core_inner(
                     );
                     step.provider = provider.clone();
                     step.model = model.clone();
+                    step.effort = effort.clone();
                     if track_rounds {
                         step.round = Some(restored_round);
                         step.turn = Some(restored_turn);

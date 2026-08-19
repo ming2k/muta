@@ -15,7 +15,7 @@
 
 use neenee_tui_engine::Rect;
 
-use crate::model::document::{MessageKind, TranscriptMessage};
+use crate::model::document::{MessageKind, NoticeSeverity, TranscriptMessage};
 use crate::model::layout::LayoutMap;
 use crate::model::selection::SelectionState;
 use neenee_contracts::Role;
@@ -565,6 +565,50 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
     rows.join("\n")
 }
 
+/// A discovery warning (model-list refresh failure) renders as a notification
+/// entry: severity header row, gap, then the wrapped body — never as a bare
+/// un-styled text line.
+#[test]
+fn discovery_warning_notice_renders_as_entry() {
+    let raw = "aa: could not refresh the model list (model-list HTTP request failed: \
+               error sending request for url (https://api.deepseek.com/v1/models)). \
+               Showing the previous list.";
+    let msg = TranscriptMessage::notice(NoticeSeverity::Warning, raw);
+    let grid = render_transcript_grid(&[msg], 60, 12);
+    println!("{grid}");
+
+    // Row 0 is the page-header band; the entry header is the first painted
+    // transcript row.
+    let first_line = grid
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default();
+    assert!(
+        first_line.contains("notification"),
+        "notice must render with a notification entry header, got: {first_line:?}"
+    );
+    // The body wraps inside the band; continuation lines must be flush with
+    // the body start, not floating at a random gutter.
+    let body_line = grid
+        .lines()
+        .find(|line| line.contains("error sending request"))
+        .unwrap_or_default();
+    assert!(
+        !body_line.trim().is_empty(),
+        "body must contain the wrapped error text, got: {body_line:?}"
+    );
+    let body_indent = body_line.len() - body_line.trim_start().len();
+    let first_body = grid
+        .lines()
+        .find(|line| line.contains("aa: could not refresh"))
+        .unwrap_or_default();
+    let first_indent = first_body.len() - first_body.trim_start().len();
+    assert_eq!(
+        body_indent, first_indent,
+        "continuation lines must be flush with the first body line"
+    );
+}
+
 /// A batch of collapsed tool steps renders with no blank rows between headers.
 #[test]
 fn collapsed_tool_steps_stack_flush() {
@@ -783,13 +827,15 @@ fn command_entries_render_header_and_direct_body_without_folding() {
         "a command entry renders its header with leading ⌘ glyph:\n{grid}"
     );
     assert!(
-        !rows[permissions_idx].trim_start().starts_with('+') && !rows[permissions_idx].trim_start().starts_with('-'),
+        !rows[permissions_idx].trim_start().starts_with('+')
+            && !rows[permissions_idx].trim_start().starts_with('-'),
         "command entries never show collapsible folding markers (ADR-0111):\n{grid}"
     );
 
     // Verify 1-line gap between header and body
     assert!(
-        rows.get(permissions_idx + 1).is_some_and(|r| r.trim().is_empty()),
+        rows.get(permissions_idx + 1)
+            .is_some_and(|r| r.trim().is_empty()),
         "there must be a 1-row gap between command header and body:\n{grid}"
     );
 
@@ -804,6 +850,45 @@ fn command_entries_render_header_and_direct_body_without_folding() {
     assert!(
         grid.contains("• bash"),
         "the body's list renders through the block renderer:\n{grid}"
+    );
+}
+
+/// ADR-0111 alignment: the invocation shares the body's leading indent, so a
+/// completed entry reads as one aligned block — the invocation never hangs to
+/// the left of the result body it introduces.
+#[test]
+fn command_entry_invocation_aligns_with_result_body() {
+    let messages = vec![TranscriptMessage::command_result(
+        "new",
+        "",
+        Some(neenee_contracts::CommandResult::Text(
+            "Started new session: a1b2c3".to_string(),
+        )),
+    )];
+
+    let grid = render_transcript_grid(&messages, 72, 12);
+    let rows: Vec<&str> = grid.lines().collect();
+    let invocation_idx = rows
+        .iter()
+        .position(|row| row.contains("/new"))
+        .expect("invocation row must render");
+    let body_idx = rows
+        .iter()
+        .position(|row| row.contains("Started new session"))
+        .expect("result body row must render");
+
+    let invocation_indent = rows[invocation_idx]
+        .chars()
+        .take_while(|c| *c == ' ')
+        .count();
+    let body_indent = rows[body_idx].chars().take_while(|c| *c == ' ').count();
+    assert_eq!(
+        invocation_indent, body_indent,
+        "invocation and result body must share the leading indent:\n{grid}"
+    );
+    assert!(
+        invocation_indent >= 2,
+        "the invocation is indented off the transcript edge (prose leading indent):\n{grid}"
     );
 }
 
@@ -885,7 +970,9 @@ fn command_component_pending_then_completed() {
     );
     let completed = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
     assert!(
-        completed.contains("⌘ command") && completed.contains("/autopilot on") && completed.contains("Autopilot ON"),
+        completed.contains("⌘ command")
+            && completed.contains("/autopilot on")
+            && completed.contains("Autopilot ON"),
         "the settled entry renders its header, invocation, and result body:\n{completed}"
     );
 
@@ -1042,7 +1129,8 @@ fn default_turn_header_has_one_gap_before_first_tool() {
         false,
     )
     .with_turn(7)
-    .with_attribution("anthropic", "claude-sonnet");
+    .with_attribution("anthropic", "claude-sonnet")
+    .with_effort(Some("high"));
 
     let grid = render_transcript_grid(&[step], 72, 14);
     let rows: Vec<&str> = grid.lines().collect();
@@ -1056,6 +1144,10 @@ fn default_turn_header_has_one_gap_before_first_tool() {
         .expect("tool header must render");
 
     assert_eq!(
+        rows[turn_idx], "  > turn 7 · claude-sonnet · high",
+        "turn header renders anchor · model · effort:\n{grid}"
+    );
+    assert_eq!(
         turn_idx, 1,
         "turn header should only inherit the viewport's one top-margin row:\n{grid}"
     );
@@ -1063,6 +1155,37 @@ fn default_turn_header_has_one_gap_before_first_tool() {
         tool_idx - turn_idx,
         2,
         "turn header and first tool should have one blank row:\n{grid}"
+    );
+}
+
+/// A channel that ran without a reasoning effort keeps the header quiet —
+/// no dangling modifier for non-reasoning turns.
+#[test]
+fn turn_header_omits_effort_when_absent() {
+    let step = tool_step_structured(
+        "read_text",
+        r#"{"path":"a.rs"}"#,
+        neenee_contracts::ToolOutput::Code {
+            lang: None,
+            text: "x".into(),
+            start_line: 1,
+            prefix: None,
+            suffix: None,
+        },
+        false,
+    )
+    .with_turn(2)
+    .with_attribution("google", "gemini-3-pro");
+
+    let grid = render_transcript_grid(&[step], 72, 14);
+    let rows: Vec<&str> = grid.lines().collect();
+    let turn_idx = rows
+        .iter()
+        .position(|row| row.contains("> turn 2"))
+        .expect("turn header must render");
+    assert_eq!(
+        rows[turn_idx], "  > turn 2 · gemini-3-pro",
+        "no-effort channel renders anchor · model only:\n{grid}"
     );
 }
 

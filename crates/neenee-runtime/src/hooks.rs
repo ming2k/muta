@@ -54,6 +54,8 @@ impl Hook for CommandHook {
         let cwd = ctx.cwd.as_deref().unwrap_or_else(|| Path::new("."));
 
         let mut command = tokio::process::Command::new("sh");
+        #[cfg(unix)]
+        command.process_group(0); // hooks may spawn children; group-kill on timeout
         command
             .arg("-c")
             .arg(&self.command)
@@ -112,17 +114,28 @@ async fn write_stdin_and_collect(
 
     // Read both streams to EOF off the wait path, so a child that writes a
     // large result then exits does not block on a full pipe.
+    // Hook output cap: a hook is a small JSON-in/JSON-out protocol
+    // participant, but nothing stopped a chatty one from buffering unbounded
+    // output for its whole 60s budget. Interpreters look at the first bytes
+    // (a JSON decision), so a head cap preserves the protocol and bounds the
+    // memory. `take` stops reading at the cap, letting the pipe drain (the
+    // child is never blocked on a full pipe).
+    const HOOK_OUTPUT_CAP: usize = 1 << 20; // 1 MiB
     let stdout_task = tokio::spawn(async move {
         let mut buf = Vec::new();
         if let Some(mut stream) = stdout {
-            let _ = stream.read_to_end(&mut buf).await;
+            let _ = tokio::io::AsyncReadExt::take(&mut stream, HOOK_OUTPUT_CAP as u64)
+                .read_to_end(&mut buf)
+                .await;
         }
         String::from_utf8_lossy(&buf).into_owned()
     });
     let stderr_task = tokio::spawn(async move {
         let mut buf = Vec::new();
         if let Some(mut stream) = stderr {
-            let _ = stream.read_to_end(&mut buf).await;
+            let _ = tokio::io::AsyncReadExt::take(&mut stream, HOOK_OUTPUT_CAP as u64)
+                .read_to_end(&mut buf)
+                .await;
         }
         String::from_utf8_lossy(&buf).into_owned()
     });
@@ -140,7 +153,18 @@ async fn write_stdin_and_collect(
         Ok(Err(error)) => Err(error),
         Err(_) => {
             // Timed out; best-effort kill. `child.wait()` borrows, so the child
-            // is still ours to kill here.
+            // is still ours to kill here. The group kill also reaches hook
+            // children the shell backgrounded (process_group(0) at spawn made
+            // the hook a group leader) — a lingering hook child would outlive
+            // its budget silently otherwise.
+            #[cfg(unix)]
+            if let Some(pid) = child.id() {
+                // SAFETY: teardown-path signal; ESRCH (already dead) is fine.
+                unsafe {
+                    libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                }
+            }
+            #[cfg(not(unix))]
             let _ = child.start_kill();
             Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,

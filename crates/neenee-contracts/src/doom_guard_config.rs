@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// ```toml
 /// [principal.nudge]
-/// enabled = true   # master switch (default false)
-/// window  = 8      # sliding-window size (recent watched signatures)
+/// enabled = true   # master switch (default true; set false to disable)
+/// window  = 16     # sliding-window size (recent watched signatures)
 /// ```
 ///
 /// Detection is pure signature bookkeeping (no model call) and the block is
@@ -40,15 +40,19 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DoomGuardConfig {
-    /// Master switch. `false` (the default) disables the doom guard entirely
-    /// — repeating calls are not blocked. Wired through
-    /// `Agent::set_doom_guard_config`; flipped off for envoys and the `/review`
-    /// diagnostic regardless of user setting.
+    /// Master switch. `true` (the default): the doom guard blocks a watched
+    /// tool call that repeats within the window — the cheapest defense
+    /// against variant loops (`sleep 1; make` / `sleep 2; make`) burning
+    /// tokens until the context overflows. Wired through
+    /// `Agent::set_doom_guard_config`; forced off for envoys and the `/review`
+    /// diagnostic regardless of user setting. Signatures are normalized
+    /// (leading env assignments, timing no-ops, casing, path decoration), so
+    /// legitimate repeats of *distinct* work are not blocked.
     pub enabled: bool,
     /// Sliding-window size: how many recent watched tool-call signatures are considered when
     /// judging whether a signature is recurring. Large enough to span a
-    /// `A B A B` thrash, small enough that an old, since-abandoned call ages
-    /// out and stops counting. Default `8`.
+    /// `A B A B` thrash *and* short variant cycles, small enough that an
+    /// old, since-abandoned call ages out and stops counting. Default `16`.
     pub window: usize,
 }
 
@@ -67,8 +71,8 @@ impl DoomGuardConfig {
 impl Default for DoomGuardConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            window: 8,
+            enabled: true,
+            window: 16,
         }
     }
 }
@@ -78,17 +82,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_is_disabled() {
+    fn default_is_enabled_with_wider_window() {
         let cfg = DoomGuardConfig::default();
-        assert!(!cfg.enabled);
-        assert_eq!(cfg.window, 8);
+        assert!(cfg.enabled, "on by default: the variant-loop defense");
+        assert_eq!(cfg.window, 16);
     }
 
     #[test]
     fn disabled_helper_keeps_default_window() {
         let off = DoomGuardConfig::disabled();
         assert!(!off.enabled);
-        assert_eq!(off.window, 8);
+        assert_eq!(off.window, 16);
     }
 
     #[test]
@@ -108,7 +112,7 @@ mod tests {
         let s = "enabled = true\n";
         let parsed: DoomGuardConfig = toml::from_str(s).unwrap();
         assert!(parsed.enabled);
-        assert_eq!(parsed.window, 8);
+        assert_eq!(parsed.window, 16);
     }
 
     #[test]
@@ -120,6 +124,6 @@ mod tests {
         let s = "enabled = true\nthreshold = 3\nescalate_at = 6\npath_threshold = 8\n";
         let parsed: DoomGuardConfig = toml::from_str(s).unwrap();
         assert!(parsed.enabled);
-        assert_eq!(parsed.window, 8);
+        assert_eq!(parsed.window, 16);
     }
 }

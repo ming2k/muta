@@ -40,6 +40,17 @@ pub enum AgentRequest {
     },
     SlashCommand(String),
     Interrupt,
+    /// The client declares this session over (ADR-0112). Sent on the paths
+    /// where the operator's intent is "I am done with this session", not
+    /// "I am detaching": the TUI's `/exit` and double-Ctrl+C quit, a
+    /// headless run's terminal round, and the web panel's end-session
+    /// action. The server intercepts it at the attach connection (it never
+    /// reaches the driver queue) and tears the hosted session down through
+    /// the same path as `ControlRequest::KillSession`: cancel the driver,
+    /// fire SessionEnd hooks, drop it from the registry, and publish
+    /// `SessionRemoved` so every dashboard drops the row. Disk history is
+    /// kept — ending a session is not deleting it.
+    EndSession,
     PermissionReply {
         request_id: String,
         decision: PermissionDecision,

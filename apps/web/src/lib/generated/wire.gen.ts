@@ -15,7 +15,7 @@ export type AgentNotice = { id: string, kind: NoticeKind, severity: NoticeSeveri
  */
 surface: NoticeSurface, title: string, body?: string, source: NoticeSource, };
 
-export type AgentRequest = { "Chat": { text: string, images: Array<ImagePart>, sent_at_ms?: number, } } | { "InsertUserInput": { session_id: string, input: QueuedUserInput, } } | { "CancelInsertedInput": { session_id: string, input_id: string, } } | { "ChatToSession": { session_id: string, input: QueuedUserInput, } } | { "SlashCommand": string } | "Interrupt" | { "PermissionReply": { request_id: string, decision: PermissionDecision, 
+export type AgentRequest = { "Chat": { text: string, images: Array<ImagePart>, sent_at_ms?: number, } } | { "InsertUserInput": { session_id: string, input: QueuedUserInput, } } | { "CancelInsertedInput": { session_id: string, input_id: string, } } | { "ChatToSession": { session_id: string, input: QueuedUserInput, } } | { "SlashCommand": string } | "Interrupt" | "EndSession" | { "PermissionReply": { request_id: string, decision: PermissionDecision, 
 /**
  * Full-duplex (ADR-0029): when the reply targets a permission
  * request surfaced by a *envoy* (carried up as a
@@ -364,7 +364,16 @@ provider?: string,
  * Model identifier that produced this assistant message (e.g.
  * `"kimi-code"`). Companion to [`Message::provider`].
  */
-model?: string, hidden: boolean, 
+model?: string, 
+/**
+ * The reasoning effort (depth) this message's model request ran with
+ * (`"high"`, `"max"`, …), when the active channel exposes one. Stamped
+ * next to [`Message::provider`]/[`Message::model`] so the transcript can
+ * show the depth each turn actually ran at after resume. Storage/UI
+ * metadata only — stripped by [`Message::to_wire`] and never sent to the
+ * provider.
+ */
+effort?: string, hidden: boolean, 
 /**
  * Nested envoy transcript. Populated only on the `Tool`-role result
  * message of a `task` tool call (see `EnvoyTool`). Each entry is a

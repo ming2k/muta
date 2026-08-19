@@ -642,10 +642,15 @@ impl App {
         // we mutably borrow `self` for the cache populate below.
         let after_at = self.input[at_start + 1..cursor_end].to_string();
 
-        // Lazy-populate the cache on first `@` mention; subsequent calls reuse
-        // it. `path_scan()` is `&mut self`, so clone the entries out to avoid
-        // holding a borrow across the iterator below.
-        let entries: Vec<String> = self.path_scan().entries.clone();
+        // Lazy-populate the cache on first `@` mention; subsequent calls
+        // reuse it. The scan runs off-thread (spawn_blocking) — see
+        // [`App::path_scan_cache`]; until it lands, `@path` completions are
+        // empty (an empty menu beats a frozen event loop). Clone the
+        // entries out to avoid holding a borrow across the iterator.
+        let entries: Vec<String> = match self.path_scan() {
+            Some(scan) => scan.entries.clone(),
+            None => Vec::new(),
+        };
 
         let mut comps: Vec<Completion> = entries
             .iter()
@@ -706,11 +711,69 @@ impl App {
         comps
     }
 
-    /// Borrow the cached recursive project listing, populating it on first
-    /// access. Mirrors opencode's per-directory picker cache: one
+    /// Borrow the cached recursive project listing, kicking off an async scan
+    /// on first access. Mirrors opencode's per-directory picker cache: one
     /// [`scan_project_files`] call per App session, then pure filtering.
-    fn path_scan(&mut self) -> &PathScan {
-        self.path_scan_cache
-            .get_or_insert_with(|| scan_project_files(&self.cwd))
+    ///
+    /// Returns `None` until the scan lands (those frames contribute no path
+    /// candidates — an empty menu beats the frozen event loop the old
+    /// synchronous `rg` produced on a large monorepo). The scan task writes
+    /// into [`App::path_scan_slot`] and pokes [`App::path_scan_wake`]; the
+    /// event loop's wake handler harvests the slot into
+    /// [`App::path_scan_cache`], and the next `completions()` call re-runs
+    /// with the listing available.
+    pub fn path_scan(&mut self) -> Option<&PathScan> {
+        // First request: install the slot + waker and start the scan.
+        if self.path_scan_slot.is_none() && self.path_scan_cache.is_none() {
+            let slot = PathScanSlot::default();
+            let wake = std::sync::Arc::new(tokio::sync::Notify::new());
+            let cwd = self.cwd.clone();
+            let slot_for_task = slot.clone();
+            let wake_for_task = wake.clone();
+            self.path_scan_slot = Some(slot);
+            self.path_scan_wake = Some(wake);
+            // `spawn_blocking` needs a runtime; off-runtime callers (unit
+            // tests) fall back to a synchronous scan — same result, just
+            // without the off-thread win.
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => {
+                    handle.spawn_blocking(move || {
+                        let scan = scan_project_files(&cwd);
+                        slot_for_task.store(scan);
+                        wake_for_task.notify_one();
+                    });
+                }
+                Err(_) => {
+                    // No runtime: run the scan inline and harvest it into
+                    // the cache immediately (the event loop's harvest pass
+                    // will never come).
+                    let scan = scan_project_files(&cwd);
+                    self.path_scan_slot = None;
+                    self.path_scan_wake = None;
+                    self.path_scan_cache = Some(Some(scan));
+                }
+            }
+        }
+        self.path_scan_cache.as_ref().and_then(|s| s.as_ref())
+    }
+}
+
+/// Shared hand-off for the async project scan: the `spawn_blocking` task
+/// stores the finished scan; the event loop harvests it into
+/// [`App::path_scan_cache`] on the next wake.
+#[derive(Clone, Default)]
+pub struct PathScanSlot(std::sync::Arc<std::sync::Mutex<Option<PathScan>>>);
+
+impl PathScanSlot {
+    /// Store a completed scan (called by the scan task).
+    pub fn store(&self, scan: PathScan) {
+        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(scan);
+    }
+
+    /// Take the finished scan, if any (called by the event loop).
+    pub fn harvest(&self) -> Option<PathScan> {
+        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        guard.take()
     }
 }

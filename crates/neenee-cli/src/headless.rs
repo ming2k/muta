@@ -205,6 +205,7 @@ pub async fn run_headless(
                         }
                         io::stdout().flush()?;
                     }
+                    declare_session_end(&tx, &mut rx).await;
                     return Ok(());
                 }
                 RoundEvent::StreamDelta(delta) => {
@@ -237,6 +238,7 @@ pub async fn run_headless(
                     } else {
                         eprintln!("\nneenee: error: {err}");
                     }
+                    declare_session_end(&tx, &mut rx).await;
                     return Err(err.into());
                 }
                 _ => {}
@@ -251,6 +253,7 @@ pub async fn run_headless(
                 } else {
                     eprintln!("\nneenee: error: {err}");
                 }
+                declare_session_end(&tx, &mut rx).await;
                 return Err(err.into());
             }
             AgentResponse::Exit => {
@@ -261,6 +264,30 @@ pub async fn run_headless(
     }
 
     Ok(())
+}
+
+/// Tell the daemon the headless run's session is over (ADR-0112) and wait
+/// for it to acknowledge with the terminal `AgentResponse::Exit`. Headless
+/// runs are ephemeral by design — the operator asked one question and is
+/// gone — so leaving the session hosted (the detach semantics a TUI get)
+/// would only litter the dashboard with dead rows waiting for an idle
+/// reaper that never applies (a session with real content is never reaped).
+/// Bounded: a daemon that never answers does not hang the CLI.
+async fn declare_session_end(
+    tx: &tokio::sync::mpsc::UnboundedSender<AgentRequest>,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentResponse>,
+) {
+    if tx.send(AgentRequest::EndSession).is_err() {
+        return; // Connection already gone; the daemon sees the socket close.
+    }
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Some(AgentResponse::Exit)) | Ok(None) => return,
+            Ok(Some(_)) => continue,
+            Err(_) => return, // Timed out; teardown proceeds server-side.
+        }
+    }
 }
 
 async fn handle_permission_request(

@@ -662,7 +662,20 @@ where
     let (resp_in_tx, resp_in_rx) = mpsc::unbounded_channel::<AgentResponse>();
 
     tokio::spawn(async move {
+        let mut end_pending = false;
         while let Some(request) = req_out_rx.recv().await {
+            if matches!(request, AgentRequest::EndSession) {
+                // Client-declared session end (ADR-0112): mark it so the
+                // pump, after flushing this frame, gives the daemon a brief
+                // window to tear the session down before the socket closes.
+                // Without this, a client that sends EndSession and drops
+                // everything immediately can race the runtime shutdown: the
+                // frame reaches the wire but the process exits before the
+                // daemon even reads it — harmless over TCP/UDS (the kernel
+                // buffers the written bytes), but the graceful-close
+                // handshake below is still worth attempting.
+                end_pending = true;
+            }
             let text = match serde_json::to_string(&Wire::Request { request }) {
                 Ok(text) => text,
                 Err(error) => {
@@ -674,6 +687,13 @@ where
                 tracing::warn!(%error, "attach: ws send failed");
                 break;
             }
+        }
+        if end_pending {
+            // Give the daemon a moment to observe the EndSession frame and
+            // run the teardown (it broadcasts the terminal `Exit` back,
+            // which the response pump relays). Bounded so a hung daemon
+            // cannot pin the client open either.
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         }
         let _ = ws_sink.close().await;
     });

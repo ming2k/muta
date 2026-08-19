@@ -495,6 +495,15 @@ fn restored_assistant_carries_provider_and_model_attribution() {
         restored.attribution_label(),
         Some(("kimi-code".to_string(), "kimi-k2.7-code".to_string()))
     );
+    // No persisted effort → no depth chip on restore.
+    assert_eq!(restored.effort, None);
+
+    // The persisted reasoning depth round-trips with the attribution.
+    let mut message = Message::new(Role::Assistant, "deep thought");
+    message.effort = Some("high".to_string());
+    let restored = transcript_message_from_core(message).unwrap();
+    assert_eq!(restored.effort.as_deref(), Some("high"));
+    assert_eq!(restored.attribution_label().map(|(_, m)| m), None::<String>);
 
     // A plain user message carries no attribution.
     let user = transcript_message_from_core(Message::new(Role::User, "hi")).unwrap();
@@ -523,6 +532,7 @@ fn restored_reasoning_is_not_shown_as_running() {
         images: None,
         provider: None,
         model: None,
+        effort: None,
         hidden: false,
         children: None,
         envoy_meta: None,
@@ -620,6 +630,7 @@ fn restored_native_tool_calls_are_visible() {
         images: None,
         provider: None,
         model: None,
+        effort: None,
         hidden: false,
         children: None,
         envoy_meta: None,
@@ -658,6 +669,7 @@ fn restored_tool_results_merge_into_steps_in_fifo_order() {
             images: None,
             provider: None,
             model: None,
+            effort: None,
             hidden: false,
             children: None,
             envoy_meta: None,
@@ -1250,6 +1262,20 @@ fn history_modal_is_click_dismissable_and_restores_draft() {
 /// Build a minimal `App` scoped to a tempdir project so we can exercise
 /// the completion pipeline end-to-end without touching the user's real
 /// filesystem. Mirrors how a real session captures cwd at startup.
+/// Test constructor for cross-module relay tests (the event loop's
+/// input-selection tests): a default `App` in a temp dir, with no files.
+/// The returned temp dir must be kept alive by the caller for the app's
+/// lifetime.
+#[cfg(test)]
+pub(crate) fn new_app_for_relay_tests() -> App {
+    let (app, _tmp) = app_in_tempdir(&[], &[]);
+    // Leak the temp dir intentionally: these tests only touch in-memory
+    // state, and returning `(App, TempDir)` would force every caller to
+    // juggle the guard. The OS reclaims the empty dir at process exit.
+    std::mem::forget(_tmp);
+    app
+}
+
 fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
     let tmp = tempfile::tempdir().expect("tempdir");
     for d in dirs {
@@ -1330,6 +1356,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         current_session_id: String::new(),
         current_workspace: String::new(),
         path_scan_cache: None,
+        path_scan_slot: None,
+        path_scan_wake: None,
         session_context: None,
         loop_status: LoopStatus::Idle,
         activity_status: String::new(),
@@ -2070,29 +2098,54 @@ fn completions_path_skips_dotgit_directory() {
 
 #[test]
 fn completions_path_cache_populated_once() {
-    // The scan should run only the first time `@` triggers; we verify by
-    // observing `path_scan_cache` transitioning from None to Some.
+    // Off-runtime (no tokio handle) the scan runs inline and lands in the
+    // cache on the first `@`; a second `@` reuses it and requests nothing.
+    // The async production path is the same state machine with a slot in
+    // between (see path_scan) — its landing is covered by the harvest
+    // assertions below on the slot itself.
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
     assert!(app.path_scan_cache.is_none());
     app.input = "@".to_string();
     app.cursor_position = 1;
     let _ = app.completions();
-    let first_scan = app
+    let first_len = app
         .path_scan_cache
         .as_ref()
         .expect("scan populated")
-        .clone();
-    // A second call must not re-scan: cache stays the same Vec pointer
-    // content. We compare lengths because the Vec itself may move.
+        .as_ref()
+        .expect("some")
+        .entries
+        .len();
+    assert!(first_len > 0, "the temp dir had at least Cargo.toml");
+    // A second call must not re-request: cache intact, no slot installed.
     app.input = "@Ca".to_string();
     app.cursor_position = app.input.chars().count();
     let _ = app.completions();
-    let second_scan = app
+    assert!(app.path_scan_slot.is_none(), "no second scan request");
+    let second_len = app
         .path_scan_cache
         .as_ref()
         .expect("scan still populated")
-        .clone();
-    assert_eq!(first_scan.entries, second_scan.entries);
+        .as_ref()
+        .expect("some")
+        .entries
+        .len();
+    assert_eq!(first_len, second_len);
+}
+
+#[test]
+fn path_scan_slot_round_trip() {
+    // The async hand-off itself: store then harvest yields the scan exactly
+    // once, and a second harvest is empty (no duplication into the cache).
+    let slot = crate::completion::PathScanSlot::default();
+    assert!(slot.harvest().is_none());
+    let scan = crate::completion::PathScan {
+        entries: vec!["a.txt".to_string()],
+    };
+    slot.store(scan);
+    let got = slot.harvest().expect("harvest yields the stored scan");
+    assert_eq!(got.entries, vec!["a.txt".to_string()]);
+    assert!(slot.harvest().is_none(), "harvest is take-once");
 }
 
 #[test]
@@ -4244,4 +4297,243 @@ fn view_reset_clears_pending_scroll_settle() {
         !app.scroll_settle_pending,
         "reset_view_state must clear a pending settle"
     );
+}
+
+// ─── Input selection caret relay ──────────────────────────────────────────
+// A whole-input selection hides the block caret, but its position is defined
+// as the selection's head (where the mouse was released). Direction keys must
+// relay from that hidden position and break the selection; deletes replace
+// the selection. These tests lock the App-side helpers and the event loop's
+// relay probe.
+
+fn app_with_input_selection(input: &str) -> App {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = input.to_string();
+    // The drag-selection shape the composer actually records: middle-click /
+    // whole-block select of the live input.
+    app.selection = SelectionState::Block {
+        message_idx: crate::view::INPUT_MSG_IDX,
+        block_idx: 0,
+    };
+    // The hidden caret parked where the mouse released (the drag's head).
+    app.set_cursor(input.chars().count());
+    app
+}
+
+#[test]
+fn has_input_selection_detects_whole_input_block_only() {
+    let mut app = app_with_input_selection("hello");
+    assert!(app.has_input_selection());
+
+    // A transcript selection never binds the composer.
+    app.selection = SelectionState::Block {
+        message_idx: 0,
+        block_idx: 0,
+    };
+    assert!(
+        !app.has_input_selection(),
+        "transcript selections must not trigger the input caret relay"
+    );
+
+    // A partial Range on INPUT_MSG_IDX is not byte-guaranteed against
+    // app.input, so it deliberately does not count either.
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 0),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 2),
+    };
+    assert!(!app.has_input_selection());
+}
+
+#[test]
+fn adopt_caret_head_and_tail_break_selection() {
+    let mut app = app_with_input_selection("hello");
+    // Park the visible caret somewhere stale — the adopt must override it,
+    // proving the relay wins over the stale position.
+    app.cursor_position = 1;
+
+    assert!(app.adopt_caret_from_input_selection(SelectionEdge::Head));
+    assert_eq!(app.cursor_position, 5, "head edge = buffer end");
+    assert_eq!(app.selection, SelectionState::None, "selection must break");
+
+    // Re-arm and adopt the tail edge.
+    app.selection = SelectionState::Block {
+        message_idx: crate::view::INPUT_MSG_IDX,
+        block_idx: 0,
+    };
+    assert!(app.adopt_caret_from_input_selection(SelectionEdge::Tail));
+    assert_eq!(app.cursor_position, 0, "tail edge = buffer start");
+    assert_eq!(app.selection, SelectionState::None);
+
+    // No selection → no-op, reports false.
+    assert!(!app.adopt_caret_from_input_selection(SelectionEdge::Head));
+}
+
+#[test]
+fn delete_input_selection_clears_buffer_and_selection() {
+    let mut app = app_with_input_selection("hello world");
+    assert!(app.delete_input_selection());
+    assert_eq!(app.input, "");
+    assert_eq!(app.cursor_position, 0);
+    assert_eq!(app.selection, SelectionState::None);
+    // Second call is a no-op.
+    assert!(!app.delete_input_selection());
+}
+
+#[test]
+fn input_selection_relays_arrows_only_when_composer_owns_caret() {
+    let mut app = app_with_input_selection("hello");
+    assert_eq!(app.caret_owner(), CaretOwner::Composer);
+    assert!(app.input_selection_relays_arrows());
+
+    // A transcript step holding focus means the composer no longer owns the
+    // caret: arrows mean step navigation, so the relay must stand down even
+    // though a selection is technically active.
+    app.focused_target = Some(crate::model::layout::InteractiveTarget::tool_step(0));
+    assert!(
+        !app.input_selection_relays_arrows(),
+        "arrows belong to step navigation while a step holds focus"
+    );
+}
+
+/// Drive the relay probe the way the event loop does: probe the raw crossterm
+/// event, and only fall through to `process_event` when the probe misses.
+fn relay_probe(
+    app: &mut App,
+    code: crossterm::event::KeyCode,
+) -> Option<crate::input::InputAction> {
+    crate::event_loop::probe_input_selection_relay(
+        app,
+        &crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+            code,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+    )
+}
+
+#[test]
+fn relay_left_arrow_breaks_selection_at_head_then_steps() {
+    let mut app = app_with_input_selection("hello world");
+    // Hidden caret at the release point: end of "hello world" (char 11).
+    // ← must break the selection there and step one left: 10.
+    let action = relay_probe(&mut app, crossterm::event::KeyCode::Left);
+    assert!(matches!(action, Some(crate::input::InputAction::None)));
+    assert_eq!(
+        app.selection,
+        SelectionState::None,
+        "← must break selection"
+    );
+    assert_eq!(
+        app.cursor_position, 10,
+        "first ← lands one past the release point"
+    );
+    assert!(
+        app.cursor_sync_pending,
+        "relay must go through set_cursor so the IME flush fires"
+    );
+}
+
+#[test]
+fn relay_right_arrow_clamps_at_buffer_end() {
+    let mut app = app_with_input_selection("abc");
+    app.cursor_position = 3; // released at the end
+    relay_probe(&mut app, crossterm::event::KeyCode::Right);
+    assert_eq!(app.cursor_position, 3, "→ past the end clamps");
+    assert_eq!(app.selection, SelectionState::None);
+}
+
+#[test]
+fn relay_up_and_down_restore_hidden_caret() {
+    // The hidden caret's position for a whole-input selection is defined as
+    // the head edge (the buffer end) — ↑/↓ restore the caret there and
+    // consume the press, rather than leaving the stale pre-selection
+    // position in place.
+    let mut app = app_with_input_selection("hello");
+    app.cursor_position = 1; // stale visible caret from before the drag
+    relay_probe(&mut app, crossterm::event::KeyCode::Up);
+    assert_eq!(
+        app.cursor_position, 5,
+        "↑ must restore the caret at the head edge, not the stale position"
+    );
+    assert_eq!(app.selection, SelectionState::None);
+
+    // ↓ behaves identically: adopt the head edge and consume the press. The
+    // press itself does not walk lines or history — that resumes from the
+    // restored position on the next key.
+    let mut app = app_with_input_selection("hello");
+    app.cursor_position = 1;
+    relay_probe(&mut app, crossterm::event::KeyCode::Down);
+    assert_eq!(app.cursor_position, 5);
+    assert_eq!(app.selection, SelectionState::None);
+}
+
+#[test]
+fn relay_backspace_and_delete_replace_selection() {
+    for code in [
+        crossterm::event::KeyCode::Backspace,
+        crossterm::event::KeyCode::Delete,
+    ] {
+        let mut app = app_with_input_selection("keep this");
+        app.cursor_position = 1; // stale visible caret
+        let action = relay_probe(&mut app, code);
+        assert!(
+            matches!(action, Some(crate::input::InputAction::Backspace)),
+            "delete-family must return Backspace's post-edit signal"
+        );
+        assert_eq!(app.input, "", "the whole selection goes in one stroke");
+        assert_eq!(app.cursor_position, 0);
+        assert_eq!(app.selection, SelectionState::None);
+    }
+}
+
+#[test]
+fn relay_ignores_keys_without_selection_or_outside_family() {
+    // No selection: the probe must miss so ordinary input handling runs.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hi".to_string();
+    assert!(relay_probe(&mut app, crossterm::event::KeyCode::Left).is_none());
+
+    // With a selection, an uninvolved key (e.g. `x`) must NOT be swallowed:
+    // typing over a selection is out of scope for the relay (the TUI has no
+    // replace-selection-on-type), so the key keeps its normal meaning.
+    let mut app = app_with_input_selection("hi");
+    assert!(relay_probe(&mut app, crossterm::event::KeyCode::Char('x')).is_none());
+    assert!(
+        app.has_input_selection(),
+        "an uninvolved key must leave the selection intact"
+    );
+}
+
+#[test]
+fn partial_input_drag_parks_caret_for_normal_arrow_handling() {
+    // A drag over only part of the input leaves a Range selection: the relay
+    // probe deliberately declines (Ranges are not byte-guaranteed against
+    // app.input), but the drag already parked `cursor_position` at the
+    // release point, so the ordinary ←/→ handling continues from there.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "hello world".to_string();
+    app.selection = SelectionState::Range {
+        anchor: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 0),
+        head: crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 6),
+    };
+    app.cursor_position = 6; // parked by handle_selection_end
+    assert!(
+        !app.has_input_selection(),
+        "a partial Range must not trigger the whole-input relay"
+    );
+    // Ordinary Left: process_event steps from the parked position.
+    let mut cursor = app.cursor_position;
+    let mut drag = SelectionDrag::default();
+    let mut text = app.input.clone();
+    let action = crate::input::process_event(
+        crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Left,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+        &mut text,
+        &mut cursor,
+        crate::input::InputContext::default(),
+        &mut drag,
+    );
+    assert!(matches!(action, crate::input::InputAction::None));
+    assert_eq!(cursor, 5, "← continues from the parked release position");
 }

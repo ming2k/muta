@@ -89,6 +89,22 @@ struct McpTransport {
     stdout: BufReader<ChildStdout>,
 }
 
+impl Drop for McpTransport {
+    fn drop(&mut self) {
+        // `kill_on_drop` fires here too, but it signals only the direct
+        // child. With `process_group(0)` at spawn, a group kill also takes
+        // down the wrapped server (`npx`/`uvx` wrappers) — without this, a
+        // reconfigured or disabled MCP server leaked its grandchild.
+        #[cfg(unix)]
+        if let Some(pid) = self._child.id() {
+            // SAFETY: teardown-path signal; ESRCH (already dead) is fine.
+            unsafe {
+                libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+            }
+        }
+    }
+}
+
 struct McpClient {
     transport: Mutex<McpTransport>,
     next_id: AtomicU64,
@@ -102,6 +118,13 @@ impl McpClient {
             .ok_or_else(|| "MCP command must not be empty".to_string())?;
 
         let mut command = Command::new(program);
+        // Group isolation: MCP servers are usually wrappers (`npx`, `uvx`)
+        // around a real server process. `kill_on_drop` signals only the
+        // direct child, so the wrapped server would survive a reconfigure/
+        // disable. A dedicated process group lets teardown kill the whole
+        // tree (see `kill_mcp_group`).
+        #[cfg(unix)]
+        command.process_group(0);
         command
             .args(args)
             .envs(&config.environment)

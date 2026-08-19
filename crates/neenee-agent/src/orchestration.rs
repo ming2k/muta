@@ -121,6 +121,13 @@ impl Provider for ProxyProvider {
             .model()
     }
 
+    fn effort(&self) -> Option<neenee_contracts::effort::Effort> {
+        self.holder
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .effort()
+    }
+
     fn model_capabilities(&self) -> neenee_contracts::ModelCapabilities {
         self.holder
             .read()
@@ -527,6 +534,8 @@ pub struct RoundInput {
     pub sent_at_ms: Option<u64>,
     /// Inline images pasted into the prompt, attached to the user message.
     pub images: Vec<ImagePart>,
+    /// Whether this round is a retry of the previous failed turn/request without adding new user messages.
+    pub is_retry: bool,
 }
 
 #[derive(Clone)]
@@ -572,28 +581,51 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
     ));
 
     tokio::spawn(async move {
+        // Supervised round task: the tail below (close_user_input_round →
+        // terminal event → lifecycle.finish → Idle) must run even when the
+        // round body panics. Before this wrapper, a panic skipped all of it:
+        // `RoundLifecycle::is_running()` stayed true forever (monitor rows
+        // and `/btw` banners stuck on "Running") and parked user-input
+        // requests were never resolved. The panic is converted into an
+        // ordinary `HarnessError::Other` so the existing error mapping emits
+        // a visible `RoundEvent::Error` instead of silence.
         send_harness_state(
             &context.tx,
             &context.session_id,
             &context.agent,
             LoopStatus::Running,
         );
-        let result = execute_round(
-            RoundContext {
-                agent: context.agent.clone(),
-                tx: context.tx.clone(),
-                token: token.clone(),
-                session: context.session,
-                session_id: context.session_id.clone(),
-                projection: context.projection,
-                retry_max_attempts: context.retry_max_attempts,
-                retry_base_ms: context.retry_base_ms,
-                retry_max_ms: context.retry_max_ms,
-                emit_round_completed: true,
-            },
-            input,
-        )
-        .await;
+        let result = {
+            let round_fut = execute_round(
+                RoundContext {
+                    agent: context.agent.clone(),
+                    tx: context.tx.clone(),
+                    token: token.clone(),
+                    session: context.session,
+                    session_id: context.session_id.clone(),
+                    projection: context.projection,
+                    retry_max_attempts: context.retry_max_attempts,
+                    retry_base_ms: context.retry_base_ms,
+                    retry_max_ms: context.retry_max_ms,
+                    emit_round_completed: true,
+                },
+                input,
+            );
+            match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(round_fut)).await {
+                Ok(result) => result,
+                Err(payload) => {
+                    let detail = payload
+                        .downcast_ref::<&str>()
+                        .map(|s| (*s).to_string())
+                        .or_else(|| payload.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "non-string payload".to_string());
+                    tracing::error!(panic = %detail, "agent round panicked");
+                    Err(HarnessError::Other(format!(
+                        "internal error: agent round panicked: {detail}"
+                    )))
+                }
+            }
+        };
         for pending in context.agent.close_user_input_round(generation) {
             let _ = context.tx.send(round_response(
                 &context.session_id,
@@ -660,8 +692,8 @@ pub async fn execute_round(
     ));
 
     // UserPromptSubmit hooks (ADR-0025): a hook may deny the prompt or prepend
-    // context. Hidden control prompts are harness-internal and bypass the gate.
-    if !input.hidden {
+    // context. Hidden control prompts and retries bypass the gate.
+    if !input.hidden && !input.is_retry {
         match agent.fire_user_prompt_submit(&input.prompt).await {
             crate::hooks::UserPromptVerdict::Deny(reason) => {
                 let _ = tx.send(round_response(
@@ -685,22 +717,15 @@ pub async fn execute_round(
 
     let admitted_session_id = session.id().await;
     // Build `round_history` — the round's working scratch — from the session's
-    // authoritative `model_window` plus the new user message (ADR-0048). The
-    // session is the single source of truth for message truth; this clone is
-    // the only transient copy, and it is committed back to the session before
-    // the round ends, so the wire body (a projection of this scratch, which is
-    // itself a projection of the session) can never diverge from the durable
-    // state. The user message is pushed here *before* the durable commit so a
-    // mid-round crash is recoverable (ADR-0035); on an unrecoverable Phase-1
-    // failure the unsend path below pops it back out and reverts the session.
-    // Snapshot the user's prompt and images before they are moved into the
-    // user message. If the round is interrupted in Phase 1 (request sent but no
-    // response bytes received), we unsend the message: pop it back out of the
-    // context and restore these to the TUI input box for re-editing.
+    // authoritative `model_window` plus the new user message (ADR-0048).
+    // When `is_retry` is true, the existing `model_window` is used as-is without
+    // pushing an extra user message.
     let unsent_prompt = input.prompt.clone();
     let unsent_images = input.images.clone();
 
-    let mut round_history = {
+    let mut round_history = if input.is_retry {
+        session.model_window().await
+    } else {
         let mut th = session.model_window().await;
         th.push(if input.hidden {
             crate::conversation_context::hidden_user(InjectionKind::HiddenRoundInput, input.prompt)
@@ -1076,8 +1101,36 @@ pub async fn execute_round(
                 generation_ms: outcome.generation_ms,
             }),
         ));
+        // First-turn AI title (ADR-0022): after a successful round, a session
+        // with no title (and no manual lock) gets one generated from the
+        // transcript. Fire-and-forget — `generate_title` carries its own
+        // 45s timeout, never touches the round path, and a failure simply
+        // leaves the picker on the first-user-message fallback. This wiring
+        // existed in the ADR but had been lost: the picker never showed AI
+        // titles because nothing called the generator.
+        maybe_generate_title(agent.clone(), session.clone());
     }
     Ok(())
+}
+
+/// Spawn the first-turn title generation when the session qualifies (ADR-0022
+/// §Decision 1: only once, only when unlocked). Best-effort in every
+/// direction: no title slot, provider failure, or a persist error all just
+/// leave things as they were.
+fn maybe_generate_title(agent: Arc<Agent>, session: Arc<SessionStore>) {
+    tokio::spawn(async move {
+        let (existing, manual) = session.title().await;
+        if existing.is_some() || manual {
+            return; // already titled (or manually cleared+locked): ADR-0022
+        }
+        let transcript = session.full_transcript().await;
+        let Some(title) = agent.generate_title(&transcript).await else {
+            return; // provider unavailable/timeout: keep the fallback title
+        };
+        if let Err(err) = session.set_title(Some(title), false).await {
+            tracing::warn!(error = %err, "could not persist generated session title");
+        }
+    });
 }
 
 fn send_context_projection(
@@ -1468,6 +1521,77 @@ pub fn start_schedule_scheduler(
     })
 }
 
+/// Backoff schedule (ms) for supervised scheduler restarts after a panic.
+const SCHEDULER_RESTART_BACKOFF_MS: [u64; 4] = [250, 1_000, 4_000, 15_000];
+
+/// After this many supervised restarts the scheduler gives up (a job that
+/// panics every tick is a bug; hot-restarting forever would spam the log).
+const SCHEDULER_RESTART_LIMIT: usize = SCHEDULER_RESTART_BACKOFF_MS.len();
+
+/// Panic-supervised variant of [`start_schedule_scheduler`]. The daemon hosts
+/// long-lived sessions whose scheduled jobs (crons, countdowns) must survive
+/// an internal error: before supervision, a panic inside `run_schedule_tick`
+/// killed the scheduler task silently and every job in that session stopped
+/// firing with nothing in the UI to say why. The supervised wrapper restarts
+/// the tick loop with bounded backoff; a persistently panicking tick (the
+/// same job blowing up every tick, say) gives up after
+/// [`SUPERVISED_RESTART_LIMIT`] attempts rather than hot-restarting forever.
+pub fn start_supervised_schedule_scheduler(
+    session: Arc<SessionStore>,
+    tx: mpsc::UnboundedSender<AgentRequest>,
+    tick_interval: std::time::Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let session = std::sync::Arc::new(session);
+        let tx = std::sync::Arc::new(tx);
+        let mut attempt = 0usize;
+        loop {
+            let outcome = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+                tick_loop(&session, &tx, tick_interval),
+            ))
+            .await;
+            if outcome.is_ok() {
+                return; // cancelled or otherwise finished cleanly
+            }
+            attempt += 1;
+            if attempt > SCHEDULER_RESTART_LIMIT {
+                tracing::error!(
+                    attempts = attempt,
+                    "schedule scheduler kept panicking; giving up (scheduled jobs in this session will no longer fire)"
+                );
+                return;
+            }
+            let backoff_ms = SCHEDULER_RESTART_BACKOFF_MS
+                [(attempt - 1).min(SCHEDULER_RESTART_BACKOFF_MS.len() - 1)];
+            tracing::warn!(
+                attempt,
+                backoff_ms,
+                "schedule scheduler panicked; restarting with backoff"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+        }
+    })
+}
+
+/// The scheduler's tick loop, factored out so the supervised wrapper can
+/// re-enter it after a panic. Only returns on cancellation; any other exit
+/// is a panic unwinding through it.
+async fn tick_loop(
+    session: &Arc<SessionStore>,
+    tx: &Arc<mpsc::UnboundedSender<AgentRequest>>,
+    tick_interval: std::time::Duration,
+) {
+    let mut ticker = tokio::time::interval(tick_interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        let now = chrono::Utc::now();
+        if let Err(err) = run_schedule_tick(session, tx, now).await {
+            tracing::warn!("schedule scheduler tick failed: {err}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod schedule_tests {
     use super::*;
@@ -1587,5 +1711,108 @@ mod schedule_tests {
         let (tx, _rx) = mpsc::unbounded_channel::<AgentRequest>();
         let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
         assert_eq!(dispatched, 0);
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+    use crate::AgentIdentity;
+    use async_trait::async_trait;
+    use neenee_contracts::{Message, ModelRequest, ProviderStreamEvent, Role};
+
+    /// A provider that answers only the non-streaming `chat` (the title
+    /// envoy's path) with a fixed title.
+    struct TitleProvider;
+
+    #[async_trait]
+    impl neenee_contracts::Provider for TitleProvider {
+        async fn chat(&self, _request: ModelRequest) -> Result<Message, String> {
+            Ok(Message::new(Role::Assistant, "Fixing the build"))
+        }
+        async fn stream_chat(
+            &self,
+            _request: ModelRequest,
+        ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+        async fn stream_chat_events(
+            &self,
+            _request: ModelRequest,
+        ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>, String>
+        {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+    }
+
+    async fn fresh_titled_session() -> Arc<SessionStore> {
+        let dir = std::env::temp_dir().join(format!(
+            "neenee-title-session-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        Arc::new(SessionStore::for_path(dir.join("session.json")))
+    }
+
+    /// The first-turn auto title (ADR-0022): a session with no title gets
+    /// one after `maybe_generate_title` runs; a manually locked title is
+    /// never overwritten.
+    #[tokio::test]
+    async fn title_generated_once_and_manual_lock_wins() {
+        let session = fresh_titled_session().await;
+        session
+            .replace_messages(vec![Message::new(Role::User, "hello there")])
+            .await
+            .unwrap();
+        let agent = Arc::new(Agent::new(
+            Arc::new(TitleProvider),
+            Vec::new(),
+            AgentIdentity::default(),
+        ));
+
+        // First run: untitled → generated + persisted. The trigger is
+        // fire-and-forget (spawned); poll until the title lands.
+        maybe_generate_title(agent.clone(), session.clone());
+        for _ in 0..100 {
+            if session.title().await.0.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let (title, manual) = session.title().await;
+        assert_eq!(title.as_deref(), Some("Fixing the build"));
+        assert!(!manual);
+
+        // Second run: already titled → untouched (manual lock path shares
+        // the same guard).
+        maybe_generate_title(agent.clone(), session.clone());
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let (again, _) = session.title().await;
+        assert_eq!(again.as_deref(), Some("Fixing the build"));
+    }
+
+    /// A manually set title is locked: the auto generator must not replace
+    /// it even though the generator runs.
+    #[tokio::test]
+    async fn manual_title_is_never_overwritten() {
+        let session = fresh_titled_session().await;
+        session
+            .replace_messages(vec![Message::new(Role::User, "hello")])
+            .await
+            .unwrap();
+        session
+            .set_title(Some("My own title".into()), true)
+            .await
+            .unwrap();
+        let agent = Arc::new(Agent::new(
+            Arc::new(TitleProvider),
+            Vec::new(),
+            AgentIdentity::default(),
+        ));
+        maybe_generate_title(agent, session.clone());
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let (title, manual) = session.title().await;
+        assert_eq!(title.as_deref(), Some("My own title"));
+        assert!(manual, "manual flag survives");
     }
 }

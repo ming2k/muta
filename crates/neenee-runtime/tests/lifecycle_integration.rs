@@ -103,6 +103,9 @@ async fn host_one(registry: &Arc<SessionRegistry>, project: &str) {
             tracker,
             sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             created_at: std::time::Instant::now(),
+            last_activity: tokio::sync::Mutex::new(std::time::Instant::now()),
+            last_seen_tick: std::sync::atomic::AtomicU64::new(0),
+            activity_tick: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             agent_for_session_end: None,
         })
         .await;

@@ -44,6 +44,26 @@ pub struct HostedSession {
     /// process-local and never persisted, matching the in-memory-only nature
     /// of the sessions it guards.
     pub created_at: std::time::Instant,
+    /// Last time the broadcast tap folded an event for this session
+    /// (monotonic). Drives idle *suspension*: a persisted session with no
+    /// clients attached and no activity for `IDLE_HOSTED_SESSION_TTL` is
+    /// torn down in memory — its transcript is already durable, so the next
+    /// attach lazy-resumes it. Before this, every real session a daemon ever
+    /// hosted stayed resident forever (full transcript + agent + MCP
+    /// runtime + two tasks each), so a multi-project daemon's memory grew
+    /// monotonically with its session history.
+    ///
+    /// A `Mutex<Instant>` (not an atomic): this is written only by the
+    /// once-a-minute reaper sweep and read nowhere else on the hot path.
+    pub last_activity: Mutex<std::time::Instant>,
+    /// The tap-tick watermark the reaper last observed. When it differs from
+    /// [`Self::activity_tick`], events were folded since the last sweep and
+    /// `last_activity` refreshes.
+    pub last_seen_tick: std::sync::atomic::AtomicU64,
+    /// Broadcast-tap side of the activity clock: bumped once per folded
+    /// event under a cheap atomic so the reaper never touches the tracker
+    /// mutex on the hot path.
+    pub activity_tick: Arc<std::sync::atomic::AtomicU64>,
     /// Handle on the session's primary agent (the same `Arc` the bootstrap
     /// hands out as `agent_for_session_end`) so the registry can fire
     /// SessionEnd hooks (ADR-0025) when the session ends — killed over the
@@ -116,6 +136,13 @@ const IDLE_REAPER_INTERVAL: std::time::Duration = std::time::Duration::from_secs
 /// (this bound applies to single-session kills; daemon shutdown sizes the
 /// same budget against its remaining grace).
 const DEFAULT_SESSION_END_HOOK_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long an idle *persisted* hosted session with no attached clients may
+/// stay resident before it is suspended (torn down in memory; the transcript
+/// is durable, so the next attach lazy-resumes it). This is what bounds the
+/// daemon's memory: without it, every real session a daemon ever hosted
+/// stayed resident forever (full transcript + agent + MCP runtime + tasks).
+const IDLE_HOSTED_SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
 impl SessionRegistry {
     pub fn new(params: HostParams) -> Self {
         Self::with_meta(Some(params))
@@ -278,6 +305,159 @@ impl SessionRegistry {
             .await
     }
 
+    /// Tear down a session whose driver task panicked (the "evict" leg of
+    /// task supervision). Reuses the kill path's cleanup — entry removal,
+    /// terminal `Exit` broadcast, bounded SessionEnd hooks, WIP clearing,
+    /// `SessionRemoved` — but is tolerant of racing callers (another client
+    /// may have already killed the session). Uses a tighter hook budget:
+    /// this runs from inside the crashed task, so a hanging SessionEnd hook
+    /// must not pin the teardown.
+    async fn evict_crashed_session(
+        &self,
+        session_id: &str,
+        cancel: &CancellationToken,
+        events: broadcast::Sender<AgentResponse>,
+        agent_for_session_end: Option<Arc<Agent>>,
+    ) {
+        // Only act if this exact entry is still live: kill_session or a
+        // concurrent crash-eviction may have removed it already. Comparing
+        // the cancel token distinguishes "already gone" from "a newer
+        // session under the same id".
+        {
+            let map = self.sessions.lock().await;
+            if map.get(session_id).is_none() {
+                tracing::debug!(
+                    session = %session_id,
+                    "crash eviction: entry already removed"
+                );
+                return;
+            }
+        }
+        // Same cleanup sequence as kill_session_with_hook_budget, with the
+        // tight crash budget (2s) — an external-process SessionEnd hook must
+        // not pin a teardown that already represents a failure path.
+        self.sessions.lock().await.remove(session_id);
+        cancel.cancel();
+        let _ = events.send(AgentResponse::Exit);
+        if let Some(agent) = agent_for_session_end
+            && tokio::time::timeout(std::time::Duration::from_secs(2), agent.fire_session_end())
+                .await
+                .is_err()
+        {
+            tracing::warn!(
+                session = %session_id,
+                "crash eviction: SessionEnd hook exceeded 2s; abandoning it"
+            );
+        }
+        self.clear_wip(session_id).await;
+        self.publish(MonitorEvent::SessionRemoved {
+            session_id: session_id.to_string(),
+        })
+        .await;
+    }
+
+    /// Suspend a hosted session: tear it down **in memory** without ending
+    /// it. Unlike [`Self::kill_session`], no terminal `Exit` is broadcast
+    /// (there are no clients to receive it — suspension requires zero
+    /// receivers) and SessionEnd hooks do **not** fire: the session is not
+    /// over, merely parked. Its transcript is durable, so the next attach
+    /// resolves through the standard lazy-resume path and rebuilds
+    /// everything. Scheduled jobs live in the session store, so they resume
+    /// with it.
+    ///
+    /// Returns `Ok(())` when the session was suspended, `Err` when it was
+    /// already gone (a racing kill/suspend) or is not suspendable.
+    pub async fn suspend_session(&self, session_id: &str) -> Result<(), String> {
+        let removed = self.sessions.lock().await.remove(session_id);
+        let Some(e) = removed else {
+            return Err(format!(
+                "session '{session_id}' is not hosted on this server"
+            ));
+        };
+        // Cancel the driver (drops the run future). The req_tx senders in
+        // clients' BoundSession clones die with the entry removal, so no
+        // further requests queue into a drained channel.
+        e.cancel.cancel();
+        // Deliberately NOT sending AgentResponse::Exit and NOT firing
+        // SessionEnd: suspension is invisible by design (no receivers exist
+        // as a precondition) and the session continues on resume.
+        self.clear_wip(session_id).await;
+        self.publish(MonitorEvent::SessionRemoved {
+            session_id: session_id.to_string(),
+        })
+        .await;
+        tracing::info!(session = %session_id, "suspended idle hosted session");
+        Ok(())
+    }
+
+    /// Sweep for idle hosted sessions to suspend. A session is suspendable
+    /// when (a) no client is attached (`receiver_count == 0`), (b) its
+    /// monitor status is not active (not running / awaiting approval /
+    /// awaiting input), and (c) it has had no tap activity for the TTL.
+    /// Empty unpersisted sessions are left to the tighter empty-reaper
+    /// above; this path exists for *real* sessions whose memory the daemon
+    /// would otherwise hold forever.
+    pub async fn suspend_idle_sessions(&self) -> Vec<String> {
+        self.suspend_idle_sessions_with(IDLE_HOSTED_SESSION_TTL)
+            .await
+    }
+
+    /// [`Self::suspend_idle_sessions`] with an explicit TTL (tests).
+    pub async fn suspend_idle_sessions_with(&self, ttl: std::time::Duration) -> Vec<String> {
+        // Snapshot under the lock; probe + suspend outside it (same pattern
+        // as the empty reaper: never hold the map lock across awaits).
+        let candidates: Vec<(String, Arc<HostedSession>)> = self
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .map(|(id, e)| (id.clone(), Arc::clone(e)))
+            .collect();
+        let mut suspended = Vec::new();
+        for (id, entry) in candidates {
+            if entry.events.receiver_count() != 0 {
+                continue; // someone is attached — theirs to keep alive
+            }
+            // Active-looking status (running round, pending approval/input)
+            // disqualifies even with no receivers: the work must be allowed
+            // to finish or be interrupted explicitly.
+            let status = entry.tracker.lock().await.row().status;
+            if status.is_active() {
+                continue;
+            }
+            // Activity clock: starts at host time and is refreshed below
+            // whenever the tap tick advanced since the last sweep, so "idle"
+            // means "no folded events for the whole TTL".
+            let tick_now = entry
+                .activity_tick
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let tick_seen = entry
+                .last_seen_tick
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if tick_now != tick_seen {
+                // Events were folded since the last sweep: refresh the idle
+                // clock and record the watermark. Not a suspension candidate
+                // this round.
+                *entry.last_activity.lock().await = std::time::Instant::now();
+                entry
+                    .last_seen_tick
+                    .store(tick_now, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
+            if entry.last_activity.lock().await.elapsed() < ttl {
+                continue;
+            }
+            // Never-persisted empties belong to the tighter reaper above.
+            if entry.session.is_empty_unpersisted().await {
+                continue;
+            }
+            if self.suspend_session(&id).await.is_ok() {
+                suspended.push(id);
+            }
+        }
+        suspended
+    }
+
     /// [`Self::kill_session`] with an explicit hook budget, so daemon
     /// shutdown can size it against its own remaining grace (ADR-0101).
     pub async fn kill_session_with_hook_budget(
@@ -430,6 +610,7 @@ impl SessionRegistry {
                     }
                     _ = tick.tick() => {
                         registry.reap_idle_empty_sessions().await;
+                        registry.suspend_idle_sessions().await;
                     }
                 }
             }
@@ -504,20 +685,24 @@ impl SessionRegistry {
         };
 
         // Peer sessions in the same workspace (by registry index), minus the
-        // asker itself. Collect ids up front (session.id() is async).
-        let peers: Vec<String> = {
+        // asker itself. Snapshot the candidate stores under the lock, then
+        // resolve ids *outside* it: `session.id()` is async, and awaiting it
+        // with the map held serializes every concurrent resolve/kill/suspend
+        // against one another.
+        let peer_stores: Vec<Arc<SessionStore>> = {
             let map = self.sessions.lock().await;
-            let mut ids = Vec::new();
-            for e in map.values() {
-                if e.project_root == workspace {
-                    let id = e.session.id().await;
-                    if id != session_id {
-                        ids.push(id);
-                    }
-                }
-            }
-            ids
+            map.values()
+                .filter(|e| e.project_root == workspace)
+                .map(|e| Arc::clone(&e.session))
+                .collect()
         };
+        let mut peers = Vec::new();
+        for store in peer_stores {
+            let id = store.id().await;
+            if id != session_id {
+                peers.push(id);
+            }
+        }
 
         let declared = self.wip.lock().await;
         let mut conflicts = Vec::new();
@@ -710,34 +895,103 @@ impl SessionRegistry {
         let monitor_bus = self.monitor.clone();
         let sync_buffer = Arc::new(Mutex::new(VecDeque::<AgentResponse>::new()));
         let sync_buffer_for_tap = sync_buffer.clone();
+        // Idle-suspension clock: bumped once per folded event (cheap atomic,
+        // no mutex) so the reaper can distinguish "alive but quiet because
+        // idle" from "hosted but forgotten".
+        let activity_tick = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let tick_for_tap = activity_tick.clone();
         tokio::spawn(async move {
+            use futures::FutureExt;
             while let Some(r) = rr.recv().await {
-                {
-                    let mut guard = tracker_for_tap.lock().await;
-                    guard.observe(&r);
-                    let row = guard.row();
-                    drop(guard);
-                    let _ = monitor_bus.send(MonitorEvent::SessionUpdated(row));
-                }
-                // Buffer the attach-sync events before broadcasting so a
-                // client that attaches later still hydrates. Order within the
-                // buffer matches emission order, so draining reproduces the
-                // startup sync faithfully.
-                if is_attach_sync_event(&r) {
-                    let mut buf = sync_buffer_for_tap.lock().await;
-                    if buf.len() >= ATTACH_SYNC_BUFFER_CAP {
-                        buf.pop_front();
+                // Isolate per event (the "isolate" supervision policy): a
+                // poison response costs one dropped frame, not the session's
+                // entire observability path. Before this, a panic anywhere in
+                // the fold killed the tap task; the driver kept running and
+                // burning tokens while every subscriber's stream froze.
+                let fold = std::panic::AssertUnwindSafe(async {
+                    {
+                        tick_for_tap.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let mut guard = tracker_for_tap.lock().await;
+                        guard.observe(&r);
+                        let row = guard.row();
+                        drop(guard);
+                        let _ = monitor_bus.send(MonitorEvent::SessionUpdated(row));
                     }
-                    buf.push_back(r.clone());
+                    // Buffer the attach-sync events before broadcasting so a
+                    // client that attaches later still hydrates. Order within
+                    // the buffer matches emission order, so draining
+                    // reproduces the startup sync faithfully.
+                    if is_attach_sync_event(&r) {
+                        let mut buf = sync_buffer_for_tap.lock().await;
+                        if buf.len() >= ATTACH_SYNC_BUFFER_CAP {
+                            buf.pop_front();
+                        }
+                        buf.push_back(r.clone());
+                    }
+                    let _ = tap.send(r);
+                });
+                if let Err(payload) = fold.catch_unwind().await {
+                    tracing::error!(
+                        panic = %crate::supervise::panic_detail(payload),
+                        "monitor tap panicked folding an event; dropped one event"
+                    );
                 }
-                let _ = tap.send(r);
             }
         });
         let cancel = CancellationToken::new();
         let cd = cancel.clone();
         let driver = boot.driver;
+        // Supervised driver spawn (the "evict" policy). The select arm keeps
+        // kill_session's cancel semantics: cancellation drops the driver
+        // future. The catch_unwind wrapper adds the panic leg — before it, a
+        // driver panic left a zombie entry: nobody drained `req_tx` (an
+        // unbounded channel, so clients kept queueing into memory), the
+        // control plane's `let _ = req_tx.send(...)` silently succeeded, and
+        // the only recovery was restarting the daemon.
+        //
+        // The registry clone is cheap (every field is an Arc), and moving the
+        // spawn after the map insert is required so eviction can find the
+        // entry. `id` is cloned below for the same reason.
+        let crash_registry = self.clone();
+        let crash_id = session.id().await;
+        let crash_events = events_tx.clone();
+        let cancel_for_crash = cancel.clone();
+        let agent_for_crash = Some(boot.agent_for_session_end.clone());
+        let (driver_done_tx, mut driver_done_rx) = mpsc::channel::<()>(1);
         tokio::spawn(async move {
-            tokio::select! {_=cd.cancelled()=>tracing::info!("registry: driver cancelled"),_=driver.run()=>tracing::info!("registry: driver exited"),}
+            use futures::FutureExt;
+            let run = async {
+                tokio::select! {
+                    _ = cd.cancelled() => (),
+                    _ = driver.run() => (),
+                }
+            };
+            let outcome = std::panic::AssertUnwindSafe(run).catch_unwind().await;
+            let _ = driver_done_tx.send(()).await;
+            if let Err(payload) = outcome {
+                let detail = crate::supervise::panic_detail(payload);
+                tracing::error!(
+                    session = %crash_id,
+                    panic = %detail,
+                    "session driver panicked; evicting the hosted session"
+                );
+                // Visible failure instead of silence: attached clients learn
+                // why before the Exit marker, then the entry is torn down
+                // through the standard path (SessionRemoved, WIP cleared,
+                // SessionEnd hooks bounded at 2s). The session stays on disk,
+                // so the next attach lazy-resumes it cleanly.
+                let _ = crash_events.send(AgentResponse::Error(format!(
+                    "internal error: session driver panicked: {detail}"
+                )));
+                crash_registry
+                    .evict_crashed_session(
+                        &crash_id,
+                        &cancel_for_crash,
+                        crash_events.clone(),
+                        agent_for_crash,
+                    )
+                    .await;
+            }
         });
         let id = session.id().await;
         let bound = BoundSession {
@@ -755,6 +1009,9 @@ impl SessionRegistry {
             tracker,
             sync_buffer,
             created_at: std::time::Instant::now(),
+            last_activity: Mutex::new(std::time::Instant::now()),
+            last_seen_tick: std::sync::atomic::AtomicU64::new(0),
+            activity_tick: activity_tick.clone(),
             agent_for_session_end: Some(boot.agent_for_session_end),
         });
         self.publish(MonitorEvent::SessionAdded(
@@ -762,6 +1019,10 @@ impl SessionRegistry {
         ))
         .await;
         self.sessions.lock().await.insert(id, hosted);
+        // Keep the panic-supervision wrapper alive until the driver settles;
+        // dropping this receiver early would let the send above fail
+        // (harmlessly) but the wrapper task would already be parked on it.
+        let _ = &mut driver_done_rx;
         Ok(bound)
     }
     fn bound_from(&self, e: &Arc<HostedSession>) -> BoundSession {

@@ -514,6 +514,12 @@ pub struct TranscriptMessage {
     pub provider: Option<String>,
     /// Model id that produced this message, companion to [`TranscriptMessage::provider`].
     pub model: Option<String>,
+    /// The reasoning effort (depth) this message's model request ran with
+    /// (`"high"`, `"max"`, …), when the active channel exposes one. Stamped at
+    /// the same point as [`TranscriptMessage::model`] so the turn header can
+    /// show the depth a given turn actually ran at. `None` for non-reasoning
+    /// channels and messages that carry no attribution.
+    pub effort: Option<String>,
     /// The user-visible round this message belongs to (1-indexed). Driving
     /// user messages open a round; assistant-side messages inherit it.
     pub round: Option<u64>,
@@ -552,6 +558,7 @@ impl TranscriptMessage {
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
+            effort: None,
             round: None,
             turn: None,
             sent_at_ms: None,
@@ -586,6 +593,15 @@ impl TranscriptMessage {
         self
     }
 
+    /// Stamp the reasoning effort (depth) this message's model request ran
+    /// with. Kept separate from [`Self::with_attribution`] so existing call
+    /// sites (and their tests) keep their arity; pass `None` (or skip the
+    /// call) when the channel exposes no effort.
+    pub fn with_effort(mut self, effort: Option<impl Into<String>>) -> Self {
+        self.effort = effort.map(Into::into);
+        self
+    }
+
     /// Stamp the enclosing user round.
     pub fn with_round(mut self, round: u64) -> Self {
         self.round = Some(round);
@@ -602,6 +618,18 @@ impl TranscriptMessage {
     pub fn with_sent_at_ms(mut self, sent_at_ms: u64) -> Self {
         self.sent_at_ms = Some(sent_at_ms);
         self
+    }
+
+    /// Whether this message is a notice with `Error` severity (indicating an
+    /// unrecovered turn error, provider failure, or error notice).
+    pub fn is_error_notice(&self) -> bool {
+        matches!(
+            self.kind,
+            MessageKind::Notice {
+                severity: NoticeSeverity::Error,
+                ..
+            }
+        )
     }
 
     /// The `(provider, model)` pair to show as an attribution badge, when this
@@ -645,6 +673,7 @@ impl TranscriptMessage {
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
+            effort: None,
             round: None,
             turn: None,
             sent_at_ms: None,
@@ -711,6 +740,7 @@ impl TranscriptMessage {
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
+            effort: None,
             round: None,
             turn: None,
             sent_at_ms: None,
@@ -1446,6 +1476,7 @@ impl TranscriptMessage {
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
+            effort: None,
             round: None,
             turn: None,
             sent_at_ms: None,
@@ -1491,6 +1522,7 @@ impl TranscriptMessage {
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
+            effort: None,
             round: None,
             turn: None,
             sent_at_ms: None,
@@ -1595,6 +1627,7 @@ impl TranscriptMessage {
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
+            effort: None,
             round: None,
             turn: None,
             sent_at_ms: None,

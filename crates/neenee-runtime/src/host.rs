@@ -195,6 +195,12 @@ async fn run_inner(
         ui,
     } = identity;
     let _signals = SignalGuard::install(gate.clone());
+    // Daemon-wide panic visibility (task supervision): a detached daemon has
+    // no controlling terminal, so a panicking task's default-hook output
+    // went nowhere. Log every panic (with origin) through tracing first;
+    // supervised call sites then turn it into a state transition instead of
+    // a silent zombie. Installed before any task is spawned.
+    crate::supervise::install_panic_hook();
     let gate: Arc<ShutdownGate> =
         Arc::new((*gate).clone().with_version(crate::serve::daemon_version()));
     bootstrap::ensure_app_roots();

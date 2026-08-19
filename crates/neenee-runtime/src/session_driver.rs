@@ -675,6 +675,17 @@ impl SessionDriver {
                         let _ = resp_tx.send(AgentResponse::TuiColorSchemeUpdated { name, custom });
                     }
                 }
+                AgentRequest::EndSession => {
+                    // Unreachable in the normal topology: the WS attach path
+                    // intercepts `EndSession` at the connection layer
+                    // (serve.rs) precisely so it cannot queue behind work
+                    // the teardown is about to cancel. This arm exists only
+                    // for completeness / future in-process embedders.
+                    tracing::warn!(
+                        "session_driver: EndSession reached the driver queue; the \
+                         connection layer should have intercepted it"
+                    );
+                }
             }
 
             // ── Activity-state reconcile (ADR-0091) ──────────────────────

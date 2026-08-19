@@ -258,6 +258,31 @@ pub fn chip_range_for_backspace(input: &str, byte_cursor: usize) -> Option<(usiz
     chip_range_ending_at(input, byte_cursor)
 }
 
+/// Detect a chip targeted by a single forward `Delete` at `byte_cursor` —
+/// the chip that *starts* at the caret. Mirrors
+/// [`chip_range_for_backspace`]: one keystroke removes the whole chip (plus
+/// the one trailing space a paste inserts) so forward-deleting a paste
+/// undoes it in full.
+///
+/// Returns the `(start_byte, end_byte)` byte range to delete.
+pub fn chip_range_for_delete(input: &str, byte_cursor: usize) -> Option<(usize, usize)> {
+    let bytes = input.as_bytes();
+    if byte_cursor >= bytes.len() || bytes[byte_cursor] != b'[' {
+        return None;
+    }
+    let rel = input[byte_cursor..].find(']')?;
+    let end = byte_cursor + rel + 1;
+    let body = &input[byte_cursor + 1..end - 1];
+    parse_chip_body(body)?;
+    // Include the one trailing space a paste appends, matching the
+    // backspace shape (chip + ` ` + cursor read backwards).
+    if bytes.get(end) == Some(&b' ') {
+        Some((byte_cursor, end + 1))
+    } else {
+        Some((byte_cursor, end))
+    }
+}
+
 /// Reconcile the staged attachment vectors against the chips that survive in
 /// `input`. Returns the new input text with all chips relabeled so their
 /// `#N` matches their new 1-based position in the truncated vectors.
@@ -606,6 +631,48 @@ mod tests {
             chip_range_for_backspace(&input, cursor),
             Some((chip_start, cursor))
         );
+    }
+
+    #[test]
+    fn chip_range_for_delete_eats_leading_chip_and_trailing_space() {
+        let input = format!("hello {} world", image_chip(1, 42));
+        let cursor = "hello ".len();
+        // Forward Delete at the chip start must remove the chip *and* the
+        // one trailing space a paste inserts, so the surviving text reads
+        // "hello world" not "hello  world".
+        let chip_end = input.find(" world").expect("world follows chip") + 1;
+        assert_eq!(
+            chip_range_for_delete(&input, cursor),
+            Some((cursor, chip_end))
+        );
+        assert_eq!(
+            format!("{}world", &input[..cursor]),
+            "hello world",
+            "sanity: deleting the range must splice cleanly"
+        );
+    }
+
+    #[test]
+    fn chip_range_for_delete_handles_end_of_input() {
+        // Chip at the very end with no trailing space: Delete at its start
+        // removes just the chip.
+        let input = format!("hello {}", image_chip(1, 42));
+        let cursor = "hello ".len();
+        assert_eq!(
+            chip_range_for_delete(&input, cursor),
+            Some((cursor, input.len()))
+        );
+    }
+
+    #[test]
+    fn chip_range_for_delete_rejects_non_chips() {
+        // A plain bracketed word is not a chip; Delete must fall through to
+        // the ordinary single-character delete.
+        let input = "see [not a chip] here".to_string();
+        let cursor = "see ".len();
+        assert_eq!(chip_range_for_delete(&input, cursor), None);
+        // Neither is a chip whose body fails to parse.
+        assert_eq!(chip_range_for_delete(&input, 0), None);
     }
 
     #[test]

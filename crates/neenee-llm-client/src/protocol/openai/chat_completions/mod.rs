@@ -172,6 +172,10 @@ impl Provider for OpenAiChatCompletionsProvider {
         self.endpoint.model.clone()
     }
 
+    fn effort(&self) -> Option<Effort> {
+        self.reasoning_effort
+    }
+
     fn model_capabilities(&self) -> neenee_contracts::ModelCapabilities {
         self.capabilities.clone()
     }

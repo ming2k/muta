@@ -121,6 +121,16 @@ pub enum CaretOwner {
     None,
 }
 
+/// Which end of an active input selection the caret should adopt when the
+/// selection is broken. `Head` is the edge nearest the hidden caret — the
+/// point where the mouse button was released for a drag selection — while
+/// `Tail` is the opposite end (where the drag began).
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum SelectionEdge {
+    Tail,
+    Head,
+}
+
 /// Capturable snapshot of the main transcript's scroll position, saved when
 /// zooming into a nested view and restored on return.
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
@@ -424,6 +434,12 @@ pub struct App {
     /// Raw current working directory captured at startup. Used to resolve
     /// `@path` mention completions against the real filesystem.
     pub cwd: std::path::PathBuf,
+    /// Shared slot + waker for the async project-file scan (see
+    /// [`Self::path_scan_cache`]): the `spawn_blocking` task writes the scan
+    /// into the slot and pokes the `Notify`, which the event loop treats as
+    /// a dirty signal; the next frame harvests the slot into the cache.
+    pub path_scan_slot: Option<crate::completion::PathScanSlot>,
+    pub path_scan_wake: Option<Arc<tokio::sync::Notify>>,
     /// The id of the session the TUI is currently viewing (`primary_session_id`
     /// outside a side view, the side id inside one). Learned each frame from
     /// the session source and stamped onto every recorded input-history entry
@@ -438,8 +454,15 @@ pub struct App {
     /// lazily on the first `@` mention and reused afterwards. Mirrors the
     /// per-directory picker cache in opencode's TUI. Invalidated after each
     /// accepted path completion so newly-created files become visible without
-    /// a restart. `None` = not scanned yet.
-    pub path_scan_cache: Option<PathScan>,
+    /// a restart.
+    ///
+    /// Three states: `None` = never requested (the next `@` kicks off an
+    /// async scan); `Some(None)` = scan in flight (completions stay empty
+    /// until it lands rather than blocking the event loop); `Some(Some(scan))`
+    /// = ready. Before the async scan, first-`@` ran `rg` **synchronously on
+    /// the event-loop task** — a large monorepo froze input for the whole
+    /// scan.
+    pub path_scan_cache: Option<Option<PathScan>>,
     /// Latest session-context snapshot for the Tools / Mcp / Skills /
     /// Permissions managers, or `None` before the first `QuerySessionContext`
     /// round-trip completes. Refreshed each frame from the response listener.
@@ -912,6 +935,19 @@ pub struct App {
 }
 
 impl App {
+    /// Record an input-history entry with the on-disk cap mirrored in memory:
+    /// [`HISTORY_CAP`] bounds the persisted union, so an unbounded in-memory
+    /// `Vec` would grow past it over a long-lived TUI (each entry is small,
+    /// but a multi-day session with heavy prompt reuse is unbounded anyway).
+    /// Evicts from the oldest end.
+    fn push_history(&mut self, entry: neenee_contracts::HistoryEntry) {
+        self.input_history.push(entry);
+        if self.input_history.len() > neenee_contracts::history::HISTORY_CAP {
+            let overflow = self.input_history.len() - neenee_contracts::history::HISTORY_CAP;
+            self.input_history.drain(..overflow);
+        }
+    }
+
     /// The token-source report for one session, from whichever source this
     /// frontend has: the shared in-process ledger (standalone path) or the
     /// on-demand harness snapshot (attach path). `None` in attach mode while
@@ -969,6 +1005,69 @@ impl App {
     pub fn set_cursor_end(&mut self) {
         let end = self.input.chars().count();
         self.set_cursor(end);
+    }
+
+    /// Whether the active selection covers a piece of the composer's text —
+    /// the precondition for the caret-relay and delete-selection behaviours.
+    /// Only whole-input selections count (`Block` on `INPUT_MSG_IDX`); a
+    /// partial `Range` never binds the composer because its endpoints come
+    /// from the general transcript selection model and are not guaranteed to
+    /// be byte offsets into `self.input`.
+    pub fn has_input_selection(&self) -> bool {
+        matches!(
+            self.selection,
+            SelectionState::Block {
+                message_idx: crate::view::INPUT_MSG_IDX,
+                ..
+            }
+        )
+    }
+
+    /// Adopt the caret to the given edge of the whole-input selection and
+    /// drop the selection, restoring the (previously hidden) caret at that
+    /// edge. This is the relay hand-off: after a mouse drag selects the
+    /// input, the block cursor is hidden, but the position it *would* occupy
+    /// is remembered so that the first direction key continues from where the
+    /// mouse released — `caret_edge == Head` is the release point (nearest
+    /// the hidden caret), `Tail` the opposite end.
+    ///
+    /// No-op (returns `false`) unless [`Self::has_input_selection`].
+    pub fn adopt_caret_from_input_selection(&mut self, edge: SelectionEdge) -> bool {
+        if !self.has_input_selection() {
+            return false;
+        }
+        let pos = match edge {
+            SelectionEdge::Tail => 0,
+            SelectionEdge::Head => self.input.chars().count(),
+        };
+        self.selection = SelectionState::None;
+        self.set_cursor(pos.min(self.input.chars().count()));
+        true
+    }
+
+    /// Whether the next direction-key press should relay from the hidden
+    /// caret position instead of acting on the *visible* (stale) caret:
+    /// `true` while a whole-input selection is active on the composer and
+    /// the composer owns the caret. Callers run this check *after* the
+    /// direction key has been mapped through `process_event` but before its
+    /// cursor mutation takes effect for the user — see the event loop's key
+    /// relay for the exact sequencing.
+    pub fn input_selection_relays_arrows(&self) -> bool {
+        self.has_input_selection() && self.caret_owner() == CaretOwner::Composer
+    }
+
+    /// Delete the composer text the active whole-input selection covers
+    /// (the standard editor behaviour: Backspace/Del over a selection
+    /// replaces it). No-op (returns `false`) unless
+    /// [`Self::has_input_selection`].
+    pub fn delete_input_selection(&mut self) -> bool {
+        if !self.has_input_selection() {
+            return false;
+        }
+        self.input.clear();
+        self.selection = SelectionState::None;
+        self.set_cursor(0);
+        true
     }
 
     /// Record the composer's screen rect as observed during the latest draw, so
@@ -2147,7 +2246,7 @@ impl App {
                 return;
             }
             let recorded = neenee_contracts::HistoryEntry::new(entry, session_id, workspace, now);
-            self.input_history.push(recorded.clone());
+            self.push_history(recorded.clone());
             if self.input_history_persist {
                 tokio::task::spawn_blocking(move || {
                     let _ = neenee_persistence::config::Config::save_history(
@@ -2172,7 +2271,7 @@ impl App {
             return;
         }
         let recorded = neenee_contracts::HistoryEntry::new(entry, session_id, workspace, now);
-        self.input_history.push(recorded.clone());
+        self.push_history(recorded.clone());
         // Same dedup guard as above: a backfilled row for this text is now
         // redundant with the recorded one.
         self.prune_backfill_after_record(&recorded.text);

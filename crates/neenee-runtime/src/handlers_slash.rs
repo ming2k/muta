@@ -46,7 +46,8 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 use crate::agent_setup::active_context_window;
 use crate::session_view::{build_sessions_overview, short_session_id};
 use crate::side::{
-    SideRegistry, SideSession, publish_btw_list, spawn_parent_status_watcher, start_active_turn,
+    SideRegistry, SideSession, publish_btw_list, refuse_if_no_provider, spawn_parent_status_watcher,
+    start_active_turn,
 };
 use crate::slash_handler::{SlashCommandRegistry, SlashContext};
 use crate::startup::{BuiltinCmd, StartupMode, split_custom_command};
@@ -1016,6 +1017,7 @@ pub async fn dispatch(
                         display_prompt: None,
                         sent_at_ms: None,
                         images: Vec::new(),
+                        is_retry: false,
                     },
                 )
                 .await;
@@ -1791,6 +1793,54 @@ pub async fn dispatch(
                 }
             }
         }
+        Some(BuiltinCmd::Retry) => {
+            if lifecycle.is_running().await {
+                record_command(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    CommandResult::Text(
+                        "Cannot retry while a round is already running.".to_string(),
+                    ),
+                )
+                .await;
+                return;
+            }
+            let current = session.model_window().await;
+            if current.is_empty() {
+                record_command(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    CommandResult::Text("No previous turn to retry.".to_string()),
+                )
+                .await;
+                return;
+            }
+            if refuse_if_no_provider(resp_tx, agent, &session.id().await) {
+                return;
+            }
+            record_invocation(session, name, args).await;
+            start_active_turn(
+                side,
+                agent,
+                session,
+                lifecycle,
+                resp_tx,
+                config,
+                RoundInput {
+                    prompt: String::new(),
+                    hidden: false,
+                    display_prompt: None,
+                    sent_at_ms: None,
+                    images: Vec::new(),
+                    is_retry: true,
+                },
+            )
+            .await;
+        }
         Some(BuiltinCmd::Help) => {
             let custom_help = if commands_for_task.is_empty() {
                 String::new()
@@ -1915,6 +1965,7 @@ pub async fn dispatch(
                     display_prompt: Some(cmd),
                     sent_at_ms: None,
                     images: Vec::new(),
+                    is_retry: false,
                 },
             )
             .await;

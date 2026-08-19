@@ -90,6 +90,7 @@ pub mod shutdown;
 pub mod side;
 pub mod slash_handler;
 pub mod startup;
+pub mod supervise;
 pub mod ui_bridge;
 pub mod wip_tools;
 

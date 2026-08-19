@@ -87,7 +87,7 @@ pub(crate) mod providers;
 #[cfg(test)]
 mod snapshot_tests;
 
-pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice, ProviderRetryState};
+pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice, ProviderRetryState, SelectionEdge};
 pub(crate) use completion::CompletionKind;
 pub(crate) use modal::{ActivityTab, Modal, Recess};
 pub(crate) use providers::{
@@ -226,6 +226,27 @@ pub async fn run_tui(
     // Install the signal guard after the terminal enters raw mode + alt screen
     // so any later SIGTERM/SIGINT/SIGHUP restores it instead of stranding it.
     terminal::spawn_signal_guard();
+    // Panic hook: a panic anywhere on the main thread unwinds the process
+    // without running run_tui's cleanup (raw mode + alt screen + mouse
+    // capture stay enabled, leaving the host terminal scrambled). The signal
+    // guard covers SIGINT/SIGTERM/SIGHUP/SIGQUIT but not panics; this closes
+    // that gap. Installed once per process — the /host re-attach loop calls
+    // run_tui repeatedly and must not chain hooks. Background tasks (the
+    // response listener, ws pumps) panic without unwinding the terminal:
+    // only the thread that owns the terminal restores it.
+    static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
+    PANIC_HOOK.call_once(|| {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let main_thread = std::thread::current()
+                .name()
+                .is_some_and(|name| name == "main");
+            if main_thread {
+                terminal::restore_terminal();
+            }
+            default_hook(info);
+        }));
+    });
     let tui_config = Arc::new(tui_config);
     let mut restored = transcript_messages_from_core(initial_messages, &tui_config);
     restored = merge_command_rows(restored, transcript_commands_from_ledger(initial_commands));
@@ -597,10 +618,17 @@ pub async fn run_tui(
                         RoundEvent::Text(t) => {
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
+                            let effort = event_loop::picker_effort(
+                                &provider_picker_clone,
+                                &cp_clone,
+                                &cm_clone,
+                            )
+                            .await;
                             *provider_retry_clone.lock().await = None;
                             let mut msgs = buf.write().await;
                             let mut message = TranscriptMessage::new(Role::Assistant, t)
                                 .with_attribution(provider, model)
+                                .with_effort(effort)
                                 .with_sent_at_ms(crate::event_loop::now_epoch_ms());
                             if let Some((round, turn)) =
                                 positions_by_session.get(&session_id).copied()
@@ -747,10 +775,17 @@ pub async fn run_tui(
                                 drop(msgs);
                                 let (provider, model) =
                                     event_loop::attribution(&cp_clone, &cm_clone).await;
+                                let effort = event_loop::picker_effort(
+                                    &provider_picker_clone,
+                                    &cp_clone,
+                                    &cm_clone,
+                                )
+                                .await;
                                 *provider_retry_clone.lock().await = None;
                                 let mut msgs = buf.write().await;
                                 let mut message = TranscriptMessage::new(Role::Assistant, delta)
-                                    .with_attribution(provider, model);
+                                    .with_attribution(provider, model)
+                                    .with_effort(effort);
                                 if let Some((round, turn)) = position {
                                     message.round = Some(round);
                                     message.turn = Some(turn);
@@ -781,9 +816,16 @@ pub async fn run_tui(
                                 // payload without any preceding text delta.
                                 let (provider, model) =
                                     event_loop::attribution(&cp_clone, &cm_clone).await;
+                                let effort = event_loop::picker_effort(
+                                    &provider_picker_clone,
+                                    &cp_clone,
+                                    &cm_clone,
+                                )
+                                .await;
                                 let mut message =
                                     TranscriptMessage::new(Role::Assistant, final_content)
-                                        .with_attribution(provider, model);
+                                        .with_attribution(provider, model)
+                                        .with_effort(effort);
                                 if let Some((round, turn)) = position {
                                     message.round = Some(round);
                                     message.turn = Some(turn);
@@ -889,8 +931,15 @@ pub async fn run_tui(
                                 // cannot leave phantom spacing behind.
                                 let (provider, model) =
                                     event_loop::attribution(&cp_clone, &cm_clone).await;
+                                let effort = event_loop::picker_effort(
+                                    &provider_picker_clone,
+                                    &cp_clone,
+                                    &cm_clone,
+                                )
+                                .await;
                                 let mut thinking = TranscriptMessage::thinking(delta.clone())
-                                    .with_attribution(provider, model);
+                                    .with_attribution(provider, model)
+                                    .with_effort(effort);
                                 if let Some((round, turn)) = position {
                                     thinking.round = Some(round);
                                     thinking.turn = Some(turn);
@@ -961,6 +1010,12 @@ pub async fn run_tui(
                             }
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
+                            let effort = event_loop::picker_effort(
+                                &provider_picker_clone,
+                                &cp_clone,
+                                &cm_clone,
+                            )
+                            .await;
                             // Stamp the current ReAct turn so this step
                             // joins its compact sibling tool batch;
                             // `TurnStarted` has already populated the session
@@ -975,6 +1030,7 @@ pub async fn run_tui(
                             // Failed/Denied force-expand to surface the error.
                             let mut message = TranscriptMessage::tool_step(id, name, arguments)
                                 .with_attribution(provider, model)
+                                .with_effort(effort)
                                 .with_sent_at_ms(sent_at_ms);
                             if let Some((round, turn)) = position {
                                 message = message.with_round(round).with_turn(turn);
@@ -1027,9 +1083,16 @@ pub async fn run_tui(
                                 // No matching in-flight call (e.g. turn restored from
                                 // history): synthesize a finished step with its default
                                 // disclosure applied directly.
+                                let effort = event_loop::picker_effort(
+                                    &provider_picker_clone,
+                                    &cp_clone,
+                                    &cm_clone,
+                                )
+                                .await;
                                 let mut message =
                                     TranscriptMessage::tool_step(id.clone(), name.clone(), "{}")
-                                        .with_attribution(provider, model);
+                                        .with_attribution(provider, model)
+                                        .with_effort(effort);
                                 if let Some((round, turn)) =
                                     positions_by_session.get(&session_id).copied()
                                 {
@@ -1608,6 +1671,8 @@ pub async fn run_tui(
         current_session_id: String::new(),
         current_workspace: String::new(),
         path_scan_cache: None,
+        path_scan_slot: None,
+        path_scan_wake: None,
         session_context: None,
         loop_status: LoopStatus::Idle,
         activity_status: String::new(),
@@ -1872,10 +1937,13 @@ pub async fn start_tui(
 
 fn push_core_notice(messages: &mut Vec<TranscriptMessage>, notice: &neenee_contracts::AgentNotice) {
     let _surface = notice.surface;
-    messages.push(TranscriptMessage::notice(
-        notice_severity_from_core(notice.severity),
-        notice.render_text(),
-    ));
+    messages.push(
+        TranscriptMessage::notice(
+            notice_severity_from_core(notice.severity),
+            notice.render_text(),
+        )
+        .with_sent_at_ms(event_loop::now_epoch_ms()),
+    );
 }
 
 /// Apply the visible transcript effect of a stream-start signal. The signal
@@ -1908,7 +1976,13 @@ fn push_local_notice(
     severity: NoticeSeverity,
     text: impl Into<String>,
 ) {
-    messages.push(TranscriptMessage::notice(severity, text));
+    // Timestamped like the command rows (`sent_at_ms` → trailing ` · HH:MM`)
+    // so a locally synthesized notice reads as the same kind of transcript
+    // entry, with an anchor for "when did this happen" after further output
+    // has scrolled it up.
+    messages.push(
+        TranscriptMessage::notice(severity, text).with_sent_at_ms(event_loop::now_epoch_ms()),
+    );
 }
 
 /// Format a single inline-transcript notice for a task-list update. Task-list
@@ -2073,4 +2147,4 @@ fn load_user_logo() -> Option<Vec<String>> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

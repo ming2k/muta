@@ -340,6 +340,25 @@ Send:
 If interruption happens before any output, the server can emit `UnsentInput`,
 which includes the prompt and images to restore to the input editor.
 
+### End session (ADR-0112)
+
+Send on the attach connection when the operator is *done* with the session —
+not detaching:
+
+```json
+{ "type": "Request", "EndSession": null }
+```
+
+The server intercepts the frame at the connection layer (it never reaches the
+driver queue), tears the hosted session down through the same path as the
+`kill_session` control verb — cancel the driver, fire `SessionEnd` hooks,
+clear WIP declarations, publish `session_removed` — and answers with the
+terminal `Exit` response on the same connection before closing it. Disk
+history is kept; resume-the-transcript remains possible. The TUI sends it on
+`/exit` and double-`Ctrl+C`; a headless run sends it after its terminal
+round. A plain socket drop does *not* end the session (detach semantics,
+ADR-0096).
+
 ### Permission request
 
 When receiving `Round.event.PermissionRequest`, show its user-facing `label`,

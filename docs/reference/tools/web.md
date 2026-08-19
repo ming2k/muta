@@ -18,7 +18,9 @@ Fetch URLs and search the web. Both are `Read`. Source:
 | `query` | string | yes | Search query |
 
 The default backend is **Exa** (`provider = "exa"`) with **Parallel** as the
-fallback; both are hosted and need an API key. Other backends — `searxng`
-(self-hosted, keyless), `tavily` (hosted, needs a key), and `duckduckgo`
-(keyless scraping, frequently blocked) — are configurable in `[websearch]`
-(`config.toml`).
+fallback; both are hosted MCP endpoints usable anonymously (an API key is
+optional and raises the quota). Other backends — `searxng` (self-hosted,
+keyless), `tavily` (hosted, needs a key), `bocha` (hosted AI search, needs a
+key, directly reachable from mainland China without a proxy), and
+`duckduckgo` (keyless scraping, frequently blocked) — are configurable in
+`[websearch]` (`config.toml`).

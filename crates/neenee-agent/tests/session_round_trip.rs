@@ -101,6 +101,7 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
             display_prompt: None,
             sent_at_ms: Some(sent_at_ms),
             images: Vec::new(),
+            is_retry: false,
         },
     )
     .await

@@ -18,7 +18,9 @@ pub struct WebSearchConfig {
     /// Primary search backend. One of: `"exa"` (default; hosted MCP, anonymous
     /// or `exa_api_key`), `"parallel"` (hosted MCP), `"duckduckgo"` (best-effort
     /// scraping, frequently blocked), `"searxng"` (self-hosted, keyless), or
-    /// `"tavily"` (hosted API, requires `tavily_api_key`).
+    /// `"tavily"` (hosted API, requires `tavily_api_key`), or `"bocha"` (hosted
+    /// AI search API, requires `bocha_api_key`; directly reachable from
+    /// mainland China without a proxy).
     pub provider: String,
     /// Fallback backend tried when `provider` fails. Empty string disables it.
     /// Default `"parallel"`.
@@ -38,6 +40,10 @@ pub struct WebSearchConfig {
     pub searxng_url: Option<String>,
     /// Tavily API key. Required when `provider = "tavily"`.
     pub tavily_api_key: Option<crate::SecretString>,
+    /// Bocha AI Search API key (api.bochaai.com). Required when
+    /// `provider = "bocha"`. Directly reachable from mainland China networks,
+    /// so it works without a proxy.
+    pub bocha_api_key: Option<crate::SecretString>,
 }
 
 impl Default for WebSearchConfig {
@@ -51,6 +57,7 @@ impl Default for WebSearchConfig {
             parallel_api_key: None,
             searxng_url: None,
             tavily_api_key: None,
+            bocha_api_key: None,
         }
     }
 }

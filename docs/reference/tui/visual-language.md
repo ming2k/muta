@@ -54,6 +54,9 @@ The two tokens are the same rank and directly coupled.
 - `QUEUE 2 · blocked` — `blocked` is a state of the queue.
 - `round 5 · 14:02` — the time is a property of the round.
 - `◆ turn 2 · sonnet · 14:02` — model and time are properties of the turn anchor.
+- `> turn 3 · glm-5.3 · high · 17:55` — model, reasoning effort, and time are
+  all properties of the turn anchor (the effort appears only when the channel
+  actually ran the turn with one).
 
 Anything that is *not* "attribute of the preceding same-rank token" must **not**
 use `·`.

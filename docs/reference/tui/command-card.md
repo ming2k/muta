@@ -20,17 +20,17 @@ One span grammar for the Entry header, followed by a 1-row gap, the concrete inv
 ```text
 ⌘ command · 21:39                     pending header
                                       ← 1-row blank gap
-/autopilot on                         concrete command invocation
+  /autopilot on                       concrete command invocation
 
 ⌘ command · 21:39                     completed header
                                       ← 1-row blank gap
-/permissions                          concrete command invocation
+  /permissions                        concrete command invocation
                                       ← 1-row blank gap
-Always-allowed tools: …               …result body through the shared block renderer
+  Always-allowed tools: …             …result body through the shared block renderer
 
 ❯ command · 21:39                     shell passthrough header
                                       ← 1-row blank gap
-!cargo check                          shell command invocation
+  !cargo check                        shell command invocation
 ```
 
 | Attribute | Value |
@@ -38,8 +38,8 @@ Always-allowed tools: …               …result body through the shared block 
 | Header Tag | `⌘ command` (slash, info) or `❯ command` (shell, ok), BOLD — indicator tone |
 | Trailing meta | ` · HH:MM` muted, when `sent_at_ms` is present |
 | Gap | 1 blank row (`TURN_HEADER_BODY_GAP_ROWS = 1`) between header and body |
-| Invocation | Concrete command text (`/name args`, `!cmd`), rendered inside the body |
-| Body | Directly rendered beneath the gap (ADR-0111); collapsible folding is eliminated |
+| Invocation | Concrete command text (`/name args`, `!cmd`), BOLD, indented by `TRANSCRIPT_BODY_LEADING_INDENT` so it lines up with the body it introduces |
+| Body | Directly rendered beneath the gap (ADR-0111) in the muted `Role::Tool` prose tone — one step quieter than the bold invocation, so input and output are distinguishable by weight/color at a glance; collapsible folding is eliminated |
 
 ## Lifecycle
 

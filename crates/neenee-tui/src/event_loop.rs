@@ -33,7 +33,7 @@ use crate::model::selection::{
 };
 use crate::versioned::{HeightInvalidation, TranscriptPatch, TranscriptUpdate, Versioned};
 use crate::view;
-use crate::{App, CaretOwner, Modal, ProviderDeleteChoice};
+use crate::{App, CaretOwner, Modal, ProviderDeleteChoice, SelectionEdge};
 
 use tokio::sync::Mutex;
 
@@ -87,6 +87,81 @@ fn displayed_transcript_did_change(
         } else {
             primary_changed
         }
+}
+
+#[cfg(test)]
+mod input_selection_relay_tests {
+    //! The mouse half of the caret relay: `handle_selection_end` parks the
+    //! hidden caret at the drag's release point, and an InputBox click breaks
+    //! a whole-input selection at the click point. These run here (not in
+    //! `crate::tests`) because the mouse handlers are `pub(super)` to the
+    //! event loop.
+    use super::*;
+    use crate::model::selection::SelectionState;
+    use crate::view::INPUT_MSG_IDX;
+
+    fn app_with_input(input: &str) -> App {
+        let mut app = crate::tests::new_app_for_relay_tests();
+        app.input = input.to_string();
+        app
+    }
+
+    #[test]
+    fn drag_end_parks_caret_at_release_point() {
+        let mut app = app_with_input("hello world");
+        // Simulate a completed drag whose head (release point) is byte 5,
+        // between "hello" and " world".
+        app.selection = SelectionState::Range {
+            anchor: crate::model::layout::SemanticCursor::new(INPUT_MSG_IDX, 0, 0),
+            head: crate::model::layout::SemanticCursor::new(INPUT_MSG_IDX, 0, 5),
+        };
+        app.cursor_position = 0; // stale pre-drag caret
+        super::actions::handle_selection_end_for_test(&mut app);
+        assert_eq!(app.cursor_position, 5, "caret parks at the head byte");
+        assert!(
+            app.cursor_sync_pending,
+            "the parked caret must arm the immediate sync"
+        );
+    }
+
+    #[test]
+    fn drag_end_snaps_to_grapheme_boundary() {
+        // A head landing mid-CJK-glyph (byte 1 of 中) must snap to a
+        // boundary so the char-indexed caret stays sliceable.
+        let mut app = app_with_input("中文");
+        app.selection = SelectionState::Range {
+            anchor: crate::model::layout::SemanticCursor::new(INPUT_MSG_IDX, 0, 0),
+            head: crate::model::layout::SemanticCursor::new(INPUT_MSG_IDX, 0, 1),
+        };
+        super::actions::handle_selection_end_for_test(&mut app);
+        assert_eq!(app.cursor_position, 0, "byte 1 floors to the cluster start");
+    }
+
+    #[test]
+    fn drag_end_ignores_transcript_selections() {
+        let mut app = app_with_input("hello");
+        app.selection = SelectionState::Range {
+            anchor: crate::model::layout::SemanticCursor::new(0, 0, 0),
+            head: crate::model::layout::SemanticCursor::new(0, 0, 3),
+        };
+        app.cursor_position = 2;
+        super::actions::handle_selection_end_for_test(&mut app);
+        assert_eq!(
+            app.cursor_position, 2,
+            "a transcript drag must not move the input caret"
+        );
+    }
+
+    #[test]
+    fn whole_block_select_parks_caret_at_end() {
+        let mut app = app_with_input("abc");
+        app.selection = SelectionState::Block {
+            message_idx: INPUT_MSG_IDX,
+            block_idx: 0,
+        };
+        super::actions::handle_selection_end_for_test(&mut app);
+        assert_eq!(app.cursor_position, 3);
+    }
 }
 
 #[cfg(test)]
@@ -450,15 +525,146 @@ pub(super) struct UnsentInput {
     pub images: Vec<neenee_contracts::ImagePart>,
 }
 
-/// Probe a raw input event against the provider-delete confirm overlay.
+/// Probe a raw input event against an active **whole-input selection**.
 ///
-/// Returns `Some(action)` when the overlay is open (it owns every key in that
-/// state): ←/→/Tab/`h`/`l` move focus between Cancel (the default) and Delete,
-/// Enter activates the focused button, and Esc / Ctrl+C cancel. Returns `None`
-/// when the overlay is closed so the caller proceeds with normal
-/// [`input::process_event`] handling. The returned action — if any — is
-/// dispatched by the standard `match action` block; `DeleteProviderConfirm`
-/// and `DeleteProviderCancel` are the overlay-specific arms.
+/// While the composer's text is selected and the composer owns the caret,
+/// the terminal block cursor is hidden (see [`App::caret_visible`]) — but its
+/// remembered position is the selection's head, the point where the mouse
+/// button was released. Every direction key must *relay* from that hidden
+/// position instead of the stale visible `cursor_position`, and the keypress
+/// must break the selection:
+///
+/// - `←`/`→` adopt the caret at the head edge, then step one character
+///   (or one word, with Ctrl/Alt) in the pressed direction — so the first
+///   press lands one past the release point, exactly like a desktop editor.
+/// - `↑`/`↓` adopt the head edge only (the caret is restored where the mouse
+///   released; the press itself keeps its normal meaning from there — the
+///   event loop dispatches `None` and the next press behaves ordinarily).
+/// - `Home`/`End` adopt the tail/head edge respectively.
+/// - `Backspace`/`Delete`/`Ctrl+W`/`Alt+D`/… delete the whole selection in
+///   one keystroke.
+///
+/// Returns `None` when no whole-input selection is active (the caller falls
+/// through to ordinary input handling) or the event is not a key / has
+/// modifiers beyond the relay's scope. The returned action — if any — flows
+/// through the standard `match action` dispatch so its post-edit passes
+/// (focus reclaim, attachment reconcile) still run.
+pub(crate) fn probe_input_selection_relay(
+    app: &mut App,
+    event: &Event,
+) -> Option<input::InputAction> {
+    use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+
+    if !app.input_selection_relays_arrows() {
+        return None;
+    }
+    let Event::Key(key) = event else {
+        return None;
+    };
+    if !matches!(key.kind, KeyEventKind::Press) {
+        return None;
+    }
+    // Only the plain relay family: no Shift (shift+arrows would mean
+    // "extend selection", which the TUI does not offer), and of the
+    // control-family only the delete/word-jump chords that edit or move by
+    // word — everything else (Ctrl+T, Ctrl+M, …) keeps its global meaning
+    // and must NOT be swallowed by the selection.
+    let word_chord = key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+
+    // Break the selection at the head (mouse-release) edge, then step the
+    // caret one char or one whitespace-delimited word in the pressed
+    // direction — so the first press lands one past the release point,
+    // matching every desktop editor.
+    let step_from_head = |app: &mut App, forward: bool, word: bool| {
+        app.adopt_caret_from_input_selection(SelectionEdge::Head);
+        let count = app.input.chars().count();
+        let at = app.cursor_position.min(count);
+        let target = if word {
+            let chars: Vec<char> = app.input.chars().collect();
+            let mut i = at;
+            if forward {
+                while i < chars.len() && chars[i].is_whitespace() {
+                    i += 1;
+                }
+                while i < chars.len() && !chars[i].is_whitespace() {
+                    i += 1;
+                }
+            } else {
+                while i > 0 && chars[i - 1].is_whitespace() {
+                    i -= 1;
+                }
+                while i > 0 && !chars[i - 1].is_whitespace() {
+                    i -= 1;
+                }
+            }
+            i
+        } else if forward {
+            (at + 1).min(count)
+        } else {
+            at.saturating_sub(1)
+        };
+        app.set_cursor(target);
+    };
+
+    match (key.code, word_chord) {
+        (KeyCode::Left, false) => {
+            step_from_head(app, false, false);
+            Some(input::InputAction::None)
+        }
+        (KeyCode::Right, false) => {
+            step_from_head(app, true, false);
+            Some(input::InputAction::None)
+        }
+        (KeyCode::Left, true) => {
+            step_from_head(app, false, true);
+            Some(input::InputAction::None)
+        }
+        (KeyCode::Right, true) => {
+            step_from_head(app, true, true);
+            Some(input::InputAction::None)
+        }
+        (KeyCode::Up | KeyCode::Down, _) => {
+            // Vertical motion restores the hidden caret at the mouse-release
+            // point and consumes the press; multi-line column-walking and
+            // history recall resume from there on the next press.
+            app.adopt_caret_from_input_selection(SelectionEdge::Head);
+            Some(input::InputAction::None)
+        }
+        (KeyCode::Home, _) => {
+            app.adopt_caret_from_input_selection(SelectionEdge::Tail);
+            Some(input::InputAction::None)
+        }
+        (KeyCode::End, _) => {
+            app.adopt_caret_from_input_selection(SelectionEdge::Head);
+            Some(input::InputAction::None)
+        }
+        (KeyCode::Backspace | KeyCode::Delete, _) => {
+            // Plain delete over an active selection replaces it (the
+            // standard editor contract): the whole selected text goes in
+            // one stroke. Returns Backspace's post-edit signal so focus
+            // reclaim and attachment reconcile run in the dispatch below.
+            app.delete_input_selection();
+            Some(input::InputAction::Backspace)
+        }
+        // The delete-family chords (Ctrl+W / Ctrl+U / Ctrl+K / Alt+D) behave
+        // the same over a selection: they replace it rather than deleting
+        // from the stale caret.
+        (KeyCode::Char('w') | KeyCode::Char('u') | KeyCode::Char('k'), _)
+            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            app.delete_input_selection();
+            Some(input::InputAction::Backspace)
+        }
+        (KeyCode::Char('d'), _) if key.modifiers.contains(KeyModifiers::ALT) => {
+            app.delete_input_selection();
+            Some(input::InputAction::Backspace)
+        }
+        _ => None,
+    }
+}
+
 fn probe_delete_overlay(app: &mut App, event: &Event) -> Option<input::InputAction> {
     use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 
@@ -1627,6 +1833,28 @@ pub(super) async fn run_app_loop(
         // to advance its slides while the hero is on screen. Keyed off the
         // *viewed* transcript so an empty background session doesn't keep
         // the loop hot while the user works elsewhere.
+        // Harvest a finished async project scan (the `@path` completion
+        // listing) into the cache; the scan task poked `dirty_notify` so this
+        // iteration re-runs completions with the listing available.
+        if let Some(slot) = app.path_scan_slot.take() {
+            if let Some(scan) = slot.harvest() {
+                app.path_scan_cache = Some(Some(scan));
+                app.path_scan_wake = None;
+                frame_dirty = true;
+            } else {
+                // Still in flight: keep the slot for the next iteration.
+                app.path_scan_slot = Some(slot);
+            }
+        }
+        // Path-completion accept resets the cache; a subsequent `@` needs a
+        // fresh scan, so re-arm the async request when the cache was dropped.
+        if app.path_scan_cache.is_none() && app.path_scan_slot.is_some() {
+            // Slot exists but never stored a scan and the cache was reset —
+            // restart the scan (rare: only after accepting a completion).
+            app.path_scan_slot = None;
+            app.path_scan_wake = None;
+        }
+
         let empty_state_showing =
             app.focused_messages().is_empty() && app.focus_stack.is_empty() && !app.in_side_view;
         let animating = runtime.is_responding.load(Ordering::SeqCst)
@@ -1869,6 +2097,19 @@ pub(super) async fn run_app_loop(
             // overlay-specific arms).
             let action = if let Some(overlay_action) = probe_delete_overlay(app, &event) {
                 overlay_action
+            } else if let Some(relay) = probe_input_selection_relay(app, &event) {
+                // A whole-input selection is active and the composer owns the
+                // caret. The block cursor is hidden, but its position is
+                // implicitly the selection's head — where the mouse button
+                // was released. Rather than letting `process_event` move the
+                // *stale* `cursor_position` (and, for Backspace/Delete,
+                // splice at that stale spot), resolve the relay right here:
+                // skip the input mapper entirely, break the selection, and
+                // adopt the caret at the proper edge. The returned action
+                // keeps the same post-edit passes (focus reclaim, attachment
+                // reconcile, completion latch) the ordinary keystroke would
+                // have run.
+                relay
             } else {
                 input::process_event(
                     event,
@@ -2004,6 +2245,37 @@ pub(super) async fn attribution(
     model: &Arc<Mutex<String>>,
 ) -> (String, String) {
     (provider.lock().await.clone(), model.lock().await.clone())
+}
+
+/// Snapshot the active model's effective reasoning effort at the moment a
+/// message is created, so the turn header shows the depth each turn actually
+/// ran with rather than today's live setting. Resolves from the provider
+/// picker mirror (pushed unconditionally at session start and on every
+/// provider/model mutation) and applies the same per-protocol gating as the
+/// hint bar ([`effective_reasoning_effort`], ADR-0046): Anthropic effort
+/// counts only while thinking is opted in, OpenAI effort whenever the channel
+/// reports one, Google never. `None` keeps non-reasoning channels quiet.
+pub(super) async fn picker_effort(
+    picker: &Arc<Mutex<ProviderPickerSnapshot>>,
+    provider: &Arc<Mutex<String>>,
+    model: &Arc<Mutex<String>>,
+) -> Option<String> {
+    let provider = provider.lock().await.clone();
+    let model = model.lock().await.clone();
+    let picker = picker.lock().await;
+    picker
+        .rows
+        .iter()
+        .find(|row| row.id == provider)
+        .and_then(|row| row.model_info.iter().find(|m| m.model == model))
+        .and_then(|m| {
+            let show = match m.protocol.as_str() {
+                "anthropic" => m.thinking == Some(true),
+                "openai" => m.effort.is_some(),
+                _ => false,
+            };
+            show.then(|| m.effort.clone()).flatten()
+        })
 }
 
 /// Resolve a mutable reference to the message at index `mi` within the

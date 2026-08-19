@@ -2403,18 +2403,23 @@ pub fn draw_command_result(
         content_lines,
     );
 
-    // Concrete command invocation inside the entry body
+    // Concrete command invocation inside the entry body. It is indented by
+    // `TRANSCRIPT_BODY_LEADING_INDENT` so the invocation's first column lines
+    // up with the result body drawn below it by `draw_message_body` — the
+    // entry reads as one aligned block instead of a hanging head.
+    let body_indent = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
     let invocation_style = if phase == CommandPhase::Pending {
         Style::default()
             .fg(theme.muted())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default()
-            .fg(theme.fg())
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD)
     };
 
-    let invocation_line = Line::from(vec![Span::styled(invocation, invocation_style)]);
+    let invocation_line = Line::from(vec![
+        Span::styled(body_indent, invocation_style),
+        Span::styled(invocation, invocation_style),
+    ]);
     {
         let mut ctx = RenderCtx::from_cursor(
             frame,
@@ -2431,13 +2436,7 @@ pub fn draw_command_result(
 
     // Result body blocks
     if phase == CommandPhase::Completed && msg.command_result_text().is_some() {
-        advance_plain_blank_rows(
-            transcript_area,
-            1,
-            skip_rows,
-            current_y,
-            content_lines,
-        );
+        advance_plain_blank_rows(transcript_area, 1, skip_rows, current_y, content_lines);
         draw_message_body(
             frame,
             transcript_area,

@@ -184,6 +184,17 @@ pub trait Provider: Send + Sync {
         String::new()
     }
 
+    /// The resolved reasoning effort (depth) this channel runs its model
+    /// requests with, as the wire string (`"high"`, `"max"`, …). Companion to
+    /// [`Provider::provider_id`]/[`Provider::model`]: the harness stamps it
+    /// onto assistant messages next to the provider/model attribution so the
+    /// transcript can show the depth each turn actually ran at. Defaults to
+    /// `None` for providers (mostly test doubles and sentinel channels) that
+    /// carry no effort knob — including thinking-disabled Anthropic channels.
+    fn effort(&self) -> Option<crate::effort::Effort> {
+        None
+    }
+
     /// Effective model capabilities for this concrete provider channel. The
     /// default resolves the static baseline by id; providers backed by a trusted
     /// remote catalogue override it with their channel-scoped snapshot.

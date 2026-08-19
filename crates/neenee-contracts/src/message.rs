@@ -203,6 +203,14 @@ pub struct Message {
     /// `"kimi-code"`). Companion to [`Message::provider`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The reasoning effort (depth) this message's model request ran with
+    /// (`"high"`, `"max"`, …), when the active channel exposes one. Stamped
+    /// next to [`Message::provider`]/[`Message::model`] so the transcript can
+    /// show the depth each turn actually ran at after resume. Storage/UI
+    /// metadata only — stripped by [`Message::to_wire`] and never sent to the
+    /// provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     #[serde(default)]
     pub hidden: bool,
     /// Nested envoy transcript. Populated only on the `Tool`-role result
@@ -324,6 +332,7 @@ impl Message {
             images: None,
             provider: None,
             model: None,
+            effort: None,
             hidden: false,
             children: None,
             envoy_meta: None,
@@ -423,6 +432,7 @@ impl Message {
             images: None,
             provider: None,
             model: None,
+            effort: None,
             hidden: false,
             children: None,
             envoy_meta: None,
@@ -486,6 +496,7 @@ impl Message {
             images: self.images.clone(),
             provider: None,
             model: None,
+            effort: None,
             hidden: false,
             children: None,
             envoy_meta: None,
@@ -563,6 +574,7 @@ mod tests {
                 images: None,
                 provider: None,
                 model: None,
+                effort: None,
                 hidden: false,
                 children: None,
                 envoy_meta: None,

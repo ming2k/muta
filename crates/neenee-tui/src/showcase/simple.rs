@@ -826,6 +826,7 @@ pub fn effort_ignition() -> io::Result<()> {
                     messages: &[],
                     reasoning_effort: Some("max"),
                     busy: false,
+                    can_retry: false,
                     context_tokens: Some(12_400),
                     ignition_elapsed_ms: elapsed_ms,
                 },

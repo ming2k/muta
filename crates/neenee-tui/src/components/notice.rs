@@ -220,9 +220,7 @@ pub(crate) fn draw_notice_view(
     // 4. Detail body: formatted detail (unfolded direct rendering)
     if let Some(detail) = parsed.detail.as_ref() {
         let detail_indent = "  ";
-        let detail_wrap_width = full_width
-            .saturating_sub(detail_indent.width() + 2)
-            .max(1);
+        let detail_wrap_width = full_width.saturating_sub(detail_indent.width() + 2).max(1);
 
         for line_str in detail.lines() {
             let wrapped_detail = wrap_text(line_str, detail_wrap_width);
@@ -239,10 +237,7 @@ pub(crate) fn draw_notice_view(
                 let line_rect = Rect::new(area.x, *current_y, area.width, 1);
                 let spans = vec![
                     Span::styled(detail_indent, Style::default()),
-                    Span::styled(
-                        dwl.text.clone(),
-                        Style::default().fg(theme.muted()),
-                    ),
+                    Span::styled(dwl.text.clone(), Style::default().fg(theme.muted())),
                 ];
                 frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
 

@@ -473,6 +473,11 @@ pub enum InputAction {
     InsertChar(char),
     /// Delete character before cursor.
     Backspace,
+    /// Delete character after the cursor (the `Del` key's forward delete).
+    /// The input layer has already spliced the text; the action signals the
+    /// event loop to run the same post-edit passes as `Backspace`
+    /// (completion latch reset, focus reclaim, attachment reconcile).
+    DeleteForward,
     /// Cycle suggestion forward.
     SuggestNext,
     /// Cycle suggestion backward.
@@ -1157,6 +1162,25 @@ pub fn process_event(
                                 .unwrap_or(0);
                             input.remove(byte_pos);
                             *cursor_position -= 1;
+                        }
+                        return InputAction::None;
+                    }
+                    KeyCode::Delete => {
+                        // Forward delete in the borrowed prompt line, so the
+                        // Del key behaves here exactly as it does in the main
+                        // composer (no chip handling — the dashboard prompt
+                        // never stages attachments).
+                        if *cursor_position < input.chars().count() {
+                            let byte_pos = input
+                                .char_indices()
+                                .map(|(i, _)| i)
+                                .nth(*cursor_position)
+                                .unwrap_or(input.len());
+                            let end_byte =
+                                crate::model::selection::inclusive_grapheme_end(input, byte_pos);
+                            if end_byte > byte_pos {
+                                input.replace_range(byte_pos..end_byte, "");
+                            }
                         }
                         return InputAction::None;
                     }
@@ -2083,6 +2107,46 @@ pub fn process_event(
                     } else {
                         InputAction::None
                     }
+                }
+                // `Del` key: forward delete — remove the character *after*
+                // the caret. Gated like Backspace on the same free-text
+                // surfaces (`edits_input_field`), so it never disturbs a
+                // read-only modal. Chip-aware: a Delete landing on the `[` of
+                // an attachment chip removes the whole chip in one
+                // keystroke, mirroring the chip-aware Backspace. The caret
+                // does not move (forward delete only shortens the text).
+                KeyCode::Delete => {
+                    if edits_input_field(
+                        context.active_modal,
+                        context.history_searching,
+                        context.model_searching,
+                        context.custom_text_field_focused(),
+                    ) && *cursor_position < input.chars().count()
+                    {
+                        let byte_cursor = input
+                            .char_indices()
+                            .map(|(i, _)| i)
+                            .nth(*cursor_position)
+                            .unwrap_or(input.len());
+                        if let Some((start, end)) =
+                            crate::composer_attachments::chip_range_for_delete(input, byte_cursor)
+                        {
+                            input.replace_range(start..end, "");
+                            return InputAction::DeleteForward;
+                        }
+                        // Snap to a grapheme boundary: a `chars()` cursor can
+                        // only land mid-cluster via hand-set test state, but a
+                        // byte slice there would panic on `remove`, so
+                        // resolve the whole cluster the way selection copy
+                        // does (never split what the user sees as one glyph).
+                        let end_byte =
+                            crate::model::selection::inclusive_grapheme_end(input, byte_cursor);
+                        if end_byte > byte_cursor {
+                            input.replace_range(byte_cursor..end_byte, "");
+                            return InputAction::DeleteForward;
+                        }
+                    }
+                    InputAction::None
                 }
                 KeyCode::Left => {
                     if context.active_modal == super::Modal::Permission {

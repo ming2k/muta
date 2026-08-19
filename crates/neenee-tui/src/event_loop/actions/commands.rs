@@ -372,6 +372,10 @@ pub(super) fn handle_ctrl_c(
             std::time::Instant::now() + std::time::Duration::from_secs(2),
         ));
     } else if app.ctrl_c_armed() {
+        // Double Ctrl+C inside the conversation is a quit intent — same
+        // client-declared session end as `/exit` (ADR-0112), unlike the
+        // detach-flavoured exits (host switch, startup overlays).
+        let _ = app.tx.send(AgentRequest::EndSession);
         tracing::info!(reason = "ctrl_c_double_press", "app exiting");
         return ActionFlow::Exit;
     } else {

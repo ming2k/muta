@@ -406,9 +406,9 @@ supports. Prefer primary and authoritative sources.
 
 The backend is configurable via the `[websearch]` table in config.toml: `exa` \
 (default; hosted, anonymous, reliable), `parallel` (hosted), `duckduckgo` \
-(keyless scraping, frequently blocked), `searxng` (self-hosted, keyless), or \
-`tavily` (hosted, needs key). A `fallback` backend is tried automatically if \
-the primary fails."
+(keyless scraping, frequently blocked), `searxng` (self-hosted, keyless), \
+`tavily` (hosted, needs key), or `bocha` (hosted AI search, needs key). A \
+`fallback` backend is tried automatically if the primary fails."
     )
 }
 

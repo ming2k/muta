@@ -80,6 +80,7 @@ define_builtin_commands! {
     Untrust     = "/untrust"      : "Revoke trust for this project (disconnects MCP, unloads hooks, project skills and commands)",
     Export      = "/export"       : "Export this conversation to the clipboard as Markdown",
     Debug       = "/debug"        : "Debug tools: /debug trace on|off, /debug preview (dry run)",
+    Retry       = "/retry"        : "Retry the last failed model request or turn",
     Help        = "/help"         : "Show available commands and keybindings",
     Exit        = "/exit"         : "Exit the program",
 }

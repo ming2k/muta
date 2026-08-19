@@ -49,6 +49,28 @@ mod tests {
     }
 
     #[test]
+    fn bocha_backend_parses_from_toml_and_builds() {
+        let toml = r#"
+            provider = "bocha"
+            fallback = "bocha"
+            bocha_api_key = "sk-test-bocha"
+        "#;
+        let cfg: WebSearchConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.provider, "bocha");
+        assert_eq!(
+            cfg.bocha_api_key
+                .as_ref()
+                .map(|k| k.expose_secret().to_string())
+                .as_deref(),
+            Some("sk-test-bocha")
+        );
+        assert_eq!(
+            crate::tools::search::build_provider(&cfg, "bocha").name(),
+            "Bocha"
+        );
+    }
+
+    #[test]
     fn write_and_edit_tools_allow_plan_paths_in_plan_mode() {
         // Plan-mode path exemption was removed (ADR-0027/0028): scoped writes
         // are now expressed per-agent via `WriteScope`, not via an

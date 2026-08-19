@@ -315,6 +315,7 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
             display_prompt: None,
             sent_at_ms: None,
             images: Vec::new(),
+            is_retry: false,
         },
     )
     .await
@@ -421,6 +422,7 @@ async fn partial_tool_stream_is_not_executed_before_provider_retry() {
             display_prompt: None,
             sent_at_ms: None,
             images: Vec::new(),
+            is_retry: false,
         },
     )
     .await
@@ -494,6 +496,7 @@ async fn turn_resumes_provider_request_after_completed_tool_activity() {
             display_prompt: None,
             sent_at_ms: None,
             images: Vec::new(),
+            is_retry: false,
         },
     )
     .await
@@ -562,6 +565,7 @@ async fn turn_exhaustion_message_explains_retry_budget() {
             display_prompt: None,
             sent_at_ms: None,
             images: Vec::new(),
+            is_retry: false,
         },
     )
     .await

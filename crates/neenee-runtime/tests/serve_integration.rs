@@ -88,6 +88,9 @@ async fn prehosted(
             tracker,
             sync_buffer,
             created_at: std::time::Instant::now(),
+            last_activity: tokio::sync::Mutex::new(std::time::Instant::now()),
+            last_seen_tick: std::sync::atomic::AtomicU64::new(0),
+            activity_tick: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             agent_for_session_end: None,
         })
         .await;
@@ -123,6 +126,9 @@ async fn host_with_project(registry: &SessionRegistry, project: std::path::PathB
             tracker,
             sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             created_at: std::time::Instant::now(),
+            last_activity: tokio::sync::Mutex::new(std::time::Instant::now()),
+            last_seen_tick: std::sync::atomic::AtomicU64::new(0),
+            activity_tick: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             agent_for_session_end: None,
         })
         .await;
@@ -721,6 +727,130 @@ async fn monitor_one_shot_closes_after_snapshot() {
 
 /// ADR-0096: the control plane manages sessions without attaching — create,
 /// observe in the monitor snapshot, kill.
+/// ADR-0112: a client declares the session ended over its attach
+/// connection; the daemon tears the session down (registry entry gone,
+/// `SessionRemoved` published, terminal `Exit` flushed to the attach
+/// client) and the connection closes. The request must never reach the
+/// driver queue — the teardown races what it would cancel.
+#[tokio::test]
+async fn attach_end_session_tears_down_and_notifies() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_dir, session) = fresh_empty_store("end-session");
+    let (registry, mut _req_rx, _bc) = prehosted(session.clone()).await;
+    let id = session.id().await;
+
+    // Watch the monitor plane so the SessionRemoved diff is observable.
+    let registry_for_serve = registry.clone();
+    let mut handle = serve::start_server(serve::ServeOptions::default(), registry_for_serve);
+    let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
+
+    // A dashboard watches the monitor plane; its row must disappear when
+    // the attach client ends the session.
+    let (mut monitor, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    let select_monitor = serde_json::to_string(&Wire::Select {
+        version: None,
+        action: AttachAction::Monitor(MonitorAction {
+            watch: true,
+            include_idle: true,
+        }),
+        project: None,
+    })
+    .unwrap();
+    monitor
+        .send(WsMessage::Text(select_monitor.into()))
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(2), monitor.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let frame: Wire = serde_json::from_str(first.to_text().unwrap_or("")).unwrap();
+    assert!(
+        matches!(
+            frame,
+            Wire::Monitor {
+                event: MonitorEvent::Snapshot(_)
+            }
+        ),
+        "expected monitor Snapshot, got {frame:?}"
+    );
+
+    // Attach.
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    let select = serde_json::to_string(&Wire::Select {
+        version: None,
+        action: AttachAction::Attach(Some(id.clone())),
+        project: None,
+    })
+    .unwrap();
+    ws.send(WsMessage::Text(select.into())).await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let frame: Wire = serde_json::from_str(msg.to_text().unwrap_or("")).unwrap();
+    assert!(
+        matches!(frame, Wire::Welcome { .. }),
+        "expected Welcome, got {frame:?}"
+    );
+
+    // Declare the session ended — raw frame shape the web panel sends.
+    ws.send(WsMessage::Text(
+        r#"{"type":"Request","EndSession":null}"#.into(),
+    ))
+    .await
+    .unwrap();
+
+    // The attach connection receives the terminal Exit before closing.
+    let mut saw_exit = false;
+    let deadline = Duration::from_secs(3);
+    while let Ok(Some(Ok(msg))) = tokio::time::timeout(deadline, ws.next()).await {
+        if let Ok(Wire::Response {
+            response: AgentResponse::Exit,
+        }) = serde_json::from_str::<Wire>(msg.to_text().unwrap_or(""))
+        {
+            saw_exit = true;
+            break;
+        }
+    }
+    assert!(saw_exit, "attach client must observe the terminal Exit");
+
+    // The registry no longer hosts the session.
+    assert!(!hosted_ids(&registry).await.contains(&id));
+
+    // The driver queue never saw the request (it was intercepted at the
+    // connection layer, not forwarded).
+    assert!(
+        _req_rx.try_recv().is_err(),
+        "EndSession must not reach the driver queue"
+    );
+
+    // The dashboard's monitor stream sees the row disappear.
+    let removed = tokio::time::timeout(Duration::from_secs(3), monitor.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let frame: Wire = serde_json::from_str(removed.to_text().unwrap_or("")).unwrap();
+    match frame {
+        Wire::Monitor {
+            event: MonitorEvent::SessionRemoved { session_id },
+        } => assert_eq!(session_id, id),
+        other => panic!("expected monitor SessionRemoved, got {other:?}"),
+    }
+
+    let _ = handle;
+    let _ = tmp;
+}
+
+/// ADR-0096: the control plane manages sessions without attaching — create,
+/// observe in the monitor snapshot, kill.
 #[tokio::test]
 async fn control_create_observe_kill_roundtrip() {
     let registry = Arc::new(SessionRegistry::prehost_only());
@@ -888,6 +1018,9 @@ async fn host_bare(
             tracker,
             sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             created_at,
+            last_activity: tokio::sync::Mutex::new(created_at),
+            last_seen_tick: std::sync::atomic::AtomicU64::new(0),
+            activity_tick: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             agent_for_session_end: None,
         })
         .await;
@@ -987,6 +1120,106 @@ async fn reaper_keeps_session_once_it_has_content() {
     assert!(reaped.is_empty(), "a persisted session is never reaped");
     assert!(hosted_ids(&registry).await.contains(&id));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// ── Idle-hosted suspension (memory bounding for real sessions) ────────────
+
+/// A persisted idle session with no clients is suspended after the TTL: the
+/// daemon's memory must be bounded by *active* work, not by session history.
+#[tokio::test]
+async fn suspension_removes_idle_persisted_session() {
+    let (dir, store) = fresh_empty_store("suspend");
+    store
+        .replace_messages(vec![neenee_contracts::Message::new(
+            neenee_contracts::Role::User,
+            "hello",
+        )])
+        .await
+        .unwrap();
+    let old = std::time::Instant::now() - Duration::from_secs(3600);
+    let (registry, _tx, id) = host_bare(store, old).await;
+
+    let suspended = registry
+        .suspend_idle_sessions_with(Duration::from_secs(60))
+        .await;
+    assert_eq!(
+        suspended,
+        vec![id.clone()],
+        "idle persisted session suspends"
+    );
+    assert!(
+        !hosted_ids(&registry).await.contains(&id),
+        "suspended session leaves the hosted set"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// An attached client keeps its session resident — suspension must never
+/// yank a session out from under a live observer.
+#[tokio::test]
+async fn suspension_keeps_session_with_attached_client() {
+    let (dir, store) = fresh_empty_store("suspend-attached");
+    store
+        .replace_messages(vec![neenee_contracts::Message::new(
+            neenee_contracts::Role::User,
+            "hello",
+        )])
+        .await
+        .unwrap();
+    let old = std::time::Instant::now() - Duration::from_secs(3600);
+    let (registry, bc_tx, id) = host_bare(store, old).await;
+    // Attach: a live broadcast receiver counts as an attached client.
+    let _rx = bc_tx.subscribe();
+
+    let suspended = registry
+        .suspend_idle_sessions_with(Duration::from_secs(60))
+        .await;
+    assert!(suspended.is_empty(), "attached session must not suspend");
+    assert!(hosted_ids(&registry).await.contains(&id));
+    drop(_rx);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Recent tap activity defers suspension: the idle clock refreshes when the
+/// tap tick advances between sweeps.
+#[tokio::test]
+async fn suspension_deferred_by_recent_activity() {
+    let (dir, store) = fresh_empty_store("suspend-active");
+    store
+        .replace_messages(vec![neenee_contracts::Message::new(
+            neenee_contracts::Role::User,
+            "hello",
+        )])
+        .await
+        .unwrap();
+    // Hosted "recently": the idle clock has not run out yet.
+    let fresh = std::time::Instant::now();
+    let (registry, _tx, id) = host_bare(store, fresh).await;
+
+    let suspended = registry
+        .suspend_idle_sessions_with(Duration::from_secs(3600))
+        .await;
+    assert!(suspended.is_empty(), "fresh session must not suspend");
+    assert!(hosted_ids(&registry).await.contains(&id));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Never-persisted empty sessions stay with the tighter empty-reaper; the
+/// suspension path must not race it.
+#[tokio::test]
+async fn suspension_skips_empty_unpersisted_sessions() {
+    let (_dir, store) = fresh_empty_store("suspend-empty");
+    let old = std::time::Instant::now() - Duration::from_secs(3600);
+    let (registry, _tx, id) = host_bare(store, old).await;
+
+    let suspended = registry
+        .suspend_idle_sessions_with(Duration::from_secs(60))
+        .await;
+    assert!(
+        suspended.is_empty(),
+        "empty session is the reaper's, not suspension's"
+    );
+    assert!(hosted_ids(&registry).await.contains(&id));
 }
 
 // ── Daemon lifecycle (ADR-0100/0101) ──────────────────────────────────────

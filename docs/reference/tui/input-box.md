@@ -30,6 +30,35 @@ transcript history always stays visible. The layout reserves space based on
 Blinking terminal caret positioned on the active wrapped line. Clamped to the
 visible inner area when the input is very long.
 
+## Selection relay
+
+While a selection covers the composer's text the block caret is hidden — but
+its position is *remembered*: the selection's **head**, the point where the
+mouse button was released. The next non-typing key relays from that hidden
+position and breaks the selection, so a drag is never "lost state":
+
+| Key | Behaviour over an active input selection |
+|-----|------------------------------------------|
+| `←` / `→` | Adopt the caret at the head edge, then step one char (word with Ctrl/Alt) in the pressed direction |
+| `↑` / `↓` | Restore the caret at the head edge and consume the press; line-walking / history recall resume from there |
+| `Home` / `End` | Adopt the tail / head edge of the selection |
+| `Backspace` / `Del` / `Ctrl+W` / `Ctrl+U` / `Ctrl+K` / `Alt+D` | Replace the selection — the whole selected text goes in one stroke |
+
+The relay only engages when the composer owns the caret (no modal, no focused
+transcript step): while a step holds keyboard focus, arrows keep their
+step-navigation meaning. A click inside the box also breaks the selection and
+parks the caret at the clicked character.
+
+## Delete key
+
+`Del` is the forward delete: it removes the character *after* the caret and
+never moves it. It works everywhere the composer line is edited (the main
+prompt, the history/model filter fields, the provider editor, the key editor,
+and the `/host` inline prompt), respects whole grapheme clusters (a CJK glyph
+or emoji vanishes as one unit), and is chip-aware — a `Del` landing on the
+`[` of an attachment chip removes the whole chip (plus the one trailing space
+a paste inserts) in one keystroke, mirroring the chip-aware `Backspace`.
+
 ## Selection
 
 Semantic mouse-drag selection works on input text via `INPUT_MSG_IDX`

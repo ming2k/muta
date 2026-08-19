@@ -3901,3 +3901,144 @@ fn digit_jump_is_scoped_to_the_effort_field() {
     );
     assert_eq!(key, "sk-5");
 }
+
+// ─── Forward delete (Del key) ─────────────────────────────────────────────
+
+/// Dispatch a plain key against the main composer (no modal), returning the
+/// action. The input and cursor are threaded through so tests can assert on
+/// the mutated buffer the way the event loop sees it.
+fn compose_key(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    input: &mut String,
+    cursor: &mut usize,
+) -> InputAction {
+    let mut drag = SelectionDrag::default();
+    process_event(
+        Event::Key(KeyEvent::new(code, modifiers)),
+        input,
+        cursor,
+        InputContext {
+            active_modal: crate::Modal::None,
+            is_responding: false,
+            completion_kind: crate::CompletionKind::None,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            permission_confirm_always: false,
+            permission_show_details: false,
+            in_envoy_view: false,
+            in_side_view: false,
+            has_focused_target: false,
+            has_queued: false,
+            history_searching: false,
+            ..Default::default()
+        },
+        &mut drag,
+    )
+}
+
+#[test]
+fn delete_key_removes_char_after_cursor() {
+    // The Del key's defining behaviour: remove the character *after* the
+    // caret, leaving the caret unmoved.
+    let mut input = "hello".to_string();
+    let mut cursor = 2;
+    assert_eq!(
+        compose_key(KeyCode::Delete, KeyModifiers::NONE, &mut input, &mut cursor),
+        InputAction::DeleteForward
+    );
+    assert_eq!(input, "helo");
+    assert_eq!(cursor, 2, "forward delete must not move the caret");
+}
+
+#[test]
+fn delete_key_at_end_is_inert() {
+    let mut input = "hello".to_string();
+    let mut cursor = 5;
+    assert_eq!(
+        compose_key(KeyCode::Delete, KeyModifiers::NONE, &mut input, &mut cursor),
+        InputAction::None
+    );
+    assert_eq!(input, "hello");
+    assert_eq!(cursor, 5);
+}
+
+#[test]
+fn delete_key_removes_full_grapheme_cluster() {
+    // A CJK char occupies 3 bytes but must vanish as one user-visible glyph;
+    // the byte math must never split what the user sees as one character.
+    let mut input = "中abc".to_string();
+    let mut cursor = 0;
+    assert_eq!(
+        compose_key(KeyCode::Delete, KeyModifiers::NONE, &mut input, &mut cursor),
+        InputAction::DeleteForward
+    );
+    assert_eq!(input, "abc");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn delete_key_eats_whole_attachment_chip() {
+    // Forward-deleting the `[` of an attachment chip removes the whole chip
+    // (plus the trailing space a paste inserts) in one keystroke, mirroring
+    // the chip-aware Backspace.
+    let chip = crate::composer_attachments::image_chip(1, 42);
+    let mut input = format!("hello {chip} world");
+    let mut cursor = "hello ".len();
+    assert_eq!(
+        compose_key(KeyCode::Delete, KeyModifiers::NONE, &mut input, &mut cursor),
+        InputAction::DeleteForward
+    );
+    assert_eq!(input, "hello world", "chip + trailing space both go");
+    assert_eq!(cursor, "hello ".len());
+}
+
+#[test]
+fn delete_key_inert_outside_free_text() {
+    // In a read-only modal (Help) the Del key must do nothing — the
+    // `edits_input_field` gate keeps it from mutating the borrowed composer.
+    let mut input = "hello".to_string();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    assert_eq!(
+        process_event(
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::Modal::Help,
+                ..Default::default()
+            },
+            &mut drag,
+        ),
+        InputAction::None
+    );
+    assert_eq!(input, "hello");
+}
+
+#[test]
+fn host_prompt_delete_key_removes_forward_char() {
+    // The /host dashboard's inline prompt borrows the composer line; Del
+    // there deletes forward too (the branch swallows the key and returns
+    // None — the mutation is the whole effect).
+    let mut input = "abc".to_string();
+    let mut cursor = 1;
+    let mut drag = SelectionDrag::default();
+    assert_eq!(
+        process_event(
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::Modal::Host,
+                host_prompting: true,
+                ..Default::default()
+            },
+            &mut drag,
+        ),
+        InputAction::None
+    );
+    assert_eq!(input, "ac");
+    assert_eq!(cursor, 1);
+}

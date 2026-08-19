@@ -17,6 +17,7 @@
 use async_trait::async_trait;
 use neenee_contracts::WebSearchConfig;
 
+pub mod bocha;
 pub mod duckduckgo;
 pub mod exa;
 pub mod parallel;
@@ -68,6 +69,12 @@ pub(crate) fn build_provider(cfg: &WebSearchConfig, name: &str) -> Box<dyn Searc
         "tavily" => Box::new(tavily::TavilyProvider {
             api_key: cfg
                 .tavily_api_key
+                .as_ref()
+                .map(|k| k.expose_secret().to_string()),
+        }),
+        "bocha" => Box::new(bocha::BochaProvider {
+            api_key: cfg
+                .bocha_api_key
                 .as_ref()
                 .map(|k| k.expose_secret().to_string()),
         }),

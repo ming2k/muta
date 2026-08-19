@@ -199,6 +199,7 @@ pub fn into_message(
         images: None,
         provider: None,
         model: None,
+        effort: None,
         hidden: false,
         children: None,
         envoy_meta: None,

@@ -11,6 +11,32 @@
 pub mod search;
 mod ssrf;
 
+/// Kill an external child's whole process group. `.process_group(0)` made the
+/// child a group leader (pgid == pid) at spawn, so `-pid` reaches
+/// grandchildren a bare `start_kill()` misses — the classic leak being
+/// `sh -c "server & echo hi"`, where the backgrounded `server` survives the
+/// shell's death and reparents to init. Long-running agents spawn thousands
+/// of shell commands; without a group kill the machine accumulates orphans.
+///
+/// Callers must still `wait()` the child afterwards so it does not linger as
+/// a zombie. Non-Unix targets fall back to killing the direct child (the
+/// Windows Job-object equivalent is out of scope for now).
+pub(crate) fn kill_process_group(child: &tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            // SAFETY: libc::kill with a plain integer signal number. Errors
+            // (ESRCH if the group is already gone) are intentionally ignored:
+            // this runs on teardown paths where the group's death is the goal.
+            unsafe {
+                libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = child.start_kill();
+}
+
 mod ask_user;
 mod bash;
 mod edit;

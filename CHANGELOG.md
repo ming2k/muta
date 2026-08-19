@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Input-box editing parity: `Del` forward delete and a selection caret
+  relay.** Two long-missing editor behaviours now work in the composer (and
+  every surface that borrows its line):
+  - **`Del` deletes forward** — the character after the caret goes, the caret
+    stays put. It respects grapheme clusters (a CJK glyph or emoji vanishes
+    as one unit) and is chip-aware: deleting onto the `[` of an attachment
+    chip removes the whole chip in one keystroke, mirroring the chip-aware
+    `Backspace`. Inert on read-only surfaces, live in the `/host` inline
+    prompt.
+  - **A selection now relays the hidden caret.** Drag-selecting input text
+    hides the block cursor, but its position is remembered — the point where
+    the mouse was released. Any direction key (`←`/`→`/`↑`/`↓`/`Home`/`End`)
+    breaks the selection and continues from that hidden position instead of
+    the stale pre-drag caret (`↑`/`↓` restore it; `←`/`→` step one further;
+    `Home`/`End` jump to the selection's edges). `Backspace`/`Del` and the
+    delete-family chords (`Ctrl+W`/`U`/`K`, `Alt+D`) replace the selection in
+    one stroke. A click inside the box breaks the selection at the click
+    point. The relay stands down while a transcript step holds keyboard
+    focus, so arrow-driven step navigation is unaffected.
+
+- **Client-declared session end (ADR-0112)**: `/exit` and double-`Ctrl+C` in
+  the TUI, a headless run's terminal round, and the web panel's new
+  "end session" sidebar action now *end* the hosted session instead of
+  leaving it hosted indefinitely — the daemon tears it down (cancels a
+  running round, fires `SessionEnd` hooks, clears WIP declarations) and
+  every dashboard drops the row immediately via `session_removed`. Disk
+  history is kept (`/sessions` resume still works); detaching (`/host`
+  switch, plain socket drop) still keeps the session running in the
+  background as before.
+
+### Changed
+
+- **Command entries: the invocation aligns with its result body, and the two
+  are distinguishable by weight and tone.** The concrete invocation (`/new`,
+  `!cargo check`) inside a command entry (ADR-0111) previously started at the
+  transcript's left edge while the result body beneath it was indented by the
+  prose leading indent — the entry read as a hanging head over a shifted body.
+  The invocation now shares the body's indent, so a completed entry renders as
+  one aligned block, and the result body keeps the bold invocation visually
+  distinct by rendering one step quieter (the muted `Role::Tool` prose tone):
+  input and output stay separable at a glance without any chrome.
+
+### Added
+
+- **The turn header shows the reasoning effort the turn ran with** —
+  `> turn 26 · glm-5.3 · high · 17:55` instead of
+  `> turn 26 · glm-5.3 · 17:55`. The depth is stamped per message at turn
+  time (thinking-gated per protocol, exactly like the hint bar's effort tag:
+  Anthropic effort counts only while thinking is on, OpenAI-compatible
+  channels whenever they expose a ladder, Gemini stays quiet), so the header
+  shows what that turn *actually* used rather than today's live setting, and
+  it survives resume: the harness stamps the resolved effort onto the
+  persisted assistant message next to the provider/model attribution. A new
+  `Provider::effort()` accessor exposes the resolved depth from each concrete
+  transport; non-reasoning channels render the unchanged shorter header.
+
 ## [0.25.2] - 2026-08-18
 
 ### Added

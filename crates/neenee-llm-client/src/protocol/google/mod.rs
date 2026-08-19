@@ -134,10 +134,14 @@ impl Provider for GoogleProvider {
         self.endpoint.model.clone()
     }
 
+    // `effort()` keeps its default (`None`): the Gemini `thinkingLevel` /
+    // `thinkingBudget` mapping has no user-facing depth vocabulary that
+    // matches the shared `Effort` tiers one-to-one, so the transcript stays
+    // quiet rather than showing a translated label that could mislead.
+
     fn model_capabilities(&self) -> neenee_contracts::ModelCapabilities {
         self.capabilities.clone()
     }
-
     fn prompt_hints(&self) -> ProviderPromptHints {
         // No protocol hint: Google's wire surface uses native function calls by
         // construction, and tool-result replay as `functionResponse` parts is

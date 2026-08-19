@@ -175,6 +175,16 @@ impl Provider for AnthropicMessagesProvider {
         self.endpoint.model.clone()
     }
 
+    fn effort(&self) -> Option<Effort> {
+        // Effort is only live while thinking is actually on: an opted-out
+        // channel must not stamp a depth onto its turns (ADR-0046).
+        if self.thinking.mode == ThinkingMode::Adaptive {
+            self.thinking.effort
+        } else {
+            None
+        }
+    }
+
     fn model_capabilities(&self) -> neenee_contracts::ModelCapabilities {
         self.capabilities.clone()
     }

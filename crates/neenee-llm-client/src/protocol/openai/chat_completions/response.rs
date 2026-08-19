@@ -105,6 +105,7 @@ pub fn message(choice: &Value, content_filter: impl FnOnce(&str, bool) -> String
         images: None,
         provider: None,
         model: None,
+        effort: None,
         hidden: false,
         children: None,
         envoy_meta: None,

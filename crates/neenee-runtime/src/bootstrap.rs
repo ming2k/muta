@@ -20,9 +20,7 @@
 
 use crate::commands::{CustomCommand, discover_commands_trusted};
 use neenee_agent::catalog;
-use neenee_agent::orchestration::{
-    MidTurnPruneProjectionGate, ProxyProvider, round_response, start_schedule_scheduler,
-};
+use neenee_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round_response};
 use neenee_agent::{Agent, AgentIdentity, EnvoyTool, PrincipalProfile, RoundLifecycle};
 use neenee_contracts::{
     AgentNotice, AgentRequest, AgentResponse, CHARS_PER_TOKEN, EXPLORE, Message, NoticeKind,
@@ -313,8 +311,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // normal `AgentRequest::Chat` round. Drives both recurring cron jobs and
     // one-shot (countdown / absolute-time) jobs. Jobs are session-scoped state
     // now, so a resumed session's schedule is already loaded above and the
-    // scheduler runs against it from the first tick.
-    start_schedule_scheduler(
+    // scheduler runs against it from the first tick. Supervised: a panic in
+    // the tick loop restarts with backoff instead of silently killing every
+    // scheduled job in the session.
+    neenee_agent::orchestration::start_supervised_schedule_scheduler(
         Arc::clone(&session),
         req_tx.clone(),
         std::time::Duration::from_secs(30),

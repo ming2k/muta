@@ -103,25 +103,108 @@ pub fn doom_signature(name: &str, args: &str) -> String {
     // Prefer the most specific locator present, in priority order.
     for key in ["command", "cmd"] {
         if let Some(s) = value.get(key).and_then(Value::as_str) {
-            return format!("{name}|{s}");
+            return format!("{name}|{}", normalize_command_locator(s));
         }
     }
     if let Some(s) = value.get("url").and_then(Value::as_str) {
-        return format!("{name}|{s}");
+        return format!("{name}|{}", normalize_query_locator(s));
     }
     for key in ["query", "pattern", "q"] {
         if let Some(s) = value.get(key).and_then(Value::as_str) {
-            return format!("{name}|{s}");
+            return format!("{name}|{}", normalize_query_locator(s));
         }
     }
     for key in ["path", "file_path", "file", "filename"] {
         if let Some(s) = value.get(key).and_then(Value::as_str) {
-            return format!("{name}|{s}");
+            return format!("{name}|{}", normalize_path_locator(s));
         }
     }
     // No recognised locator: key on the whole arg blob so two identical blobs
     // still collide (a true exact-repeat) but distinct blobs stay distinct.
     format!("{name}|{}", args.trim())
+}
+
+/// Normalize a shell-command locator so cosmetic variation does not defeat
+/// signature equality: drop leading `VAR=value` assignments, drop throwaway
+/// segments whose first token is a timing no-op (`sleep 2; make test` ≡
+/// `make test`), collapse whitespace, and lowercase the leading token
+/// (program name). Genuinely different commands still differ.
+fn normalize_command_locator(raw: &str) -> String {
+    let mut meaningful: Vec<String> = Vec::new();
+    for segment in raw.split([';', '\n']) {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        let cleaned = strip_env_assignments(segment);
+        if cleaned.is_empty() {
+            continue;
+        }
+        let first = cleaned.split_whitespace().next().unwrap_or("");
+        if is_noise_first_token(first) {
+            continue;
+        }
+        let mut tokens: Vec<String> = cleaned.split_whitespace().map(str::to_string).collect();
+        if let Some(first) = tokens.first_mut() {
+            *first = first.to_lowercase();
+        }
+        meaningful.push(tokens.join(" "));
+    }
+    if meaningful.is_empty() {
+        // Everything was noise (e.g. a bare `sleep 5`): key on the no-op's
+        // name alone — `sleep 5` vs `sleep 9` is the classic variant-loop
+        // noise, and there is no other intent to preserve.
+        let first = strip_env_assignments(raw.trim())
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        return first;
+    }
+    meaningful.join("; ")
+}
+
+/// Strip leading `VAR=value` assignments from a command segment (they are
+/// environment plumbing, not intent).
+fn strip_env_assignments(segment: &str) -> String {
+    let mut tokens: Vec<&str> = Vec::new();
+    for tok in segment.split_whitespace() {
+        if tokens.is_empty()
+            && tok.contains('=')
+            && tok.split_once('=').is_some_and(|(k, v)| {
+                !k.is_empty()
+                    && !v.is_empty()
+                    && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+        {
+            continue; // leading assignment: drop
+        }
+        tokens.push(tok);
+    }
+    tokens.join(" ")
+}
+
+/// First tokens whose segments carry no distinguishing intent for loop
+/// detection: timing/no-ops the model uses to vary a signature.
+fn is_noise_first_token(token: &str) -> bool {
+    matches!(token.to_lowercase().as_str(), "sleep" | "true" | ":")
+}
+
+/// Normalize query/pattern/url locators: trim + collapse whitespace and
+/// lowercase (search text casing is not intent). Kept conservative — no
+/// stemming or stopword removal, which could over-merge distinct queries.
+fn normalize_query_locator(raw: &str) -> String {
+    raw.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Normalize path locators: trim separators and trailing slashes so
+/// `src/`, `./src` key identically.
+fn normalize_path_locator(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    trimmed.strip_prefix("./").unwrap_or(trimmed).to_string()
 }
 
 /// The pre-dispatch doom-loop detector.
@@ -371,5 +454,77 @@ mod tests {
         );
         assert_eq!(humanize_sig("grep"), "grep");
         assert_eq!(humanize_sig("use_skill|<unwatched>"), "use_skill");
+    }
+
+    // ── Signature normalization (v2) ─────────────────────────────────────
+    // The guard is only as good as signature equality: before normalization,
+    // `sleep 1; make test` vs `sleep 2; make test` were distinct signatures
+    // and the guard never fired on variant loops.
+
+    #[test]
+    fn sleep_noise_variants_collide() {
+        let a = doom_signature("bash", r#"{"command":"sleep 1; make test"}"#);
+        let b = doom_signature("bash", r#"{"command":"sleep 2; make test"}"#);
+        assert_eq!(a, b, "timing no-op must not distinguish signatures");
+    }
+
+    #[test]
+    fn bare_sleep_variants_collide() {
+        let a = doom_signature("bash", r#"{"command":"sleep 5"}"#);
+        let b = doom_signature("bash", r#"{"command":"sleep 9"}"#);
+        assert_eq!(a, b, "a pure no-op keys on its stripped form");
+    }
+
+    #[test]
+    fn env_assignment_prefixes_collide() {
+        let a = doom_signature("bash", r#"{"command":"FOO=1 make test"}"#);
+        let b = doom_signature("bash", r#"{"command":"make test"}"#);
+        assert_eq!(a, b, "leading VAR=value is plumbing, not intent");
+    }
+
+    #[test]
+    fn program_casing_collides_but_arguments_do_not() {
+        let a = doom_signature("bash", r#"{"command":"Make test"}"#);
+        let b = doom_signature("bash", r#"{"command":"make test"}"#);
+        assert_eq!(a, b, "program-name casing is not intent");
+        let c = doom_signature("bash", r#"{"command":"make check"}"#);
+        assert_ne!(b, c, "different arguments remain distinct");
+    }
+
+    #[test]
+    fn query_casing_and_spacing_collide() {
+        let a = doom_signature("grep", r#"{"query":"TODO  fix"}"#);
+        let b = doom_signature("grep", r#"{"query":"todo fix"}"#);
+        assert_eq!(a, b);
+        let c = doom_signature("grep", r#"{"query":"todo refactor"}"#);
+        assert_ne!(b, c);
+    }
+
+    #[test]
+    fn path_decorations_collide() {
+        let a = doom_signature("read_text", r#"{"path":"./src/"}"#);
+        let b = doom_signature("read_text", r#"{"path":"src"}"#);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn normalized_variant_loop_is_blocked() {
+        // End-to-end: a variant loop (the exact escape the normalization
+        // closes) must trip the guard's pre-dispatch block.
+        let mut g = DoomLoopGuard::new(enabled());
+        let s = doom_signature("bash", r#"{"command":"sleep 1; make test"}"#);
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&s)),
+            GuardAction::Continue
+        );
+        // Same intent, different noise → same signature → blocked.
+        let variant = doom_signature("bash", r#"{"command":"FOO=1 sleep 99; make test"}"#);
+        assert_eq!(variant, s, "precondition: normalization collapses them");
+        match g.check_ahead(std::slice::from_ref(&variant)) {
+            GuardAction::Block { signatures, .. } => {
+                assert_eq!(signatures, vec![s]);
+            }
+            other => panic!("expected block, got {other:?}"),
+        }
     }
 }

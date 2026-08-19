@@ -31,6 +31,19 @@ const ACCEPT_BACKOFF_CAP: std::time::Duration = std::time::Duration::from_secs(1
 /// emitter cannot grow it without limit.
 pub(crate) const ATTACH_SYNC_BUFFER_CAP: usize = 64;
 
+/// WS keepalive cadence for attach connections (ADR-0113). The daemon pings
+/// the peer on this interval; any inbound frame (pong included) refreshes
+/// [`WS_PEER_SILENCE_LIMIT`]'s deadline.
+const WS_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long an attach connection may stay completely silent (no inbound
+/// frame) before the daemon drops it. Peers that die without a RST — laptop
+/// sleep, NAT reaping, killed VM — otherwise park the read half until TCP's
+/// own timeout, holding the session's broadcast receiver (and blocking the
+/// idle-suspension reaper) for tens of minutes. Three missed pings is the
+/// conventional dead-connection verdict.
+const WS_PEER_SILENCE_LIMIT: std::time::Duration = std::time::Duration::from_secs(90);
+
 /// Whether `response` is an attach-time state-sync event: one of the
 /// startup emissions a client that attaches *after* the session began can
 /// never reconstruct (active context projection, harness snapshot, key
@@ -54,6 +67,15 @@ async fn drain_attach_sync(
     buffer: &tokio::sync::Mutex<std::collections::VecDeque<AgentResponse>>,
 ) -> Vec<AgentResponse> {
     buffer.lock().await.drain(..).collect()
+}
+
+/// Read-only snapshot of the attach-sync buffer for the Lagged resync path:
+/// unlike [`drain_attach_sync`] (consumed once by a *new* client), a lagging
+/// client's re-anchor must leave the buffer intact for the next attacher.
+async fn snapshot_attach_sync(
+    buffer: &tokio::sync::Mutex<std::collections::VecDeque<AgentResponse>>,
+) -> Vec<AgentResponse> {
+    buffer.lock().await.iter().cloned().collect()
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -947,9 +969,121 @@ where
             .await
             .map_err(|e| format!("ws send: {e}"))?;
     }
+    // Liveness bookkeeping: a WS peer that dies without a RST (laptop
+    // sleep, NAT drop, killed VM) leaves the select below parked on
+    // `ws_source.next()` until TCP's own timeout (tens of minutes). A
+    // periodic ping keeps the socket honest — the peer's pong (or any
+    // inbound frame) refreshes the deadline; a full silence window with
+    // nothing inbound tears the connection down so the session's broadcast
+    // receiver is released (which also unblocks the idle suspension reaper,
+    // ADR-0113).
+    let mut last_inbound = tokio::time::Instant::now();
+    let mut ping_interval = tokio::time::interval(WS_PING_INTERVAL);
+    ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ping_interval.tick().await; // skip the immediate first tick
     loop {
-        tokio::select! {resp=rx.recv()=>{match resp{Ok(resp)=>{let text=serde_json::to_string(&Wire::Response{response:resp}).map_err(|e|format!("serialize response: {e}"))?;if let Err(e)=ws_sink.send(WsMessage::Text(text.into())).await{return Err(format!("ws send: {e}"));}},Err(broadcast::error::RecvError::Lagged(n))=>{tracing::warn!(skipped=n,"neenee serve: client lagged");continue;},Err(broadcast::error::RecvError::Closed)=>break,}},
-        msg=ws_source.next()=>{match msg{Some(Ok(WsMessage::Text(text)))=>match serde_json::from_str::<Wire>(&text){Ok(Wire::Request{request})=>{let _=req_tx.send(request);},Ok(_)=>{},Err(e)=>tracing::warn!(error=%e,"neenee serve: bad request json"),},Some(Ok(_))=>{},Some(Err(e))=>return Err(format!("ws recv: {e}")),None=>break,}}}
+        tokio::select! {
+            _ = ping_interval.tick() => {
+                if last_inbound.elapsed() > WS_PEER_SILENCE_LIMIT {
+                    tracing::warn!(
+                        silent_for_secs = last_inbound.elapsed().as_secs(),
+                        "neenee serve: peer silent past the limit; dropping connection"
+                    );
+                    return Err("peer silent past keepalive limit".to_string());
+                }
+                if let Err(e) = ws_sink.send(WsMessage::Ping(vec![].into())).await {
+                    return Err(format!("ws ping: {e}"));
+                }
+            }
+            resp = rx.recv() => match resp {
+                Ok(resp) => {
+                    let text = serde_json::to_string(&Wire::Response { response: resp })
+                        .map_err(|e| format!("serialize response: {e}"))?;
+                    if let Err(e) = ws_sink.send(WsMessage::Text(text.into())).await {
+                        return Err(format!("ws send: {e}"));
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    // A slow attach client fell behind the session bus and
+                    // the channel dropped `n` events. Skipping them silently
+                    // used to leave the client's view permanently stale
+                    // (missing transcript deltas read as "the agent hung").
+                    // Re-anchor instead: replay the attach-sync buffer —
+                    // the same idempotent startup state a fresh attach gets
+                    // — so the client resynchronizes instead of drifting.
+                    tracing::warn!(skipped = n, "neenee serve: client lagged; resyncing from attach-sync buffer");
+                    for event in snapshot_attach_sync(&bound.sync_buffer).await {
+                        let text = serde_json::to_string(&Wire::Response { response: event })
+                            .map_err(|e| format!("serialize resync: {e}"))?;
+                        if let Err(e) = ws_sink.send(WsMessage::Text(text.into())).await {
+                            return Err(format!("ws send: {e}"));
+                        }
+                    }
+                    continue;
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            msg = ws_source.next() => match msg {
+                Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
+                    Ok(Wire::Request { request: AgentRequest::EndSession }) => {
+                        // Client-declared session end (ADR-0112): the
+                        // operator said "I am done with this session", so
+                        // tear it down now through the same path as
+                        // `ControlRequest::KillSession` — cancel the driver,
+                        // fire SessionEnd hooks, drop it from the registry,
+                        // publish `SessionRemoved` — instead of leaving the
+                        // session hosted until an idle reaper notices it.
+                        // This never reaches the driver queue: the driver is
+                        // about to be cancelled, so queueing would race the
+                        // teardown.
+                        let session_id = bound.session.id().await;
+                        match registry.kill_session(&session_id).await {
+                            Ok(()) => tracing::info!(
+                                session = %session_id,
+                                "neenee serve: client declared session end"
+                            ),
+                            // Already gone — which is exactly what the
+                            // client asked for (e.g. another client ended it
+                            // first). Nothing to report.
+                            Err(e) => tracing::debug!(
+                                session = %session_id,
+                                error = %e,
+                                "neenee serve: session already gone on client end"
+                            ),
+                        }
+                        // `kill_session` broadcast the terminal
+                        // `AgentResponse::Exit` on the session bus before
+                        // returning; it is already sitting in this
+                        // connection's buffer. Flush it (and anything
+                        // queued behind it) so the client observes the
+                        // graceful end marker instead of a bare socket
+                        // close. Best-effort and bounded by what is
+                        // buffered right now.
+                        while let Ok(event) = rx.try_recv() {
+                            let text = serde_json::to_string(&Wire::Response { response: event })
+                                .map_err(|e| format!("serialize response: {e}"))?;
+                            if ws_sink.send(WsMessage::Text(text.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        return Ok(());
+                    }
+                    Ok(Wire::Request { request }) => {
+                        let _ = req_tx.send(request);
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = %e, "neenee serve: bad request json"),
+                },
+                Some(Ok(_)) => {
+                    // Any inbound frame (pong, binary, text we ignore)
+                    // proves the peer is alive: refresh the keepalive
+                    // deadline.
+                    last_inbound = tokio::time::Instant::now();
+                }
+                Some(Err(e)) => return Err(format!("ws recv: {e}")),
+                None => break,
+            },
+        }
     }
     Ok(())
 }
@@ -1244,6 +1378,18 @@ fn classify_head(head: &[u8]) -> TcpTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn end_session_serializes_as_flattened_null_unit_variant() {
+        // ADR-0112: `EndSession` is a unit variant flattened into the
+        // `Wire::Request` envelope, so it must appear as a key with a `null`
+        // value next to `"type"` — the same shape `Interrupt` uses, and what
+        // the web panel's `requestFrame({ EndSession: null })` sends.
+        let text = serde_json::to_string(&Wire::Request {
+            request: AgentRequest::EndSession,
+        })
+        .expect("serialize EndSession");
+        assert_eq!(text, r#"{"type":"Request","EndSession":null}"#);
+    }
     #[test]
     fn generate_token_is_nonempty_hex() {
         let t = generate_token();

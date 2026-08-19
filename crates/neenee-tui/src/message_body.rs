@@ -267,9 +267,14 @@ pub fn draw_message_body(
                 } = inline;
                 let is_user = msg.role == neenee_contracts::Role::User;
                 let is_queued = is_user && msg.delivery == DeliveryStatus::Queued;
+                // A `Role::Tool` body reaching here is a command result
+                // (ADR-0111): a harness artifact, not model prose, so it
+                // reads one step quieter than assistant text. Tool *steps*
+                // never take this path (they render via `draw_tool_step`).
                 let base = match msg.role {
                     neenee_contracts::Role::User => Style::default().fg(theme.user_text()),
                     neenee_contracts::Role::System => Style::default().fg(theme.system_text()),
+                    neenee_contracts::Role::Tool => Style::default().fg(theme.muted()),
                     _ => Style::default().fg(theme.fg()),
                 };
                 let full_width = area.width as usize;

@@ -91,6 +91,21 @@ describe("DaemonStore smoke", () => {
     expect(ws.protocols).toEqual(["bearer.sekret"]);
   });
 
+  it("ends a session via the kill_session control verb (ADR-0112)", () => {
+    const store = new DaemonStore();
+    store.init({ wsUrl: "ws://test:1" });
+    store.endSession("sess-9");
+    const ws = FakeWebSocket.latest();
+    ws.open();
+    // The Select carries the control verb, not an attach.
+    expect(ws.sentJson(0).action).toEqual({
+      control: { verb: "kill_session", session_id: "sess-9" },
+    });
+    // The reply (ok or error) closes the one-shot control connection.
+    ws.message({ type: "ControlReply", ok: true, session_id: "sess-9" });
+    expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
+  });
+
   it("attaches to the first session from the monitor snapshot and loads the transcript", () => {
     const store = new DaemonStore();
     store.init({ wsUrl: "ws://test:1" });

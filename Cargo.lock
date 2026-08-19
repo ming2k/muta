@@ -1409,6 +1409,7 @@ dependencies = [
  "glob",
  "image",
  "inventory",
+ "libc",
  "mockito",
  "neenee-contracts",
  "neenee-llm-client",
@@ -1483,6 +1484,7 @@ version = "0.25.2"
 dependencies = [
  "async-trait",
  "futures",
+ "libc",
  "neenee-contracts",
  "serde_json",
  "tokio",

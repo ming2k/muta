@@ -9,10 +9,10 @@ use neenee_contracts::AgentRequest;
 use crate::input;
 use crate::interaction::{self, ClickTarget};
 use crate::model::document::{NoticeSeverity, TranscriptMessage};
-use crate::model::layout::InteractiveTarget;
-use crate::model::selection::{CellDragInfo, SelectionState};
+use crate::model::layout::{InteractiveTarget, SemanticCursor};
+use crate::model::selection::{CellDragInfo, SelectionState, floor_grapheme_boundary};
 use crate::step_interaction::StepKind;
-use crate::{ActivityTab, App, Modal, ProviderDeleteChoice};
+use crate::{ActivityTab, App, CaretOwner, Modal, ProviderDeleteChoice, SelectionEdge};
 
 use super::super::{UiRuntime, handle_permission_submit, resolve_focused_mut};
 
@@ -255,7 +255,23 @@ pub(super) async fn handle_selection_start(
                 // focused step so the next keypress edits rather
                 // than acting on a step.
                 app.focused_target = None;
-                app.drag.begin_range(&mut app.selection, cursor);
+                // Relay hand-off: place the (possibly hidden) caret at the
+                // clicked character so any pending whole-input selection is
+                // broken exactly where the user clicked, and the next
+                // direction key continues from there. Without this, clicking
+                // into a selected input and pressing ← would jump from the
+                // stale pre-selection caret instead of the click point.
+                app.adopt_caret_from_input_selection(SelectionEdge::Tail);
+                app.selection = SelectionState::None;
+                let byte = floor_grapheme_boundary(&app.input, cursor.byte_offset);
+                app.set_cursor(app.input[..byte].chars().count());
+                // Arm a fresh drag from the click point; a plain click (no
+                // drag) collapses to a zero-length range that paints nothing,
+                // exactly like the previous behaviour.
+                app.drag.begin_range(
+                    &mut app.selection,
+                    SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, byte),
+                );
             }
             ClickTarget::StepSummary { message_idx, kind } => {
                 // Clicked a step summary: navigate into an envoy
@@ -386,7 +402,41 @@ pub(super) fn handle_selection_update(app: &mut App, x: u16, y: u16) {
 
 /// Loop stage (input dispatch): the `SelectionEnd` arm of the action match.
 pub(super) fn handle_selection_end(app: &mut App) {
+    handle_selection_end_impl(app);
+}
+
+/// Test entry for [`handle_selection_end`] — same logic, callable from the
+/// event loop's relay tests (the handler itself is `pub(super)` to actions).
+#[cfg(test)]
+pub(crate) fn handle_selection_end_for_test(app: &mut App) {
+    handle_selection_end_impl(app);
+}
+
+fn handle_selection_end_impl(app: &mut App) {
     app.drag.finish(&mut app.selection);
+    // Caret relay: when the finished drag selected (part of) the live input,
+    // the caret is hidden for as long as the selection paints — but its
+    // position is defined to be the drag's head, the point where the mouse
+    // button was released. Record that position now, so the first direction
+    // key after the drag relays from the release point instead of the stale
+    // pre-drag caret (the event loop's `probe_input_selection_relay` resolves
+    // it when the selection is next touched).
+    if let SelectionState::Range { head, .. } = app.selection
+        && head.message_idx == crate::view::INPUT_MSG_IDX
+        && app.caret_owner() == CaretOwner::Composer
+    {
+        let byte = floor_grapheme_boundary(&app.input, head.byte_offset);
+        app.set_cursor(app.input[..byte].chars().count());
+    }
+    // Middle-click-style whole-block select on the input selects the entire
+    // buffer; the caret's hidden position is defined as the end (head).
+    if let SelectionState::Block {
+        message_idx: crate::view::INPUT_MSG_IDX,
+        ..
+    } = app.selection
+    {
+        app.set_cursor(app.input.chars().count());
+    }
 }
 
 /// Loop stage (input dispatch): the `SelectBlock` arm of the action match.
@@ -396,6 +446,12 @@ pub(super) fn handle_select_block(app: &mut App, x: u16, y: u16) {
             message_idx: mi,
             block_idx: bi,
         };
+        // Whole-input select (middle-click on the composer): the hidden
+        // caret's position is defined as the buffer's end, so a following
+        // ←/Backspace relays from there once the selection breaks.
+        if mi == crate::view::INPUT_MSG_IDX {
+            app.set_cursor(app.input.chars().count());
+        }
     }
 }
 

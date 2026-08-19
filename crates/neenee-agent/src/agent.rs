@@ -2546,6 +2546,10 @@ impl Agent {
                 // provider delegates to whichever concrete provider is active.
                 provider: Some(request_provider),
                 model: Some(request_model),
+                // Reasoning depth the channel actually ran this request at
+                // (thinking-gated per protocol), so the transcript can label
+                // each turn with the effort it truly used.
+                effort: self.provider.effort().map(|e| e.as_str().to_string()),
                 // Drain any provider-opaque wire credential the turn
                 // accumulated (e.g. the Anthropic thinking signature) so the
                 // next replay re-emits it verbatim. None for providers that

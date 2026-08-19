@@ -19,10 +19,14 @@
 //!
 //! ```text
 //! > turn 2 · sonnet
+//! > turn 3 · glm-5.3 · high          (channel exposing a reasoning effort)
 //! ```
 //!
 //! rendered in an info-tone bold for the `> turn N` anchor and muted for the
-//! rest, using foreground color only — no background band. The header is
+//! rest (model, reasoning effort, send time), using foreground color only — no
+//! background band. The effort detail appears only when the turn actually ran
+//! with one (thinking-gated per protocol), so non-reasoning channels keep the
+//! shorter form. The header is
 //! composed from the shared `MetaStrip` component
 //! (`render/components/meta_strip.rs`), so this two-tone "anchor · detail"
 //! treatment is the same one the sent user-message header uses. This keeps the
@@ -88,9 +92,9 @@ impl TranscriptLayout for Default {
     }
 }
 
-/// Paint the turn header row: `> turn N · model · HH:MM`, info-tone bold
-/// anchor with muted metadata, no background band. The caller inserts the
-/// standard header-to-body gap before the group's first component.
+/// Paint the turn header row: `> turn N · model · [effort] · HH:MM`,
+/// info-tone bold anchor with muted metadata, no background band. The caller
+/// inserts the standard header-to-body gap before the group's first component.
 fn draw_turn_header(stream: &mut Stream<'_, '_>, turn: u64, msg: &TranscriptMessage) {
     // Always account for one content line even when scrolled out of view, so
     // scroll height stays faithful to what a user scrolling back would see.
@@ -106,8 +110,8 @@ fn draw_turn_header(stream: &mut Stream<'_, '_>, turn: u64, msg: &TranscriptMess
     let band = stream.band;
 
     // Two-tone label, no background band: `> turn N` is the info-tone
-    // anchor, the rest (model, send time) reads as muted metadata on the
-    // same line. The strip component keeps this treatment shared with sent
+    // anchor, the rest (model, effort, send time) reads as muted metadata on
+    // the same line. The strip component keeps this treatment shared with sent
     // user-message headers.
     let lead = format!("{AI_OUTPUT_LEAD_GLYPH} ");
     let mut strip = MetaStrip::new()
@@ -121,6 +125,16 @@ fn draw_turn_header(stream: &mut Stream<'_, '_>, turn: u64, msg: &TranscriptMess
         .map(str::to_string)
     {
         strip = strip.detail(name);
+    }
+    // Reasoning depth, when the channel ran this turn with one: an attribute
+    // of the model (`glm-5.3 · high`), same R1 modifier grammar the hint bar
+    // uses. Absent for non-reasoning channels — nothing to claim.
+    if let Some(effort) = msg
+        .effort
+        .as_deref()
+        .filter(|e| !e.is_empty() && !e.eq_ignore_ascii_case("none"))
+    {
+        strip = strip.detail(effort.to_string());
     }
     if let Some(sent_at_ms) = msg.sent_at_ms {
         strip = strip.detail(sent_time_label(sent_at_ms));

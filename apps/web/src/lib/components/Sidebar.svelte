@@ -148,6 +148,16 @@
                   ✎
                 </button>
                 <button
+                  class="icon-action end-btn"
+                  title="End session (keeps history; removes it from the daemon)"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    daemon.endSession(s.id);
+                  }}
+                >
+                  ⏻
+                </button>
+                <button
                   class="icon-action delete-btn"
                   class:confirm={confirmDeleteId === s.id}
                   title={confirmDeleteId === s.id ? "Click again to confirm deletion" : "Delete session"}
@@ -395,6 +405,10 @@
 
   .icon-action:hover {
     color: var(--text-secondary);
+  }
+
+  .end-btn:hover {
+    color: var(--accent-warning, var(--text-secondary)) !important;
   }
 
   .delete-btn:hover {

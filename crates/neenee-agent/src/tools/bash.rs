@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use neenee_contracts::Tool;
 use serde_json::json;
 use tokio::process::Command;
-use tokio::time::{Duration, timeout};
+use tokio::time::Duration;
 
 use crate::tools::helpers::{WorkspaceBase, json_string, workspace_base};
 
@@ -98,6 +98,16 @@ impl Tool for BashTool {
         use neenee_contracts::tool_output::{
             ShellLine, ShellStream, normalize_carriage_returns, strip_ansi,
         };
+        // In-memory collection caps (see `cap_shell_buffers`): the structured
+        // output carries full stdout/stderr/`lines`, so a chatty command
+        // (`cat huge.log` under a 30s timeout) could buffer hundreds of MB
+        // before the *text* path truncated at `to_text` time. Head+tail
+        // truncation here bounds the resident payload; the model still gets
+        // the same SHELL_TRUNCATED_CHARS view and the TUI's folded rendering
+        // already skips the middle, so nothing user-visible is lost.
+        const SHELL_COLLECT_MAX_CHARS: usize =
+            neenee_contracts::tool_output::SHELL_MAX_OUTPUT_CHARS * 8;
+        const SHELL_COLLECT_MAX_LINES: usize = 5_000;
         use tokio::io::{AsyncBufReadExt, BufReader};
 
         let args: serde_json::Value =
@@ -235,6 +245,12 @@ impl Tool for BashTool {
         // resetting the deadline each time, so the idle timer never fires on
         // legitimate work.
         let idle_budget = Duration::from_secs(10);
+        // `child` stays owned *outside* the drain future (borrowed as
+        // `&mut`): this lets the wall-clock race below fire the group kill
+        // itself on timeout. A plain `timeout(run)` around a future that
+        // *owns* the child would drop it mid-await, delegating the kill to
+        // `kill_on_drop` — which signals only the direct child, letting
+        // grandchildren leak (`sh -c "server & echo hi"`).
         let run = async {
             stdout_task.await.ok();
             stderr_task.await.ok();
@@ -291,9 +307,37 @@ impl Tool for BashTool {
             // If we broke out on the idle deadline, the child is still alive;
             // reap it (kill_on_drop would too, but reaping gives a real exit).
             // A blocked child may not have exited, so don't block on wait()
-            // indefinitely — best-effort.
+            // indefinitely — best-effort. The group kill also reaches
+            // grandchildren the child backgrounded (see kill_process_group).
+            // Head+tail cap on the collected buffers: keep both ends (the
+            // head shows what the command did first, the tail shows how it
+            // ended — errors cluster there) and drop the middle, mirroring
+            // how both the model view and the TUI fold already treat it.
+            let mut collection_truncated = false;
+            if stdout_buf.len() > SHELL_COLLECT_MAX_CHARS {
+                stdout_buf = head_tail(&stdout_buf, SHELL_COLLECT_MAX_CHARS / 2);
+                collection_truncated = true;
+            }
+            if stderr_buf.len() > SHELL_COLLECT_MAX_CHARS {
+                stderr_buf = head_tail(&stderr_buf, SHELL_COLLECT_MAX_CHARS / 2);
+                collection_truncated = true;
+            }
+            if lines.len() > SHELL_COLLECT_MAX_LINES {
+                let half = SHELL_COLLECT_MAX_LINES / 2;
+                let dropped = lines.len() - (half * 2);
+                let marker = ShellLine {
+                    stream: ShellStream::Err,
+                    text: format!("⋯ {dropped} lines dropped (collection cap)"),
+                };
+                let mut capped: Vec<ShellLine> = lines.drain(..half).collect();
+                capped.push(marker);
+                capped.extend(lines.drain(lines.len() - half..));
+                lines = capped;
+                collection_truncated = true;
+            }
+
             let exit = if idle_blocked {
-                let _ = child.start_kill();
+                crate::tools::kill_process_group(&child);
                 child.wait().await.ok().and_then(|s| s.code())
             } else {
                 child.wait().await.ok().and_then(|s| s.code())
@@ -304,8 +348,8 @@ impl Tool for BashTool {
             } else {
                 neenee_contracts::tool_output::ShellTermination::Exited
             };
-            let truncated =
-                neenee_contracts::tool_output::shell_inner_text(&stdout_buf, &stderr_buf, exit)
+            let truncated = collection_truncated
+                || neenee_contracts::tool_output::shell_inner_text(&stdout_buf, &stderr_buf, exit)
                     .len()
                     > neenee_contracts::tool_output::SHELL_MAX_OUTPUT_CHARS;
             Ok(neenee_contracts::ToolOutput::Shell {
@@ -319,15 +363,43 @@ impl Tool for BashTool {
             }) as Result<neenee_contracts::ToolOutput, String>
         };
 
-        timeout(timeout_duration, run)
-            .await
-            .map_err(|_| format!("Command timed out after {} seconds", timeout_secs))?
+        // The wall-clock timeout races the drain future; on timeout the
+        // future is cancelled mid-await and this side fires the group kill
+        // itself (grandchildren included), then reaps within a bounded
+        // grace so a wedged child cannot hang the tool.
+        let outcome = match tokio::time::timeout(timeout_duration, run).await {
+            Ok(step) => step,
+            Err(_) => Err(format!("Command timed out after {} seconds", timeout_secs)),
+        };
+        if outcome.is_err() {
+            crate::tools::kill_process_group(&child);
+            let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+        }
+        outcome
     }
 }
 
 neenee_contracts::register_tool!(BashFactory => |ctx| BashTool {
     root: workspace_base(ctx),
 });
+
+/// Keep the first `head` and last `head` bytes of `s` (UTF-8-safe, without
+/// splitting a character), joining them with a marker row. Used by the bash
+/// tool's collection cap so a chatty command's resident payload stays bounded
+/// while both the leading context and the error-bearing tail survive.
+fn head_tail(s: &str, head: usize) -> String {
+    use neenee_contracts::tool_output::truncate_utf8;
+    if s.len() <= head * 2 {
+        return s.to_string();
+    }
+    let total = s.len();
+    format!(
+        "{}\n⋯ {} bytes dropped (collection cap)\n{}",
+        truncate_utf8(s, head),
+        total - head * 2,
+        truncate_utf8(&s[total - head..], head)
+    )
+}
 
 #[cfg(test)]
 mod tests {
@@ -436,13 +508,102 @@ mod tests {
         }
     }
 
+    /// A timed-out command's whole process group is killed — including
+    /// grandchildren the shell backgrounded. This is the regression test for
+    /// the orphan leak: `sh -c "sleep 300 & echo hi"` with a 1s budget used
+    /// to leave the backgrounded `sleep` alive (reparented to init); the
+    /// group kill must reach it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_timeout_kills_grandchildren() {
+        let tool = BashTool { root: None };
+        // Marker file the grandchild touches when (if) it survives the tool
+        // call; checked after the timeout returns.
+        let marker = std::env::temp_dir().join(format!(
+            "neenee-grandchild-{}.txt",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let command = format!(
+            // sleep finishes before the wall clock in the survival scenario
+            // only if it was NOT killed; the marker is written either way, so
+            // the assertion distinguishes killed-vs-alive by timing instead.
+            "sleep 60 & echo $! > {}; echo started",
+            marker.display()
+        );
+        let out = tool
+            .call_structured(&format!(
+                r#"{{"command":{}, "timeout": 2}}"#,
+                serde_json::to_string(&command).unwrap()
+            ))
+            .await;
+        // Must be a timeout error, not a hang.
+        assert!(
+            matches!(&out, Err(e) if e.contains("timed out")),
+            "expected timeout error, got {out:?}"
+        );
+        // The pid file exists; the grandchild must be dead within a bounded
+        // wait. Poll `kill(pid, 0)` via /proc to avoid libc in the test.
+        let pid_txt = std::fs::read_to_string(&marker).unwrap_or_default();
+        let pid: i32 = pid_txt.trim().parse().unwrap_or(0);
+        let _ = std::fs::remove_file(&marker);
+        assert!(pid > 0, "grandchild did not record its pid ({pid_txt:?})");
+        let alive = |pid: i32| {
+            std::path::Path::new(&format!("/proc/{pid}"))
+                .try_exists()
+                .unwrap_or(false)
+        };
+        // Give the group kill a moment to land, then assert death.
+        for _ in 0..50 {
+            if !alive(pid) {
+                return; // grandchild was killed with the group ✓
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        panic!("grandchild pid {pid} survived the group kill");
+    }
+
+    /// A huge-output command is capped in memory: the structured payload's
+    /// head and tail survive with a drop marker between them, and the
+    /// `truncated` hint is set so text consumers render the truncation note.
+    #[tokio::test]
+    async fn bash_caps_huge_output_in_memory() {
+        let tool = BashTool { root: None };
+        // ~800k chars: an order of magnitude above the 64k-char collection
+        // threshold (SHELL_MAX_OUTPUT_CHARS × 8).
+        let out = tool
+            .call_structured(
+                r#"{"command":"for i in $(seq 1 80000); do printf 'abcdefghij'; done; echo TAIL-MARKER"}"#,
+            )
+            .await
+            .expect("ok");
+        match out {
+            neenee_contracts::ToolOutput::Shell {
+                stdout, truncated, ..
+            } => {
+                assert!(truncated, "collection cap must set the hint");
+                assert!(
+                    stdout.contains("dropped (collection cap)"),
+                    "marker present"
+                );
+                assert!(
+                    stdout.len() < 70_000,
+                    "payload bounded near the 64k cap, got {}",
+                    stdout.len()
+                );
+                // Both ends survive.
+                assert!(stdout.starts_with("abcdefghij"), "head kept");
+                assert!(stdout.contains("TAIL-MARKER"), "tail kept");
+            }
+            other => panic!("expected Shell, got {other:?}"),
+        }
+    }
+
     /// Captured tabs are expanded to spaces (not kept raw), so the wrapper's
     /// width math matches the grid. A literal `\t` would otherwise be measured
     /// as width 0 and scramble the disclosure band.
     #[tokio::test]
     async fn bash_captures_expanded_tabs() {
         let tool = BashTool { root: None };
-        // printf with a literal tab: the JSON string is `printf 'a\tb\n'`.
         let out = tool
             .call_structured(r#"{"command":"printf 'a\\tb\\n'"}"#)
             .await

@@ -632,6 +632,8 @@ pub struct HintBarView<'a> {
     pub messages: &'a [TranscriptMessage],
     pub reasoning_effort: Option<&'a str>,
     pub busy: bool,
+    /// Whether the previous turn ended in an unrecovered error and is eligible for /retry.
+    pub can_retry: bool,
     pub context_tokens: Option<usize>,
     pub ignition_elapsed_ms: Option<u128>,
 }
@@ -644,11 +646,13 @@ enum ActionDensity {
 }
 
 /// Build the left side of the bottom row as a short action sentence: send
-/// when idle, or queue when the agent is mid-round. The persistent queue bar
-/// carries the queue affordances (recall, expand), so this stays a pure "what
-/// will Enter do" surface.
+/// when idle, or queue when the agent is mid-round. When the previous turn failed
+/// and is eligible for retry, includes a `/retry` guidance affordance. The
+/// persistent queue bar carries the queue affordances (recall, expand), so this
+/// stays a pure "what will Enter do" surface.
 fn input_action_spans(
     busy: bool,
+    can_retry: bool,
     density: ActionDensity,
     theme: &Theme,
     bg: Color,
@@ -672,6 +676,13 @@ fn input_action_spans(
             if compact { " queue" } else { " queue message" },
             hint_style,
         ));
+    } else if can_retry {
+        spans.push(Span::styled(" send", hint_style));
+        spans.push(Span::styled(" · ", hint_style));
+        spans.push(Span::styled("/retry", key_style));
+        if !compact {
+            spans.push(Span::styled(" to retry", hint_style));
+        }
     } else {
         spans.push(Span::styled(" send", hint_style));
     }
@@ -702,6 +713,7 @@ pub fn draw_hint_bar(
         messages: _,
         reasoning_effort,
         busy,
+        can_retry,
         context_tokens,
         ignition_elapsed_ms,
     } = view;
@@ -714,7 +726,7 @@ pub fn draw_hint_bar(
     // round/turn distinction before sending. The queue affordances live in
     // the persistent queue bar, not here.
     let mut action_density = ActionDensity::Full;
-    let mut zone_spans = input_action_spans(busy, action_density, theme, bg);
+    let mut zone_spans = input_action_spans(busy, can_retry, action_density, theme, bg);
     let mut zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
 
     // --- Right cluster: model name and context bar.
@@ -834,7 +846,7 @@ pub fn draw_hint_bar(
     let mut right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Compact;
-        zone_spans = input_action_spans(busy, action_density, theme, bg);
+        zone_spans = input_action_spans(busy, can_retry, action_density, theme, bg);
         zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
     }
     // Drop order under width pressure: the instance suffix first (pure
@@ -856,7 +868,7 @@ pub fn draw_hint_bar(
     }
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Tiny;
-        zone_spans = input_action_spans(busy, action_density, theme, bg);
+        zone_spans = input_action_spans(busy, can_retry, action_density, theme, bg);
         zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
     }
     if !fits(zone_pill_width, right_width) && show_model {
@@ -1626,6 +1638,7 @@ mod tests {
                         messages: &messages,
                         reasoning_effort: Some("max"),
                         busy: false,
+                        can_retry: false,
                         context_tokens: None,
                         ignition_elapsed_ms: None,
                     },
@@ -1671,6 +1684,7 @@ mod tests {
                     messages: &messages,
                     reasoning_effort: None,
                     busy: false,
+                    can_retry: false,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
                 },
@@ -1694,6 +1708,7 @@ mod tests {
                     messages: &[],
                     reasoning_effort: None,
                     busy: false,
+                    can_retry: false,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
                 },
@@ -1722,6 +1737,7 @@ mod tests {
                     messages: &Vec::<TranscriptMessage>::new(),
                     reasoning_effort: None,
                     busy,
+                    can_retry: false,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
                 };
@@ -1739,6 +1755,38 @@ mod tests {
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
         assert!(row_text(&mut terminal, false).contains("Enter send"));
         assert!(row_text(&mut terminal, true).contains("Enter queue message"));
+    }
+
+    #[test]
+    fn hint_bar_shows_retry_guidance_when_can_retry() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(80, 1);
+        terminal.draw(|frame| {
+            draw_hint_bar(
+                frame,
+                Rect::new(0, 0, 80, 1),
+                HintBarView {
+                    current_model: "mock-model",
+                    model_available: true,
+                    provider_name: None,
+                    messages: &[],
+                    reasoning_effort: None,
+                    busy: false,
+                    can_retry: true,
+                    context_tokens: None,
+                    ignition_elapsed_ms: None,
+                },
+                &theme,
+            );
+        });
+        let buf = terminal.buffer();
+        let text = (0..buf.area().width as usize)
+            .map(|x| buf.content[x].symbol().to_string())
+            .collect::<String>();
+        assert!(
+            text.contains("Enter send · /retry to retry"),
+            "row was {text:?}"
+        );
     }
 
     #[test]
@@ -1760,6 +1808,7 @@ mod tests {
                     messages: &Vec::<TranscriptMessage>::new(),
                     reasoning_effort: None,
                     busy: false,
+                    can_retry: false,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
                 },
@@ -1803,6 +1852,7 @@ mod tests {
                     messages: &[],
                     reasoning_effort: None,
                     busy: true,
+                    can_retry: false,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
                 },
@@ -1834,6 +1884,7 @@ mod tests {
                     messages: &[],
                     reasoning_effort: Some("high"),
                     busy: true,
+                    can_retry: false,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
                 },
@@ -1872,6 +1923,7 @@ mod tests {
                         messages: &Vec::<TranscriptMessage>::new(),
                         reasoning_effort: effort,
                         busy: false,
+                        can_retry: false,
                         context_tokens: None,
                         ignition_elapsed_ms: None,
                     },
@@ -1918,6 +1970,7 @@ mod tests {
                         messages: &Vec::<TranscriptMessage>::new(),
                         reasoning_effort: None,
                         busy: false,
+                        can_retry: false,
                         context_tokens: None,
                         ignition_elapsed_ms: None,
                     },
@@ -1965,6 +2018,7 @@ mod tests {
                     messages: &Vec::<TranscriptMessage>::new(),
                     reasoning_effort: Some("max"),
                     busy: false,
+                    can_retry: false,
                     context_tokens: None,
                     ignition_elapsed_ms: None,
                 },
@@ -2006,6 +2060,7 @@ mod tests {
                         messages: &Vec::<TranscriptMessage>::new(),
                         reasoning_effort: Some("max"),
                         busy: false,
+                        can_retry: false,
                         context_tokens: Some(12_400),
                         ignition_elapsed_ms: elapsed_ms,
                     },

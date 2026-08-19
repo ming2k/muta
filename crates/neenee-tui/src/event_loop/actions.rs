@@ -30,6 +30,9 @@ mod commands;
 mod modals;
 mod mouse;
 
+#[cfg(test)]
+pub(crate) use mouse::handle_selection_end_for_test;
+
 pub(super) use commands::split_command_word;
 
 #[cfg(test)]
@@ -85,6 +88,12 @@ pub(super) async fn dispatch_action(
         input::InputAction::Quit => {
             // Now reachable only via the `/exit` slash command (the bare
             // `q` shortcut was removed to stop accidental first-key exits).
+            // The operator's intent is "done with this session", not
+            // "detach": declare the session ended (ADR-0112) so the daemon
+            // tears it down instead of hosting it forever. Fire-and-forget
+            // is safe — the client pump drains the request channel to the
+            // wire before it closes the socket on App drop.
+            let _ = app.tx.send(AgentRequest::EndSession);
             tracing::info!(reason = "slash_exit", "app exiting");
             return ActionFlow::Exit;
         }
@@ -1456,6 +1465,30 @@ pub(super) async fn dispatch_action(
             // already spliced the chip out of `app.input`; this
             // drops the orphaned entry from `pending_images` /
             // `pending_text_pastes` and relabels survivors.
+            app.reconcile_attachments();
+        }
+        input::InputAction::DeleteForward => {
+            // Forward delete runs the same post-edit passes as Backspace: the
+            // text mutation already happened in `process_event`; this arm
+            // only keeps the completion latch, focus ownership, and staged
+            // attachments consistent with the new buffer (a chip-aware
+            // forward delete may have orphaned a staged entry).
+            if app.active_modal == Modal::CustomProvider {
+                app.on_custom_filter_changed();
+            } else if app.active_modal == Modal::ConfigThemeCustom
+                && Theme::set_custom_color_value(
+                    &mut app.custom_color_draft,
+                    app.modal_index,
+                    &app.input,
+                )
+            {
+                app.theme = Theme::from_color_scheme("custom", &app.custom_color_draft);
+            }
+            app.suggestion_index = None;
+            app.completion_dismissed = false;
+            // Editing the input box reclaims focus from any transcript step,
+            // mirroring Backspace.
+            app.focused_target = None;
             app.reconcile_attachments();
         }
         input::InputAction::SuggestNext => {
