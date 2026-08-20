@@ -508,6 +508,10 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                 app.modal_index = (app.modal_index + count - 1) % count;
             }
         }
+        Modal::UsageStats => {
+            // The usage overlay scrolls as one body (no per-row selection).
+            app.usage_stats_scroll = app.usage_stats_scroll.saturating_sub(1);
+        }
         Modal::Queue => {
             // Wheel/PageUp: scroll the queue body. Clearing the
             // follow flag lets the user browse freely until they
@@ -628,6 +632,10 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                     .max(1);
                 app.modal_index = (app.modal_index + 1) % count;
             }
+        }
+        Modal::UsageStats => {
+            // The usage overlay scrolls as one body (no per-row selection).
+            app.usage_stats_scroll = app.usage_stats_scroll.saturating_add(1);
         }
         Modal::Queue => {
             // Wheel/PageDown: scroll the queue body. Clearing the

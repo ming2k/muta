@@ -278,13 +278,6 @@ pub async fn run_tui(
     >::new()));
     let context_tokens_clone = context_tokens.clone();
 
-    // Per-session throughput summary for the most recent natural round, shown
-    // in the TokenReport modal as an honest tokens/sec.
-    let round_tps = Arc::new(Mutex::new(
-        HashMap::<String, neenee_contracts::RoundSummary>::new(),
-    ));
-    let round_tps_clone = round_tps.clone();
-
     let is_responding = Arc::new(AtomicBool::new(false));
     let ir_clone = is_responding.clone();
     let harness = Arc::new(Mutex::new(HarnessSnapshot {
@@ -344,6 +337,12 @@ pub async fn run_tui(
         None::<neenee_contracts::TokenSourceReport>,
     ));
     let token_report_clone = token_report.clone();
+    // Cross-session usage statistics (ADR-0122), fetched on demand when the
+    // `/usage` overlay opens. Same on-demand pattern.
+    let usage_stats = Arc::new(tokio::sync::Mutex::new(
+        None::<neenee_contracts::usage_stats::UsageStatsReport>,
+    ));
+    let usage_stats_clone = usage_stats.clone();
     // The **live primary session id**. The handshake-time `SessionSource` is
     // frozen for the process lifetime, but the harness repoints its shared
     // store on `/new`, `/session open`, `/resume`, and `/fork` — so anything
@@ -620,10 +619,10 @@ pub async fn run_tui(
                             );
                         }
                         RoundEvent::RoundCompleted(summary) => {
-                            round_tps_clone
-                                .lock()
-                                .await
-                                .insert(session_id.clone(), summary);
+                            // The web header chip still consumes this summary;
+                            // the TUI's Context Usage modal now derives its
+                            // rates from the token ledger instead.
+                            let _ = summary;
                             outbox_signals_clone
                                 .lock()
                                 .await
@@ -1595,6 +1594,12 @@ pub async fn run_tui(
                         *token_report_clone.lock().await = Some(report);
                     }
                 }
+                AgentResponse::UsageStatsReport { report } => {
+                    // Session-independent by design (ADR-0122): no
+                    // viewed-session guard, the durable store aggregates
+                    // across every session.
+                    *usage_stats_clone.lock().await = Some(report);
+                }
                 AgentResponse::SessionContext(snapshot) => {
                     *session_context_clone.lock().await = Some(snapshot);
                 }
@@ -1737,9 +1742,10 @@ pub async fn run_tui(
         token_ledger,
         token_report: None,
         context_tokens: None,
-        round_tps: None,
         token_report_scroll: 0,
         token_report_detail: false,
+        usage_stats: None,
+        usage_stats_scroll: 0,
         todos_rect: None,
         queue_rect: None,
         modal_rect: None,
@@ -1942,7 +1948,6 @@ pub async fn run_tui(
             current_provider,
             current_model,
             context_tokens,
-            round_tps,
             harness,
             activity_status,
             provider_retry,
@@ -1969,6 +1974,7 @@ pub async fn run_tui(
             sessions_overview_rev,
             session_detail,
             token_report,
+            usage_stats,
             open_sessions,
             host_sessions,
             host_sessions_rev,

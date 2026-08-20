@@ -50,7 +50,7 @@ pub use crate::overlays::{
     draw_oauth_pending, draw_permission_sheet, draw_permissions_manager,
     draw_provider_delete_confirm, draw_provider_template_chooser, draw_question_modal,
     draw_queue_modal, draw_session_preview, draw_sessions_modal, draw_skills_modal,
-    draw_token_report_modal, draw_tools_modal, token_report_round_count,
+    draw_token_report_modal, draw_tools_modal, draw_usage_stats_modal, token_report_round_count,
 };
 use crate::page_header;
 pub(crate) use crate::page_header::{

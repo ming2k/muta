@@ -596,6 +596,20 @@ pub(super) async fn dispatch_action(
             app.session_modal_follow = true;
             let _ = app.tx.send(AgentRequest::QuerySessionContext);
         }
+        input::InputAction::OpenUsage => {
+            // The usage-statistics overlay (`/usage`, ADR-0122). Reached via
+            // the local `/usage` interception. The data is the durable
+            // cross-session store, so (re)kick a `QueryUsageStats` round-trip
+            // each time it opens and the numbers are always fresh; until the
+            // reply lands the overlay renders a loading placeholder.
+            app.active_modal = Modal::UsageStats;
+            app.modal_keymap_open = false;
+            app.usage_stats = None;
+            app.usage_stats_scroll = 0;
+            let _ = app
+                .tx
+                .send(AgentRequest::QueryUsageStats { event_cap: 200 });
+        }
         input::InputAction::OpenMcp => {
             // The MCP manager modal. Reached via `/mcp` (intercepted
             // locally). Shares the session-context snapshot, so kick a
@@ -1536,28 +1550,39 @@ pub(super) async fn dispatch_action(
             if let Ok(idx) = idx_str.parse::<usize>() {
                 app.accept_completion(idx);
             }
-            // Note: slash-command accepts latch the dismissal flag
-            // inside accept_completion (terminal accept), so Tab on
-            // `/pursue` exits completion just like Enter. `@path`
-            // accepts stay live so Tab keeps cycling candidates.
+            // Legacy accept-without-closing arm (no longer bound to a key at
+            // the top level — Tab now commits like Enter). Kept for callers
+            // that want a live splice; the popup stays open only for
+            // directory descents, which accept_completion decides by kind.
         }
         input::InputAction::CommitSuggestion(idx_str) => {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 app.accept_completion(idx);
             }
-            // Enter always "finishes" the completion regardless of
-            // kind: drop the highlight and latch the dismissal flag
-            // so the popup stays hidden until the next edit. For
-            // slash commands this mirrors what accept_completion
-            // already did; for `@path` it is Enter-specific (Tab on
-            // a path stays live so the user can keep cycling).
+            // Enter — and now Tab — always "finish" the completion
+            // regardless of kind: drop the highlight and latch the
+            // dismissal flag so the popup stays hidden until the next edit.
+            // For slash commands and path files this mirrors what
+            // accept_completion already did; for a path *directory* accept
+            // (which stays live so Tab can keep descending) it is the
+            // commit-specific close. Tab re-opens via
+            // ReopenCompletion, so closing here costs nothing.
             app.suggestion_index = None;
             app.completion_dismissed = true;
+        }
+        input::InputAction::ReopenCompletion => {
+            // The other half of the Esc/Tab toggle: bring a dismissed
+            // completion menu back without accepting anything. The next
+            // anchor pass (post-dispatch, same iteration) seeds the
+            // highlight onto the first candidate, so the reopened menu
+            // lands already selected with its details flyout showing.
+            app.completion_dismissed = false;
         }
         input::InputAction::CloseCompletion => {
             // Esc dismisses the popup without accepting anything.
             // Same latch as Enter-commit so the popup stays hidden
-            // until the next edit clears `completion_dismissed`.
+            // until the next edit clears `completion_dismissed` — or
+            // until Tab re-opens it (ReopenCompletion).
             app.suggestion_index = None;
             app.completion_dismissed = true;
         }

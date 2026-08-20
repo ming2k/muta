@@ -78,7 +78,12 @@ pub mod token_ledger;
 pub mod tokenizer;
 pub use token_ledger::{
     RequestUsageKey, RequestUsageRecord, RequestUsageSource, RequestUsageStatus, TokenSourceLedger,
-    TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn,
+    TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn, UsageStatSink,
+};
+pub mod usage_stats;
+pub use usage_stats::{
+    UsageDayTotals, UsageModelRow, UsageModelTotals, UsageStatRecord, UsageStatsReport,
+    aggregate_usage_records, day_key_from_epoch_ms,
 };
 pub mod doom_guard_config;
 pub mod secret;

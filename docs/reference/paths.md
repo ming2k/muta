@@ -76,6 +76,7 @@ Persistent, program-generated, must survive restart. Back it up.
 | `projects/<bucket>/embeddings.json` | Per-project lightweight embedding index | Rebuildable (re-indexed) |
 | `projects/<bucket>/neenee.lock` | Per-project advisory lock | Rebuildable |
 | `projects/<bucket>/permissions.json` | Per-project cached "always allow" permission rules | Rebuildable (re-prompts) |
+| `usage/daily/<YYYY-MM-DD>.json` | Cross-session usage statistics (ADR-0122): one append-only file per local day of terminal request records, mirrored from the token ledger. A **sibling of `projects/`**, so session cleanup never touches it; powers the `/usage` overlay | Yes (history is unrecoverable) |
 | `skills/` | User-global skills (`SKILL.md` per skill) | Yes (user-authored) |
 | `commands/` | User-global slash commands | Yes (user-authored) |
 

@@ -20,6 +20,17 @@ pub struct InputContext {
     pub suggestion_count: usize,
     pub has_exact_suggestion: bool,
     pub suggestion_index: Option<usize>,
+    /// Whether the completion menu is currently hidden behind the Esc/Enter
+    /// dismissal latch ([`App::completion_dismissed`]). Tab consults it to
+    /// re-open a dismissed menu: Esc closes, Tab reopens — the toggle's
+    /// other half.
+    pub completion_dismissed: bool,
+    /// Whether the composer still holds text a completion menu could anchor
+    /// to — a partial `/command` or an `@mention` under the caret. Together
+    /// with [`Self::completion_dismissed`] it decides whether Tab can bring
+    /// a dismissed popup back: re-opening makes sense only when the trigger
+    /// text survived.
+    pub has_trigger_text: bool,
     pub permission_confirm_always: bool,
     /// Whether the inline permission sheet is expanded to "Details". Drives
     /// whether ↑/↓ in the compose zone scroll the details body or the
@@ -151,6 +162,7 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
             | super::Modal::Activity
             | super::Modal::Queue
             | super::Modal::TokenReport
+            | super::Modal::UsageStats
             | super::Modal::Host
             | super::Modal::Btw
     )
@@ -175,6 +187,7 @@ fn scrolls_own_body(modal: super::Modal) -> bool {
             | super::Modal::Permissions
             | super::Modal::Config
             | super::Modal::TokenReport
+            | super::Modal::UsageStats
             | super::Modal::OauthPending
             | super::Modal::ProviderTemplate
             | super::Modal::CustomProvider
@@ -320,6 +333,12 @@ pub enum InputAction {
     /// command (intercepted locally, never sent to the backend). The request is
     /// never forwarded — it only opens the overlay.
     OpenTools,
+    /// Open the usage-statistics overlay (`/usage`, ADR-0122): daily token
+    /// totals, per-model breakdown, and the recent request event log, from
+    /// the durable cross-session store. Intercepted locally; the handler
+    /// issues `AgentRequest::QueryUsageStats` so the overlay populates from
+    /// the daemon-side store.
+    OpenUsage,
     /// Open the MCP manager modal: a centered, selectable list of every
     /// configured MCP server with `Space` toggle and `r` reconnect. Reached via
     /// the `/mcp` slash command (intercepted locally, never sent to the
@@ -465,6 +484,12 @@ pub enum InputAction {
     /// time. The popup re-renders against the spliced input so the user can
     /// keep cycling.
     AcceptSuggestion(String),
+    /// Re-open a completion menu that Esc dismissed, without accepting
+    /// anything. Bound to `Tab` while the composer still holds the trigger
+    /// text (a partial `/command` or an `@mention`): Esc closes the popup,
+    /// Tab brings it back, so the toggle is symmetric and the user never has
+    /// to re-edit the text to recover the menu.
+    ReopenCompletion,
     /// Like [`InputAction::AcceptSuggestion`] but the popup is closed
     /// afterwards. Used by `Enter` (both the slash-prefix auto-accept and the
     /// highlighted-item path). The harness latches a `completion_dismissed`
@@ -1391,6 +1416,7 @@ pub fn process_event(
                         super::Modal::Config => InputAction::ConfigActivate,
                         super::Modal::Activity => InputAction::CloseModal,
                         super::Modal::TokenReport => InputAction::TokenReportActivate,
+                        super::Modal::UsageStats => InputAction::CloseModal,
                         super::Modal::None => {
                             if context.has_focused_target {
                                 return InputAction::ActivateFocusedTarget;
@@ -1431,6 +1457,7 @@ pub fn process_event(
                                     "/connections" => InputAction::OpenConnections,
                                     "/permissions" => InputAction::OpenPermissions,
                                     "/tools" => InputAction::OpenTools,
+                                    "/usage" => InputAction::OpenUsage,
                                     "/mcp" => InputAction::OpenMcp,
                                     "/skills" => InputAction::OpenSkills,
                                     // Bare `/settings` (or `/config`) opens the manager modal
@@ -1460,14 +1487,29 @@ pub fn process_event(
                         // `/session` → `/sessions`). Type the target command to
                         // reach a sibling.
                         && !context.has_exact_suggestion
+                        && !context.completion_dismissed
                     {
-                        // A slash/path suggestion menu is open: accept the
-                        // next entry.
-                        let next = match context.suggestion_index {
-                            Some(i) => (i + 1) % context.suggestion_count,
-                            None => 0,
-                        };
-                        InputAction::AcceptSuggestion(next.to_string())
+                        // A slash/path suggestion menu is open with a row
+                        // highlighted: Tab commits it — the same gesture as
+                        // Enter, down to sharing the terminal-accept
+                        // semantics in `accept_completion`. (The highlight
+                        // is now anchored to the first candidate whenever
+                        // the popup is visible, so this fires on a plain
+                        // Tab with no prior navigation.)
+                        let idx = context.suggestion_index.unwrap_or(0);
+                        InputAction::CommitSuggestion(idx.to_string())
+                    } else if context.active_modal == super::Modal::None
+                        && context.completion_kind != super::CompletionKind::None
+                        && context.completion_dismissed
+                        && context.has_trigger_text
+                    {
+                        // Esc closed the popup but the composer still holds a
+                        // completion trigger (a partial `/command` or an
+                        // `@mention`): Tab re-opens it without accepting
+                        // anything. Tab is the toggle's other half — Esc
+                        // closes, Tab reopens — so the user can always get
+                        // the menu back without re-editing the text.
+                        InputAction::ReopenCompletion
                     } else if context.active_modal == super::Modal::ModelEditor {
                         // Tab cycles focus between the editor's API-key and
                         // model-id fields.
@@ -1489,9 +1531,10 @@ pub fn process_event(
                     } else if context.active_modal == super::Modal::OauthPending {
                         InputAction::CycleOauthSelection
                     } else {
-                        // No completion open and no modal field to cycle: Tab
-                        // is a no-op. (There is no zone switching: focus is
-                        // toggled with Ctrl+Up/Ctrl-Down, never Tab.)
+                        // No completion open (or it was dismissed without a
+                        // trigger left in the text) and no modal field to
+                        // cycle: Tab is a no-op. (There is no zone switching:
+                        // focus is toggled with Ctrl+Up/Ctrl-Down, never Tab.)
                         InputAction::None
                     }
                 }
@@ -2193,6 +2236,7 @@ pub fn process_event(
                         }
                         super::Modal::Help => InputAction::ScrollUp,
                         super::Modal::TokenReport => InputAction::ModalUp,
+                        super::Modal::UsageStats => InputAction::ScrollUp,
                         super::Modal::None => {
                             if context.has_focused_target {
                                 InputAction::FocusPrevTarget
@@ -2267,6 +2311,7 @@ pub fn process_event(
                         }
                         super::Modal::Help => InputAction::ScrollDown,
                         super::Modal::TokenReport => InputAction::ModalDown,
+                        super::Modal::UsageStats => InputAction::ScrollDown,
                         super::Modal::None => {
                             if context.has_focused_target {
                                 InputAction::FocusNextTarget

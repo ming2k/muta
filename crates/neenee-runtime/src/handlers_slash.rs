@@ -935,6 +935,21 @@ pub async fn dispatch(
             // maintains client-side (ADR-0096); this is only the open signal.
             let _ = resp_tx.send(AgentResponse::OpenHostPanel);
         }
+        Some(BuiltinCmd::Usage) => {
+            // Handled in TUI: `/usage` opens the usage-statistics overlay
+            // locally (intercepted in input.rs as `InputAction::OpenUsage`)
+            // and issues `AgentRequest::QueryUsageStats`; it never arrives
+            // here as a SlashCommand. Reaching this arm means a non-TUI
+            // client (web panel) typed it — answer inline with a pointer so
+            // the command is never silently dropped.
+            record_ack(
+                session,
+                name,
+                args,
+                "Usage statistics are shown by the TUI overlay — open the terminal app and run /usage there.",
+            )
+            .await;
+        }
         Some(BuiltinCmd::Btw) => {
             // `/btw` grammar (ADR-0103 §4):
             //   `/btw`        — open a NEW aside view (no round yet);

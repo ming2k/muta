@@ -27,6 +27,8 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
             suggestion_count: 1,
             has_exact_suggestion: exact,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -78,6 +80,8 @@ fn enter_with_completion(
             suggestion_count,
             has_exact_suggestion,
             suggestion_index,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -154,14 +158,111 @@ fn enter_highlight_wins_over_exact_slash_match() {
 
 #[test]
 fn enter_without_highlight_still_sends_path_message() {
-    // No explicit highlight on a path menu → Enter keeps sending the
-    // message. Tab remains the way to accept the first path candidate
-    // without first navigating with ↓.
+    // Defensive fallback for a state the anchor pass no longer produces
+    // (a visible menu always carries a highlight now): with no highlight
+    // on a path menu, Enter keeps sending the message as typed.
     let mut input = "@src/foo".to_string();
     assert_eq!(
         enter_with_completion(&mut input, crate::CompletionKind::Path, 3, None, false,),
         InputAction::SendChat("@src/foo".to_string())
     );
+}
+
+#[test]
+fn enter_accepts_the_default_highlighted_path_suggestion() {
+    // The anchor pass selects the first candidate the moment the popup
+    // appears, so a plain Enter on `@src/foo` commits that candidate
+    // instead of shipping the partial mention — the same contract as
+    // every IDE autocomplete. Esc first (see the dismissal tests) is the
+    // way to send the raw text.
+    let mut input = "@src/foo".to_string();
+    assert_eq!(
+        enter_with_completion(&mut input, crate::CompletionKind::Path, 3, Some(0), false,),
+        InputAction::CommitSuggestion("0".to_string())
+    );
+}
+
+#[test]
+fn tab_reopens_a_dismissed_completion_menu() {
+    // Esc closed the popup but the partial `/mc` is still in the composer:
+    // Tab brings the menu back (the toggle's other half) instead of
+    // no-op'ing. The reopened menu lands with its first row highlighted —
+    // the anchor pass seeds that on the next iteration.
+    let mut input = "/mc".to_string();
+    let mut cursor = 3;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::Modal::None,
+            completion_kind: crate::CompletionKind::Slash,
+            suggestion_count: 2,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            completion_dismissed: true,
+            has_trigger_text: true,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::ReopenCompletion);
+    // The composer text is untouched — Tab only re-opens the popup.
+    assert_eq!(input, "/mc");
+}
+
+#[test]
+fn tab_reopens_a_dismissed_path_completion_menu() {
+    // Same gesture for `@path` mentions: an Esc-dismissed mention menu
+    // comes back on Tab while the `@src` trigger text survives.
+    let mut input = "@src".to_string();
+    let mut cursor = 4;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::Modal::None,
+            completion_kind: crate::CompletionKind::Path,
+            suggestion_count: 3,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            completion_dismissed: true,
+            has_trigger_text: true,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::ReopenCompletion);
+}
+
+#[test]
+fn tab_stays_inert_when_no_trigger_text_survives() {
+    // A dismissed menu whose trigger text is gone (e.g. the input was
+    // cleared, or resolved to an exact command) has nothing to re-open:
+    // Tab must not resurrect a popup for text that no longer asks for one.
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::Modal::None,
+            completion_kind: crate::CompletionKind::Slash,
+            suggestion_count: 0,
+            has_exact_suggestion: false,
+            suggestion_index: None,
+            completion_dismissed: true,
+            has_trigger_text: false,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::None);
 }
 
 #[test]
@@ -188,6 +289,8 @@ fn esc_closes_slash_completion_menu() {
             suggestion_count: 2,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -234,6 +337,8 @@ fn esc_closes_path_completion_menu() {
             suggestion_count: 3,
             has_exact_suggestion: false,
             suggestion_index: Some(1),
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -279,6 +384,8 @@ fn esc_falls_through_when_no_completion_is_open() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -321,6 +428,8 @@ fn typing_in_compose_returns_insert_char() {
             suggestion_count: 2,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -363,6 +472,8 @@ fn backspace_in_compose_returns_backspace_action() {
             suggestion_count: 1,
             has_exact_suggestion: true,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -409,6 +520,8 @@ fn backspace_atomically_deletes_an_image_chip() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -455,6 +568,8 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -496,6 +611,8 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -569,6 +686,8 @@ fn enter_shell(input: &mut String) -> InputAction {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -611,6 +730,8 @@ fn escape_returns_from_always_confirmation() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: true,
             permission_show_details: false,
             in_envoy_view: false,
@@ -649,6 +770,8 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -690,6 +813,8 @@ fn star_in_models_modal_toggles_model_favorite() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -729,6 +854,8 @@ fn a_in_connections_modal_opens_template_chooser() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -770,6 +897,8 @@ fn enter_in_connections_modal_is_inert_no_activate_concept() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -810,6 +939,8 @@ fn esc_in_models_browse_closes_the_modal() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -849,6 +980,8 @@ fn esc_in_connections_browse_closes_the_modal() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -890,6 +1023,8 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -931,6 +1066,8 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -968,6 +1105,8 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
         suggestion_count: 0,
         has_exact_suggestion: false,
         suggestion_index: None,
+        completion_dismissed: false,
+        has_trigger_text: false,
         permission_confirm_always: false,
         permission_show_details: false,
         in_envoy_view: false,
@@ -1027,6 +1166,8 @@ fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -1061,6 +1202,8 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
         suggestion_count: 0,
         has_exact_suggestion: false,
         suggestion_index: None,
+        completion_dismissed: false,
+        has_trigger_text: false,
         permission_confirm_always: false,
         permission_show_details: false,
         in_envoy_view: false,
@@ -1106,6 +1249,8 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -1151,6 +1296,8 @@ fn key_in_side_view_with(
         suggestion_count: 0,
         has_exact_suggestion: false,
         suggestion_index: None,
+        completion_dismissed: false,
+        has_trigger_text: false,
         permission_confirm_always: false,
         permission_show_details: false,
         in_envoy_view: false,
@@ -1197,6 +1344,8 @@ fn key_with_focus(code: KeyCode) -> InputAction {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -1263,6 +1412,8 @@ fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -1451,6 +1602,8 @@ fn escape_in_btw_modal_closes_the_modal() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -1493,6 +1646,8 @@ fn enter_in_btw_modal_focuses_the_selected_aside() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -1567,6 +1722,8 @@ fn run_key(
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -1915,6 +2072,8 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 suggestion_count: 0,
                 has_exact_suggestion: false,
                 suggestion_index: None,
+                completion_dismissed: false,
+                has_trigger_text: false,
                 permission_confirm_always: false,
                 permission_show_details: false,
                 in_envoy_view: false,
@@ -2608,6 +2767,8 @@ fn run_history_key(
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -2751,6 +2912,8 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -2788,6 +2951,8 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -2829,6 +2994,8 @@ fn up_with_queued(has_queued: bool) -> InputAction {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -2891,6 +3058,8 @@ fn compose_key_with_completion(
             suggestion_count,
             has_exact_suggestion: exact,
             suggestion_index: Some(0),
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -2955,7 +3124,7 @@ fn arrows_walk_history_once_command_is_fully_typed() {
 #[test]
 fn tab_does_not_cycle_completions_on_exact_command() {
     // A fully-typed command is resolved: its popup is hidden, so Tab must
-    // not invisibly cycle sibling candidates (e.g. `/session` →
+    // not invisibly commit sibling candidates (e.g. `/session` →
     // `/sessions`).
     let kind = crate::CompletionKind::Slash;
     assert_eq!(
@@ -2963,10 +3132,12 @@ fn tab_does_not_cycle_completions_on_exact_command() {
         InputAction::None
     );
 
-    // A partial command still accepts the next suggestion on Tab.
+    // A partial command commits the highlighted suggestion on Tab — the
+    // same gesture as Enter. With the anchor pass keeping the first
+    // candidate highlighted, a plain Tab (no prior ↓) commits index 0.
     assert_eq!(
         compose_key_with_completion(KeyCode::Tab, kind, 2, false),
-        InputAction::AcceptSuggestion("1".to_string())
+        InputAction::CommitSuggestion("0".to_string())
     );
 }
 
@@ -2992,6 +3163,8 @@ fn queue_modal_char(c: char) -> InputAction {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -3030,6 +3203,8 @@ fn queue_modal_key(code: KeyCode) -> InputAction {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -3116,6 +3291,8 @@ fn up_arrow_in_browse_does_not_recall_queued() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -3159,6 +3336,8 @@ fn run_paste(
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -3295,6 +3474,8 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -3579,6 +3760,8 @@ fn oauth_key(c: char) -> InputAction {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -3620,6 +3803,8 @@ fn oauth_keycode(code: KeyCode) -> InputAction {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -3746,6 +3931,8 @@ fn mouse_ctx_for(modal: crate::Modal) -> InputContext {
         suggestion_count: 0,
         has_exact_suggestion: false,
         suggestion_index: None,
+        completion_dismissed: false,
+        has_trigger_text: false,
         permission_confirm_always: false,
         permission_show_details: false,
         in_envoy_view: false,
@@ -3826,6 +4013,8 @@ fn ctrl_x_outside_history_modal_is_a_noop() {
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -3868,6 +4057,8 @@ fn run_history_clear_key(
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -3961,6 +4152,8 @@ fn editor_key(code: KeyCode, editor_field: u8, input: &mut String) -> InputActio
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,
@@ -4035,6 +4228,8 @@ fn compose_key(
             suggestion_count: 0,
             has_exact_suggestion: false,
             suggestion_index: None,
+            completion_dismissed: false,
+            has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
             in_envoy_view: false,

@@ -59,6 +59,35 @@ or emoji vanishes as one unit), and is chip-aware — a `Del` landing on the
 `[` of an attachment chip removes the whole chip (plus the one trailing space
 a paste inserts) in one keystroke, mirroring the chip-aware `Backspace`.
 
+## Completion menu
+
+Typing a partial `/command` or an `@path` mention opens the completion
+popup above the composer. The menu follows the IDE-autocomplete contract:
+
+| Key | Behaviour while the menu is open |
+|-----|----------------------------------|
+| *(menu appears)* | The **first candidate is selected by default** — the solid brand band and the details flyout track it with no prior keystroke |
+| `↑` / `↓` | Move the highlight |
+| `Enter` | Commit the highlighted candidate |
+| `Tab` | Commit the highlighted candidate (same as `Enter`) |
+| `Esc` | Dismiss the popup without accepting; the composer text is untouched |
+| `Tab` *(after `Esc`)* | Re-open the dismissed menu — the toggle's other half — landing selected on the first candidate again |
+
+The selection is kept coherent by an **anchor pass** that runs wherever the
+candidate list is re-derived (per keystroke, after each dispatched action,
+and at the render gate): a freshly opened menu seeds its highlight onto the
+first candidate, a stale index clamps back into range when the list shrinks,
+and no rendered menu (a resolved exact-match composer, a dismissed popup, an
+open modal) clears the highlight. The highlighted row can therefore never
+point at a menu that is not on screen.
+
+Tab's re-open gesture requires **trigger text** to still be present: a
+partial `/command` or a live `@mention` qualifies; a fully-typed known
+command (the resolved state whose popup is deliberately hidden) and plain
+prose do not, so Tab never resurrects a menu the text no longer asks for.
+A keystroke (`InsertChar` / `Backspace`) also re-arms live completions on
+its own, clearing the dismissal latch.
+
 ## Selection
 
 Semantic mouse-drag selection works on input text via `INPUT_MSG_IDX`

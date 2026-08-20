@@ -230,6 +230,16 @@ pub enum AgentRequest {
     QueryTokenUsage {
         session_id: String,
     },
+    /// Request the cross-session usage-statistics report (ADR-0122): daily
+    /// token totals, per-model breakdown, and the recent terminal-request
+    /// event log, aggregated over the durable day-partitioned store that
+    /// survives session cleanup. The harness replies with
+    /// [`AgentResponse::UsageStatsReport`]. Sent by the TUI when the
+    /// `/usage` overlay opens.
+    QueryUsageStats {
+        /// How many recent events to include in the event-log tail.
+        event_cap: usize,
+    },
     /// Request a fresh session-context snapshot (model / tools / permissions /
     /// skills / mcp). The harness replies with [`AgentResponse::SessionContext`].
     /// Sent by the TUI when a manager modal opens.
@@ -457,6 +467,14 @@ pub enum AgentResponse {
     TokenUsageReport {
         session_id: String,
         report: crate::token_ledger::TokenSourceReport,
+    },
+    /// Reply to [`AgentRequest::QueryUsageStats`]: the cross-session usage
+    /// report (per-day / per-model totals + recent event log) aggregated from
+    /// the durable usage store. Unlike [`Self::TokenUsageReport`] this data is
+    /// session-independent — it outlives session deletion by design
+    /// (ADR-0122) — so no session id accompanies it.
+    UsageStatsReport {
+        report: crate::usage_stats::UsageStatsReport,
     },
     Error(String),
     Exit,

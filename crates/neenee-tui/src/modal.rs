@@ -133,6 +133,14 @@ pub enum Modal {
     /// Opened by clicking the context meter in the hint bar. Esc /
     /// outside-click closes.
     TokenReport,
+    /// Usage statistics (`/usage`, ADR-0122): the durable cross-session view
+    /// — daily token totals, per-`(provider, model)` breakdown, and the
+    /// recent terminal-request event log. Data comes from the
+    /// day-partitioned store under `data/usage/` (a sibling of `projects/`),
+    /// so it survives session cleanup by design. Fetched on demand via
+    /// `AgentRequest::QueryUsageStats`; the body scrolls via
+    /// `App::usage_stats_scroll`. Esc / outside-click closes.
+    UsageStats,
     /// `/btw` asides list (ADR-0103 §5): one row per live aside conversation,
     /// newest first, with `Enter` = jump back into the aside and `D` =
     /// close-and-discard it. Opened by F5 or `/btw list`. A read-only-style
@@ -225,6 +233,7 @@ impl Modal {
                 | Modal::Models
                 | Modal::Connections
                 | Modal::TokenReport
+                | Modal::UsageStats
                 | Modal::Btw
         )
     }

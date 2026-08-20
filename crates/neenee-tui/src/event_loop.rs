@@ -250,10 +250,6 @@ pub(super) struct UiRuntime {
     pub current_model: Arc<Mutex<String>>,
     /// Latest AI-visible context size for the primary session.
     pub context_tokens: Arc<Mutex<HashMap<String, neenee_contracts::ContextTokenSnapshot>>>,
-    /// Latest per-round throughput summary (keyed by session id), surfaced in
-    /// the TokenReport modal as an honest tokens/sec that excludes the time
-    /// the round spent parked on human decisions.
-    pub round_tps: Arc<Mutex<HashMap<String, neenee_contracts::RoundSummary>>>,
     pub harness: Arc<Mutex<HarnessSnapshot>>,
     pub activity_status: Arc<Mutex<String>>,
     pub provider_retry: Arc<Mutex<Option<crate::app::ProviderRetryState>>>,
@@ -355,6 +351,12 @@ pub(super) struct UiRuntime {
     /// [`App::token_report`]. In the standalone path the local ledger
     /// ([`App::token_ledger`]) is the source instead and this stays `None`.
     pub token_report: Arc<Mutex<Option<neenee_contracts::TokenSourceReport>>>,
+    /// Cross-session usage-statistics report (ADR-0122), written by the
+    /// listener from [`neenee_contracts::AgentResponse::UsageStatsReport`]
+    /// and read into [`App::usage_stats`] for the `/usage` overlay.
+    /// Session-independent by design — the durable store it aggregates
+    /// survives session cleanup.
+    pub usage_stats: Arc<Mutex<Option<neenee_contracts::usage_stats::UsageStatsReport>>>,
     pub open_sessions: Arc<AtomicBool>,
     /// Live daemon monitor snapshot for the `/host` control panel
     /// (ADR-0096), maintained by a dedicated monitor client task.
@@ -419,7 +421,6 @@ impl UiRuntime {
             current_provider: Arc::new(Mutex::new(String::new())),
             current_model: Arc::new(Mutex::new(String::new())),
             context_tokens: Arc::new(Mutex::new(HashMap::new())),
-            round_tps: Arc::new(Mutex::new(HashMap::new())),
             harness: Arc::new(Mutex::new(HarnessSnapshot {
                 loop_status: LoopStatus::Idle,
                 round_counter: 0,
@@ -450,6 +451,7 @@ impl UiRuntime {
             sessions_overview_rev: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_detail: Arc::new(Mutex::new(None)),
             token_report: Arc::new(Mutex::new(None)),
+            usage_stats: Arc::new(Mutex::new(None)),
             open_sessions: Arc::new(AtomicBool::new(false)),
             host_sessions: Arc::new(Mutex::new(Vec::new())),
             host_sessions_rev: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -1290,6 +1292,10 @@ async fn sync_runtime_state(
     if let Some(report) = runtime.token_report.lock().await.take() {
         app.token_report = Some(report);
     }
+    // Mirror the on-demand cross-session usage statistics (ADR-0122).
+    if let Some(report) = runtime.usage_stats.lock().await.take() {
+        app.usage_stats = Some(report);
+    }
     if let Some(sig) = runtime.oauth_add_signal.lock().await.take() {
         match sig {
             OauthAddSignal::Pending {
@@ -1540,12 +1546,6 @@ async fn sync_transcripts_and_session(app: &mut App, runtime: &UiRuntime) -> (bo
     }
     app.context_tokens = runtime
         .context_tokens
-        .lock()
-        .await
-        .get(&viewed_session_id)
-        .copied();
-    app.round_tps = runtime
-        .round_tps
         .lock()
         .await
         .get(&viewed_session_id)
@@ -2076,6 +2076,12 @@ pub(super) async fn run_app_loop(
                 app.completions()
             };
             let suggestion_count = completions.len();
+            // Keep the menu's highlight coherent with the live candidates:
+            // a freshly opened menu starts with its first row selected (the
+            // band + details flyout follow), a stale index clamps into
+            // range, and no visible menu clears it.
+            app.anchor_completion_selection(&completions);
+            let suggestion_index = app.suggestion_index;
             // The "exact match" auto-accept on Enter only makes sense for slash
             // commands: there, typing an unambiguous prefix and pressing Enter
             // should expand to the unique command rather than send `/go` as a
@@ -2100,7 +2106,13 @@ pub(super) async fn run_app_loop(
                         || first == "/serve"
                 })
                 .unwrap_or(false);
-            let completion_kind = if suppress_completions {
+            // The input layer sees the *unsuppressed* classification: the
+            // dismissal latch is carried separately (`completion_dismissed`)
+            // so Tab's re-open gesture can tell "a slash menu is dismissed"
+            // apart from "no menu applies at all". Every other consumer of
+            // the kind already consults the latch, so suppressing here would
+            // only have hidden the dismissed-but-recoverable state.
+            let completion_kind = if app.active_modal == Modal::HistorySearch {
                 crate::CompletionKind::None
             } else {
                 app.completion_kind()
@@ -2133,6 +2145,12 @@ pub(super) async fn run_app_loop(
             // returned action flows through the normal action dispatch below
             // (`DeleteProviderConfirm` / `DeleteProviderCancel` are the
             // overlay-specific arms).
+            // Snapshot before the mutable borrow of `app.input` below: Tab's
+            // re-open gesture needs to know whether a dismissed menu still
+            // has trigger text to come back to, evaluated against the
+            // pre-keystroke composer (the keystroke itself decides whether
+            // the latch clears via the InsertChar/Backspace passes).
+            let has_trigger_text = app.completion_trigger_text_present();
             let action = if let Some(overlay_action) = probe_delete_overlay(app, &event) {
                 overlay_action
             } else if let Some(relay) = probe_input_selection_relay(app, &event) {
@@ -2160,7 +2178,9 @@ pub(super) async fn run_app_loop(
                         completion_kind,
                         suggestion_count,
                         has_exact_suggestion,
-                        suggestion_index: app.suggestion_index,
+                        suggestion_index,
+                        completion_dismissed: app.completion_dismissed,
+                        has_trigger_text,
                         permission_confirm_always: app.permission_confirm_always,
                         permission_show_details: app.permission_show_details,
                         in_envoy_view,
@@ -2260,6 +2280,18 @@ pub(super) async fn run_app_loop(
                 actions::ActionFlow::NextEvent => continue,
                 actions::ActionFlow::Exit => return Ok(()),
             }
+
+            // Post-dispatch anchor: an action may have replaced the composer
+            // programmatically (a Tab/Esc completion gesture, a queue recall,
+            // a paste applied below), so re-derive the candidate list and
+            // re-anchor the highlight before the next event shares this
+            // redraw. Suppressed exactly when the pre-compute above was.
+            let completions = if suppress_completions {
+                Vec::new()
+            } else {
+                app.completions()
+            };
+            app.anchor_completion_selection(&completions);
         }
     }
 }

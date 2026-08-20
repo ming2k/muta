@@ -95,7 +95,7 @@ and [ADR-0096](docs/adr/0096-unified-session-daemon.md).
 | Key | Action |
 |-----|--------|
 | `Enter` | Send message |
-| `Tab` | Accept slash-command / `@path` completion |
+| `Tab` | Commit the highlighted slash-command / `@path` completion (re-opens a menu `Esc` dismissed) |
 | `Ctrl+M` | Open the model picker |
 | `Ctrl+T` | Open todos |
 | `Ctrl+B` | Move the caret back one character (readline backward-char) |
@@ -109,6 +109,7 @@ and [ADR-0096](docs/adr/0096-unified-session-daemon.md).
 | `/schedule <when> <prompt>` | Schedule a prompt on a cron (recurring) or a countdown/absolute time (one-shot) |
 | `/compact` | Compact context to free up space |
 | `/sessions` | Browse and open past sessions |
+| `/usage` | Cross-session usage statistics: daily tokens, per-model totals, recent request log (survives session cleanup) |
 | `/export` | Export conversation as Markdown |
 | `/mcp` | Inspect MCP server connections |
 

@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`/usage` — cross-session usage statistics that survive session cleanup
+  (ADR-0122).** A new overlay shows daily token totals (with a two-week bar
+  chart), a per-`(provider, model)` breakdown sorted by usage, and the
+  recent terminal-request event log (state, model, tokens, local time).
+  The data comes from a new day-partitioned append-only store at
+  `data/usage/daily/<YYYY-MM-DD>.json` — a **sibling of `projects/`**, never
+  inside a session file — so deleting sessions or pruning project buckets
+  can never touch it: the report reflects each day's real consumption
+  forever. Records are mirrored from the existing token-ledger settlement
+  point (`TokenSourceLedger::settle_request` forwards every terminal
+  attempt to a `UsageStatSink`), keyed idempotently by request identity
+  (a reported replay upgrades an earlier estimate, never the reverse),
+  written atomically and lock-serialised across processes. Interrupted and
+  failed attempts are included (marked), so the daily number is honest
+  about what was actually requested. Fetched over the control plane via
+  `AgentRequest::QueryUsageStats` / `AgentResponse::UsageStatsReport`, so
+  the web panel can reuse the same aggregate.
+
+### Changed
+
+- **The Context Usage modal now shows throughput at both scopes — per round
+  and per session — instead of only the latest round's.** The round table's
+  **Turns** column was replaced by a **TPS** column: this round's average
+  output rate (the round's output tokens ÷ the generation time its attempts
+  actually measured, `–` when nothing was timed). The turn count it replaced
+  still lives in the drill-in's "Turns / attempts" row. The top **Output
+  rate** row is now the *session-wide* average — Σ output tokens ÷ Σ measured
+  generation time over every terminal attempt, a time-weighted mean rather
+  than an average of per-round rates — and it no longer goes stale waiting
+  for a `RoundCompleted` event: both figures are derived from the token
+  ledger the modal already reads, so they agree by construction with each
+  other and with the drill-in's per-attempt `tok/s` column. With turn
+  (`tok/s` in the drill-in), round (`TPS`), and session (`Output rate`)
+  rates all visible, the modal's `RoundSummary` plumbing was retired.
+
+- **The input box's completion menu now behaves like every IDE
+  autocomplete.** The moment the `/slash` or `@path` popup appears its
+  **first candidate is selected by default** — the solid brand highlight
+  band and the details flyout track it with no prior keystroke, `↑`/`↓`
+  move the highlight, and `Enter` commits it. A new "anchor" pass keeps
+  the selection coherent wherever the candidate list is re-derived (per
+  keystroke, after each dispatched action, at the render gate): a fresh
+  menu seeds `Some(0)`, a stale index clamps into range when the list
+  shrinks, and no rendered menu (a resolved exact-match composer, a
+  dismissed popup) clears the highlight — so the highlighted row can
+  never point at a menu that is not on screen. The `Path` menu inherits
+  the same Enter-commits-the-highlight contract the slash menu already
+  had.
+
+- **`Tab` is now the completion commit (same as `Enter`) and the other
+  half of the `Esc` toggle.** While a menu is open, `Tab` commits the
+  highlighted candidate instead of silently cycling to the next one
+  (cycling is `↑`/`↓`'s job). After `Esc` dismissed a popup, `Tab`
+  re-opens it — landing selected on the first candidate again — provided
+  the composer still holds trigger text (a partial `/command` or a live
+  `@mention`); a resolved exact command never resurrects its menu.
+
 ## [0.28.0] - 2026-08-20
 
 ### Changed

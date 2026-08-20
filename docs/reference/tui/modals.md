@@ -70,6 +70,7 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
 | [Permission sheet](#permission-sheet) | Automatic | (inline, not centered) | `draw_permission_sheet` |
 | [Help](#help-modal) | `Ctrl+H` / `?` / `F1` / `/help` | 58 × 70 | `draw_help_modal` |
 | [Activity](#activity-modal) | Click activity bar | 72 × 70 | `draw_activity_modal` |
+| [Usage statistics](#usage-statistics-modal) | `/usage` | 76 × 86% | `draw_usage_stats_modal` |
 | [Asides](#asides-modal) | `F5` / `/btw list` | 66 × 84% | `draw_btw_modal` |
 | [Toasts](#toasts) | Transient | top-right, 3 rows | `draw_armed_toast`, `draw_copy_toast` |
 
@@ -523,6 +524,33 @@ Two tabs cycled with `←`/`→`:
 | `←` / `→` | Cycle tabs |
 | `↑` / `↓` | Scroll the active tab's body |
 | `Esc` | Close |
+
+## Usage statistics modal
+
+The durable cross-session view (`/usage`, ADR-0122). Unlike every other
+modal its data is **session-independent**: it aggregates the day-partitioned
+store at `data/usage/daily/` (a sibling of `projects/`), so deleting
+sessions or pruning project buckets never removes history — the numbers
+reflect each day's real consumption. Fetched on demand
+(`AgentRequest::QueryUsageStats`); a loading placeholder shows until the
+reply lands.
+
+One scrolling body with three sections:
+
+| Section | Contents |
+|---------|----------|
+| **Summary** | Range, total tokens, input/output split, cache read/write, estimated share, request count |
+| **Daily tokens** | A two-week bar chart (newest at the right, `·` for empty days) plus one row per local day: total, in/out, request count |
+| **By model** | One row per `(provider, model)` across all days, sorted by descending total, with request counts |
+| **Recent requests** | The newest terminal attempts (newest last): local time, lifecycle state (colored), model, tokens (`~` marks estimated) |
+
+| Key | Effect |
+|-----|--------|
+| `↑` / `↓` / `PgUp` / `PgDn` | Scroll the body |
+| `Esc` / outside click | Close |
+
+Interrupted, failed, and abandoned attempts are included and marked, so the
+daily totals are honest about what was actually requested.
 
 ## Toasts
 

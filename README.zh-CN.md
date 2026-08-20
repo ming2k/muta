@@ -75,7 +75,7 @@ daemon 默认通过 Unix socket 提供一条可读写的控制平面协议（创
 | 按键 | 功能 |
 |------|------|
 | `Enter` | 发送消息 |
-| `Tab` | 接受斜杠命令 / `@path` 补全 |
+| `Tab` | 确认斜杠命令 / `@path` 补全的高亮项（Esc 关闭后可重新唤出） |
 | `Ctrl+M` | 打开模型选择器 |
 | `Ctrl+T` | 打开待办 |
 | `Ctrl+B` | 光标向左移动一个字符（readline backward-char） |
@@ -89,6 +89,7 @@ daemon 默认通过 Unix socket 提供一条可读写的控制平面协议（创
 | `/schedule <when> <提示>` | 按 cron（周期性）或倒计时 / 绝对时间（一次性）调度提示 |
 | `/compact` | 压缩上下文以释放空间 |
 | `/sessions` | 浏览和打开历史会话 |
+| `/usage` | 跨会话使用统计：每日 token、各模型用量、最近请求日志（不随会话清理消失） |
 | `/export` | 将对话导出为 Markdown |
 | `/mcp` | 查看 MCP 服务器连接状态 |
 

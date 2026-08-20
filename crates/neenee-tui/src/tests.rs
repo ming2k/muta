@@ -933,6 +933,190 @@ fn completions_trigger_word_pins_suggestion_on_top() {
     assert_eq!(completions.len(), 1);
 }
 
+/// The anchor pass is what makes "popup visible ⇒ first row selected" true:
+/// with no prior highlight it seeds `Some(0)`, so the band, the details
+/// flyout, and a plain Enter/Tab all land on the first candidate without
+/// any prior ↓.
+#[test]
+fn anchor_seeds_the_first_candidate_when_the_menu_opens() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/se".to_string();
+    app.cursor_position = app.input.chars().count();
+    assert!(app.suggestion_index.is_none());
+    let completions = app.completions();
+    assert!(!completions.is_empty(), "`/se` should have candidates");
+    app.anchor_completion_selection(&completions);
+    assert_eq!(
+        app.suggestion_index,
+        Some(0),
+        "a freshly opened menu must start highlighted on its first row"
+    );
+}
+
+/// A visible menu keeps exactly one highlighted row even when the candidate
+/// list shrinks under a stale index: the highlight clamps into range rather
+/// than pointing past the list (which would render no band and no flyout).
+#[test]
+fn anchor_clamps_a_stale_highlight_into_range() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/se".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    let count = completions.len();
+    // Simulate a stale index from a wider list (e.g. a refine filtered
+    // candidates away between keystrokes).
+    app.suggestion_index = Some(count + 5);
+    app.anchor_completion_selection(&completions);
+    assert_eq!(
+        app.suggestion_index,
+        Some(count - 1),
+        "an out-of-range highlight must clamp to the last candidate"
+    );
+}
+
+/// A resolved composer (the text exactly equals a candidate) renders no
+/// menu, so the anchor must clear the highlight — otherwise a lingering
+/// index would keep Enter/Tab committing a command the user cannot see.
+#[test]
+fn anchor_clears_the_highlight_when_no_menu_is_rendered() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/sessions".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    // `/sessions` is a real command: its exact match is the composer text.
+    assert!(
+        completions
+            .iter()
+            .any(|c| c.label == app.input && c.replace_end == app.input.len()),
+        "`/sessions` should be among its own candidates"
+    );
+    app.suggestion_index = Some(0);
+    app.anchor_completion_selection(&completions);
+    assert_eq!(
+        app.suggestion_index, None,
+        "no rendered menu must mean no highlight"
+    );
+}
+
+/// Tab's re-open gesture keys off trigger text that survived Esc: a partial
+/// slash command qualifies, a resolved exact command does not (its popup is
+/// hidden on purpose), and plain prose never does.
+#[test]
+fn completion_trigger_text_present_matches_the_composer_state() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/se".to_string();
+    app.cursor_position = app.input.chars().count();
+    assert!(app.completion_trigger_text_present());
+    app.input = "/sessions".to_string();
+    app.cursor_position = app.input.chars().count();
+    assert!(
+        !app.completion_trigger_text_present(),
+        "a resolved exact command must not offer a re-open"
+    );
+    app.input = "plain prose".to_string();
+    app.cursor_position = app.input.chars().count();
+    assert!(!app.completion_trigger_text_present());
+}
+
+/// Regression for the wiring itself: the event loop feeds the input layer the
+/// **unsuppressed** `completion_kind` (the dismissal latch travels as its own
+/// `completion_dismissed` flag). Suppressing the kind while the latch is set
+/// would make Tab's re-open branch unreachable — `completion_kind` would be
+/// `None` exactly when the user pressed Tab after Esc — so this pins the
+/// contract end to end through the real mapper.
+#[test]
+fn tab_after_esc_reopens_through_the_event_loop_context_shape() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/se".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    // Esc's arm: latch the dismissal, drop the highlight.
+    app.suggestion_index = None;
+    app.completion_dismissed = true;
+
+    // Build the context exactly as `run_app_loop` does: the candidate list
+    // is suppressed (empty) while the latch is set, but the classification
+    // is NOT — that distinction is what makes the re-open gesture visible
+    // to the input layer.
+    let suppress_completions = app.completion_dismissed;
+    let completions = if suppress_completions {
+        Vec::new()
+    } else {
+        app.completions()
+    };
+    let completion_kind = app.completion_kind();
+    let has_trigger_text = app.completion_trigger_text_present();
+    let mut input = app.input.clone();
+    let mut cursor = app.cursor_position;
+    let mut drag = crate::model::selection::SelectionDrag::default();
+    let action = crate::input::process_event(
+        crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Tab,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+        &mut input,
+        &mut cursor,
+        crate::input::InputContext {
+            active_modal: crate::Modal::None,
+            completion_kind,
+            suggestion_count: completions.len(),
+            has_exact_suggestion: false,
+            suggestion_index: app.suggestion_index,
+            completion_dismissed: app.completion_dismissed,
+            has_trigger_text,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(
+        action,
+        crate::input::InputAction::ReopenCompletion,
+        "Tab after Esc must re-open the dismissed slash menu"
+    );
+    // And the ReopenCompletion arm's state change restores a selected menu
+    // once the loop's post-dispatch anchor runs.
+    app.completion_dismissed = false;
+    let completions = app.completions();
+    app.anchor_completion_selection(&completions);
+    assert_eq!(app.suggestion_index, Some(0));
+    assert!(!app.completion_dismissed);
+}
+
+/// The Esc → Tab round trip, driven through the same `App` state the action
+/// arms mutate (`CloseCompletion` latches the dismissal + clears the
+/// highlight; `ReopenCompletion` drops the latch; the loop's anchor pass
+/// re-seeds the highlight). After the round trip the menu must be visible
+/// **and** carry a highlighted row again — the state the renderer needs to
+/// paint the band and the details flyout.
+#[test]
+fn esc_then_tab_round_trip_restores_a_highlighted_menu() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+    app.input = "/se".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    // Frame 1: menu opens, anchor seeds the first candidate.
+    let completions = app.completions();
+    app.anchor_completion_selection(&completions);
+    assert_eq!(app.suggestion_index, Some(0));
+    assert!(!app.completion_dismissed);
+
+    // Esc (CloseCompletion arm): popup hidden, highlight dropped.
+    app.suggestion_index = None;
+    app.completion_dismissed = true;
+    assert!(app.completion_trigger_text_present());
+
+    // Tab (ReopenCompletion arm): latch dropped, then the loop's post-
+    // dispatch anchor re-derives candidates and re-seeds the highlight.
+    app.completion_dismissed = false;
+    let completions = app.completions();
+    app.anchor_completion_selection(&completions);
+    assert_eq!(
+        app.suggestion_index,
+        Some(0),
+        "the reopened menu must land already selected"
+    );
+}
+
 #[test]
 fn completions_trigger_word_suggestion_precedes_prefix_matches() {
     // A trigger that also prefixes a real command must still pin its
@@ -1406,9 +1590,10 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         token_ledger: None,
         token_report: None,
         context_tokens: None,
-        round_tps: None,
         token_report_scroll: 0,
         token_report_detail: false,
+        usage_stats: None,
+        usage_stats_scroll: 0,
         todos_rect: None,
         queue_rect: None,
         modal_rect: None,

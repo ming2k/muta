@@ -525,6 +525,13 @@ pub(super) fn render_frame(
         && app.completion_kind() != CompletionKind::None
     {
         let completions = app.completions();
+        // Anchor pass (the frame-side twin of the event loop's pre-compute):
+        // any state change that bypassed a keystroke — a paste, an async
+        // project-scan landing, a modal teardown — still lands here, so this
+        // is the last line of defense keeping "popup visible ⇒ one row
+        // highlighted" true. A freshly opened menu starts at its first
+        // candidate; a stale index clamps; nothing visible clears.
+        app.anchor_completion_selection(&completions);
         let exact_match = completions.iter().any(|c| {
             c.replace_start == 0 && c.replace_end == app.input.len() && c.label == app.input
         });
@@ -879,13 +886,27 @@ pub(super) fn render_frame(
                 view::ContextUsageView {
                     snapshot: app.context_tokens,
                     window_tokens: crate::providers::model_context_window(&app.current_model),
-                    round_summary: app.round_tps,
                 },
                 app.modal_index
                     .min(view::token_report_round_count(&report).saturating_sub(1)),
                 app.token_report_detail,
                 loading,
                 &mut app.token_report_scroll,
+                &app.theme,
+            ))
+        }
+        Modal::UsageStats => {
+            // The durable cross-session view (`/usage`, ADR-0122). The
+            // daemon-side store aggregates every session's terminal
+            // requests; a loading placeholder shows until the
+            // `QueryUsageStats` reply lands.
+            let loading = app.usage_stats.is_none();
+            let report = app.usage_stats.clone().unwrap_or_default();
+            Some(view::draw_usage_stats_modal(
+                f,
+                &report,
+                loading,
+                &mut app.usage_stats_scroll,
                 &app.theme,
             ))
         }

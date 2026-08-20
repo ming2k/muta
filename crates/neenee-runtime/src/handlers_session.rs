@@ -116,6 +116,17 @@ pub fn token_usage(
     let _ = resp_tx.send(AgentResponse::TokenUsageReport { session_id, report });
 }
 
+/// `AgentRequest::QueryUsageStats` — aggregate the durable cross-session
+/// usage store (ADR-0122) and reply with
+/// [`AgentResponse::UsageStatsReport`]. Pure read over `data/usage/`;
+/// independent of the live ledger and of any session, so it reflects days
+/// whose sessions were long since deleted.
+pub fn usage_stats(resp_tx: &mpsc::UnboundedSender<AgentResponse>, event_cap: usize) {
+    let store = neenee_persistence::usage_stats::UsageStatsStore::new();
+    let report = store.report(event_cap);
+    let _ = resp_tx.send(AgentResponse::UsageStatsReport { report });
+}
+
 /// `AgentRequest::QuerySessionContext` — build and push the
 /// model/tools/permissions/skills/mcp snapshot for the Tools / Mcp / Skills /
 /// Permissions manager modals.

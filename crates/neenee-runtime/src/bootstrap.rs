@@ -766,6 +766,15 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // (reported vs. estimated) into it, and the frontend reads it for the
     // token-source report.
     let token_ledger = neenee_contracts::TokenSourceLedger::shared();
+    // Durable cross-session usage mirror (ADR-0122): every terminal settle is
+    // forwarded into the day-partitioned store under `data/usage/` — a
+    // sibling of `projects/`, so session cleanup can never touch it.
+    token_ledger.install_usage_sink(Arc::new(
+        neenee_persistence::usage_stats::UsageStatsStore::new(),
+    ));
+    token_ledger.set_usage_project(neenee_persistence::paths::project_bucket_name(
+        &project_root,
+    ));
     envoy_tool_handle.bind_accounting(
         token_ledger.clone(),
         agent.thread_id_handle(),

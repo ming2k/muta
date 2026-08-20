@@ -306,6 +306,24 @@ impl Dirs {
         self.state_dir.join("log")
     }
 
+    /// Cross-session usage statistics root (ADR-0122): the durable,
+    /// day-partitioned mirror of the token ledger. Sits at
+    /// `<data_dir>/usage` — a **sibling of [`Self::projects_dir`]**, never
+    /// inside a project bucket — so clearing session history (deleting
+    /// sessions or whole project buckets) can never touch it. One JSON file
+    /// per local day lives under `usage/daily/`.
+    pub fn usage_stats_dir(&self) -> PathBuf {
+        self.data_dir.join("usage")
+    }
+
+    /// One day's usage-statistics file: `usage/daily/<YYYY-MM-DD>.json`.
+    /// The day key is produced by [`crate::usage_stats::day_key_from_epoch_ms`].
+    pub fn usage_stats_day_file(&self, day: &str) -> PathBuf {
+        self.usage_stats_dir()
+            .join("daily")
+            .join(format!("{day}.json"))
+    }
+
     // ---- helpers -----------------------------------------------------------
 
     /// The **daemon instance directory**: the one directory holding the

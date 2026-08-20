@@ -32,6 +32,7 @@ pub mod skills;
 pub mod toast;
 pub mod token_report;
 pub mod tools;
+pub mod usage_stats;
 
 // Re-export the public API so `paint::overlays::draw_*` callers are unchanged.
 pub use activity::{ActivityModalView, draw_activity_modal};
@@ -60,3 +61,4 @@ pub use skills::draw_skills_modal;
 pub use toast::{draw_armed_toast, draw_copy_toast, draw_notice_toast};
 pub use token_report::{ContextUsageView, draw_token_report_modal, token_report_round_count};
 pub use tools::draw_tools_modal;
+pub use usage_stats::draw_usage_stats_modal;

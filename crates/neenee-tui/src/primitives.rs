@@ -227,6 +227,12 @@ impl ContentModalSpec {
     /// like the queue overview it mirrors (list + footer legend).
     pub const BTW: Self = Self::new(66, 9, 84);
     pub const TOKEN_REPORT: Self = Self::new(66, 9, 80);
+    /// The usage-statistics overlay (`/usage`): three stacked sections
+    /// (summary, daily chart + table, model breakdown, event log) in one
+    /// scrolling body. Wider than the context-usage modal so the four-column
+    /// tables breathe; the viewport ceiling keeps long histories scrolled
+    /// rather than full-height.
+    pub const USAGE_STATS: Self = Self::new(76, 12, 86);
     pub const ACTIVITY: Self = Self::new(72, 8, 80);
     /// The unified provider/model editor (`draw_model_editor`). Sizes to its
     /// content — at most three rows (API key, reasoning effort, extended

@@ -499,6 +499,9 @@ impl SessionDriver {
                 AgentRequest::QueryTokenUsage { session_id } => {
                     crate::handlers_session::token_usage(&token_ledger, &resp_tx, session_id);
                 }
+                AgentRequest::QueryUsageStats { event_cap } => {
+                    crate::handlers_session::usage_stats(&resp_tx, event_cap);
+                }
                 AgentRequest::QuerySessionContext => {
                     crate::handlers_session::query_context(
                         &agent,

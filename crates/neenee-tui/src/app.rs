@@ -312,14 +312,19 @@ pub struct App {
     /// Latest session-scoped AI context snapshot from the harness. This is a
     /// provider usage/projection value, never a persisted transcript estimate.
     pub context_tokens: Option<neenee_contracts::ContextTokenSnapshot>,
-    /// Latest per-round throughput summary for the viewed session, shown in the
-    /// TokenReport modal. `None` until the first natural round completes.
-    pub round_tps: Option<neenee_contracts::RoundSummary>,
     /// Scroll offset of the TokenReport modal body.
     pub token_report_scroll: usize,
     /// `true` when the TokenReport modal is drilled into one round's ReAct-turn
     /// usage; `false` when it shows the session's round list.
     pub token_report_detail: bool,
+    /// Cross-session usage-statistics report fetched on demand from the
+    /// harness (`QueryUsageStats`, ADR-0122). Session-independent: it
+    /// aggregates the durable store under `data/usage/`, which survives
+    /// session cleanup. `None` while the round-trip is in flight (the
+    /// overlay renders a loading placeholder).
+    pub usage_stats: Option<neenee_contracts::usage_stats::UsageStatsReport>,
+    /// Scroll offset of the usage-statistics overlay body.
+    pub usage_stats_scroll: usize,
     /// Screen rect of the todo bar (the one-row task-list summary), so a click
     /// on it opens the Activity modal directly on the Todos section. `None`
     /// when no todos are shown (empty task list or bar hidden).
@@ -1292,6 +1297,7 @@ impl App {
                 }
             },
             Modal::TokenReport => Some((&mut self.token_report_scroll, None)),
+            Modal::UsageStats => Some((&mut self.usage_stats_scroll, None)),
             Modal::OauthPending => Some((&mut self.oauth_scroll, None)),
             Modal::ProviderTemplate => Some((&mut self.template_scroll, None)),
             Modal::CustomProvider => Some((&mut self.custom_scroll, None)),

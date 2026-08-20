@@ -33,3 +33,4 @@ pub mod paths;
 pub mod provider_usage;
 pub mod session;
 pub mod trusted_projects;
+pub mod usage_stats;

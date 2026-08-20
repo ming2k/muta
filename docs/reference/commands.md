@@ -23,6 +23,7 @@ Project and user-defined commands are covered under
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
 | `/fork` | Fork the current conversation into a child session |
 | `/dashboard` | Open the session dashboard — a full-screen live view over every daemon session (console + sessions dock), with preview / attach / interrupt / prompt / create (ADR-0096; layout per ADR-0097). `/host` is a hidden alias |
+| `/usage` | Open the usage-statistics overlay — daily token totals, per-model breakdown, and the recent request event log, aggregated over the durable store at `data/usage/` that survives session cleanup (ADR-0122) |
 | `/btw [prompt\|list]` | Open a background aside conversation — asides keep running when you leave (`Ctrl+C` detaches, `Esc` interrupts, `F5` lists) |
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |

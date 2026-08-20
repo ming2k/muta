@@ -289,6 +289,14 @@ define_builtin_commands! {
         intent_keywords: ["dashboard", "host", "daemon", "monitor", "status", "overview", "dock", "fleet"],
         category: System,
     },
+    Usage = "/usage" : {
+        summary: "Cross-session usage statistics",
+        description: "Open the usage-statistics overlay: daily token totals, per-model breakdown, and the recent request event log. Data comes from a durable store under data/usage/ that survives session cleanup, so it reflects every day's real consumption.",
+        usage: ["/usage"],
+        examples: [("/usage", "Open the usage statistics overlay")],
+        intent_keywords: ["usage", "stats", "statistics", "tokens", "tokens-per-day", "daily", "consumption", "spend", "quota"],
+        category: System,
+    },
     Btw = "/btw" : {
         summary: "Open a side conversation (aside)",
         description: "Open an aside conversation forked from the current context that runs in the background without interrupting the main task.",

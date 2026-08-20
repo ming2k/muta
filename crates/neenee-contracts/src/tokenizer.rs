@@ -906,8 +906,8 @@ mod tests {
         let cases: &[(&str, usize)] = &[
             ("../../crates/neenee-agent/src/agent.rs", 10_478),
             ("../../crates/neenee-contracts/src/pressure.rs", 11_207),
-            ("../../README.zh-CN.md", 2_093),
-            ("../../CHANGELOG.md", 10_356),
+            ("../../README.zh-CN.md", 2_152),
+            ("../../CHANGELOG.md", 10_456),
         ];
         let t = Tokenizer::new();
         for (path, expected) in cases {

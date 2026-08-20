@@ -13,6 +13,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+/// Receiver of terminal request records for the durable cross-session usage
+/// statistics (ADR-0122). Implemented by the persistence layer
+/// (`neenee-persistence`'s `UsageStatsStore`); installed into a
+/// [`TokenSourceLedger`] by the daemon bootstrap so every settled request is
+/// mirrored into the day-partitioned store that survives session cleanup.
+///
+/// The sink must be non-blocking and non-fatal from the ledger's
+/// perspective: implementations buffer or write synchronously at their own
+/// discretion and swallow/report errors on their own channels — a stats
+/// failure must never break request accounting.
+pub trait UsageStatSink: Send + Sync {
+    /// Called once per terminally settled request attempt. `recorded_at_ms`
+    /// is the wall-clock settlement time; `project` is the project bucket
+    /// name (empty = unknown).
+    fn record_usage(&self, recorded_at_ms: u64, project: &str, record: &RequestUsageRecord);
+}
+
 /// Lifecycle state of one concrete provider request attempt.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -207,7 +224,7 @@ fn key(provider: &str, model: &str) -> (String, String) {
 /// A thread-safe running ledger of token counts split by source (reported vs.
 /// estimated), keyed by `(provider_id, model)`. Shared between the agent (the
 /// writer — books each turn) and the TUI (the reader — renders the report).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct TokenSourceLedger {
     /// `(provider, model)` → accumulator (totals + per-turn line items). A
     /// [`BTreeMap`] so the report iterates in a stable order.
@@ -221,6 +238,20 @@ pub struct TokenSourceLedger {
     /// to this id, preventing usage from another opened session leaking into
     /// the current report.
     active_session: Mutex<Option<String>>,
+    /// Optional durable mirror (ADR-0122): every terminally settled request
+    /// is forwarded to this sink. `None` in tests / when no store is bound.
+    usage_sink: Mutex<Option<Arc<dyn UsageStatSink>>>,
+    /// Project bucket name stamped onto sink records (empty = unknown).
+    usage_project: Mutex<String>,
+}
+
+impl std::fmt::Debug for TokenSourceLedger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenSourceLedger")
+            .field("active_session", &self.active_session())
+            .field("usage_project", &self.usage_snapshot())
+            .finish_non_exhaustive()
+    }
 }
 
 impl TokenSourceLedger {
@@ -243,6 +274,27 @@ impl TokenSourceLedger {
 
     pub fn active_session(&self) -> Option<String> {
         self.active_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Install the durable usage-statistics sink (ADR-0122). Every
+    /// terminally settled request attempt is forwarded to it from
+    /// [`Self::settle_request`]. Replaces any prior sink.
+    pub fn install_usage_sink(&self, sink: Arc<dyn UsageStatSink>) {
+        *self.usage_sink.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
+    }
+
+    /// Stamp the project bucket name forwarded with sink records. Called by
+    /// the driver on session open/switch so records group by project.
+    pub fn set_usage_project(&self, project: impl Into<String>) {
+        *self.usage_project.lock().unwrap_or_else(|e| e.into_inner()) = project.into();
+    }
+
+    /// Current project bucket name (test/diagnostics).
+    pub fn usage_snapshot(&self) -> String {
+        self.usage_project
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
@@ -356,6 +408,26 @@ impl TokenSourceLedger {
             record.total_tokens = record
                 .prompt_tokens
                 .saturating_add(record.completion_tokens);
+        }
+        // Mirror the terminal record into the durable cross-session usage
+        // store (ADR-0122). The sink owns its error handling; a stats failure
+        // must never propagate into request accounting. Drop the requests
+        // lock first so the sink (which may read the ledger) cannot
+        // deadlock.
+        let sink = self
+            .usage_sink
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(sink) = sink {
+            let project = self
+                .usage_project
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let settled = record.clone();
+            drop(requests);
+            sink.record_usage(now_epoch_ms(), &project, &settled);
         }
     }
 
@@ -550,6 +622,15 @@ fn request_display_order(record: &RequestUsageRecord) -> (u64, u8, u32, u32, &st
     )
 }
 
+/// Wall-clock epoch milliseconds. Kept here (rather than at each call site)
+/// so the usage-stat day bucket derives from one definition of "now".
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// One row of the report: a single provider+model and its source split.
 ///
 /// Serialisable so an attached frontend can receive the daemon-side report
@@ -578,6 +659,62 @@ pub struct TokenSourceReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    /// Collecting sink for tests: records everything it receives.
+    #[derive(Default)]
+    struct CollectingSink {
+        received: StdMutex<Vec<(u64, String, RequestUsageRecord)>>,
+    }
+
+    impl UsageStatSink for CollectingSink {
+        fn record_usage(&self, recorded_at_ms: u64, project: &str, record: &RequestUsageRecord) {
+            self.received.lock().unwrap().push((
+                recorded_at_ms,
+                project.to_string(),
+                record.clone(),
+            ));
+        }
+    }
+
+    #[test]
+    fn settled_requests_are_mirrored_to_the_usage_sink() {
+        let ledger = TokenSourceLedger::new();
+        let sink = Arc::new(CollectingSink::default());
+        ledger.install_usage_sink(sink.clone());
+        ledger.set_usage_project("bucket-42");
+
+        let key = ledger.begin_request("s1", "openai", "gpt", 3, 1, 1_000);
+        ledger.settle_request(
+            &key,
+            RequestUsageStatus::Completed,
+            Some(crate::TokenUsage {
+                prompt_tokens: 900,
+                completion_tokens: 100,
+                total_tokens: 1_000,
+                ..Default::default()
+            }),
+            0,
+            2_000,
+        );
+        // A duplicate terminal event must not mirror twice (the reported
+        // idempotency fence fires before the sink forward).
+        ledger.settle_request(&key, RequestUsageStatus::Failed, None, 5, 0);
+
+        let received = sink.received.lock().unwrap();
+        assert_eq!(received.len(), 1, "one terminal settle → one sink record");
+        assert_eq!(received[0].1, "bucket-42");
+        assert_eq!(received[0].2.total_tokens, 1_000);
+        assert_eq!(received[0].2.status, RequestUsageStatus::Completed);
+    }
+
+    #[test]
+    fn ledger_without_sink_still_settles() {
+        let ledger = TokenSourceLedger::new();
+        let key = ledger.begin_request("s1", "openai", "gpt", 1, 1, 100);
+        ledger.settle_request(&key, RequestUsageStatus::Failed, None, 10, 0);
+        assert_eq!(ledger.records_for_session("s1").len(), 1);
+    }
 
     #[test]
     fn lifecycle_attempts_are_keyed_idempotent_and_session_scoped() {

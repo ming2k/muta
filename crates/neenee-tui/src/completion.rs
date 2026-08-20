@@ -553,6 +553,82 @@ impl App {
         }
     }
 
+    /// Whether the composer still holds text a completion menu could anchor
+    /// to — the cheap precondition for Tab's re-open gesture. True while the
+    /// input is a **partial** slash command (a leading `/` plus more input,
+    /// not yet an exact known command — that resolved state keeps the popup
+    /// hidden on purpose) or an `@mention` range is active under the caret.
+    pub fn completion_trigger_text_present(&self) -> bool {
+        match self.completion_kind() {
+            CompletionKind::None => false,
+            CompletionKind::Slash => {
+                !self.input.trim().is_empty() && !self.known_exact_slash_input()
+            }
+            CompletionKind::Path => true,
+        }
+    }
+
+    /// Whether the composer holds a fully-typed, recognized slash command —
+    /// the *resolved* state whose popup stays hidden so Tab/↑/↓ keep their
+    /// ordinary roles. Mirrors the `has_exact_suggestion` predicate the event
+    /// loop derives from the live candidate list, without recomputing it.
+    fn known_exact_slash_input(&self) -> bool {
+        let Some(first) = self.input.split_whitespace().next() else {
+            return false;
+        };
+        if !self.input.starts_with('/') {
+            return false;
+        }
+        let trimmed = self.input.trim();
+        neenee_runtime::startup::BuiltinCmd::find_spec(first)
+            .is_some_and(|spec| trimmed == spec.name)
+            || self.custom_commands.iter().any(|(name, _)| trimmed == name)
+    }
+
+    /// Keep the completion menu's selection coherent with its live candidate
+    /// list — the "anchor" pass. Runs in the two places that re-derive
+    /// candidates (the event loop's per-event pre-compute and the render
+    /// gate), so the highlighted row and the painted popup can never drift
+    /// apart.
+    ///
+    /// The product behaviour this encodes: **the first candidate is selected
+    /// by default the moment the popup appears.** A visible menu always
+    /// carries exactly one highlighted row — the solid brand band and the
+    /// details flyout follow it — `↑`/`↓` move that highlight, and Enter /
+    /// Tab commit it: the same contract as every IDE autocomplete.
+    ///
+    /// Rather than sprinkling `Some(0)` writes over the many call sites that
+    /// replace the input programmatically, the pass is idempotent and runs
+    /// centrally:
+    ///
+    /// - no candidates, or a resolved exact-match composer → clear the
+    ///   highlight (nothing is rendered to carry it);
+    /// - `None` → seed `Some(0)`: a freshly opened menu starts highlighted;
+    /// - `Some(i)` out of range (the list shrank under a stale index) →
+    ///   clamp back into range instead of losing the highlight;
+    /// - `Some(i)` in range → keep it.
+    pub fn anchor_completion_selection(&mut self, completions: &[Completion]) {
+        let input_len = self.input.len();
+        let exact = completions
+            .iter()
+            .any(|c| c.replace_start == 0 && c.replace_end == input_len && c.label == self.input);
+        let visible = !completions.is_empty() && !exact;
+        match (visible, self.suggestion_index) {
+            // No menu on screen (or a resolved exact-match composer): the
+            // highlight must not linger where nothing is rendered.
+            (false, _) => self.suggestion_index = None,
+            // A freshly opened menu starts with its first candidate
+            // selected — the default highlight the details flyout follows.
+            (true, None) => self.suggestion_index = Some(0),
+            // The list shrank under a stale index (e.g. a refine filtered
+            // candidates away): clamp back into range instead of losing
+            // the highlight.
+            (true, Some(i)) => {
+                self.suggestion_index = Some(i.min(completions.len() - 1));
+            }
+        }
+    }
+
     /// Compute the live completion candidates for the current input + cursor.
     /// Returns an empty `Vec` when no menu should be shown. See [`Completion`]
     /// for the slash-vs-path replace-range semantics. Takes `&mut self` so the

@@ -194,12 +194,26 @@ its own ledger; a fork begins with no copied request usage because the parent
 requests must not be billed twice. Provider/model totals and turn-level rows
 are derived from these records instead of serving as mutable primary state.
 
+### The durable mirror (ADR-0122)
+
+Session-scoped accounting dies with the session, so the same settlement point
+also feeds a **cross-session** store. `settle_request` forwards every terminal
+record to an optional `UsageStatSink`; the daemon installs a
+day-partitioned store (`data/usage/daily/<YYYY-MM-DD>.json`, a sibling of
+`projects/`) behind it. The store is append-only, keyed idempotently by the
+same request identity (a reported replay upgrades an estimate, never the
+reverse), written atomically and lock-serialised across processes, and —
+because it lives outside every session file — untouched by any session
+cleanup. The `/usage` overlay aggregates it into daily totals, a per-model
+breakdown, and a recent-request event log; see
+[ADR-0122](../../../adr/0122-durable-cross-session-usage-statistics.md).
+
 ## The Context Usage modal
 
 The hint bar's context meter — the `89.2k (8%)` indicator pinned to the
 bottom-right — is now **clickable**. Clicking it opens a centered, read-only
 **Context Usage** modal. The top shows the current AI-visible context size
-plus the latest model output rate; the request-usage list groups the
+plus the session-average model output rate; the request-usage list groups the
 active session's attempts by user round, and a detail page expands a round
 into its model turns:
 
@@ -208,32 +222,38 @@ into its model turns:
 │ Size                 12.5k / 200.0k (6%)                  │
 │ Output rate          52.3 tok/s                           │
 │                                                          │
-│   Round      State        Tokens      Turns               │
-│ ▌1st         done          12.3k         2                │
-│   2nd        done           2.4k         1                │
+│   Round      State        Tokens       TPS                │
+│ ▌1st         done          12.3k        48                │
+│   2nd        done           2.4k        61                │
 │                                                          │
 │                            ↑↓ select  ↵ turns  Esc close │
 └────────────────────────────────────────────────────────────┘
 ```
 
-The top read-out has two peer key/value rows: context **Size** and the latest
-**Output rate** (tokens/sec of the last completed round's model generation).
-The label is "Output rate", not "Throughput", deliberately: throughput implies
-end-to-end processing speed, but this figure *excludes* tool execution, hooks,
-and human-decision pauses — it isolates how fast the model itself generated.
-Its denominator is `generation_ms`, summed across the round's completed
-provider requests (with a fallback to active wall-clock when none completed
-measurably); per-request spans are the same span the detail page's `tok/s`
-column divides by, so the summary and the drill-in always agree. Envoy
-sub-agents are folded in symmetrically: their completion tokens reach the
-numerator and their own generation time reaches the denominator, so a
-delegating round does not show an inflated tok/s.
+The top read-out has two peer key/value rows: context **Size** and the
+session-wide **Output rate** — the average tokens/sec across *every* request
+the session made, not just the last round. The label is "Output rate", not
+"Throughput", deliberately: throughput implies end-to-end processing speed,
+but this figure *excludes* tool execution, hooks, and human-decision pauses —
+it isolates how fast the model itself generated. It is computed as Σ output
+tokens ÷ Σ measured `generation_ms` over all terminal attempts — a
+time-weighted mean, so one long streaming request carries the weight it
+deserves instead of being averaged equally with a burst of short ones.
+Per-request spans are the same spans the detail page's `tok/s` column and
+each round's TPS cell divide by, so the summary, the round list, and the
+drill-in always agree. Envoy sub-agents are folded in symmetrically: their
+completion tokens reach the numerator and their own generation time reaches
+the denominator, so a delegating round does not show an inflated tok/s.
 Beneath it sits the round ledger table — no sub-heading, since the modal
 title already names the view and the column headers frame the rows. The
 table has four columns: **Round** (bare ordinal label), **State** (the
 round's aggregate lifecycle — `done` / `in flight` / `failed` / …, the
-only colored column), **Tokens**, and **Turns** (a plain count, no `›`/`…`
-suffix — the State column carries that signal now). Column widths are
+only colored column), **Tokens**, and **TPS** — this round's *average*
+output rate: the round's output tokens ÷ the generation time its attempts
+actually measured (rendered `–` when nothing was timed: legacy bookings
+carry no timing, and an in-flight attempt has not sealed its clock yet).
+The turn count the TPS column replaced lives on in the drill-in's
+"Turns / attempts" row. Column widths are
 content-driven: every column sizes to its widest cell, and any leftover
 modal width is split evenly across the gaps between columns, so the table
 breathes instead of clumping at one edge. The selected round row is
@@ -248,10 +268,11 @@ The report answers two questions at a glance:
   available before the first request and refreshes after committed history
   changes.
 - **"How fast is the model generating?"** — the output-rate line divides the
-  round's output tokens by its *generation* time (the time the model actually
-  spent streaming, excluding tool execution and human-decision pauses). A
-  round that was mostly waiting (permission prompts, `ask_user`) therefore does
-  not read as a slow model: only the model's own streaming span is in the
+  session's output tokens by its total *generation* time (the time the model
+  actually spent streaming, excluding tool execution and human-decision
+  pauses), while the TPS column answers the same question per round. A round
+  that was mostly waiting (permission prompts, `ask_user`) therefore does not
+  read as a slow model: only the model's own streaming span is in the
   denominator.
 - **"Which round cost what?"** — the per-round totals make token spend
   across the conversation visible at a glance; drilling into a round
