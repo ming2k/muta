@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-08-20
+
 ### Changed
 
 - **Provider instances are state; routes are derived, never persisted
@@ -3886,7 +3888,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.29.1...HEAD
+[0.29.1]: https://github.com/ming2k/neenee/releases/tag/v0.29.1
 [0.29.0]: https://github.com/ming2k/neenee/releases/tag/v0.29.0
 [0.28.0]: https://github.com/ming2k/neenee/releases/tag/v0.28.0
 [0.27.0]: https://github.com/ming2k/neenee/releases/tag/v0.27.0
