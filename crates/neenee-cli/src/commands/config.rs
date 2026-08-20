@@ -37,7 +37,12 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
             );
             println!("compaction_prune:           {}", config.compaction_prune);
             println!("mcp_servers_count:          {}", config.mcp.len());
-            println!("providers_count:            {}", config.providers.len());
+            println!(
+                "instances_count:            {}",
+                neenee_persistence::instances::Instances::load()
+                    .providers
+                    .len()
+            );
         }
         ConfigAction::Get(key) => {
             let config = Config::load();

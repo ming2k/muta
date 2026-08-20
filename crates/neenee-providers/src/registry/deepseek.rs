@@ -85,6 +85,8 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "deepseek",
     baselines: MODELS,
+    base_url: "https://api.deepseek.com/v1/responses",
+    user_agent: None,
     protocol: "openai-responses",
     models: DEEPSEEK_BUILTIN_MODELS,
     discovery: true,

@@ -10,6 +10,7 @@ name = "neenee"
 path = "src/main.rs"
 
 [dependencies]
+neenee-agent = { path = "../neenee-agent" }
 neenee-contracts = { path = "../neenee-contracts" }
 neenee-persistence = { path = "../neenee-persistence" }
 neenee-runtime = { path = "../neenee-runtime" }

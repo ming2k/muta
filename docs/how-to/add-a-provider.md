@@ -6,10 +6,10 @@ capability model that decides which path to take, see
 [Provider capabilities](../explanation/provider-capabilities.md).
 
 neenee resolves every provider through one catalog
-(`build_catalog` in `crates/neenee-agent/src/catalog.rs`): it materializes
-registry presets, bespoke built-ins, and user-defined entries into channels
-with fully resolved credentials, then constructs the concrete `Provider` via
-`build_provider_for_channel` in
+(`build_catalog` in `crates/neenee-agent/src/catalog/`): it derives the
+concrete routes (per-model transport/endpoint/credential/reasoning) from each
+provider instance's template plus the discovery cache, then constructs the
+concrete `Provider` via `build_provider_for_channel` in
 `crates/neenee-providers/src/registry/mod.rs`.
 Startup and a `/models` pick share this single path — there is no separate
 dispatch `match` to edit for presets or user entries.
@@ -43,44 +43,52 @@ Two properties worth knowing:
 - **The instance is never re-seeded.** Unlike curated templates there is no
   model snapshot to mirror, so a later startup never replaces the typed id.
 
-The equivalent hand-written `config.toml` entry looks like this (see
-[Path 1](#path-1-user-defined-entry-no-code) for the full field reference):
+The equivalent hand-written state looks like this (see [Path 1](#path-1-user-defined-entry-no-code)
+for the full field reference). Instances live in `providers.toml`
+(`$XDG_STATE_HOME/neenee/`), credentials in `credentials.toml`, and only the
+selection (`default_provider` / `default_model`) in `config.toml`:
 
 ```toml
+# $XDG_CONFIG_HOME/neenee/config.toml — behavior only
 default_provider = "wechat"
 default_model = "GLM-5.2"
+```
 
+```toml
+# $XDG_STATE_HOME/neenee/providers.toml — instances
 [[providers]]
 id = "wechat"
 name = "WeChat OpenAI"
-
-[[providers.channels]]
-label = "GLM-5.2"
 transport = "OpenAi"
 base_url = "https://chatapi.weixin.qq.com/openai/v1/chat/completions"
-api_key = "sk-..."
-model = "GLM-5.2"
+models = ["GLM-5.2"]
+```
+
+```toml
+# $XDG_CONFIG_HOME/neenee/credentials.toml — secrets
+[providers]
+wechat = "sk-..."
 ```
 
 ## Path 1: User-defined entry (no code)
 
-Any OpenAI-compatible, Google-native, or Llama endpoint can be added from
-`config.toml` without touching code. Add a `[[providers]]` table whose `id`
-either overrides a built-in or introduces a new model:
+Any OpenAI-compatible, Google-native, or Anthropic-format endpoint can be
+added to `providers.toml` without touching code. Declare a pure-custom
+instance (no `template_id`) with its transport, endpoint, and model ids:
 
 ```toml
-default_provider = "acme"
-
 [[providers]]
 id = "acme"
 name = "Acme"
-
-[[providers.channels]]
-label = "default"
-transport = "OpenAi"          # or "Anthropic" or "Google"
+transport = "OpenAi"          # OpenAi | OpenAiResponses | Anthropic | Google
 base_url = "https://api.acme.example/v1/chat/completions"
-api_key_env = "ACME_API_KEY"        # env var wins over the inline key below
-model = "acme-1"
+# api_key_env = "ACME_API_KEY"   # optional env var holding the credential
+models = ["acme-1"]
+```
+
+```toml
+[providers]
+acme = "sk-..."               # $XDG_CONFIG_HOME/neenee/credentials.toml
 ```
 
 A **native-Google relay / 中转站** uses `Google`. The `base_url` is the
@@ -88,49 +96,49 @@ versioned base (carry the `/v1beta` prefix — the `/models/{id}:generateContent
 path is appended for you). Auth stays on the `?key=` query param:
 
 ```toml
-default_provider = "my-gemini-relay"
-
 [[providers]]
 id = "my-gemini-relay"
 name = "My Google Relay"
-
-[[providers.channels]]
-label = "default"
 transport = "Google"
 base_url = "https://relay.example.com/v1beta"
-api_key_env = "GEMINI_RELAY_KEY"
-model = "gemini-2.5-flash"
+models = ["gemini-2.5-flash"]
 ```
 
-To redirect the **built-in** `google` preset instead (so picking `google` in
-`/models` and `default_provider = "google"` route through the relay), set the
-top-level `google_base_url` (or export `GOOGLE_BASE_URL`):
+To redirect the **built-in** `google` template instead (so picking `google` in
+`/models` and `default_provider = "google"` route through the relay), create
+an instance referencing the template with a `base_url` override — the override
+wins over the template's default endpoint:
 
 ```toml
-default_provider = "google"
-google_base_url = "https://relay.example.com/v1beta"
+[[providers]]
+id = "google"
+name = "Google"
+template_id = "google"
+base_url = "https://relay.example.com/v1beta"
 ```
 
-The legacy spellings `gemini_base_url` / `GEMINI_BASE_URL` are still accepted
-as aliases.
-
-Per-channel fields:
+Instance fields:
 
 | Field | Meaning |
 |-------|---------|
-| `transport` | `OpenAi`, `Anthropic`, or `Google` |
-| `base_url` | Full chat-completions URL (OpenAI), `/messages` URL (Anthropic), or **versioned Google base** (native Google, e.g. `https://relay.example.com/v1beta` — the `/models/{id}:generateContent` path is appended for you) |
-| `api_key_env` | Env var name read first; empty values fall through |
-| `api_key` | Inline key, used when `api_key_env` is unset or empty |
-| `model` | Wire model id; falls back to the entry `id` when omitted |
-| `user_agent` | OpenAI-compatible and native Google |
-| `effort` | Optional reasoning-depth override (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`); applies to any reasoning model whose protocol exposes a depth field, clamped to the model's supported levels. See [Reasoning effort](../reference/effort.md) |
-| `thinking` | Optional Anthropic thinking on/off switch; ignored by OpenAI and Google |
+| `id` | Unique instance id; referenced by `default_provider` and by `credentials.toml` |
+| `name` | Display name; defaults to the id |
+| `template_id` | Optional: derive routes from a template (`deepseek`, `kimi-code`, `google`, ...). Pure-custom instances omit it and declare `transport` / `base_url` / `models` below |
+| `auth` | `ApiKey` (default), or an OAuth variant for subscription instances |
+| `api_key_env` | Optional env var *name* holding the credential; wins over `credentials.toml` |
+| `transport` | `OpenAi`, `OpenAiResponses`, `Anthropic`, or `Google` (pure-custom only) |
+| `base_url` | Full chat-completions URL (OpenAI), `/responses` URL (Responses), `/messages` URL (Anthropic), or **versioned Google base** (native Google, e.g. `https://relay.example.com/v1beta` — the `/models/{id}:generateContent` path is appended for you) |
+| `user_agent` | OpenAI-compatible and native Google (pure-custom only) |
+| `models` | The declared model ids a pure-custom instance serves |
 
-An entry whose `id` matches a built-in replaces it entirely; a new `id` is
-appended. One entry may carry several `channels` (e.g. a model reachable
-through several relays), with `default_channel` selecting the active one. See
-[ADR-0002](../adr/0002-model-channel-abstraction.md) for the channel model.
+Per-model reasoning (`effort` / `thinking`) is **not** a persisted field — it
+lives per `(instance, model)` in the discovery cache, edited from the model `e`
+picker. See [Reasoning effort](../reference/effort.md).
+
+Multiple instances of the same template (e.g. two `deepseek` instances with
+different keys or endpoints) are ordinary: each is its own `[[providers]]` row
+with the same `template_id`, and each owns its own credential keyed by its own
+`id`. The template defines the routes once; instances never repeat them.
 
 ## Path 2: Built-in provider (per-provider file)
 
@@ -191,15 +199,14 @@ registry via `inventory` at link time — `resolve("acme-1")` returns the
 context window and capabilities you declared, with no manual registration
 call.
 
-### Optional: persist the API key in config
+### Optional: persist the API key
 
-By default a built-in resolves its API key from `config.toml`/`credentials.toml`
-through the catalog, not from an environment variable. To let users persist it
-in `credentials.toml` (or read it from an `api_key_env` channel field), add the
-provider id to `CREDENTIALED_BUILTINS` and a corresponding `*_api_key` field on
-`Config` in `crates/neenee-persistence/src/config.rs`. The catalog's credential
-resolution then picks the config field up after `credentials.toml`, so a preset
-works through either path.
+An instance's credential is stored in `credentials.toml` keyed by instance id
+(`[providers.<id>] api_key`), or read live from an `api_key_env` env var when
+the instance declares one. No code change is needed — every instance already
+resolves its credential this way. The catalog resolves env-first
+(`api_key_env`), then `credentials.toml`, then empty (a keyless relay sends no
+bearer).
 
 ## Path 3: Standalone adapter (incompatible contract)
 
@@ -233,8 +240,9 @@ Then wire the adapter into the two construction sites:
    in `build_provider_for_channel`
    (`crates/neenee-providers/src/registry/mod.rs`) that constructs the adapter
    from the channel.
-2. Materialize the entry in `build_catalog`
-   (`crates/neenee-agent/src/catalog.rs`) so the catalog exposes it by `id`.
+2. Register the template in `PROVIDER_TEMPLATE_SPECS` (add a `route_for_model`
+   arm if the adapter routes by model wire format) so the catalog's derivation
+   (`crates/neenee-agent/src/catalog/derive.rs`) exposes it by `id`.
 
 Map neenee's `Role` enum to the provider's role names in both `chat` and
 `stream_chat`. The universal fallback assumes assistant text is reachable

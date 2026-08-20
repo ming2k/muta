@@ -115,6 +115,8 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "zai-code",
     baselines: MODELS,
+    base_url: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
+    user_agent: Some(crate::ZCODE_USER_AGENT),
     protocol: "openai",
     // Z.AI coding platform is a fixed membership endpoint (no public /models endpoint).
     discovery: false,

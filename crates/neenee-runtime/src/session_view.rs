@@ -23,8 +23,8 @@ pub fn short_session_id(id: &str) -> &str {
 ///
 /// Derived from the provider catalog so the readiness signal and the actual
 /// provider construction share one resolution path.
-pub fn provider_key_status(config: &Config) -> Vec<(String, bool)> {
-    catalog::build_catalog(config)
+pub fn provider_key_status(_config: &Config) -> Vec<(String, bool)> {
+    catalog::build_catalog()
         .iter()
         .map(|entry| (entry.id.clone(), entry.key_ready()))
         .collect()
@@ -50,7 +50,7 @@ pub fn build_session_context(
 
     // Catalog entry carries the authoritative display metadata; fall back to
     // the raw model id / empty when the provider isn't a known catalog entry.
-    let entry = catalog::build_catalog(config)
+    let entry = catalog::build_catalog()
         .into_iter()
         .find(|e| e.id == provider_id);
     let display_name = entry

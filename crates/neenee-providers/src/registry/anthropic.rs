@@ -144,6 +144,8 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "anthropic",
     baselines: MODELS,
+    base_url: "https://api.anthropic.com/v1/messages",
+    user_agent: None,
     protocol: "anthropic",
     models: ANTHROPIC_BUILTIN_MODELS,
     discovery: true,

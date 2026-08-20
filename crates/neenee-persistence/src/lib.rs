@@ -28,6 +28,7 @@ pub mod config;
 pub mod embedding;
 pub mod events;
 pub mod fsutil;
+pub mod instances;
 pub mod lock;
 pub mod paths;
 pub mod provider_usage;

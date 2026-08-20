@@ -2,7 +2,8 @@
 //! (rows, per-model effort/thinking info, auth badges) rendered by the
 //! TUI's Connections/Models modals.
 
-use super::{build_catalog, default_provider_id};
+use super::derive::derive_entries;
+use super::{Stores, effective_default_provider_id};
 use neenee_contracts::catalog::{Channel, ProviderEntry, Transport};
 use neenee_contracts::{
     Effort, ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, ThinkingMode,
@@ -30,8 +31,9 @@ pub(super) fn active_model_id_for_entry(
 }
 
 pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPickerSnapshot {
-    let entries = build_catalog(config);
-    let default_id = default_provider_id(config).to_string();
+    let stores = Stores::load();
+    let entries = derive_entries(&stores.instances, &stores.cache, &stores.creds);
+    let default_id = effective_default_provider_id(config, &stores);
     let rows = entries
         .iter()
         .map(|entry| {
@@ -55,10 +57,9 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
             // The template that birthed this instance drives the
             // Connections list's provider-type label (distinct from the
             // user-given instance name).
-            let template_id = config
-                .providers
-                .iter()
-                .find(|p| p.id == entry.id)
+            let template_id = stores
+                .instances
+                .get(&entry.id)
                 .and_then(|p| p.template_id.clone())
                 .unwrap_or_default();
             ProviderPickerRow {
@@ -73,24 +74,15 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
                 key_ready: entry.key_ready(),
                 template_id,
                 last_used_ms: usage.last_used_ms(&entry.id),
-                auth: provider_auth(config, &entry.id),
+                auth: stores
+                    .instances
+                    .get(&entry.id)
+                    .map(|p| p.auth)
+                    .unwrap_or_default(),
             }
         })
         .collect();
     ProviderPickerSnapshot { default_id, rows }
-}
-
-pub(super) fn provider_auth(config: &Config, provider_id: &str) -> neenee_contracts::ChannelAuth {
-    config
-        .providers
-        .iter()
-        .find(|p| p.id == provider_id)
-        .and_then(|p| {
-            p.channels
-                .get(p.default_channel.min(p.channels.len().saturating_sub(1)))
-        })
-        .map(|ch| ch.auth)
-        .unwrap_or_default()
 }
 
 pub(super) fn channel_protocol_and_base_url(channel: &Channel) -> (String, String) {

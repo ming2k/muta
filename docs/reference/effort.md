@@ -110,18 +110,18 @@ clamps a legacy `medium` override up to `low`).
 
 ## Configuring it
 
-Effort is set per channel, as a string:
+Effort is set per **route** — one `(instance, model)` pair — as a string,
+stored in the discovery cache (`route_settings`) and edited from the model `e`
+picker in the TUI:
 
 ```toml
-[[providers]]
-# ...
-  [[providers.channels]]
-  effort = "high"   # none | minimal | low | medium | high | xhigh | max
+# $XDG_CACHE_HOME/neenee/models_discovery.json
+# route_settings["<instance_id>"]["<model_id>"] = { "effort": "high" }
 ```
 
-For first-party Anthropic models (Claude) the same value lives in the
-`[model_reasoning."<model-id>"]` table instead — see
-[Configuration: per-model reasoning settings](configuration.md#per-model-reasoning-settings).
+It is not a `config.toml` field: routes are derived at runtime, and their
+reasoning knobs are user-set route facts kept with the other per-route data.
+See [Configuration: per-model reasoning settings](configuration.md#per-model-reasoning-settings).
 In the TUI, press `e` on a model in the provider view to cycle it.
 
 An unset effort leaves the server default in place. A set effort is clamped to

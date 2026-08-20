@@ -1,50 +1,69 @@
-//! Materializes a `Catalog` from the host crate's [`Config`].
+//! Materializes the runtime `Catalog` from the instance store, the template
+//! registry, and the discovery cache — never from `config.toml`, which holds
+//! behavior only.
 //!
-//! This is the single source of truth for the environment-variable-then-config
-//! resolution rules that startup and runtime provider switching share. Every
-//! [`Channel`] produced here carries fully resolved credentials and model id, so
-//! provider construction (`build_provider_for_channel` in `neenee-providers`)
-//! never touches the environment or config again.
-//!
-//! ADR-0002: built-in presets produce one `"default"` channel per entry from
-//! the per-provider fields, while user-defined entries may declare several
-//! channels (with `default_channel` selecting one). Favorites and recency are
-//! layered on top via the provider-usage telemetry.
+//! Provider instances are persisted in `providers.toml` (see
+//! `neenee_persistence::instances`); their routes (one channel per model) are
+//! **derived** here at startup and on every switch from the instance's
+//! template plus the per-route facts in `models_discovery.json`. Every
+//! [`neenee_contracts::catalog::Channel`] produced here carries fully resolved
+//! credentials and model id, so provider construction
+//! (`build_provider_for_channel` in `neenee-providers`) never touches the
+//! environment, config, or stores again.
 
+mod derive;
 mod discovery;
-mod migrate;
+mod legacy;
 mod picker;
-mod translate;
 
-pub use discovery::{
-    DiscoveryOutcome, default_model_source_for_spec, discover_provider_models,
-    reconcile_provider_models, sync_fitted_model_registry,
-};
-pub use migrate::{
-    DEEPSEEK_RESPONSES_URL, migrate_deepseek_channels_to_responses,
-    migrate_legacy_provider_instances,
-};
+pub use derive::{derive_channel, derive_entries, route_models, transport_for_protocol};
+pub use discovery::{discover_provider_models, sync_fitted_model_registry};
+pub use legacy::migrate_legacy_state;
 use picker::active_model_id_for_entry;
 pub use picker::build_picker_state;
-use translate::user_provider_to_entry;
 
 use neenee_contracts::catalog::ProviderEntry;
-use neenee_persistence::config::Config;
-use neenee_persistence::provider_usage::ProviderUsage;
+use neenee_persistence::config::{Config, Credentials, DiscoveryCache};
+use neenee_persistence::instances::Instances;
 
 #[cfg(test)]
 mod tests;
+
+/// The three stores the catalog derives from, loaded together so a caller
+/// that builds an entry and then mutates the stores stays consistent.
+pub struct Stores {
+    pub instances: Instances,
+    pub cache: DiscoveryCache,
+    pub creds: Credentials,
+}
+
+impl Stores {
+    pub fn load() -> Self {
+        Self {
+            instances: Instances::load(),
+            cache: DiscoveryCache::load(),
+            creds: Credentials::load(),
+        }
+    }
+}
 
 pub fn default_provider_id(config: &Config) -> &str {
     &config.default_provider
 }
 
-pub fn build_catalog(config: &Config) -> Vec<ProviderEntry> {
-    config
-        .providers
-        .iter()
-        .map(user_provider_to_entry)
-        .collect()
+/// The effective default provider id: `config.default_provider` when it names
+/// a live instance, else the first instance, else empty.
+pub fn effective_default_provider_id(config: &Config, stores: &Stores) -> String {
+    stores
+        .instances
+        .effective_default(&config.default_provider)
+        .map(|p| p.id.clone())
+        .unwrap_or_default()
+}
+
+pub fn build_catalog() -> Vec<ProviderEntry> {
+    let stores = Stores::load();
+    derive_entries(&stores.instances, &stores.cache, &stores.creds)
 }
 
 pub fn build_provider_for(
@@ -60,8 +79,10 @@ pub fn build_provider_for_model(
     model_id: Option<&str>,
     session_id: Option<&str>,
 ) -> Option<std::sync::Arc<dyn neenee_contracts::Provider>> {
-    let entries = build_catalog(config);
-    let entry = entries.iter().find(|e| e.id == provider_id)?;
+    let stores = Stores::load();
+    let entry = derive_entries(&stores.instances, &stores.cache, &stores.creds)
+        .into_iter()
+        .find(|e| e.id == provider_id)?;
     let wanted = model_id.or(config.default_model.as_deref());
     let channel = wanted
         .and_then(|m| entry.channel_for_model(m))
@@ -71,26 +92,34 @@ pub fn build_provider_for_model(
 }
 
 pub fn resolved_model_name(config: &Config, id: &str) -> Option<String> {
-    resolved_model_name_inner(config, id, &ProviderUsage::default())
+    resolved_model_name_inner(
+        config,
+        id,
+        &neenee_persistence::provider_usage::ProviderUsage::default(),
+    )
 }
 
 pub fn resolved_model_name_with_usage(
     config: &Config,
     id: &str,
-    usage: &ProviderUsage,
+    usage: &neenee_persistence::provider_usage::ProviderUsage,
 ) -> Option<String> {
     resolved_model_name_inner(config, id, usage)
 }
 
-fn resolved_model_name_inner(config: &Config, id: &str, usage: &ProviderUsage) -> Option<String> {
-    build_catalog(config)
+fn resolved_model_name_inner(
+    config: &Config,
+    id: &str,
+    usage: &neenee_persistence::provider_usage::ProviderUsage,
+) -> Option<String> {
+    build_catalog()
         .iter()
         .find(|e| e.id == id)
         .and_then(|entry| active_model_id_for_entry(config, entry, usage))
 }
 
-pub fn models_for_provider(config: &Config, provider_id: &str) -> Vec<String> {
-    build_catalog(config)
+pub fn models_for_provider(_config: &Config, provider_id: &str) -> Vec<String> {
+    build_catalog()
         .iter()
         .find(|e| e.id == provider_id)
         .map(|entry| entry.channels.iter().map(|c| c.model.clone()).collect())

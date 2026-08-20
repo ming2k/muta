@@ -29,4 +29,5 @@ pub use registry::{
     OPENAI_BUILTIN_MODELS, OPENAI_PROVIDER_SPECS, OPENCODE_GO_MODELS, OPENCODE_GO_SERVED_MODELS,
     OpenAiProviderSpec, PROVIDER_TEMPLATE_SPECS, ProviderTemplateSpec, XAI_BUILTIN_MODELS,
     ZAI_CODE_MODELS, build_provider_for_channel, openai_provider_spec, provider_template_spec,
+    route_for_model,
 };

@@ -35,8 +35,8 @@ User-edited configuration. Lossy; back it up.
 
 | Path | Purpose | Lossy? |
 |------|---------|--------|
-| `config.toml` | User-edited configuration (`[principal]`, `[[providers]]`, `[permissions]`, `[bash_policy]`, `[tui]`, `[input_history]`, `[tool_variants]`, `[model_reasoning]`, `[[hooks]]`, `[skills]`, `[websearch]`, `[mcp.<server>]`, ...) | Yes |
-| `credentials.toml` | Token-auth secrets, split out of `config.toml` (written `rw-------`), keyed by **provider instance**: `[builtins.<id>] api_key` for the built-in providers, `[user.<id>] api_key` for user-defined instances. OAuth logins do not live here — see the note below. A credential belongs to the instance; every channel of that instance resolves it. | Yes |
+| `config.toml` | User-edited configuration — **behavior only** (`default_provider` / `default_model`, `[principal]`, `[permissions]`, `[bash_policy]`, `[tui]`, `[input_history]`, `[tool_variants]`, `[[hooks]]`, `[skills]`, `[websearch]`, `[mcp.<server>]`, ...). Provider *instances* live in the state store (`providers.toml`), secrets in `credentials.toml` | Yes |
+| `credentials.toml` | Token-auth secrets, split out of `config.toml` (written `rw-------`), keyed by **provider instance**: `[providers.<id>] api_key`. OAuth logins do not live here — see the note below. A credential belongs to the instance; every route it serves resolves it. | Yes |
 | `logo.txt` | Optional user-supplied ASCII logo; when present its lines replace the built-in wordmark on the welcome screen | Rebuildable |
 
 Default location: `~/.config/neenee/`.
@@ -51,7 +51,7 @@ The two credential kinds, side by side:
 
 | Kind | File | Keyed by | Contents |
 |------|------|----------|----------|
-| token (API key) | `~/.config/neenee/credentials.toml` | provider instance (`[user.<id>]` / `[builtins.<id>]`) | `api_key` |
+| token (API key) | `~/.config/neenee/credentials.toml` | provider instance (`[providers.<id>]`) | `api_key` |
 | oauth (subscription login) | `~/.local/state/neenee/auth.toml` | provider instance (`[tokens.<provider>]`) | `access` / `refresh` / `expires_ms` / `account_id` |
 
 The category split follows the XDG spec's own test ("important or portable
@@ -93,6 +93,7 @@ re-prompts; no conversation is lost.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `history.json` | Slash-command input history | Rebuildable |
+| `providers.toml` | **Provider instances** — the program-managed "who I connect to" records: id/name, `template_id`, `auth`, optional `api_key_env`, and a pure-custom instance's declared transport/endpoint/models. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each instance's template + the discovery cache, never persisted | No (user-managed connections) |
 | `trusted_projects.json` | The per-project trust grant set (which projects' `.neenee/config.toml` external tools are loaded) | Rebuildable (re-trust) |
 | `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |
 | `model_usage.json` | Per-model token usage telemetry | Rebuildable |
@@ -109,6 +110,7 @@ Derived, deletable, repopulated on demand. Safe to delete.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `skills/remote/` | Cached remote skill repositories (fetched from `[skills] urls`) | Safe to delete |
+| `models_discovery.json` | Per-route facts derived from live `GET /models`: the discovered model list, fitted capability metadata, and the user's per-(instance, model) reasoning overrides (`route_settings`) | Rebuildable (re-discovered); `route_settings` is user-set and recreated by the model `e` editor |
 
 Default location: `~/.cache/neenee/`.
 

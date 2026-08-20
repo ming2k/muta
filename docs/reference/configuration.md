@@ -98,53 +98,56 @@ window = 8
 | `provider_retry_base_ms` | `1000` | Base delay for exponential backoff, in milliseconds |
 | `provider_retry_max_ms` | `10000` | Cap on the backoff delay, in milliseconds |
 
-## Built-in provider credentials and models
+## Provider instances and credentials
 
-API keys may be supplied as top-level `*_api_key` fields (legacy form, still
-migrated) or — the current form — as `[[providers]]` channel fields / the
-`credentials.toml` secret file. See [Providers](providers.md) for the provider
-matrix and [Paths](paths.md) for `credentials.toml`. On first launch the
-top-level fields below are migrated into explicit `[[providers]]` instances;
-the model ids live in `default_model` (multi-model providers have no
-per-provider model slot).
+Provider *instances* (the "who I connect to" records) live in the state store
+`$XDG_STATE_HOME/neenee/providers.toml`; secrets in
+`$XDG_CONFIG_HOME/neenee/credentials.toml`; `config.toml` holds only the
+*selection* (`default_provider` / `default_model`, which reference instance
+ids). The routes a model actually travels (per-model transport/endpoint/
+reasoning) are **derived at runtime** from each instance's template and the
+discovery cache — never persisted, so two instances of the same template can
+never duplicate or drift a route set. See [Providers](providers.md) for the
+matrix, [Paths](paths.md) for the files, and [Add a provider](../how-to/add-a-provider.md)
+for the full workflow.
 
-| Key | Default model | Purpose |
-|-----|---------------|---------|
-| `openai_api_key`, `openai_model` | `gpt-5.6-sol` | OpenAI |
-| `google_api_key` (alias `gemini_api_key`), `google_base_url` (alias `gemini_base_url`) | via `default_model` | Google Gemini |
-| `moonshot_api_key`, `moonshot_model` | `k3` | Moonshot / Kimi Code |
-| `deepseek_api_key` | via `default_model` | DeepSeek V4 (Flash + Pro share one key) |
-| `zai_api_key`, `zai_model` | `glm-5.2` | Z.AI coding plan (GLM-5) |
-| `anthropic_api_key`, `anthropic_base_url` | via `default_model` | Anthropic (Claude) |
-| `opencode_go_api_key` | via `default_model` | OpenCode Go relay |
-
-## User-defined providers
-
-`providers` is an array of `[[providers]]` tables, each with one or more
-channels. A user entry whose `id` matches a built-in replaces it; otherwise it
-adds a new model. See [Add a provider](../how-to/add-a-provider.md) for the
-full schema and examples.
-
-Template-created providers may also carry `template_id` and `model_source`.
-`model_source = "Api"` refreshes the provider's model list and retains the last
-successful result if discovery fails. Trusted templates persist an optional
-channel `remote` table with provider-advertised capabilities and endpoint data.
-That table is discovery-managed; see [Model Metadata](model-metadata.md).
+An instance is declared as one `[[providers]]` table in `providers.toml`:
 
 ```toml
 [[providers]]
 id = "acme"
-name = "Acme Relay"
-default_channel = 0
+name = "Acme Relay"          # display name; defaults to the id
+template_id = "custom-openai" # optional: derive routes from a template
+auth = "ApiKey"              # ApiKey | XaiOAuth | ChatGptOAuth | CopilotOAuth | AntigravityOAuth
+# api_key_env = "ACME_API_KEY"  # optional env var holding the credential
 
-  [[providers.channels]]
-  label = "Default"
-  transport = "OpenAi"    # OpenAi | Anthropic | Google
-  model = "acme-7b"
-  base_url = "https://relay.example.com/v1"
-  api_key_env = "ACME_API_KEY"  # env var name; wins over api_key
-  effort = "high"               # optional reasoning-depth override (clamped to the model's levels)
+# Pure-custom instance only (no template_id):
+transport = "OpenAi"         # OpenAi | OpenAiResponses | Anthropic | Google
+base_url = "https://relay.example.com/v1/chat/completions"
+models = ["acme-7b", "acme-13b"]
 ```
+
+The credential for an instance is stored once, keyed by instance id:
+
+```toml
+[providers]
+acme = "sk-..."
+```
+
+Resolution precedence is **`api_key_env` env var > `credentials.toml`** — an
+instance declares an optional env var *name*; when set and populated it wins.
+
+Multiple instances of the same provider are ordinary: each is its own
+`[[providers]]` row referencing the same `template_id`, differing only in
+identity, credential, and overrides. The template defines the routes once;
+instances never repeat them.
+
+> **Legacy layout.** Older releases stored provider instances (with embedded
+> per-model channels) in `config.toml` `[[providers]]` tables, keys in
+> `[builtins.<id>]` / `[user.<id>]` in `credentials.toml`, and per-model
+> reasoning in `[model_reasoning]`. A one-shot migration converts that layout
+> to the stores above on the first launch with a current build; the old tables
+> are then ignored by the app (and dropped by the next `config.toml` save).
 
 | `favorites` | Default | Meaning |
 |-----|---------|---------|
@@ -186,55 +189,38 @@ variant a model receives for a capability with several implementations.
 
 ## Per-model reasoning settings
 
-Reasoning controls are **per model**, not per provider. `effort` is the
-reasoning-depth throttle; `thinking` is an Anthropic-only on/off switch. See
-[Reasoning effort](effort.md) for the full per-provider mapping and how a
-model's effective ladder resolves; this section covers configuration only.
+Reasoning controls are **per route** — one (instance, model) pair — not per
+provider. `effort` is the reasoning-depth throttle; `thinking` is an
+Anthropic-only on/off switch. See [Reasoning effort](effort.md) for the full
+per-provider mapping and how a model's effective ladder resolves; this section
+covers storage only.
 
 `effort` applies to any reasoning model whose protocol exposes a depth field —
 OpenAI (Responses and chat), Anthropic, xAI Grok, Kimi K3, DeepSeek, GLM-5.2,
 and Gemini. Valid values are clamped to the model's supported levels at
 request-build time (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`;
-GPT models expose a subset). For OpenAI / xAI / Google / Z.AI / DeepSeek
-channels it is the channel-level `effort` field; for first-party Anthropic
-models it lives in the `[model_reasoning]` table below.
+GPT models expose a subset). Settings are stored per `(instance, model)` in the
+discovery cache (`$XDG_CACHE_HOME/neenee/models_discovery.json`) under
+`route_settings`, written by the model `e` editor in the picker — they are
+user-set route facts, not `config.toml` behavior.
 
 Anthropic extended thinking is **opt-in** (ADR-0046). A model does not reason
-unless you have configured it to. The two Anthropic knobs live in the
-`[model_reasoning."<model-id>"]` table, keyed by model id, or on a
-user-defined Anthropic channel.
+unless you have configured it to.
 
-**Opt-in rule:** a model's *presence* in this table opts it in to thinking.
-Thinking defaults **on** (the recommended Claude mode) unless the entry
-explicitly sets `thinking = false`; a set `effort` applies at that depth (else
-the model's default, and `output_config` is omitted to keep the request lean). A
-model **not** listed here sends no `thinking` object at all — it never reasons on
-its own. Both fields are optional within an entry.
+**Opt-in rule:** a route's *presence* in `route_settings` opts the model in to
+thinking. Thinking defaults **on** (the recommended Claude mode) unless the
+entry explicitly sets `thinking = false`; a set `effort` applies at that depth
+(else the model's default). A route **not** listed sends no `thinking` object —
+it never reasons on its own. Both fields are optional within an entry.
 
-```toml
-# Opus reasons at max depth (thinking on by default, since the entry exists).
-[model_reasoning."claude-opus-4-8"]
-effort   = "max"     # low | medium | high | xhigh | max (clamped to the model's levels)
-# thinking omitted → defaults on
+In the TUI, drilling into a provider and pressing `e` on a model with reasoning
+controls opens the per-model settings popup. OpenAI models show the Effort row;
+Anthropic models show Effort plus the Thinking switch.
 
-# Haiku: opted in but kept shallow and with thinking off.
-[model_reasoning."claude-haiku-4-5"]
-effort   = "low"
-thinking = false
-```
-
-This table applies wherever the named Anthropic-format model is served — the
-built-in `anthropic` provider and Anthropic-format relays alike. In the TUI,
-drilling into a provider and pressing `e` on a model with reasoning controls
-opens the per-model settings popup. OpenAI models show the Effort row.
-Anthropic models show Effort plus the Thinking switch. For a user-defined
-Anthropic relay, setting the channel's `effort` or `thinking` has the same
-opt-in effect.
-
-The legacy flat fields `anthropic_effort` / `anthropic_thinking` are
-**deprecated** and no longer read — they only still load so an existing
-`config.toml` does not break. Migrate by moving their values into a
-`[model_reasoning]` entry.
+The legacy `[model_reasoning."<model-id>"]` table and the flat
+`anthropic_effort` / `anthropic_thinking` fields are **deprecated** and no
+longer read; a one-shot migration folds their values into `route_settings` for
+the instances that serve the model.
 
 ## TUI presentation
 

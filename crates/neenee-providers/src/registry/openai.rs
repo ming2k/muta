@@ -193,6 +193,8 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "openai",
     baselines: MODELS,
+    base_url: "https://api.openai.com/v1/chat/completions",
+    user_agent: None,
     protocol: "openai",
     models: OPENAI_BUILTIN_MODELS,
     discovery: true,

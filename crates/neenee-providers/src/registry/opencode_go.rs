@@ -283,6 +283,10 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "opencode-go",
     baselines: MODELS,
+    // Endpoints are per-model by wire format (see `route_for_model`); the
+    // instance-level default is the OpenAI chat-completions surface.
+    base_url: "https://opencode.ai/zen/go/v1/chat/completions",
+    user_agent: None,
     protocol: "openai",
     // opencode-go's model list is derived at runtime from the baseline
     // registry and spans multiple transports; a live overwrite would regress it.

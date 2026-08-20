@@ -64,21 +64,21 @@ impl AuthStore {
 
     /// Read auth store from `path`, falling back to migrating from `legacy_path` if `path` is missing.
     pub fn load_from_paths(path: &std::path::Path, legacy_path: &std::path::Path) -> Self {
-        if !path.exists() && legacy_path.exists() {
-            if let Ok(content) = fs::read_to_string(legacy_path) {
-                if let Ok(store) = toml::from_str::<Self>(&content) {
-                    tracing::info!(
-                        from = %legacy_path.display(),
-                        to = %path.display(),
-                        "migrating auth.toml from config dir to state dir"
-                    );
-                    if let Ok(bytes) = toml::to_string_pretty(&store).map(|s| s.into_bytes()) {
-                        let _ = neenee_persistence::fsutil::atomic_write_bytes(path, &bytes);
-                    }
-                    let _ = fs::remove_file(legacy_path);
-                    return store;
-                }
+        if !path.exists()
+            && legacy_path.exists()
+            && let Ok(content) = fs::read_to_string(legacy_path)
+            && let Ok(store) = toml::from_str::<Self>(&content)
+        {
+            tracing::info!(
+                from = %legacy_path.display(),
+                to = %path.display(),
+                "migrating auth.toml from config dir to state dir"
+            );
+            if let Ok(bytes) = toml::to_string_pretty(&store).map(|s| s.into_bytes()) {
+                let _ = neenee_persistence::fsutil::atomic_write_bytes(path, &bytes);
             }
+            let _ = fs::remove_file(legacy_path);
+            return store;
         }
         let Ok(content) = fs::read_to_string(path) else {
             return Self::default();

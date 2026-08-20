@@ -101,6 +101,8 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "chatgpt-oauth",
     baselines: MODELS,
+    base_url: "https://chatgpt.com/backend-api/codex/responses",
+    user_agent: None,
     // The Responses transport is the OpenAI wire family; discovery is
     // disabled because the ChatGPT subscription backend does not expose a
     // standard `GET /models` list, and the plan-unlocked set is fixed.

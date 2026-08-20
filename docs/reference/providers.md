@@ -42,16 +42,23 @@ Responses API used by the ChatGPT subscription backend.
 ## Provider catalog
 
 `default_provider` in `config.toml` is the **fresh-session default**: the
-provider a new launch lands on. The `/models` picker accepts the same names
-and, on a switch, persists the choice back to `default_provider` so the next
-launch follows it; see [Dual-write provider/model
-selection](../adr/0066-dual-write-provider-selection.md). Credentials resolve
-from the `config.toml` fields below (or the `credentials.toml` secret file —
-see [Paths](paths.md)) through the catalog. Environment variables are read
-only where a channel explicitly declares an `api_key_env` (user-defined
-`[[providers.channels]]`, and template presets that still carry one). The
-legacy `<PROVIDER>_API_KEY` environment variables of earlier releases are no
-longer read at runtime.
+provider instance a new launch lands on. The `/models` picker accepts the same
+ids and, on a switch, persists the choice back to `default_provider` so the
+next launch follows it; see [Dual-write provider/model
+selection](../adr/0066-dual-write-provider-selection.md).
+
+Provider *instances* are declared in the state store
+(`$XDG_STATE_HOME/neenee/providers.toml`, one `[[providers]]` row per
+instance); each instance references a template by `template_id` (or is a
+pure-custom declaration) and owns exactly one credential, stored in
+`credentials.toml` keyed by instance id (`[providers.<id>]`, see
+[Paths](paths.md)). The concrete routes (per-model transport/endpoint/
+reasoning) are **derived at runtime** from the instance's template and the
+discovery cache — they are never persisted, so two instances of the same
+template cannot drift apart. Credential resolution precedence is
+`api_key_env` env var > `credentials.toml`. The legacy `<PROVIDER>_API_KEY`
+environment variables and `config.toml` `*_api_key` fields of earlier releases
+are no longer read at runtime.
 
 ### OpenAI-compatible presets
 
@@ -61,28 +68,27 @@ env vars are data in that table, not hard-coded per struct.
 
 | `default_provider` | Endpoint | Credentials | Default / popular models |
 |--------------------|----------|-------------|--------------------------|
-| `kimi-code` | `https://api.kimi.com/coding/v1/chat/completions` | `moonshot_api_key` config field / `credentials.toml` | `k3` (Kimi K3, 1M context) plus the platform's live `/models` list |
-| `zai-code` | `https://open.bigmodel.cn/api/coding/paas/v4/chat/completions` | `zai_api_key` config field / `credentials.toml` | `glm-5.3` (default), `glm-5.2` |
+| `kimi-code` | `https://api.kimi.com/coding/v1/chat/completions` | instance credential (`credentials.toml [providers.<id>]`) | `k3` (Kimi K3, 1M context) plus the platform's live `/models` list |
+| `zai-code` | `https://open.bigmodel.cn/api/coding/paas/v4/chat/completions` | instance credential (`credentials.toml [providers.<id>]`) | `glm-5.3` (default), `glm-5.2` |
 
 ### Bespoke providers
 
 | `default_provider` | Struct | Endpoint | Credentials | Default / popular models |
 |--------------------|--------|----------|-------------|--------------------------|
-| `openai` | `OpenAiChatCompletionsProvider` | `https://api.openai.com/v1/chat/completions` | `openai_api_key` config field / `credentials.toml` | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` |
-| `anthropic` | `AnthropicMessagesProvider` | `https://api.anthropic.com/v1/messages` (overridable via `config.anthropic_base_url`) | `anthropic_api_key` config field / `credentials.toml` | `claude-fable-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` |
-| `google` | `GoogleProvider` | `{google_base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; env `GOOGLE_BASE_URL`, then `config.google_base_url`; legacy `GEMINI_BASE_URL` alias) | `google_api_key` config field (legacy alias `gemini_api_key`) / `credentials.toml` | `gemini-3.7-flash`, `gemini-3.5-flash`, `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../../crates/neenee-providers/src/registry/google.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
-| `deepseek` | `OpenAiResponsesProvider` | `https://api.deepseek.com/v1/responses` | `deepseek_api_key` config field / `credentials.toml` | `deepseek-v4-flash`, `deepseek-v4-flash-0731`, `deepseek-v4-pro`, `deepseek-v4-pro-0813` (1M context; thinking + non-thinking modes) |
+| `openai` | `OpenAiChatCompletionsProvider` | `https://api.openai.com/v1/chat/completions` | instance credential (`credentials.toml [providers.<id>]`) | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` |
+| `anthropic` | `AnthropicMessagesProvider` | `https://api.anthropic.com/v1/messages` (overridable via an instance `base_url`) | instance credential (`credentials.toml [providers.<id>]`) | `claude-fable-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` |
+| `google` | `GoogleProvider` | `{base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; overridable via an instance `base_url`) | instance credential (`credentials.toml [providers.<id>]`) | `gemini-3.7-flash`, `gemini-3.5-flash`, `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../../crates/neenee-providers/src/registry/google.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
+| `deepseek` | `OpenAiResponsesProvider` | `https://api.deepseek.com/v1/responses` | instance credential (`credentials.toml [providers.<id>]`) | `deepseek-v4-flash`, `deepseek-v4-flash-0731`, `deepseek-v4-pro`, `deepseek-v4-pro-0813` (1M context; thinking + non-thinking modes) |
 
 Notes:
 
-- `deepseek` is a multi-model catalog entry: `deepseek-v4-flash` and
-  `deepseek-v4-pro` share one API key (`DEEPSEEK_API_KEY`) and one endpoint.
-  It is materialized by the catalog layer, not by `OPENAI_PROVIDER_SPECS`.
+- `deepseek` is a multi-model template instance: `deepseek-v4-flash` and
+  `deepseek-v4-pro` share one credential and one endpoint. It is derived by
+  the catalog from the `deepseek` template, not by `OPENAI_PROVIDER_SPECS`.
   Both V4 models natively speak the OpenAI **Responses API** (Flash since the
-  0731 GA, Pro since 0813), so the channels use the Responses transport; a
-  startup migration repoints any channel still on the official
-  chat-completions URL. The dated ids (`-0731` / `-0813`) pin a snapshot; the
-  bare ids float with the upstream latest.
+  0731 GA, Pro since 0813), so the template's routes use the Responses
+  transport. The dated ids (`-0731` / `-0813`) pin a snapshot; the bare ids
+  float with the upstream latest.
 - `zai-code` targets the Zhipu BigModel / Z.AI coding-plan platform (CN) and serves the
   GLM-5 family; it sends a `ZCode/3.5.3` User-Agent along with native ZCode identity headers
   (`X-Title`, `X-ZCode-Agent`, `HTTP-Referer`) so the platform recognises its native coding client.
@@ -141,7 +147,7 @@ subscription bundles that expose a `/v1/chat/completions` surface:
 
 | Template id | Protocol | Notes |
 |-------------|----------|-------|
-| `custom-openai` | `openai` | Seeds **no** model list. The editor shows a free-text Model field (registry-known OpenAI ids as suggestions, plus the raw typed id as a custom value); the typed id becomes the one seeded channel. No live discovery — the instance keeps exactly the id the user typed. |
+| `custom-openai` | `openai` | Seeds **no** model list. The editor shows a free-text Model field (registry-known OpenAI ids as suggestions, plus the raw typed id as a custom value); the typed id becomes the instance's declared model. No live discovery — the instance keeps exactly the id the user typed. |
 
 Model ids travel **verbatim**: an endpoint with case-sensitive ids (e.g. the
 WeChat OpenAI-compatible endpoint serves `GLM-5.2` / `Deepseek-v4-flash` and

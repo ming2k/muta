@@ -35,6 +35,8 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "copilot-oauth",
     baselines: MODELS,
+    base_url: "https://api.githubcopilot.com/chat/completions",
+    user_agent: None,
     // Copilot speaks the OpenAI chat-completions wire family against
     // api.githubcopilot.com. Discovery + fitting are enabled so the
     // instance tracks the user's actual plan-unlocked model set (which

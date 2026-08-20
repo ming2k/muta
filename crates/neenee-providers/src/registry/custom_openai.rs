@@ -60,6 +60,8 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "custom-openai",
     baselines: MODELS,
+    base_url: "",
+    user_agent: None,
     protocol: "openai",
     // No live discovery: arbitrary relays' `GET /models` is an availability
     // signal at best, and a user-supplied single-model endpoint must keep the

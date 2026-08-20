@@ -110,6 +110,14 @@ pub struct ProviderTemplateSpec {
     /// reused and never renamed once shipped — it is the durable join key
     /// between an instance and its template.
     pub id: &'static str,
+    /// The instance-level default endpoint this template's routes reach.
+    /// `""` for templates that need a user-supplied endpoint
+    /// (`custom-openai`) — [`route_for_model`] returns `None` for those.
+    pub base_url: &'static str,
+    /// The `User-Agent` header this template's routes must send, when the
+    /// provider requires a specific one (the coding-plan endpoints validate
+    /// this header). `None` → the shared [`crate::NEENEE_USER_AGENT`].
+    pub user_agent: Option<&'static str>,
     /// Baseline capability metadata for the models this provider serves.
     /// Lives beside the template (one table per provider) and is submitted to
     /// `neenee_contracts`'s baseline registry at link time; the reconciliation
@@ -178,6 +186,38 @@ pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
 /// Look up a template spec by its stable id. Exact match only.
 pub fn provider_template_spec(id: &str) -> Option<&'static ProviderTemplateSpec> {
     PROVIDER_TEMPLATE_SPECS.iter().find(|spec| spec.id == id)
+}
+
+/// Resolve the transport endpoint for **one model** of a template — the route
+/// the catalog materializes at runtime (routes are derived, never persisted).
+///
+/// Returns `(protocol, base_url, user_agent)` where `protocol` is one of the
+/// wire-protocol labels `"openai"` / `"openai-responses"` / `"anthropic"` /
+/// `"google"`. Most templates serve every model over one endpoint; the
+/// `opencode-go` relay routes models by their registered wire format (OpenAI
+/// chat / Anthropic `/messages` / Google `/v1beta`), so its base URL and
+/// protocol vary per model. `None` for templates with no built-in endpoint
+/// (`custom-openai`), where the instance declaration must supply one.
+pub fn route_for_model(
+    template_id: &str,
+    model_id: &str,
+) -> Option<(&'static str, &'static str, Option<&'static str>)> {
+    let spec = provider_template_spec(template_id)?;
+    if spec.id == "opencode-go" {
+        let format = neenee_contracts::model::resolve(model_id).format;
+        let (protocol, base_url) = match format {
+            neenee_contracts::WireFormat::AnthropicCompat => {
+                ("anthropic", "https://opencode.ai/zen/go/v1/messages")
+            }
+            neenee_contracts::WireFormat::Google => ("google", "https://opencode.ai/zen/go/v1beta"),
+            _ => ("openai", "https://opencode.ai/zen/go/v1/chat/completions"),
+        };
+        return Some((protocol, base_url, spec.user_agent));
+    }
+    if spec.base_url.is_empty() {
+        return None;
+    }
+    Some((spec.protocol, spec.base_url, spec.user_agent))
 }
 
 impl OpenAiProviderSpec {

@@ -155,6 +155,8 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "google",
     baselines: MODELS,
+    base_url: "https://generativelanguage.googleapis.com/v1beta",
+    user_agent: None,
     protocol: "google",
     models: GOOGLE_BUILTIN_MODELS,
     discovery: true,

@@ -82,59 +82,54 @@ is not listed.
 Google-native relays use the versioned base URL. neenee appends
 `/models/{model}:generateContent` for each request.
 
-## Configure a relay in `config.toml`
+## Configure a relay instance
 
-Edit the user config when you want a reproducible provider definition without
-using the TUI. Store tokens in the credentials file or an environment variable
-when possible.
+Edit the state store when you want a reproducible provider definition without
+using the TUI. Instances live in `providers.toml`
+(`$XDG_STATE_HOME/neenee/`), the selection in `config.toml`, and tokens in the
+credentials file or an environment variable.
 
 ```toml
+# $XDG_CONFIG_HOME/neenee/config.toml — behavior only
 default_provider = "example-openai"
+```
 
+```toml
+# $XDG_STATE_HOME/neenee/providers.toml — instances
 [[providers]]
 id = "example-openai"
 name = "Example OpenAI"
-
-[[providers.channels]]
-label = "gpt-5.5"
 transport = "OpenAi"
 base_url = "https://relay.example.com/v1/chat/completions"
-api_key_env = "RELAY_API_KEY"
-model = "gpt-5.5"
+models = ["gpt-5.5"]
+```
+
+```toml
+# $XDG_CONFIG_HOME/neenee/credentials.toml — secrets (or set RELAY_API_KEY in the env)
+[providers]
+example-openai = "sk-..."
 ```
 
 For Anthropic:
 
 ```toml
-default_provider = "example-claude"
-
 [[providers]]
 id = "example-claude"
 name = "Example Claude"
-
-[[providers.channels]]
-label = "claude-sonnet-5"
 transport = "Anthropic"
 base_url = "https://relay.example.com/v1/messages"
-api_key_env = "RELAY_API_KEY"
-model = "claude-sonnet-5"
+models = ["claude-sonnet-5"]
 ```
 
 For Google-native Antigravity:
 
 ```toml
-default_provider = "antigravity"
-
 [[providers]]
 id = "antigravity"
 name = "Antigravity"
-
-[[providers.channels]]
-label = "gemini-3-flash"
 transport = "Google"
 base_url = "https://relay.example.com/antigravity/v1beta"
-api_key_env = "RELAY_API_KEY"
-model = "gemini-3-flash"
+models = ["gemini-3-flash"]
 ```
 
 ## Check a relay endpoint

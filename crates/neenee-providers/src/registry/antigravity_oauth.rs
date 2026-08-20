@@ -140,6 +140,8 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "antigravity-oauth",
     baselines: MODELS,
+    base_url: "https://cloudcode-pa.googleapis.com",
+    user_agent: Some("antigravity/1.23.2 windows/amd64"),
     protocol: "google",
     discovery: false,
     fitting: false,

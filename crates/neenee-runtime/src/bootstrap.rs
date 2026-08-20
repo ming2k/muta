@@ -186,33 +186,14 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let (resp_tx, resp_rx) = mpsc::unbounded_channel::<AgentResponse>();
 
     let mut config = Config::load();
-    if catalog::migrate_legacy_provider_instances(&mut config)
-        && let Err(error) = config.save()
-    {
-        tracing::warn!(?error, "could not persist provider instance migration");
-    }
-    // Move official-endpoint DeepSeek channels onto the Responses transport
-    // (V4 Flash 0731+ / Pro 0813+ natively speak it) before reconciliation
-    // reseeds anything from the template.
-    if catalog::migrate_deepseek_channels_to_responses(&mut config)
-        && let Err(error) = config.save()
-    {
-        tracing::warn!(?error, "could not persist DeepSeek Responses migration");
-    }
-    // Reconcile template-sourced instances before building the picker: Fixed
-    // instances mirror their template, while Api instances retain their last
-    // discovered client-supported subset. Pure-custom instances (no
-    // `template_id`) are untouched. See the `reconcile_provider_models` doc
-    // comment for the exact semantics.
-    if catalog::reconcile_provider_models(&mut config)
-        && let Err(error) = config.save()
-    {
-        tracing::warn!(?error, "could not persist provider model reconciliation");
-    }
+    // One-shot migration from the legacy layout (provider instances in
+    // `config.toml`, keys in `[builtins]/[user]`) to the state stores. Runs
+    // before anything touches the instance store.
+    catalog::migrate_legacy_state();
     // Overlay persisted fitted-model metadata onto model resolution, so ids a
     // trusted provider advertised (but the static registry does not know)
     // resolve with their real capabilities from the very first request.
-    catalog::sync_fitted_model_registry(&config);
+    catalog::sync_fitted_model_registry();
 
     // Live model-list discovery for API-sourced instances. Runs in the
     // BACKGROUND so slow/unreachable providers never delay the first frame:

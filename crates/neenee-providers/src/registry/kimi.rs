@@ -97,6 +97,8 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "kimi-code",
     baselines: MODELS,
+    base_url: "https://api.kimi.com/coding/v1/chat/completions",
+    user_agent: Some(crate::OPENCODE_USER_AGENT),
     protocol: "openai",
     // The Kimi Code platform exposes a live /models endpoint, so instances
     // created from this template track the platform's actual model list.

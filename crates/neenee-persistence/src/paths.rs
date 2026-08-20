@@ -161,6 +161,14 @@ impl Dirs {
         self.state_dir.join("auth.toml")
     }
 
+    /// Provider instances (`$XDG_STATE_HOME/neenee/providers.toml`). The
+    /// program-managed "who I connect to" records — deliberately NOT in the
+    /// user-edited `config.toml`, which holds behavior only. See
+    /// [`crate::instances`].
+    pub fn providers_file(&self) -> PathBuf {
+        self.state_dir.join("providers.toml")
+    }
+
     /// Legacy location in config_dir for backward compatibility.
     pub fn legacy_auth_file(&self) -> PathBuf {
         self.config_dir.join("auth.toml")

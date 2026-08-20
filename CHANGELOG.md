@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Provider instances are state; routes are derived, never persisted
+  (ADR-0123).** `config.toml` is now behavior-only: provider *instances* moved
+  to a state store (`$XDG_STATE_HOME/neenee/providers.toml`), credentials are
+  keyed by instance (`credentials.toml [providers.<id>]`, replacing
+  `[builtins.<id>]` / `[user.<id>]`), and per-model routes (transport/
+  endpoint/reasoning) are derived at runtime from each instance's template
+  plus the discovery cache — the `[[providers.channels]]` concept and the
+  legacy top-level `*_api_key` / `*_base_url` / `*_model` fields are gone. Two
+  instances of the same template no longer duplicate or drift a route set;
+  per-(instance, model) reasoning lives in the discovery cache
+  (`route_settings`), not `config.toml`. A one-shot migration converts the
+  legacy layout automatically on first launch; `neenee auth` / `neenee config`
+  read the new stores.
+
 ## [0.29.0] - 2026-08-20
 
 ### Added

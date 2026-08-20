@@ -66,6 +66,8 @@ inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "xai-oauth",
     baselines: MODELS,
+    base_url: "https://api.x.ai/v1/chat/completions",
+    user_agent: None,
     protocol: "openai",
     models: XAI_BUILTIN_MODELS,
     discovery: true,

@@ -1,9 +1,11 @@
-//! Provider-switch / favorite / default-model handlers, extracted verbatim
-//! from the agent background task's `match req { … }` dispatch.
+//! Provider-switch / favorite / default-model handlers.
 //!
-//! Each handler is one match arm, lifted unchanged. Parameters are named to
-//! match the original loop locals (`config`, `agent`, `provider_for_task`,
-//! `resp_tx`, `provider_usage`) so the body reads exactly as it did inline.
+//! Each handler is one match arm of the agent background task's dispatch.
+//! Provider instances live in the `providers.toml` state store, credentials in
+//! `credentials.toml`, and per-route facts in the discovery cache — `config`
+//! holds only *behavior* (`default_provider` / `default_model` / favorites),
+//! which is what these handlers persist there. Routes are derived by the
+//! catalog at activation time.
 
 use neenee_agent::Agent;
 use neenee_agent::catalog;
@@ -11,8 +13,9 @@ use neenee_agent::orchestration::round_response;
 use neenee_contracts::{
     AgentNotice, AgentResponse, CommandRecord, CommandResult, Provider, RoundEvent, SecretString,
 };
+use neenee_persistence::config::{Config, Credentials, DiscoveryCache, UserTransport};
+use neenee_persistence::instances::{Instances, ProviderInstance};
 use neenee_persistence::{
-    config::Config,
     provider_usage::ProviderUsage,
     session::{ProviderSelection, SessionStore},
 };
@@ -21,50 +24,6 @@ use tokio::sync::mpsc;
 
 use crate::agent_setup::{reseed_prune_threshold, reseed_tool_variants};
 use crate::session_view::provider_key_status;
-
-/// Whether `id` is a multi-model provider — a built-in that hosts several models
-/// behind one key, or a user-defined provider with more than one channel. For
-/// these the active model lives in `config.default_model` rather than a
-/// per-provider model slot.
-fn is_multi_model_provider(config: &Config, id: &str) -> bool {
-    if matches!(
-        id,
-        "openai" | "opencode-go" | "anthropic" | "google" | "deepseek"
-    ) {
-        return true;
-    }
-    config
-        .providers
-        .iter()
-        .any(|p| p.id == id && p.channels.len() > 1)
-}
-
-/// Persist a TUI-entered API key for `provider_type`. The legacy per-builtin
-/// fields are still written (startup migration folds them into instances
-/// created later), but the catalog builds providers exclusively from
-/// `config.providers` instances — so when an instance already exists the key
-/// must also land on every non-OAuth channel, otherwise the live provider
-/// keeps the old key and the new one is dropped at the next startup. OAuth
-/// channels are skipped: their bearer is owned by the auth flow.
-fn apply_switch_api_key(config: &mut Config, provider_type: &str, key: &str) {
-    match provider_type {
-        "openai" => config.openai_api_key = Some(key.into()),
-        "google" => config.google_api_key = Some(key.into()),
-        "kimi-code" => config.moonshot_api_key = Some(key.into()),
-        "deepseek" => config.deepseek_api_key = Some(key.into()),
-        "zai-code" => config.zai_api_key = Some(key.into()),
-        "opencode-go" => config.opencode_go_api_key = Some(key.into()),
-        "anthropic" => config.anthropic_api_key = Some(key.into()),
-        _ => {}
-    }
-    if let Some(provider) = config.providers.iter_mut().find(|p| p.id == provider_type) {
-        for channel in &mut provider.channels {
-            if !channel.auth.is_oauth() {
-                channel.api_key = Some(key.into());
-            }
-        }
-    }
-}
 
 /// `AgentRequest::SwitchProvider` — persist the chosen key/url/model/default,
 /// rebuild the provider through the catalog so resolution stays shared with
@@ -90,47 +49,35 @@ pub async fn switch(
     api_key: Option<SecretString>,
     base_url: Option<String>,
 ) {
-    // A key entered in the TUI is persisted and wins over
-    // config; environment variables still take precedence.
-    if let Some(key) = api_key {
-        apply_switch_api_key(config, &provider_type, key.expose_secret());
+    let mut instances = Instances::load();
+    // A key entered in the TUI is the instance's credential; an environment
+    // variable (`api_key_env`) still wins at catalog resolution time.
+    if let Some(key) = api_key
+        && instances.get(&provider_type).is_some()
+    {
+        let mut creds = Credentials::load();
+        creds.set_api_key(&provider_type, Some(key));
+        if creds.save().is_err() {
+            tracing::warn!("switch: could not persist credential");
+        }
     }
     if let Some(url) = base_url
-        && provider_type.as_str() == "anthropic"
+        && !url.trim().is_empty()
+        && let Some(instance) = instances.get_mut(&provider_type)
     {
-        config.anthropic_base_url = Some(url);
+        instance.base_url = Some(url.trim().to_string());
+        if instances.save().is_err() {
+            tracing::warn!("switch: could not persist base-url override");
+        }
     }
-    // ADR-0046: reasoning (effort/thinking) is no longer set on provider
-    // switch — it is opted in per model via `[model_reasoning]`
-    // (`EditModelReasoning`) / a channel's reasoning fields
-    // (`EditProviderModel`). Switching just selects the provider + model.
-    //
+
     // Set the selection on the effective config so `activate` resolves the
     // right channel; the save below persists it as the global default, and
     // the session pin (written further below) records this session's own
-    // choice for exact restore on resume.
+    // choice for exact restore on resume. The active model always lives in the
+    // shared `default_model` — every instance is multi-model capable.
     config.default_provider = provider_type.clone();
-    // Multi-model providers (opencode-go, anthropic, google, deepseek, and any
-    // user-defined provider with several channels) carry the active model in the
-    // shared `default_model` field — every channel shares one API key and each
-    // model's transport is derived from its catalog channel. Single-model
-    // built-ins keep their per-provider model slot as before.
-    let pinned_model: Option<String> = if is_multi_model_provider(config, &provider_type) {
-        config.default_model = Some(model.clone());
-        Some(model.clone())
-    } else {
-        config.default_model = None;
-        match provider_type.as_str() {
-            "kimi-code" => config.moonshot_model = Some(model.clone()),
-            "zai-code" => config.zai_model = Some(model.clone()),
-            _ => {}
-        }
-        // Keep the per-session pin's model explicit so reopen lands on the
-        // exact model even for single-model providers.
-        Some(model.clone())
-    };
-    // Persist the switch as the global default so the next launch (a fresh
-    // session without a pin) lands on this provider/model.
+    config.default_model = Some(model.clone());
     if let Err(error) = config.save() {
         tracing::warn!(?error, "could not persist provider selection");
     }
@@ -139,7 +86,7 @@ pub async fn switch(
     if let Err(error) = session
         .set_provider_selection(Some(ProviderSelection {
             provider: provider_type.clone(),
-            model: pinned_model,
+            model: Some(model.clone()),
         }))
         .await
     {
@@ -160,9 +107,10 @@ pub async fn switch(
     .await;
 }
 
-/// `AgentRequest::AddProvider` — persist a user-defined ("custom") provider to
-/// `config.providers`, then activate it. For SuperGrok OAuth the TUI runs
-/// [`authorize`] first, then calls this with `auth = XaiOAuth`.
+/// `AgentRequest::AddProvider` — create a provider instance (from a template
+/// or as a pure-custom declaration), persist it to the state store, set its
+/// credential, then activate it. For OAuth templates the TUI runs
+/// [`authorize`] first, then calls this with `auth` set.
 #[allow(clippy::too_many_arguments)]
 pub async fn add(
     config: &mut Config,
@@ -180,21 +128,12 @@ pub async fn add(
     auth: neenee_contracts::ChannelAuth,
     template_id: Option<String>,
 ) {
-    use neenee_persistence::config::{UserChannelConfig, UserProviderConfig, UserTransport};
-
-    let id = unique_provider_id(config, &name);
-    let transport = match protocol.as_str() {
-        "anthropic" => UserTransport::Anthropic,
-        "google" | "gemini" => UserTransport::Google,
-        // The OpenAI Responses API over an API key (e.g. DeepSeek V4).
-        "openai-responses" => UserTransport::OpenAiResponses,
-        // Default (and explicit "openai"): the OpenAI-compatible chat surface.
-        _ => UserTransport::OpenAi,
-    };
+    let mut instances = Instances::load();
+    let id = instances.unique_id(&name);
+    let transport = transport_for_protocol(&protocol);
     let trimmed_key = api_key.expose_secret().trim();
-    let api_key = (!trimmed_key.is_empty()).then(|| SecretString::from(trimmed_key));
     // Pasted API key on an OAuth template → ordinary ApiKey auth.
-    let auth = match (auth, api_key.is_some()) {
+    let auth = match (auth, !trimmed_key.is_empty()) {
         (a, true) if a.is_oauth() => neenee_contracts::ChannelAuth::ApiKey,
         (other, _) => other,
     };
@@ -202,70 +141,70 @@ pub async fn add(
         let trimmed = base_url.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     };
-    // ADR-0046: reasoning is opt-in per model. New channels are created with no
-    // effort/thinking — the user opts a model in from the stage-2 model `e`
-    // editor (`EditProviderModel`). One channel per seeded model — a template
-    // that seeds the whole Claude family lands every model in the picker's
-    // stage-2 list, all sharing the provider's transport/endpoint/key. Empty/
-    // whitespace model ids are dropped.
-    let channels: Vec<UserChannelConfig> = models
+    // Stamp the template id so the catalog derives this instance's routes from
+    // the template. Only a known id is recorded; an unknown / blank value
+    // keeps the instance pure-custom (its declared models are honored).
+    let resolved_template_id =
+        template_id.filter(|tid| neenee_providers::provider_template_spec(tid).is_some());
+    // Sanitized declared model ids. Template instances derive their model set
+    // and leave `models` empty; a template that must still seed its list
+    // (custom-openai) declares it here.
+    let declared_models: Vec<String> = models
         .iter()
         .map(|m| neenee_contracts::sanitize_model_id(m))
         .filter(|m| !m.is_empty())
-        .map(|model| UserChannelConfig {
-            label: model.clone(),
-            transport,
-            api_key_env: None,
-            api_key: api_key.clone(),
-            model: Some(model),
-            base_url: base_url.clone(),
-            user_agent: user_agent.clone(),
-            effort: None,
-            thinking: None,
-            auth,
-            remote: None,
-        })
         .collect();
-    // A provider must serve at least one model; a template with no usable model
-    // id is a no-op rather than a broken zero-channel entry.
-    if channels.is_empty() {
+    let is_template = resolved_template_id.is_some();
+    // A pure-custom provider must declare at least one model; a template
+    // instance with a template that seeds none is a no-op.
+    if !is_template && declared_models.is_empty() {
         return;
     }
-    let active_model = channels[0].model.clone().unwrap_or_default();
-    // Stamp the template id so the catalog re-seeds this instance from the
-    // template's current models at startup. Only a known id is recorded; an
-    // unknown / blank value keeps the instance pure-custom (no tracking).
-    let resolved_template_id =
-        template_id.filter(|tid| neenee_providers::provider_template_spec(tid).is_some());
-    // A template-sourced instance adopts the template's default model source:
-    // Api (live `GET /models` discovery with snapshot fallback) where the
-    // template supports it, Fixed otherwise. A pure-custom instance ignores
-    // model_source, so the Fixed default is harmless.
-    let model_source = resolved_template_id
-        .as_deref()
-        .and_then(neenee_providers::provider_template_spec)
-        .map(catalog::default_model_source_for_spec)
+    let active_model = declared_models
+        .first()
+        .cloned()
+        .or_else(|| {
+            resolved_template_id
+                .as_deref()
+                .and_then(neenee_providers::provider_template_spec)
+                .and_then(|spec| spec.models.first())
+                .map(|m| (*m).to_string())
+        })
         .unwrap_or_default();
-    let entry = UserProviderConfig {
+
+    let instance = ProviderInstance {
         id: id.clone(),
         name: (!name.trim().is_empty()).then(|| name.trim().to_string()),
-        channels,
-        default_channel: 0,
         template_id: resolved_template_id,
-        model_source,
-        // A fresh instance has no fitted metadata yet; live discovery fills
-        // it for fitting-enabled templates on the next refresh.
-        fitted_models: Default::default(),
+        auth,
+        api_key_env: None,
+        transport: if is_template { None } else { Some(transport) },
+        base_url,
+        user_agent: if is_template { None } else { user_agent },
+        models: if is_template {
+            Vec::new()
+        } else {
+            declared_models
+        },
     };
-    config.providers.push(entry);
+    instances.providers.push(instance);
+    if instances.save().is_err() {
+        tracing::warn!("add: could not persist instance");
+    }
+    // The instance's credential, if the user supplied one.
+    if auth == neenee_contracts::ChannelAuth::ApiKey && !trimmed_key.is_empty() {
+        let mut creds = Credentials::load();
+        creds.set_api_key(&id, Some(SecretString::from(trimmed_key)));
+        if creds.save().is_err() {
+            tracing::warn!("add: could not persist credential");
+        }
+    }
+
     config.default_provider = id.clone();
-    // Record the first seeded model as the active model so the picker and status
-    // surfaces land on it.
     config.default_model = Some(active_model.clone());
-    // Adding a provider is also a live switch: persist the selection as the
-    // global default (like `/models`), then pin it to this session so resume
-    // restores it exactly.
-    let _ = config.save();
+    if let Err(error) = config.save() {
+        tracing::warn!(?error, "add: could not persist selection");
+    }
     // Pin the newly-added provider to this session — adding a provider is
     // also a live switch, so it is pinned like `/models`.
     if let Err(error) = session
@@ -282,12 +221,9 @@ pub async fn add(
     // list. A failure keeps the seed; each failure is reported back as a
     // warning so the user knows the list may be incomplete.
     if auth.is_oauth() && auth != neenee_contracts::ChannelAuth::AntigravityOAuth {
-        let outcome = catalog::discover_provider_models(config).await;
+        let outcome = catalog::discover_provider_models().await;
         if outcome.changed {
-            catalog::sync_fitted_model_registry(config);
-            if let Err(error) = config.save_preserving_provider_selection() {
-                tracing::warn!(?error, "live discovery after add: could not persist");
-            }
+            catalog::sync_fitted_model_registry();
         }
         for (failed_provider, message) in &outcome.failures {
             let _ = resp_tx.send(AgentResponse::ConnectStatus(
@@ -311,12 +247,9 @@ pub async fn add(
     .await;
 }
 
-/// `AgentRequest::EditProvider` — update a user-defined provider's metadata in
-/// place: display name, and every API-key channel's transport/base-URL/key.
-/// Each channel's model id is preserved, so a multi-model custom provider keeps
-/// all its models. OAuth channels (ChatGPT/Codex, xAI) are skipped: their
-/// base-URL/transport/token are owned by the auth flow and must not be
-/// overwritten, so only the name (and an API-key channel's fields) change. An
+/// `AgentRequest::EditProvider` — update an instance's display name, endpoint
+/// override (API-key instances), and credential in place. OAuth instances'
+/// endpoint/bearer are owned by the auth flow and are never overwritten. An
 /// empty `api_key` leaves the existing key untouched. Persists, then
 /// re-activates so the live provider picks up the new endpoint/key.
 #[allow(clippy::too_many_arguments)]
@@ -332,47 +265,43 @@ pub async fn edit(
     base_url: String,
     api_key: SecretString,
 ) {
-    use neenee_persistence::config::UserTransport;
-
-    let transport = match protocol.as_str() {
-        "anthropic" => UserTransport::Anthropic,
-        "google" | "gemini" => UserTransport::Google,
-        "openai-responses" => UserTransport::OpenAiResponses,
-        _ => UserTransport::OpenAi,
-    };
+    let mut instances = Instances::load();
+    let transport = transport_for_protocol(&protocol);
     let trimmed_url = base_url.trim();
     let trimmed_key = api_key.expose_secret().trim();
     let trimmed_name = name.trim();
-    let Some(provider) = config.providers.iter_mut().find(|p| p.id == id) else {
+    let Some(instance) = instances.get_mut(&id) else {
         return;
     };
     if !trimmed_name.is_empty() {
-        provider.name = Some(trimmed_name.to_string());
+        instance.name = Some(trimmed_name.to_string());
     }
-    for channel in &mut provider.channels {
-        // An OAuth channel's endpoint and bearer are resolved by the auth flow
-        // (xAI `https://api.x.ai/...`, ChatGPT
-        // `https://chatgpt.com/backend-api/codex/...`); editing the provider
-        // must never clobber them. The editor hides Base URL/Token for OAuth,
-        // but the server guards too so a malformed/empty payload can't wipe
-        // them.
-        if channel.auth.is_oauth() {
-            continue;
+    // OAuth instances' endpoint and bearer are resolved by the auth flow; the
+    // editor hides Base URL/Token for OAuth, but the server guards too so a
+    // malformed/empty payload can't wipe them.
+    if !instance.auth.is_oauth() {
+        if !trimmed_url.is_empty() {
+            instance.base_url = Some(trimmed_url.to_string());
         }
-        channel.transport = transport;
-        channel.base_url = (!trimmed_url.is_empty()).then(|| trimmed_url.to_string());
-        // An empty key keeps whatever the channel already had.
+        // A pure-custom instance also adopts the edited transport.
+        if instance.template_id.is_none() {
+            instance.transport = Some(transport);
+        }
+        // An empty key keeps whatever the instance already had.
         if !trimmed_key.is_empty() {
-            channel.api_key = Some(SecretString::from(trimmed_key));
+            let mut creds = Credentials::load();
+            creds.set_api_key(&id, Some(SecretString::from(trimmed_key)));
+            if creds.save().is_err() {
+                tracing::warn!("edit: could not persist credential");
+            }
         }
-        // ADR-0046: reasoning (effort/thinking) is no longer edited here — it
-        // is per-model, via `EditProviderModel`. Editing provider metadata
-        // leaves each channel's reasoning knobs untouched.
     }
-    let _ = config.save_preserving_provider_selection();
+    if instances.save().is_err() {
+        tracing::warn!("edit: could not persist instance");
+    }
     // Only rebuild the live provider when editing the active one (so a new
     // endpoint/key takes effect); editing an inactive provider just refreshes
-    // the persisted config + the picker snapshot without switching.
+    // the persisted state + the picker snapshot without switching.
     if config.default_provider == id {
         let model = catalog::resolved_model_name_with_usage(config, &id, provider_usage)
             .unwrap_or_default();
@@ -396,11 +325,11 @@ pub async fn edit(
     }
 }
 
-/// `AgentRequest::RemoveProviderModel` — drop a model (channel) from a
-/// user-defined provider, persist, and push a fresh picker snapshot. The last
-/// remaining channel is kept (a provider must serve at least one model). If the
-/// removed model was the active `default_model`, it is cleared so the provider
-/// falls back to its default channel.
+/// `AgentRequest::RemoveProviderModel` — drop a declared model from a
+/// pure-custom instance, persist, and push a fresh picker snapshot. The last
+/// remaining model is kept (an instance must serve at least one model). If the
+/// removed model was the active `default_model`, it is cleared so the instance
+/// falls back to its first route.
 pub async fn remove_model(
     config: &mut Config,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
@@ -408,16 +337,15 @@ pub async fn remove_model(
     provider_id: String,
     model: String,
 ) {
-    if let Some(provider) = config.providers.iter_mut().find(|p| p.id == provider_id)
-        && provider.channels.len() > 1
-        && let Some(pos) = provider
-            .channels
-            .iter()
-            .position(|c| c.model.as_deref() == Some(model.as_str()))
+    let mut instances = Instances::load();
+    if let Some(instance) = instances.get_mut(&provider_id)
+        && instance.template_id.is_none()
+        && instance.models.len() > 1
+        && let Some(pos) = instance.models.iter().position(|m| *m == model)
     {
-        provider.channels.remove(pos);
-        if provider.default_channel >= provider.channels.len() {
-            provider.default_channel = 0;
+        instance.models.remove(pos);
+        if instances.save().is_err() {
+            tracing::warn!("remove_model: could not persist instance");
         }
     }
     if config.default_model.as_deref() == Some(model.as_str()) {
@@ -435,8 +363,9 @@ pub async fn remove_model(
     )));
 }
 
-/// `AgentRequest::EditProviderModel` — update settings for one channel of a
-/// user-defined provider. Provider metadata (name/base URL/key) is untouched.
+/// `AgentRequest::EditProviderModel` — update the per-(instance, model)
+/// reasoning overrides in the discovery cache. Instance metadata (name /
+/// endpoint / credential) is untouched.
 #[allow(clippy::too_many_arguments)]
 pub async fn edit_model(
     config: &mut Config,
@@ -456,32 +385,37 @@ pub async fn edit_model(
             .filter(|s| neenee_contracts::effort::Effort::parse(s).is_some())
     });
 
-    let Some(provider) = config.providers.iter_mut().find(|p| p.id == provider_id) else {
+    // Resolve the route's transport to decide which knobs apply (Anthropic
+    // honors thinking; OpenAI/Responses carry effort only; Google ignores both).
+    let stores = catalog::Stores::load();
+    let Some(instance) = stores.instances.get(&provider_id) else {
         return;
     };
-    let Some(channel) = provider
-        .channels
-        .iter_mut()
-        .find(|c| c.model.as_deref() == Some(model.as_str()))
-    else {
-        return;
-    };
+    let transport =
+        catalog::derive_channel(instance, &model, &stores.cache, &stores.creds).transport;
 
-    match channel.transport {
-        neenee_persistence::config::UserTransport::Anthropic => {
-            channel.effort = valid_effort;
-            channel.thinking = thinking;
+    let mut cache = DiscoveryCache::load();
+    let entry = cache.route_settings_for_mut(&provider_id, &model);
+    match transport {
+        neenee_contracts::catalog::Transport::Anthropic { .. } => {
+            entry.effort = valid_effort;
+            entry.thinking = thinking;
         }
-        neenee_persistence::config::UserTransport::OpenAi
-        | neenee_persistence::config::UserTransport::OpenAiResponses => {
-            channel.effort = valid_effort;
-            channel.thinking = None;
+        neenee_contracts::catalog::Transport::OpenAi { .. }
+        | neenee_contracts::catalog::Transport::OpenAiResponses { .. } => {
+            entry.effort = valid_effort;
+            entry.thinking = None;
         }
-        neenee_persistence::config::UserTransport::Google => {}
+        neenee_contracts::catalog::Transport::Google { .. } => {}
     }
-
-    if let Err(error) = config.save_preserving_provider_selection() {
-        tracing::warn!(?error, "could not persist provider model settings");
+    if entry.is_empty() {
+        cache
+            .route_settings
+            .get_mut(&provider_id)
+            .and_then(|m| m.remove(&model));
+    }
+    if cache.save().is_err() {
+        tracing::warn!("edit_model: could not persist route settings");
     }
 
     let active_model =
@@ -507,13 +441,12 @@ pub async fn edit_model(
     }
 }
 
-/// `AgentRequest::EditModelReasoning` — update the per-model reasoning
-/// settings (Anthropic effort/thinking) persisted in the
-/// `[model_reasoning."<model-id>"]` table. This serves the **built-in**
-/// `anthropic` provider (and any built-in Anthropic-format model), which has
-/// no user-editable channels: its per-model knobs live in this shared table
-/// keyed by model id (ADR-0045). If the edited model is the active one, the
-/// live provider is re-activated so the new settings take effect at once.
+/// `AgentRequest::EditModelReasoning` — update the per-(instance, model)
+/// reasoning overrides for the currently active instance. Serves the model
+/// `e` editor for any model; the setting is scoped to the instance that
+/// actually serves it (a model id can be served by more than one instance).
+/// If the edited model is the active one, the live provider is re-activated
+/// so the new settings take effect at once.
 #[allow(clippy::too_many_arguments)]
 pub async fn edit_model_reasoning(
     config: &mut Config,
@@ -532,18 +465,19 @@ pub async fn edit_model_reasoning(
             .filter(|s| neenee_contracts::effort::Effort::parse(s).is_some())
     });
 
-    let settings = config.model_reasoning.for_model_mut(&model);
-    settings.effort = valid_effort;
-    settings.thinking = thinking;
-
-    if let Err(error) = config.save_preserving_provider_selection() {
-        tracing::warn!(?error, "could not persist per-model reasoning settings");
+    let provider_id = config.default_provider.clone();
+    let mut cache = DiscoveryCache::load();
+    let entry = cache.route_settings_for_mut(&provider_id, &model);
+    entry.effort = valid_effort;
+    entry.thinking = thinking;
+    if cache.save().is_err() {
+        tracing::warn!("edit_model_reasoning: could not persist route settings");
     }
 
     // Re-activate if this model is the live one so the change applies now.
-    let provider_id = &config.default_provider;
-    let active_model = catalog::resolved_model_name_with_usage(config, provider_id, provider_usage)
-        .unwrap_or_default();
+    let active_model =
+        catalog::resolved_model_name_with_usage(config, &provider_id, provider_usage)
+            .unwrap_or_default();
     if active_model == model {
         activate(
             config,
@@ -552,7 +486,7 @@ pub async fn edit_model_reasoning(
             None,
             resp_tx,
             provider_usage,
-            provider_id.clone(),
+            provider_id,
             model,
         )
         .await;
@@ -564,13 +498,11 @@ pub async fn edit_model_reasoning(
     }
 }
 
-/// `AgentRequest::DeleteProvider` — remove a user-defined provider entry
-/// entirely. Drops it from `config.providers` (a no-op for built-ins or an
-/// unknown id), prunes it from `favorites`, and persists. When the deleted
-/// provider was the active one (`config.default_provider`), it falls back to
-/// the default built-in provider (`"kimi-code"`) and re-activates so the live
-/// provider never points at a removed entry. Otherwise (deleting an inactive
-/// provider) it only refreshes the picker snapshot.
+/// `AgentRequest::DeleteProvider` — remove a provider instance entirely: drop
+/// it from the instance store, its credential, its discovery-cache records,
+/// and its OAuth tokens, and prune its model ids from favorites. When the
+/// deleted instance was the active one, fall back to the effective default and
+/// re-activate so the live provider never points at a removed entry.
 #[allow(clippy::too_many_arguments)]
 pub async fn delete(
     config: &mut Config,
@@ -580,41 +512,45 @@ pub async fn delete(
     provider_usage: &mut ProviderUsage,
     id: String,
 ) {
-    // Drop the user-defined entry. `retain` is a no-op when the id is unknown,
-    // and built-in ids are never present in `config.providers`, so this is
-    // safely a built-in guard. Capture the deleted provider's model ids first —
-    // favorite is model-level (ADR-0046), so those are the favorites to prune.
-    let deleted_models: Vec<String> = config
-        .providers
-        .iter()
-        .find(|p| p.id == id)
-        .map(|p| p.channels.iter().filter_map(|c| c.model.clone()).collect())
-        .unwrap_or_default();
-    let before = config.providers.len();
-    config.providers.retain(|p| p.id != id);
-    // Nothing to do — the id was not a user-defined provider.
-    if config.providers.len() == before {
+    let mut instances = Instances::load();
+    let Some(deleted) = instances.remove(&id) else {
         return;
+    };
+    // Prune the deleted instance's model ids from favorites (model-level) so
+    // the picker never references a model that is no longer served.
+    let deleted_models = catalog::route_models(&deleted, &DiscoveryCache::load());
+    config
+        .favorites
+        .retain(|fav| !deleted_models.iter().any(|m| m == fav));
+    if instances.save().is_err() {
+        tracing::warn!("delete: could not persist instance store");
     }
-    // Clean up any OAuth credentials stored specifically for this deleted instance
+    // Clean up the credential and any OAuth tokens stored for this instance.
+    let mut creds = Credentials::load();
+    creds.remove_api_key(&id);
+    if creds.save().is_err() {
+        tracing::warn!("delete: could not persist credentials");
+    }
     let mut auth_store = neenee_providers::oauth::AuthStore::load();
     if auth_store.remove(&id).is_some() {
         let _ = auth_store.save();
     }
-    // Prune the deleted provider's model ids from favorites (model-level) so
-    // the picker never references a model that is no longer served.
-    if !deleted_models.is_empty() {
-        config
-            .favorites
-            .retain(|fav| !deleted_models.iter().any(|m| m == fav));
+    let mut cache = DiscoveryCache::load();
+    cache.remove_instance(&id);
+    if cache.save().is_err() {
+        tracing::warn!("delete: could not persist discovery cache");
     }
 
     let was_active = config.default_provider == id;
     if was_active {
-        // Fall back to the catalog's default built-in provider (kimi-code),
-        // clear any model pointer that belonged to the deleted provider, then
-        // activate so the live provider is rebuilt from a valid entry.
-        config.default_provider = catalog::default_provider_id(&Config::default()).to_string();
+        config.default_provider = catalog::effective_default_provider_id(
+            config,
+            &catalog::Stores {
+                instances: Instances::load(),
+                cache: DiscoveryCache::load(),
+                creds: Credentials::load(),
+            },
+        );
         config.default_model = None;
     }
     if let Err(error) = config.save_preserving_provider_selection() {
@@ -696,47 +632,10 @@ pub async fn reapply_session_selection(
     .await;
 }
 
-/// Derive a stable provider id from a user-supplied display name: lowercase,
-/// non-alphanumeric runs collapsed to single hyphens, trimmed. Falls back to
-/// `"custom"` for an empty/symbol-only name so the id is always non-empty.
-fn custom_provider_id(name: &str) -> String {
-    let mut id = String::new();
-    let mut prev_hyphen = false;
-    for ch in name.trim().chars() {
-        if ch.is_ascii_alphanumeric() {
-            id.push(ch.to_ascii_lowercase());
-            prev_hyphen = false;
-        } else if !prev_hyphen && !id.is_empty() {
-            id.push('-');
-            prev_hyphen = true;
-        }
-    }
-    let id = id.trim_end_matches('-').to_string();
-    if id.is_empty() {
-        "custom".to_string()
-    } else {
-        id
-    }
-}
-
-fn unique_provider_id(config: &Config, name: &str) -> String {
-    let base = custom_provider_id(name);
-    if !config.providers.iter().any(|p| p.id == base) {
-        return base;
-    }
-    for n in 2usize.. {
-        let candidate = format!("{base}-{n}");
-        if !config.providers.iter().any(|p| p.id == candidate) {
-            return candidate;
-        }
-    }
-    unreachable!("unbounded suffix search must eventually find an id")
-}
-
 /// `AgentRequest::AuthorizeOAuth` — run an OAuth login before a provider
 /// instance exists ("+ Add provider → xAI OAuth / ChatGPT OAuth"). `auth`
 /// selects which provider's flow to run; tokens persist under that provider's
-/// `auth.toml` key (`xai` / `chatgpt`).
+/// `auth.toml` key.
 pub async fn authorize(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     method: neenee_contracts::LoginMethod,
@@ -778,11 +677,10 @@ pub async fn connect(
     provider_id: String,
     method: neenee_contracts::LoginMethod,
 ) {
-    let auth_mode = catalog::build_picker_state(config, provider_usage)
-        .rows
-        .into_iter()
-        .find(|r| r.id == provider_id)
-        .map(|r| r.auth)
+    let instances = Instances::load();
+    let auth_mode = instances
+        .get(&provider_id)
+        .map(|p| p.auth)
         .unwrap_or_default();
     let Some(mut cfg) = auth_mode
         .oauth_provider_id()
@@ -809,12 +707,9 @@ pub async fn connect(
     // fresh token so the picker shows the account's real entitlements right
     // away. A failure keeps the previous subset; each failure is reported back
     // as a warning so the user knows *why* the list did not refresh.
-    let outcome = catalog::discover_provider_models(config).await;
+    let outcome = catalog::discover_provider_models().await;
     if outcome.changed {
-        catalog::sync_fitted_model_registry(config);
-        if let Err(error) = config.save_preserving_provider_selection() {
-            tracing::warn!(?error, "live discovery after login: could not persist");
-        }
+        catalog::sync_fitted_model_registry();
     }
     for (failed_provider, message) in &outcome.failures {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
@@ -829,7 +724,7 @@ pub async fn connect(
         .into_iter()
         .find(|r| r.id == provider_id)
         .map(|r| r.model)
-        .unwrap_or_else(|| "gpt-5.6-sol".to_string());
+        .unwrap_or_default();
     activate(
         config,
         agent,
@@ -1051,15 +946,18 @@ async fn run_oauth(
     true
 }
 
-async fn refresh_oauth_if_needed(config: &Config, provider_id: &str) {
+async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str) {
     use neenee_providers::oauth::{AuthStore, OAuth};
 
-    let provider = config.providers.iter().find(|p| p.id == provider_id);
-    let auth = provider.and_then(|p| p.channels.first()).map(|ch| ch.auth);
-    let template_id = provider.and_then(|p| p.template_id.as_deref());
+    let instances = Instances::load();
+    let Some(instance) = instances.get(provider_id) else {
+        return;
+    };
+    let auth = instance.auth;
+    let template_id = instance.template_id.as_deref();
 
     let Some(mut cfg) = auth
-        .and_then(|a| a.oauth_provider_id())
+        .oauth_provider_id()
         .and_then(neenee_providers::oauth::config_by_provider_id)
     else {
         return;
@@ -1068,7 +966,7 @@ async fn refresh_oauth_if_needed(config: &Config, provider_id: &str) {
 
     let store = AuthStore::load();
     let Some(stored) = store
-        .get_for_provider(provider_id, template_id, auth.unwrap_or_default())
+        .get_for_provider(provider_id, template_id, auth)
         .cloned()
     else {
         return;
@@ -1310,9 +1208,9 @@ pub async fn set_default_model(
 }
 
 /// `AgentRequest::RefreshProviderModels` — run live model discovery for all
-/// discovery-enabled providers from upstream (e.g. `GET /models`), update the
-/// config, sync fitted models registry, push updated picker snapshot and
-/// provider keys, and emit a toast notice when user-initiated.
+/// discovery-enabled instances from upstream (e.g. `GET /models`), update the
+/// discovery cache, sync the fitted-model registry, push an updated picker
+/// snapshot and provider keys, and emit a toast notice when user-initiated.
 pub async fn refresh_models(
     config: &mut Config,
     _agent: &Agent,
@@ -1322,17 +1220,9 @@ pub async fn refresh_models(
     session: Option<&SessionStore>,
     user_initiated: bool,
 ) {
-    let reconcile_changed = catalog::reconcile_provider_models(config);
-    let outcome = catalog::discover_provider_models(config).await;
-    let changed = reconcile_changed || outcome.changed;
-    if changed {
-        catalog::sync_fitted_model_registry(config);
-        if let Err(error) = config.save_preserving_provider_selection() {
-            tracing::warn!(
-                ?error,
-                "refresh_models: could not persist discovered models"
-            );
-        }
+    let outcome = catalog::discover_provider_models().await;
+    if outcome.changed {
+        catalog::sync_fitted_model_registry();
     }
 
     for (failed_provider, message) in &outcome.failures {
@@ -1348,9 +1238,9 @@ pub async fn refresh_models(
         && user_initiated
     {
         let session_id = session.id().await;
-        let ack = if !outcome.failures.is_empty() && !changed {
+        let ack = if !outcome.failures.is_empty() && !outcome.changed {
             "Model refresh failed to reach upstream".to_string()
-        } else if changed {
+        } else if outcome.changed {
             "Model list updated".to_string()
         } else {
             "Model list refreshed (up to date)".to_string()
@@ -1368,10 +1258,21 @@ pub async fn refresh_models(
     )));
 }
 
+/// Map a wire-protocol label from the TUI to the persisted transport enum.
+fn transport_for_protocol(protocol: &str) -> UserTransport {
+    match protocol {
+        "anthropic" => UserTransport::Anthropic,
+        "google" | "gemini" => UserTransport::Google,
+        // The OpenAI Responses API over an API key (e.g. DeepSeek V4).
+        "openai-responses" => UserTransport::OpenAiResponses,
+        // Default (and explicit "openai"): the OpenAI-compatible chat surface.
+        _ => UserTransport::OpenAi,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neenee_persistence::config::{UserChannelConfig, UserProviderConfig};
 
     #[tokio::test]
     async fn record_provider_ack_appends_durable_ack_to_command_ledger() {
@@ -1406,125 +1307,30 @@ mod tests {
     }
 
     #[test]
-    fn custom_provider_id_slugifies_names() {
-        assert_eq!(custom_provider_id("My Relay"), "my-relay");
-        assert_eq!(custom_provider_id("  Acme  AI  "), "acme-ai");
-        assert_eq!(custom_provider_id("relay.example.com"), "relay-example-com");
-        assert_eq!(custom_provider_id("OpenAI!!!"), "openai");
-        // Symbol-only / empty names fall back to a usable id.
-        assert_eq!(custom_provider_id("***"), "custom");
-        assert_eq!(custom_provider_id(""), "custom");
+    fn transport_for_protocol_maps_known_labels() {
+        assert_eq!(
+            transport_for_protocol("anthropic"),
+            UserTransport::Anthropic
+        );
+        assert_eq!(transport_for_protocol("google"), UserTransport::Google);
+        assert_eq!(
+            transport_for_protocol("openai-responses"),
+            UserTransport::OpenAiResponses
+        );
+        assert_eq!(transport_for_protocol("openai"), UserTransport::OpenAi);
+        assert_eq!(transport_for_protocol("future"), UserTransport::OpenAi);
     }
 
     #[test]
-    fn unique_provider_id_suffixes_colliding_instance_names() {
-        let mut config = Config::default();
-        config.providers.push(UserProviderConfig {
-            id: "openai".to_string(),
-            ..Default::default()
-        });
-        assert_eq!(unique_provider_id(&config, "OpenAI"), "openai-2");
-        config.providers.push(UserProviderConfig {
-            id: "openai-2".to_string(),
-            ..Default::default()
-        });
-        assert_eq!(unique_provider_id(&config, "OpenAI"), "openai-3");
-    }
-
-    #[test]
-    fn multi_model_provider_covers_builtins_and_multichannel_user_entries() {
-        let mut config = Config::default();
-        for id in ["openai", "opencode-go", "anthropic", "google", "deepseek"] {
-            assert!(is_multi_model_provider(&config, id), "{id} is multi-model");
-        }
-        // Single-model built-ins are not multi-model.
-        assert!(!is_multi_model_provider(&config, "kimi-code"));
-        assert!(!is_multi_model_provider(&config, "zai-code"));
-        // A user provider counts as multi-model only with >1 channel.
-        config.providers.push(UserProviderConfig {
+    fn instance_unique_id_slugifies_and_disambiguates() {
+        let mut instances = Instances::default();
+        instances.providers.push(ProviderInstance {
             id: "my-relay".to_string(),
-            channels: vec![Default::default(), Default::default()],
             ..Default::default()
         });
-        assert!(is_multi_model_provider(&config, "my-relay"));
-    }
-
-    #[test]
-    fn switch_key_lands_on_instance_channels_and_legacy_field() {
-        let mut config = Config::default();
-        config.providers.push(UserProviderConfig {
-            id: "kimi-code".to_string(),
-            channels: vec![
-                UserChannelConfig {
-                    label: "k3".to_string(),
-                    api_key: Some("sk-old".into()),
-                    ..Default::default()
-                },
-                UserChannelConfig {
-                    label: "kimi-for-coding".to_string(),
-                    api_key: None,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
-
-        apply_switch_api_key(&mut config, "kimi-code", "sk-new");
-
-        // The catalog builds providers from instance channels, so every
-        // channel must carry the new key — otherwise the live provider keeps
-        // the old key and the new one is dropped at the next startup.
-        let provider = &config.providers[0];
-        assert!(
-            provider
-                .channels
-                .iter()
-                .all(|c| c.api_key.as_ref().map(SecretString::expose_secret) == Some("sk-new"))
-        );
-        // The legacy field stays in sync for the credentials fold.
-        assert_eq!(
-            config
-                .moonshot_api_key
-                .as_ref()
-                .map(SecretString::expose_secret),
-            Some("sk-new")
-        );
-    }
-
-    #[test]
-    fn switch_key_skips_oauth_channels() {
-        let mut config = Config::default();
-        config.providers.push(UserProviderConfig {
-            id: "chatgpt-relay".to_string(),
-            channels: vec![
-                UserChannelConfig {
-                    label: "oauth-model".to_string(),
-                    auth: neenee_contracts::ChannelAuth::ChatGptOAuth,
-                    api_key: None,
-                    ..Default::default()
-                },
-                UserChannelConfig {
-                    label: "key-model".to_string(),
-                    api_key: Some("sk-old".into()),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
-
-        apply_switch_api_key(&mut config, "chatgpt-relay", "sk-new");
-
-        let provider = &config.providers[0];
-        assert!(
-            provider.channels[0].api_key.is_none(),
-            "an OAuth channel's bearer is owned by the auth flow"
-        );
-        assert_eq!(
-            provider.channels[1]
-                .api_key
-                .as_ref()
-                .map(SecretString::expose_secret),
-            Some("sk-new")
-        );
+        assert_eq!(instances.unique_id("My Relay"), "my-relay-2");
+        assert_eq!(instances.unique_id("  Acme  AI  "), "acme-ai");
+        assert_eq!(instances.unique_id("***"), "custom");
+        assert_eq!(instances.unique_id(""), "custom");
     }
 }
