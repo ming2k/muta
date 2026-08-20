@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: neenee session-host WebSocket API
-  version: 0.27.0
+  version: 0.28.0
   description: |
     Machine-readable contract for the unified session-daemon transport
     (`neenee daemon start --fg`; ADR-0081/0089/0093/0094/0096/0119).
@@ -223,7 +223,7 @@ components:
         - name: controlShutdown
           payload:
             type: Select
-            version: 0.27.0
+            version: 0.28.0
             action:
               control:
                 verb: shutdown
