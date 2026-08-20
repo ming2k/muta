@@ -32,6 +32,8 @@ fn idle_base(id: String) -> neenee_contracts::MonitoredSession {
         note: None,
         project_root: String::new(),
         wip: None,
+        parent_id: None,
+        fork_kind: neenee_contracts::SessionForkKind::default(),
     }
 }
 
@@ -1365,6 +1367,7 @@ fn global_record_carries_the_daemon_version() {
         started_at: 3,
         uds_path: None,
         version: Some(serve::daemon_version().to_string()),
+        grace_secs: None,
     };
     let json = serde_json::to_string(&record).unwrap();
     assert!(json.contains(serve::daemon_version()));

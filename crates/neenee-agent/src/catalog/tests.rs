@@ -25,9 +25,9 @@ use neenee_providers::{
     OPENCODE_USER_AGENT, ZCODE_USER_AGENT, provider_template_spec,
 };
 
+use super::*;
 #[cfg(test)]
 use neenee_providers::OPENAI_PROVIDER_SPECS;
-use super::*;
 use std::sync::Mutex;
 
 /// Tests that mutate process-wide env vars (`*_API_KEY`, `*_MODEL`)
@@ -76,10 +76,9 @@ fn sandboxed_paths() -> PathsSandbox {
     // parameter. It is released exactly once, in Drop.
     PathsSandbox {
         _guard: unsafe {
-            std::mem::transmute::<
-                std::sync::MutexGuard<'_, ()>,
-                std::sync::MutexGuard<'static, ()>,
-            >(guard)
+            std::mem::transmute::<std::sync::MutexGuard<'_, ()>, std::sync::MutexGuard<'static, ()>>(
+                guard,
+            )
         },
         _tmp: tmp,
     }
@@ -121,7 +120,10 @@ fn google_channel_surfaces_effort_from_the_model_ladder() {
     if let Transport::Google { effort, .. } = &mut overridden.transport {
         *effort = Some(Effort::Low);
     }
-    assert_eq!(channel_model_info(&overridden).effort.as_deref(), Some("low"));
+    assert_eq!(
+        channel_model_info(&overridden).effort.as_deref(),
+        Some("low")
+    );
 
     // A Gemini model with no effort ladder (an unknown id no baseline
     // knows) must stay inert — no effort surfaced, no editor offered.
@@ -133,7 +135,8 @@ fn google_channel_surfaces_effort_from_the_model_ladder() {
 }
 
 #[test]
-fn empty_config_has_no_provider_instances() {        let config = bare_config();
+fn empty_config_has_no_provider_instances() {
+    let config = bare_config();
     assert!(build_catalog(&config).is_empty());
     assert_eq!(
         build_picker_state(&config, &ProviderUsage::default())
@@ -481,8 +484,7 @@ fn reconcile_adds_new_models_introduced_by_template() {
 
 #[test]
 fn reconcile_api_instance_keeps_last_discovered_supported_subset() {
-    let known =
-        supported_models_for_template(provider_template_spec("deepseek").unwrap());
+    let known = supported_models_for_template(provider_template_spec("deepseek").unwrap());
     let subset = [known[1], known[3]];
     let mut instance = template_instance("deepseek", &subset);
     instance.model_source = neenee_persistence::config::ModelSource::Api;
@@ -498,8 +500,7 @@ fn reconcile_api_instance_keeps_last_discovered_supported_subset() {
 
 #[test]
 fn reconcile_api_instance_drops_unsupported_without_expanding_subset() {
-    let known =
-        supported_models_for_template(provider_template_spec("deepseek").unwrap());
+    let known = supported_models_for_template(provider_template_spec("deepseek").unwrap());
     let kept = known[2];
     let mut instance = template_instance("deepseek", &[kept, "removed-or-unknown-model"]);
     instance.model_source = neenee_persistence::config::ModelSource::Api;
@@ -1139,9 +1140,8 @@ fn anthropic_default_model_selects_its_channel_and_builds() {
         resolved_model_name(&config, "anthropic").as_deref(),
         Some("claude-sonnet-4-6")
     );
-    let provider =
-        build_provider_for_model(&config, "anthropic", Some("claude-sonnet-4-6"), None)
-            .expect("anthropic provider should build");
+    let provider = build_provider_for_model(&config, "anthropic", Some("claude-sonnet-4-6"), None)
+        .expect("anthropic provider should build");
     assert_eq!(provider.model(), "claude-sonnet-4-6");
     assert_eq!(provider.provider_id(), "anthropic");
 }
@@ -1591,11 +1591,10 @@ async fn discover_filters_to_supported_intersection_and_keeps_provider_settings(
         known_outside_seed.to_string(),
         kept_a.to_string(),
     ];
-    let expected =
-        supported_model_intersection(&supported_models_for_template(spec), &advertised)
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
+    let expected = supported_model_intersection(&supported_models_for_template(spec), &advertised)
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     let mut server = mockito::Server::new_async().await;
     let body = format!(
         r#"{{"data":[{{"id":"cloud-only-model"}},{{"id":"{kept_b}"}},{{"id":"{known_outside_seed}"}},{{"id":"{kept_a}"}}]}}"#
@@ -1812,10 +1811,7 @@ fn reconcile_backfill_sets_api_model_source_for_discovery_template() {
     });
 
     assert!(reconcile_provider_models(&mut config));
-    assert_eq!(
-        config.providers[0].template_id.as_deref(),
-        Some("deepseek")
-    );
+    assert_eq!(config.providers[0].template_id.as_deref(), Some("deepseek"));
     assert_eq!(
         config.providers[0].model_source,
         neenee_persistence::config::ModelSource::Api,
@@ -2100,7 +2096,8 @@ fn copilot_remote_endpoint_selects_the_advertised_transport() {
         }),
         ..Default::default()
     };
-    let messages = user_channel_to_channel(&base, "remote-model", "copilot-test", Some("copilot-oauth"));
+    let messages =
+        user_channel_to_channel(&base, "remote-model", "copilot-test", Some("copilot-oauth"));
     assert!(matches!(
         messages.transport,
         Transport::Anthropic { copilot: true, .. }
@@ -2108,7 +2105,12 @@ fn copilot_remote_endpoint_selects_the_advertised_transport() {
 
     let mut responses = base.clone();
     responses.remote.as_mut().unwrap().endpoint = Some(RemoteModelEndpoint::Responses);
-    let responses = user_channel_to_channel(&responses, "remote-model", "copilot-test", Some("copilot-oauth"));
+    let responses = user_channel_to_channel(
+        &responses,
+        "remote-model",
+        "copilot-test",
+        Some("copilot-oauth"),
+    );
     assert!(matches!(
         responses.transport,
         Transport::OpenAiResponses { copilot: true, .. }
@@ -2116,7 +2118,8 @@ fn copilot_remote_endpoint_selects_the_advertised_transport() {
 
     let mut chat = base;
     chat.remote.as_mut().unwrap().endpoint = Some(RemoteModelEndpoint::ChatCompletions);
-    let chat = user_channel_to_channel(&chat, "remote-model", "copilot-test", Some("copilot-oauth"));
+    let chat =
+        user_channel_to_channel(&chat, "remote-model", "copilot-test", Some("copilot-oauth"));
     assert!(matches!(
         chat.transport,
         Transport::OpenAi { copilot: true, .. }

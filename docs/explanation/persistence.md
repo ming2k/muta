@@ -127,25 +127,34 @@ Two categories of file deliberately live outside XDG:
 XDG categories answer *where*. The override stack answers *who decides*.
 From highest to lowest:
 
-1. **CLI flag.** Reserved for `--config-dir`, `--data-dir`,
-   `--state-dir`, `--cache-dir` plumbing. The type exists; flag wiring
-   is reserved for a future change.
+1. **CLI flag.** `--home <dir>` moves every category at once — the
+   instance-root selector (ADR-0121); `--config-dir`, `--data-dir`,
+   `--state-dir`, `--cache-dir` are reserved plumbing for per-category
+   flags.
 2. **App-specific env var.** `NEENEE_CONFIG_DIR`, `NEENEE_DATA_DIR`,
    `NEENEE_STATE_DIR`, `NEENEE_CACHE_DIR`. Use these to redirect
    neenee and only neenee.
-3. **Standard XDG env var.** `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+3. **Instance root.** `NEENEE_HOME` redirects *everything at once* —
+   the four categories plus the daemon's runtime files — under one root,
+   and is how development and test runs isolate themselves from an
+   installed neenee (ADR-0121). The env form of `--home`; sits below the
+   per-category vars so a sandbox can still carve one category out.
+4. **Standard XDG env var.** `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
    `XDG_STATE_HOME`, `XDG_CACHE_HOME`. Affects every compliant
    application; ideal for shared setups.
-4. **Native per-OS default.** On macOS, `~/Library/Application
+5. **Native per-OS default.** On macOS, `~/Library/Application
    Support/neenee`; on Windows, `%APPDATA%\neenee`. Provided by the
    platform's convention rather than the spec.
-5. **`$HOME` fallback.** `~/.config`, `~/.local/share`, `~/.local/state`,
+6. **`$HOME` fallback.** `~/.config`, `~/.local/share`, `~/.local/state`,
    `~/.cache` — the spec's default locations when nothing else applies.
-6. **Current directory.** Last resort; never panics.
+7. **Current directory.** Last resort; never panics.
 
 The same precedence applies to every category — there is no per-subsystem
 special case. Relative values in the XDG env vars are ignored (per spec);
-absolute values win.
+absolute values win. The daemon's runtime files follow the same idea with
+their own tail: the instance root > `$XDG_RUNTIME_DIR/neenee` > the data
+directory, and `NEENEE_PORT` plays the same role for the daemon's default
+TCP port.
 
 ## What is safe to delete
 

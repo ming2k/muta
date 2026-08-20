@@ -303,6 +303,14 @@ pub(super) struct UiRuntime {
     /// [`neenee_contracts::AgentResponse::BtwList`] and mirrored into
     /// [`App::btw_list`] for the asides modal and the main header count.
     pub btw_list: Arc<Mutex<Vec<neenee_contracts::BtwAsideSummary>>>,
+    /// Per-session chrome (view-scoped state): activity / responding /
+    /// round / turn for the primary **and** every live aside, maintained by
+    /// the response listener and mirrored into [`App::session_chrome`]
+    /// each frame. A view renders only its own session's entry
+    /// ([`App::viewed_chrome`]) so an aside view never shows the primary's
+    /// activity bar.
+    pub session_chrome:
+        Arc<std::sync::Mutex<std::collections::HashMap<String, crate::app::SessionChrome>>>,
     /// One-shot request to open the asides modal (ADR-0103 §5): armed by F5 /
     /// `/btw list`, consumed by the loop. Kept separate from the rows so a
     /// refresh of the list (registry mutation) never re-pops the modal.
@@ -432,6 +440,7 @@ impl UiRuntime {
             parent_status: Arc::new(Mutex::new(ParentStatus::Idle)),
             side_view_signal: Arc::new(Mutex::new(None)),
             btw_list: Arc::new(Mutex::new(Vec::new())),
+            session_chrome: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             open_btw: Arc::new(AtomicBool::new(false)),
             viewed_session_id: Arc::new(Mutex::new(None)),
             live_session_id: Arc::new(Mutex::new(String::new())),
@@ -1442,6 +1451,15 @@ async fn sync_transcripts_and_session(app: &mut App, runtime: &UiRuntime) -> (bo
     // Mirror the `/btw` asides list (ADR-0103 §5) into the app each frame.
     // Cheap: it is a small Vec replaced only when the registry changed.
     app.btw_list = runtime.btw_list.lock().await.clone();
+    // Mirror the per-session chrome map (view-scoped state): the listener
+    // maintains one entry per observed session (primary + asides); the app
+    // copy is what `App::viewed_chrome` reads. `enter_side_view` /
+    // `exit_side_view` swap entries in/out of the display fields.
+    app.session_chrome = runtime
+        .session_chrome
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
     // Drain a pending side-view transition (enter/leave `/btw`).
     let side_view_transitioned = match runtime.side_view_signal.lock().await.take() {
         Some(crate::event_loop::SideViewSignal::Opened { side_id, .. }) => {
@@ -1874,8 +1892,11 @@ pub(super) async fn run_app_loop(
 
         let empty_state_showing =
             app.focused_messages().is_empty() && app.focus_stack.is_empty() && !app.in_side_view;
-        let animating = runtime.is_responding.load(Ordering::SeqCst)
-            || app.round_started_at.is_some()
+        // View-scoped: the redraw animation gate follows the *viewed*
+        // session's round (a streaming aside animates its view; the primary
+        // idling behind it does not force the aside view to animate).
+        let viewed_animating = app.viewed_chrome().responding;
+        let animating = viewed_animating
             || app.copy_toast_until.is_some()
             || app.notice_toast_until.is_some()
             || app.ctrl_c_armed()

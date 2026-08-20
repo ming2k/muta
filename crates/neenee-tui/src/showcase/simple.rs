@@ -515,6 +515,8 @@ pub fn sessions() -> io::Result<()> {
             updated_at: now_ms() - 600_000,
             message_count: 12,
             active: true,
+            parent_id: None,
+            fork_kind: neenee_contracts::SessionForkKind::Trunk,
         },
         SessionOverview {
             id: "def456".into(),
@@ -523,6 +525,8 @@ pub fn sessions() -> io::Result<()> {
             updated_at: now_ms() - 43_200_000,
             message_count: 4,
             active: false,
+            parent_id: Some("abc123".into()),
+            fork_kind: neenee_contracts::SessionForkKind::Aside,
         },
         SessionOverview {
             id: "ghi789".into(),
@@ -531,6 +535,8 @@ pub fn sessions() -> io::Result<()> {
             updated_at: now_ms() - 172_800_000,
             message_count: 28,
             active: false,
+            parent_id: None,
+            fork_kind: neenee_contracts::SessionForkKind::Trunk,
         },
     ];
     let mut state = SessionsState { sessions, index: 0 };

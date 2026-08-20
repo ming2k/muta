@@ -1093,6 +1093,8 @@ mod tests {
                         updated_at: 0,
                         message_count: 12,
                         active: true,
+                        parent_id: None,
+                        fork_kind: neenee_contracts::SessionForkKind::Trunk,
                     },
                     neenee_contracts::SessionOverview {
                         id: "def456".to_string(),
@@ -1101,6 +1103,8 @@ mod tests {
                         updated_at: 0,
                         message_count: 4,
                         active: false,
+                        parent_id: None,
+                        fork_kind: neenee_contracts::SessionForkKind::Trunk,
                     },
                 ],
                 0,

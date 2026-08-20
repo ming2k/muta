@@ -17,29 +17,32 @@ neenee [OPTIONS] [COMMAND]
 | Command | Effect |
 |---------|--------|
 | *(none)* | Start a fresh session hosted by the daemon |
-| `resume [id]` | Resume a hosted session (picker when no id is given) |
-| `attach [id]` | Attach the TUI to a hosted session |
-| `run <prompt>` / `exec <prompt>` | Headless non-interactive execution with prompt |
+| `attach [id]` | Attach the TUI to a hosted session — the TUI picker opens when no id is given |
+| `run <prompt>` | Headless non-interactive execution with the prompt |
 | `auth <list\|show\|set>` | Manage model provider authentication & API keys |
 | `config <path\|list\|get\|set>` | Inspect or mutate `config.toml` |
-| `mcp <list>` | Inspect configured MCP servers |
-| `skill <list>` | Discover and inspect available skills |
-| `session <list\|attach\|delete\|dashboard>` | Session management commands |
-| `daemon <start\|stop\|status>` | Manage the unified background session daemon |
-| `serve [--port <n>] [--public] [--detach] [--idle-exit <min>] [--grace <secs>]` | Run the session daemon (foreground; `--detach` backgrounds it) |
-| `stop` | Stop the running daemon gracefully |
-| `status [--watch] [--json] [--all]` | Show the daemon's sessions needing attention |
+| `mcp ls` | List configured MCP servers (the bare `neenee mcp` teaches the subcommand) |
+| `skill ls` | List discovered skills (the bare `neenee skill` teaches the subcommand) |
+| `session rm <id>` | Terminate a hosted session by id — listing is `daemon status`, the daemon's view of what it hosts |
+| `daemon start [--fg] [--port <n>] [--public] [--idle-exit <min>] [--grace <secs>]` | Start the session daemon (detached by default; `--fg` stays in the foreground for supervisors) |
+| `daemon stop` | Stop the running daemon gracefully (budget-coordinated, ADR-0119) |
+| `daemon status [--watch] [--json] [--all] [--diagnostic]` | Show the daemon's sessions and endpoint health |
 | `dashboard` | Open the full-screen session dashboard |
+| `panel [url\|open]` | The web panel's address for the running daemon: `url` (the default, and the bare form) prints it with its token; `open` also launches the platform browser (`$BROWSER`, else xdg-open/open) |
 | `doctor` | Verify stored session integrity |
 | `completions <bash\|zsh\|fish>` | Print a shell completion script |
 | `help [command]` | Print top-level or command help |
 
 `neenee showcase <name>` (render one UI component standalone) exists only in
-debug builds and is listed only there.
+debug builds and is listed only there; the component playground is
+[Showcase](../dev/showcase.md) in the contributor docs.
 
 | Option | Effect |
 |--------|--------|
 | `--project <path>` | Operate on the project at `<path>` |
+| `--home <dir>` | Run as a fully separate instance rooted at `<dir>/neenee/` — config, data, daemon files, and (with `NEENEE_PORT`) the port; the CLI form of `NEENEE_HOME` (ADR-0121) |
+| `--remote <addr>` | Run headless against an explicitly named daemon (`host:port` or `ws://host:port`) instead of the local instance — no discovery, no spawn |
+| `--token <token>` | The bearer token `--remote` requires (every network-exposed daemon demands one; see `panel url` on the host) |
 | `--autopilot` | Run without confirmations or questions this session |
 | `--json` | Machine-readable JSON output for status or headless run |
 | `-h`, `--help` | Print help (`neenee help <command>` for a command's help) |
@@ -53,19 +56,21 @@ debug builds and is listed only there.
   short error plus a `--help` pointer to **stderr** and exits **2**.
 - An unrecognized command close to a real one earns a `tip: a similar
   command exists: '…'` line.
-- `--attach [id]` is the legacy flag form of `neenee attach`; it still
-  parses but is not advertised in help.
+- Retired spellings (`serve`, `stop`, `status`, `resume`, `exec`) are
+  refused with an error naming the canonical form (ADR-0119), not silently
+  accepted.
+- `--attach [id]` normalizes to `neenee attach [id]`.
 
 ## The daemon
 
-`neenee serve` runs the session daemon (normally spawned on demand by
-`neenee` itself; run it explicitly — including under a supervisor — with
-`neenee serve --detach`). It accepts `--port <n>`, `--public`,
-`--idle-exit <min>`, `--grace <secs>`, `-h`/`--help`, and `-V`/`--version`,
-with the same exit-code conventions. Since ADR-0102 there is no separate
-server binary: `neenee` is the one executable. (There is no `--project`:
-the daemon is project-agnostic since the unified model, and the old flag
-did nothing.)
+`neenee daemon start` runs the session daemon (normally spawned on demand
+by `neenee` itself). It **detaches by default** — the verb asks for a
+daemon — and takes `--fg` for supervisors (systemd/tmux keep the process
+in the foreground and provide their own daemonization); `--no-local-auth`,
+`--port <n>`, `--public`, `--idle-exit <min>`, and `--grace <secs>` apply
+to both shapes. Since ADR-0102 there is no separate server binary: `neenee`
+is the one executable. (There is no `--project`: the daemon is
+project-agnostic since the unified model.)
 
 The daemon stops gracefully on SIGINT, SIGTERM, or SIGHUP within its grace
 budget (`[daemon] shutdown_grace_secs`, default 10s): it stops accepting,
@@ -95,5 +100,8 @@ neenee completions fish > ~/.config/fish/completions/neenee.fish
 
 | Variable | Effect |
 |----------|--------|
+| `NEENEE_HOME` | Instance root (ADR-0121): redirects config, data, state, cache, the daemon's runtime files, and (with `NEENEE_PORT`) the default port under one root — the env form of `--home`. Must be absolute; relative values are ignored |
+| `NEENEE_PORT` | Default TCP port for `daemon start` when `--port` is absent (overrides the well-known 9800) |
+| `NEENEE_CONFIG_DIR`, `NEENEE_DATA_DIR`, `NEENEE_STATE_DIR`, `NEENEE_CACHE_DIR` | Per-category directory overrides (see [Paths](paths.md)) |
 | `NEENEE_LOG` | Log level for the file log under the XDG state dir: `off`, `error`, `warn`, `info` (default), `debug`, `trace` |
 | `RUST_LOG` | Per-target filter; takes precedence over `NEENEE_LOG` when set |

@@ -346,7 +346,10 @@ pub(super) fn supported_models_for_template(spec: &ProviderTemplateSpec) -> Vec<
         .collect()
 }
 
-pub(super) fn supported_model_intersection<'a>(supported: &[&'a str], available: &[String]) -> Vec<&'a str> {
+pub(super) fn supported_model_intersection<'a>(
+    supported: &[&'a str],
+    available: &[String],
+) -> Vec<&'a str> {
     let available = available.iter().map(String::as_str).collect::<HashSet<_>>();
     supported
         .iter()

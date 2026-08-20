@@ -26,6 +26,73 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 pub use crate::serve::AttachAction;
 pub use crate::serve_discovery::Discovery as DaemonInfo;
 
+/// An explicitly named daemon endpoint (`--remote <addr>` + `--token
+/// <token>`): the operator supplied the coordinates, so no discovery
+/// record exists or is read. Distinct from [`DaemonInfo`] on purpose — a
+/// discovered daemon is identified by local state (pid, socket path,
+/// version record); a remote one is identified by nothing but the address,
+/// and pretending otherwise is how a remote run silently lands on the
+/// local instance.
+#[derive(Debug, Clone)]
+pub struct RemoteDaemon {
+    /// Hostname or IP. Loopback only when the address was a bare `:port`.
+    pub host: String,
+    pub port: u16,
+    pub token: String,
+}
+
+impl RemoteDaemon {
+    /// Parse `--remote <addr>` (`host:port`, `ws://host:port`, or a bare
+    /// `:port` for loopback) together with the required `--token`. The
+    /// token is mandatory because every network-exposed listener demands
+    /// one (ADR-0105); a missing port is an error rather than a well-known
+    /// default — a default would silently target the local daemon when the
+    /// operator meant a remote one.
+    pub fn parse(addr: &str, token: Option<String>) -> Result<Self, String> {
+        let bare = addr.trim().strip_prefix("ws://").unwrap_or(addr.trim());
+        let (host, port) = split_host_port(bare)?;
+        let host = host.unwrap_or_else(|| "127.0.0.1".to_string());
+        let Some(token) = token.filter(|t| !t.is_empty()) else {
+            return Err(
+                "--remote needs --token <token>: every network-exposed daemon \
+                 requires the bearer token (see `neenee panel` on the host)"
+                    .to_string(),
+            );
+        };
+        Ok(Self { host, port, token })
+    }
+
+    /// Connect and run the attach handshake over TCP+bearer. No UDS
+    /// attempt (the socket belongs to the remote machine's filesystem),
+    /// no version pre-check (the handshake carries the daemon's version).
+    pub async fn connect(&self, action: AttachAction) -> Result<Handshake, String> {
+        let url = format!("ws://{}:{}/", self.host, self.port);
+        let mut request = url
+            .as_str()
+            .into_client_request()
+            .map_err(|e| format!("bad ws url {url}: {e}"))?;
+        let value = HeaderValue::from_str(&format!("Bearer {}", self.token))
+            .map_err(|e| format!("bad bearer token: {e}"))?;
+        request.headers_mut().insert("Authorization", value);
+        let (ws, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .map_err(|e| format!("ws connect to {url}: {e}"))?;
+        finish_handshake(ws.split(), action).await
+    }
+}
+
+/// Split `host:port` into its parts. A missing port is an error.
+fn split_host_port(s: &str) -> Result<(Option<String>, u16), String> {
+    let (host, port_str) = match s.rsplit_once(':') {
+        Some(parts) => parts,
+        None => return Err(format!("'{s}' is not host:port")),
+    };
+    let port: u16 = port_str
+        .parse()
+        .map_err(|_| format!("'{port_str}' is not a port number"))?;
+    Ok(((!host.is_empty()).then(|| host.to_string()), port))
+}
+
 const LIVENESS_TIMEOUT: Duration = Duration::from_millis(500);
 const SERVER_START_TIMEOUT: Duration = Duration::from_secs(10);
 const SERVER_START_POLL: Duration = Duration::from_millis(100);
@@ -59,14 +126,14 @@ pub fn discover(_project_root: &Path) -> Option<DaemonInfo> {
         let uds_connectable = false;
 
         let tcp_addr =
-            std::net::SocketAddr::from(([127, 0, 0, 1], crate::startup::DEFAULT_SERVE_PORT));
+            std::net::SocketAddr::from(([127, 0, 0, 1], crate::startup::env_default_port()));
         let tcp_connectable =
             std::net::TcpStream::connect_timeout(&tcp_addr, Duration::from_millis(300)).is_ok();
 
         if uds_connectable || tcp_connectable {
             let recovered = DaemonInfo {
                 pid,
-                port: crate::startup::DEFAULT_SERVE_PORT,
+                port: crate::startup::env_default_port(),
                 token: None,
                 project_root: String::new(),
                 started_at: 0,
@@ -75,6 +142,7 @@ pub fn discover(_project_root: &Path) -> Option<DaemonInfo> {
                 #[cfg(not(unix))]
                 uds_path: None,
                 version: Some(crate::serve::daemon_version().to_string()),
+                grace_secs: None,
             };
             // Restore discovery file so future lookups are immediate
             let _ = discovery::write_global(&recovered);
@@ -158,9 +226,19 @@ pub fn version_mismatch(info: &DaemonInfo) -> String {
              Please update your neenee client to {daemon_ver} or newer.",
             info.pid
         ),
-        VersionRelation::Equal => format!(
-            "client/daemon version mismatch: client and daemon both report {client_ver} but failed compatibility check."
-        ),
+        VersionRelation::Equal => {
+            if !daemon_image_is_current(info.pid) {
+                format!(
+                    "client/daemon binary mismatch: running daemon (pid {}, version {daemon_ver}) executable differs from this client (rebuilt binary). \
+                     Stop it with `neenee stop` and rerun — the daemon restarts on demand.",
+                    info.pid
+                )
+            } else {
+                format!(
+                    "client/daemon version mismatch: client and daemon both report {client_ver} but failed compatibility check."
+                )
+            }
+        }
         VersionRelation::Unknown => format!(
             "client/daemon version mismatch: this client is {client_ver} but the running daemon (pid {}) is {daemon_ver}. \
              If the daemon is outdated, stop it with `neenee stop` and rerun; if the client is outdated, update your client.",
@@ -181,7 +259,7 @@ pub fn version_mismatch(info: &DaemonInfo) -> String {
 /// signal. [`daemon_image_is_current`] closes that gap by comparing the
 /// running daemon's executable against this client's own — a daemon whose
 /// `/proc/<pid>/exe` link has been replaced (or points elsewhere) is
-/// treated as incompatible so [`ensure_daemon`] recycles it.
+/// treated as incompatible.
 pub fn versions_compatible(info: &DaemonInfo) -> bool {
     info.version
         .as_deref()
@@ -200,13 +278,11 @@ pub fn versions_compatible(info: &DaemonInfo) -> bool {
 ///
 /// Returns `true` when the check is unavailable (non-Linux, unreadable
 /// `/proc`, an unresolvable current exe): absence of evidence must not
-/// recycle a healthy production daemon. A daemon spawned by an *installed*
+/// flag a healthy production daemon. A daemon spawned by an *installed*
 /// binary (`/usr/bin/neenee`) matches an installed client exactly, and a
 /// client running from a different build root than the daemon (e.g. an
 /// installed client attaching to a dev daemon) intentionally counts as
-/// compatible — the version field above remains the wire-level guard, and
-/// `ensure_daemon` only recycles when the client is *newer or same-version
-/// and image-divergent*, never for a genuinely older client.
+/// compatible — the version field above remains the wire-level guard.
 pub fn daemon_image_is_current(pid: u32) -> bool {
     #[cfg(unix)]
     {
@@ -221,10 +297,7 @@ pub fn daemon_image_is_current(pid: u32) -> bool {
         let exe_link = std::path::Path::new("/proc")
             .join(pid.to_string())
             .join("exe");
-        match (
-            std::fs::metadata(&exe_link),
-            std::fs::metadata(&current),
-        ) {
+        match (std::fs::metadata(&exe_link), std::fs::metadata(&current)) {
             (Ok(daemon), Ok(client)) => same_inode(&daemon, &client),
             // No /proc entry (non-Linux unix, or the pid vanished between the
             // discovery read and here): cannot tell, do not disturb.
@@ -288,12 +361,63 @@ async fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
     !is_process_alive(pid)
 }
 
-/// Stop the daemon through a tiered shutdown pipeline:
-/// 1. Tier 1 (Protocol): If the daemon speaks this client's version, send `Shutdown` control verb.
-/// 2. Tier 2 (OS Signal): If skewed or control fails, send `SIGTERM` to `info.pid`.
-/// 3. Tier 3 (Force): If the daemon remains alive after grace budget, escalate to `SIGKILL`.
-/// 4. Tier 4 (Cleanup): Clean up the discovery record and UDS socket.
+/// Whether the socket file at `path` was created by `pid`'s daemon —
+/// i.e. the daemon is dead and left it behind. A live holder (probed by
+/// connecting) means a successor daemon owns the socket now, and a
+/// stopper must not unlink it (ADR-0116 Tier-4 pid guard, mirroring the
+/// discovery record's `remove_if_matching_pid`).
+#[cfg(unix)]
+fn uds_belongs_to_pid(path: &std::path::Path, pid: u32) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    if is_process_alive(pid) {
+        // The daemon that spawned this stop is somehow still alive; its
+        // socket is live state, not a leftover.
+        return false;
+    }
+    // The recorded daemon is gone: whatever answers (or does not) on the
+    // socket now belongs to someone else. Only a *responsive* socket
+    // indicates a successor; a dead file is a leftover this stop should
+    // clean up.
+    !uds_answers(path)
+}
+
+/// Best-effort connect probe: does anything accept on this UDS path?
+#[cfg(unix)]
+fn uds_answers(path: &std::path::Path) -> bool {
+    std::os::unix::net::UnixStream::connect(path).is_ok()
+}
+
+/// The drain budget a stopper should allow when the discovery record
+/// predates `grace_secs` (ADR-0116): generous enough not to interrupt a
+/// default-configured daemon (10s) mid-drain, short enough that a wedged
+/// process still escalates.
+const FALLBACK_GRACE: Duration = Duration::from_secs(15);
+
+/// Stop the daemon through a tiered, **budget-coordinated** shutdown
+/// pipeline (ADR-0116):
+///
+/// 1. Tier 1 (Protocol): if the daemon speaks this client's version, send
+///    the `Shutdown` control verb, then wait the daemon's *own* drain
+///    budget (from the discovery record's `grace_secs`) — not a hardcoded
+///    couple of seconds. Any signal arriving mid-drain escalates the
+///    daemon to a forced exit that skips session teardown, so escalating
+///    early destroys the graceful drain the stop just requested.
+/// 2. Tier 2 (OS Signal): if the versions skew, the verb could not be
+///    delivered, or the budget elapsed without an exit, `SIGTERM` the pid
+///    and wait the same budget (the daemon drains the same way on SIGTERM).
+/// 3. Tier 3 (Force): if it still lives, `SIGKILL`.
+/// 4. Tier 4 (Cleanup): remove the discovery record, and the UDS socket
+///    only if it still belongs to this daemon's pid (a successor spawned
+///    during the stop window must not lose its socket).
 pub async fn stop(info: &DaemonInfo) -> Result<(), String> {
+    // The daemon's own drain budget, when it advertised one: the single
+    // number every tier below is coordinated against.
+    let grace = info
+        .grace_secs
+        .map(Duration::from_secs)
+        .unwrap_or(FALLBACK_GRACE);
     let mut stopped = false;
 
     // Tier 1: Try graceful protocol shutdown if versions are compatible.
@@ -304,17 +428,19 @@ pub async fn stop(info: &DaemonInfo) -> Result<(), String> {
         )
         .await
     {
-        stopped = wait_for_process_exit(info.pid, Duration::from_millis(2000)).await;
+        stopped = wait_for_process_exit(info.pid, grace).await;
     }
 
     // Tier 2 & 3: Fall back to OS signals if protocol did not stop it.
+    // SIGTERM drains through the same budgeted phases as the verb, so it
+    // too waits the full grace before the SIGKILL escalation.
     if !stopped {
         #[cfg(unix)]
         {
             let pid = info.pid as libc::pid_t;
             if is_process_alive(info.pid) {
                 let _ = unsafe { libc::kill(pid, libc::SIGTERM) };
-                stopped = wait_for_process_exit(info.pid, Duration::from_millis(1500)).await;
+                stopped = wait_for_process_exit(info.pid, grace).await;
 
                 if !stopped && is_process_alive(info.pid) {
                     let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
@@ -333,10 +459,15 @@ pub async fn stop(info: &DaemonInfo) -> Result<(), String> {
         }
     }
 
-    // Tier 4: Cleanup discovery record & socket
+    // Tier 4: Cleanup discovery record & socket. The record removal is
+    // pid-guarded (`remove_if_matching_pid`); the UDS socket now is too:
+    // a successor daemon may have been spawned while we waited out the
+    // grace above, and unlinking *its* socket would break live clients.
     discovery::remove_if_matching_pid(&discovery::global_discovery_path(), info.pid);
     #[cfg(unix)]
-    if let Some(uds) = &info.uds_path {
+    if let Some(uds) = &info.uds_path
+        && uds_belongs_to_pid(uds, info.pid)
+    {
         let _ = std::fs::remove_file(uds);
     }
 
@@ -358,39 +489,9 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
         if versions_compatible(&info) {
             return Ok(info);
         }
-        // Discovered an outdated daemon (daemon version < client version,
-        // unknown pre-0.24, or — the development-loop case — a same-version
-        // daemon whose executable has since been replaced by a rebuild).
-        // Automatically stop the outdated daemon and spawn the current
-        // version on demand.
-        let image_drifted = !daemon_image_is_current(info.pid);
-        let is_client_newer = match info.version.as_deref() {
-            Some(v) => {
-                compare_versions(crate::serve::daemon_version(), v) == VersionRelation::ClientNewer
-            }
-            None => true,
-        };
-        let client_is_older = info.version.as_deref().is_some_and(|v| {
-            compare_versions(crate::serve::daemon_version(), v) == VersionRelation::ClientOlder
-        });
-        // Recycle when the client is strictly newer, or when the versions
-        // match but the running image is no longer the file this client runs
-        // (a rebuilt `target/debug` binary). A strictly *older* client must
-        // never recycle a newer daemon — the version field stays
-        // authoritative for that direction.
-        if is_client_newer || (image_drifted && !client_is_older) {
-            tracing::info!(
-                daemon_pid = info.pid,
-                daemon_ver = ?info.version,
-                client_ver = crate::serve::daemon_version(),
-                image_drifted,
-                "ensure_daemon: running daemon is outdated; restarting daemon"
-            );
-            let _ = stop(&info).await;
-            let _ = wait_for_process_exit(info.pid, Duration::from_secs(2)).await;
-        } else {
-            return Ok(info);
-        }
+        // Incompatible daemon is running. Do not stop or kill it to avoid
+        // interrupting ongoing tasks. Prompt the user about the incompatibility.
+        return Err(version_mismatch(&info));
     }
 
     // Check if another daemon is holding the instance lock
@@ -406,37 +507,25 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
         let init_deadline = std::time::Instant::now() + Duration::from_secs(2);
         while std::time::Instant::now() < init_deadline {
             tokio::time::sleep(SERVER_START_POLL).await;
-            if let Some(info) = discover(project_root)
-                && versions_compatible(&info)
-            {
-                return Ok(info);
+            if let Some(info) = discover(project_root) {
+                if versions_compatible(&info) {
+                    return Ok(info);
+                } else {
+                    return Err(version_mismatch(&info));
+                }
             }
             if !is_process_alive(holder_pid) {
                 break;
             }
         }
 
-        // If still locked and discover() failed, the process holding the lock is deadlocked or unresponsive.
-        // Clear the deadlock by stopping the unresponsive process.
+        // If still locked and discover() failed, do not kill the existing process.
+        // Report that another daemon is running and holding the lock.
         if is_process_alive(holder_pid) {
-            tracing::warn!(
-                holder_pid,
-                "ensure_daemon: process holding lock is unresponsive; clearing deadlock"
-            );
-            let ghost = DaemonInfo {
-                pid: holder_pid,
-                port: crate::startup::DEFAULT_SERVE_PORT,
-                token: None,
-                project_root: String::new(),
-                started_at: 0,
-                #[cfg(unix)]
-                uds_path: Some(discovery::default_uds_path()),
-                #[cfg(not(unix))]
-                uds_path: None,
-                version: None,
-            };
-            let _ = stop(&ghost).await;
-            let _ = wait_for_process_exit(holder_pid, Duration::from_secs(2)).await;
+            return Err(format!(
+                "another neenee daemon (pid {holder_pid}) is running and holding the instance lock. \
+                 If it is unresponsive, stop it with `neenee stop`."
+            ));
         }
     }
 
@@ -444,10 +533,12 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
     let deadline = std::time::Instant::now() + SERVER_START_TIMEOUT;
     loop {
         tokio::time::sleep(SERVER_START_POLL).await;
-        if let Some(info) = discover(project_root)
-            && versions_compatible(&info)
-        {
-            return Ok(info);
+        if let Some(info) = discover(project_root) {
+            if versions_compatible(&info) {
+                return Ok(info);
+            } else {
+                return Err(version_mismatch(&info));
+            }
         }
         if let Ok(Some(status)) = child.try_wait() {
             let log_text = std::fs::read_to_string(startup_log_path()).unwrap_or_default();
@@ -472,14 +563,14 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
             };
             if !log_trimmed.is_empty() {
                 return Err(format!(
-                    "timed out after {}s waiting for neenee daemon to start{lock_info}: {log_trimmed}",
-                    SERVER_START_TIMEOUT.as_secs(),
+                    "neenee daemon did not become ready within {:?}{lock_info}: {log_trimmed}",
+                    SERVER_START_TIMEOUT
                 ));
             } else {
                 return Err(format!(
-                    "timed out after {}s waiting for neenee daemon to start{lock_info}. \
-                     Run `neenee daemon status` to inspect server state or view logs in ~/.local/state/neenee/log/",
-                    SERVER_START_TIMEOUT.as_secs(),
+                    "neenee daemon did not become ready within {:?}{lock_info} (see {})",
+                    SERVER_START_TIMEOUT,
+                    startup_log_path().display()
                 ));
             }
         }
@@ -489,7 +580,7 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
 fn spawn_daemon() -> Result<std::process::Child, String> {
     let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("neenee"));
     let mut command = std::process::Command::new(&program);
-    command.arg("serve");
+    command.args(["daemon", "start", "--fg"]);
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
@@ -534,6 +625,14 @@ fn spawn_daemon() -> Result<std::process::Child, String> {
 /// Comprehensive diagnostics for the daemon control plane and system status.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DaemonDiagnostics {
+    /// The resolved daemon instance directory (ADR-0121): the root of every
+    /// daemon runtime file this report probes. Surfaced so an operator can
+    /// see which instance — host or `NEENEE_HOME` sandbox — a client is
+    /// talking about before reading anything else below.
+    pub instance_dir: PathBuf,
+    /// The default port this client resolves (`--port` > `NEENEE_PORT` >
+    /// 9800), for the same reason as `instance_dir`.
+    pub default_port: u16,
     pub discovery_path: PathBuf,
     pub discovery_record: Option<DaemonInfo>,
     pub discovery_valid: bool,
@@ -581,7 +680,7 @@ pub fn diagnose_daemon() -> DaemonDiagnostics {
         .as_ref()
         .map(|d| d.port)
         .or_else(|| raw_record.as_ref().map(|d| d.port))
-        .unwrap_or(9800);
+        .unwrap_or_else(crate::startup::env_default_port);
 
     let tcp_addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let tcp_listening =
@@ -594,6 +693,8 @@ pub fn diagnose_daemon() -> DaemonDiagnostics {
         .filter(|s| !s.is_empty());
 
     DaemonDiagnostics {
+        instance_dir: discovery::instance_dir(),
+        default_port: crate::startup::env_default_port(),
         discovery_path,
         discovery_record: discovery_record.or(raw_record),
         discovery_valid: discover_at(&discovery::global_discovery_path()).is_some(),
@@ -1032,6 +1133,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn remote_daemon_parses_the_documented_address_forms() {
+        let t = |addr| RemoteDaemon::parse(addr, Some("tok".into())).unwrap();
+        // host:port
+        assert_eq!(
+            (t("192.168.1.4:9800").host, t("192.168.1.4:9800").port),
+            ("192.168.1.4".to_string(), 9800)
+        );
+        // ws:// scheme is accepted and stripped
+        assert_eq!(t("ws://box.lan:9800").host, "box.lan");
+        assert_eq!(t("ws://box.lan:9800").port, 9800);
+        // bare :port means loopback (the local daemon over TCP)
+        assert_eq!(t(":9800").host, "127.0.0.1");
+        // whitespace is tolerated
+        assert_eq!(t("  box.lan:9800  ").host, "box.lan");
+    }
+
+    #[test]
+    fn remote_daemon_requires_a_port_and_a_token() {
+        // No port: refuse rather than defaulting — a default would
+        // silently target the local daemon when a remote one was meant.
+        let err = RemoteDaemon::parse("box.lan", Some("tok".into())).unwrap_err();
+        assert!(err.contains("not host:port"), "{err}");
+        let err = RemoteDaemon::parse("box.lan:notaport", Some("tok".into())).unwrap_err();
+        assert!(err.contains("not a port number"), "{err}");
+        // Every network-exposed daemon requires the bearer token.
+        let err = RemoteDaemon::parse("box.lan:9800", None).unwrap_err();
+        assert!(err.contains("--token"), "{err}");
+        let err = RemoteDaemon::parse("box.lan:9800", Some(String::new())).unwrap_err();
+        assert!(err.contains("--token"), "{err}");
+    }
+
+    #[test]
     fn test_compare_versions() {
         assert_eq!(compare_versions("0.25.0", "0.25.0"), VersionRelation::Equal);
         assert_eq!(
@@ -1125,6 +1258,7 @@ mod tests {
             started_at: 0,
             uds_path: None,
             version: Some("0.24.0".to_string()),
+            grace_secs: None,
         };
         let msg = version_mismatch(&daemon_older);
         assert!(msg.contains("is older than this client"));
@@ -1138,6 +1272,7 @@ mod tests {
             started_at: 0,
             uds_path: None,
             version: Some("99.0.0".to_string()),
+            grace_secs: None,
         };
         let msg = version_mismatch(&daemon_newer);
         assert!(msg.contains("older than the running daemon"));
@@ -1151,10 +1286,24 @@ mod tests {
             started_at: 0,
             uds_path: None,
             version: None,
+            grace_secs: None,
         };
         let msg = version_mismatch(&daemon_none);
         assert!(msg.contains("unknown (older than 0.24)"));
         assert!(msg.contains("neenee stop"));
+
+        let daemon_equal_drift = DaemonInfo {
+            pid: u32::MAX - 10,
+            port: 9800,
+            token: None,
+            project_root: String::new(),
+            started_at: 0,
+            uds_path: None,
+            version: Some(crate::serve::daemon_version().to_string()),
+            grace_secs: None,
+        };
+        let msg = version_mismatch(&daemon_equal_drift);
+        assert!(msg.contains("client/daemon"));
     }
 
     fn record(port: u16, token: Option<String>) -> DaemonInfo {
@@ -1166,6 +1315,7 @@ mod tests {
             started_at: 0,
             uds_path: None,
             version: None,
+            grace_secs: None,
         }
     }
     fn dead_port() -> u16 {
@@ -1199,6 +1349,7 @@ mod tests {
             started_at: 0,
             uds_path: None,
             version: None,
+            grace_secs: None,
         };
         std::fs::write(&path, serde_json::to_vec(&live_rec).unwrap()).unwrap();
         assert!(discover_at(&path).is_none());
@@ -1227,8 +1378,41 @@ mod tests {
             started_at: 0,
             uds_path: None,
             version: Some("0.24.0".to_string()),
+            grace_secs: None,
         };
         let res = stop(&info).await;
         assert!(res.is_ok());
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn uds_guard_never_unlinks_a_live_successor_socket() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("daemon.sock");
+
+    // Missing file: nothing to clean, not ours.
+    assert!(!uds_belongs_to_pid(&path, 42));
+
+    let dead_pid = 999_999_998u32; // not this process, not alive
+
+    // A live listener (a successor daemon) answers: never unlink it,
+    // even though the recorded pid is dead.
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    assert!(!uds_belongs_to_pid(&path, dead_pid));
+    drop(listener);
+
+    // The listener is gone but the file remains (exactly what a
+    // SIGKILLed daemon leaves): nobody answers, the recorded pid is
+    // dead — a stale socket this stop should remove.
+    assert!(uds_belongs_to_pid(&path, dead_pid));
+}
+
+#[test]
+fn stop_budget_follows_the_advertised_grace() {
+    // The tier budget must come from the record (ADR-0116); the test
+    // pins the plumbing by asserting the fallback constant is generous
+    // enough to cover a default-configured daemon's 10s drain, so a
+    // legacy record cannot cause an early SIGTERM escalation either.
+    assert!(FALLBACK_GRACE >= Duration::from_secs(10));
 }

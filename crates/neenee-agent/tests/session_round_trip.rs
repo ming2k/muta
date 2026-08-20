@@ -88,7 +88,7 @@ async fn execute_round_persists_a_session_that_resume_reopens() {
                 preserve_rounds: 6,
                 summarize: false,
                 prune: false,
-                prune_protect_chars: 0,
+                prune_protect_tokens: 0,
             },
             retry_max_attempts: 1,
             retry_base_ms: 1,

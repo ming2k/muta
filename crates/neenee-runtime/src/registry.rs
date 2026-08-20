@@ -202,6 +202,25 @@ impl SessionRegistry {
             }
             AttachAction::Attach(None) => self.resolve_auto(caller_project, declared).await,
             AttachAction::Attach(Some(id)) => self.resolve_id(&id, caller_project).await,
+            // The picker carrier (ADR-0116): a throwaway session whose only
+            // job is to host the client's picker modal. The bootstrap skips
+            // restore and hooks for it; `/sessions <id>` switches to the
+            // real session through the ordinary re-attach path.
+            AttachAction::Picker => self
+                .assemble_hosted(
+                    crate::startup::SessionStart::Picker,
+                    caller_project.to_path_buf(),
+                )
+                .await
+                .map(ResolveOutcome::Welcome)
+                .unwrap_or_else(|e| match e {
+                    AssembleErr::NoHost => {
+                        ResolveOutcome::Error("this host cannot create sessions".into())
+                    }
+                    AssembleErr::AssembleFailed(e) => {
+                        ResolveOutcome::Error(format!("could not open the session picker: {e}"))
+                    }
+                }),
             // Monitor handshakes are intercepted by the WS layer
             // (`serve::handle_connection`) and never reach `resolve`.
             AttachAction::Monitor(_) => {
@@ -217,7 +236,7 @@ impl SessionRegistry {
     /// its id. The session is daemon-held; no client is attached yet.
     pub async fn create_session(&self, project: PathBuf) -> Result<String, String> {
         let bound = self
-            .assemble_hosted(crate::startup::StartupMode::Fresh, project)
+            .assemble_hosted(crate::startup::SessionStart::Fresh, project)
             .await
             .map_err(|e| match e {
                 AssembleErr::NoHost => "this host cannot create sessions".to_string(),
@@ -228,7 +247,7 @@ impl SessionRegistry {
 
     async fn create_session_outcome(&self, project: PathBuf) -> ResolveOutcome {
         match self
-            .assemble_hosted(crate::startup::StartupMode::Fresh, project)
+            .assemble_hosted(crate::startup::SessionStart::Fresh, project)
             .await
         {
             Ok(b) => ResolveOutcome::Welcome(b),
@@ -824,7 +843,7 @@ impl SessionRegistry {
         }
         match self
             .assemble_hosted(
-                crate::startup::StartupMode::Resume(Some(id.to_string())),
+                crate::startup::SessionStart::Resume(id.to_string()),
                 caller_project.to_path_buf(),
             )
             .await
@@ -840,7 +859,7 @@ impl SessionRegistry {
     }
     async fn assemble_hosted(
         &self,
-        startup: crate::startup::StartupMode,
+        startup: crate::startup::SessionStart,
         project_root: PathBuf,
     ) -> Result<BoundSession, AssembleErr> {
         let HostParams {
@@ -855,7 +874,6 @@ impl SessionRegistry {
             startup,
             project_root: Some(project_root.clone()),
             autopilot: false,
-            single_instance: false,
             extra_session_tools: None,
         })
         .await
@@ -1135,6 +1153,9 @@ fn base_row(overview: SessionOverview, project_root: &std::path::Path) -> Monito
         note: None,
         project_root: project_root.display().to_string(),
         wip: None,
+        // Lineage rides from the overview (ADR-0103 fork surfacing).
+        parent_id: overview.parent_id,
+        fork_kind: overview.fork_kind,
     }
 }
 
@@ -1150,6 +1171,8 @@ async fn overview_of(session: &SessionStore, active: bool) -> SessionOverview {
                 updated_at: item.updated_at,
                 message_count: item.message_count,
                 active,
+                parent_id: item.parent_id,
+                fork_kind: item.fork_kind,
             };
         }
     }
@@ -1161,6 +1184,9 @@ async fn overview_of(session: &SessionStore, active: bool) -> SessionOverview {
         updated_at: 0,
         message_count: mc,
         active,
+        // Not on disk yet (never persisted or empty): no lineage to report.
+        parent_id: None,
+        fork_kind: neenee_contracts::SessionForkKind::Trunk,
     }
 }
 async fn session_exists_on_disk(project_root: &std::path::Path, id: &str) -> bool {

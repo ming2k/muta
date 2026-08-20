@@ -31,7 +31,7 @@ impl SearchProvider for TavilyProvider {
             .json(&serde_json::json!({
                 "api_key": key,
                 "query": query,
-                "search_depth": "basic",
+                "search_depth": "advanced",
                 "include_answer": false,
                 "max_results": 10
             }))

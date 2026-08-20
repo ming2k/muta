@@ -11,7 +11,6 @@
 //! channels (with `default_channel` selecting one). Favorites and recency are
 //! layered on top via the provider-usage telemetry.
 
-
 mod discovery;
 mod migrate;
 mod picker;
@@ -25,8 +24,8 @@ pub use migrate::{
     DEEPSEEK_RESPONSES_URL, migrate_deepseek_channels_to_responses,
     migrate_legacy_provider_instances,
 };
-pub use picker::build_picker_state;
 use picker::active_model_id_for_entry;
+pub use picker::build_picker_state;
 use translate::user_provider_to_entry;
 
 use neenee_contracts::catalog::ProviderEntry;

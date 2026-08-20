@@ -13,8 +13,8 @@
 //! [`AgentIdentity`], the [`PrincipalProfile`], and the [`UiBridge`] as
 //! parameters. Nothing here names a product or a principal.
 //!
-//! `StartupMode::Version`, `StartupMode::Doctor`, `StartupMode::Attach`, and
-//! `StartupMode::Showcase` are **not** handled here: they are purely local
+//! `SessionStart::Version`, `SessionStart::Doctor`, `SessionStart::Attach`, and
+//! `SessionStart::Showcase` are **not** handled here: they are purely local
 //! (or client-side) short-circuits and must be dispatched by the caller
 //! before invoking [`assemble`].
 
@@ -23,20 +23,19 @@ use neenee_agent::catalog;
 use neenee_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round_response};
 use neenee_agent::{Agent, AgentIdentity, EnvoyTool, PrincipalProfile, RoundLifecycle};
 use neenee_contracts::{
-    AgentNotice, AgentRequest, AgentResponse, CHARS_PER_TOKEN, EXPLORE, Message, NoticeKind,
-    NoticeSeverity, NoticeSource, Provider, RoundEvent, ToolContextBuilder, ToolSet,
-    collect_toolset,
+    AgentNotice, AgentRequest, AgentResponse, EXPLORE, Message, NoticeKind, NoticeSeverity,
+    NoticeSource, Provider, RoundEvent, ToolContextBuilder, ToolSet, collect_toolset,
 };
 use neenee_mcp::{McpCatalog, McpRuntime};
 use neenee_persistence::{
     config::{Config, InputHistoryConfig, TuiConfig},
-    embedding, lock, paths, provider_usage,
+    embedding, paths, provider_usage,
     session::SessionStore,
     trusted_projects::TrustGate,
 };
 use neenee_skills::{SkillCatalog, SkillRegistry};
 
-use crate::startup::{BuiltinCmd, StartupMode};
+use crate::startup::{BuiltinCmd, SessionStart};
 use crate::{SessionDriver, UiBridge};
 
 use std::collections::HashMap;
@@ -57,17 +56,13 @@ pub struct BootstrapParams {
     pub principal: PrincipalProfile,
     /// The frontend's clipboard/UI bridge (used by `/export`).
     pub ui: Arc<dyn UiBridge>,
-    /// How the session should start. Only `Fresh`, `Resume`, and `Picker`
-    /// reach the harness; `Doctor`, `Attach` (and debug-only `Showcase`) must
-    /// be short-circuited by the caller before calling [`assemble`].
-    pub startup: StartupMode,
+    /// How the session begins (ADR-0116: only the assembly-relevant
+    /// shapes exist here; one-shot CLI modes never reach the harness).
+    pub startup: SessionStart,
     /// `--project` override; when `None`, the current directory is used.
     pub project_root: Option<PathBuf>,
     /// `--autopilot` at start: the agent runs without human intervention.
     pub autopilot: bool,
-    /// `--single-instance`: restore the pre-ADR-0018 exclusive per-project
-    /// process lock.
-    pub single_instance: bool,
     /// Extra tools to publish onto the assembled agent (ADR-0097 §5's
     /// WIP-coordination tools). The assemble passes them through untouched;
     /// the registry publishes them once the session id is known.
@@ -113,11 +108,7 @@ pub struct Bootstrap {
     /// The `[input_history]` config, pulled out of the live config alongside
     /// `tui_config` so the frontend can dedup / filter history as it records.
     pub input_history_config: InputHistoryConfig,
-    /// The per-project advisory process lock (ADR-0018), when
-    /// `--single-instance` requested it. **The guard releases on drop** — the
     /// caller must hold it for the process lifetime (e.g. bind it to
-    /// `let _process_lock = ...` in `main`).
-    pub process_lock: Option<lock::ProcessLock>,
     /// Echo of [`BootstrapParams::extra_session_tools`], for the registry to
     /// publish once the session id is known. Not consumed by the assemble.
     pub extra_session_tools: Option<Vec<Arc<dyn neenee_contracts::Tool>>>,
@@ -157,16 +148,15 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         startup,
         project_root: project_override,
         autopilot: autopilot_at_start,
-        single_instance,
         extra_session_tools,
     } = params;
     debug_assert!(
         matches!(
             startup,
-            StartupMode::Fresh
-                | StartupMode::FreshWithPrompt(_)
-                | StartupMode::Resume(_)
-                | StartupMode::Picker
+            SessionStart::Fresh
+                | SessionStart::FreshWithPrompt(_)
+                | SessionStart::Resume(_)
+                | SessionStart::Picker
         ),
         "assemble only handles Fresh/FreshWithPrompt/Resume/Picker; other modes must short-circuit in the caller"
     );
@@ -262,30 +252,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // env-var-then-config resolution rules shared with runtime switching. See
     // `docs/adr/0002-model-channel-abstraction.md`.
 
-    // ADR-0018: the per-project advisory lock is opt-in. The default is
-    // unlocked so multiple instances can run in one project — each pins its
-    // own `sessions/<id>.{json,jsonl}` and never shares a mutable file.
-    // `--single-instance` restores the pre-0018 exclusive lock for users who
-    // want it. Doctor always skips the lock so it can inspect stores while
-    // another instance is running (the caller short-circuits Doctor before
-    // calling `assemble`, so the guard below is belt-and-braces).
-    let process_lock = if single_instance && !matches!(startup, StartupMode::Doctor) {
-        Some(lock::ProcessLock::acquire(
-            &paths::get().project_lock_file(&project_root),
-        )?)
-    } else {
-        None
-    };
-
-    // Showcase: render a single UI component standalone. No agent, session, or
-    // network — just the component's model + renderer on a live terminal.
-    // The caller returns for it before calling `assemble`, before any of the
-    // agent/session plumbing here is constructed.
-    #[cfg(debug_assertions)]
-    debug_assert!(
-        !matches!(startup, StartupMode::Showcase(_)),
-        "showcase must return before the agent/session plumbing runs"
-    );
+    // ADR-0116: the pre-0018 per-project exclusive lock is gone — the
+    // unified daemon owns every session and the CLI flag was dead (parsed,
+    // discarded). Sessions still pin their own `sessions/<id>.{json,jsonl}`
+    // (ADR-0018), so concurrency is safe without a project-wide lock.
 
     // Session loading honors the startup mode. Under ADR-0018
     // `load_for_project` pins a fresh `sessions/<id>.{json,jsonl}`, so a bare
@@ -297,13 +267,12 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // picker overlay instead of guessing.
     let session = Arc::new(SessionStore::load_for_project(project_root.clone()));
     let open_picker_on_start = match &startup {
-        StartupMode::Fresh | StartupMode::FreshWithPrompt(_) => false,
-        StartupMode::Picker => true,
-        StartupMode::Resume(id) => {
-            session.resume(id.as_deref()).await?;
+        SessionStart::Fresh | SessionStart::FreshWithPrompt(_) => false,
+        SessionStart::Picker => true,
+        SessionStart::Resume(id) => {
+            session.resume(Some(id.as_str())).await?;
             false
         }
-        _ => unreachable!("other startup modes return before assemble"),
     };
 
     // Background `/schedule` scheduler, bound to THIS session. Every 30s it prunes
@@ -647,7 +616,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // run against the throwaway fresh session — the real session is restored
     // only once the user picks one from the picker (`/session open`). Fresh and
     // `neenee resume <id>` load eagerly as before.
-    let is_picker = matches!(startup, StartupMode::Picker);
+    let is_picker = matches!(startup, SessionStart::Picker);
 
     let restored_messages = if is_picker {
         Vec::new()
@@ -660,11 +629,13 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // prune threshold. The threshold is derived from the active model's context
     // window and re-seeded whenever the provider switches (see
     // `reseed_prune_threshold`), so it tracks the live model rather than a
-    // fixed character budget.
+    // fixed token budget.
     if config.compaction_prune {
         agent.set_context_projection_gate(Some(Arc::new(MidTurnPruneProjectionGate {
             session: session.clone(),
-            prune_protect_chars: config.compaction_prune_protect_tokens * CHARS_PER_TOKEN,
+            // ADR-0120: token-native — the config key was always tokens; the
+            // old ×4 char conversion existed only for the byte-space pruner.
+            prune_protect_tokens: config.compaction_prune_protect_tokens,
         })));
         crate::agent_setup::reseed_prune_threshold(&agent, &config);
     }
@@ -736,7 +707,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         // round. Resume vs fresh start is surfaced so a hook can branch.
         {
             let source = match &startup {
-                StartupMode::Resume(_) => neenee_contracts::SessionSource::Resume,
+                SessionStart::Resume(_) => neenee_contracts::SessionSource::Resume,
                 _ => neenee_contracts::SessionSource::Startup,
             };
             let mut messages = session.model_window().await;
@@ -841,7 +812,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         custom_command_suggestions,
         tui_config,
         input_history_config,
-        process_lock,
         extra_session_tools,
         agent: agent_for_session_end.clone(),
     })

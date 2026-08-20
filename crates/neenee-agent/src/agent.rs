@@ -561,6 +561,9 @@ struct RequestAccountingGuard {
     cancel: CancellationToken,
     projected_prompt_tokens: i64,
     observed_completion_tokens: i64,
+    /// Incremental BPE counter for streamed deltas (exact across delta
+    /// boundaries; a per-delta sum would over-count merges that span them).
+    output_counter: neenee_contracts::tokenizer::StreamingCounter,
     observed_usage: Option<TokenUsage>,
     settled: bool,
     /// Started when the provider request was dispatched, stopped once a valid
@@ -598,6 +601,7 @@ impl RequestAccountingGuard {
             cancel: cancel.clone(),
             projected_prompt_tokens: projected_prompt_tokens as i64,
             observed_completion_tokens: 0,
+            output_counter: neenee_contracts::tokenizer::StreamingCounter::new(),
             observed_usage: None,
             settled: false,
             started_at: Some(std::time::Instant::now()),
@@ -606,9 +610,12 @@ impl RequestAccountingGuard {
     }
 
     fn observe_output(&mut self, text: &str) {
+        // Streamed deltas feed an exact incremental BPE counter: BPE is not
+        // additive across delta boundaries (merges span them), so summing
+        // per-delta counts overestimates by 2–100% depending on chunk size.
         self.observed_completion_tokens = self
             .observed_completion_tokens
-            .saturating_add(pressure::estimate_string_tokens(text));
+            .saturating_add(self.output_counter.push(text) as i64);
     }
 
     fn observe_usage(&mut self, usage: TokenUsage) {
@@ -1050,24 +1057,24 @@ impl Agent {
     }
 
     fn estimate_model_request(request: &neenee_contracts::ModelRequest) -> RequestTokenEstimate {
-        // Use per-message wire weight here rather than `estimate_tokens`: the
-        // latter intentionally includes persisted envoy children, while the
-        // provider receives only the parent message's rendered result.
-        let message_tokens = |messages: &[Message]| {
-            messages
-                .iter()
-                .map(neenee_contracts::estimate_message_tokens)
-                .sum::<i64>()
-                .max(0) as usize
-        };
-        let history = request
+        // Per-message wire weight (not `estimate_tokens`, which intentionally
+        // includes persisted envoy children the provider never sees), with
+        // each message tokenized exactly once — a prior version tokenized the
+        // non-system subset a second time (and cloned the whole message list
+        // to build it), doubling the dominant cost of every estimate.
+        let per_message: Vec<i64> = request
             .messages
             .iter()
-            .filter(|message| message.role != Role::System)
-            .cloned()
-            .collect::<Vec<_>>();
-        let history_tokens = message_tokens(&history);
-        let prepared_message_tokens = message_tokens(&request.messages);
+            .map(neenee_contracts::estimate_message_tokens)
+            .collect();
+        let history_tokens = per_message
+            .iter()
+            .zip(&request.messages)
+            .filter(|(_, message)| message.role != Role::System)
+            .map(|(tokens, _)| *tokens)
+            .sum::<i64>()
+            .max(0) as usize;
+        let prepared_message_tokens = per_message.iter().sum::<i64>().max(0) as usize;
         let tool_schema_tokens = request
             .tool_specs
             .iter()
@@ -1265,6 +1272,13 @@ impl Agent {
         state.generation_ms = state.generation_ms.saturating_add(request.generation_ms);
         // Prefer the usage the provider reported (streamed, then drained).
         let reported = streamed_usage.or_else(|| self.provider.take_last_usage());
+        // Any streamed-but-unfinalized tail (the last open pretoken) belongs
+        // to the completion count too: close the incremental counter before
+        // settling so the estimate matches what a whole-text count would say.
+        let streamed_total = request.output_counter.finish() as i64;
+        if streamed_total > request.observed_completion_tokens {
+            request.observed_completion_tokens = streamed_total;
+        }
         if let Some(usage) = reported {
             state.token_usage.total_tokens += usage.total_tokens;
             state.token_usage.prompt_tokens += usage.prompt_tokens;

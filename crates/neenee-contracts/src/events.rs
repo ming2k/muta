@@ -800,10 +800,12 @@ pub enum RoundEvent {
     /// Mirrors [`AgentEvent::InputRequest`]: an interactive `bash` command
     /// needs operator input (L3.5 β).
     InputRequest(InputRequest),
+    /// A context projection (compaction or prune) was committed. Token
+    /// samples of the active window around the projection (ADR-0120).
     Compacted {
         archived_messages: usize,
-        before_chars: usize,
-        after_chars: usize,
+        window_tokens_before: usize,
+        window_tokens_after: usize,
     },
     HarnessState(HarnessSnapshot),
     /// The task list changed (full-replace via `todo`, surgical update via
@@ -951,6 +953,34 @@ pub struct SessionOverview {
     pub updated_at: u64,
     pub message_count: usize,
     pub active: bool,
+    /// The session this one was forked from, when it is a branch rather
+    /// than a trunk (`/fork`, `/btw` aside). `None` for a trunk session
+    /// (`/new` or the very first session). Lineage is what the dashboard
+    /// groups by: one trunk row per conversation, its branches nested
+    /// beneath — there is always exactly one *main* line, the trunk the
+    /// user is driving; branches are derived views that never replace it.
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    /// How this session came to exist, so the dashboard can badge rows
+    /// without string-matching ids: `fork` (an explicit `/fork` branch that
+    /// *replaced* the active pointer), `aside` (a `/btw` background
+    /// conversation forked off the trunk), or `trunk` (no parent).
+    #[serde(default)]
+    pub fork_kind: SessionForkKind,
+}
+
+/// The provenance of a session relative to its lineage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum SessionForkKind {
+    /// A root session: `/new` or the first-ever session. The main line.
+    #[default]
+    Trunk,
+    /// An explicit `/fork` branch (the active pointer moved here).
+    Fork,
+    /// A `/btw` aside: forked from the trunk, running alongside it.
+    Aside,
 }
 
 /// Full detail for one session, requested on demand (the session-info

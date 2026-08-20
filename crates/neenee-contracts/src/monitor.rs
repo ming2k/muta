@@ -15,6 +15,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::events::SessionForkKind;
+
 /// Handshake action selecting a daemon-observability stream instead of a
 /// session attach (ADR-0093 §2). Sent as the first frame:
 /// `{"type":"Select","action":{"monitor":{"watch":…,"include_idle":…}}}`.
@@ -152,6 +154,17 @@ pub struct MonitoredSession {
     /// declared WIP", which is what a consumer needs to answer `check_wip`.
     #[serde(default)]
     pub wip: Option<WipStatus>,
+    /// Lineage (ADR-0103 fork surfacing): the parent session this one was
+    /// forked from, when it is a branch. `None` on a trunk. The dashboard
+    /// groups by trunk: one main card per conversation, its branches
+    /// badged beneath — the main line is always exactly one.
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    /// How this session came to exist: trunk root, `/fork` branch, or
+    /// `/btw` aside. Defaults to `Trunk` for producers that predate the
+    /// field.
+    #[serde(default)]
+    pub fork_kind: SessionForkKind,
 }
 
 /// A session's declared work-in-progress (ADR-0097 §5): the paths it is
@@ -234,6 +247,8 @@ impl MonitoredSession {
             note: None,
             project_root: String::new(),
             wip: None,
+            parent_id: None,
+            fork_kind: SessionForkKind::default(),
         }
     }
 }
@@ -382,6 +397,8 @@ mod tests {
                 note: None,
                 project_root: "/tmp/proj".into(),
                 wip: None,
+                parent_id: None,
+                fork_kind: SessionForkKind::Trunk,
             }],
         };
         let json = serde_json::to_string(&MonitorEvent::Snapshot(snapshot.clone())).unwrap();

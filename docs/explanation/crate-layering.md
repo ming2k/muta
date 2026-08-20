@@ -148,7 +148,7 @@ The user-facing presentation layers:
 1. **`neenee-cli`** (package name; binary `neenee`) — the single CLI entrypoint:
    argument parsing, subcommand routing (`auth`, `config`, `mcp`, `skill`, `session`, `daemon`),
    and process lifecycle. For interactive sessions, it connects to the session daemon via
-   `neenee-runtime::client`; for daemon serving (`neenee serve`), it launches the host via
+   `neenee-runtime::client`; for daemon serving (`neenee daemon start --fg`), it launches the host via
    `neenee-runtime::host`. It depends strictly downwards and holds zero direct dependency on `neenee-agent`.
 2. **`neenee-tui`** — the terminal user interface library built on `neenee-tui-engine`.
    It acts as a pure remote client attaching to daemon-hosted sessions via WebSocket channels,

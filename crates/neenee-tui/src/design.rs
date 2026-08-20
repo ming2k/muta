@@ -158,7 +158,7 @@ pub(crate) const BAR_LEGEND_GAP_MIN: usize = 6;
 //
 //   R0  Atomic   `Image #1`, `24.1 KB`, `3 tool calls`, `F3 block`
 //                Parts of one value — no symbol, 0–1 space.
-//   R1  Modify   `Thinking · 120 chars`, `↳ Completed · 3 calls · 1.2s`
+//   R1  Modify   `Thinking · 120 tokens`, `↳ Completed · 3 calls · 1.2s`
 //                The trailing token is a state / measure / attribute of the
 //                leading one. THE one and only use of the middle dot.
 //   R2  Enumerate  `turn 2  sonnet`, `/skills  /repeat  /help`

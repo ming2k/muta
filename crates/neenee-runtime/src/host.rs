@@ -230,11 +230,19 @@ async fn run_inner(
         Ok(lock) => Some(lock),
         Err(busy) => {
             // Another daemon is either alive (fine — the client-side
-            // discovery probe should have found it) or draining (wait for
-            // the socket to come free, bounded by a fraction of that
-            // daemon's own grace budget).
-            tracing::warn!(%busy, "neenee serve: another daemon holds the instance lock; waiting for it to exit");
-            match wait_for_lock(&lock_path, Duration::from_secs(15)).await {
+            // discovery probe should have found it) or draining. Wait for
+            // the lock with a budget derived from *this* daemon's grace
+            // plus a floor: a draining predecessor holds the lock for at
+            // most its own grace, and the floor covers the general case
+            // (a sibling draining at a longer configured grace, slow
+            // session hooks, machine load). The predecessor's budget is
+            // not knowable from here — the lock file carries only its
+            // pid — so the floor is what makes this bound honest rather
+            // than a magic number (ADR-0101/0116).
+            let budget =
+                lifecycle.shutdown_grace.max(Duration::from_secs(10)) + Duration::from_secs(5);
+            tracing::warn!(%busy, budget_secs = budget.as_secs(), "neenee daemon: another daemon holds the instance lock; waiting for it to exit");
+            match wait_for_lock(&lock_path, budget).await {
                 Ok(lock) => Some(lock),
                 Err(_) => {
                     return RunOutcome::StartupFailed(format!(
@@ -297,6 +305,11 @@ async fn run_inner(
         started_at,
         uds_path: bound_uds.clone(),
         version: Some(crate::serve::daemon_version().to_string()),
+        // Publish the drain budget so `neenee daemon stop` waits *this*
+        // daemon's grace before escalating (ADR-0116): an early SIGTERM
+        // would force-exit the daemon and skip the very session teardown
+        // the stop requested.
+        grace_secs: Some(lifecycle.shutdown_grace.as_secs()),
     };
     let mut discovery_lease = discovery::DiscoveryLease::new(
         match discovery::write_global(&record) {

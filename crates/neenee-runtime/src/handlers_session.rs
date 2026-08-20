@@ -69,6 +69,8 @@ pub async fn rename(
                         updated_at: summary.updated_at,
                         message_count: summary.message_count,
                         active: summary.active,
+                        parent_id: summary.parent_id,
+                        fork_kind: summary.fork_kind,
                     });
                 }
             }

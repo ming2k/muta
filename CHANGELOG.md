@@ -7,6 +7,249 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The command surface finishes its convergence (ADR-0119's principle
+  applied to its own leftovers).** `session ls` is retired — the session
+  table is the daemon's view, so `neenee daemon status` is its one home
+  (`neenee session ls` now refuses with a pointer, and `neenee session`
+  teaches `session rm <id>` instead of silently listing). `mcp` and
+  `skill` gained the noun-verb shape before growing a second action made
+  it a breaking change: `neenee mcp ls` / `neenee skill ls` (aliases
+  `list`), with the bare nouns refusing and teaching. `panel` now says
+  what it does: `neenee panel [url]` prints the URL (the historical
+  behaviour, kept as the bare form), and the new `neenee panel open`
+  additionally launches the platform browser (`$BROWSER`, else
+  xdg-open/open). Help no longer advertises `--yolo` ahead of the
+  canonical `--autopilot`.
+
+- **`--remote` / `--token` are real: they no longer parse and then
+  vanish.** Headless `neenee run --remote <host:port> --token <t>` now
+  connects to the explicitly named daemon directly — no local discovery
+  read, no on-demand spawn of a local daemon — over TCP+bearer, with the
+  address accepted as `host:port`, `ws://host:port`, or a bare `:port`
+  for loopback. A missing port or token is an actionable error rather
+  than a silent well-known default (which would target the local daemon
+  while appearing to be remote).
+
+- **`neenee daemon start` (detached) no longer drops its own flags.**
+  `--port`, `--public`, `--no-local-auth`, `--idle-exit`, and `--grace`
+  now survive the detach and reach the foreground child — previously
+  `daemon start --port 9809` silently bound the default (or its ephemeral
+  fallback), because the supervisor re-invocation passed none of them.
+  Found by the new CLI smoke; pinned there.
+
+- **A CLI-surface smoke gate joins the e2e job**
+  (`apps/web/e2e/cli-smoke.sh`): the binary's own contract — retired
+  spellings teach, noun-verb shapes parse, `--remote` validates and
+  connects — exercised against a live daemon in a throwaway instance
+  root, complementing the protocol-level `daemon-smoke.mjs`.
+
+- **Tokens are the first-class unit everywhere (ADR-0120).** With the exact
+  BPE tokenizer in place, every char/byte-denominated budget, marker, and
+  display in the pressure → prune → compact pipeline is token-native now:
+  - `prune_tool_results` takes `protect_recent_tokens` /
+    `min_reclaim_tokens` (the byte accumulator it replaced under-protected
+    CJK sessions 3–4×); `PruneOutcome::reclaimed_tokens`; tier thresholds
+    `TRUNCATE_MIN_TOKENS = 512` / keep-each-side 128 tokens.
+  - Model-visible markers tell the truth in the model's own unit:
+    `[cleared tool result: … (42 lines, 350 tokens)]` and
+    `[… N tokens elided …]` (recognizers match a stable substring, so
+    pre-ADR-0120 records still escalate truncate→clear).
+  - The compaction summary pipeline is token-bounded end to end
+    (`truncate_to_tokens`, the new exact token-boundary cut):
+    `summary_char_budget` and its `target × 4` round trip are gone, the
+    excerpt fallback / summarizer transcript / envoy caps are token
+    budgets, and the binary-search `truncate_summary_to_token_budget`
+    collapses into the exact cut.
+  - `Compacted` (wire + persisted checkpoint) carries
+    `window_tokens_before`/`window_tokens_after` — point-in-time samples
+    of the active window around the projection, named subject-first so
+    the pair sorts together and reads as one measurement. Previously
+    byte values labeled chars, shown as bytes in the TUI and chars on
+    the web: four ways of being wrong.
+  - Transcript displays report tokens: `Thinking · N tokens` (TUI +
+    docs), `[Output truncated: N tokens total]`, search truncation and
+    `webfetch` framing, `Successfully wrote N tokens`, and the transport
+    decode-error preview's omitted-tail count.
+  - The `× CHARS_PER_TOKEN` conversions on the already-token
+    `compaction_prune_protect_tokens` config are deleted (orchestration
+    and bootstrap pass it through); `PRUNE_MIN_RECLAIM_TOKENS = 2_000`
+    replaces the 8 000-byte floor.
+- **The char-class estimator and `CHARS_PER_TOKEN` are deleted** (ADR-0120):
+  the tokenizer is total, so the "cheap fallback" had no failure mode to
+  fall back from and no production caller. `estimate_bytes` survives only
+  as the `/debug preview` wire-size diagnostic, where bytes are the
+  honest unit.
+- **No compatibility aliases for renamed persisted/wire shapes** (the
+  "erase over compat" policy, ADR-0120): the serde aliases that mapped
+  old event tags (`compaction_committed`, `repeat_jobs_set`,
+  `turn_counter_set`), old snapshot keys (`messages`,
+  `archived_messages`, `last_relief`, `compaction`, `repeat_jobs`,
+  `turn_counter`, `compaction_preserve_turns`), and the byte-era
+  checkpoint fields onto current names are removed, along with the
+  legacy `PRUNED_TOOL_PLACEHOLDER` string and the substring-matching
+  truncation recognizer. Old records fail to parse by design: the event
+  loader skips those lines with a warn, an unparseable session snapshot
+  starts fresh (loudly warned), and pre-rename config keys fall back to
+  defaults. Regression tests pin the skip/drop behavior so aliases
+  cannot silently creep back.
+
+### Added
+
+- **Isolated instances for development and testing (`--home`,
+  `NEENEE_HOME`, `NEENEE_PORT` — ADR-0121).** One selector with two
+  entrances: the global `--home <dir>` flag and the `NEENEE_HOME`
+  environment variable name the same **instance root**. Either gives
+  neenee a completely separate footprint — config, credentials, sessions,
+  skills, logs, and the daemon's socket/lock/discovery record under
+  `<dir>/neenee/` — so a checkout's debug builds and test suites can run
+  beside a live installed daemon without reading, writing, stopping, or
+  spawning into its state. `NEENEE_PORT` overrides the well-known 9800
+  default (below an explicit `--port`). A sandboxed client's auto-spawned
+  daemon inherits the sandbox by construction, and `neenee daemon status
+  --diagnostic` now leads with the resolved instance root and default port
+  (making "two daemons, one discovered" a one-command diagnosis). With no
+  root set, path and port resolution are byte-for-byte the previous
+  behaviour.
+
+### Changed
+
+- **The CLI speaks one verb per action — the daemon noun owns its
+  lifecycle (ADR-0119).** `neenee daemon start [--fg] | stop | status` is
+  the canonical surface; the retired top-level `serve`/`stop`/`status`
+  spellings are refused with an error naming the canonical form instead
+  of silently accepting both forever. `daemon start` **detaches by
+  default** (the verb asks for a daemon); `--fg` is the supervisor shape
+  and is what `assets/neenee.service` and the on-demand self-spawn now
+  use. `resume` merged into `attach`, `exec` into `run`, and `session`
+  narrowed to `ls`/`rm` (joining a session is `attach`; the dashboard is
+  `neenee dashboard`).
+
+- **The command-line parser moved out of the session runtime.** What was
+  `neenee_runtime::startup::parse_args` (with two hand-maintained flag
+  tables for `serve` vs `daemon start`, hand-written help text, and three
+  hand-maintained completion scripts) is now `neenee-cli`'s `cli.rs`: a
+  declarative spec table that drives parsing, help, "did you mean", and
+  the bash/zsh/fish completions from one source. The runtime's
+  `StartupMode` (24 variants) shrank to `SessionStart` (4 — the shapes a
+  session assembly actually consumes); `--single-instance`, a flag parsed
+  and then discarded since the unified daemon (its registry call site
+  hardcoded `false`), is now refused with an explanation and its plumbing
+  is deleted.
+
+- **`neenee attach` with no id opens the real session picker.** The
+  daemon offers a new `AttachAction::Picker` that assembles a throwaway
+  carrier session (no restore, no hooks); the client's TUI raises the
+  sessions modal over it, and `/sessions <id>` switches to the chosen
+  session through the ordinary re-attach path. Previously this path
+  printed a session list on **stderr** and exited, leaving the user to
+  copy an id by hand — the picker modal existed but was never wired to
+  it. `Attach(None)`'s auto-bind of a lone session is unchanged.
+
+### Fixed
+
+- **`neenee daemon stop` no longer force-kills a daemon that is draining
+  within its own budget.** The daemon now publishes its configured drain
+  budget as `grace_secs` in the discovery record, and the stopper's tier
+  pipeline (verb → SIGTERM → SIGKILL) waits *that* budget at each
+  graceful tier instead of a hardcoded 2s: any signal arriving mid-drain
+  escalates the daemon's `ShutdownGate` to a forced exit, so the old
+  timing made a daemon with legitimately slow `SessionEnd` hooks
+  (configured grace 10s, hooks up to 5s) skip the very teardown the stop
+  requested. Records predating the field fall back to a 15s constant —
+  generous against the 10s default, so a legacy record cannot cause the
+  same regression.
+
+- **The stop pipeline's Tier-4 cleanup no longer unlinks a successor
+  daemon's UDS socket.** The discovery-record removal has long been
+  pid-guarded (`remove_if_matching_pid`); the socket removal now is too
+  (`uds_belongs_to_pid`): the file is removed only when the recorded
+  daemon is dead *and* nothing answers on the path, so a daemon spawned
+  during the stop window keeps its socket.
+
+- **The single-instance lock wait tells the truth about its budget.**
+  `wait_for_lock` now waits `max(grace, 10s) + 5s` instead of a hardcoded
+  15s whose comment claimed it was "a fraction of that daemon's own grace
+  budget" (it was larger than the default grace and too small for a
+  long-grace daemon). The floor matters: the *predecessor's* grace is not
+  knowable from the lock file, and the original 15s was sized to cover
+  the general case.
+
+### Added
+
+- **Native `cl100k_base` BPE tokenizer for token prediction
+  (ADR-0117).** The char-class estimator behind the context meter, the
+  pruning/compaction triggers, `/context`, and the tool-schema overhead
+  estimate is replaced by a real byte-level BPE implemented natively in
+  `neenee-contracts` (`tokenizer.rs`), following OpenAI's `tiktoken`:
+  a hand-rolled scanner for the cl100k pretokenizer regex (no `regex`
+  dependency) plus tiktoken's `byte_pair_merge` over a compactly packed
+  100 256-rank vocabulary embedded from `vendor/cl100k_base.packed`
+  (1.04 MB, ≈35% smaller than the published `.tiktoken` file). On this
+  repository's own CJK + Rust corpus the old estimator was off by
+  −24…−54%; the tokenizer is exact for `cl100k_base` and cross-validated
+  against an offline tiktoken reference (counts and pretokenization
+  pinned in `tests/tokenizer_corpus.rs`). Message-level estimation now
+  also charges chat framing (4 tokens/message, 2/tool-call). The
+  char-class estimator remains as `count_tokens_heuristic` (documented
+  fallback, ADR-0044). See
+  [ADR-0117](docs/adr/0117-native-cl100k-bpe-tokenizer.md).
+- **Exact incremental token counting for streamed output.** BPE is not
+  additive across delta boundaries — merges span them, so summing
+  per-delta token counts over-counts streamed completions by 2–100%
+  (measured; worst on English with small deltas). The turn-accounting
+  path that estimates completion tokens when a provider reports no usage
+  now feeds every delta into a `StreamingCounter`
+  (`neenee-contracts`, ADR-0117): it commits only pretokens that no
+  future scalar can extend or re-split (holding back symbol runs ending
+  in an apostrophe, which can still become contractions) and carries the
+  open tail, yielding counts identical to whole-text tokenization for
+  every chunking (property-tested over 9 scripts × 7 chunk sizes).
+  Also fixed: `estimate_model_request` tokenized the non-system message
+  subset a second time (and cloned the message list to do it), doubling
+  the cost of every pressure estimate.
+
+
+- **Two-stage web research: pluggable depth reader for `webfetch`.** The web
+  tools are now an explicit breadth/depth pair
+  ([ADR-0118](docs/adr/0118-two-stage-web-research-search-breadth-fetch-depth.md)):
+  `websearch` stays breadth-only behind `SearchProvider`, while `webfetch`
+  gains a mirrored `Reader` abstraction (`crates/neenee-agent/src/tools/reader/`).
+  New `[websearch] reader` key: `"builtin"` (default, unchanged direct-fetch
+  behaviour) or `"jina"` (r.jina.ai: JavaScript rendering, readability-style
+  extraction, Markdown; optional `jina_api_key`; automatic fallback to the
+  builtin path with a visible annotation on reader failure). Tavily now
+  requests `search_depth: "advanced"` for richer breadth snippets.
+  `webfetch` truncation is unified to the shared 16,000-byte cap (keeping
+  half on truncation) and labels the reader/content-type in its truncation
+  header. Live-network E2E tests pin the pipeline (`tests/webtool_e2e.rs`,
+  `--ignored` by default).
+- **Session lineage: forks and asides are first-class.** A new persisted
+  `SessionForkKind` (`Trunk` / `Fork` / `Aside`) is stamped at fork time —
+  `/fork` writes `Fork`, `/btw` writes `Aside` — and flows through
+  `SessionSummary` → `SessionOverview` → `MonitoredSession`, so every
+  observer (session picker, dashboard, web panel via the generated TS types)
+  can see which sessions are branches and of what. A legacy snapshot with a
+  `parent_id` but no kind degrades to `Fork`. The dashboard badges branch
+  cards (`⑂aside` / `⑂fork`, muted name) while trunk cards stay plain —
+  the main line is exactly one. See
+  [ADR-0116-2](docs/adr/0116-2-session-lineage.md).
+
+### Fixed
+
+- **`/btw` aside views inherited the primary's activity bar and round
+  state.** Chrome is now view-scoped: a per-session `SessionChrome`
+  (activity text, responding flag, round/turn counters, elapsed-timer
+  origin) is maintained for the primary and every live aside;
+  `enter_side_view` parks the primary's chrome and swaps in the aside's own
+  entry (a new aside starts idle — no inherited "responding" bar), and
+  `exit_side_view` restores the primary's exactly as it was, so a primary
+  round that kept streaming during the detour shows its own bar again. The
+  activity bar, elapsed timer, Activity modal counters, and the redraw
+  animation gate all read the viewed session's entry. Jumping aside → aside
+  no longer re-snapshots the previous aside's state as the primary's.
+
 ## [0.27.0] - 2026-08-19
 
 ### Changed

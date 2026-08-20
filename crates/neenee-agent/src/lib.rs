@@ -67,14 +67,13 @@ pub use neenee_contracts::*;
 pub use neenee_contracts::{
     AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, EXPLORE, EnvoyEvent, EnvoyProfile,
     HarnessError, HarnessSnapshot, ImagePart, InputReply, InputRequest, McpConnectionStatus,
-    McpServerConfig, Message, ModelRequest, PRUNED_TOOL_PLACEHOLDER, PatchOp, PermissionDecision,
-    PermissionRequest, Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot,
-    ProviderStreamEvent, PruneOutcome, RetryableError, Role, SessionOverview, ShellTermination,
-    SkillsConfig, StdinPolicy, TITLE, TokenUsage, Tool, ToolCall, ToolOutput, ToolPolicy,
-    ToolResult, ToolStream, Transport, UserQuestion, UserQuestionOption, UserQuestionReply,
-    UserQuestionRequest, WebSearchConfig, estimate_bytes, estimate_tokens, is_context_overflow,
-    parse_retryable_error, prune_tool_results, public_error_message, retryable_error,
-    truncate_utf8,
+    McpServerConfig, Message, ModelRequest, PatchOp, PermissionDecision, PermissionRequest,
+    Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot, ProviderStreamEvent,
+    PruneOutcome, RetryableError, Role, SessionOverview, ShellTermination, SkillsConfig,
+    StdinPolicy, TITLE, TokenUsage, Tool, ToolCall, ToolOutput, ToolPolicy, ToolResult, ToolStream,
+    Transport, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
+    WebSearchConfig, estimate_bytes, estimate_tokens, is_context_overflow, parse_retryable_error,
+    prune_tool_results, public_error_message, retryable_error, truncate_utf8,
 };
 
 // Same ambient std/tokio prelude the Agent struct used to inherit from

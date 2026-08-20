@@ -34,7 +34,7 @@ use crate::{Agent, RequestTokenEstimate, RoundBegin, RoundLifecycle};
 use neenee_contracts::{
     AgentEvent, AgentRequest, AgentResponse, CronExpr, HarnessError, HarnessSnapshot, ImagePart,
     InjectionKind, LoopStatus, Message, ModelRequest, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, Provider, ProviderStreamEvent, Role, RoundEvent, Schedule, estimate_bytes,
+    NoticeSurface, Provider, ProviderStreamEvent, Role, RoundEvent, Schedule, estimate_tokens,
     repeat::DEFAULT_MAX_AGE_DAYS,
 };
 use neenee_persistence::{
@@ -383,14 +383,17 @@ pub struct ContextProjectionSettings {
     pub summarize: bool,
     /// Enable cheap tool-result pruning (pre-turn and mid-turn).
     pub prune: bool,
-    /// Character budget of the most recent tool results protected from pruning.
-    pub prune_protect_chars: usize,
+    /// Token budget of the most recent tool results protected from pruning
+    /// (ADR-0120: token-native; the config key was already tokens, the old
+    /// `× CHARS_PER_TOKEN` conversion existed only to feed a char-space
+    /// pruner).
+    pub prune_protect_tokens: usize,
 }
 
 impl ContextProjectionSettings {
-    /// Mid-turn pruning only fires when it can reclaim at least this many chars,
-    /// to avoid pruning churn for negligible gains.
-    pub const PRUNE_MIN_RECLAIM_CHARS: usize = 8_000;
+    /// Mid-turn pruning only fires when it can reclaim at least this many
+    /// tokens, to avoid pruning churn for negligible gains.
+    pub const PRUNE_MIN_RECLAIM_TOKENS: usize = 2_000;
 
     /// Resolve settings for the active model's context window. `window_tokens`
     /// is the live model's context window (tokens); `0` means unknown and the
@@ -401,8 +404,7 @@ impl ContextProjectionSettings {
             preserve_rounds: config.compaction_preserve_rounds,
             summarize: config.compaction_summarize,
             prune: config.compaction_prune,
-            prune_protect_chars: config.compaction_prune_protect_tokens
-                * neenee_contracts::CHARS_PER_TOKEN,
+            prune_protect_tokens: config.compaction_prune_protect_tokens,
         }
     }
 
@@ -432,7 +434,7 @@ mod projection_settings_tests {
             preserve_rounds: 6,
             summarize: true,
             prune: true,
-            prune_protect_chars: 24_000,
+            prune_protect_tokens: 24_000,
         };
         let resolved = settings.for_request(RequestTokenEstimate {
             history_tokens: 100_000,
@@ -450,7 +452,7 @@ mod projection_settings_tests {
 /// when the active round is approaching the model's context budget.
 pub struct MidTurnPruneProjectionGate {
     pub session: Arc<SessionStore>,
-    pub prune_protect_chars: usize,
+    pub prune_protect_tokens: usize,
 }
 
 #[async_trait]
@@ -459,16 +461,16 @@ impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
         let mut messages = messages;
         let outcome = neenee_contracts::prune_tool_results(
             &mut messages,
-            self.prune_protect_chars,
-            ContextProjectionSettings::PRUNE_MIN_RECLAIM_CHARS,
+            self.prune_protect_tokens,
+            ContextProjectionSettings::PRUNE_MIN_RECLAIM_TOKENS,
         )?;
-        let after_chars = estimate_bytes(&messages);
+        let window_tokens_after = estimate_tokens(&messages);
         let checkpoint = ContextProjectionCheckpoint {
             operation: neenee_persistence::session::ContextProjectionKind::Prune,
             archived_messages: outcome.originals.len(),
             active_messages: messages.len(),
-            before_chars: after_chars + outcome.reclaimed_chars,
-            after_chars,
+            window_tokens_before: window_tokens_after + outcome.reclaimed_tokens,
+            window_tokens_after,
         };
         let result = ContextProjectionResult {
             model_window: messages.clone(),
@@ -1374,26 +1376,27 @@ pub async fn prune_and_commit(
     session: &SessionStore,
     settings: &ContextProjectionSettings,
 ) -> Result<(), String> {
-    let before_chars = estimate_bytes(history);
+    let window_tokens_before = estimate_tokens(history);
     let Some(outcome) = neenee_contracts::prune_tool_results(
         history,
-        settings.prune_protect_chars,
-        ContextProjectionSettings::PRUNE_MIN_RECLAIM_CHARS,
+        settings.prune_protect_tokens,
+        ContextProjectionSettings::PRUNE_MIN_RECLAIM_TOKENS,
     ) else {
         return Ok(());
     };
-    let after_chars = estimate_bytes(history);
+    let window_tokens_after = estimate_tokens(history);
     let checkpoint = ContextProjectionCheckpoint {
         operation: neenee_persistence::session::ContextProjectionKind::Prune,
         archived_messages: outcome.originals.len(),
         active_messages: history.len(),
-        before_chars,
-        after_chars,
+        window_tokens_before,
+        window_tokens_after,
     };
     tracing::debug!(
         pruned_tool_results = checkpoint.archived_messages,
-        before_chars,
-        after_chars,
+        window_tokens_before,
+        window_tokens_after,
+        reclaimed_tokens = outcome.reclaimed_tokens,
         "pruned stale tool results"
     );
     session
@@ -1414,8 +1417,8 @@ pub fn send_compaction(
         session_id,
         RoundEvent::Compacted {
             archived_messages: checkpoint.archived_messages,
-            before_chars: checkpoint.before_chars,
-            after_chars: checkpoint.after_chars,
+            window_tokens_before: checkpoint.window_tokens_before,
+            window_tokens_after: checkpoint.window_tokens_after,
         },
     ));
 }

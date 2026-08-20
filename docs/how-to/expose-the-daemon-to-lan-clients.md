@@ -9,7 +9,7 @@ TCP loopback only, so nothing leaves the machine unless you ask for it.
 ## 1. Start the daemon with a public listener
 
 ```bash
-neenee serve --port 8765 --public
+neenee daemon start --fg --port 8765 --public
 ```
 
 (`--public` makes the daemon bind `0.0.0.0` instead of loopback.)

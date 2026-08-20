@@ -44,6 +44,15 @@ cargo clippy --workspace --all-targets --locked
 CI gates every workspace member; the workflow file is the authority for the
 current gating set.
 
+## Isolation from the host installation
+
+If an installed neenee daemon is running on this machine, run the checks
+above with `NEENEE_HOME` exported to a throwaway root, and any manual run of
+the debug binary with `--home <dir>`. Either confines the entire instance —
+sessions, config, daemon socket/lock, logs, port — so a checkout can never
+read, write, stop, or spawn into the installed daemon's state.
+See [Dev and test isolation](dev-and-test-isolation.md) for the recipes.
+
 ## Artifact maintenance
 
 Cargo does not garbage-collect obsolete target variants. Check the build

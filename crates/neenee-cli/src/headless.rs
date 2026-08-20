@@ -11,19 +11,44 @@ pub async fn run_headless(
     json: bool,
     project_override: Option<PathBuf>,
     autopilot: bool,
-    _remote: Option<String>,
-    _token: Option<String>,
+    remote: Option<String>,
+    token: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let project_root = project_override
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-
-    let info = client::ensure_daemon(&project_root).await?;
-    if !client::versions_compatible(&info) {
-        return Err(client::version_mismatch(&info).into());
+    // Two mutually exclusive transports, resolved once:
+    //
+    // - `--remote <addr>` names an explicit daemon endpoint (ADR-0105's
+    //   LAN shape): connect to it directly — no discovery read, no local
+    //   spawn. A remote run that silently fell back to the local instance
+    //   would be the worst kind of lie: it would *appear* to work while
+    //   driving the wrong daemon.
+    // - Otherwise the local instance: discover, or spawn on demand.
+    //
+    // The version pre-check applies only to the local shape — it compares
+    // local discovery state (pid, /proc image), which does not exist for
+    // a remote daemon; there, the handshake carries the version
+    // negotiation.
+    enum Transport {
+        Remote(client::RemoteDaemon),
+        Local(client::DaemonInfo),
     }
+    let transport = match remote {
+        Some(addr) => Transport::Remote(client::RemoteDaemon::parse(&addr, token)?),
+        None => {
+            let project_root = project_override
+                .clone()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            let info = client::ensure_daemon(&project_root).await?;
+            if !client::versions_compatible(&info) {
+                return Err(client::version_mismatch(&info).into());
+            }
+            Transport::Local(info)
+        }
+    };
 
-    let handshake = client::connect(&info, AttachAction::New).await?;
+    let handshake = match &transport {
+        Transport::Remote(daemon) => daemon.connect(AttachAction::New).await?,
+        Transport::Local(info) => client::connect(info, AttachAction::New).await?,
+    };
     let (tx, mut rx, session_id, _round_counter, _history, provider, model) = match handshake {
         Handshake::Attached {
             req_tx,

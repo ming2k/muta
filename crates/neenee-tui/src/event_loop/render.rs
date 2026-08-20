@@ -76,7 +76,12 @@ pub(super) fn render_frame(
     // also be reached through `app` at the same time. It is restored once
     // `view_messages` is no longer borrowed (see below).
     let mut height_cache = std::mem::take(&mut app.layout_height_cache);
-    let activity_for_display = app.activity_status.as_str();
+    // View-scoped chrome: render the activity text of whichever session the
+    // user is viewing — the focused aside's own entry inside `/btw`, the
+    // primary's otherwise. This is the aside-view activity-bar fix: the
+    // displayed bar tracks the *viewed* session, never a global blend.
+    let viewed_chrome = app.viewed_chrome();
+    let activity_for_display = viewed_chrome.activity.as_str();
     let status = display_status(
         app.loop_status,
         activity_for_display,
@@ -261,7 +266,10 @@ pub(super) fn render_frame(
                 autopilot: app.autopilot,
             }),
             todos: app.todos.as_ref(),
-            round_started_at: app.round_started_at,
+            // View-scoped: the elapsed-timer origin belongs to the viewed
+            // session's round (an aside view times the aside's round, not
+            // the primary's).
+            round_started_at: viewed_chrome.round_started_at,
             hovered_step: chrome_interactive.then_some(app.hovered_step).flatten(),
             focused_target: chrome_interactive.then_some(app.focused_target).flatten(),
             logo: app.logo.as_deref(),
@@ -958,10 +966,10 @@ pub(super) fn render_frame(
                     active_tab: app.activity_tab,
                     todos: app.todos.as_ref(),
                     user_prompt: user_prompt.as_deref(),
-                    round_count: app.round_count,
-                    current_turn: app.current_turn,
+                    round_count: viewed_chrome.round_count,
+                    current_turn: viewed_chrome.current_turn,
                     current_model: app.current_model.as_str(),
-                    round_started_at: app.round_started_at,
+                    round_started_at: viewed_chrome.round_started_at,
                     activity: &status,
                 },
                 &mut app.activity_scroll,

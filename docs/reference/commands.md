@@ -63,10 +63,10 @@ row extends the steering without growing the executable command surface.
 
 ### `/serve`
 
-> **Superseded by the unified daemon (ADR-0096).** The `neenee serve`
+> **Superseded by the unified daemon (ADR-0096).** The `neenee daemon start --fg`
 > daemon now owns every session and serves them all
 > over the control plane; hot-attaching a listener to a single running TUI
-> session is a legacy of the per-session-server model. Use `neenee serve` to run
+> session is a legacy of the per-session-server model. Use `neenee daemon start` to run
 > the daemon and `neenee attach` / `/dashboard` to drive its sessions. See the
 > [Server WebSocket API](server-api.md) for the current protocol.
 

@@ -7,13 +7,13 @@
 //! Two isolation notes:
 //!
 //! - The loop's filesystem footprint (discovery record, instance lock) is
-//!   sandboxed by pointing `NEENEE_*_DIR`/`XDG_RUNTIME_DIR` at a temp root
-//!   **before the first `paths::get()` resolution in this process** (the
-//!   resolver is process-global). The env is set once in a `static`
-//!   initializer, and every test gets its own subdirectories via a
-//!   per-test UDS path — the shared record paths live under the same
-//!   sandbox root, so cross-test interference is limited to the record
-//!   file itself, which each test waits out via its own outcome.
+//!   sandboxed by pointing `NEENEE_HOME` at a temp root **before the first
+//!   `paths::get()` resolution in this process** (ADR-0121). One variable
+//!   redirects every category and the daemon's runtime files; the env is
+//!   set once in a `static` initializer, and every test gets its own
+//!   subdirectories via a per-test UDS path — the shared record paths live
+//!   under the same sandbox root, so cross-test interference is limited to
+//!   the record file itself, which each test waits out via its own outcome.
 //! - `host::run_with_gate` is driven against a prehost-only registry (no
 //!   session assembly); hosted sessions are inserted by hand, the same
 //!   fixture style as `serve_integration`.
@@ -33,27 +33,63 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 
 /// Sandbox the process-wide dirs once, before any `paths::get()` call can
 /// cache a real-user resolution (see module docs).
+///
+/// ADR-0121: `NEENEE_HOME` alone redirects every category *and* the daemon
+/// instance dir, so the five hand-assembled env vars this used to set
+/// collapse to one. The root is a dedicated tempdir (not the shared
+/// `sandbox` subdirs) kept alive for the process.
 fn sandbox_once() {
     use std::sync::Once;
     static SANDBOX: Once = Once::new();
     static KEEP: std::sync::Mutex<Option<tempfile::TempDir>> = std::sync::Mutex::new(None);
     SANDBOX.call_once(|| {
         let tmp = tempfile::tempdir().unwrap();
-        for (key, sub) in [
-            ("NEENEE_CONFIG_DIR", "config"),
-            ("NEENEE_DATA_DIR", "data"),
-            ("NEENEE_STATE_DIR", "state"),
-            ("NEENEE_CACHE_DIR", "cache"),
-            ("XDG_RUNTIME_DIR", "runtime"),
-        ] {
-            let dir = tmp.path().join(sub);
-            std::fs::create_dir_all(&dir).unwrap();
-            // SAFETY: single-writer (the Once) and set before any test body
-            // spawns; the env is never mutated again in this process.
-            unsafe { std::env::set_var(key, &dir) };
-        }
+        // SAFETY: single-writer (the Once) and set before any test body
+        // spawns; the env is never mutated again in this process.
+        unsafe { std::env::set_var("NEENEE_HOME", tmp.path()) };
         *KEEP.lock().unwrap() = Some(tmp);
     });
+}
+
+/// The ADR-0121 isolation contract, pinned at the level users experience
+/// it: with `NEENEE_HOME` set, every category and the daemon's runtime
+/// files resolve under the sandbox root, and the host's XDG runtime dir
+/// (which the test env deliberately does not clear) cannot leak any
+/// daemon-facing path back out of it.
+#[test]
+fn neenee_home_redirects_the_daemon_footprint() {
+    sandbox_once();
+    let dirs = neenee_persistence::paths::get();
+    let root = std::env::var("NEENEE_HOME").unwrap();
+    let under_root = |p: &std::path::Path| p.starts_with(&root);
+    for dir in [
+        &dirs.config_dir,
+        &dirs.data_dir,
+        &dirs.state_dir,
+        &dirs.cache_dir,
+        &dirs.instance_dir(),
+    ] {
+        assert!(
+            under_root(dir),
+            "{:?} must stay under the NEENEE_HOME sandbox root",
+            dir
+        );
+    }
+    assert_eq!(
+        dirs.instance_dir(),
+        std::path::PathBuf::from(&root)
+            .join("neenee")
+            .join("instance")
+    );
+    // And the daemon-facing paths derive from the instance dir.
+    for path in [
+        neenee_runtime::serve_discovery::global_discovery_path(),
+        neenee_runtime::serve_discovery::global_lock_path(),
+        #[cfg(unix)]
+        neenee_runtime::serve_discovery::default_uds_path(),
+    ] {
+        assert!(under_root(&path), "{path:?} must follow the instance dir");
+    }
 }
 
 /// A minimal `HostIdentity` for the loop: the prehost-only registry never
@@ -304,4 +340,149 @@ async fn port_bind_failure_is_a_readable_startup_failure() {
         other => panic!("expected StartupFailed, got {other:?}"),
     }
     assert_eq!(outcome.exit_code(), 1);
+}
+
+/// ADR-0121's inheritance invariant, proven end-to-end: a daemon spawned
+/// from a client whose environment carries `NEENEE_HOME` writes its
+/// discovery record inside the sandbox — never into the host's runtime
+/// dir, which on this machine is exactly where a live installed daemon's
+/// record sits.
+///
+/// `client::spawn_daemon` re-execs `current_exe()`, which inside a test
+/// harness is the test binary, not a CLI. So this test mirrors that spawn
+/// shape exactly (`daemon start --fg`, inherited env, detached process
+/// group) but with the real CLI binary cargo builds alongside the test.
+/// The lifecycle-integration crate has no bin target of its own, so the
+/// binary is located via the workspace layout (`target/debug/neenee`).
+///
+/// Isolation within the suite: the sibling tests share the process-wide
+/// `sandbox_once()` root and drive `host::run_*` directly (no discovery),
+/// but this test stops its daemon **through discovery** — so it must own a
+/// private instance root, or its `stop` would discover (and shut down) a
+/// sibling test's in-flight loop through the shared record. A dedicated
+/// `NEENEE_HOME` on the spawned command's environment gives the daemon its
+/// own `daemon.json`/`daemon.lock`/`daemon.sock`, which is also a purer
+/// proof of the inheritance contract: the *child's* env alone decides
+/// where its footprint lands.
+#[tokio::test]
+async fn spawned_daemon_inherits_the_neenee_home_sandbox() {
+    sandbox_once(); // install the shared root before reading it back
+    let own = tempfile::tempdir().unwrap();
+    let own_root = own.path().to_path_buf();
+    // The record path this *process* resolves (the shared sandbox). The
+    // child gets its own root below; the leak assertion is that the
+    // child's pid never appears in *this* record, not that this record is
+    // absent — sibling tests legitimately run their loops under it.
+    let shared_record = std::path::PathBuf::from(std::env::var("NEENEE_HOME").unwrap())
+        .join("neenee")
+        .join("instance")
+        .join("daemon.json");
+
+    // Locate the CLI binary the way a developer run would have it.
+    let exe = std::env::current_exe().unwrap();
+    let target_dir = exe
+        .ancestors()
+        .find(|p| p.file_name().is_some_and(|n| n == "deps"))
+        .and_then(|deps| deps.parent())
+        .expect("test binary lives under <target>/deps");
+    let cli = target_dir.join(if cfg!(windows) {
+        "neenee.exe"
+    } else {
+        "neenee"
+    });
+    if !cli.exists() {
+        // The binary is not part of this crate's default test build; skip
+        // rather than silently proving nothing.
+        eprintln!("skipping: {} not built", cli.display());
+        return;
+    }
+
+    // The spawn_daemon shape: same argv, environment carrying only the
+    // sandbox contract (the point under test), detached process group.
+    let mut command = std::process::Command::new(&cli);
+    command.args(["daemon", "start", "--fg"]);
+    command
+        .env("NEENEE_HOME", &own_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .current_dir("/");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    let child = command.spawn().expect("spawn the sandboxed daemon");
+    let daemon_pid = child.id();
+
+    // Reap continuously: this process is the daemon's *parent*, so once
+    // `daemon stop` kills it the exit must be reaped promptly or the
+    // (zombie) entry makes `is_process_alive` report "alive" and the stop
+    // reports failure — a parent/stopper coupling that never exists in
+    // production (the stopper is a peer, not the parent).
+    let mut reaper_child = child;
+    let reaper = std::thread::spawn(move || reaper_child.wait());
+
+    // The record must appear inside the child's own sandbox…
+    let own_record = own_root.join("neenee").join("instance").join("daemon.json");
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let mut saw_record = false;
+    while std::time::Instant::now() < deadline {
+        if let Ok(bytes) = std::fs::read(&own_record)
+            && let Ok(record) =
+                serde_json::from_slice::<neenee_runtime::serve_discovery::Discovery>(&bytes)
+        {
+            assert_eq!(
+                record.pid, daemon_pid,
+                "the record inside the child's sandbox must be the child's"
+            );
+            assert_eq!(
+                record.version.as_deref(),
+                Some(neenee_runtime::serve::daemon_version()),
+                "the sandboxed daemon must be this build"
+            );
+            saw_record = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(saw_record, "daemon never advertised inside its sandbox");
+
+    // …and the child's pid must never have leaked into the caller's
+    // instance (the ADR-0121 guarantee: the child's env alone decides
+    // where its footprint lands).
+    if let Ok(bytes) = std::fs::read(&shared_record)
+        && let Ok(record) =
+            serde_json::from_slice::<neenee_runtime::serve_discovery::Discovery>(&bytes)
+    {
+        assert_ne!(
+            record.pid, daemon_pid,
+            "a daemon given its own NEENEE_HOME must not write the caller's instance"
+        );
+    }
+
+    // Stop it the operator's way: a `daemon stop` from the same sandbox
+    // env must reach (only) the sandboxed daemon. Running the CLI rather
+    // than the in-process client keeps version/image identity intact
+    // (`versions_compatible` compares binaries, and the caller here is the
+    // test binary — the daemon is the CLI).
+    let mut stop = std::process::Command::new(&cli);
+    stop.args(["daemon", "stop"])
+        .env("NEENEE_HOME", &own_root)
+        .stdin(std::process::Stdio::null());
+    let stop_output = stop.output().expect("run daemon stop in the sandbox");
+    assert!(
+        stop_output.status.success(),
+        "daemon stop must succeed: {} (stderr: {})",
+        stop_output.status,
+        String::from_utf8_lossy(&stop_output.stderr)
+    );
+    reaper
+        .join()
+        .expect("reap the daemon")
+        .expect("the sandboxed daemon exited cleanly");
+    assert!(
+        !own_record.exists(),
+        "the drained daemon must remove its discovery record"
+    );
 }

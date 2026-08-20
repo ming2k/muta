@@ -29,7 +29,7 @@ use neenee_agent::orchestration::{
 };
 use neenee_contracts::{
     AgentNotice, AgentRequest, AgentResponse, CommandRecord, CommandResult, CronExpr, LoopStatus,
-    Message, Provider, RoundEvent, Schedule, ScheduledJob, Tool, estimate_bytes, estimate_tokens,
+    Message, Provider, RoundEvent, Schedule, ScheduledJob, Tool, estimate_tokens,
     repeat::parse_schedule_arg,
 };
 use neenee_mcp::McpRuntime;
@@ -50,7 +50,7 @@ use crate::side::{
     spawn_parent_status_watcher, start_active_turn,
 };
 use crate::slash_handler::{SlashCommandRegistry, SlashContext};
-use crate::startup::{BuiltinCmd, StartupMode, split_custom_command};
+use crate::startup::{BuiltinCmd, SessionStart, split_custom_command};
 
 async fn supersede_for_session_switch(
     lifecycle: &RoundLifecycle,
@@ -460,7 +460,7 @@ pub async fn dispatch(
     embedding_store_for_commands: &Arc<AsyncRwLock<embedding::EmbeddingStore>>,
     req_tx_for_commands: &mpsc::UnboundedSender<AgentRequest>,
     project_root_for_side: &std::path::Path,
-    startup: &StartupMode,
+    startup: &SessionStart,
     ui: &dyn crate::UiBridge,
     extra_commands: &SlashCommandRegistry,
 ) {
@@ -1681,7 +1681,7 @@ pub async fn dispatch(
                     let model_name = agent.provider.model();
                     let window = active_context_window(agent);
                     let tokens = estimate_tokens(&messages);
-                    let estimated_bytes = estimate_bytes(&messages);
+                    let wire_bytes = messages.iter().map(|m| m.content.len()).sum::<usize>();
                     let session_id = session.id().await;
                     let timestamp = chrono::Utc::now();
                     let pressure_pct = if window > 0 {
@@ -1704,7 +1704,9 @@ pub async fn dispatch(
                         "model": model_name,
                         "context_window_tokens": window,
                         "estimated_tokens": tokens,
-                        "estimated_bytes": estimated_bytes,
+                        // wire-size diagnostic: bytes remain the honest unit
+                        // for the transport view (ADR-0120 keeps this one).
+                        "estimated_wire_bytes": wire_bytes,
                         "pressure_pct": pressure_pct,
                         "tools": agent
                             .installed_tools()

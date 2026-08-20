@@ -15,8 +15,7 @@ use crate::events::{EventLog, SessionEvent};
 use crate::fsutil;
 use crate::paths;
 use neenee_contracts::{
-    InjectionKind, InjectionOrigin, Message, Provider, Role, SessionDetail, count_tokens,
-    estimate_bytes, estimate_tokens,
+    InjectionKind, InjectionOrigin, Message, Provider, Role, SessionDetail, estimate_tokens,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -47,25 +46,26 @@ pub struct ProviderSelection {
     pub model: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextProjectionKind {
-    /// Legacy snapshots/events did not record whether the projection was prune
-    /// or compact. Keep that uncertainty explicit instead of guessing on load.
-    #[default]
-    Unknown,
     Prune,
     Compact,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContextProjectionCheckpoint {
-    #[serde(default)]
     pub operation: ContextProjectionKind,
     pub archived_messages: usize,
     pub active_messages: usize,
-    pub before_chars: usize,
-    pub after_chars: usize,
+    /// Token size of the active model window **sampled immediately before
+    /// the projection was applied**. A point-in-time sample, not a live
+    /// value: the window keeps growing after this checkpoint.
+    pub window_tokens_before: usize,
+    /// Token size of the active model window immediately **after** the
+    /// projection. Same point-in-time caveat; the difference to
+    /// [`Self::window_tokens_before`] is what the projection reclaimed.
+    pub window_tokens_after: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,19 +73,19 @@ pub struct ContextProjectionCheckpoint {
 struct SessionData {
     id: String,
     parent_id: Option<String>,
+    /// How this session came to exist relative to its lineage: a root trunk,
+    /// an explicit `/fork` branch, or a `/btw` aside forked off the trunk.
+    /// `#[serde(default)]` so legacy snapshots (which predate lineage
+    /// tracking) load as `Trunk` — a parent_id-bearing legacy file degrades
+    /// to `Fork` in the summary layer, preserving whatever lineage the old
+    /// data carried.
+    #[serde(default)]
+    fork_kind: neenee_contracts::SessionForkKind,
     created_at: u64,
     updated_at: u64,
-    #[serde(rename = "model_window", alias = "messages")]
     model_window: Vec<Message>,
-    #[serde(rename = "archived_transcript", alias = "archived_messages")]
     archived_transcript: Vec<Message>,
     /// Stats of the most recent model-context projection (prune or compaction).
-    /// `alias` keeps snapshots written before the rename loadable.
-    #[serde(
-        rename = "last_projection",
-        alias = "last_relief",
-        alias = "compaction"
-    )]
     last_projection: Option<ContextProjectionCheckpoint>,
     /// Working directory this session belongs to. Phase 2 (project isolation)
     /// uses this to route archived sessions to the right per-project bucket
@@ -102,10 +102,10 @@ struct SessionData {
     /// Each entry is either a recurring cron job or a one-shot (countdown /
     /// absolute-time) job. The session that created a job owns it; the
     /// background scheduler polls the live session and dispatches each due job
-    /// as a chat round. `#[serde(default, alias = "repeat_jobs")]` so legacy
+    /// as a chat round. `#[serde(default)]` so
     /// snapshots load with whatever they had and no migration is required for
     /// the field rename (only the schema bump records the change).
-    #[serde(default, alias = "repeat_jobs")]
+    #[serde(default)]
     scheduled_jobs: Vec<neenee_contracts::ScheduledJob>,
     /// Schema version of this session file. Migrations increment this and are
     /// applied lazily on load.
@@ -151,8 +151,7 @@ struct SessionData {
     /// Phase 2). Bumped at the start of every round; read by the todo
     /// stale-detector via `updated_at_round`. Persisted so a resumed session's
     /// staleness comparisons stay valid instead of the counter resetting to 0.
-    /// The alias keeps pre-ADR-0047 snapshots readable.
-    #[serde(default, alias = "turn_counter")]
+    #[serde(default)]
     round_counter: u64,
     /// Per-request token accounting for this session. Unlike the historical
     /// process-global ledger, these records survive resume and cannot leak
@@ -177,6 +176,7 @@ impl Default for SessionData {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             parent_id: None,
+            fork_kind: neenee_contracts::SessionForkKind::Trunk,
             created_at: now,
             updated_at: now,
             model_window: Vec::new(),
@@ -671,6 +671,9 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
 pub struct SessionSummary {
     pub id: String,
     pub parent_id: Option<String>,
+    /// How this session came to exist: trunk root, explicit `/fork`
+    /// branch, or `/btw` aside. Drives the dashboard's lineage grouping.
+    pub fork_kind: neenee_contracts::SessionForkKind,
     pub message_count: usize,
     pub updated_at: u64,
     pub created_at: u64,
@@ -1438,6 +1441,7 @@ impl SessionStore {
         let fork_id = uuid::Uuid::new_v4().to_string();
         child.id = fork_id.clone();
         child.parent_id = Some(parent_id.clone());
+        child.fork_kind = neenee_contracts::SessionForkKind::Fork;
         child.created_at = now;
         child.updated_at = now;
         // Usage belongs to concrete requests made by the parent session. A
@@ -1481,6 +1485,7 @@ impl SessionStore {
         let side_id = uuid::Uuid::new_v4().to_string();
         side.id = side_id.clone();
         side.parent_id = Some(parent_id.clone());
+        side.fork_kind = neenee_contracts::SessionForkKind::Aside;
         side.created_at = now;
         side.updated_at = now;
         side.request_usage_records.clear();
@@ -1669,6 +1674,7 @@ impl SessionStore {
         SessionSummary {
             id: data.id.clone(),
             parent_id: data.parent_id.clone(),
+            fork_kind: data.fork_kind,
             message_count: data.model_window.len() + data.archived_transcript.len(),
             updated_at: data.updated_at,
             created_at: data.created_at,
@@ -2024,9 +2030,20 @@ fn load_or_seed(
     let mut data = fs::read_to_string(path)
         .ok()
         .and_then(|content| serde_json::from_str::<SessionData>(&content).ok())
-        .unwrap_or_else(|| SessionData {
-            project_root: project_root.to_path_buf(),
-            ..Default::default()
+        .unwrap_or_else(|| {
+            if path.exists() {
+                // Unparseable snapshot (e.g. pre-rename field names — the
+                // ADR-0120 no-alias policy): start fresh rather than
+                // half-migrate, and say so loudly.
+                tracing::warn!(
+                    path = %path.display(),
+                    "session snapshot failed to parse; starting a fresh session"
+                );
+            }
+            SessionData {
+                project_root: project_root.to_path_buf(),
+                ..Default::default()
+            }
         });
     if let Err(error) = load_session_blobs(&mut data, blob_store) {
         tracing::warn!(error = %error, "could not load session blobs from snapshot");
@@ -2078,13 +2095,15 @@ fn load_snapshot(path: &Path) -> Result<SessionData, String> {
 struct SessionHeader {
     id: String,
     parent_id: Option<String>,
+    #[serde(default)]
+    fork_kind: neenee_contracts::SessionForkKind,
     created_at: u64,
     updated_at: u64,
     #[serde(default)]
     title: Option<String>,
-    #[serde(rename = "model_window", alias = "messages", default)]
+    #[serde(default)]
     model_window: Vec<Box<RawValue>>,
-    #[serde(rename = "archived_transcript", alias = "archived_messages", default)]
+    #[serde(default)]
     archived_transcript: Vec<Box<RawValue>>,
 }
 
@@ -2118,9 +2137,19 @@ struct SessionIdOnly {
 }
 
 fn summary_header(data: &SessionHeader, active: bool) -> SessionSummary {
+    // Lineage: the recorded kind wins; a legacy file that carries a
+    // `parent_id` but predates `fork_kind` (serialized as the default
+    // `Trunk`) degrades to `Fork` so its branch relationship is not lost.
+    let fork_kind = match (data.fork_kind, data.parent_id.as_ref()) {
+        (neenee_contracts::SessionForkKind::Trunk, Some(_)) => {
+            neenee_contracts::SessionForkKind::Fork
+        }
+        (kind, _) => kind,
+    };
     SessionSummary {
         id: data.id.clone(),
         parent_id: data.parent_id.clone(),
+        fork_kind,
         message_count: data.model_window.len() + data.archived_transcript.len(),
         updated_at: data.updated_at,
         created_at: data.created_at,
@@ -2202,7 +2231,7 @@ const CHECKPOINT_HEADER: &str = "[Conversation checkpoint]\n\
      Earlier complete rounds were compacted. Treat this as durable context, not a new user request.\n\n";
 
 /// Per-message excerpt cap used by the deterministic excerpt fallback.
-const EXCERPT_CAP: usize = 1_500;
+const EXCERPT_CAP_TOKENS: usize = 375;
 
 pub struct CompactionSelection {
     /// Older complete rounds moved out of the model-visible window.
@@ -2317,12 +2346,13 @@ fn summary_token_budget(target_tokens: usize, tail: &[Message]) -> usize {
         .max(2_000)
 }
 
-/// Character budget for the compaction summary, derived from the post-
-/// compaction token target. The summary may fill the target (the preserved
-/// tail sits alongside it), bounded to a sane range so huge windows do not
-/// produce enormous summaries and tiny windows still get a useful digest.
-fn summary_char_budget(target_tokens: usize) -> usize {
-    (target_tokens * neenee_contracts::CHARS_PER_TOKEN).clamp(8_000, 96_000)
+/// Token budget for the compaction summary, derived from the post-compaction
+/// token target (ADR-0120: token-native; the old `target × 4` char budget was
+/// then binary-searched back into tokens — a pure-loss round trip). Bounded
+/// so huge windows do not produce enormous summaries and tiny windows still
+/// get a useful digest.
+fn summary_token_budget_clamped(target_tokens: usize) -> usize {
+    target_tokens.clamp(2_000, 24_000)
 }
 
 fn label_for(role: Role) -> Option<&'static str> {
@@ -2345,7 +2375,7 @@ pub fn checkpoint_message(summary: &str) -> Message {
 
 /// Assemble the final [`ContextProjectionResult`] from a selection and a summary.
 pub fn build_compaction_result(
-    before_chars: usize,
+    window_tokens_before: usize,
     selection: CompactionSelection,
     summary: String,
 ) -> ContextProjectionResult {
@@ -2353,14 +2383,14 @@ pub fn build_compaction_result(
     let mut model_window = Vec::with_capacity(tail.len() + 1);
     model_window.push(checkpoint_message(&summary));
     model_window.extend(tail);
-    let after_chars = estimate_bytes(&model_window);
+    let window_tokens_after = estimate_tokens(&model_window);
     ContextProjectionResult {
         checkpoint: ContextProjectionCheckpoint {
             operation: ContextProjectionKind::Compact,
             archived_messages: archived.len(),
             active_messages: model_window.len(),
-            before_chars,
-            after_chars,
+            window_tokens_before,
+            window_tokens_after,
         },
         model_window,
         archived_originals: archived,
@@ -2371,10 +2401,12 @@ pub fn build_compaction_result(
 /// LLM summarization call fails. Budget is allocated **newest-first** so recent
 /// context is never crowded out by older verbose messages; selected excerpts
 /// are then emitted in chronological order for readability. When a previous
-/// summary exists it is carried forward as anchored context.
+/// summary exists it is carried forward as anchored context. The budget and
+/// per-message caps are **tokens** (ADR-0120); every cut lands on an exact
+/// token boundary.
 pub fn build_excerpt_summary(
     archived: &[Message],
-    max_chars: usize,
+    max_tokens: usize,
     previous_summary: Option<&str>,
 ) -> String {
     // Pass 1 (newest-first): pick which messages fit the remaining budget.
@@ -2388,11 +2420,13 @@ pub fn build_excerpt_summary(
         if content.is_empty() {
             continue;
         }
-        let remaining = max_chars.saturating_sub(used);
-        if remaining < 64 {
+        let remaining = max_tokens.saturating_sub(used);
+        if remaining < 16 {
             break;
         }
-        let cost = content.len().min(EXCERPT_CAP) + label.len() + 4;
+        let cost = neenee_contracts::tokenizer::count_tokens(content).min(EXCERPT_CAP_TOKENS)
+            + neenee_contracts::tokenizer::count_tokens(label)
+            + 2;
         used += cost;
         chosen.push(index);
     }
@@ -2409,11 +2443,15 @@ pub fn build_excerpt_summary(
             continue;
         };
         let content = message.content.trim();
-        let remaining = max_chars.saturating_sub(output.len());
-        if remaining < 64 {
+        let remaining =
+            max_tokens.saturating_sub(neenee_contracts::tokenizer::count_tokens(&output));
+        if remaining < 16 {
             break;
         }
-        let excerpt = truncate_utf8(content, remaining.min(EXCERPT_CAP));
+        let excerpt = neenee_contracts::tokenizer::truncate_str_to_tokens(
+            content,
+            remaining.min(EXCERPT_CAP_TOKENS),
+        );
         output.push_str(label);
         output.push_str(": ");
         output.push_str(excerpt);
@@ -2422,8 +2460,9 @@ pub fn build_excerpt_summary(
     let history = output.trim_end().to_string();
 
     if let Some(previous) = previous_summary.map(str::trim).filter(|s| !s.is_empty()) {
-        let previous_budget = (max_chars / 4).clamp(500, 4_000);
-        let previous_excerpt = truncate_utf8(previous, previous_budget);
+        let previous_budget = (max_tokens / 4).clamp(125, 1_000);
+        let previous_excerpt =
+            neenee_contracts::tokenizer::truncate_str_to_tokens(previous, previous_budget);
         format!("[Previous summary]\n{previous_excerpt}\n\n[Recent history]\n{history}")
     } else {
         history
@@ -2439,19 +2478,23 @@ pub fn compact_messages(
     target_tokens: usize,
     preserve_rounds: usize,
 ) -> Option<ContextProjectionResult> {
-    let before_chars = estimate_bytes(messages);
+    let window_tokens_before = estimate_tokens(messages);
     let selection = select_compaction_for_target(messages, preserve_rounds, target_tokens)?;
     let summary_tokens = summary_token_budget(target_tokens, &selection.tail);
-    let budget_chars = summary_char_budget(summary_tokens);
+    let excerpt_budget = summary_token_budget_clamped(summary_tokens);
     let summary = truncate_summary_to_token_budget(
         build_excerpt_summary(
             &selection.archived,
-            budget_chars,
+            excerpt_budget,
             selection.previous_summary.as_deref(),
         ),
         summary_tokens,
     );
-    Some(build_compaction_result(before_chars, selection, summary))
+    Some(build_compaction_result(
+        window_tokens_before,
+        selection,
+        summary,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -2511,8 +2554,9 @@ Rules:\n\
 - Preserve exact file paths, commands, error strings, and identifiers when known.\n\
 - Do not mention the summary process or that context was compacted.";
 
-/// Cap applied to each tool-result when serializing history for the summarizer.
-const SUMMARY_TOOL_OUTPUT_CAP: usize = 1_500;
+/// Token cap applied to each tool-result when serializing history for the
+/// summarizer (ADR-0120).
+const SUMMARY_TOOL_OUTPUT_CAP_TOKENS: usize = 375;
 
 /// Render `archived` as a readable transcript for the summarizer, capping tool
 /// outputs and dropping the oldest messages when the result exceeds `budget`.
@@ -2529,7 +2573,11 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
             }
         }
         if message.role == Role::Tool {
-            body = truncate_utf8(body.trim(), SUMMARY_TOOL_OUTPUT_CAP).to_string();
+            body = neenee_contracts::tokenizer::truncate_str_to_tokens(
+                body.trim(),
+                SUMMARY_TOOL_OUTPUT_CAP_TOKENS,
+            )
+            .to_string();
         }
         // Envoy transcripts: render a bounded view of the nested work so
         // the summarizer can capture what each `task` call actually did
@@ -2540,7 +2588,7 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
         if let Some(children) = &message.children
             && !children.is_empty()
         {
-            let nested = serialize_envoy_transcript_for_summary(children, SUMMARY_ENVOY_CAP);
+            let nested = serialize_envoy_transcript_for_summary(children, SUMMARY_ENVOY_CAP_TOKENS);
             if !nested.is_empty() {
                 body.push_str("\n[envoy transcript]\n");
                 body.push_str(&nested);
@@ -2553,18 +2601,19 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
     }
 
     let joined = lines.join("\n\n");
-    if joined.len() <= budget {
+    if neenee_contracts::tokenizer::count_tokens(&joined) <= budget {
         return joined;
     }
 
-    // Over budget: keep the most recent lines that fit.
+    // Over budget: keep the most recent lines that fit (token budgets).
     let mut kept: Vec<&String> = Vec::new();
     let mut total = 0usize;
     for line in lines.iter().rev() {
-        if total + line.len() + 2 > budget {
+        let cost = neenee_contracts::tokenizer::count_tokens(line) + 2;
+        if total + cost > budget {
             break;
         }
-        total += line.len() + 2;
+        total += cost;
         kept.push(line);
     }
     kept.reverse();
@@ -2575,11 +2624,11 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
     )
 }
 
-/// Per-envoy character cap when rendering the nested transcript into the
-/// summarizer prompt. Large enough to surface the envoy's task, its key
-/// tool calls, and its conclusion; small enough that a turn with five
-/// envoys cannot crowd out the rest of the conversation.
-const SUMMARY_ENVOY_CAP: usize = 2_000;
+/// Per-envoy token cap when rendering the nested transcript into the
+/// summarizer prompt (ADR-0120). Large enough to surface the envoy's task,
+/// its key tool calls, and its conclusion; small enough that a turn with
+/// five envoys cannot crowd out the rest of the conversation.
+const SUMMARY_ENVOY_CAP_TOKENS: usize = 500;
 
 /// Render an envoy's nested transcript as a compact summarizer-facing view.
 /// Recursive: an envoy's own `task` results (sub-envoys) are rendered
@@ -2598,14 +2647,18 @@ fn serialize_envoy_transcript_for_summary(children: &[Message], budget: usize) -
             }
         }
         if message.role == Role::Tool {
-            body = truncate_utf8(body.trim(), SUMMARY_TOOL_OUTPUT_CAP).to_string();
+            body = neenee_contracts::tokenizer::truncate_str_to_tokens(
+                body.trim(),
+                SUMMARY_TOOL_OUTPUT_CAP_TOKENS,
+            )
+            .to_string();
         }
         // One level deeper, with a much smaller cap, so we never spend more
         // than ~25% of the parent envoy's budget on a single sub-envoy.
         if let Some(nested) = &message.children
             && !nested.is_empty()
         {
-            let inner = serialize_envoy_transcript_for_summary(nested, (budget / 4).max(500));
+            let inner = serialize_envoy_transcript_for_summary(nested, (budget / 4).max(125));
             if !inner.is_empty() {
                 body.push_str("\n[sub-envoy transcript]\n");
                 body.push_str(&inner);
@@ -2617,10 +2670,13 @@ fn serialize_envoy_transcript_for_summary(children: &[Message], budget: usize) -
         lines.push(format!("  {label}: {body}"));
     }
     let joined = lines.join("\n");
-    if joined.len() <= budget {
+    if neenee_contracts::tokenizer::count_tokens(&joined) <= budget {
         joined
     } else {
-        format!("{}...[truncated]", truncate_utf8(&joined, budget))
+        format!(
+            "{}...[truncated]",
+            neenee_contracts::tokenizer::truncate_str_to_tokens(&joined, budget)
+        )
     }
 }
 
@@ -2708,15 +2764,14 @@ pub async fn run_compaction(
     provider: Option<Arc<dyn Provider>>,
     extra_context: Vec<String>,
 ) -> Result<Option<ContextProjectionResult>, String> {
-    let before_chars = estimate_bytes(history);
-    let before_tokens = estimate_tokens(history);
+    let window_tokens_before = estimate_tokens(history);
     let Some(selection) = select_compaction_for_target(history, preserve_rounds, target_tokens)
     else {
         return Ok(None);
     };
 
     let summary_tokens = summary_token_budget(target_tokens, &selection.tail);
-    let budget_chars = summary_char_budget(summary_tokens);
+    let transcript_budget = summary_token_budget_clamped(summary_tokens);
     let summary = match provider.as_ref() {
         Some(provider) => {
             match summarize_with_provider(
@@ -2724,7 +2779,7 @@ pub async fn run_compaction(
                 &selection.archived,
                 selection.previous_summary.as_deref(),
                 &extra_context,
-                budget_chars,
+                transcript_budget,
             )
             .await
             {
@@ -2736,7 +2791,7 @@ pub async fn run_compaction(
                     );
                     build_excerpt_summary(
                         &selection.archived,
-                        budget_chars,
+                        transcript_budget,
                         selection.previous_summary.as_deref(),
                     )
                 }
@@ -2744,17 +2799,16 @@ pub async fn run_compaction(
         }
         None => build_excerpt_summary(
             &selection.archived,
-            budget_chars,
+            transcript_budget,
             selection.previous_summary.as_deref(),
         ),
     };
 
     let summary = truncate_summary_to_token_budget(summary, summary_tokens);
-    let result = build_compaction_result(before_chars, selection, summary);
+    let result = build_compaction_result(window_tokens_before, selection, summary);
     tracing::debug!(
-        before_chars,
-        after_chars = result.checkpoint.after_chars,
-        before_tokens,
+        window_tokens_before,
+        window_tokens_after = result.checkpoint.window_tokens_after,
         "compaction complete"
     );
     let model_window = result.model_window.clone();
@@ -2762,41 +2816,14 @@ pub async fn run_compaction(
     Ok(Some(result))
 }
 
-fn truncate_utf8(text: &str, max_bytes: usize) -> &str {
-    if text.len() <= max_bytes {
-        return text;
-    }
-    let mut end = max_bytes;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
-}
-
 /// Enforce the allocated checkpoint budget even when a summarizing provider
-/// ignores its requested length. The estimator is the same one that drives
-/// projection thresholds, so the active working window has one consistent
-/// unit of account.
+/// ignores its requested length. Now a thin wrapper over the exact
+/// token-boundary cut ([`neenee_contracts::tokenizer::truncate_to_tokens`]);
+/// the old binary search existed only because the budget round-tripped
+/// through characters (ADR-0120 removed that).
 fn truncate_summary_to_token_budget(text: String, max_tokens: usize) -> String {
-    if count_tokens(&text).max(0) as usize <= max_tokens {
-        return text;
-    }
-    let boundaries = text
-        .char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(text.len()))
-        .collect::<Vec<_>>();
-    let mut low = 0usize;
-    let mut high = boundaries.len().saturating_sub(1);
-    while low < high {
-        let middle = (low + high).div_ceil(2);
-        if count_tokens(&text[..boundaries[middle]]).max(0) as usize <= max_tokens {
-            low = middle;
-        } else {
-            high = middle.saturating_sub(1);
-        }
-    }
-    text[..boundaries[low]].trim_end().to_string()
+    let (prefix, _) = neenee_contracts::tokenizer::truncate_to_tokens(&text, max_tokens);
+    prefix.trim_end().to_string()
 }
 
 /// Diagnostic scan of stored session files. When `project_root` is `None`
@@ -3109,6 +3136,7 @@ mod tests {
             let root =
                 std::env::temp_dir().join(format!("neenee-proj-iso-{}", uuid::Uuid::new_v4()));
             let dirs = paths::Dirs::resolve(&paths::PathsOverride {
+                home: Some(root.clone()),
                 data_dir: Some(root.join("data")),
                 state_dir: Some(root.join("state")),
                 config_dir: Some(root.join("config")),
@@ -3201,6 +3229,69 @@ mod tests {
         assert_eq!(store.model_window().await[0].content, "parent");
         store.open(&fork_id[..8]).await.unwrap();
         assert_eq!(store.model_window().await[0].content, "fork");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn fork_lineage_is_stamped_and_surfaces_through_list() {
+        // Lineage contract (dashboard fork surfacing): `fork` stamps
+        // `Fork`, `fork_to_side` stamps `Aside`, a fresh session is `Trunk`,
+        // and `list()` carries both the parent link and the kind so the
+        // dashboard can group trunk + branches without guessing from ids.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-lineage-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "parent")])
+            .await
+            .unwrap();
+        let parent_id = store.id().await;
+
+        // Trunk: the fresh parent has no lineage.
+        let trunk = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == parent_id)
+            .unwrap();
+        assert_eq!(trunk.fork_kind, neenee_contracts::SessionForkKind::Trunk);
+        assert!(trunk.parent_id.is_none());
+
+        // Explicit fork: kind = Fork, parent recorded. Note that `fork`
+        // repoints the store at the branch, so the trunk's row is the
+        // *original* parent id and the branch's parent link names it.
+        let (fork_id, _) = store.fork().await.unwrap();
+        store
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "branch")])
+            .await
+            .unwrap();
+        let branch = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == fork_id)
+            .unwrap();
+        assert_eq!(branch.fork_kind, neenee_contracts::SessionForkKind::Fork);
+        assert_eq!(branch.parent_id.as_deref(), Some(parent_id.as_str()));
+
+        // Aside: kind = Aside. `fork_to_side` forks from the *current*
+        // pointer — which after `fork()` is the branch — so the aside's
+        // parent names the branch, not the trunk. That is the real
+        // semantics: an aside inherits the conversation you are looking at.
+        let (side_id, _) = store.fork_to_side().await.unwrap();
+        let aside = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == side_id)
+            .unwrap();
+        assert_eq!(aside.fork_kind, neenee_contracts::SessionForkKind::Aside);
+        assert_eq!(aside.parent_id.as_deref(), Some(fork_id.as_str()));
+
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -3836,10 +3927,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_repeat_snapshot_loads_as_scheduled_jobs() {
-        // A pre-v9 snapshot written by the old `/repeat` code used the flat
-        // `repeat_jobs` field with `RepeatJob { cron: String, … }`. It must
-        // load as `scheduled_jobs` with cron `Schedule` triggers, no data loss.
+    async fn legacy_repeat_snapshot_drops_old_jobs() {
+        // ADR-0120 policy: the pre-v9 `repeat_jobs` field is not aliased.
+        // Jobs are rebuildable scheduler state (the schema-v9 comment's own
+        // classification); an old snapshot loads with zero scheduled jobs
+        // rather than carrying a compat mapping.
         let directory =
             std::env::temp_dir().join(format!("neenee-schedule-legacy-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
@@ -3868,15 +3960,7 @@ mod tests {
 
         let store = SessionStore::for_path(path.clone());
         let jobs = store.scheduled_jobs().await;
-        assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].id, "legacy1");
-        assert_eq!(
-            jobs[0].trigger,
-            neenee_contracts::Schedule::Cron {
-                cron: "0 9 * * 1-5".to_string()
-            }
-        );
-
+        assert!(jobs.is_empty(), "legacy jobs must not load, got {jobs:?}");
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -4351,7 +4435,10 @@ mod tests {
     }
 
     #[test]
-    fn session_snapshot_round_counter_writes_canonical_key_and_reads_legacy_key() {
+    fn session_snapshot_round_counter_writes_canonical_key_and_rejects_legacy_key() {
+        // ADR-0120 policy: the pre-ADR-0047 `turn_counter` key is not
+        // aliased. It parses as an unknown field (dropped) and the counter
+        // loads at its default — the stale value must not resurface.
         let mut canonical = serde_json::to_value(SessionData {
             round_counter: 11,
             ..SessionData::default()
@@ -4361,12 +4448,18 @@ mod tests {
         let counter = object.remove("round_counter").unwrap();
         object.insert("turn_counter".to_string(), counter);
 
-        let loaded: SessionData = serde_json::from_value(canonical).unwrap();
-        assert_eq!(loaded.round_counter, 11);
+        let loaded = serde_json::from_value::<SessionData>(canonical).unwrap();
+        assert_eq!(
+            loaded.round_counter, 0,
+            "legacy key must not carry its value through"
+        );
 
-        let serialized = serde_json::to_string(&loaded).unwrap();
+        let serialized = serde_json::to_string(&SessionData {
+            round_counter: 11,
+            ..SessionData::default()
+        })
+        .unwrap();
         assert!(serialized.contains("\"round_counter\":11"));
-        assert!(!serialized.contains("\"turn_counter\""));
     }
 
     #[tokio::test]
@@ -4733,8 +4826,8 @@ mod tests {
                 operation: ContextProjectionKind::Compact,
                 archived_messages: 1,
                 active_messages: 1,
-                before_chars: 100,
-                after_chars: 20,
+                window_tokens_before: 100,
+                window_tokens_after: 20,
             }),
             ..Default::default()
         };
@@ -4869,14 +4962,13 @@ mod tests {
 
         let store = SessionStore::for_path(path.clone());
         let messages = store.model_window().await;
-        assert_eq!(messages.len(), 2);
-        for (i, m) in messages.iter().enumerate() {
-            assert!(
-                m.origin.is_none(),
-                "legacy message {i} must load with origin None, got {:?}",
-                m.origin
-            );
-        }
+        // ADR-0120 policy: pre-rename snapshot keys (`messages` /
+        // `archived_messages`) are not aliased; the unparseable snapshot
+        // loads as a fresh empty session rather than half-migrating.
+        assert!(
+            messages.iter().all(|m| m.origin.is_none()),
+            "any loaded message must lack origin"
+        );
 
         let _ = fs::remove_dir_all(directory);
     }
@@ -4949,20 +5041,20 @@ mod tests {
     #[test]
     fn summary_truncation_respects_the_projection_token_unit() {
         let summary = truncate_summary_to_token_budget("中".repeat(400), 100);
-        assert!(count_tokens(&summary) <= 100);
+        assert!(neenee_contracts::tokenizer::count_tokens(&summary) <= 100);
     }
 
     #[test]
     fn excerpt_summary_keeps_recent_first_under_budget() {
         // A large old tool result and a small recent user message. With a tiny
-        // budget only the recent message (chosen newest-first) survives; the old
-        // verbose tool result is omitted instead of crowding it out.
+        // token budget only the recent message (chosen newest-first) survives;
+        // the old verbose tool result is omitted instead of crowding it out.
         let archived = vec![
             Message::new(Role::Tool, "X".repeat(3_000)),
             Message::new(Role::User, "recent critical detail"),
         ];
 
-        let summary = build_excerpt_summary(&archived, 90, None);
+        let summary = build_excerpt_summary(&archived, 20, None);
 
         assert!(summary.contains("recent critical detail"));
         assert!(!summary.contains('X'));

@@ -119,22 +119,30 @@ jobs:
       - name: Start an isolated daemon and smoke it
         working-directory: .
         env:
-          XDG_RUNTIME_DIR: ${{ runner.temp }}/xdg-runtime
-          XDG_DATA_HOME: ${{ runner.temp }}/xdg-data
-          XDG_CONFIG_HOME: ${{ runner.temp }}/xdg-config
-          XDG_STATE_HOME: ${{ runner.temp }}/xdg-state
+          # ADR-0121: one variable isolates the instance root (config, data,
+          # state, daemon runtime files); NEENEE_PORT takes a port that can
+          # never contend with anything else on the runner. The same contract
+          # `--home` / `NEENEE_HOME` provide locally.
+          NEENEE_HOME: ${{ runner.temp }}/neenee-e2e-home
+          NEENEE_PORT: "9800"
         run: |
           set -e
-          mkdir -p "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME"
+          mkdir -p "$NEENEE_HOME"
           ./target/debug/neenee daemon start --port 9800 &
           for i in $(seq 1 50); do
             curl -fsS http://127.0.0.1:9800/healthz > /dev/null 2>&1 && break
             sleep 0.2
           done
           curl -fsS http://127.0.0.1:9800/healthz
-          TOKEN=$(node -p "JSON.parse(require('fs').readFileSync('$XDG_RUNTIME_DIR/neenee/daemon.json','utf8')).token")
+          TOKEN=$(node -p "JSON.parse(require('fs').readFileSync('$NEENEE_HOME/neenee/instance/daemon.json','utf8')).token")
           DAEMON_TOKEN="$TOKEN" node apps/web/e2e/daemon-smoke.mjs
-          ./target/debug/neenee stop || true
+          ./target/debug/neenee daemon stop || true
+      # CLI-surface smoke (ADR-0119/0121): the binary's own contract —
+      # retired spellings teach, noun-verb shapes parse, --remote connects.
+      # Protocol-level coverage lives in daemon-smoke.mjs above; this pins
+      # what that cannot see: parsing, exit codes, and the remote path.
+      - name: CLI surface smoke
+        run: bash apps/web/e2e/cli-smoke.sh
 
   fmt:
     name: Format
@@ -184,6 +192,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+    env:
+      # ADR-0121: belt-and-braces. Every suite sandboxes itself, but a
+      # process-wide NEENEE_HOME means a test that forgets its own sandbox
+      # still resolves inside the throwaway root instead of the runner's
+      # HOME (and can never reach a developer's real home when run locally
+      # with NEENEE_HOME exported).
+      NEENEE_HOME: ${{ runner.temp }}/neenee-test-home
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

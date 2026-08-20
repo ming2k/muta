@@ -22,7 +22,7 @@
 - **Semantic TUI** — In-house grid + diff rendering engine (`neenee-tui-engine`), built from scratch to replace ratatui. Retained-mode grid with write-marks-dirty diff, wide-glyph ownership, and `bce`-aware crossterm backend. Live status, expandable tool steps, and structured diffs.
 - **Tool Use** — Full ReAct loop with native and fallback tool-calling; bash, file I/O, grep, glob, web search, and MCP servers.
 - **Scheduled Prompts** — Schedule prompts on a clock with `/schedule`: recurring cron jobs or one-shot countdown/absolute-time timers, so the agent can run on autopilot on a schedule.
-- **Session Daemon & Control Plane** — One user-level daemon owns every session across every project, so work survives closed terminals and you can watch or drive any of it from anywhere: `neenee status` for a live multi-task view, `/dashboard` in the TUI to switch sessions without killing them, and a read/write control API (create / prompt / interrupt / approve / kill) over a local socket or a token-protected LAN port — the same protocol a web panel consumes.
+- **Session Daemon & Control Plane** — One user-level daemon owns every session across every project, so work survives closed terminals and you can watch or drive any of it from anywhere: `neenee daemon status` for a live multi-task view, `/dashboard` in the TUI to switch sessions without killing them, and a read/write control API (create / prompt / interrupt / approve / kill) over a local socket or a token-protected LAN port — the same protocol a web panel consumes.
 - **Durable Sessions** — Atomic persistence with compaction, resume, and fork.
 - **Skills** — Load domain-specific instructions on demand or automatically by mention.
 
@@ -56,13 +56,13 @@ and several clients can co-drive or observe them:
 
 ```bash
 neenee                   # attach to the daemon (auto-started on first use)
-neenee serve             # run the daemon in the foreground
-neenee serve --detach    # ... or in the background
-neenee serve --public    # also listen on all interfaces (TCP+token) for LAN clients
+neenee daemon start      # run the daemon (detached by default)
+
+neenee daemon start --fg --public  # foreground, all interfaces (TCP+token), for LAN clients
 neenee attach [id]       # drive a specific daemon-held session
-neenee status            # one-shot table: sessions needing attention
-neenee status --watch    # live table, redraws on every change
-neenee status --json     # raw monitor frames (the control-panel API)
+neenee daemon status     # one-shot table: sessions needing attention
+neenee daemon status --watch    # live table, redraws on every change
+neenee daemon status --json     # raw monitor frames (the control-panel API)
 neenee dashboard         # the full-screen dashboard, straight from the shell
 ```
 
@@ -80,7 +80,7 @@ kept as a hidden alias.)
 the shell — no need to enter a session first. It attaches to the daemon's
 most-recently-active session only as the underlying carrier and raises the
 dashboard over it: Esc quits, `a` on a card attaches into that session. Like
-`neenee status` it never spawns a daemon, so it needs a running host with at
+`neenee daemon status` it never spawns a daemon, so it needs a running host with at
 least one session.
 
 The daemon speaks one read/write control-plane protocol (create, prompt,

@@ -1,5 +1,5 @@
+use crate::cli::ConfigAction;
 use neenee_persistence::config::Config;
-use neenee_runtime::startup::ConfigAction;
 
 pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
     match action {

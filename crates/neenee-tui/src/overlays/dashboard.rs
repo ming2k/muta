@@ -453,12 +453,38 @@ fn dock_card_line(
     // status (15) · three 2-cell gutters (6). The name takes the rest.
     const FIXED: usize = 2 + 5 + 7 + 15 + 6;
     let name_w = cell_width.saturating_sub(FIXED).max(4);
-    let name = truncate_display(&entry.workspace, name_w);
+    // Lineage badge (fork surfacing): a branch of a live conversation is
+    // labeled with its kind — `⑂ aside` for a `/btw` fork, `⑂ fork` for an
+    // explicit branch — so the dock reads as trunk cards with their derived
+    // branches marked, not as N independent sessions. A trunk keeps the
+    // plain name (the main line needs no badge: there is exactly one).
+    let lineage = match row.fork_kind {
+        neenee_contracts::SessionForkKind::Trunk => String::new(),
+        neenee_contracts::SessionForkKind::Aside => "⑂aside ".to_string(),
+        neenee_contracts::SessionForkKind::Fork => "⑂fork ".to_string(),
+    };
+    let lineage_w = lineage.chars().count();
+    let name_budget = name_w.saturating_sub(lineage_w);
+    let name = truncate_display(&entry.workspace, name_budget);
 
     let spans = vec![
         Span::styled(format!("{marker} "), Style::default().fg(theme.brand())),
         Span::styled(format!("{seq:<5}"), Style::default().fg(theme.brand())),
-        Span::styled(format_padded(&name, name_w), name_style),
+        Span::styled(
+            format_padded(&name, name_budget),
+            if lineage.is_empty() {
+                name_style
+            } else {
+                // A branch reads as derived: muted next to its trunk's plain
+                // name, still bold under selection.
+                if is_selected {
+                    name_style
+                } else {
+                    Style::default().fg(theme.muted())
+                }
+            },
+        ),
+        Span::styled(lineage, Style::default().fg(theme.brand())),
         Span::styled("  ".to_string(), Style::default()),
         Span::styled(format!("{uptime:>7}"), Style::default().fg(theme.muted())),
         Span::styled("  ".to_string(), Style::default()),
@@ -1038,6 +1064,8 @@ mod tests {
             note: None,
             project_root: project_root.into(),
             wip: None,
+            parent_id: None,
+            fork_kind: neenee_contracts::SessionForkKind::Trunk,
         }
     }
 
@@ -1128,6 +1156,42 @@ mod tests {
         assert!(text.contains("neenee"), "{text}");
         assert!(text.contains("2h14m"), "{text}");
         assert!(text.contains("running"), "{text}");
+    }
+
+    #[test]
+    fn dock_card_badges_a_forked_session_by_kind() {
+        // Lineage surfacing: a trunk card carries no badge (exactly one main
+        // line per conversation); an aside/fork branch is badged `⑂aside` /
+        // `⑂fork` so the dock reads as trunk + derived branches rather than
+        // N independent sessions.
+        let theme = Theme::default();
+        let now = 1_000u64;
+
+        let mut trunk = row("t", 1, "/work/main", SessionStatus::Running);
+        trunk.fork_kind = neenee_contracts::SessionForkKind::Trunk;
+        let entries = dock_entries(std::slice::from_ref(&trunk));
+        let line = dock_card_line(&entries[0], 60, false, false, now, &theme);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            !text.contains('⑂'),
+            "a trunk carries no lineage badge: {text}"
+        );
+
+        let mut aside = row("a", 2, "/work/main", SessionStatus::Running);
+        aside.parent_id = Some("t".into());
+        aside.fork_kind = neenee_contracts::SessionForkKind::Aside;
+        let entries = dock_entries(std::slice::from_ref(&aside));
+        let line = dock_card_line(&entries[0], 60, false, false, now, &theme);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("⑂aside"), "an aside branch is badged: {text}");
+
+        let mut fork = row("f", 3, "/work/main", SessionStatus::Idle);
+        fork.parent_id = Some("t".into());
+        fork.fork_kind = neenee_contracts::SessionForkKind::Fork;
+        let entries = dock_entries(std::slice::from_ref(&fork));
+        let line = dock_card_line(&entries[0], 60, false, false, now, &theme);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("⑂fork"), "an explicit fork is badged: {text}");
     }
 
     #[test]

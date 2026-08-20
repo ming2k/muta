@@ -1756,6 +1756,8 @@ impl TranscriptMessage {
     }
 
     /// Human-readable summary for the reasoning trace (always one line).
+    /// Reports **tokens** (ADR-0120) — the unit of what this thinking block
+    /// costs against the context window, not a scalar count of the text.
     pub fn thinking_summary(&self) -> Option<String> {
         let MessageKind::Thinking {
             content,
@@ -1765,12 +1767,11 @@ impl TranscriptMessage {
         else {
             return None;
         };
-        let chars = content.chars().count();
+        let tokens = neenee_contracts::tokenizer::count_tokens(content);
         Some(match duration_ms {
-            None => format!("Thinking · {} chars", chars),
+            None => format!("Thinking · {tokens} tokens"),
             Some(_) => format!(
-                "Thinking · {} chars · {}",
-                chars,
+                "Thinking · {tokens} tokens · {}",
                 duration_text(*duration_ms)
             ),
         })

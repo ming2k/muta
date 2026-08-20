@@ -860,9 +860,7 @@ pub struct Config {
     /// [`CompactionPolicy`] for the per-field semantics.
     pub compaction: CompactionPolicy,
     /// Number of recent complete user rounds preserved verbatim by full
-    /// compaction. `compaction_preserve_turns` is the pre-ADR-0047 key and is
-    /// accepted when loading older configuration files.
-    #[serde(alias = "compaction_preserve_turns")]
+    /// compaction.
     pub compaction_preserve_rounds: usize,
     /// Use the active model to produce an anchored, structured summary when
     /// compacting. When `false` (or when the summarization call fails) compaction
@@ -1749,12 +1747,18 @@ mod tests {
     }
 
     #[test]
-    fn compaction_round_count_writes_canonical_key_and_reads_legacy_key() {
+    fn compaction_round_count_writes_canonical_key_and_drops_legacy_key() {
+        // ADR-0120 policy: the pre-ADR-0047 key is not aliased. It parses as
+        // an unknown key (warned and ignored) and the field stays at its
+        // default — the stale value must not carry through.
         let legacy: Config = toml::from_str("compaction_preserve_turns = 9").unwrap();
-        assert_eq!(legacy.compaction_preserve_rounds, 9);
+        assert_eq!(
+            legacy.compaction_preserve_rounds,
+            Config::default().compaction_preserve_rounds
+        );
 
         let serialized = toml::to_string(&legacy).unwrap();
-        assert!(serialized.contains("compaction_preserve_rounds = 9"));
+        assert!(serialized.contains("compaction_preserve_rounds ="));
         assert!(!serialized.contains("compaction_preserve_turns ="));
     }
 
@@ -2175,7 +2179,8 @@ model = "model-b"
     }
 
     #[test]
-    fn reseeded_provider_credentials_survive_save_and_load() {        let (tmp, _guard, _override_guard) = sandbox_config_dir();
+    fn reseeded_provider_credentials_survive_save_and_load() {
+        let (tmp, _guard, _override_guard) = sandbox_config_dir();
         let mut provider = configured_relay();
         assert!(
             provider.reseed_channels_from_models(

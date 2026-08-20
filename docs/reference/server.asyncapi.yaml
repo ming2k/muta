@@ -4,7 +4,7 @@ info:
   version: 0.27.0
   description: |
     Machine-readable contract for the unified session-daemon transport
-    (`neenee serve` / the `neenee-server` binary; ADR-0081/0089/0093/0094/0096).
+    (`neenee daemon start --fg`; ADR-0081/0089/0093/0094/0096/0119).
     One process owns every session across every project and serves them over a
     single WebSocket endpoint (Unix domain socket by default, TCP + bearer token
     when exposed). Client roles share the socket, distinguished by the client's
@@ -76,7 +76,7 @@ servers:
     host: 0.0.0.0:{port}
     protocol: ws
     description: |
-      `neenee serve --public` (`--expose` on the `neenee-server` binary) binds
+      `neenee daemon start --fg --public` binds
       all interfaces for LAN clients (ADR-0096).
       A bearer token is mandatory: send `Authorization: Bearer <token>` on the
       handshake, else HTTP 401. The daemon generates and prints the token on
@@ -1128,11 +1128,11 @@ components:
       properties:
         Compacted:
           type: object
-          required: [archived_messages, before_chars, after_chars]
+          required: [archived_messages, window_tokens_before, window_tokens_after]
           properties:
             archived_messages: { type: integer, minimum: 0 }
-            before_chars: { type: integer, minimum: 0 }
-            after_chars: { type: integer, minimum: 0 }
+            window_tokens_before: { type: integer, minimum: 0 }
+            window_tokens_after: { type: integer, minimum: 0 }
           additionalProperties: false
       additionalProperties: false
     EventHarnessState:

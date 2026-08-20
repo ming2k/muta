@@ -6,21 +6,10 @@
 //! intact. Compaction thresholds are derived from the active model's context
 //! window via [`CompactionPolicy`] / [`ContextBudget`].
 
+use crate::tokenizer;
 use crate::{Message, Role};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-
-/// Approximate characters per token for the cheap estimator used when a
-/// provider does not report real token usage. Centralised here so every
-/// budget↔content conversion stays consistent with [`estimate_tokens`].
-pub const CHARS_PER_TOKEN: usize = 4;
-
-/// Legacy placeholder for a fully-cleared tool result. Still recognised on read
-/// so older sessions (and the early uninformative form) are treated as
-/// already-cleared, but new clears use the informative [`CLEARED_TOOL_PREFIX`]
-/// form below. Kept on a `Tool`-role message so the OpenAI `tool_call_id` chain
-/// stays intact for providers that require it.
-pub const PRUNED_TOOL_PLACEHOLDER: &str = "[Old tool result content cleared]";
 
 /// Prefix of the placeholder a *fully cleared* tool result is replaced with.
 /// The full form carries a breadcrumb — `[cleared tool result: read foo.rs (42
@@ -31,16 +20,19 @@ pub const CLEARED_TOOL_PREFIX: &str = "[cleared tool result:";
 /// Marker embedded in a *truncated* tool result (head + tail kept, middle
 /// elided). Distinguishes the intermediate "truncated" tier from a full clear so
 /// a later, higher-pressure pass can escalate truncation to a clear.
-const ELIDED_MARKER: &str = " chars elided to relieve context ...]";
+/// Reports **tokens** (ADR-0120).
+const ELIDED_MARKER: &str = " tokens elided to relieve context ...]";
 
-/// Own-content length (chars) above which a prune candidate is first *truncated*
-/// (a gentler tier that keeps the shape of the output) rather than cleared
-/// outright. Below it, truncation would not save enough to be worth the lost
-/// signal, so the candidate is cleared directly.
-const TRUNCATE_MIN_CHARS: usize = 2_000;
+/// Token size of a tool result above which a prune candidate is first
+/// *truncated* (a gentler tier that keeps the shape of the output) rather
+/// than cleared outright. Below it, truncation would not save enough to be
+/// worth the lost signal, so the candidate is cleared directly.
+/// ≈ the old 2 000-byte gate for ASCII, 3× tighter for CJK-heavy output —
+/// which is the point: CJK results were wrongly entering the gentle tier.
+const TRUNCATE_MIN_TOKENS: usize = 512;
 
-/// Characters of head and of tail preserved when truncating a candidate.
-const TRUNCATE_KEEP_EACH_SIDE: usize = 400;
+/// Tokens of head and of tail preserved when truncating a candidate.
+const TRUNCATE_KEEP_EACH_SIDE_TOKENS: usize = 128;
 
 /// Declarative context-compaction policy expressed as fractions of the active
 /// model's full context window, plus a fallback window for models whose size
@@ -120,41 +112,26 @@ pub struct ContextBudget {
     pub target_tokens: usize,
 }
 
-/// Byte-size estimate of a message list: byte length of `content` +
-/// tool-call `name`+`arguments`. A cheap context-pressure proxy used when a
-/// provider does not report token usage. `reasoning_content` is **not**
-/// included because it is never sent to providers and therefore does not
-/// consume the context window.
-///
-/// This counts **bytes**, not characters or tokens (the name is explicit about
-/// that now — previously it was `estimate_chars`, which was misleading since
-/// `str::len()` returns bytes and a multi-byte glyph counts several times).
-/// Callers that need a token estimate should use [`estimate_tokens`] instead,
-/// which classifies characters. The pruning/compaction pipeline measures its
-/// *character budgets* (summary budget, reclaim thresholds) in this same byte
-/// space — see `summary_char_budget` — and the token↔byte conversion
-/// constant [`CHARS_PER_TOKEN`] anchors that direction.
+/// Wire-size (bytes) of a message list: byte length of `content` +
+/// tool-call `name`+`arguments`. **Diagnostic only** (ADR-0120): context
+/// pressure and every budget are token-denominated; bytes answer a transport
+/// question ("how big is the payload"), not a context question.
+/// `reasoning_content` is excluded (never sent to providers).
 pub fn estimate_bytes(messages: &[Message]) -> usize {
     messages.iter().map(message_bytes).sum()
 }
 
-/// Token estimate of a message list using the char-class estimator
-/// ([`count_tokens`]). Unlike the flat `bytes / 4` heuristic, this accounts
-/// for CJK glyphs (≈1 token each), code punctuation, and other Unicode — so
-/// it stays accurate for mixed Chinese + code conversations.
+/// Token estimate of a message list using the native BPE tokenizer
+/// (ADR-0117) with per-message chat framing overhead. This is the pressure
+/// predictor: exact for `cl100k_base`-family models, a close approximation
+/// for sibling encodings.
 ///
 /// `reasoning_content` is excluded (never sent to providers), mirroring
 /// `message_bytes`.
 pub fn estimate_tokens(messages: &[Message]) -> usize {
     let mut tokens: i64 = 0;
     for m in messages {
-        tokens += count_tokens(&m.content);
-        if let Some(calls) = m.tool_calls.as_ref() {
-            for c in calls {
-                tokens += count_tokens(&c.name);
-                tokens += count_tokens(&c.arguments);
-            }
-        }
+        tokens += estimate_message_tokens(m);
         // Nested envoy transcripts are real session weight (persisted, replayed
         // on resume) so they count, just like `message_bytes` does.
         if let Some(children) = m.children.as_ref() {
@@ -202,22 +179,27 @@ pub(crate) fn message_bytes(message: &Message) -> usize {
 pub struct PruneOutcome {
     /// Number of tool-result messages whose content was cleared.
     pub cleared_count: usize,
-    /// Character bytes reclaimed by clearing.
-    pub reclaimed_chars: usize,
+    /// **Tokens** reclaimed by clearing (old content minus new content,
+    /// measured with the exact BPE tokenizer).
+    pub reclaimed_tokens: usize,
     /// Original (pre-clear) tool messages, oldest-first, for durable archival.
     pub originals: Vec<Message>,
 }
 
 /// Relieve context pressure by degrading older `Tool`-role results in place,
 /// keeping the OpenAI `tool_call_id` chain intact. Mutates `messages`; returns
-/// `Some(PruneOutcome)` only when at least `min_reclaim_chars` would be
+/// `Some(PruneOutcome)` only when at least `min_reclaim_tokens` would be
 /// reclaimed, else `None` with `messages` untouched (atomic: nothing is mutated
 /// unless the gate passes).
+///
+/// All budgets are **tokens** (ADR-0120): the recency-protection window and
+/// the reclaim gate compare against exactly what the provider's context
+/// window charges.
 ///
 /// This is more than FIFO-by-age. For each candidate the policy chooses *what*
 /// to prune and *how hard*:
 ///
-/// - **Recency protection** keeps the most recent `protect_recent_chars` of
+/// - **Recency protection** keeps the most recent `protect_recent_tokens` of
 ///   tool output verbatim — that is what is usually still relevant.
 /// - **Keep-alive** spares a fresh result whose file target is mentioned in the
 ///   last few non-tool messages (likely still in play).
@@ -231,21 +213,21 @@ pub struct PruneOutcome {
 ///   (a gentler tier that keeps its shape) and only fully clears it on a later,
 ///   higher-pressure pass — or immediately when it is already small.
 /// - **Informative clears** replace content with `[cleared tool result: <label>
-///   (<n> lines, <m> chars)]` so the model can decide whether to re-fetch.
+///   (<n> lines, <m> tokens)]` so the model can decide whether to re-fetch.
 ///
 /// Idempotent: already-cleared results are skipped; a truncated result escalates
 /// to a clear on a subsequent pass, so repeated calls converge.
 pub fn prune_tool_results(
     messages: &mut [Message],
-    protect_recent_chars: usize,
-    min_reclaim_chars: usize,
+    protect_recent_tokens: usize,
+    min_reclaim_tokens: usize,
 ) -> Option<PruneOutcome> {
-    let plan = plan_prune(messages, protect_recent_chars);
+    let plan = plan_prune(messages, protect_recent_tokens);
     let reclaimable: usize = plan.iter().map(|c| c.reclaim).sum();
-    if plan.is_empty() || reclaimable < min_reclaim_chars {
+    if plan.is_empty() || reclaimable < min_reclaim_tokens {
         return None;
     }
-    Some(apply_prune(messages, plan, protect_recent_chars))
+    Some(apply_prune(messages, plan, protect_recent_tokens))
 }
 
 /// One planned degradation: replace `messages[index].content` with
@@ -308,7 +290,7 @@ fn range_covers(outer: (usize, usize), inner: (usize, usize)) -> bool {
 
 /// Plan (without mutating) which tool results to degrade and how. Returns an
 /// empty vec when there is nothing to do.
-fn plan_prune(messages: &[Message], protect_recent_chars: usize) -> Vec<PrunePlan> {
+fn plan_prune(messages: &[Message], protect_recent_tokens: usize) -> Vec<PrunePlan> {
     let meta = collect_tool_meta(messages);
     let tools: Vec<usize> = messages
         .iter()
@@ -320,14 +302,16 @@ fn plan_prune(messages: &[Message], protect_recent_chars: usize) -> Vec<PrunePla
         return Vec::new();
     }
 
-    // Recency protection: protect newest results until the char budget is met.
+    // Recency protection: protect newest results until the token budget is
+    // met. Token-denominated (ADR-0120) — the byte accumulator this replaced
+    // under-protected CJK-heavy sessions by 3–4×.
     let mut protected: HashSet<usize> = HashSet::new();
-    let mut protected_chars = 0usize;
+    let mut protected_tokens = 0usize;
     for &i in tools.iter().rev() {
-        if protected_chars >= protect_recent_chars {
+        if protected_tokens >= protect_recent_tokens {
             break;
         }
-        protected_chars += message_bytes(&messages[i]);
+        protected_tokens += estimate_message_tokens(&messages[i]).max(0) as usize;
         protected.insert(i);
     }
 
@@ -361,10 +345,12 @@ fn plan_prune(messages: &[Message], protect_recent_chars: usize) -> Vec<PrunePla
         }
         let content = &messages[i].content;
         let new_content = degrade(content, &meta_i, stale);
-        if new_content.len() >= content.len() {
+        let content_tokens = tokenizer::count_tokens(content);
+        let new_tokens = tokenizer::count_tokens(&new_content);
+        if new_tokens >= content_tokens {
             continue; // no real gain
         }
-        let reclaim = content.len() - new_content.len();
+        let reclaim = content_tokens - new_tokens;
         plan.push(PrunePlan {
             index: i,
             new_content,
@@ -379,12 +365,12 @@ fn plan_prune(messages: &[Message], protect_recent_chars: usize) -> Vec<PrunePla
 fn apply_prune(
     messages: &mut [Message],
     plan: Vec<PrunePlan>,
-    protect_recent_chars: usize,
+    protect_recent_tokens: usize,
 ) -> PruneOutcome {
     let mut outcome = PruneOutcome::default();
     for item in plan {
         outcome.originals.push(messages[item.index].clone());
-        outcome.reclaimed_chars += item.reclaim;
+        outcome.reclaimed_tokens += item.reclaim;
         outcome.cleared_count += 1;
         messages[item.index].content = item.new_content;
         messages[item.index].reasoning_content = None;
@@ -393,10 +379,10 @@ fn apply_prune(
         // so prune them too (ungated — durability already happened when the
         // envoy finished; here we relieve in-memory pressure).
         if let Some(children) = messages[item.index].children.as_mut() {
-            let child_plan = plan_prune(children, protect_recent_chars);
+            let child_plan = plan_prune(children, protect_recent_tokens);
             if !child_plan.is_empty() {
-                let nested = apply_prune(children, child_plan, protect_recent_chars);
-                outcome.reclaimed_chars += nested.reclaimed_chars;
+                let nested = apply_prune(children, child_plan, protect_recent_tokens);
+                outcome.reclaimed_tokens += nested.reclaimed_tokens;
             }
         }
     }
@@ -410,7 +396,7 @@ fn degrade(content: &str, meta: &ToolMeta, stale: bool) -> String {
         return cleared_placeholder(meta, content);
     }
     // Large and fresh -> truncate (gentler). Small -> clear directly.
-    if content.len() >= TRUNCATE_MIN_CHARS {
+    if tokenizer::count_tokens(content) >= TRUNCATE_MIN_TOKENS {
         truncate_middle(content)
     } else {
         cleared_placeholder(meta, content)
@@ -491,7 +477,7 @@ fn mentioned_after(messages: &[Message], index: usize, file_key: Option<&str>) -
 }
 
 fn is_cleared(content: &str) -> bool {
-    content == PRUNED_TOOL_PLACEHOLDER || content.starts_with(CLEARED_TOOL_PREFIX)
+    content.starts_with(CLEARED_TOOL_PREFIX)
 }
 
 fn is_truncated(content: &str) -> bool {
@@ -580,7 +566,8 @@ fn classify_file_touch(arguments: &str) -> (Option<(usize, usize)>, bool) {
 }
 
 /// Informative cleared-placeholder carrying the tool label and the size that was
-/// dropped, so the model can decide whether to re-fetch.
+/// dropped, so the model can decide whether to re-fetch. The size is in
+/// **tokens** (ADR-0120) — the model's own unit of context.
 fn cleared_placeholder(meta: &ToolMeta, content: &str) -> String {
     let label = if meta.label.is_empty() {
         "tool"
@@ -589,22 +576,26 @@ fn cleared_placeholder(meta: &ToolMeta, content: &str) -> String {
     };
     let lines = content.lines().count().max(1);
     format!(
-        "{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {} chars)]",
-        content.len()
+        "{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {} tokens)]",
+        tokenizer::count_tokens(content)
     )
 }
 
 /// Keep head + tail, eliding the middle with a recognisable marker. Returns the
-/// content unchanged when it is too short for truncation to help.
+/// content unchanged when it is too short for truncation to help. Head and tail
+/// are bounded in **tokens** (ADR-0120): the cut lands on exact token
+/// boundaries, so what survives costs precisely what the budget says.
 fn truncate_middle(content: &str) -> String {
-    let chars: Vec<char> = content.chars().collect();
-    let keep = TRUNCATE_KEEP_EACH_SIDE;
-    if chars.len() <= keep * 2 + 64 {
+    let keep = TRUNCATE_KEEP_EACH_SIDE_TOKENS;
+    let total = tokenizer::count_tokens(content);
+    if total <= keep * 2 + 16 {
         return content.to_string();
     }
-    let head: String = chars[..keep].iter().collect();
-    let tail: String = chars[chars.len() - keep..].iter().collect();
-    let dropped = chars.len() - keep * 2;
+    let (head, head_tokens) = tokenizer::truncate_to_tokens(content, keep);
+    let reversed: String = content.chars().rev().collect();
+    let (tail_rev, _tail_tokens) = tokenizer::truncate_to_tokens(&reversed, keep);
+    let tail: String = tail_rev.chars().rev().collect();
+    let dropped = total - head_tokens - tokenizer::count_tokens(&tail);
     format!("{head}\n[... {dropped}{ELIDED_MARKER}\n{tail}")
 }
 
@@ -612,31 +603,38 @@ pub fn estimate_message_tokens(message: &Message) -> i64 {
     let mut tokens = if message.content.is_empty() {
         0
     } else {
-        count_tokens(&message.content)
+        tokenizer::count_tokens(&message.content) as i64
     };
+    // Chat framing overhead per message (chatml-style `<|im_start|>role …
+    // <|im_end|>` measured ≈ 4 tokens on cl100k_base); the first system
+    // message carries an extra priming block in most templates.
+    if !message.content.is_empty() || message.tool_calls.is_some() {
+        tokens += 4;
+    }
     if let Some(calls) = message.tool_calls.as_ref() {
         for c in calls {
-            // Tool-call name is a known function identifier — for the common
-            // ASCII short names (~8-15 chars) it collapses to 1-3 tokens, so we
-            // count it as natural language rather than dense code.
+            // Tool-call name is a known function identifier — a short ASCII
+            // name is 1-3 tokens under BPE, same as before but exact now.
             if !c.name.is_empty() {
-                tokens += count_tokens(&c.name);
+                tokens += tokenizer::count_tokens(&c.name) as i64;
             }
             // Count the semantic JSON values/keys while omitting punctuation
             // and transport envelopes. Malformed/incremental arguments fall
-            // back to text estimation rather than disappearing.
+            // back to text tokenization rather than disappearing.
             if let Ok(arguments) = serde_json::from_str(&c.arguments) {
                 tokens += estimate_semantic_json_tokens(&arguments);
             } else if !c.arguments.is_empty() {
-                tokens += count_tokens(&c.arguments);
+                tokens += tokenizer::count_tokens(&c.arguments) as i64;
             }
+            // Framing per tool call (open/close tags of the call structure).
+            tokens += 2;
         }
     }
     tokens
 }
 
 pub fn estimate_string_tokens(s: &str) -> i64 {
-    count_tokens(s)
+    tokenizer::count_tokens(s) as i64
 }
 
 /// Estimate the model-visible semantic content of structured JSON without
@@ -662,15 +660,16 @@ pub fn estimate_semantic_json_tokens(value: &serde_json::Value) -> i64 {
     ];
 
     fn estimate(value: &serde_json::Value) -> i64 {
+        let count = |s: &str| tokenizer::count_tokens(s) as i64;
         match value {
             serde_json::Value::Null => 0,
-            serde_json::Value::Bool(value) => count_tokens(if *value { "true" } else { "false" }),
-            serde_json::Value::Number(value) => count_tokens(&value.to_string()),
+            serde_json::Value::Bool(value) => count(if *value { "true" } else { "false" }),
+            serde_json::Value::Number(value) => count(&value.to_string()),
             serde_json::Value::String(value) => {
                 if value.is_empty() {
                     0
                 } else {
-                    count_tokens(value)
+                    count(value)
                 }
             }
             serde_json::Value::Array(values) => values.iter().map(estimate).sum(),
@@ -680,7 +679,7 @@ pub fn estimate_semantic_json_tokens(value: &serde_json::Value) -> i64 {
                     let key_tokens = if ENVELOPE_KEYS.contains(&key.as_str()) {
                         0
                     } else {
-                        count_tokens(key)
+                        count(key)
                     };
                     key_tokens + estimate(value)
                 })
@@ -689,143 +688,6 @@ pub fn estimate_semantic_json_tokens(value: &serde_json::Value) -> i64 {
     }
 
     estimate(value)
-}
-
-/// Approximate token count of a string, without a real tokenizer.
-///
-/// We classify each Unicode scalar into a category and add a *fractional*
-/// token weight for it, then round. This tracks how BPE tokenizers actually
-/// split text far better than a flat `bytes / 4`:
-///
-/// | category                          | weight | rationale                                   |
-/// |-----------------------------------|--------|---------------------------------------------|
-/// | ASCII word / whitespace / digit   | 1/4    | English averages ~4 chars/token (baseline)  |
-/// | CJK ideograph (Han / Hiragana /…) | 1/1    | almost one token per glyph                  |
-/// | CJK punctuation (。，、…)          | 1/1    | low-frequency, usually own token            |
-/// | other non-ASCII letters (é, а, λ) | 1/2    | ~2 chars/token, worse than ASCII            |
-/// | code punctuation `(){}[];` `=->`  | 1/1    | dense, rarely merges with neighbors         |
-/// | other ASCII punctuation           | 1/2    | `. ,` often merge, denser than words        |
-///
-/// Rationale for CJK = ~1 token/char: UTF-8 encodes a Han glyph as 3 bytes, and
-/// most BPE vocabularies were trained on English-dominant corpora, so CJK
-/// ideographs are almost never merged into multi-char tokens — one glyph ≈ one
-/// token (often more for rare characters, which we approximate as 1).
-///
-/// Pure integer math, single O(n) pass, no external vocab. The result is an
-/// `i64` to match the legacy return type of these estimators.
-pub fn count_tokens(s: &str) -> i64 {
-    // Running sum scaled by 256 so we keep sub-token fractions with integer
-    // math, then divide once at the end. 256 is divisible by every denominator
-    // we use (1, 2, 4), so there is no rounding drift.
-    const SCALE: u32 = 256;
-    let mut acc: u32 = 0;
-    for ch in s.chars() {
-        acc += token_weight_scaled(ch, SCALE);
-    }
-    // Floor of 1 token for any non-empty (or even empty) input, matching the
-    // legacy estimator's `.max(1)` so a single short tool result is never
-    // booked as zero pressure.
-    (((acc + SCALE / 2) / SCALE) as i64).max(1)
-}
-
-/// Token weight of a single character, pre-scaled by `scale`.
-fn token_weight_scaled(ch: char, scale: u32) -> u32 {
-    let u = ch as u32;
-    // --- CJK and adjacent scripts: ~1 token per glyph -----------------------
-    // Each ideograph / kana / Hangul syllable is overwhelmingly its own token.
-    if is_cjk_like(u) {
-        return scale; // 1.0
-    }
-    // CJK + fullwidth punctuation: ，。、；：？！「」『』（）【】《》…—·
-    // These are low-frequency and likewise rarely merge.
-    if is_cjk_punct(u) {
-        return scale; // 1.0
-    }
-    if u < 128 {
-        // --- ASCII range ----------------------------------------------------
-        // Word characters (letters/digits) hit the English baseline: BPE merges
-        // them into ~4-char tokens, so 0.25 each. THIS MUST COME BEFORE the
-        // code-punct check (digits/letters are not code punctuation anyway, but
-        // the ordering keeps the intent explicit).
-        if ch.is_alphanumeric() {
-            return scale / 4; // 0.25
-        }
-        // Whitespace folds into the same English baseline.
-        if ch.is_whitespace() {
-            return scale / 4; // 0.25
-        }
-        // Code punctuation: brackets / operators that BPE rarely merges.
-        if is_code_punct(u) {
-            return scale; // 1.0
-        }
-        // Other ASCII punctuation (. , " '): merges more than operators but is
-        // denser than words.
-        return scale / 2; // 0.5
-    }
-    // --- Non-ASCII word characters: ~2 chars/token -------------------------
-    // Accented Latin, Cyrillic, Greek, etc. Denser than ASCII words but not
-    // 1:1 like CJK (these scripts DO get frequent bigram merges).
-    if ch.is_alphabetic() || ch.is_numeric() {
-        return scale / 2; // 0.5
-    }
-    // --- Other non-ASCII punctuation / symbols: ~2 chars/token -------------
-    scale / 2 // 0.5
-}
-
-/// True for CJK ideographs, Hiragana, Katakana, Hangul syllables, and CJK
-/// compatibility / extension blocks. Coverage follows the Unicode ranges that
-/// modern tokenizers split per-glyph.
-fn is_cjk_like(u: u32) -> bool {
-    matches!(
-        u,
-        // CJK Unified Ideographs (common Han)
-        0x4E00..=0x9FFF
-        // CJK Extension A
-        | 0x3400..=0x4DBF
-        // CJK Extension B-F, Supplementary (rare but still per-glyph)
-        | 0x20000..=0x2FA1F
-        // Hiragana
-        | 0x3040..=0x309F
-        // Katakana (incl. halfwidth 0xFF65..=0xFF9F)
-        | 0x30A0..=0x30FF
-        | 0xFF65..=0xFF9F
-        // Hangul Syllables
-        | 0xAC00..=0xD7A3
-        // CJK Radicals / Kangxi
-        | 0x2E80..=0x2EFF
-        // CJK Compatibility Ideographs
-        | 0xF900..=0xFAFF
-        // Fullwidth ASCII letters/digits also count per-glyph (ＡＢＣ１２３)
-        | 0xFF10..=0xFF19
-        | 0xFF21..=0xFF3A
-        | 0xFF41..=0xFF5A
-    )
-}
-
-/// CJK and fullwidth punctuation that tokenizers rarely merge.
-fn is_cjk_punct(u: u32) -> bool {
-    matches!(
-        u,
-        // CJK Symbols and Punctuation (。，、；：？！「」『』【】《》)
-        0x3000..=0x303F
-        // Halfwidth / Fullwidth punctuation block (fullwidth ! , . : ; ? etc.)
-        | 0xFF01..=0xFF0F
-        | 0xFF1A..=0xFF20
-        | 0xFF3B..=0xFF40
-        | 0xFF5B..=0xFF65
-    )
-}
-
-/// ASCII punctuation that code relies on heavily and that BPE tends to split
-/// off as its own token: brackets, braces, backticks, and common operators.
-fn is_code_punct(u: u32) -> bool {
-    // `(){}[]<>;=+-*/%&|^~!?:`  plus backtick and the path separators / and \
-    matches!(
-        char::from_u32(u),
-        Some('(' | ')' | '{' | '}' | '[' | ']')
-            | Some('<' | '>' | ';' | '=' | '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '~')
-            | Some('!' | '?' | ':' | '`' | '\\' | '@' | '#' | '$' | '_')
-    )
 }
 
 #[cfg(test)]
@@ -854,6 +716,8 @@ mod tests {
 
     #[test]
     fn large_fresh_result_is_truncated_then_cleared_on_next_pass() {
+        // ~64 BPE tokens per 256 'Y's: 5 000 chars ≈ 1 250 tokens, well past
+        // the 512-token truncate tier; head/tail keeps 128 tokens each side.
         let big = "Y".repeat(5_000);
         let mut messages = vec![
             Message::new(Role::User, "q1"),
@@ -868,13 +732,15 @@ mod tests {
         assert!(!is_cleared(&messages[1].content));
         assert!(messages[1].content.len() < 5_000);
 
-        // Pass 2: already truncated -> escalated to a full clear.
+        // Pass 2: already truncated -> escalated to a full clear. The reclaim
+        // gate must see a real gain: the truncated form still holds ~260
+        // tokens (128 head + 128 tail + marker), the clear drops it to ~20.
         let out2 = prune_tool_results(&mut messages, 0, 1).unwrap();
         assert_eq!(out2.cleared_count, 1);
         assert!(is_cleared(&messages[1].content));
 
         // Pass 3: nothing left to do -> None (converged / idempotent).
-        assert!(prune_tool_results(&mut messages, 0, 1).is_none());
+        assert!(prune_tool_results(&mut messages, 0, 50).is_none());
     }
 
     #[test]
@@ -1108,91 +974,6 @@ mod tests {
         assert_eq!(budget.target_tokens, 250_000);
     }
 
-    // ----- char-class token estimator ---------------------------------------
-
-    #[test]
-    fn count_tokens_plain_english_is_close_to_bytes_over_four() {
-        // "The quick brown fox jumps over the lazy dog." — the classic.
-        let s = "The quick brown fox jumps over the lazy dog.";
-        // The old flat heuristic gave 43 bytes / 4 ≈ 10. The char-class
-        // estimator weights words at 0.25 and the period/space at ~0.4 each,
-        // landing in the same ballpark.
-        let est = count_tokens(s);
-        assert!((7..=14).contains(&est), "got {est}");
-    }
-
-    #[test]
-    fn count_tokens_chinese_is_one_token_per_glyph() {
-        // 4 Han glyphs should estimate ≈ 4 tokens — never 1, which the old
-        // `bytes / 4` heuristic (12 bytes / 4) wrongly produced.
-        assert_eq!(count_tokens("你好世界"), 4);
-        // A short sentence with CJK punctuation included.
-        let est = count_tokens("你好，世界！");
-        // 你好 + ， + 世界 + ！ = 6 glyphs ≈ 6 tokens.
-        assert_eq!(est, 6);
-    }
-
-    #[test]
-    fn count_tokens_cjk_not_collapsed_to_quarter() {
-        // This is the regression that motivated the rewrite: 4 Chinese chars
-        // must not estimate as ~1 token.
-        let four_chars = "人工智能";
-        assert!(count_tokens(four_chars) >= 4);
-        // And it must be roughly 4x what an equal byte count of ASCII gives.
-        let ascii_equiv = "aaaaaaaaaaaa"; // same 12 bytes
-        assert!(count_tokens(four_chars) > count_tokens(ascii_equiv));
-    }
-
-    #[test]
-    fn count_tokens_code_is_denser_than_prose() {
-        // Same character count, but the code line should estimate higher
-        // because its brackets/operators each cost ~1 token.
-        let prose = "print the value now "; // 20 chars
-        let code = "f(x){return a+b[c];}"; // 20 chars
-        assert!(
-            count_tokens(code) > count_tokens(prose),
-            "code={} prose={}",
-            count_tokens(code),
-            count_tokens(prose)
-        );
-    }
-
-    #[test]
-    fn count_tokens_mixed_zh_code_sentence() {
-        // A typical bilingual developer sentence: CJK + ASCII + code.
-        let s = "用 estimate_tokens(ctx) 计算 context";
-        let est = count_tokens(s);
-        // CJK part alone is ≥ 8 tokens (用计算context-ish). Just sanity-check
-        // it is well above the old flat `bytes/4` number.
-        let old_flat = (s.len() / 4) as i64;
-        assert!(
-            est > old_flat,
-            "char-class est {est} should exceed flat bytes/4 {old_flat} for CJK-heavy text"
-        );
-    }
-
-    #[test]
-    fn count_tokens_kana_and_hangul_count_per_glyph() {
-        // Japanese (Kanji + Hiragana + Katakana) and Korean (Hangul) must also
-        // estimate ~1 token per glyph, not be under-counted by bytes/4.
-        assert!(count_tokens("こんにちは") >= 5); // 5 hiragana
-        assert!(count_tokens("안녕하세요") >= 5); // 5 hangul syllables
-    }
-
-    #[test]
-    fn count_tokens_non_ascii_letters_are_half() {
-        // Cyrillic / accented Latin: ~2 chars per token, denser than ASCII
-        // words but not 1:1 like CJK.
-        let est = count_tokens("Привет"); // 6 Cyrillic letters
-        assert!((2..=4).contains(&est), "got {est}");
-    }
-
-    #[test]
-    fn count_tokens_empty_is_one() {
-        // Empty string floors to 1, matching the old estimator's `.max(1)`.
-        assert_eq!(count_tokens(""), 1);
-    }
-
     #[test]
     fn semantic_json_ignores_transport_syntax_but_keeps_domain_content() {
         let empty = serde_json::json!({"type": "object", "properties": {}});
@@ -1215,13 +996,21 @@ mod tests {
     }
 
     #[test]
-    fn message_estimate_treats_empty_content_and_empty_arguments_as_zero() {
+    fn message_estimate_treats_empty_content_and_empty_arguments_as_framing_only() {
         let mut message = Message::new(Role::Assistant, "");
         message.tool_calls = Some(vec![crate::ToolCall {
             id: "call_1".into(),
             name: String::new(),
             arguments: "{}".into(),
         }]);
+        // No content, no name, empty JSON object: only the per-message (4)
+        // and per-tool-call (2) framing overhead remains.
+        assert_eq!(estimate_message_tokens(&message), 6);
+    }
+
+    #[test]
+    fn message_estimate_with_no_content_and_no_calls_is_zero() {
+        let message = Message::new(Role::Assistant, "");
         assert_eq!(estimate_message_tokens(&message), 0);
     }
 

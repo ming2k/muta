@@ -1390,6 +1390,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         side_session_id: None,
         parent_status: neenee_contracts::ParentStatus::Idle,
         btw_list: Vec::new(),
+        session_chrome: std::collections::HashMap::new(),
+        saved_primary_chrome: None,
         btw_scroll: 0,
         btw_modal_follow: true,
         scroll: 0,
@@ -4042,6 +4044,8 @@ fn startup_picker_flag_governs_sessions_modal_quit_and_resets_on_open() {
 /// Helper: build a minimal picker row so a test list is readable.
 fn overview_row(id: &str) -> neenee_contracts::SessionOverview {
     neenee_contracts::SessionOverview {
+        parent_id: None,
+        fork_kind: neenee_contracts::SessionForkKind::Trunk,
         id: id.to_string(),
         overview: format!("overview-{id}"),
         created_at: 0,
@@ -4753,4 +4757,111 @@ fn range_selection_cjk_left_arrow_snaps_grapheme() {
     assert!(matches!(action, Some(crate::input::InputAction::None)));
     assert_eq!(app.selection, SelectionState::None);
     assert_eq!(app.cursor_position, 0, "← steps left from char 1 to char 0");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// View-scoped chrome for `/btw` aside views (ADR-0103 fix): an aside view must
+// render its own session's activity bar, never inherit the primary's, and the
+// primary's chrome must survive the aside detour untouched.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn aside_view_does_not_inherit_the_primary_activity_bar() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    // The primary is mid-round with live chrome.
+    app.activity_status = "responding".to_string();
+    app.round_started_at = Some(std::time::Instant::now());
+    app.round_count = 7;
+    app.current_turn = 3;
+
+    // Open a brand-new aside: no chrome entry exists yet, so the view must
+    // show a fresh idle surface — not the primary's streaming bar.
+    app.enter_side_view("side-1".to_string());
+    assert!(app.in_side_view);
+    assert!(
+        app.viewed_chrome().activity.is_empty(),
+        "a new aside starts idle, not 'responding'"
+    );
+    assert_eq!(
+        app.viewed_chrome().round_count,
+        0,
+        "a new aside carries no round counter"
+    );
+    assert!(
+        app.viewed_chrome().round_started_at.is_none(),
+        "a new aside has no elapsed timer"
+    );
+
+    // The primary's chrome is parked, not destroyed.
+    let parked = app.saved_primary_chrome.as_ref().expect("primary parked");
+    assert_eq!(parked.activity, "responding");
+    assert_eq!(parked.round_count, 7);
+    assert_eq!(parked.current_turn, 3);
+    assert!(parked.round_started_at.is_some());
+}
+
+#[test]
+fn exiting_an_aside_restores_the_primary_chrome_exactly() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.activity_status = "running tool: bash".to_string();
+    let started = std::time::Instant::now();
+    app.round_started_at = Some(started);
+    app.round_count = 12;
+    app.current_turn = 2;
+
+    app.enter_side_view("side-9".to_string());
+    // While inside the aside, its own events land in its chrome entry only.
+    app.session_chrome.insert(
+        "side-9".to_string(),
+        crate::app::SessionChrome {
+            activity: "thinking".to_string(),
+            responding: true,
+            round_count: 1,
+            current_turn: 1,
+            round_started_at: Some(std::time::Instant::now()),
+        },
+    );
+    // Re-entering (focus jump) must swap the aside's own chrome in.
+    app.enter_side_view("side-9".to_string());
+    assert_eq!(app.viewed_chrome().activity, "thinking");
+    assert_eq!(app.viewed_chrome().round_count, 1);
+
+    // Leaving restores the primary's parked chrome bit-for-bit: the primary
+    // round that kept streaming in the background shows its own bar again.
+    app.exit_side_view();
+    assert!(!app.in_side_view);
+    let chrome = app.viewed_chrome();
+    assert_eq!(chrome.activity, "running tool: bash");
+    assert_eq!(chrome.round_count, 12);
+    assert_eq!(chrome.current_turn, 2);
+    assert!(chrome.round_started_at.is_some());
+}
+
+#[test]
+fn reentering_a_running_aside_shows_its_own_chrome() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    // The primary is idle.
+    app.activity_status.clear();
+    app.round_started_at = None;
+
+    // A background aside is streaming (its listener-maintained entry).
+    app.session_chrome.insert(
+        "side-2".to_string(),
+        crate::app::SessionChrome {
+            activity: "responding".to_string(),
+            responding: true,
+            round_count: 2,
+            current_turn: 1,
+            round_started_at: Some(std::time::Instant::now()),
+        },
+    );
+    app.enter_side_view("side-2".to_string());
+    let chrome = app.viewed_chrome();
+    assert_eq!(chrome.activity, "responding");
+    assert!(chrome.responding);
+    assert_eq!(chrome.round_count, 2);
+    assert!(
+        chrome.round_started_at.is_some(),
+        "the aside's elapsed timer is its own"
+    );
 }

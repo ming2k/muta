@@ -401,6 +401,33 @@ pub async fn run_tui(
     // `UiRuntime::open_btw` — armed by F5 / `/btw list` on the loop side.
     let btw_list = Arc::new(Mutex::new(Vec::<neenee_contracts::BtwAsideSummary>::new()));
     let btw_list_clone = btw_list.clone();
+    // View-scoped chrome (ADR-0103 fix): per-session activity / responding /
+    // round / turn, maintained by the listener for the primary *and* every
+    // live aside. The loop mirrors this into `App::session_chrome` each
+    // frame; a view renders only its own session's entry, so an aside view
+    // shows its own activity bar instead of inheriting the primary's.
+    let session_chrome = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+        String,
+        crate::app::SessionChrome,
+    >::new()));
+    let session_chrome_clone = session_chrome.clone();
+    /// Per-event chrome bookkeeping for one session's stream. Writes the
+    /// session's own `SessionChrome` entry (bookkeeping for every session),
+    /// and additionally updates the *displayed* legacy fields only when the
+    /// event belongs to the primary (`!routes_to_side`) — preserving the
+    /// existing isolation of the main view from aside rounds while giving
+    /// the aside view its own state to render once focused.
+    struct ChromeUpdate {
+        session_id: String,
+        map: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::app::SessionChrome>>>,
+    }
+    impl ChromeUpdate {
+        fn edit(&mut self, f: impl FnOnce(&mut crate::app::SessionChrome)) {
+            if let Ok(mut map) = self.map.lock() {
+                f(map.entry(self.session_id.clone()).or_default());
+            }
+        }
+    }
     // Which session the frontend is currently viewing (primary id, or the
     // focused aside's id), written by the event loop each frame and read by
     // the listener to scope on-demand queries (e.g. `TokenUsageReport`).
@@ -521,6 +548,19 @@ pub async fn run_tui(
                     // its own buffer + the parent-status banner instead.
                     // Permission and user-question requests stay global
                     // regardless of origin so their modals always surface.
+                    //
+                    // Chrome bookkeeping (view-scoped state): every session —
+                    // primary *and* asides — mirrors its own activity /
+                    // responding / round / turn into `App::session_chrome`
+                    // via `chrome_updater`. The primary's entry also feeds the
+                    // legacy display fields (gated exactly like today), while
+                    // an aside's entry is pure bookkeeping until its view is
+                    // focused — at which point `enter_side_view` swaps it in.
+                    let chrome_session_id = session_id.clone();
+                    let mut chrome_updater = ChromeUpdate {
+                        session_id: chrome_session_id,
+                        map: session_chrome_clone.clone(),
+                    };
                     let buf = if routes_to_side {
                         &side_messages_clone
                     } else {
@@ -713,6 +753,14 @@ pub async fn run_tui(
                             }
                         }
                         RoundEvent::Activity(status) => {
+                            // View-scoped chrome: record this session's own
+                            // activity text regardless of which view is
+                            // focused; only the primary also drives the
+                            // displayed global activity state.
+                            chrome_updater.edit(|c| {
+                                c.activity = status.clone();
+                                c.responding = true;
+                            });
                             if !routes_to_side {
                                 *activity_clone.lock().await = status;
                                 ir_clone.store(true, Ordering::SeqCst);
@@ -740,6 +788,12 @@ pub async fn run_tui(
                                 // model request, shown as `turn 1`.
                                 *current_turn_clone.lock().await = turn;
                             }
+                            // View-scoped chrome: per-session structural
+                            // counters (Activity modal's `round N · turn M`).
+                            chrome_updater.edit(|c| {
+                                c.round_count = round;
+                                c.current_turn = turn;
+                            });
                         }
                         RoundEvent::StreamStart => {
                             // A stream lifecycle event is not visible transcript content.
@@ -754,6 +808,17 @@ pub async fn run_tui(
                                 let mut msgs = buf.write().await;
                                 begin_stream(&mut msgs);
                             }
+                            // View-scoped chrome: a stream means this session
+                            // is mid-round (elapsed timer origin).
+                            chrome_updater.edit(|c| {
+                                c.responding = true;
+                                if c.round_started_at.is_none() {
+                                    c.round_started_at = Some(std::time::Instant::now());
+                                }
+                                if c.activity.is_empty() {
+                                    c.activity = "responding".to_string();
+                                }
+                            });
                             if !routes_to_side {
                                 ir_clone.store(true, Ordering::SeqCst);
                                 *activity_clone.lock().await = "responding".to_string();
@@ -1262,16 +1327,16 @@ pub async fn run_tui(
                         }
                         RoundEvent::Compacted {
                             archived_messages,
-                            before_chars,
-                            after_chars,
+                            window_tokens_before,
+                            window_tokens_after,
                         } => {
                             let mut msgs = buf.write().await;
                             push_local_notice(
                                 &mut msgs,
                                 NoticeSeverity::Info,
                                 format!(
-                                    "Compacted {} messages: {} -> {} bytes.",
-                                    archived_messages, before_chars, after_chars
+                                    "Compacted {} messages: {} -> {} tokens.",
+                                    archived_messages, window_tokens_before, window_tokens_after
                                 ),
                             );
                         }
@@ -1283,6 +1348,33 @@ pub async fn run_tui(
                                     idle: !running,
                                 },
                             );
+                            // View-scoped chrome: the authoritative
+                            // running/idle transition for this session —
+                            // start the timer on running, retire the
+                            // activity surface on idle. Recorded for every
+                            // session (asides included) so a background
+                            // aside's finish is visible the moment its view
+                            // is (re)focused.
+                            {
+                                let round_counter = snapshot.round_counter;
+                                chrome_updater.edit(|c| {
+                                    c.round_count = round_counter;
+                                    c.responding = running;
+                                    if running {
+                                        c.current_turn = 0;
+                                        if c.round_started_at.is_none() {
+                                            c.round_started_at = Some(std::time::Instant::now());
+                                        }
+                                        if c.activity.is_empty() {
+                                            c.activity = "running".to_string();
+                                        }
+                                    } else {
+                                        c.activity.clear();
+                                        c.current_turn = 0;
+                                        c.round_started_at = None;
+                                    }
+                                });
+                            }
                             if !routes_to_side {
                                 let round_counter = snapshot.round_counter;
                                 if !running && needs_round_rebase {
@@ -1629,6 +1721,8 @@ pub async fn run_tui(
         side_session_id: None,
         parent_status: ParentStatus::Idle,
         btw_list: Vec::new(),
+        session_chrome: std::collections::HashMap::new(),
+        saved_primary_chrome: None,
         btw_scroll: 0,
         btw_modal_follow: true,
         scroll: 0,
@@ -1865,6 +1959,7 @@ pub async fn run_tui(
             parent_status,
             side_view_signal,
             btw_list,
+            session_chrome,
             open_btw,
             viewed_session_id,
             live_session_id,

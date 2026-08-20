@@ -75,6 +75,7 @@ pub mod identity;
 pub mod pressure;
 pub mod principal;
 pub mod token_ledger;
+pub mod tokenizer;
 pub use token_ledger::{
     RequestUsageKey, RequestUsageRecord, RequestUsageSource, RequestUsageStatus, TokenSourceLedger,
     TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn,
@@ -100,8 +101,9 @@ pub use events::{
     InputRequest, LoopStatus, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity, NoticeSource,
     NoticeSurface, ParentStatus, PermissionDecision, PermissionRequest, PermissionRuleInfo,
     ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, QueuedUserInput, RoundEvent,
-    RoundSummary, SessionContextSnapshot, SessionDetail, SessionOverview, SessionSnapshot,
-    SkillInfo, ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
+    RoundSummary, SessionContextSnapshot, SessionDetail, SessionForkKind, SessionOverview,
+    SessionSnapshot, SkillInfo, ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply,
+    UserQuestionRequest,
 };
 pub mod monitor;
 pub use hooks::{
@@ -119,14 +121,18 @@ pub use monitor::{
     WipAdvice, WipConflict, WipStatus,
 };
 pub use pressure::{
-    CHARS_PER_TOKEN, CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PRUNED_TOOL_PLACEHOLDER,
-    PruneOutcome, count_tokens, estimate_bytes, estimate_message_tokens,
-    estimate_semantic_json_tokens, estimate_tokens, prune_tool_results,
+    CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PruneOutcome, estimate_bytes,
+    estimate_message_tokens, estimate_semantic_json_tokens, estimate_tokens, prune_tool_results,
 };
 pub use principal::{PrincipalProfile, PrincipalRole, PrincipalRuntimeConfig};
 pub use secret::SecretString;
 pub use session_title::{TITLE_MAX_LEN, clean_title};
 pub use skills_config::SkillsConfig;
+/// The BPE token counter ([`crate::tokenizer`], ADR-0117) under the name the
+/// heuristic estimator used to own: token prediction is BPE now, and callers
+/// that imported `count_tokens` for budget-fitting (summary truncation)
+/// must measure in the same unit as the projection thresholds.
+pub use tokenizer::{StreamingCounter, Tokenizer, count_tokens, truncate_to_tokens};
 pub use tool_output::truncate_utf8;
 pub use tool_registry::{
     Capability, ToolContext, ToolContextBuilder, ToolFactory, ToolScope, ToolSelection, ToolSet,

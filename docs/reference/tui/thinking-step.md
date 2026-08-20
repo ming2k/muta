@@ -8,7 +8,7 @@ panel.
 ## Collapsed
 
 ```text
-  + Thinking · 140 chars · 1.2s
+  + Thinking · 140 tokens · 1.2s
 ```
 
 | Attribute | Value |
@@ -29,8 +29,8 @@ marker needs to change between streaming and finished.
 
 | State | Format |
 |-------|--------|
-| Streaming | `Thinking · {chars} chars` (duration omitted) |
-| Completed | `Thinking · {duration} · {chars} chars` |
+| Streaming | `Thinking · {tokens} tokens` (duration omitted) |
+| Completed | `Thinking · {duration} · {tokens} tokens` |
 
 ## Expanded
 

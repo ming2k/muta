@@ -120,13 +120,17 @@ pub(super) fn format_results(query: &str, source: &str, results: Vec<SearchResul
 }
 
 /// Guard the model's context window against huge provider payloads.
+/// Token-bounded (ADR-0120): the cut lands on an exact token boundary and the
+/// notice reports the context cost in the model's own unit.
 pub(super) fn cap_output(text: &str) -> String {
-    let max_chars = 16_000;
-    if text.chars().count() <= max_chars {
+    const MAX_TOKENS: usize = 4_000;
+    let total = neenee_contracts::tokenizer::count_tokens(text);
+    if total <= MAX_TOKENS {
         return text.to_string();
     }
-    let truncated: String = text.chars().take(max_chars).collect();
-    format!("{truncated}\n\n[... output truncated at {max_chars} characters ...]")
+    let (prefix, kept) = neenee_contracts::tokenizer::truncate_to_tokens(text, MAX_TOKENS);
+    let dropped = total - kept;
+    format!("{prefix}\n\n[... {dropped} more tokens truncated ...]")
 }
 
 /// Invoke a hosted MCP-style search endpoint via JSON-RPC `tools/call` and
@@ -248,10 +252,23 @@ mod tests {
 
     #[test]
     fn cap_output_truncates_long_text() {
-        let long = "a".repeat(20_000);
+        // Token-dense text (words, not merge-friendly runs) so the 4 000-token
+        // cap actually engages: 'a'*20 000 is only ~2 500 tokens because cl100k
+        // merges long 'a' runs into single tokens.
+        let long = "the quick brown fox jumps over the lazy dog. ".repeat(2_000);
         let out = cap_output(&long);
-        assert!(out.contains("truncated"));
-        assert!(out.chars().count() < 20_000);
+        assert!(
+            out.contains("tokens truncated"),
+            "got tail: {}",
+            &out[out.len().saturating_sub(80)..]
+        );
+        // Within the budget by the exact tokenizer's own measure.
+        let body = out.split("\n\n[... ").next().unwrap_or("");
+        assert!(
+            neenee_contracts::tokenizer::count_tokens(body) <= 4_000,
+            "body tokens = {}",
+            neenee_contracts::tokenizer::count_tokens(body)
+        );
     }
 
     #[test]

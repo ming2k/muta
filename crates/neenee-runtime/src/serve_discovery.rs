@@ -56,26 +56,35 @@ pub struct Discovery {
     /// treated as "unknown", which also mismatches, prompting a restart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The daemon's configured graceful-drain budget, **seconds**
+    /// (ADR-0116). `neenee daemon stop` reads this so its escalation
+    /// tiers wait *the daemon's own budget* before SIGTERM/SIGKILL: a
+    /// signal arriving mid-drain escalates the daemon to a forced exit,
+    /// so a client that escalates early destroys the graceful drain it
+    /// just requested. `None` on records predating the field — clients
+    /// fall back to a conservative default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grace_secs: Option<u64>,
 }
 
 /// The global discovery path for the unified daemon (ADR-0096): one record
-/// per user, in the runtime dir when available.
+/// per user, in the instance dir (ADR-0121: `--home`/`NEENEE_HOME`, else
+/// `$XDG_RUNTIME_DIR`, else the data dir).
 pub fn global_discovery_path() -> PathBuf {
-    let dirs = paths::get();
-    match &dirs.runtime_dir {
-        Some(runtime) => runtime.join("daemon.json"),
-        None => dirs.data_dir.join("daemon.json"),
-    }
+    paths::get().instance_dir().join("daemon.json")
 }
 
-/// The default UDS path the daemon binds (ADR-0096).
+/// The resolved daemon instance directory (ADR-0121). Exposed for
+/// diagnostics so a report can name *which* instance — host or sandbox —
+/// it probed before listing paths inside it.
+pub fn instance_dir() -> PathBuf {
+    paths::get().instance_dir()
+}
+
+/// The default UDS path the daemon binds (ADR-0096), inside the instance dir.
 #[cfg(unix)]
 pub fn default_uds_path() -> PathBuf {
-    let dirs = paths::get();
-    match &dirs.runtime_dir {
-        Some(runtime) => runtime.join("daemon.sock"),
-        None => dirs.data_dir.join("daemon.sock"),
-    }
+    paths::get().instance_dir().join("daemon.sock")
 }
 
 /// The daemon's single-instance lock path (ADR-0101): a companion
@@ -85,11 +94,7 @@ pub fn default_uds_path() -> PathBuf {
 /// daemon's UDS socket, which is exactly the clobbering race the pre-0101
 /// `bind_uds` "remove stale socket file" step could not distinguish.
 pub fn global_lock_path() -> PathBuf {
-    let dirs = paths::get();
-    match &dirs.runtime_dir {
-        Some(runtime) => runtime.join("daemon.lock"),
-        None => dirs.data_dir.join("daemon.lock"),
-    }
+    paths::get().instance_dir().join("daemon.lock")
 }
 
 /// RAII guard over the global discovery record: `Drop` removes the file, so
@@ -143,6 +148,7 @@ mod lease_tests {
                 started_at: 3,
                 uds_path: None,
                 version: None,
+                grace_secs: None,
             },
         )
         .unwrap();
@@ -166,6 +172,7 @@ mod lease_tests {
                 started_at: 3,
                 uds_path: None,
                 version: None,
+                grace_secs: None,
             },
         )
         .unwrap();
@@ -187,6 +194,7 @@ mod lease_tests {
                 started_at: 3,
                 uds_path: None,
                 version: None,
+                grace_secs: None,
             },
         )
         .unwrap();
@@ -243,18 +251,19 @@ pub fn remove(path: &Path) {
 /// Remove `path` only if the discovery record inside belongs to `expected_pid`.
 /// Prevents an older daemon from unlinking a newer daemon's discovery file.
 pub fn remove_if_matching_pid(path: &Path, expected_pid: u32) {
-    if let Ok(bytes) = std::fs::read(path) {
-        if let Ok(record) = serde_json::from_slice::<Discovery>(&bytes) {
-            if record.pid != expected_pid {
-                return;
-            }
-        }
+    if let Ok(bytes) = std::fs::read(path)
+        && let Ok(record) = serde_json::from_slice::<Discovery>(&bytes)
+        && record.pid != expected_pid
+    {
+        return;
     }
     remove(path);
 }
 
 /// The path-resolution rule, split from [`paths::get`] so tests can supply
-/// their own dirs without touching process-wide env.
+/// their own dirs without touching process-wide env. The runtime location is
+/// the instance dir (ADR-0121) and the fallback is the project bucket in
+/// data — the same rule [`global_discovery_path`] applies globally.
 fn path_from_dirs(dirs: &Dirs, project_root: &Path) -> PathBuf {
     match &dirs.runtime_dir {
         Some(runtime) => runtime
@@ -292,6 +301,7 @@ mod tests {
             started_at: 1_755_000_000,
             uds_path: None,
             version: Some("0.27.0".to_string()),
+            grace_secs: None,
         }
     }
 

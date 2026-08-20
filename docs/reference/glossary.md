@@ -203,7 +203,7 @@ documentation and ADRs.
 | Term | Superseded by | Reference |
 |------|---------------|-----------|
 | `neenee-host` | `neenee-runtime` | [Crate layering](../explanation/crate-layering.md) |
-| `neenee-server` (binary) | merged into `neenee` (`neenee serve`) | [Crate layering](../explanation/crate-layering.md) |
+| `neenee-server` (binary) | merged into `neenee` (`neenee daemon start --fg`) | [Crate layering](../explanation/crate-layering.md) |
 | `neenee-app` | `neenee-persistence` | [ADR-0005](../adr/0005-strict-layering-and-renames.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
 | `neenee-cli` (pre-ADR-0035 cli crate) | `neenee-code`, then `neenee`; the name is current again since ADR-0080 | [ADR-0035](../adr/0035-application-layer-split.md), [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md), [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md) |
 | `neenee-code` | `neenee`, then `neenee-cli` | [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md), [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md) |

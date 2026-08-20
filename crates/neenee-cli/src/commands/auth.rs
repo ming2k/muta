@@ -1,6 +1,6 @@
+use crate::cli::AuthAction;
 use neenee_contracts::SecretString;
 use neenee_persistence::config::Config;
-use neenee_runtime::startup::AuthAction;
 
 fn mask_key(secret: &Option<SecretString>) -> &'static str {
     if secret.is_some() {

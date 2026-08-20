@@ -41,7 +41,7 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::UiBridge;
 use crate::side::SideRegistry;
-use crate::startup::StartupMode;
+use crate::startup::SessionStart;
 
 /// The slice of the dispatcher context an extension slash command may touch.
 ///
@@ -77,7 +77,7 @@ pub struct SlashContext<'a> {
     pub embedding_store: &'a Arc<AsyncRwLock<embedding::EmbeddingStore>>,
     pub req_tx: &'a mpsc::UnboundedSender<AgentRequest>,
     pub project_root: &'a Path,
-    pub startup: &'a StartupMode,
+    pub startup: &'a SessionStart,
     pub ui: &'a dyn UiBridge,
 }
 

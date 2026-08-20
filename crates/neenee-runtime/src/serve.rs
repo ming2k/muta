@@ -83,6 +83,13 @@ async fn snapshot_attach_sync(
 pub enum AttachAction {
     New,
     Attach(Option<String>),
+    /// Open the sessions picker over a throwaway carrier session
+    /// (ADR-0116): the daemon assembles a `Picker` start — no restore, no
+    /// hooks — and the client's TUI raises the picker modal; `/sessions
+    /// <id>` switches to the real session. The endpoint for `neenee
+    /// attach` with no id, so choosing is interactive instead of a printed
+    /// list on stderr.
+    Picker,
     /// Observe the whole host instead of attaching to one session
     /// (ADR-0093): the server answers with a snapshot frame and, when
     /// `watch` is set, streams diffs until the client disconnects.
@@ -873,7 +880,7 @@ where
         AttachAction::Control(request) => {
             return run_control(ws_sink, registry, gate, listeners, request).await;
         }
-        AttachAction::New | AttachAction::Attach(_) => {}
+        AttachAction::New | AttachAction::Attach(_) | AttachAction::Picker => {}
     }
     // The caller's project scopes creation / lazy resume (ADR-0096). Attach
     // clients declare their working directory in the Select frame's optional
@@ -1463,6 +1470,16 @@ mod tests {
         );
         let back: AttachAction = serde_json::from_str(r#"{"attach":"abc"}"#).unwrap();
         assert_eq!(back, AttachAction::Attach(Some("abc".into())));
+        // The picker action (ADR-0116) serializes as a bare unit variant;
+        // an older daemon that does not know it fails the Select frame with
+        // a clear deserialize error instead of a mid-handshake protocol
+        // fault.
+        assert_eq!(
+            serde_json::to_string(&AttachAction::Picker).unwrap(),
+            "\"picker\""
+        );
+        let back: AttachAction = serde_json::from_str("\"picker\"").unwrap();
+        assert_eq!(back, AttachAction::Picker);
     }
 
     fn handshake_req(headers: &[(&str, &str)]) -> Request {

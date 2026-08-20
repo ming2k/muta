@@ -11,7 +11,7 @@ Its machine-readable contract is [`server.asyncapi.yaml`](server.asyncapi.yaml).
 
 ## Roles and entry points
 
-The daemon (`neenee serve` — the single binary, ADR-0102) serves one
+The daemon (`neenee daemon start --fg` — the single binary, ADR-0102) serves one
 control-plane endpoint per user, on a Unix domain socket plus a TCP loopback
 listener by default (fixed port 9800, ephemeral fallback), and on all
 interfaces when `--public` (ADR-0096/0105). Three client roles share the
@@ -32,14 +32,17 @@ the unified daemon; the protocol below is the daemon's control plane.
 - **Unix domain socket (default, ADR-0096):** the daemon's primary local
   channel at `$XDG_RUNTIME_DIR/neenee/daemon.sock`, `0600` inside a `0700`
   runtime dir. No bearer token — the filesystem permissions are the auth
-  boundary. CLI and TUI use this.
+  boundary. CLI and TUI use this. The instance root selector
+  (`--home` / `NEENEE_HOME`) moves this directory wholesale (ADR-0121).
 - **TCP loopback (default port 9800, ADR-0105):** binds `127.0.0.1` and, with
   `[daemon] local_auth` on (the default), **requires a bearer token**,
   generated per daemon start and published in the owner-only (0600)
   discovery record — co-located CLI/TUI clients read it from there and
   authenticate transparently. `--no-local-auth` / `local_auth = false`
-  restores trust-the-loopback. When port 9800 is taken, the daemon falls
-  back to an ephemeral port; the record always carries the actual one.
+  restores trust-the-loopback. When the default port is taken, the daemon
+  falls back to an ephemeral port; the record always carries the actual
+  one. `NEENEE_PORT` overrides the default (ADR-0121) — below an explicit
+  `--port`, above the well-known 9800.
 - **TCP exposed (`--public`):** binds `0.0.0.0` and **requires a bearer
   token** (else HTTP 401). The daemon generates a token on startup and
   points at the discovery record. Exposing is an explicit opt-in that always
@@ -167,7 +170,7 @@ the new title; an unknown id answers
 The server sends `{ "type": "Monitor", "kind": "snapshot", … }` first, then —
 while `watch` holds — `session_added` / `session_updated` / `session_removed`
 diffs. With `watch: false` it closes after the snapshot (one-shot poll, which
-is what `neenee status` does). Each diff carries a whole
+is what `neenee daemon status` does). Each diff carries a whole
 [`MonitoredSession`](#monitoredsession) row; consumers upsert by `id`.
 
 `include_idle: false` (the default) filters both the snapshot and the diff
@@ -228,7 +231,7 @@ The verbs (`Select{action: {control: {…}}}`):
 | `interrupt` | `session_id` | Stop the current round |
 | `resolve_permission` | `session_id`, `request_id`, `decision` (`once`/`always`/`reject`) | Answer a pending tool-permission prompt |
 | `kill_session` | `session_id` | Tear the session down (monitors get `session_removed`) |
-| `shutdown` | — | Stop the daemon itself (ADR-0100): the same budgeted graceful drain as SIGINT/SIGTERM — listeners close, connections drain, every session's `SessionEnd` hooks fire, the discovery record is removed, exit 0. The `ControlReply{ok:true}` is sent *before* the drain starts (it would otherwise cancel the replier). This is what `neenee stop` sends. |
+| `shutdown` | — | Stop the daemon itself (ADR-0100): the same budgeted graceful drain as SIGINT/SIGTERM — listeners close, connections drain, every session's `SessionEnd` hooks fire, the discovery record is removed, exit 0. The `ControlReply{ok:true}` is sent *before* the drain starts (it would otherwise cancel the replier). This is what `neenee daemon stop` sends. |
 
 `ControlReply` is `{ ok, session_id?, error? }`. On `ok:false`, `error`
 explains (unknown session, host cannot create, …). The connection closes

@@ -240,11 +240,14 @@ pub async fn decode_response_json(
 }
 
 fn body_preview(text: &str) -> String {
-    let total_chars = text.chars().count();
+    // Diagnostic text inside a decode-error message: report the omitted tail
+    // in tokens (ADR-0120) — how much context the body would have cost.
+    let total_tokens = neenee_contracts::tokenizer::count_tokens(text);
     let mut preview: String = text.chars().take(DECODE_ERROR_BODY_PREVIEW).collect();
-    let truncated_chars = total_chars.saturating_sub(preview.chars().count());
-    if truncated_chars > 0 {
-        preview.push_str(&format!("…<{truncated_chars} more chars>"));
+    let truncated_tokens =
+        total_tokens.saturating_sub(neenee_contracts::tokenizer::count_tokens(&preview));
+    if truncated_tokens > 0 {
+        preview.push_str(&format!("…<{truncated_tokens} more tokens>"));
     }
     preview = preview
         .replace('\n', "\\n")
@@ -429,17 +432,19 @@ mod tests {
     }
 
     #[test]
-    fn body_preview_truncates_long_body_and_reports_remaining_chars() {
+    fn body_preview_truncates_long_body_and_reports_remaining_tokens() {
         let long = "a".repeat(DECODE_ERROR_BODY_PREVIEW * 2 + 50);
         let preview = body_preview(&long);
-        assert_eq!(
-            preview.chars().count(),
-            DECODE_ERROR_BODY_PREVIEW
-                + format!("…<{} more chars>", DECODE_ERROR_BODY_PREVIEW + 50)
-                    .chars()
-                    .count()
+        // The omitted tail is reported in tokens (ADR-0120): the whole body
+        // tokenizes to N, the kept preview to fewer, the difference is the
+        // count in the suffix.
+        let total = neenee_contracts::tokenizer::count_tokens(&long);
+        let kept = neenee_contracts::tokenizer::count_tokens(&long[..DECODE_ERROR_BODY_PREVIEW]);
+        let omitted = total - kept;
+        assert!(
+            preview.ends_with(&format!("…<{omitted} more tokens>")),
+            "got: {preview}"
         );
-        assert!(preview.ends_with(&format!("…<{} more chars>", DECODE_ERROR_BODY_PREVIEW + 50)));
     }
 
     #[test]

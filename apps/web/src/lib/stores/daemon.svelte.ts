@@ -883,7 +883,7 @@ export class DaemonStore {
       this.pushToast(
         "info",
         "Context compacted",
-        `${c.archived_messages} messages archived (${c.before_chars} → ${c.after_chars} chars).`,
+        `${c.archived_messages} messages archived (${c.window_tokens_before} → ${c.window_tokens_after} tokens).`,
       );
     } else if ("RetryScheduled" in event) {
       const r = event.RetryScheduled;

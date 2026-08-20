@@ -71,6 +71,32 @@ mod tests {
     }
 
     #[test]
+    fn reader_field_parses_and_defaults_to_builtin() {
+        let cfg = WebSearchConfig::default();
+        assert_eq!(cfg.reader, "builtin");
+        assert!(cfg.jina_api_key.is_none());
+
+        let toml = r#"
+            reader = "jina"
+            jina_api_key = "jina-test-key"
+        "#;
+        let cfg: WebSearchConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.reader, "jina");
+        assert_eq!(
+            cfg.jina_api_key
+                .as_ref()
+                .map(|k| k.expose_secret().to_string())
+                .as_deref(),
+            Some("jina-test-key")
+        );
+        // A full config round-trips the new fields without dropping them.
+        let reencoded = toml::to_string(&cfg).unwrap();
+        let reloaded: WebSearchConfig = toml::from_str(&reencoded).unwrap();
+        assert_eq!(reloaded.reader, "jina");
+        assert!(reloaded.jina_api_key.is_some());
+    }
+
+    #[test]
     fn write_and_edit_tools_allow_plan_paths_in_plan_mode() {
         // Plan-mode path exemption was removed (ADR-0027/0028): scoped writes
         // are now expressed per-agent via `WriteScope`, not via an

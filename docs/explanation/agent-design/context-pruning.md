@@ -25,7 +25,7 @@ dropping one half breaks the chain for providers that validate it. So pruning
 **keeps the message and degrades its content in tiers** — it never deletes the
 shell. A candidate is either *truncated* (head and tail kept, middle elided) or
 *cleared* to an informative placeholder,
-`[cleared tool result: read config.rs (42 lines, 1500 chars)]`
+`[cleared tool result: read config.rs (42 lines, 350 tokens)]`
 (`CLEARED_TOOL_PREFIX`, `neenee-contracts/src/pressure.rs`), which tells the model
 exactly what it lost and lets it decide whether to re-fetch. The legacy
 `[Old tool result content cleared]` form (`PRUNED_TOOL_PLACEHOLDER`) is still
@@ -36,14 +36,14 @@ recognised on read so older sessions stay idempotent. Either way the
 
 `prune_tool_results` (`neenee-contracts/src/pressure.rs`) is the pure, side-effect-free
 heart of the layer. It plans degradations without mutating, then applies them
-atomically — and only when the planned reclaim exceeds `min_reclaim_chars`, so
+atomically — and only when the planned reclaim exceeds `min_reclaim_tokens`, so
 the durable archive is never churned for a negligible win.
 
 Selection is **not** FIFO-by-age. For each older tool result it decides both
 *what* to prune and *how hard*, in five passes:
 
 1. **Recency protection.** Walk newest-first, protecting the most recent
-   `protect_recent_chars` of tool output verbatim — that is what is usually
+   `protect_recent_tokens` of tool output verbatim — that is what is usually
    still relevant.
 2. **Staleness / dedup.** Correlate each result back to its originating call via
    `tool_call_id` (name + arguments). An earlier read is stale only when a
@@ -64,7 +64,7 @@ Selection is **not** FIFO-by-age. For each older tool result it decides both
    (where truncation would not save enough to be worth the lost signal) is
    cleared directly.
 5. **Informative clears.** A full clear writes
-   `[cleared tool result: <label> (<n> lines, <m> chars)]`, carrying the tool
+   `[cleared tool result: <label> (<n> lines, <m> tokens)]`, carrying the tool
    name, its salient argument, and the size dropped.
 
 It is **idempotent and convergent**: an already-cleared result is skipped, and a
@@ -135,7 +135,7 @@ it records how the durable session is projected into the model window
 | Key | Default | Effect |
 |-----|---------|--------|
 | `compaction_prune` | `true` | Master switch for both entry points. |
-| `compaction_prune_protect_tokens` | `6_000` | Recent tool output protected from pruning (converted to chars via `CHARS_PER_TOKEN`). Larger = keep more recent detail, prune less. |
+| `compaction_prune_protect_tokens` | `6_000` | Recent tool output protected from pruning, in tokens (ADR-0120: passed to the pruner as-is; the old ×4 char conversion is gone). Larger = keep more recent detail, prune less. |
 | `[compaction].prune_utilization` | `0.65` | Window fraction at which pruning engages. |
 
 `ContextProjectionSettings::PRUNE_MIN_RECLAIM_CHARS` (8_000) is the fixed

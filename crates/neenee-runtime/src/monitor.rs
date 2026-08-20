@@ -104,6 +104,11 @@ impl MonitorTracker {
                 self.base.overview.clone_from(&item.overview);
                 self.base.message_count = item.message_count;
                 self.base.created_at = item.created_at;
+                // Lineage (fork surfacing): the overview is the authoritative
+                // source — it reads the persisted snapshot, where `parent_id`
+                // and `fork_kind` are stamped at fork time.
+                self.base.parent_id.clone_from(&item.parent_id);
+                self.base.fork_kind = item.fork_kind;
             }
             return;
         }
@@ -272,6 +277,8 @@ mod tests {
                 note: None,
                 project_root: "/tmp/proj".into(),
                 wip: None,
+                parent_id: None,
+                fork_kind: neenee_contracts::SessionForkKind::Trunk,
             },
             SessionStatus::Idle,
         )
@@ -307,6 +314,8 @@ mod tests {
                 updated_at: 8,
                 message_count: 9,
                 active: true,
+                parent_id: None,
+                fork_kind: neenee_contracts::SessionForkKind::Trunk,
             },
             // Another session's row must not leak into ours.
             neenee_contracts::SessionOverview {
@@ -316,6 +325,8 @@ mod tests {
                 updated_at: 1,
                 message_count: 1,
                 active: false,
+                parent_id: None,
+                fork_kind: neenee_contracts::SessionForkKind::Trunk,
             },
         ]));
         let row = t.row();
@@ -337,6 +348,8 @@ mod tests {
                 updated_at: 1,
                 message_count: 1,
                 active: false,
+                parent_id: None,
+                fork_kind: neenee_contracts::SessionForkKind::Trunk,
             },
         ]));
         let row = t.row();

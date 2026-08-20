@@ -542,7 +542,10 @@ impl ToolOutput {
             ToolOutput::Listing { entries } => entries.join("\n"),
             ToolOutput::Matches { lines, .. } => lines.join("\n"),
             ToolOutput::Patch { path, op, new, .. } => match op {
-                PatchOp::Create => format!("Successfully wrote {} bytes to {}", new.len(), path),
+                PatchOp::Create => format!(
+                    "Successfully wrote {} tokens to {path}",
+                    crate::tokenizer::count_tokens(new)
+                ),
                 PatchOp::Edit => format!("Edited '{}' successfully", path),
                 PatchOp::Delete => format!("Deleted '{}'", path),
             },
@@ -676,13 +679,16 @@ pub const TAB_WIDTH: usize = 8;
 /// changes nothing for text-based consumers. The truncation policy
 /// ([`SHELL_MAX_OUTPUT_CHARS`] threshold, [`SHELL_TRUNCATED_CHARS`] cut) lives
 /// here as the back-compat bridge; structured consumers read the raw fields
-/// directly and bypass this.
+/// directly and bypass this. The truncation *notice* reports **tokens**
+/// (ADR-0120) — the context-window cost of what was dropped — while the
+/// threshold/cut stay byte-based (they bound resident payload, a byte
+/// concern).
 fn shell_to_text(stdout: &str, stderr: &str, exit: Option<i32>, truncated: bool) -> String {
     let inner = shell_inner_text(stdout, stderr, exit);
     if truncated || inner.len() > SHELL_MAX_OUTPUT_CHARS {
+        let tokens = crate::tokenizer::count_tokens(&inner);
         format!(
-            "[Output truncated: {} chars total]\n{}\n\n[Output was large — use grep or read_text if you need specific parts]",
-            inner.len(),
+            "[Output truncated: {tokens} tokens total]\n{}\n\n[Output was large — use grep or read_text if you need specific parts]",
             truncate_utf8(&inner, SHELL_TRUNCATED_CHARS)
         )
     } else {
@@ -887,7 +893,11 @@ mod tests {
             termination: ShellTermination::Exited,
         };
         let text = o.to_text();
-        assert!(text.starts_with("[Output truncated: 9000 chars total]\n"));
+        // 9000 'a's ≈ 1125 cl100k tokens; the notice reports tokens (ADR-0120).
+        assert!(
+            text.starts_with("[Output truncated: 1125 tokens total]\n"),
+            "got: {text:.80}"
+        );
         assert!(
             text.ends_with("[Output was large — use grep or read_text if you need specific parts]")
         );

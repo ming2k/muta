@@ -39,13 +39,9 @@ pub enum SessionEvent {
     /// later in the log supersedes it (snapshot semantics). See ADR-0035.
     MessagesAppended { messages: Vec<Message> },
     /// A model-context projection (tool-result pruning or summarizing compaction)
-    /// archived originals and replaced the model-visible window. Aliases keep
-    /// event logs written before the projection rename replayable.
-    #[serde(alias = "context_relief_committed", alias = "compaction_committed")]
+    /// archived originals and replaced the model-visible window.
     ContextProjectionCommitted {
-        #[serde(alias = "archived")]
         archived_originals: Vec<Message>,
-        #[serde(alias = "active")]
         model_window: Vec<Message>,
         checkpoint: ContextProjectionCheckpoint,
     },
@@ -66,9 +62,7 @@ pub enum SessionEvent {
     /// the legacy `/repeat`). Snapshot semantics: the full list is stored on
     /// every change so resume restores the same schedule. The session that
     /// created a job owns it; fork and resume carry it along just like the
-    /// todos. Aliased from the pre-v9 `repeat_jobs_set` tag so legacy event
-    /// logs replay unchanged.
-    #[serde(alias = "repeat_jobs_set")]
+    /// todos.
     ScheduledJobsSet {
         jobs: Vec<neenee_contracts::ScheduledJob>,
     },
@@ -91,7 +85,6 @@ pub enum SessionEvent {
     /// The harness round counter advanced (ADR-0048 Phase 2). Snapshot
     /// semantics. Mirrors `Agent::round_counter` so a resumed session's todo
     /// stale-detector comparisons stay valid.
-    #[serde(alias = "turn_counter_set")]
     RoundCounterSet { counter: u64 },
     /// Insert or replace one lifecycle-aware request attempt. The key makes
     /// replay idempotent and avoids rewriting the full ledger on every stream
@@ -351,11 +344,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_compaction_committed_tag_still_replays() {
-        // Event logs written before the prune/compact rename used the tag
-        // `compaction_committed`. The serde alias on `ContextProjectionCommitted`
-        // must keep those lines replayable, or resuming an old session would
-        // drop its archived rounds. Regression guard for the rename.
+    fn pre_projection_event_tags_are_skipped_not_replayed() {
+        // ADR-0120 policy: no serde aliases for renamed event shapes. An
+        // event line written before the projection rename
+        // (`compaction_committed`, `archived`/`active` fields) fails to
+        // parse and the loader skips it with a warn — the accepted cost of
+        // carrying no compat layer. This pins that behavior so a future
+        // alias does not creep back in unnoticed.
         let dir =
             std::env::temp_dir().join(format!("neenee-events-legacy-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -365,19 +360,14 @@ mod tests {
             "{\"seq\":0,\"timestamp\":1,\"type\":\"compaction_committed\",\
              \"archived\":[],\"active\":[],\
              \"checkpoint\":{\"archived_messages\":2,\"active_messages\":3,\
-             \"before_chars\":100,\"after_chars\":40}}\n",
+             \"window_tokens_before\":100,\"window_tokens_after\":40}}\n",
         )
         .unwrap();
         let loaded = EventLog::new(path).load().unwrap();
-        assert_eq!(loaded.len(), 1);
-        match &loaded[0].event {
-            SessionEvent::ContextProjectionCommitted { checkpoint, .. } => {
-                assert_eq!(checkpoint.operation, ContextProjectionKind::Unknown);
-                assert_eq!(checkpoint.before_chars, 100);
-                assert_eq!(checkpoint.after_chars, 40);
-            }
-            other => panic!("legacy tag did not map to ContextProjectionCommitted: {other:?}"),
-        }
+        assert!(
+            loaded.is_empty(),
+            "legacy line must be skipped, got {loaded:?}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -400,8 +390,8 @@ mod tests {
                 operation: ContextProjectionKind::Prune,
                 archived_messages: 1,
                 active_messages: 1,
-                before_chars: 100,
-                after_chars: 20,
+                window_tokens_before: 100,
+                window_tokens_after: 20,
             },
         })
         .unwrap();
@@ -487,15 +477,12 @@ mod tests {
     }
 }
 #[test]
-fn round_counter_event_writes_canonical_tag_and_reads_legacy_tag() {
-    let legacy: SessionEvent =
-        serde_json::from_str(r#"{"type":"turn_counter_set","counter":7}"#).unwrap();
-    assert!(matches!(
-        legacy,
-        SessionEvent::RoundCounterSet { counter: 7 }
-    ));
+fn round_counter_event_writes_canonical_tag() {
+    // ADR-0120 policy: the pre-rename `turn_counter_set` tag is not aliased
+    // and must fail to deserialize.
+    let legacy = serde_json::from_str::<SessionEvent>(r#"{"type":"turn_counter_set","counter":7}"#);
+    assert!(legacy.is_err(), "legacy tag must not parse");
 
     let serialized = serde_json::to_string(&SessionEvent::RoundCounterSet { counter: 7 }).unwrap();
     assert!(serialized.contains("\"type\":\"round_counter_set\""));
-    assert!(!serialized.contains("\"type\":\"turn_counter_set\""));
 }

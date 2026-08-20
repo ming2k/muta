@@ -16,7 +16,7 @@
 #   scheduled prompts to keep running:
 #     loginctl enable-linger $USER
 # - The Type is `exec` (not `notify`): the daemon does not speak sd_notify;
-#   readiness is observed through the discovery record / `neenee status`.
+#   readiness is observed through the discovery record / `neenee daemon status`.
 
 [Unit]
 Description=neenee session daemon
@@ -25,7 +25,7 @@ After=network.target
 
 [Service]
 Type=exec
-ExecStart=%h/.local/bin/neenee serve --idle-exit 0 --grace 20
+ExecStart=%h/.local/bin/neenee daemon start --fg --idle-exit 0 --grace 20
 Restart=on-failure
 RestartSec=2
 # Graceful stop: SIGTERM starts the daemon's drain; give it its full budget

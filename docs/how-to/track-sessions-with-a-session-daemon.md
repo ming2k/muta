@@ -8,24 +8,24 @@ CLI, web) talks to it over one control-plane protocol (ADR-0096).
 
 ## Concepts
 
-- **Session daemon** (`neenee serve`): one
+- **Session daemon** (`neenee daemon start`): one
   process per user that hosts and manages all sessions. It starts on demand
-  (the first `neenee` spawns it) or explicitly (`neenee serve`).
+  (the first `neenee` spawns it) or explicitly (`neenee daemon start`).
 - **Hosted sessions**: every session is daemon-held. It keeps running when
   its TUI closes, and any client can attach to it.
 - **Control plane**: the daemon's read/write API — observe (`Monitor`),
   drive (`Attach`), and manage (`CreateSession`, `SendPrompt`, `Interrupt`,
   `ResolvePermission`, `KillSession`).
-- **Control view**: `neenee status` in a terminal, `/dashboard` inside a TUI,
+- **Control view**: `neenee daemon status` in a terminal, `/dashboard` inside a TUI,
   or `neenee dashboard` to jump straight into that full-screen view from the
   shell.
 
 ## 1. Start (or don't) the daemon
 
 ```bash
-neenee serve              # foreground; prints the control-plane endpoints
-neenee serve --detach     # background (auto-started on first `neenee` anyway)
-neenee serve --public     # also listen on all interfaces with a mandatory bearer token
+neenee daemon start       # detached by default; --fg stays in the foreground
+# (detached is the default; auto-started on first `neenee` anyway)
+neenee daemon start --fg --public  # all interfaces + mandatory bearer token
 ```
 
 You usually never run this yourself — any `neenee` or `neenee attach` spawns
@@ -52,10 +52,10 @@ neenee attach <id>      # the round is still running (or just finished)
 Terminal, one-shot or live:
 
 ```bash
-neenee status              # sessions needing attention, across all projects
-neenee status --watch      # live table
-neenee status --all        # also list idle sessions
-neenee status --json       # raw monitor frames (scripts / a web panel)
+neenee daemon status       # sessions needing attention, across all projects
+neenee daemon status --watch      # live table
+neenee daemon status --all        # also list idle sessions
+neenee daemon status --json       # raw monitor frames (scripts / a web panel)
 ```
 
 Inside any TUI, press **`/dashboard`** (alias `/host`): a full-screen live
@@ -74,7 +74,7 @@ Or open it straight from the shell with **`neenee dashboard`** — no need to
 enter a session first. It attaches to the daemon's most-recently-active
 session only as the underlying carrier and raises the dashboard over it:
 **Esc quits**, **`a`** on a card attaches into that session. Like
-`neenee status`, it never spawns a daemon, so it needs a running host with at
+`neenee daemon status`, it never spawns a daemon, so it needs a running host with at
 least one session.
 
 ```text
@@ -106,7 +106,7 @@ verbs the web panel and scripts use (the TUI uses attach + `/dashboard`):
 | `Interrupt { session_id }` | Stop the current round |
 | `ResolvePermission { session_id, request_id, decision }` | Approve/reject a pending tool call |
 | `KillSession { session_id }` | Tear a session down |
-| `Shutdown` | Stop the daemon itself — the same graceful drain as Ctrl-C/SIGTERM (what `neenee stop` sends) |
+| `Shutdown` | Stop the daemon itself — the same graceful drain as Ctrl-C/SIGTERM (what `neenee daemon stop` sends) |
 
 Over the Unix socket (default) these need no token — the socket's `0600`
 permissions are the boundary. Over an exposed TCP listener every call needs
@@ -115,8 +115,8 @@ permissions are the boundary. Over an exposed TCP listener every call needs
 ## 5. Stop the daemon
 
 ```bash
-neenee stop              # graceful, through the control plane
-kill <pid>               # SIGTERM runs the same drain (pid is in `neenee status`)
+neenee daemon stop       # graceful, through the control plane
+kill <pid>               # SIGTERM runs the same drain (pid is in `neenee daemon status`)
 ```
 
 Both run the same budgeted drain: stop accepting, close live connections
@@ -132,7 +132,7 @@ for a ready systemd user unit.
 
 ## 6. Build your own panel
 
-`neenee status --json` emits the exact frames a control panel consumes. The
+`neenee daemon status --json` emits the exact frames a control panel consumes. The
 full contract — handshake roles, `MonitoredSession` fields, control verbs —
 is documented in [Server WebSocket API](../reference/server-api.md) and
 machine-readable in [`server.asyncapi.yaml`](../reference/server.asyncapi.yaml).
@@ -141,7 +141,7 @@ verbs; there is no separate web backend to run.
 
 ## Scope and limits
 
-- One daemon per user. `neenee status` aggregates every project; TUI `/dashboard`
+- One daemon per user. `neenee daemon status` aggregates every project; TUI `/dashboard`
   is the same view in-terminal.
 - Sessions outlive their TUIs by design — `KillSession` (or stopping the
   daemon) is how a session ends.
@@ -149,4 +149,4 @@ verbs; there is no separate web backend to run.
   daemon + control plane), [ADR-0093](../adr/0093-daemon-observability-monitor-protocol.md)
   (monitor protocol), [ADR-0054](../adr/0054-server-layer-followups.md)
   (loopback-default security), [ADR-0101](../adr/0101-daemon-shutdown-correctness.md)
-  (shutdown correctness: budgeted drain, signals, `neenee stop`).
+  (shutdown correctness: budgeted drain, signals, `neenee daemon stop`).

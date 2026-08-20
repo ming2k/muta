@@ -112,7 +112,7 @@ CI/CD environments and background developer machines:
 - **Scheduled Prompts (`/schedule`)**: Developers can configure recurring
   cron triggers or countdown timers for periodic health checks, dependency
   audits, or release verification reports.
-- **Observability Streams (`neenee status`)**: External dashboards, monitoring
+- **Observability Streams (`neenee daemon status --json`)**: External dashboards, monitoring
   scripts, and supervisor units observe live session states through
   stream-oriented JSON output or watch tables without interfering with
   running turns.

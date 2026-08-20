@@ -196,6 +196,31 @@ pub fn format_retry_duration(duration: std::time::Duration) -> String {
     }
 }
 
+/// The view-scoped chrome of one session: the activity-bar text, the
+/// responding flag, and the structural round/turn counters. Each session —
+/// the primary and every live `/btw` aside — owns an entry in
+/// [`App::session_chrome`], and a view renders exclusively from the entry of
+/// the session it displays ([`App::viewed_chrome`]). This is what keeps an
+/// aside view from inheriting the primary's activity bar (and vice versa):
+/// before this type existed these were single global fields, so whichever
+/// view was focused showed the *primary's* state no matter which session was
+/// actually streaming.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionChrome {
+    /// Activity-bar text ("" when idle). Per session: a background aside's
+    /// "running" status lives in its own entry, invisible to the main view.
+    pub activity: String,
+    /// Whether this session currently has a live round (drives the
+    /// breathing/spinner animation and Esc-to-interrupt arming).
+    pub responding: bool,
+    /// Round counter for this session (Activity modal's `round N`).
+    pub round_count: u64,
+    /// Current turn within this session's round (1-indexed for display).
+    pub current_turn: u64,
+    /// When this session's current round started (elapsed-timer segment).
+    pub round_started_at: Option<std::time::Instant>,
+}
+
 pub struct App {
     pub input: String,
     /// Structured transcript messages (semantic document model).
@@ -233,6 +258,21 @@ pub struct App {
     /// header aside count. Kept even while inside an aside view so jumping
     /// back never needs a round trip.
     pub btw_list: Vec<neenee_contracts::BtwAsideSummary>,
+    /// Per-session chrome (activity text, responding flag, round/turn
+    /// counters) for every session this client has observed, keyed by
+    /// `session_id` — the primary **and** every live aside. A view renders
+    /// from its own session's entry (see [`App::viewed_chrome`]), so an
+    /// aside view never inherits the primary's activity bar and the primary
+    /// never shows an aside's: chrome is view-scoped, not global (the
+    /// pre-scoped fields below remain the *primary's* entry and the source
+    /// of truth for the main view).
+    pub session_chrome: std::collections::HashMap<String, SessionChrome>,
+    /// The primary's chrome, saved when entering an aside view and restored
+    /// on exit. Entering swaps the *displayed* chrome to the aside's own
+    /// [`SessionChrome`] entry; exiting restores the primary's exactly as it
+    /// was (a running primary round keeps its activity bar, elapsed timer,
+    /// and counters across the aside detour).
+    pub saved_primary_chrome: Option<SessionChrome>,
     /// Scroll + follow slots for the asides modal (shared pattern with the
     /// sessions picker: `session_scroll` / `session_modal_follow`).
     pub btw_scroll: usize,
@@ -1914,6 +1954,27 @@ impl App {
         self.focused_target = None;
     }
 
+    /// The chrome of whichever session the user is currently viewing: the
+    /// focused aside's entry while in the aside view, the primary's
+    /// (carried by the legacy `App` fields) otherwise. Renderers must read
+    /// activity/round state through this accessor — never the bare fields —
+    /// so a view can only ever display its own session's status.
+    pub fn viewed_chrome(&self) -> SessionChrome {
+        if self.in_side_view
+            && let Some(side_id) = self.side_session_id.as_deref()
+            && let Some(chrome) = self.session_chrome.get(side_id)
+        {
+            return chrome.clone();
+        }
+        SessionChrome {
+            activity: self.activity_status.clone(),
+            responding: self.round_started_at.is_some() || !self.activity_status.is_empty(),
+            round_count: self.round_count,
+            current_turn: self.current_turn,
+            round_started_at: self.round_started_at,
+        }
+    }
+
     /// Zoom into an envoy task's child messages.
     pub fn enter_envoy(&mut self, call_id: String) {
         let saved_scroll = ScrollSnapshot {
@@ -1948,9 +2009,40 @@ impl App {
     /// zoom's `reset_view_state` so the swap feels identical to focusing a
     /// task step.
     pub fn enter_side_view(&mut self, side_id: String) {
-        self.side_session_id = Some(side_id);
+        self.side_session_id = Some(side_id.clone());
         self.in_side_view = true;
         self.parent_status = ParentStatus::Idle;
+        // View-scoped chrome (the aside-view activity-bar fix): snapshot the
+        // primary's live chrome, then swap the displayed chrome to the
+        // aside's own `SessionChrome` entry. A primary round still streaming
+        // in the background keeps its activity text, elapsed timer, and
+        // counters parked in `saved_primary_chrome`; the aside view shows
+        // only the aside's state — typically idle on entry ("new aside, no
+        // round"), or streaming if re-entering a running aside.
+        //
+        // The snapshot is taken only when none is parked: jumping between
+        // asides (A → B, or re-entering A) must not re-snapshot, because the
+        // displayed chrome at that moment is the *previous aside's* —
+        // overwriting would silently destroy the primary's parked state.
+        if self.saved_primary_chrome.is_none() {
+            self.saved_primary_chrome = Some(SessionChrome {
+                activity: self.activity_status.clone(),
+                responding: self.round_started_at.is_some() || !self.activity_status.is_empty(),
+                round_count: self.round_count,
+                current_turn: self.current_turn,
+                round_started_at: self.round_started_at,
+            });
+        }
+        if let Some(chrome) = self.session_chrome.get(&side_id).cloned() {
+            self.apply_chrome(&chrome);
+        } else {
+            // First entry: the aside has no chrome history yet — a fresh,
+            // idle surface. Clearing rather than inheriting is the point.
+            self.activity_status.clear();
+            self.round_started_at = None;
+            self.round_count = 0;
+            self.current_turn = 0;
+        }
         self.reset_view_state();
     }
 
@@ -1960,9 +2052,35 @@ impl App {
     /// full history without a refetch. The aside session stays live on the
     /// harness side until explicitly closed.
     pub fn exit_side_view(&mut self) {
+        // Restore the primary's parked chrome (the aside-view activity-bar
+        // fix): whatever the primary was doing when the user entered the
+        // aside — idle, or a round still streaming in the background — its
+        // activity bar, elapsed timer, and counters come back exactly as
+        // they were. Without this, exiting into a running primary would show
+        // the aside's (or a cleared) bar until the next primary event.
+        if let Some(primary) = self.saved_primary_chrome.take() {
+            self.apply_chrome(&primary);
+        } else {
+            // No snapshot exists only in a legacy in-process state that
+            // predates the snapshot write; clear to a neutral surface and
+            // let the next frame's per-session bookkeeping rebuild it.
+            self.activity_status.clear();
+            self.round_started_at = None;
+        }
         self.in_side_view = false;
         self.side_session_id = None;
         self.reset_view_state();
+    }
+
+    /// Overwrite the display chrome (the `App`-level fields the renderers
+    /// read) from a [`SessionChrome`] entry. The single write path for
+    /// view swaps; per-event updates during a round go through the
+    /// listener's routing instead.
+    fn apply_chrome(&mut self, chrome: &SessionChrome) {
+        self.activity_status = chrome.activity.clone();
+        self.round_started_at = chrome.round_started_at;
+        self.round_count = chrome.round_count;
+        self.current_turn = chrome.current_turn;
     }
 
     /// Cycle to the previous (`dir < 0`) or next (`dir > 0`) sibling envoy

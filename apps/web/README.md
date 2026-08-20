@@ -47,6 +47,7 @@ HTTP from WebSocket on one port, so the whole setup is
 ```sh
 neenee daemon start          # serves the panel on http://127.0.0.1:9800
 neenee panel                 # prints the URL, token included
+neenee panel open            # ...and launches the browser
 ```
 
 The daemon requires a bearer token by default (`[daemon] local_auth`); the

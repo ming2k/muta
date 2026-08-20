@@ -6,13 +6,11 @@
 
 use super::discovery::default_model_source_for_spec;
 use neenee_contracts::{SecretString, WireFormat};
-use neenee_persistence::config::{
-    Config, UserChannelConfig, UserProviderConfig, UserTransport,
-};
+use neenee_persistence::config::{Config, UserChannelConfig, UserProviderConfig, UserTransport};
 use neenee_providers::{
     ANTHROPIC_BUILTIN_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS,
-    OPENAI_BUILTIN_MODELS, OPENCODE_GO_SERVED_MODELS, OPENCODE_USER_AGENT,
-    ZAI_CODE_MODELS, ZCODE_USER_AGENT, provider_template_spec,
+    OPENAI_BUILTIN_MODELS, OPENCODE_GO_SERVED_MODELS, OPENCODE_USER_AGENT, ZAI_CODE_MODELS,
+    ZCODE_USER_AGENT, provider_template_spec,
 };
 
 pub fn migrate_legacy_provider_instances(config: &mut Config) -> bool {

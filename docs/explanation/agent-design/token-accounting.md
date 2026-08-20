@@ -77,13 +77,45 @@ number in `streamed_usage`, so there is no need to also drain the provider's
 stash (which may be empty or stale from a prior request). The `or_else` chain
 makes "we already have the streamed number" short-circuit cleanly.
 
-## The local char-class estimator
+## The local predictor: native BPE (with a char-class fallback)
 
-When no upstream usage is available, neenee estimates locally. The estimator
-lives in `crates/neenee-contracts/src/pressure.rs` (`count_tokens`) and replaces the
-old flat `bytes / 4` heuristic that the codebase carried for years.
+When no upstream usage is available, neenee predicts locally. Since ADR-0117
+the predictor is a **native byte-level BPE tokenizer**
+(`crates/neenee-contracts/src/tokenizer.rs`) implementing OpenAI's `tiktoken`
+for the `cl100k_base` encoding: text is split by the cl100k pretokenizer
+regex (a hand-rolled scanner — no `regex` dependency) and each pretoken's
+bytes are merged greedily by lowest rank (`byte_pair_merge`). The 100 256-rank
+vocabulary ships as a compact binary blob (`vendor/cl100k_base.packed`,
+1.04 MB) parsed once per process. Token prediction is therefore *exact* for
+models using that encoding family (GPT-3.5/4 and most OpenAI-compatible
+relays) and a close approximation for siblings (`o200k_base`); it is
+cross-validated against an offline tiktoken reference in
+`crates/neenee-contracts/tests/tokenizer_corpus.rs`.
 
-### Why `bytes / 4` was wrong
+Message-level estimation (`estimate_message_tokens`) additionally charges
+chat framing overhead — 4 tokens per message, 2 per tool call — measured the
+way tiktoken's chat examples account for chat-template structure that the
+client cannot see.
+
+The **char-class estimator** (`count_tokens_heuristic` in `pressure.rs`,
+ADR-0044) remains as a documented cheap fallback. It classifies each Unicode
+scalar into a category and adds a fractional per-character weight:
+
+| Category | Weight (tokens/char) | Rationale |
+|----------|:----:|-----------|
+| ASCII letter / digit / whitespace | 0.25 | English baseline: BPE merges ~4 chars/token |
+| CJK ideograph, kana, Hangul | 1.0 | Almost one token per glyph |
+| CJK + fullwidth punctuation (。，、？！) | 1.0 | Low-frequency, usually its own token |
+| Other non-ASCII letters (é, а, λ) | 0.5 | ~2 chars/token, denser than ASCII |
+| Code punctuation `(){}[];` `=+-*/` | 1.0 | Dense, rarely merges with neighbors |
+| Other ASCII punctuation (`. , " '`) | 0.5 | Merges more than operators, denser than words |
+
+Measured against real `cl100k_base` counts on this repository's own sources
+(mixed Chinese prose + Rust code), the char-class estimator ran **−24% to
+−54% low** — the direction that risks provider-side truncation — which is
+what motivated the BPE predictor.
+
+### History: why `bytes / 4` was replaced (ADR-0044)
 
 The old estimator divided the UTF-8 byte length by four. That ratio is a
 reasonable average for **English prose** — English words average about four
@@ -104,21 +136,12 @@ code**, and for both `bytes / 4` breaks badly:
   identifiers (`getUserSettingsFromDatabase`) merge more than the heuristic
   assumes. The net error is large and unstable.
 
-### The char-class model
+### The char-class model (legacy detail)
 
-The estimator classifies each Unicode scalar into a category and adds a
+The legacy estimator classifies each Unicode scalar into a category and adds a
 *fractional* per-character token weight, accumulating in fixed-point integer
 math (scaled by 256) and rounding once at the end. It is a single O(n) pass
 with no external vocabulary.
-
-| Category | Weight (tokens/char) | Rationale |
-|----------|:----:|-----------|
-| ASCII letter / digit / whitespace | 0.25 | English baseline: BPE merges ~4 chars/token |
-| CJK ideograph, kana, Hangul | 1.0 | Almost one token per glyph |
-| CJK + fullwidth punctuation (。，、？！) | 1.0 | Low-frequency, usually its own token |
-| Other non-ASCII letters (é, а, λ) | 0.5 | ~2 chars/token, denser than ASCII |
-| Code punctuation `(){}[];` `=+-*/` | 1.0 | Dense, rarely merges with neighbors |
-| Other ASCII punctuation (`. , " '`) | 0.5 | Merges more than operators, denser than words |
 
 The CJK ranges covered are: CJK Unified Ideographs (+ Extension A/B–F),
 Hiragana, Katakana (incl. halfwidth), Hangul Syllables, CJK Radicals, CJK

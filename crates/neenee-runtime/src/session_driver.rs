@@ -30,7 +30,7 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::UiBridge;
 use crate::session_view::{build_sessions_overview, provider_key_status};
-use crate::startup::StartupMode;
+use crate::startup::SessionStart;
 
 /// The owned state and request loop for one live session.
 ///
@@ -88,7 +88,7 @@ pub struct SessionDriver {
     pub project_root: PathBuf,
     /// Startup mode — read by the misplaced SessionStart-hooks block inside
     /// `/pursue status` (preserved verbatim; see note in [`Self::run`]).
-    pub startup: StartupMode,
+    pub startup: SessionStart,
     /// Whether the sessions picker should open on launch (`neenee resume`
     /// with no id).
     pub open_picker_on_start: bool,

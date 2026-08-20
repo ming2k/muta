@@ -1,37 +1,23 @@
+//! `neenee session …` (ADR-0116): the session noun. Removing lives here;
+//! *joining* a session is `neenee attach` (a top-level verb — it is the
+//! primary interactive act, not a sub-management task), and *listing* is
+//! `neenee daemon status` — the session table is the daemon's view of what
+//! it hosts, so a `session ls` would duplicate it verbatim.
+
+use crate::cli::SessionAction;
 use neenee_runtime::client;
 use neenee_runtime::serve::ControlRequest;
-use neenee_runtime::startup::SessionAction;
 use std::path::PathBuf;
 
 pub async fn run(
     action: SessionAction,
     project_override: Option<PathBuf>,
-    autopilot: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_root = project_override
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     match action {
-        SessionAction::List {
-            watch,
-            json,
-            include_idle,
-        } => {
-            crate::status::run(
-                &project_root,
-                crate::status::StatusOptions {
-                    watch,
-                    json,
-                    include_idle,
-                    diagnostic: false,
-                },
-            )
-            .await?;
-        }
-        SessionAction::Attach(id) => {
-            crate::run_attached(id, false, project_override, autopilot, false, None).await?;
-        }
         SessionAction::Delete(id) => {
             let info = client::discover(&project_root).ok_or_else(|| {
                 "no daemon is running. Start or discover one before managing sessions.".to_string()
@@ -46,10 +32,7 @@ pub async fn run(
                 },
             )
             .await?;
-            println!("Session '{}' has been terminated.", id);
-        }
-        SessionAction::Dashboard => {
-            crate::run_dashboard(project_override, autopilot).await?;
+            println!("Session '{id}' has been terminated.");
         }
     }
     Ok(())

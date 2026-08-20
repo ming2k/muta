@@ -34,6 +34,11 @@ pub enum WebSnapshotResult {
     NotModified { checked_at_ms: u64 },
 }
 
+/// Hard cap on any tool output destined for the model's context window, in
+/// bytes. Shared by websearch and webfetch so both tools behave the same;
+/// webfetch keeps half the budget when it truncates (see [`WebFetchTool`]).
+pub(crate) const WEB_OUTPUT_CAP_BYTES: usize = 16_000;
+
 /// Fetch a URL and return its text content (HTML stripped to text).
 pub struct WebFetchTool {
     config: Arc<WebSearchConfig>,
@@ -309,7 +314,8 @@ impl Tool for WebFetchTool {
     fn description(&self) -> &str {
         "Fetch the content of a web page or URL and return it as text. Use for reading \
          documentation, APIs, or any publicly accessible resource. HTML pages are converted to \
-         plain text. Output is truncated for very large pages."
+         plain text (Markdown via the Jina reader when `[websearch] reader = \"jina\"`). \
+         Output is truncated for very large pages."
     }
     fn parameters(&self) -> serde_json::Value {
         json!({
@@ -330,43 +336,62 @@ impl Tool for WebFetchTool {
         }
         // SSRF pre-flight: resolve the host and reject any non-public address
         // (metadata endpoint, loopback, RFC1918, link-local) before sending.
+        // This runs before any reader (builtin or third-party) so a private
+        // URL is never relayed to an external service either.
         crate::tools::ssrf::assert_public_url(url).await?;
         let raw = args["raw"].as_bool().unwrap_or(false);
         let client = self.client()?;
-        let response = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| format!("Request failed: {}", e))?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!("HTTP {} for {}", status, url));
-        }
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read body: {}", e))?;
-        let body = if raw || !content_type.contains("html") {
-            text
-        } else {
-            html_to_text(&text)
+        let reader = crate::tools::reader::build_reader(&self.config);
+        let reader_name = reader.name();
+        let output = match reader.read(client, url, raw).await {
+            Ok(output) => output,
+            Err(reader_err) if matches!(reader, crate::tools::reader::Reader::Jina(_)) => {
+                // The configured reader failed (network, quota, HTTP error).
+                // Fall back to the builtin direct fetch rather than failing
+                // the whole call — a degraded page beats no page — but keep
+                // the failure visible so misconfiguration is diagnosable.
+                let builtin = crate::tools::reader::Reader::Builtin;
+                let output = builtin.read(client, url, raw).await.map_err(|builtin_err| {
+                    format!("Jina reader failed: {reader_err}\nDirect fetch also failed: {builtin_err}")
+                })?;
+                annotate_with_reader_failure(url, output, &reader_err)
+            }
+            Err(err) => return Err(err),
         };
-        if body.len() > 16_000 {
+        let body = output.text;
+        let content_type = output.content_type;
+        if body.len() > WEB_OUTPUT_CAP_BYTES {
+            let keep = WEB_OUTPUT_CAP_BYTES / 2;
+            let tokens = neenee_contracts::tokenizer::count_tokens(&body);
             return Ok(format!(
-                "[Fetched {} chars from {}, truncated]\n{}\n\n[Use raw=true or a more specific URL for full content]",
-                body.len(),
-                url,
-                truncate_utf8(&body, 8_000)
+                "[Fetched {tokens} tokens from {url} (reader: {reader_name}, content-type: {content_type}), truncated]\n{}\n\n[Use raw=true or a more specific URL for full content]",
+                truncate_utf8(&body, keep)
             ));
         }
         Ok(body)
     }
+}
+
+/// Mark a page that was successfully fetched by the builtin fallback after
+/// the configured reader failed, so the model knows the extraction quality
+/// may be lower than configured (e.g. no JS rendering).
+fn annotate_with_reader_failure(
+    url: &str,
+    mut output: crate::tools::reader::ReaderOutput,
+    reader_err: &str,
+) -> crate::tools::reader::ReaderOutput {
+    let first_line: String = reader_err
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(160)
+        .collect();
+    output.text = format!(
+        "[Note: configured reader failed: {first_line}. Fell back to direct fetch for {url}; extraction may include page boilerplate.]\n\n{}",
+        output.text
+    );
+    output
 }
 
 /// Search the web via a pluggable backend. The provider (and an optional

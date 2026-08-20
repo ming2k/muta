@@ -4,6 +4,7 @@ use neenee_persistence::config::Config;
 use neenee_persistence::session;
 use neenee_runtime::client;
 use neenee_tui::start_tui;
+mod cli;
 mod commands;
 mod headless;
 mod identity;
@@ -13,15 +14,18 @@ mod status;
 /// Lives here (not in `neenee-agent`) so the engine stays identity-agnostic
 /// and a different frontend could reuse it as another agent.
 use crate::identity::{neenee_identity, principal_code};
-use neenee_runtime::startup::{
-    CliArgs, DaemonAction, StartupMode, completion_script, help_text, init_tracing, parse_args,
-};
+use cli::{CliArgs, DaemonAction, McpAction, Mode, PanelAction, SkillAction};
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _tracing_guard = init_tracing();
+    // Pre-parse for the instance-root flag (ADR-0121) so `--home` can be
+    // installed before *anything* resolves a path — tracing's log dir is
+    // the first consumer. A full re-parse below keeps error handling in one
+    // place; this pass only trusts the flag when the command line is valid.
+    install_home_override(&std::env::args().skip(1).collect::<Vec<_>>());
+    let _tracing_guard = neenee_runtime::startup::init_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -30,16 +34,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
+/// Install `--home` as the process-wide path override (ADR-0121).
+///
+/// Called from `main` before any `paths::get()` can cache a resolution.
+/// The flag is the CLI form of the instance-root selector and wins over
+/// the `NEENEE_HOME` env var; `set_default` is first-wins, so a later
+/// accidental second install is a no-op. Errors are deferred to the real
+/// parser in `run` — this pass stays silent so a malformed command line
+/// reports exactly once.
+fn install_home_override(args: &[String]) {
+    let mut iter = args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        if arg == "--home" {
+            if let Some(value) = iter.next() {
+                install_override(PathBuf::from(value));
+            }
+            return;
+        }
+        if let Some(value) = arg.strip_prefix("--home=").filter(|v| !v.is_empty()) {
+            install_override(PathBuf::from(value));
+            return;
+        }
+    }
+    // Absent flag: record the no-op so `installed_home` and the `run`
+    // consistency assertion stay well-defined.
+    let _ = INSTALLED_HOME.set(None);
+
+    fn install_override(home: PathBuf) {
+        // Restate the flag as its env form for every child process: the
+        // runtime's auto-spawn (`client::spawn_daemon`) and the detach path
+        // build fresh command lines that cannot inherit a flag, but they do
+        // inherit the environment. This makes `--home X` and
+        // `NEENEE_HOME=X` indistinguishable to any descendant — the flag is
+        // sugar over the env var, with identical inheritance semantics.
+        //
+        // SAFETY: called once from `main` before any thread exists, so no
+        // concurrent reader can observe the write (setenv is not thread-safe).
+        unsafe { std::env::set_var("NEENEE_HOME", &home) };
+        let dirs =
+            neenee_persistence::paths::Dirs::resolve(&neenee_persistence::paths::PathsOverride {
+                home: Some(home.clone()),
+                ..Default::default()
+            });
+        let _ = INSTALLED_HOME.set(Some(home));
+        if let Err(previous) = neenee_persistence::paths::set_default(dirs) {
+            tracing::debug!(
+                previous = ?previous,
+                "path override already installed; --home ignored"
+            );
+        }
+    }
+}
+
+/// The `--home` value the pre-parser installed, if any, for the
+/// consistency assertion in `run`. Kept separately from `paths::get()`
+/// because the resolver layers env below the flag: `NEENEE_HOME` alone
+/// also redirects every path without setting this.
+static INSTALLED_HOME: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+fn installed_home() -> Option<PathBuf> {
+    INSTALLED_HOME.get().cloned().flatten()
+}
+
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let CliArgs {
-        mut mode,
-        project: project_override,
-        autopilot: autopilot_at_start,
-        single_instance: _,
-        interactive,
-        remote,
-        token,
-    } = match parse_args(std::env::args().skip(1).collect()) {
+    let mut parsed = match cli::parse(&std::env::args().skip(1).collect::<Vec<_>>()) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("neenee: {error}\n\nRun 'neenee --help' for more information.");
@@ -47,275 +105,131 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Stdin pipeline detection: if stdin is piped, attach content to prompt
+    // Stdin pipeline detection: piped input becomes (or joins) the prompt.
+    // Only the prompt-bearing modes take it — piping into `neenee daemon
+    // status` is a shell mistake, not a headless run.
     use std::io::{self, IsTerminal, Read};
     let stdin_input = if !io::stdin().is_terminal() {
         let mut buffer = String::new();
         if io::stdin().read_to_string(&mut buffer).is_ok() {
             let trimmed = buffer.trim();
-            if !trimmed.is_empty() {
-                Some(trimmed.to_string())
-            } else {
-                None
-            }
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
         } else {
             None
         }
     } else {
         None
     };
-
     if let Some(piped) = stdin_input {
-        match mode {
-            StartupMode::Fresh => {
-                if interactive {
-                    mode = StartupMode::FreshWithPrompt(piped);
-                } else {
-                    mode = StartupMode::Headless {
-                        prompt: piped,
-                        json: false,
-                    };
-                }
-            }
-            StartupMode::FreshWithPrompt(p) => {
-                let combined = format!("{p}\n\n--- Standard Input ---\n{piped}");
-                if interactive {
-                    mode = StartupMode::FreshWithPrompt(combined);
-                } else {
-                    mode = StartupMode::Headless {
-                        prompt: combined,
-                        json: false,
-                    };
-                }
-            }
-            StartupMode::Headless { prompt, json } => {
-                let combined = format!("{prompt}\n\n--- Standard Input ---\n{piped}");
-                mode = StartupMode::Headless {
-                    prompt: combined,
-                    json,
+        match &parsed.mode {
+            Mode::Fresh | Mode::Run { .. } => {
+                let joined = match parsed.prompt.take() {
+                    Some(existing) => format!("{existing}\n\n--- Standard Input ---\n{piped}"),
+                    None => piped,
                 };
+                parsed.prompt = Some(joined);
             }
             _ => {}
         }
     }
 
-    if matches!(mode, StartupMode::Version) {
-        println!("neenee {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-
-    if let StartupMode::Help(topic) = &mode
-        && let Some(text) = help_text(topic.as_deref())
-    {
-        print!("{text}");
-        return Ok(());
-    }
-
-    if let StartupMode::Completions(shell) = &mode
-        && let Some(script) = completion_script(shell)
-    {
-        print!("{script}");
-        return Ok(());
-    }
-
-    #[cfg(debug_assertions)]
-    if let StartupMode::Showcase(component) = &mode {
-        return neenee_tui::showcase::run(component);
-    }
-
-    if matches!(mode, StartupMode::Doctor) {
-        session::run_doctor(project_override.as_deref()).await?;
-        return Ok(());
-    }
-
-    // Subcommands: config, auth, mcp, skill, session
-    if let StartupMode::Config(action) = mode {
-        return commands::config::run(action);
-    }
-
-    if let StartupMode::Auth(action) = mode {
-        return commands::auth::run(action);
-    }
-
-    if let StartupMode::Mcp(action) = mode {
-        return commands::mcp::run(action);
-    }
-
-    if let StartupMode::Skill(action) = mode {
-        return commands::skill::run(action).await;
-    }
-
-    if let StartupMode::Session(action) = mode {
-        return commands::session::run(action, project_override, autopilot_at_start).await;
-    }
-
-    // Daemon management (new subcommand & legacy serve/stop/status)
-    if let StartupMode::Daemon(action) = mode {
-        match action {
-            DaemonAction::Start {
-                port,
-                public,
-                detach,
-                idle_exit_minutes,
-                shutdown_grace_secs,
-                no_local_auth,
-                port_explicit,
-            } => {
-                return run_serve(
-                    port,
-                    public,
-                    detach,
-                    idle_exit_minutes,
-                    shutdown_grace_secs,
-                    no_local_auth,
-                    port_explicit,
-                )
-                .await;
-            }
-            DaemonAction::Stop => {
-                return stop_daemon().await.map_err(Into::into);
-            }
-            DaemonAction::Status {
-                watch,
-                json,
-                include_idle,
-                diagnostic,
-            } => {
-                let project_root = project_override.clone().unwrap_or_else(|| {
-                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                });
-                return status::run(
-                    &project_root,
-                    status::StatusOptions {
-                        watch,
-                        json,
-                        include_idle,
-                        diagnostic,
-                    },
-                )
-                .await
-                .map_err(Into::into);
-            }
+    // Resolve the Fresh/Run/headless intent once, here, where the terminal
+    // shape is known: an explicit `-p` or a non-terminal stdout means
+    // headless; `-i` forces the TUI; `run` is headless by definition.
+    if matches!(parsed.mode, Mode::Fresh) && !parsed.interactive {
+        let stdout_is_tty = io::stdout().is_terminal();
+        if parsed.prompt_from_flag || parsed.json || (parsed.prompt.is_some() && !stdout_is_tty) {
+            parsed.mode = Mode::Run {
+                prompt: parsed.prompt.clone().unwrap_or_default(),
+            };
         }
     }
 
-    // Headless execution mode
-    if let StartupMode::Headless { prompt, json } = mode {
-        return headless::run_headless(
-            prompt,
-            json,
-            project_override,
-            autopilot_at_start,
-            remote,
-            token,
-        )
-        .await;
-    }
-
-    // Interactive session with initial prompt
-    if let StartupMode::FreshWithPrompt(prompt) = mode {
-        return run_attached(
-            None,
-            true,
-            project_override,
-            autopilot_at_start,
-            false,
-            Some(prompt),
-        )
-        .await;
-    }
-
-    // Attach mode
-    if let StartupMode::Attach(session_id) = &mode {
-        return run_attached(
-            session_id.clone(),
-            false,
-            project_override,
-            autopilot_at_start,
-            false,
-            None,
-        )
-        .await;
-    }
-
-    if matches!(mode, StartupMode::Stop) {
-        return stop_daemon().await.map_err(Into::into);
-    }
-
-    if matches!(mode, StartupMode::Panel) {
-        return print_panel_url();
-    }
-
-    if let StartupMode::Serve {
-        port,
-        public,
-        detach,
-        idle_exit_minutes,
-        shutdown_grace_secs,
-        no_local_auth,
-        port_explicit,
-    } = &mode
-    {
-        return run_serve(
-            *port,
-            *public,
-            *detach,
-            *idle_exit_minutes,
-            *shutdown_grace_secs,
-            *no_local_auth,
-            *port_explicit,
-        )
-        .await;
-    }
-
-    if let StartupMode::Status {
-        watch,
-        json,
-        include_idle,
-        diagnostic,
-    } = &mode
-    {
-        let project_root = project_override
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        return status::run(
-            &project_root,
-            status::StatusOptions {
-                watch: *watch,
-                json: *json,
-                include_idle: *include_idle,
-                diagnostic: *diagnostic,
-            },
-        )
-        .await
-        .map_err(Into::into);
-    }
-
-    if matches!(mode, StartupMode::Dashboard) {
-        return run_dashboard(project_override, autopilot_at_start).await;
-    }
-
-    if matches!(
+    let CliArgs {
         mode,
-        StartupMode::Fresh | StartupMode::Resume(_) | StartupMode::Picker
-    ) {
-        let fresh = matches!(mode, StartupMode::Fresh);
-        let target = match &mode {
-            StartupMode::Resume(id) => id.clone(),
-            _ => None,
-        };
-        return run_attached(
-            target,
-            fresh,
-            project_override,
-            autopilot_at_start,
-            false,
-            None,
-        )
-        .await;
-    }
+        project: project_override,
+        autopilot: autopilot_at_start,
+        interactive,
+        prompt,
+        json: _,
+        remote,
+        token,
+        home,
+        ..
+    } = parsed;
 
-    Ok(())
+    // The pre-parser in `main` already installed the override; assert the
+    // two passes agree so the flag can never parse one way and install
+    // another (ADR-0121's single-source rule for path-layer flags).
+    debug_assert_eq!(home, installed_home());
+
+    match mode {
+        Mode::Version => {
+            println!("neenee {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Mode::Help(topic) => {
+            if let Some(text) = cli::help_text(topic.as_deref()) {
+                print!("{text}");
+            }
+            Ok(())
+        }
+        Mode::Completions(shell) => {
+            print!("{}", cli::completion_script(shell));
+            Ok(())
+        }
+        #[cfg(debug_assertions)]
+        Mode::Showcase(component) => neenee_tui::showcase::run(&component),
+        Mode::Doctor => session::run_doctor(project_override.as_deref())
+            .await
+            .map_err(Into::into),
+        Mode::Config(action) => commands::config::run(action),
+        Mode::Auth(action) => commands::auth::run(action),
+        Mode::Mcp(McpAction::List) => commands::mcp::run(),
+        Mode::Skill(SkillAction::List) => commands::skill::run().await,
+        Mode::Session(action) => commands::session::run(action, project_override).await,
+        Mode::Daemon(action) => run_daemon_action(action, project_override).await,
+        Mode::Panel(action) => run_panel(action),
+        Mode::Dashboard => run_dashboard(project_override, autopilot_at_start).await,
+        Mode::Attach { id } => {
+            run_attached(id, false, project_override, autopilot_at_start, false, None).await
+        }
+        Mode::Run { prompt } => {
+            if interactive {
+                // `run -i` deliberately switches to the TUI with the prompt.
+                run_attached(
+                    None,
+                    true,
+                    project_override,
+                    autopilot_at_start,
+                    false,
+                    Some(prompt),
+                )
+                .await
+            } else {
+                headless::run_headless(
+                    prompt,
+                    parsed.json,
+                    project_override,
+                    autopilot_at_start,
+                    remote,
+                    token,
+                )
+                .await
+            }
+        }
+        Mode::Fresh => {
+            run_attached(
+                None,
+                true,
+                project_override,
+                autopilot_at_start,
+                false,
+                prompt,
+            )
+            .await
+        }
+    }
 }
 
 /// Cap on how long exit is allowed to wait for the input-history write
@@ -350,10 +264,10 @@ async fn save_history_bounded(history: Vec<neenee_contracts::HistoryEntry>, dedu
     }
 }
 
-/// `neenee serve --detach`: spawn the daemon in the
-/// background and return immediately. If a daemon is already
-/// running for this user, report it instead of spawning a second one.
-fn detach_daemon() -> Result<(), String> {
+/// `neenee daemon start` (detached, the default): spawn the daemon in the
+/// background and return. If a daemon is already running, report it
+/// instead of spawning a second one.
+fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
     if let Some(info) = client::discover(std::path::Path::new(".")) {
         return Err(format!(
             "a neenee daemon is already running (pid {}, port {}). Stop it with `neenee stop` before starting another.",
@@ -362,7 +276,33 @@ fn detach_daemon() -> Result<(), String> {
     }
     let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("neenee"));
     let mut command = std::process::Command::new(&program);
-    command.arg("serve");
+    // The supervisor form: the child re-enters `daemon start --fg` —
+    // foreground by construction, its lifecycle flags from [daemon] config.
+    // No `--home` restatement needed: `install_home_override` restates the
+    // flag as `NEENEE_HOME` in this process's environment, and the child
+    // inherits it (ADR-0121).
+    command.args(["daemon", "start", "--fg"]);
+    // Every explicit start flag survives the detach: the child is the same
+    // start the operator asked for, minus the daemonization. Dropping them
+    // here would make `daemon start --port N` silently bind the default —
+    // exactly the class of lie a detached process can afford (nobody is
+    // watching its output). Only pass what was set: unset flags keep the
+    // [daemon]-config defaults the child resolves itself.
+    if let Some(port) = flags.port {
+        command.arg("--port").arg(port.to_string());
+    }
+    if flags.public {
+        command.arg("--public");
+    }
+    if flags.no_local_auth {
+        command.arg("--no-local-auth");
+    }
+    if let Some(minutes) = flags.idle_exit_minutes {
+        command.arg("--idle-exit").arg(minutes.to_string());
+    }
+    if let Some(secs) = flags.shutdown_grace_secs {
+        command.arg("--grace").arg(secs.to_string());
+    }
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -390,24 +330,66 @@ fn detach_daemon() -> Result<(), String> {
 /// one. The token is only ever printed on this explicit, operator-initiated
 /// request (never in daemon logs or banners); the panel persists it to
 /// localStorage on first visit.
-fn print_panel_url() -> Result<(), Box<dyn std::error::Error>> {
-    match client::discover(std::path::Path::new(".")) {
-        Some(info) => {
-            let mut url = format!("http://127.0.0.1:{}", info.port);
-            if let Some(token) = &info.token {
-                url.push_str(&format!("/?token={token}"));
-            }
-            println!("{url}");
-            Ok(())
-        }
-        None => Err("no neenee daemon is running (start one with `neenee daemon start`)".into()),
+/// `neenee panel url` / `neenee panel open` (ADR-0105): the web panel's
+/// address for the running daemon — with the bearer token as a query
+/// param when the daemon requires one. The token is only ever printed on
+/// this explicit, operator-initiated request (never in daemon logs or
+/// banners); the panel persists it to localStorage on first visit.
+///
+/// `url` prints (scripts, remote forwarding); `open` additionally hands
+/// the URL to the platform browser (`$BROWSER`, else xdg-open / open).
+/// The bare `neenee panel` prints — it was the verb's whole meaning
+/// before the subcommands existed, and a bare noun that opens a GUI is a
+/// surprise on headless boxes.
+fn panel_url(info: &client::DaemonInfo) -> String {
+    let mut url = format!("http://127.0.0.1:{}", info.port);
+    if let Some(token) = &info.token {
+        url.push_str(&format!("/?token={token}"));
     }
+    url
 }
 
-/// `neenee stop` (ADR-0100): stop the running daemon through the tiered
-/// shutdown pipeline (graceful control verb -> OS SIGTERM -> SIGKILL).
-/// Stopping a daemon that is not running (or whose record is stale) is a
-/// success — the operator's desired end state ("no daemon") is already true.
+fn run_panel(action: PanelAction) -> Result<(), Box<dyn std::error::Error>> {
+    let info = match client::discover(std::path::Path::new(".")) {
+        Some(info) => info,
+        None => {
+            return Err(
+                "no neenee daemon is running (start one with `neenee daemon start`)".into(),
+            );
+        }
+    };
+    let url = panel_url(&info);
+    match action {
+        PanelAction::Url => println!("{url}"),
+        PanelAction::Open => {
+            println!("{url}");
+            // Best-effort: a missing browser opener is a note, not an
+            // error — the URL is already on stdout for copy-paste.
+            let program = std::env::var("BROWSER").ok().filter(|b| !b.is_empty());
+            let (program, args): (String, Vec<String>) = match program {
+                Some(b) => (b, vec![url.clone()]),
+                None if cfg!(target_os = "macos") => ("open".to_string(), vec![url.clone()]),
+                None => ("xdg-open".to_string(), vec![url.clone()]),
+            };
+            match std::process::Command::new(&program)
+                .args(&args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(_) => {}
+                Err(e) => eprintln!("neenee: could not launch {program} ({e}); open {url}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `neenee daemon stop` (ADR-0100/0116): stop the running daemon through
+/// the budget-aware shutdown pipeline (graceful control verb → SIGTERM →
+/// SIGKILL). Stopping a daemon that is not running (or whose record is
+/// stale) is a success — the operator's desired end state ("no daemon")
+/// is already true.
 async fn stop_daemon() -> Result<(), String> {
     let info = match client::discover(std::path::Path::new(".")) {
         Some(info) => info,
@@ -417,7 +399,7 @@ async fn stop_daemon() -> Result<(), String> {
                 if client::is_process_alive(pid) {
                     client::DaemonInfo {
                         pid,
-                        port: neenee_runtime::startup::DEFAULT_SERVE_PORT,
+                        port: neenee_runtime::startup::env_default_port(),
                         token: None,
                         project_root: String::new(),
                         started_at: 0,
@@ -426,6 +408,7 @@ async fn stop_daemon() -> Result<(), String> {
                         #[cfg(not(unix))]
                         uds_path: None,
                         version: None,
+                        grace_secs: None,
                     }
                 } else {
                     eprintln!("neenee: no daemon is running.");
@@ -441,8 +424,6 @@ async fn stop_daemon() -> Result<(), String> {
     eprintln!("neenee: daemon stopped (pid {}).", info.pid);
     Ok(())
 }
-
-/// `neenee dashboard` entry: open the full-screen session dashboard directly.
 ///
 /// The dashboard's data (the live `MonitorEvent` snapshot) and its control
 /// verbs (interrupt / prompt / create) ride their own daemon connections, so
@@ -510,28 +491,94 @@ async fn run_dashboard(
     .await
 }
 
-async fn run_serve(
-    port: u16,
+/// `neenee daemon <action>` dispatch (ADR-0116: the daemon noun owns
+/// start/stop/status; the retired top-level spellings route here too).
+async fn run_daemon_action(
+    action: DaemonAction,
+    project_override: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match action {
+        DaemonAction::Start {
+            foreground,
+            port,
+            public,
+            no_local_auth,
+            idle_exit_minutes,
+            shutdown_grace_secs,
+        } => {
+            if !foreground {
+                return detach_daemon(&DaemonStart {
+                    port,
+                    public,
+                    no_local_auth,
+                    idle_exit_minutes,
+                    shutdown_grace_secs,
+                })
+                .map_err(Into::into);
+            }
+            run_daemon_foreground(DaemonStart {
+                port,
+                public,
+                no_local_auth,
+                idle_exit_minutes,
+                shutdown_grace_secs,
+            })
+            .await
+        }
+        DaemonAction::Stop => stop_daemon().await.map_err(Into::into),
+        DaemonAction::Status {
+            watch,
+            json,
+            include_idle,
+            diagnostic,
+        } => {
+            let project_root = project_override
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            status::run(
+                &project_root,
+                status::StatusOptions {
+                    watch,
+                    json,
+                    include_idle,
+                    diagnostic,
+                },
+            )
+            .await
+            .map_err(Into::into)
+        }
+    }
+}
+
+/// The daemon-start flags that reach the runtime (one struct, one place).
+struct DaemonStart {
+    port: Option<u16>,
     public: bool,
-    detach: bool,
+    no_local_auth: bool,
     idle_exit_minutes: Option<u64>,
     shutdown_grace_secs: Option<u64>,
-    no_local_auth: bool,
-    port_explicit: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if detach {
-        return detach_daemon().map_err(Into::into);
-    }
+}
+
+/// `neenee daemon start`: detached unless `--fg`. Detaching is the default
+/// because the user asked for a *daemon*; `--fg` is the supervisor shape
+/// (systemd/tmux foreground processes).
+async fn run_daemon_foreground(flags: DaemonStart) -> Result<(), Box<dyn std::error::Error>> {
     let mut lifecycle = neenee_runtime::host::LifecycleOptions::from_config();
-    if let Some(minutes) = idle_exit_minutes {
+    if let Some(minutes) = flags.idle_exit_minutes {
         lifecycle.idle_exit = match minutes {
             0 => None,
             m => Some(std::time::Duration::from_secs(m * 60)),
         };
     }
-    if let Some(secs) = shutdown_grace_secs {
+    if let Some(secs) = flags.shutdown_grace_secs {
         lifecycle.shutdown_grace = std::time::Duration::from_secs(secs.max(1));
     }
+    // An explicitly requested port must fail loudly when taken; only the
+    // default port falls back to ephemeral (ADR-0105). The *default* itself
+    // honours NEENEE_PORT so an isolated instance (ADR-0121) takes its own
+    // port instead of contending with the host daemon on 9800.
+    let port = flags
+        .port
+        .unwrap_or(neenee_runtime::startup::env_default_port());
     let outcome = neenee_runtime::host::run_with_gate(
         neenee_runtime::host::HostIdentity {
             identity: neenee_identity(),
@@ -540,19 +587,17 @@ async fn run_serve(
         },
         neenee_runtime::host::HostOptions {
             port,
-            expose: if public {
+            expose: if flags.public {
                 neenee_runtime::serve::ServeExpose::Public
             } else {
                 neenee_runtime::serve::ServeExpose::Local
             },
             token: None,
-            // CLI flag wins over config; both default to the secure posture
-            // (loopback token on, ADR-0105).
-            local_auth: !no_local_auth
+            // CLI flag wins over config; both default to the secure
+            // posture (loopback token on, ADR-0105).
+            local_auth: !flags.no_local_auth
                 && neenee_persistence::config::Config::load().daemon.local_auth,
-            // An explicitly requested port must fail loudly when taken; only
-            // the default port falls back to ephemeral (ADR-0105).
-            port_fallback: !port_explicit,
+            port_fallback: flags.port.is_none(),
             #[cfg(unix)]
             uds_path: Some(neenee_runtime::serve_discovery::default_uds_path()),
         },
@@ -566,7 +611,8 @@ async fn run_serve(
         }
         neenee_runtime::host::RunOutcome::ForcedExit { reason } => {
             eprintln!(
-                "neenee: daemon stopped ({reason}); grace budget expired, stragglers were aborted — see the log."
+                "neenee: daemon stopped ({reason}); grace budget expired, stragglers were \
+                 aborted — see the log."
             );
         }
         neenee_runtime::host::RunOutcome::StartupFailed(what) => {
@@ -603,6 +649,10 @@ async fn run_attached(
     // Only the very first connect may create a fresh session; the `/host`
     // re-attach loop below always targets an explicit existing id.
     let mut fresh_pending = fresh;
+    // `neenee attach` with no id picks interactively (ADR-0116): the first
+    // connect opens the TUI sessions picker over a throwaway carrier; the
+    // picker's `/sessions <id>` exit re-attaches through `switch_to`.
+    let mut pick_pending = session_id.is_none() && !fresh;
     let mut autopilot_pending = autopilot_at_start;
     // `neenee dashboard` raises the dashboard over the carrier session on the
     // first TUI entry only; a `/host` switch re-attaches into an ordinary
@@ -613,13 +663,16 @@ async fn run_attached(
     loop {
         let action = match &target {
             Some(id) => client::AttachAction::Attach(Some(id.clone())),
-            // Bare `neenee` asks for a brand-new session unconditionally;
-            // `neenee resume` (no id) leaves the choice to the daemon
-            // (auto-bind a lone session, Pick when several exist).
+            // Bare `neenee` asks for a brand-new session unconditionally.
             None if fresh_pending => client::AttachAction::New,
+            // `neenee attach` with no id opens the TUI picker (ADR-0116).
+            None if pick_pending => client::AttachAction::Picker,
+            // Auto-bind a lone session (the daemon decides; several mean
+            // the picker, which the Pick fallback below turns interactive).
             None => client::AttachAction::Attach(None),
         };
         fresh_pending = false;
+        pick_pending = false;
         let handshake = client::connect(&info, action).await?;
         let (tx, rx, hosted_session_id, round_counter, transcript, provider, model) =
             match handshake {
@@ -640,13 +693,35 @@ async fn run_attached(
                     provider,
                     model,
                 ),
-                client::Handshake::Pick(sessions) => {
-                    eprintln!("Multiple sessions are available on the daemon:");
-                    for sess in &sessions {
-                        eprintln!("  {}  ({} messages)", sess.id, sess.message_count);
+                // A daemon that answers `Pick` wants the user to choose.
+                // Choosing is interactive (ADR-0116): reconnect as a picker
+                // carrier and let the TUI modal do the listing, with fuzzy
+                // filter, detail pane, and Enter-to-open — not a printed
+                // stderr list that makes the user copy an id by hand.
+                client::Handshake::Pick(_) => {
+                    let handshake = client::connect(&info, client::AttachAction::Picker).await?;
+                    match handshake {
+                        client::Handshake::Attached {
+                            req_tx,
+                            resp_rx,
+                            session_id,
+                            round_counter,
+                            history,
+                            provider,
+                            model,
+                        } => (
+                            req_tx,
+                            resp_rx,
+                            session_id,
+                            round_counter,
+                            history,
+                            provider,
+                            model,
+                        ),
+                        client::Handshake::Pick(_) => {
+                            return Err("the daemon offered no session to pick from".into());
+                        }
                     }
-                    eprintln!("Re-run with a specific id: neenee attach <id>");
-                    return Ok(());
                 }
             };
         if autopilot_pending {

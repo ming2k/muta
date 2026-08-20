@@ -44,6 +44,19 @@ pub struct WebSearchConfig {
     /// `provider = "bocha"`. Directly reachable from mainland China networks,
     /// so it works without a proxy.
     pub bocha_api_key: Option<crate::SecretString>,
+    /// Jina Reader API key (r.jina.ai). Optional — the reader works
+    /// anonymously with a lower rate limit; a key raises the quota.
+    pub jina_api_key: Option<crate::SecretString>,
+    /// Page-content backend used by `webfetch` for HTML pages. One of:
+    /// `"builtin"` (default; direct fetch + local HTML stripping — zero
+    /// third-party dependency, but naive extraction that keeps boilerplate),
+    /// or `"jina"` (r.jina.ai Reader: server-side rendering including
+    /// JavaScript, readability-style extraction, Markdown output; sends the
+    /// URL to a third party and adds one network hop).
+    ///
+    /// This is the "depth" half of the two-stage research pipeline
+    /// (websearch = breadth, webfetch = depth); see ADR-0117.
+    pub reader: String,
 }
 
 impl Default for WebSearchConfig {
@@ -58,6 +71,8 @@ impl Default for WebSearchConfig {
             searxng_url: None,
             tavily_api_key: None,
             bocha_api_key: None,
+            jina_api_key: None,
+            reader: "builtin".to_string(),
         }
     }
 }

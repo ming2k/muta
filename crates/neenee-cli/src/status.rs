@@ -106,6 +106,15 @@ pub(crate) fn format_diagnostics(diag: &DaemonDiagnostics) -> String {
     let mut out = String::new();
     out.push_str("neenee daemon — system status & diagnostics:\n");
 
+    // Instance scope first (ADR-0121): every path below reads differently
+    // once the reader knows whether this client resolves the host instance
+    // or an isolated `NEENEE_HOME` sandbox.
+    out.push_str(&format!(
+        "  Instance:          {} (default port {})\n",
+        diag.instance_dir.display(),
+        diag.default_port
+    ));
+
     // Discovery record
     out.push_str("  Discovery Record: ");
     match &diag.discovery_record {
@@ -345,6 +354,7 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use neenee_contracts::SessionForkKind;
 
     fn row(id: &str, status: SessionStatus) -> MonitoredSession {
         MonitoredSession {
@@ -365,6 +375,8 @@ mod tests {
             note: None,
             project_root: "/tmp/project".into(),
             wip: None,
+            parent_id: None,
+            fork_kind: SessionForkKind::default(),
         }
     }
 
@@ -428,10 +440,30 @@ mod tests {
         assert_eq!(fmt_elapsed(3_900_000), "1h05m");
     }
 
+    fn base_diag() -> DaemonDiagnostics {
+        DaemonDiagnostics {
+            instance_dir: std::path::PathBuf::from("/run/user/1000/neenee"),
+            default_port: 9800,
+            discovery_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.json"),
+            discovery_record: None,
+            discovery_valid: true,
+            lock_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.lock"),
+            lock_held: false,
+            lock_holder_pid: None,
+            lock_holder_alive: false,
+            uds_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.sock"),
+            uds_exists: false,
+            uds_connectable: false,
+            tcp_port: 9800,
+            tcp_listening: false,
+            startup_log_path: std::path::PathBuf::from("/tmp/startup.log"),
+            last_startup_log: None,
+        }
+    }
+
     #[test]
     fn diagnostics_formatter_renders_healthy_state() {
         let diag = DaemonDiagnostics {
-            discovery_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.json"),
             discovery_record: Some(neenee_runtime::client::DaemonInfo {
                 pid: 12345,
                 port: 9800,
@@ -442,47 +474,58 @@ mod tests {
                     "/run/user/1000/neenee/daemon.sock",
                 )),
                 version: Some("0.25.1".to_string()),
+                grace_secs: Some(10),
             }),
             discovery_valid: true,
-            lock_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.lock"),
             lock_held: true,
             lock_holder_pid: Some(12345),
             lock_holder_alive: true,
-            uds_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.sock"),
             uds_exists: true,
             uds_connectable: true,
-            tcp_port: 9800,
             tcp_listening: true,
-            startup_log_path: std::path::PathBuf::from("/tmp/startup.log"),
-            last_startup_log: None,
+            ..base_diag()
         };
         let text = format_diagnostics(&diag);
         assert!(text.contains("PID 12345"), "{text}");
         assert!(text.contains("HELD by PID 12345"), "{text}");
         assert!(text.contains("Daemon is running and healthy"), "{text}");
+        // The instance scope line leads the report (ADR-0121).
+        assert!(text.contains("Instance:"), "{text}");
+        assert!(text.contains("default port 9800"), "{text}");
     }
 
     #[test]
     fn diagnostics_formatter_detects_ghost_daemon() {
         let diag = DaemonDiagnostics {
-            discovery_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.json"),
-            discovery_record: None,
             discovery_valid: false,
-            lock_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.lock"),
             lock_held: true,
             lock_holder_pid: Some(9999),
             lock_holder_alive: true,
-            uds_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.sock"),
             uds_exists: true,
             uds_connectable: false,
-            tcp_port: 9800,
             tcp_listening: false,
-            startup_log_path: std::path::PathBuf::from("/tmp/startup.log"),
             last_startup_log: Some("panic: something went wrong".to_string()),
+            ..base_diag()
         };
         let text = format_diagnostics(&diag);
         assert!(text.contains("Ghost daemon detected"), "{text}");
         assert!(text.contains("HELD by PID 9999"), "{text}");
         assert!(text.contains("panic: something went wrong"), "{text}");
+    }
+
+    #[test]
+    fn diagnostics_formatter_names_the_sandbox_instance() {
+        // A sandboxed client (ADR-0121) must be identifiable at a glance:
+        // the report's first data line names the instance dir and the
+        // client-resolved default port, so "two daemons, one discovered"
+        // becomes a one-command diagnosis.
+        let mut diag = base_diag();
+        diag.instance_dir = std::path::PathBuf::from("/tmp/neenee-dev/neenee/instance");
+        diag.default_port = 9801;
+        let text = format_diagnostics(&diag);
+        assert!(
+            text.contains("/tmp/neenee-dev/neenee/instance (default port 9801)"),
+            "{text}"
+        );
     }
 }

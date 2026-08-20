@@ -13,14 +13,14 @@ and for day-to-day use see
 ┌─ neenee (the CLI) ──────────────── every verb is a client call
 │    serve / attach / status
 │
-├─ neenee serve (the daemon) ─────── one process per user; owns every session
+├─ neenee daemon start (the daemon) ─ one process per user; owns every session
 │    session plane:  a SessionRegistry hosting N sessions across N projects
 │    control plane:  observe (Monitor) · drive (Attach) · manage (Control)
 │      ├─ Unix socket  (default; file permissions are the auth boundary)
 │      └─ TCP + token  (--public; for LAN clients and the web panel)
 │
 └─ clients ───────────────────────── all speak the control plane
-     TUI (/host, attach)   neenee status   a web control panel   scripts
+     TUI (/host, attach)   neenee daemon status   a web control panel   scripts
 ```
 
 One user-level daemon — not one per project, not one per session — holds
@@ -69,10 +69,17 @@ Two transports carry it:
 - **Unix domain socket** (default, `$XDG_RUNTIME_DIR/neenee/daemon.sock`) —
   the local channel for the CLI and TUI. `0600` in a `0700` runtime dir;
   the filesystem *is* the authentication, so no token.
-- **TCP + bearer token** (`neenee serve --public`) — for LAN clients and
+- **TCP + bearer token** (`neenee daemon start --fg --public`) — for LAN clients and
   the web panel. Exposing is always an explicit opt-in that carries a token
   (ADR-0054's model); TLS is fronted by a reverse proxy. See
   [How to expose the daemon to LAN clients](../how-to/expose-the-daemon-to-lan-clients.md).
+
+These locations describe the default instance. A second neenee that must
+not share them — a development build beside an installed daemon, a test
+suite — redirects socket, lock, discovery record, and port together with
+`NEENEE_HOME` / `NEENEE_PORT`
+([ADR-0121](../adr/0121-instance-isolation-for-development-and-testing.md));
+the two daemons then coexist with no shared state at all.
 
 A web control panel is therefore a static page that opens the monitor stream
 and calls control verbs — no web-specific server exists or is needed.
@@ -81,7 +88,7 @@ and calls control verbs — no web-specific server exists or is needed.
 
 1. Any `neenee` or `neenee attach` finds no live daemon record
    (`daemon.json`) and spawns the daemon detached; or you run
-   `neenee serve [--detach]` yourself.
+   `neenee daemon start` yourself (detached by default; `--fg` for supervisors).
 2. The daemon binds the UDS (always) and a TCP port (loopback by default,
    exposed with `--public`), writes the global discovery record, and waits.
 3. Sessions are created on demand (a client's attach, or a control

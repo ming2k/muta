@@ -10,14 +10,24 @@ Each XDG category resolves through the same fixed precedence, highest first.
 
 | # | Source | Notes |
 |---|--------|-------|
-| 1 | CLI flag | Reserved for `--config-dir`, `--data-dir`, `--state-dir`, `--cache-dir` plumbing (not yet wired) |
-| 2 | `NEENEE_CONFIG_DIR`, `NEENEE_DATA_DIR`, `NEENEE_STATE_DIR`, `NEENEE_CACHE_DIR` | App-specific env override |
-| 3 | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | Standard XDG env override; relative values ignored per spec |
-| 4 | Native per-OS default | `directories` crate: `~/.config` etc. on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows |
-| 5 | `$HOME/.config`, `$HOME/.local/share`, `$HOME/.local/state`, `$HOME/.cache` | Spec default when nothing else applies |
-| 6 | Current working directory | Last resort; never panics |
+| 1 | `--home <dir>` | Instance root (ADR-0121): the CLI form of the `NEENEE_HOME` selector; wins over the env var |
+| 2 | `NEENEE_CONFIG_DIR`, `NEENEE_DATA_DIR`, `NEENEE_STATE_DIR`, `NEENEE_CACHE_DIR` | App-specific env override; more specific than the root, so one category can be carved out of a sandbox |
+| 3 | `NEENEE_HOME` | Instance root (ADR-0121): `<dir>/neenee/{config,data,state,cache}` + `<dir>/neenee/instance` for daemon runtime files. One variable isolates the entire footprint — the dev/test sandbox shape. Relative or empty values are ignored |
+| 4 | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | Standard XDG env override; relative values ignored per spec |
+| 5 | Native per-OS default | `directories` crate: `~/.config` etc. on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows |
+| 6 | `$HOME/.config`, `$HOME/.local/share`, `$HOME/.local/state`, `$HOME/.cache` | Spec default when nothing else applies |
+| 7 | Current working directory | Last resort; never panics |
 
 All four categories honour the same stack — no per-subsystem special cases.
+The instance root sits *below* the per-category variables (specific beats
+general) and *above* the `XDG_*` layer, so one sandbox switch wins over the
+ambient desktop environment.
+
+The daemon runtime files resolve through the same idea, terminated by
+[`instance_dir`]: `--home`/`NEENEE_HOME` (`<dir>/neenee/instance`) >
+`$XDG_RUNTIME_DIR/neenee` > data dir fallback. `NEENEE_PORT` is the
+port-layer sibling: it overrides the well-known 9800 default (an explicit
+`--port` still wins).
 
 ## Config — `$XDG_CONFIG_HOME/neenee/`
 
@@ -101,19 +111,22 @@ Derived, deletable, repopulated on demand. Safe to delete.
 
 Default location: `~/.cache/neenee/`.
 
-## Runtime — `$XDG_RUNTIME_DIR/neenee/` (Linux only)
+## Runtime — the daemon instance dir
 
-Ephemeral per-login. Honoured only when the environment provides
-`XDG_RUNTIME_DIR`; otherwise neenee falls back to state. Never assume
-runtime exists.
+Ephemeral per daemon. By default `$XDG_RUNTIME_DIR/neenee/` on Linux;
+moved wholesale to `<dir>/neenee/instance` by the instance root selector
+(`--home` / `NEENEE_HOME`, ADR-0121). Never assume the default location
+exists.
 
 | Path | Purpose | Lossy? |
 |------|---------|--------|
-| `neenee.lock` | Cross-process advisory lock | Ephemeral |
+| `daemon.lock` | Cross-process single-instance `flock` | Ephemeral |
 | `daemon.json` | Unified session-daemon discovery record (pid, TCP port, UDS path, token when exposed, daemon `version`); written on startup after the port is bound, removed on every shutdown path — graceful, forced, or panic (ADR-0096/0101) | Ephemeral |
-| `daemon.lock` | Single-instance `flock` for the daemon (ADR-0101): a second daemon waits here bounded instead of stealing the socket | Ephemeral |
 | `daemon.sock` | The daemon's Unix-domain control-plane socket (0600); removed on shutdown (ADR-0096) | Ephemeral |
 | `serve/<bucket>.json` | Legacy pre-ADR-0096 per-project discovery records; ignored by current clients (harmless litter) | Ephemeral |
+
+Without any override, the daemon falls back to the data directory for these
+files when `$XDG_RUNTIME_DIR` is unset.
 
 ## Project working tree (not under XDG)
 
@@ -145,6 +158,25 @@ The override stack is identical; only the fallback locations differ.
 | Cache | `~/Library/Caches/neenee` | `%LOCALAPPDATA%\neenee\cache` |
 
 `XDG_*_HOME` env vars still take precedence over these on every platform.
+
+## Isolated instances (development and testing)
+
+`--home <dir>` (or `NEENEE_HOME=<dir>`) gives neenee a fully separate
+footprint: config, credentials, sessions, skills, logs, the daemon's
+socket/lock/discovery record, and (via `NEENEE_PORT`) the default TCP port.
+A sandboxed client spawns its on-demand daemon with the inherited
+environment, so the daemon lands in the same sandbox — the host
+installation's daemon and data are never touched.
+
+| Purpose | Command |
+|---------|---------|
+| Run one command isolated | `neenee --home /tmp/x <args>` |
+| Isolate a whole shell / CI step | `export NEENEE_HOME=/tmp/x NEENEE_PORT=9801` |
+| Run the test suites isolated | `export NEENEE_HOME=$(mktemp -d)` then `cargo test` |
+| Confirm which instance a client sees | `neenee --home /tmp/x daemon status --diagnostic` |
+
+See [ADR-0121](../adr/0121-instance-isolation-for-development-and-testing.md)
+for the decision record.
 
 ## Cleanup quick reference
 

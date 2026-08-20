@@ -8,6 +8,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod reader;
 pub mod search;
 mod ssrf;
 

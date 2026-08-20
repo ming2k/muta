@@ -382,10 +382,7 @@ const GOOGLE_ANTIGRAVITY_CLIENT_ID: &str = concat!(
     "tmhssin2h21lcre235vtolojh4g403ep",
     ".apps.googleusercontent.com"
 );
-const GOOGLE_ANTIGRAVITY_CLIENT_SECRET: &str = concat!(
-    "GOCSPX-",
-    "K58FWR486LdLJ1mLB8sXC4z6qDAf"
-);
+const GOOGLE_ANTIGRAVITY_CLIENT_SECRET: &str = concat!("GOCSPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf");
 
 // ─────────────────────────────────────────────────────────────────────────────
 
