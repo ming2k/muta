@@ -12,6 +12,9 @@
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Owner-only protection applied to every file we write and its leaf parent:
 /// Unix uses `0600`/`0700`; Windows uses protected current-user DACLs. Config
@@ -23,27 +26,53 @@ fn create_parent_dir(path: &Path) -> std::io::Result<()> {
     neenee_platform::secure_file::create_private_parent(path)
 }
 
-/// Create `path` for writing with owner-only permissions from the moment it
-/// exists, so there is never a window where the file is group/world-readable.
-fn create_private_file(path: &Path) -> std::io::Result<File> {
-    neenee_platform::secure_file::create_private_file(path)
+/// Atomically claim a unique temporary file beside `destination`.
+///
+/// The old fixed `<destination>.tmp` name let concurrent writers open or
+/// truncate the same file. On Unix that could silently splice writes; Windows
+/// surfaced the race as a sharing violation. A process id plus monotonic
+/// sequence makes collisions exceptional, while `create_new` is the actual
+/// race-free guarantee across threads and processes.
+fn create_temporary_file(destination: &Path) -> std::io::Result<(PathBuf, File)> {
+    let Some(file_name) = destination.file_name() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "atomic-write destination must name a file",
+        ));
+    };
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    for _ in 0..1_024 {
+        let sequence = TEMPORARY_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let mut temporary_name = file_name.to_os_string();
+        temporary_name.push(format!(".tmp.{}.{sequence}", std::process::id()));
+        let temporary = parent.join(temporary_name);
+        match neenee_platform::secure_file::create_new_private_file(&temporary) {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate a unique atomic-write temporary file",
+    ))
 }
 
-/// Write `bytes` atomically: serialise to `<path>.tmp`, `fsync`, `rename` over
-/// `path`, then best-effort `fsync` of `path`'s parent directory.
+/// Write `bytes` atomically: serialise to a uniquely claimed same-directory
+/// temporary file, `fsync`, rename over `path`, then best-effort `fsync` of
+/// `path`'s parent directory.
 ///
 /// The temp file and leaf parent are owner-only from creation (`0600`/`0700`
 /// on Unix, protected current-user DACLs on Windows), so secrets never pass
 /// through a broadly readable state.
 ///
 /// Returns the original [`std::io::Error`] on any failure. The temporary file
-/// is best-effort cleaned up on failure (its presence is not itself corrupting —
-/// the next successful write will overwrite it).
+/// is best-effort cleaned up on failure. A crash may leave that uniquely named
+/// sibling behind, but no later write will open or trust it.
 pub fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     create_parent_dir(path)?;
-    let temporary = path.with_extension("tmp");
+    let (temporary, mut file) = create_temporary_file(path)?;
     let result = (|| -> std::io::Result<()> {
-        let mut file = create_private_file(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
@@ -140,10 +169,11 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"name\": \"ok\""));
         assert!(text.contains("\"n\": 7"));
-        assert!(
-            !dir.join("payload.tmp").exists(),
-            "temp file must be cleaned up"
-        );
+        let entries = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(entries, vec![std::ffi::OsString::from("payload.json")]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -170,6 +200,49 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"name\": \"v2\""));
         assert!(!text.contains("v1"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn concurrent_atomic_writers_use_disjoint_temporary_files() {
+        let dir =
+            std::env::temp_dir().join(format!("neenee-fsutil-{}-concurrent", uuid::Uuid::new_v4()));
+        let path = dir.join("payload.json");
+        let payloads = (0..16)
+            .map(|index| format!("writer-{index}:{}", "x".repeat(16_384)))
+            .collect::<Vec<_>>();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(payloads.len()));
+        let writers = payloads
+            .iter()
+            .cloned()
+            .map(|payload| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    atomic_write_bytes(&path, payload.as_bytes())
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for writer in writers {
+            writer.join().unwrap().unwrap();
+        }
+        let final_payload = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            payloads.contains(&final_payload),
+            "the destination must contain one complete writer payload"
+        );
+        let leftovers = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| name.to_string_lossy().contains(".tmp."))
+            .collect::<Vec<_>>();
+        assert!(
+            leftovers.is_empty(),
+            "temporary files leaked: {leftovers:?}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

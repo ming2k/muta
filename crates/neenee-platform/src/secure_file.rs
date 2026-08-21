@@ -12,6 +12,15 @@ pub fn create_private_file(path: &Path) -> io::Result<File> {
     native::create_private_file(path)
 }
 
+/// Exclusively create a new owner-only file.
+///
+/// Unlike [`create_private_file`], this never truncates an existing path. It
+/// is the primitive atomic writers use to claim a unique temporary pathname
+/// without a check-then-create race.
+pub fn create_new_private_file(path: &Path) -> io::Result<File> {
+    native::create_new_private_file(path)
+}
+
 /// Atomically replace `destination` with the same-filesystem temporary file
 /// at `source`, including Windows' explicit replace-existing semantics.
 pub fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
@@ -36,6 +45,14 @@ mod native {
             .write(true)
             .create(true)
             .truncate(true)
+            .mode(0o600)
+            .open(path)
+    }
+
+    pub(super) fn create_new_private_file(path: &Path) -> io::Result<File> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
             .mode(0o600)
             .open(path)
     }
@@ -79,7 +96,7 @@ mod native {
         SetFileSecurityW,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CREATE_ALWAYS, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
+        CREATE_ALWAYS, CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
         MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
     };
 
@@ -106,6 +123,14 @@ mod native {
     }
 
     pub(super) fn create_private_file(path: &Path) -> io::Result<File> {
+        open_private_file(path, CREATE_ALWAYS)
+    }
+
+    pub(super) fn create_new_private_file(path: &Path) -> io::Result<File> {
+        open_private_file(path, CREATE_NEW)
+    }
+
+    fn open_private_file(path: &Path, creation_disposition: u32) -> io::Result<File> {
         let wide = wide(path);
         let descriptor = SecurityDescriptor::current_user_only()?;
         let attributes = SECURITY_ATTRIBUTES {
@@ -121,7 +146,7 @@ mod native {
                 GENERIC_READ | GENERIC_WRITE,
                 FILE_SHARE_READ,
                 &attributes,
-                CREATE_ALWAYS,
+                creation_disposition,
                 FILE_ATTRIBUTE_NORMAL,
                 ptr::null_mut(),
             )

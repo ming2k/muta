@@ -766,6 +766,14 @@ pub struct SessionStore {
     sessions_dir: PathBuf,
     blob_store: BlobStore,
     state: Mutex<SessionState>,
+    /// FIFO commit gate for snapshot writes.
+    ///
+    /// State mutations are ordered by `state`, but snapshot I/O runs on the
+    /// blocking pool after that guard is released. Without a second ordered
+    /// gate, two callers could write the same snapshot concurrently and an
+    /// older clone could replace a newer one. Tokio's mutex is FIFO, so callers
+    /// reserve persistence in the same order they leave their state mutation.
+    persist_gate: Mutex<()>,
 }
 
 impl SessionStore {
@@ -835,6 +843,7 @@ impl SessionStore {
                 data,
                 defer_persist,
             }),
+            persist_gate: Mutex::new(()),
         }
     }
 
@@ -862,6 +871,7 @@ impl SessionStore {
                 // Fresh primary session: defer until it gains real content.
                 defer_persist: true,
             }),
+            persist_gate: Mutex::new(()),
         }
     }
 
@@ -1738,6 +1748,7 @@ impl SessionStore {
                 // An already-materialised side session persists eagerly.
                 defer_persist: false,
             }),
+            persist_gate: Mutex::new(()),
         })
     }
 
@@ -1982,6 +1993,10 @@ impl SessionStore {
         data: SessionData,
         blob_store: BlobStore,
     ) -> Result<(), String> {
+        // Every mutator calls this immediately after releasing `state` and
+        // awaits the result. The FIFO gate therefore preserves mutation order
+        // while the actual fsync-heavy work remains off the async executor.
+        let _persist_guard = self.persist_gate.lock().await;
         // `spawn_blocking` is the right primitive: this is real blocking I/O,
         // not async work. `BlockingError` only occurs at runtime shutdown, in
         // which case the session is tearing down anyway — surface it as a
