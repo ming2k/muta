@@ -65,7 +65,7 @@ struct PermissionState {
 /// request channels, and the optional project root for on-disk persistence.
 pub struct PermissionStore {
     state: Mutex<PermissionState>,
-    project_root: Mutex<Option<std::path::PathBuf>>,
+    persistence: Mutex<Option<PermissionPersistence>>,
     /// When true, the agent runs **autopilot** — without human intervention:
     /// no permission confirmations, no questions. Operationally this skips the
     /// permission prompt entirely (and bypasses the allowlist wholesale), but
@@ -78,11 +78,22 @@ pub struct PermissionStore {
     autopilot: Mutex<bool>,
 }
 
+/// Stable on-disk target for one project's permissions.
+///
+/// Resolve the concrete file once when the project is bound. Re-reading the
+/// process-wide path resolver on every mutation would let a later environment
+/// or test override silently redirect one store between different files.
+#[derive(Clone)]
+struct PermissionPersistence {
+    project_root: std::path::PathBuf,
+    file: std::path::PathBuf,
+}
+
 impl PermissionStore {
     pub fn new() -> Self {
         Self {
             state: Mutex::new(PermissionState::default()),
-            project_root: Mutex::new(None),
+            persistence: Mutex::new(None),
             autopilot: Mutex::new(false),
         }
     }
@@ -280,24 +291,41 @@ impl PermissionStore {
 
     /// The persisted project root, if any.
     pub fn project_root(&self) -> Option<std::path::PathBuf> {
-        lock(&self.project_root).clone()
+        lock(&self.persistence)
+            .as_ref()
+            .map(|target| target.project_root.clone())
     }
 
     /// Designate the project whose bucket backs the persistent "always"
     /// allowlist, and load any rules already on disk into the in-memory set.
     /// Pass `None` to disable persistence (envoys and most tests do this).
     pub fn set_project_root(&self, root: Option<std::path::PathBuf>) {
-        {
-            *lock(&self.project_root) = root.clone();
-        }
-        if let Some(root) = root {
-            self.load_persistent(&root);
+        self.set_project_root_with_dirs(root, &neenee_persistence::paths::get());
+    }
+
+    /// Bind a project using an explicit path capability.
+    ///
+    /// Production callers normally use [`Self::set_project_root`], which
+    /// snapshots the installed application directories. The explicit form is
+    /// also the hermetic test seam: tests can supply isolated directories
+    /// without mutating process-wide environment or path overrides.
+    pub(crate) fn set_project_root_with_dirs(
+        &self,
+        root: Option<std::path::PathBuf>,
+        dirs: &neenee_persistence::paths::Dirs,
+    ) {
+        let target = root.map(|project_root| PermissionPersistence {
+            file: dirs.project_permissions(&project_root),
+            project_root,
+        });
+        *lock(&self.persistence) = target.clone();
+        if let Some(target) = target {
+            self.load_persistent(&target.file);
         }
     }
 
-    fn load_persistent(&self, root: &std::path::Path) {
-        let path = neenee_persistence::paths::get().project_permissions(root);
-        let Ok(text) = std::fs::read_to_string(&path) else {
+    fn load_persistent(&self, path: &std::path::Path) {
+        let Ok(text) = std::fs::read_to_string(path) else {
             return;
         };
         match serde_json::from_str::<PersistedPermissions>(&text) {
@@ -345,11 +373,11 @@ impl PermissionStore {
     /// into the project bucket. Best-effort: logs on failure and never
     /// propagates the error.
     fn persist(&self) {
-        let root = lock(&self.project_root).clone();
-        let Some(root) = root else {
+        let target = lock(&self.persistence).clone();
+        let Some(target) = target else {
             return;
         };
-        let path = neenee_persistence::paths::get().project_permissions(&root);
+        let path = target.file;
         let snapshot = {
             let perms = lock(&self.state);
             let mut rules: Vec<PermissionRule> = perms.always.iter().cloned().collect();
@@ -569,22 +597,18 @@ mod tests {
     fn revoked_set_persists_across_load() {
         // The revoked set round-trips through the on-disk file: revoke, persist,
         // reload into a fresh store, and the seed still skips the rule.
-        //
-        // Hermetic: this test touches `paths::get()`, which reads
-        // `NEENEE_DATA_DIR`. Other permission tests mutate that env var under
-        // `ENV_GUARD`; without acquiring the same guard this test would race
-        // them and read a polluted env. Pin a private data dir and serialize.
-        let _guard = crate::tests::ENV_GUARD.blocking_lock();
         let tmp = ScratchDir::new();
-        // SAFETY: `ENV_GUARD` is held, so no other test observes this var and
-        // it is removed before the guard is released.
-        unsafe {
-            std::env::set_var("NEENEE_DATA_DIR", tmp.path());
-        }
+        let dirs = neenee_persistence::paths::Dirs {
+            config_dir: tmp.path().join("config"),
+            data_dir: tmp.path().join("data"),
+            state_dir: tmp.path().join("state"),
+            cache_dir: tmp.path().join("cache"),
+            runtime_dir: None,
+        };
         let project_root = tmp.path().to_path_buf();
 
         let store = PermissionStore::new();
-        store.set_project_root(Some(project_root.clone()));
+        store.set_project_root_with_dirs(Some(project_root.clone()), &dirs);
         let rule = PermissionRuleConfig {
             tool: "bash".to_string(),
             scope: "git push".to_string(),
@@ -594,7 +618,7 @@ mod tests {
 
         // A fresh store pointed at the same bucket loads the revoked set.
         let reloaded = PermissionStore::new();
-        reloaded.set_project_root(Some(project_root));
+        reloaded.set_project_root_with_dirs(Some(project_root), &dirs);
         reloaded.seed_from_config(std::slice::from_ref(&rule));
         assert!(
             !reloaded.is_always_allowed(&PermissionRule {
@@ -603,9 +627,5 @@ mod tests {
             }),
             "revocation must survive a restart (persisted revoked set)"
         );
-
-        unsafe {
-            std::env::remove_var("NEENEE_DATA_DIR");
-        }
     }
 }

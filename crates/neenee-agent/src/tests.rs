@@ -2,16 +2,6 @@ use super::*;
 use futures::stream::{self, BoxStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Serialises tests that mutate process-wide env vars (`NEENEE_DATA_DIR`).
-/// Tests that touch env vars MUST take this lock to avoid racing other
-/// parallel tests that read paths via [`neenee_persistence::paths::get`].
-///
-/// `pub(crate)` so sibling `#[cfg(test)]` modules (e.g.
-/// `permission_store::tests`) that also resolve project paths through
-/// `paths::get()` share the same serialization point instead of racing the
-/// env-mutating tests.
-pub(crate) static ENV_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 struct TestProvider;
 struct HintProvider;
 struct PermissionTestProvider(AtomicUsize);
@@ -2138,16 +2128,17 @@ async fn autopilot_hides_ask_user_from_the_advertised_toolset() {
 
 #[tokio::test]
 async fn always_permission_persists_across_agents_for_same_project() {
-    let _guard = ENV_GUARD.lock().await;
     let tmp = std::env::temp_dir().join(format!("neenee-perms-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp).expect("create temp data dir");
-    // `paths::get()` reads `NEENEE_DATA_DIR` on every call (no caching), so
-    // pointing the env var at a tempdir redirects the project bucket there.
-    unsafe {
-        std::env::set_var("NEENEE_DATA_DIR", &tmp);
-    }
+    let dirs = neenee_persistence::paths::Dirs {
+        config_dir: tmp.join("config"),
+        data_dir: tmp.join("data"),
+        state_dir: tmp.join("state"),
+        cache_dir: tmp.join("cache"),
+        runtime_dir: None,
+    };
     let project_root = std::path::PathBuf::from("/tmp/neenee-perms-fixture-project");
-    let perms_path = neenee_persistence::paths::get().project_permissions(&project_root);
+    let perms_path = dirs.project_permissions(&project_root);
 
     // First agent: prompt for a write_test permission and approve Always.
     let agent = Arc::new(Agent::new(
@@ -2155,7 +2146,7 @@ async fn always_permission_persists_across_agents_for_same_project() {
         vec![Arc::new(WriteTestTool)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_project_root(Some(project_root.clone()));
+    agent.set_project_root_with_dirs(Some(project_root.clone()), &dirs);
     assert!(agent.allowed_tools().is_empty());
 
     let call = ToolCall {
@@ -2206,7 +2197,7 @@ async fn always_permission_persists_across_agents_for_same_project() {
         vec![Arc::new(WriteTestTool)],
         crate::AgentIdentity::default(),
     ));
-    agent2.set_project_root(Some(project_root.clone()));
+    agent2.set_project_root_with_dirs(Some(project_root.clone()), &dirs);
     assert_eq!(
         agent2.allowed_tools(),
         vec!["write_test /tmp/test".to_string()],
@@ -2227,28 +2218,28 @@ async fn always_permission_persists_across_agents_for_same_project() {
         vec![Arc::new(WriteTestTool)],
         crate::AgentIdentity::default(),
     );
-    agent3.set_project_root(Some(other_root));
+    agent3.set_project_root_with_dirs(Some(other_root), &dirs);
     assert!(
         agent3.allowed_tools().is_empty(),
         "unrelated project must not inherit another project's rules"
     );
 
-    unsafe {
-        std::env::remove_var("NEENEE_DATA_DIR");
-    }
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[tokio::test]
 async fn agent_without_project_root_never_writes_permissions_file() {
-    let _guard = ENV_GUARD.lock().await;
     let tmp = std::env::temp_dir().join(format!("neenee-perms-noset-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&tmp).expect("create temp data dir");
-    unsafe {
-        std::env::set_var("NEENEE_DATA_DIR", &tmp);
-    }
+    let dirs = neenee_persistence::paths::Dirs {
+        config_dir: tmp.join("config"),
+        data_dir: tmp.join("data"),
+        state_dir: tmp.join("state"),
+        cache_dir: tmp.join("cache"),
+        runtime_dir: None,
+    };
     let project_root = std::path::PathBuf::from("/tmp/neenee-perms-noset-fixture");
-    let perms_path = neenee_persistence::paths::get().project_permissions(&project_root);
+    let perms_path = dirs.project_permissions(&project_root);
 
     // No set_project_root call: the agent stays ephemeral, so an Always
     // approval must not write any file (envoys behave the same way).
@@ -2266,9 +2257,6 @@ async fn agent_without_project_root_never_writes_permissions_file() {
         "ephemeral agent must not create a permissions file"
     );
 
-    unsafe {
-        std::env::remove_var("NEENEE_DATA_DIR");
-    }
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

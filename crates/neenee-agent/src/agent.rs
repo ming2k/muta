@@ -2048,6 +2048,17 @@ impl Agent {
         self.permissions.set_project_root(root);
     }
 
+    /// Test seam for binding project persistence to an explicit directory
+    /// capability without mutating process-wide path state.
+    #[cfg(test)]
+    pub(crate) fn set_project_root_with_dirs(
+        &self,
+        root: Option<std::path::PathBuf>,
+        dirs: &neenee_persistence::paths::Dirs,
+    ) {
+        self.permissions.set_project_root_with_dirs(root, dirs);
+    }
+
     /// Seed declarative permission rules from `[permissions]` config. Delegates
     /// to `PermissionStore::seed_from_config`.
     pub fn seed_permissions_from_config(
