@@ -621,6 +621,19 @@ mod tests {
         }
     }
 
+    /// Native absolute paths for scope-policy tests. Unix-looking paths such
+    /// as `/home/user` are drive-relative on Windows and therefore test a
+    /// different rule than intended.
+    fn scoped_test_paths() -> (PathBuf, PathBuf, PathBuf) {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let granted = base.join("neenee-policy-granted");
+        let inside = granted.join("notes.md");
+        let outside = base.join("neenee-policy-outside").join("secret.txt");
+        (granted, inside, outside)
+    }
+
     #[tokio::test]
     async fn disabled_policy_denies() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
@@ -653,12 +666,13 @@ mod tests {
     #[tokio::test]
     async fn scope_gate_autopilot_blocks_out_of_scope() {
         // No user reachable → an out-of-scope call is hard-denied (safety floor).
+        let (granted, _inside, outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
-            target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            target: ScopeTarget::Path(outside.clone()),
         });
         let op = neenee_contracts::OperationScope {
-            paths: Some(vec![PathBuf::from("/home/user")]),
+            paths: Some(vec![granted]),
             commands: None,
         };
         let disabled = HashSet::new();
@@ -670,7 +684,7 @@ mod tests {
             &tool,
             "write_file",
             "{}",
-            ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            ScopeTarget::Path(outside),
             true, // autopilot
             op.clone(),
             disabled.clone(),
@@ -686,12 +700,13 @@ mod tests {
     #[tokio::test]
     async fn scope_gate_attended_hands_out_of_scope_to_user() {
         // A human is reachable → the gate passes; the broker (next gate) asks.
+        let (granted, _inside, outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
-            target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            target: ScopeTarget::Path(outside.clone()),
         });
         let op = neenee_contracts::OperationScope {
-            paths: Some(vec![PathBuf::from("/home/user")]),
+            paths: Some(vec![granted]),
             commands: None,
         };
         let disabled = HashSet::new();
@@ -703,7 +718,7 @@ mod tests {
             &tool,
             "write_file",
             "{}",
-            ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            ScopeTarget::Path(outside),
             false, // attended
             op.clone(),
             disabled.clone(),
@@ -719,12 +734,13 @@ mod tests {
     #[tokio::test]
     async fn scope_gate_in_scope_passes_regardless_of_autopilot() {
         // Inside the granted scope → always passes (broker applies as usual).
+        let (granted, inside, _outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
-            target: ScopeTarget::Path(PathBuf::from("/home/user/notes.md")),
+            target: ScopeTarget::Path(inside.clone()),
         });
         let op = neenee_contracts::OperationScope {
-            paths: Some(vec![PathBuf::from("/home/user")]),
+            paths: Some(vec![granted]),
             commands: None,
         };
         let disabled = HashSet::new();
@@ -736,7 +752,7 @@ mod tests {
             &tool,
             "write_file",
             "{}",
-            ScopeTarget::Path(PathBuf::from("/home/user/notes.md")),
+            ScopeTarget::Path(inside),
             true,
             op.clone(),
             disabled.clone(),
@@ -812,12 +828,13 @@ mod tests {
         // #10: an attended out-of-scope call reaches the broker (the soft gate
         // passes it), and the broker's Ask request must carry elevation: true so
         // the TUI renders the distinct ⚠ treatment.
+        let (granted, _inside, outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
-            target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            target: ScopeTarget::Path(outside.clone()),
         });
         let op = neenee_contracts::OperationScope {
-            paths: Some(vec![PathBuf::from("/home/user")]),
+            paths: Some(vec![granted]),
             commands: None,
         };
         let disabled = HashSet::new();
@@ -829,7 +846,7 @@ mod tests {
             &tool,
             "write_file",
             "{}",
-            ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            ScopeTarget::Path(outside),
             false,
             op.clone(),
             disabled.clone(),
@@ -845,12 +862,13 @@ mod tests {
     #[tokio::test]
     async fn broker_in_scope_ask_is_not_elevation() {
         // An in-scope call's Ask must carry elevation: false (routine prompt).
+        let (granted, inside, _outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
-            target: ScopeTarget::Path(PathBuf::from("/home/user/a")),
+            target: ScopeTarget::Path(inside.clone()),
         });
         let op = neenee_contracts::OperationScope {
-            paths: Some(vec![PathBuf::from("/home/user")]),
+            paths: Some(vec![granted]),
             commands: None,
         };
         let disabled = HashSet::new();
@@ -862,7 +880,7 @@ mod tests {
             &tool,
             "write_file",
             "{}",
-            ScopeTarget::Path(PathBuf::from("/home/user/a")),
+            ScopeTarget::Path(inside),
             false,
             op.clone(),
             disabled.clone(),

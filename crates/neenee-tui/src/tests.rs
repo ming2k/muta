@@ -1307,6 +1307,8 @@ fn is_explicit_path_prefix_recognizes_all_shell_conventions() {
     assert!(is_explicit_path_prefix("~"));
     assert!(is_explicit_path_prefix("/"));
     assert!(is_explicit_path_prefix("/etc/host"));
+    #[cfg(windows)]
+    assert!(is_explicit_path_prefix(r"C:\Users\runner\notes"));
     assert!(is_explicit_path_prefix("../src/fo"));
     assert!(is_explicit_path_prefix("~/notes/a"));
     // Plain relative queries are NOT explicit — they use the project scan.
@@ -1349,14 +1351,24 @@ fn resolve_explicit_dir_home_prefix_uses_home() {
 
 #[test]
 fn resolve_explicit_dir_absolute_prefix_uses_root() {
-    // `/etc/h` resolves to `/etc` with prefix `h`, independent of cwd.
-    let dummy_cwd = std::path::PathBuf::from("/some/project");
-    let (dir, prefix) = resolve_explicit_dir("/etc/h", &dummy_cwd).expect("resolved");
-    assert_eq!(
-        dir,
-        std::path::PathBuf::from("/etc").canonicalize().unwrap()
-    );
+    // A native absolute query resolves to its parent with the final component
+    // as prefix, independent of cwd (drive/root semantics vary by platform).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let expected = tmp.path().canonicalize().unwrap();
+    let query = tmp.path().join("h").display().to_string();
+    let (dir, prefix) = resolve_explicit_dir(&query, tmp.path()).expect("resolved");
+    assert_eq!(dir, expected);
     assert_eq!(prefix, "h");
+}
+
+#[cfg(windows)]
+#[test]
+fn resolve_explicit_dir_accepts_native_windows_separators() {
+    let cwd = std::path::Path::new(r"D:\workspace\neenee");
+    let (dir, prefix) =
+        resolve_explicit_dir(r"C:\Users\runner\notes\draft", cwd).expect("resolved");
+    assert_eq!(dir, std::path::PathBuf::from(r"C:\Users\runner\notes"));
+    assert_eq!(prefix, "draft");
 }
 
 #[test]

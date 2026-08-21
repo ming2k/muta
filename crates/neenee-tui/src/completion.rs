@@ -319,11 +319,17 @@ pub(super) fn path_query_match(path: &str, query: &str) -> bool {
 /// - `../` / `..` — parent of the project root
 /// - `./` / `.`   — explicit current dir (rare, but unambiguous)
 /// - `~/` / `~`   — the user's home directory
-/// - `/`          — filesystem root
+/// - `/`          — filesystem root/current-drive root
+/// - Windows drive/UNC paths (with either separator)
 ///
 /// A plain relative segment like `src/` is NOT explicit and keeps using the
 /// project scan, so the common case is unaffected.
 pub(super) fn is_explicit_path_prefix(query: &str) -> bool {
+    #[cfg(windows)]
+    let query = query.replace('\\', "/");
+    #[cfg(not(windows))]
+    let query = query.to_string();
+
     query.starts_with("../")
         || query == ".."
         || query.starts_with("./")
@@ -331,6 +337,7 @@ pub(super) fn is_explicit_path_prefix(query: &str) -> bool {
         || query.starts_with("~/")
         || query == "~"
         || query.starts_with('/')
+        || std::path::Path::new(&query).is_absolute()
 }
 
 /// Expand an explicit-path query into `(absolute_dir, name_prefix)`: the
@@ -352,33 +359,34 @@ pub(super) fn resolve_explicit_dir(
 ) -> Option<(std::path::PathBuf, String)> {
     use std::path::PathBuf;
 
-    // The base the leading prefix anchors to, plus the remainder of the query
-    // that still travels with it (e.g. `../src/fo` → base cwd, remainder
-    // `../src/fo`; `~/notes/a` → base home, remainder `notes/a`).
-    let (base, remainder): (PathBuf, &str) =
-        if let Some(rest) = query.strip_prefix("~/").or_else(|| query.strip_prefix("~")) {
-            let home = dirs::home_dir().or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-            (home.unwrap_or_default(), rest)
-        } else if let Some(rest) = query.strip_prefix('/') {
-            (PathBuf::from("/"), rest)
-        } else {
-            // `../`, `./`, bare `..`/`.` — resolve relative to the project root
-            // captured at startup (NOT the live process cwd, which can drift).
-            (cwd.to_path_buf(), query)
-        };
+    // Windows users naturally type both separators; forward slashes are also
+    // accepted by Windows path APIs and give the parser one stable grammar.
+    #[cfg(windows)]
+    let query = query.replace('\\', "/");
+    #[cfg(not(windows))]
+    let query = query.to_string();
 
-    // Split the remainder into its directory portion + trailing name prefix.
-    // `../src/fo` → dir `../src`, prefix `fo`. A remainder with no `/` (e.g.
-    // `@~foo` after stripping `~`) means everything is the prefix and the
-    // directory is just the base.
-    let last_sep = remainder.rfind('/');
-    let dir = match last_sep {
-        Some(idx) => base.join(&remainder[..=idx]),
-        None => base,
+    let home = || dirs::home_dir().or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+    let (expanded, names_directory) = if query == "~" {
+        (home()?, true)
+    } else if let Some(rest) = query.strip_prefix("~/") {
+        (home()?.join(rest), query.ends_with('/'))
+    } else {
+        // PathBuf::join implements native root/prefix replacement: Unix `/`,
+        // Windows drive roots, rooted current-drive paths and UNC prefixes all
+        // retain their OS meaning. Relative `.`/`..` remain anchored to the
+        // project cwd captured at startup.
+        (
+            cwd.join(std::path::Path::new(&query)),
+            query.ends_with('/') || matches!(query.as_str(), "." | ".."),
+        )
     };
-    let name_prefix = match last_sep {
-        Some(idx) => remainder[idx + 1..].to_string(),
-        None => remainder.to_string(),
+
+    let (dir, name_prefix) = if names_directory {
+        (expanded, String::new())
+    } else {
+        let prefix = expanded.file_name()?.to_string_lossy().into_owned();
+        (expanded.parent()?.to_path_buf(), prefix)
     };
 
     // Canonicalize so the candidates we render are clean absolute paths with

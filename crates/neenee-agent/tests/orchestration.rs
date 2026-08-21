@@ -178,10 +178,21 @@ impl Provider for ToolThenRetryProvider {
         request: neenee_contracts::ModelRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>, String>
     {
+        let mut messages = serde_json::to_value(&request.messages)
+            .expect("messages should serialize to a JSON value");
+        for message in messages
+            .as_array_mut()
+            .expect("serialized messages should be an array")
+        {
+            message
+                .as_object_mut()
+                .expect("serialized message should be an object")
+                .remove("timestamp");
+        }
         self.requests
             .lock()
             .expect("request log lock poisoned")
-            .push(serde_json::to_string(&request.messages).expect("messages should serialize"));
+            .push(serde_json::to_string(&messages).expect("messages should serialize"));
         let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
         match attempt {
             0 | 2 => Ok(Box::pin(stream::iter(vec![Ok(
@@ -781,8 +792,10 @@ async fn retry_resumes_stopped_round_without_breaking_turn_sequence() {
         window.iter().any(|message| message.content == "recovered"),
         "the resumed round's answer is committed"
     );
-    // Both provider requests carried the same one-message history: the
-    // resume re-sent the committed checkpoint verbatim.
+    // Both provider requests carried the same semantic history. The system
+    // prompt is projected afresh for each request and its local diagnostic
+    // timestamp may advance; timestamp is not provider protocol content and
+    // is removed by the request recorder above.
     let logged = requests.lock().expect("request log lock poisoned").clone();
     assert_eq!(logged.len(), 2);
     assert_eq!(

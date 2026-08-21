@@ -916,6 +916,10 @@ mod tests {
             // previously degraded this test to asserting nothing).
             let text = std::fs::read_to_string(path)
                 .unwrap_or_else(|e| panic!("corpus file {path} unreadable: {e}"));
+            // Reference counts are generated from the repository's canonical
+            // LF form. Git may materialize CRLF on Windows, which is a checkout
+            // policy difference rather than tokenizer drift.
+            let text = text.replace("\r\n", "\n");
             let text = &text[..text.len().min(40_000)];
             let got = t.count(text);
             let drift = (got as f64 - *expected as f64).abs() / *expected as f64;

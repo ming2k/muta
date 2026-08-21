@@ -118,25 +118,38 @@ mod native {
 mod native {
     use std::fs::File;
     use std::io;
-    use std::mem::zeroed;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, UnlockFileEx,
     };
     use windows_sys::Win32::System::IO::OVERLAPPED;
 
+    /// A byte far beyond the diagnostic PID text. Windows byte-range locks
+    /// block reads through the locked range, so locking from offset zero made
+    /// `probe_holder` unreadable while the lock was doing its job. Windows
+    /// permits locking beyond EOF; every participant contends on this same
+    /// single sentinel byte while the human-readable metadata stays readable.
+    const LOCK_BYTE_OFFSET: u32 = u32::MAX;
+
+    fn lock_overlapped() -> OVERLAPPED {
+        let mut overlapped = OVERLAPPED::default();
+        // Selecting the `Anonymous` offset view is the documented layout used
+        // by synchronous LockFileEx/UnlockFileEx calls. Writing a union field
+        // is safe; only reading a union field requires `unsafe`.
+        overlapped.Anonymous.Anonymous.Offset = LOCK_BYTE_OFFSET;
+        overlapped
+    }
+
     pub(super) fn try_lock(file: &File) -> io::Result<()> {
-        // A zeroed OVERLAPPED selects offset zero; locking the maximum range
-        // gives this file the same whole-file semantics as Unix flock.
-        let mut overlapped: OVERLAPPED = unsafe { zeroed() };
+        let mut overlapped = lock_overlapped();
         // SAFETY: handle and OVERLAPPED are valid for this synchronous call.
         let ok = unsafe {
             LockFileEx(
                 file.as_raw_handle(),
                 LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
                 0,
-                u32::MAX,
-                u32::MAX,
+                1,
+                0,
                 &mut overlapped,
             )
         };
@@ -148,10 +161,9 @@ mod native {
     }
 
     pub(super) fn unlock(file: &File) -> io::Result<()> {
-        let mut overlapped: OVERLAPPED = unsafe { zeroed() };
+        let mut overlapped = lock_overlapped();
         // SAFETY: handle and OVERLAPPED match the range used by `try_lock`.
-        let ok =
-            unsafe { UnlockFileEx(file.as_raw_handle(), 0, u32::MAX, u32::MAX, &mut overlapped) };
+        let ok = unsafe { UnlockFileEx(file.as_raw_handle(), 0, 1, 0, &mut overlapped) };
         if ok != 0 {
             Ok(())
         } else {

@@ -1120,14 +1120,12 @@ async fn hosted_ids(registry: &SessionRegistry) -> std::collections::HashSet<Str
 #[tokio::test]
 async fn reaper_removes_idle_never_persisted_session() {
     let (_dir, store) = fresh_empty_store("idle");
-    // Old enough to exceed any TTL we pass; no client ever attaches.
-    let old = std::time::Instant::now() - Duration::from_secs(3600);
-    let (registry, _tx, id) = host_bare(store, old).await;
+    // A zero TTL makes the freshly hosted session immediately eligible
+    // without assuming the OS monotonic clock has at least an hour of epoch.
+    let (registry, _tx, id) = host_bare(store, std::time::Instant::now()).await;
     assert!(hosted_ids(&registry).await.contains(&id));
 
-    let reaped = registry
-        .reap_idle_empty_sessions_with(Duration::from_secs(60))
-        .await;
+    let reaped = registry.reap_idle_empty_sessions_with(Duration::ZERO).await;
     assert_eq!(reaped, vec![id.clone()], "the idle empty session is reaped");
     assert!(
         !hosted_ids(&registry).await.contains(&id),
@@ -1151,14 +1149,11 @@ async fn reaper_keeps_empty_session_within_ttl() {
 #[tokio::test]
 async fn reaper_keeps_empty_session_with_attached_client() {
     let (_dir, store) = fresh_empty_store("watched");
-    let old = std::time::Instant::now() - Duration::from_secs(3600);
-    let (registry, tx, id) = host_bare(store, old).await;
+    let (registry, tx, id) = host_bare(store, std::time::Instant::now()).await;
     // An attached client holds an event subscription open.
     let _client_rx = tx.subscribe();
 
-    let reaped = registry
-        .reap_idle_empty_sessions_with(Duration::from_secs(60))
-        .await;
+    let reaped = registry.reap_idle_empty_sessions_with(Duration::ZERO).await;
     assert!(
         reaped.is_empty(),
         "an empty session someone is watching is never reaped"
@@ -1178,12 +1173,9 @@ async fn reaper_keeps_session_once_it_has_content() {
         )])
         .await
         .unwrap();
-    let old = std::time::Instant::now() - Duration::from_secs(3600);
-    let (registry, _tx, id) = host_bare(store, old).await;
+    let (registry, _tx, id) = host_bare(store, std::time::Instant::now()).await;
 
-    let reaped = registry
-        .reap_idle_empty_sessions_with(Duration::from_secs(60))
-        .await;
+    let reaped = registry.reap_idle_empty_sessions_with(Duration::ZERO).await;
     assert!(reaped.is_empty(), "a persisted session is never reaped");
     assert!(hosted_ids(&registry).await.contains(&id));
     let _ = std::fs::remove_dir_all(dir);
@@ -1203,12 +1195,9 @@ async fn suspension_removes_idle_persisted_session() {
         )])
         .await
         .unwrap();
-    let old = std::time::Instant::now() - Duration::from_secs(3600);
-    let (registry, _tx, id) = host_bare(store, old).await;
+    let (registry, _tx, id) = host_bare(store, std::time::Instant::now()).await;
 
-    let suspended = registry
-        .suspend_idle_sessions_with(Duration::from_secs(60))
-        .await;
+    let suspended = registry.suspend_idle_sessions_with(Duration::ZERO).await;
     assert_eq!(
         suspended,
         vec![id.clone()],
@@ -1233,14 +1222,11 @@ async fn suspension_keeps_session_with_attached_client() {
         )])
         .await
         .unwrap();
-    let old = std::time::Instant::now() - Duration::from_secs(3600);
-    let (registry, bc_tx, id) = host_bare(store, old).await;
+    let (registry, bc_tx, id) = host_bare(store, std::time::Instant::now()).await;
     // Attach: a live broadcast receiver counts as an attached client.
     let _rx = bc_tx.subscribe();
 
-    let suspended = registry
-        .suspend_idle_sessions_with(Duration::from_secs(60))
-        .await;
+    let suspended = registry.suspend_idle_sessions_with(Duration::ZERO).await;
     assert!(suspended.is_empty(), "attached session must not suspend");
     assert!(hosted_ids(&registry).await.contains(&id));
     drop(_rx);
@@ -1276,12 +1262,9 @@ async fn suspension_deferred_by_recent_activity() {
 #[tokio::test]
 async fn suspension_skips_empty_unpersisted_sessions() {
     let (_dir, store) = fresh_empty_store("suspend-empty");
-    let old = std::time::Instant::now() - Duration::from_secs(3600);
-    let (registry, _tx, id) = host_bare(store, old).await;
+    let (registry, _tx, id) = host_bare(store, std::time::Instant::now()).await;
 
-    let suspended = registry
-        .suspend_idle_sessions_with(Duration::from_secs(60))
-        .await;
+    let suspended = registry.suspend_idle_sessions_with(Duration::ZERO).await;
     assert!(
         suspended.is_empty(),
         "empty session is the reaper's, not suspension's"

@@ -203,7 +203,10 @@ async fn workspace_jail_middleware_blocks_sensitive_roots() {
     let ok_args = serde_json::json!({ "path": "src/main.rs" });
     assert!(jail.pre_execute("read_text", &ok_args, &env).await.is_ok());
 
-    let jail_args = serde_json::json!({ "path": "/etc/shadow" });
+    // A traversal is platform-independent and exercises the actual jail
+    // invariant; hard-coding `/etc` silently becomes a relative path on
+    // Windows and leaves the dangerous `..` case untested everywhere.
+    let jail_args = serde_json::json!({ "path": "../secret" });
     let res = jail.pre_execute("read_text", &jail_args, &env).await;
     assert!(res.is_err());
     assert!(res.unwrap_err().contains("Security Denial"));

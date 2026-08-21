@@ -187,11 +187,13 @@ mod tests {
         image::DynamicImage::ImageRgb8(img)
             .write_to(&mut buf, image::ImageFormat::Png)
             .unwrap();
-        let path = std::env::temp_dir().join("neenee_read_image_test.png");
+        let path =
+            std::env::temp_dir().join(format!("neenee-read-image-{}.png", uuid::Uuid::new_v4()));
         std::fs::write(&path, buf.into_inner()).unwrap();
 
+        let arguments = serde_json::json!({ "path": &path }).to_string();
         let out = ReadImageTool { root: None }
-            .call_structured(&format!(r#"{{"path":"{}"}}"#, path.display()))
+            .call_structured(&arguments)
             .await
             .unwrap();
         match out {
@@ -205,5 +207,6 @@ mod tests {
             }
             other => panic!("expected Image, got {other:?}"),
         }
+        std::fs::remove_file(path).unwrap();
     }
 }

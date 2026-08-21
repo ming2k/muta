@@ -1049,7 +1049,7 @@ pub fn draw_hint_bar(
     context_rect
 }
 
-/// Abbreviate an absolute path to its `~/...` form so the workspace reads as a
+/// Abbreviate an absolute path to its native `~`-relative form so the workspace reads as a
 /// short, glanceable label. Falls back to the literal path when no home
 /// directory is known or the path is outside it. Mirrors the home-resolution
 /// pattern the `~/` mention-completion query parser uses, in reverse.
@@ -1062,7 +1062,10 @@ pub(crate) fn tilde_home(path: &std::path::Path) -> String {
             let rest = path.strip_prefix(&home).ok();
             return match rest {
                 Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-                Some(rest) => format!("~/{}", rest.display()),
+                Some(rest) => std::path::PathBuf::from("~")
+                    .join(rest)
+                    .display()
+                    .to_string(),
                 // Unreachable: starts_with was just checked.
                 None => path.display().to_string(),
             };
@@ -1485,13 +1488,19 @@ mod tests {
 
     #[test]
     fn tilde_home_shortens_a_home_rooted_path() {
-        let home = std::path::PathBuf::from(
-            std::env::var_os("HOME").unwrap_or_else(|| std::ffi::OsString::from("/tmp")),
-        );
+        let home = dirs::home_dir()
+            .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+            .expect("test requires a discoverable home directory");
         let under = home.join("projects").join("xx");
         let rendered = tilde_home(&under);
-        assert!(rendered.starts_with("~/"), "got {rendered:?}");
-        assert!(rendered.ends_with("projects/xx"), "got {rendered:?}");
+        assert_eq!(
+            rendered,
+            std::path::PathBuf::from("~")
+                .join("projects")
+                .join("xx")
+                .display()
+                .to_string()
+        );
 
         // The home directory itself collapses to a bare `~`.
         assert_eq!(tilde_home(&home), "~");

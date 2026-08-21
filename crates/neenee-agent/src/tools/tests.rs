@@ -129,10 +129,8 @@ mod tests {
 
         let tool = ReadTextTool::new(None);
 
-        let full = tool
-            .call_structured(&r#"{"path":"PATH"}"#.replace("PATH", &path.to_string_lossy()))
-            .await
-            .unwrap();
+        let full_arguments = serde_json::json!({ "path": &path }).to_string();
+        let full = tool.call_structured(&full_arguments).await.unwrap();
         match full {
             neenee_contracts::ToolOutput::Code {
                 start_line, text, ..
@@ -143,12 +141,8 @@ mod tests {
             _ => panic!("expected Code"),
         }
 
-        let offset = tool
-            .call_structured(
-                &r#"{"path":"PATH","offset":3}"#.replace("PATH", &path.to_string_lossy()),
-            )
-            .await
-            .unwrap();
+        let offset_arguments = serde_json::json!({ "path": &path, "offset": 3 }).to_string();
+        let offset = tool.call_structured(&offset_arguments).await.unwrap();
         match offset {
             neenee_contracts::ToolOutput::Code {
                 start_line, text, ..
@@ -196,8 +190,9 @@ mod tests {
         let path = dir.join("small.txt");
         std::fs::write(&path, "a\nb\nc\n").unwrap();
 
+        let arguments = serde_json::json!({ "path": &path }).to_string();
         let out = ReadTextTool::new(None)
-            .call_structured(&r#"{"path":"PATH"}"#.replace("PATH", &path.to_string_lossy()))
+            .call_structured(&arguments)
             .await
             .unwrap();
         let (text, prefix, suffix) = code_parts(out);
@@ -218,13 +213,8 @@ mod tests {
         const PAGE: usize = 5000; // 50_000 / (9 + 1)
         let (path, _lines) = make_fixed_width_file(LINES);
         let tool = ReadTextTool::new(None);
-        let arg = |offset: usize| {
-            format!(
-                r#"{{"path":"{}","offset":{}}}"#,
-                path.to_string_lossy(),
-                offset
-            )
-        };
+        let arg =
+            |offset: usize| serde_json::json!({ "path": &path, "offset": offset }).to_string();
 
         // Page 1: lines 1..=5000, continuation offset = 5001.
         let (text1, pre1, suf1) = code_parts(tool.call_structured(&arg(1)).await.unwrap());
@@ -269,11 +259,7 @@ mod tests {
         // the model advances instead of looping.
         const LINES: usize = 6000;
         let (path, _lines) = make_fixed_width_file(LINES);
-        let arg = format!(
-            r#"{{"path":"{}","limit":{}}}"#,
-            path.to_string_lossy(),
-            LINES
-        );
+        let arg = serde_json::json!({ "path": &path, "limit": LINES }).to_string();
         let (text, _pre, suf) =
             code_parts(ReadTextTool::new(None).call_structured(&arg).await.unwrap());
         // Far fewer than the requested 6000 lines — bounded by the budget.
@@ -297,9 +283,10 @@ mod tests {
 
         let empty = dir.join("empty.txt");
         std::fs::write(&empty, "").unwrap();
+        let empty_arguments = serde_json::json!({ "path": &empty }).to_string();
         let (text, pre, suf) = code_parts(
             ReadTextTool::new(None)
-                .call_structured(&r#"{"path":"PATH"}"#.replace("PATH", &empty.to_string_lossy()))
+                .call_structured(&empty_arguments)
                 .await
                 .unwrap(),
         );
@@ -312,11 +299,10 @@ mod tests {
 
         let small = dir.join("small.txt");
         std::fs::write(&small, "a\nb\n").unwrap();
+        let past_eof_arguments = serde_json::json!({ "path": &small, "offset": 99 }).to_string();
         let (text, pre, suf) = code_parts(
             ReadTextTool::new(None)
-                .call_structured(
-                    &r#"{"path":"PATH","offset":99}"#.replace("PATH", &small.to_string_lossy()),
-                )
+                .call_structured(&past_eof_arguments)
                 .await
                 .unwrap(),
         );
@@ -339,10 +325,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("neenee-read-isdir-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let err = ReadTextTool::new(None)
-            .call(&r#"{"path":"PATH"}"#.replace("PATH", &dir.to_string_lossy()))
-            .await
-            .unwrap_err();
+        let arguments = serde_json::json!({ "path": &dir }).to_string();
+        let err = ReadTextTool::new(None).call(&arguments).await.unwrap_err();
         assert!(
             err.contains("list_dir"),
             "should point to list_dir, got: {err}"

@@ -333,7 +333,8 @@ mod tests {
     #[test]
     fn rejects_absolute_path() {
         let tmp = tempdir();
-        let err = load_sandboxed(&tmp, "/etc/passwd").unwrap_err();
+        let absolute = std::env::temp_dir().join("neenee-absolute-path-probe");
+        let err = load_sandboxed(&tmp, absolute.to_str().unwrap()).unwrap_err();
         assert!(err.contains("absolute paths are not allowed"));
     }
 
