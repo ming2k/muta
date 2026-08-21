@@ -19,9 +19,9 @@
 //!   invalidates the in-flight round, so its generation-guarded cleanup is
 //!   suppressed and the switch handler owns the terminal events.
 //!
-//! Both paths record *why* they stopped (C11): [`Self::record_interrupt`]
+//! Both paths record *why* they stopped (C11): [`RoundLifecycle::record_interrupt`]
 //! parks a reason on the lifecycle the moment the cancellation is requested,
-//! and the unwinding round task reads it back via [`Self::take_interrupt`]
+//! and the unwinding round task reads it back via [`RoundLifecycle::take_interrupt`]
 //! when it emits its terminal cleanup. This is what lets one
 //! `HarnessError::Interrupted` unwind render as "Esc Esc" versus "new
 //! message" versus "process exited" without threading a reason through every

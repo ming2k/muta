@@ -217,7 +217,7 @@ pub(super) async fn handle_send_chat(
 ///
 /// The insert becomes a **transcript entry immediately** (ADR-0126): it is
 /// appended to the scrollback as a user message flagged
-/// [`DeliveryStatus::Queued`] — visually "blocked on the running turn" — so
+/// `DeliveryStatus::Queued` — visually "blocked on the running turn" — so
 /// the user sees it land in the conversation without disturbing the running
 /// turn's own rendering (the turn's streaming entry is a separate message and
 /// keeps appending below it). The entry is flipped to delivered when the

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Daemon auto-start works again on Unix.** Version 0.30.0 configured a
+  spawned daemon with both `process_group(0)` and `setsid(2)`; the former
+  made the child a process-group leader, which requires the latter to fail
+  with `EPERM`. Both explicit `daemon start` and on-demand startup now share
+  one detachment primitive that calls `setsid(2)` alone, with regression
+  coverage for the resulting session and process-group identities.
+
 ## [0.30.0] - 2026-08-21
 
 ### Fixed

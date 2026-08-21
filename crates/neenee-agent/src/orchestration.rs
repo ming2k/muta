@@ -1851,7 +1851,7 @@ const SCHEDULER_RESTART_LIMIT: usize = SCHEDULER_RESTART_BACKOFF_MS.len();
 /// firing with nothing in the UI to say why. The supervised wrapper restarts
 /// the tick loop with bounded backoff; a persistently panicking tick (the
 /// same job blowing up every tick, say) gives up after
-/// [`SUPERVISED_RESTART_LIMIT`] attempts rather than hot-restarting forever.
+/// `SCHEDULER_RESTART_LIMIT` attempts rather than hot-restarting forever.
 pub fn start_supervised_schedule_scheduler(
     session: Arc<SessionStore>,
     tx: mpsc::UnboundedSender<AgentRequest>,

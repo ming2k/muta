@@ -528,10 +528,7 @@ async fn start_resolved_turn(
     if input.is_retry() {
         let pending = session.retry_pending().await;
         let round_counter = session.round_counter().await;
-        let valid = pending
-            .as_ref()
-            .is_some_and(|point| point.round == round_counter);
-        if !valid {
+        let Some(pending) = pending.filter(|point| point.round == round_counter) else {
             let _ = tx.send(round_response(
                 &session_id,
                 RoundEvent::Error(
@@ -540,10 +537,10 @@ async fn start_resolved_turn(
             ));
             send_harness_state(tx, &session_id, &agent, LoopStatus::Idle);
             return;
-        }
+        };
         // Re-bind the checkpoint to the resolved session's own point: the
         // handler read the primary's, which may differ from an aside target.
-        input = RoundInput::resume(pending.expect("validated above"));
+        input = RoundInput::resume(pending);
     }
     let projection =
         ContextProjectionSettings::from_config(config, active_context_window(principal));

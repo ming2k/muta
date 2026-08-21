@@ -665,7 +665,7 @@ impl SessionRegistry {
     /// once at startup; the task stops cleanly on shutdown.
     ///
     /// The same tick runs the low-frequency storage-maintenance pass
-    /// ([`Self::run_storage_maintenance_once`]) at most once per day: blob
+    /// ([`Self::spawn_storage_maintenance`]) at most once per day: blob
     /// garbage collection and usage-day retention. Both are whole-data-dir
     /// scans, far too expensive to run per session event.
     pub fn spawn_idle_reaper(self: &Arc<Self>, cancel: CancellationToken) {

@@ -90,7 +90,7 @@ impl UsageStatsStore {
         }
     }
 
-    /// Delete day files older than [`RETAINED_DAYS`] newest days. Best-effort
+    /// Delete day files older than `RETAINED_DAYS` newest days. Best-effort
     /// and cheap (a directory listing); called opportunistically from the
     /// settle path so telemetry cannot grow unboundedly. Returns the number
     /// of files removed.

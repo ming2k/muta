@@ -2589,7 +2589,10 @@ fn queue_pointer_down_restores_the_draft() {
     assert_eq!(app.input, "msg c");
     // Past the newest: the press dissolves the pointer (consumed) and
     // restores the stashed draft.
-    assert!(app.queue_pointer_next("session-a"), "dissolve consumes the key");
+    assert!(
+        app.queue_pointer_next("session-a"),
+        "dissolve consumes the key"
+    );
     assert!(app.queue_pointer.is_none());
     assert_eq!(app.input, "my draft");
     // An unarmed ↓ is inert (the caller falls through to history).
@@ -3807,10 +3810,11 @@ fn inserts_are_transcript_owned_not_outbox_items() {
     // Only the Dispatching leftover (w1) remains; a live insert never
     // touched the outbox at any point in its lifecycle.
     assert_eq!(app.pending_count("session-a"), 1);
-    assert!(app
-        .pending_dispatch
-        .iter()
-        .all(|d| d.state == QueuedDispatchState::Dispatching));
+    assert!(
+        app.pending_dispatch
+            .iter()
+            .all(|d| d.state == QueuedDispatchState::Dispatching)
+    );
 }
 
 #[test]

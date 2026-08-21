@@ -4,7 +4,7 @@
 //! pressure, compaction gates, and `/context`. The algorithm and the
 //! `cl100k_base` vocabulary are OpenAI's tiktoken: text is split by the
 //! cl100k pretokenizer regex, then each pretoken's bytes are merged greedily
-//! by lowest rank ([`byte_pair_merge`]). Ranks come from a compact packed
+//! by lowest rank (`byte_pair_merge`). Ranks come from a compact packed
 //! table embedded at compile time (`vendor/cl100k_base.packed` — format and
 //! generator in `vendor/README.md`), so encoding is total (every byte value
 //! is a token) and dependency-free.

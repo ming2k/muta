@@ -22,7 +22,7 @@
 //! * **restart** — the task is a self-contained loop whose job can simply be
 //!   re-entered (accept loops, periodic refreshers). Bounded exponential
 //!   backoff; a loop that keeps panicking escalates after
-//!   [`SUPERVISED_RESTART_LIMIT`] attempts.
+//!   `SUPERVISED_RESTART_LIMIT` attempts.
 
 /// Extract a human-readable message from a panic payload.
 pub(crate) fn panic_detail(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -50,7 +50,7 @@ const SUPERVISED_RESTART_BACKOFF_MS: [u64; 4] = [250, 1_000, 4_000, 15_000];
 pub(crate) const SUPERVISED_RESTART_LIMIT: usize = SUPERVISED_RESTART_BACKOFF_MS.len();
 
 /// How long to wait between restarts after the backoff table is exhausted
-/// (used while the restart budget lasts, see [`SUPERVISED_RESTART_LIMIT`]).
+/// (used while the restart budget lasts, see `SUPERVISED_RESTART_LIMIT`).
 #[cfg(test)]
 fn restart_backoff_ms(attempt: usize) -> u64 {
     // attempt is 0-based; saturate at the last (largest) entry.
@@ -60,7 +60,7 @@ fn restart_backoff_ms(attempt: usize) -> u64 {
 
 /// A restart outer shell around a `loop`-shaped future body. Runs `body`,
 /// and if it panics, logs and restarts with backoff up to
-/// [`SUPERVISED_RESTART_LIMIT`] times. Normal returns (`Ok`/`Err`/`()`) are
+/// `SUPERVISED_RESTART_LIMIT` times. Normal returns (`Ok`/`Err`/`()`) are
 /// **not** restarted — only panics are: an ordinary return means the loop
 /// finished its job or hit an error path it understands.
 ///

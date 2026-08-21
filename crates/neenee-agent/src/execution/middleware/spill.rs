@@ -4,8 +4,8 @@
 //! from overflowing the model's context window or wasting tokens.
 
 use async_trait::async_trait;
-use neenee_contracts::execution::{ExecutionEnvironment, ToolMiddleware};
 use neenee_contracts::ToolOutput;
+use neenee_contracts::execution::{ExecutionEnvironment, ToolMiddleware};
 
 /// Middleware that offloads tool outputs exceeding a byte threshold to a file on disk.
 #[derive(Debug, Clone)]
@@ -71,7 +71,10 @@ impl ToolMiddleware for SpillMiddleware {
         // Generate truncated summary
         let total_chars = text.chars().count();
         let head: String = text.chars().take(self.head_chars).collect();
-        let tail: String = text.chars().skip(total_chars.saturating_sub(self.tail_chars)).collect();
+        let tail: String = text
+            .chars()
+            .skip(total_chars.saturating_sub(self.tail_chars))
+            .collect();
 
         let rewritten = format!(
             "{head}\n\n\

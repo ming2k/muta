@@ -608,25 +608,30 @@ fn spawn_daemon() -> Result<std::process::Child, String> {
     // would silently land in that project. Per-session scoping is explicit
     // via the Select frame's `project` field.
     command.current_dir("/");
-    // Own process group (ADR-0101): a daemon spawned from an interactive
-    // shell must not share the shell's foreground group, or the terminal's
-    // Ctrl-C SIGINTs the "background" daemon along with everything else in
-    // the group.
-    //
-    // New session (ADR-0125): `setsid(2)` detaches the daemon from the
-    // spawning terminal's *session*, which is what makes it compositor- and
-    // terminal-death-proof the way tmux's server is. `process_group(0)`
-    // alone only escapes the foreground process group — the daemon stays a
-    // member of the terminal's session, so when the terminal (or the
-    // compositor hosting it) dies, the kernel SIGHUPs the session's members
-    // and takes the daemon with it (ADR-0101 then dutifully drains and
-    // exits). `setsid` removes that coupling by construction; failure of
-    // the call is fatal on purpose — a half-detached daemon is exactly the
-    // lie "detached" cannot afford.
+    configure_daemon_detachment(&mut command);
+    command
+        .spawn()
+        .map_err(|error| format!("could not spawn {}: {error}", program.display()))
+}
+
+/// Configure the process-level detachment shared by every daemon spawn path.
+///
+/// On Unix, `setsid(2)` is the single primitive: it creates both a new session
+/// and a new process group, detaching the daemon from the caller's controlling
+/// terminal. It must not be combined with `CommandExt::process_group(0)`:
+/// that call first makes the child a process-group leader, and POSIX requires
+/// `setsid(2)` to fail with `EPERM` for a process-group leader.
+///
+/// A `setsid(2)` failure is returned by [`std::process::Command::spawn`]. A
+/// half-detached daemon would violate the lifecycle contract, so callers must
+/// treat that failure as fatal.
+pub fn configure_daemon_detachment(command: &mut std::process::Command) {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
+
+        // SAFETY: `setsid(2)` is async-signal-safe and this closure performs
+        // no allocation or other work between `fork` and `exec`.
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() == -1 {
@@ -636,9 +641,9 @@ fn spawn_daemon() -> Result<std::process::Child, String> {
             });
         }
     }
-    command
-        .spawn()
-        .map_err(|error| format!("could not spawn {}: {error}", program.display()))
+
+    #[cfg(not(unix))]
+    let _ = command;
 }
 
 /// Comprehensive diagnostics for the daemon control plane and system status.
@@ -1160,6 +1165,38 @@ pub fn upsert_session_row(rows: &mut Vec<MonitoredSession>, row: MonitoredSessio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_detachment_creates_a_fresh_session_and_process_group() {
+        use std::process::{Command, Stdio};
+
+        let mut command = Command::new("sleep");
+        command
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_daemon_detachment(&mut command);
+
+        let mut child = command
+            .spawn()
+            .expect("a correctly detached child must spawn");
+        let pid = child.id() as libc::pid_t;
+        // SAFETY: `pid` names the live child owned by this test.
+        let sid = unsafe { libc::getsid(pid) };
+        // SAFETY: `pid` names the live child owned by this test.
+        let pgid = unsafe { libc::getpgid(pid) };
+
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert_eq!(sid, pid, "setsid must make the daemon a session leader");
+        assert_eq!(
+            pgid, pid,
+            "setsid must also make the daemon a process-group leader"
+        );
+    }
 
     #[test]
     fn remote_daemon_parses_the_documented_address_forms() {

@@ -773,7 +773,10 @@ async fn retry_resumes_stopped_round_without_breaking_turn_sequence() {
         .iter()
         .filter(|message| message.role == Role::User)
         .count();
-    assert_eq!(user_count, 1, "resume must not append a second user message");
+    assert_eq!(
+        user_count, 1,
+        "resume must not append a second user message"
+    );
     assert!(
         window.iter().any(|message| message.content == "recovered"),
         "the resumed round's answer is committed"

@@ -81,12 +81,18 @@ async fn tools_running_on_in_memory_execution_environment() {
     // 1. WriteFileTool creates file in memory
     let write_tool = WriteFileTool::with_env(env.clone());
     let write_res = write_tool
-        .call_structured(r#"{"path":"lib.rs","content":"pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n"}"#)
+        .call_structured(
+            r#"{"path":"lib.rs","content":"pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n"}"#,
+        )
         .await
         .unwrap();
 
     assert!(matches!(write_res, ToolOutput::Patch { .. }));
-    assert!(env.fs().exists(&PathBuf::from("/virtual/workspace/lib.rs")).await);
+    assert!(
+        env.fs()
+            .exists(&PathBuf::from("/virtual/workspace/lib.rs"))
+            .await
+    );
 
     // 2. ReadTextTool reads file from memory
     let read_tool = ReadTextTool::with_env(env.clone());
@@ -96,7 +102,9 @@ async fn tools_running_on_in_memory_execution_environment() {
         .unwrap();
 
     match read_res {
-        ToolOutput::Code { text, start_line, .. } => {
+        ToolOutput::Code {
+            text, start_line, ..
+        } => {
             assert_eq!(start_line, 1);
             assert!(text.contains("pub fn add"));
         }
@@ -111,7 +119,11 @@ async fn tools_running_on_in_memory_execution_environment() {
         .unwrap();
 
     assert!(matches!(edit_res, ToolOutput::Patch { .. }));
-    let updated = env.fs().read_to_string(&PathBuf::from("/virtual/workspace/lib.rs")).await.unwrap();
+    let updated = env
+        .fs()
+        .read_to_string(&PathBuf::from("/virtual/workspace/lib.rs"))
+        .await
+        .unwrap();
     assert!(updated.contains("a + b + 1"));
 
     // 4. ListDirTool lists virtual directory
@@ -159,7 +171,9 @@ async fn spill_middleware_offloads_massive_output() {
 
     let mut large_text = String::new();
     for i in 0..50 {
-        large_text.push_str(&format!("Line {i}: This is a detailed log output statement.\n"));
+        large_text.push_str(&format!(
+            "Line {i}: This is a detailed log output statement.\n"
+        ));
     }
 
     let mut output = ToolOutput::Text(large_text.clone());

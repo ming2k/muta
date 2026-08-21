@@ -21,7 +21,7 @@ pub struct InputContext {
     pub has_exact_suggestion: bool,
     pub suggestion_index: Option<usize>,
     /// Whether the completion menu is currently hidden behind the Esc/Enter
-    /// dismissal latch ([`App::completion_dismissed`]). Tab consults it to
+    /// dismissal latch (`App::completion_dismissed`). Tab consults it to
     /// re-open a dismissed menu: Esc closes, Tab reopens — the toggle's
     /// other half.
     pub completion_dismissed: bool,

@@ -1435,7 +1435,6 @@ dependencies = [
 name = "neenee-cli"
 version = "0.30.0"
 dependencies = [
- "libc",
  "neenee-agent",
  "neenee-contracts",
  "neenee-mcp",

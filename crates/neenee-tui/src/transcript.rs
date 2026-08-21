@@ -671,7 +671,7 @@ mod tests {
 
         // 6 rows: u1, a1, marker1, u2, a2, marker2(tail).
         assert_eq!(merged.len(), 6);
-        assert_eq!(merged[2].is_round_interrupt(), true);
+        assert!(merged[2].is_round_interrupt());
         assert_eq!(
             merged[2].sent_at_ms,
             Some(3_000),

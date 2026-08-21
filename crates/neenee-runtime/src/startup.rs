@@ -732,14 +732,17 @@ mod tests {
             if !in_table || !line.starts_with('|') {
                 continue;
             }
-            let Some(start) = line.find('`') else { continue };
+            let Some(start) = line.find('`') else {
+                continue;
+            };
             let rest = &line[start + 1..];
             let Some(end) = rest.find('`') else { continue };
             let cell = &rest[..end];
-            if let Some(name) = cell.split_whitespace().next() {
-                if name.starts_with('/') && !name.contains('\\') {
-                    documented.push(name.to_string());
-                }
+            if let Some(name) = cell.split_whitespace().next()
+                && name.starts_with('/')
+                && !name.contains('\\')
+            {
+                documented.push(name.to_string());
             }
         }
         let advertised: Vec<String> = BuiltinCmd::ALL

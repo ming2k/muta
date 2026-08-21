@@ -4,9 +4,7 @@ use serde_json::json;
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
-use crate::tools::helpers::{
-    WorkspaceBase, env_from_root, execution_environment, workspace_base,
-};
+use crate::tools::helpers::{WorkspaceBase, env_from_root, execution_environment, workspace_base};
 
 /// Maximum wall-clock time for a single `rg` invocation. A slow or wedged
 /// ripgrep (huge tree, catastrophic-backtracking pattern) is released rather
@@ -79,7 +77,10 @@ impl Tool for GrepTool {
         // can read the file when it needs surroundings. Clamp to a sane ceiling.
         let context = args["context"].as_u64().unwrap_or(0).min(10);
 
-        let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
+        let env = self
+            .env
+            .clone()
+            .unwrap_or_else(|| env_from_root(&self.root));
         // Search the session's workspace root, not the daemon process's cwd
         // (ADR-0096): a default `.` must scan the invoking session's project.
         // `join` passes an absolute search path through unchanged.

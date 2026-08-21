@@ -274,12 +274,8 @@ mod tests {
             path.to_string_lossy(),
             LINES
         );
-        let (text, _pre, suf) = code_parts(
-            ReadTextTool::new(None)
-                .call_structured(&arg)
-                .await
-                .unwrap(),
-        );
+        let (text, _pre, suf) =
+            code_parts(ReadTextTool::new(None).call_structured(&arg).await.unwrap());
         // Far fewer than the requested 6000 lines — bounded by the budget.
         assert!(text.lines().count() < LINES);
         assert!(

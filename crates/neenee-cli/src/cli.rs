@@ -124,7 +124,10 @@ pub enum ConfigAction {
     List,
     Path,
     Get(String),
-    Set { key: String, value: String },
+    Set {
+        key: String,
+        value: String,
+    },
     /// `neenee config check` — validate `config.toml` against the schema:
     /// hard errors, typo'd keys, and dead legacy spellings.
     Check,
@@ -562,8 +565,11 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 home = Some(PathBuf::from(flag_value("--home", inline, &mut iter)?));
             }
             "--config-dir" => {
-                config_dir =
-                    Some(PathBuf::from(flag_value("--config-dir", inline, &mut iter)?));
+                config_dir = Some(PathBuf::from(flag_value(
+                    "--config-dir",
+                    inline,
+                    &mut iter,
+                )?));
             }
             "--data-dir" => {
                 data_dir = Some(PathBuf::from(flag_value("--data-dir", inline, &mut iter)?));

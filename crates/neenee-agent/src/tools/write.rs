@@ -73,7 +73,10 @@ impl Tool for WriteFileTool {
         let path = args["path"].as_str().ok_or("Missing 'path'")?;
         let content = args["content"].as_str().ok_or("Missing 'content'")?;
 
-        let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
+        let env = self
+            .env
+            .clone()
+            .unwrap_or_else(|| env_from_root(&self.root));
         let resolved = resolve_workspace_path(&self.root, path);
 
         // Write atomically (temp file + fsync + rename) so an interrupted write

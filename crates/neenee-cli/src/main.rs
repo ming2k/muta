@@ -226,11 +226,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // per-category flags are consumed by the same pre-parser; binding them
     // here keeps the two parses honest about all five selectors.
     debug_assert_eq!(home, installed_home());
-    debug_assert!(config_dir.is_none() && data_dir.is_none() && state_dir.is_none() && cache_dir.is_none()
-        || std::env::var_os("NEENEE_CONFIG_DIR").is_some()
-        || std::env::var_os("NEENEE_DATA_DIR").is_some()
-        || std::env::var_os("NEENEE_STATE_DIR").is_some()
-        || std::env::var_os("NEENEE_CACHE_DIR").is_some());
+    debug_assert!(
+        config_dir.is_none() && data_dir.is_none() && state_dir.is_none() && cache_dir.is_none()
+            || std::env::var_os("NEENEE_CONFIG_DIR").is_some()
+            || std::env::var_os("NEENEE_DATA_DIR").is_some()
+            || std::env::var_os("NEENEE_STATE_DIR").is_some()
+            || std::env::var_os("NEENEE_CACHE_DIR").is_some()
+    );
 
     match mode {
         Mode::Version => {
@@ -385,28 +387,10 @@ fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    // Own process group (ADR-0101): a detached daemon must not sit in the
-    // invoking shell's foreground process group, or the terminal's Ctrl-C
-    // SIGINTs it along with everything else — the exact opposite of what
-    // "detach" promises.
-    //
-    // New session (ADR-0125): `setsid(2)` also severs the daemon from the
-    // invoking terminal's session, so terminal/compositor death cannot
-    // SIGHUP it (tmux-server semantics). See the twin comment in
-    // `client::spawn_daemon`.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
+    // Use the same process-level detachment as on-demand auto-spawn. Keeping
+    // this in one helper prevents the two entry points from drifting into
+    // subtly different session/process-group semantics.
+    client::configure_daemon_detachment(&mut command);
     command
         .spawn()
         .map_err(|e| format!("could not spawn {}: {e}", program.display()))?;

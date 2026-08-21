@@ -9,9 +9,7 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
         ConfigAction::Check => {
             let findings = neenee_persistence::config_check::check_config_file(None);
             if findings.is_empty() {
-                println!(
-                    "config.toml is valid and every key is understood by this version."
-                );
+                println!("config.toml is valid and every key is understood by this version.");
                 return Ok(());
             }
             let mut legacy = 0;

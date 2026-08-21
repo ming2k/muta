@@ -154,12 +154,12 @@ fn collect_blob_refs(raw: &str, live: &mut std::collections::HashSet<String>) {
         rest = &rest[pos + "\"content_blob\"".len()..];
         // Skip whitespace and the colon, expect a quoted string.
         let after_colon = rest.trim_start().strip_prefix(':').map(str::trim_start);
-        if let Some(value) = after_colon.and_then(|s| s.strip_prefix('"')) {
-            if let Some(end) = value.find('"') {
-                let hash = &value[..end];
-                if hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    live.insert(hash.to_string());
-                }
+        if let Some(value) = after_colon.and_then(|s| s.strip_prefix('"'))
+            && let Some(end) = value.find('"')
+        {
+            let hash = &value[..end];
+            if hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                live.insert(hash.to_string());
             }
         }
     }

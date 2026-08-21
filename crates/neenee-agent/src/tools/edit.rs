@@ -212,7 +212,10 @@ impl Tool for EditFileTool {
         let path = args["path"].as_str().ok_or("Missing 'path'")?;
         let old_str = args["old_string"].as_str().ok_or("Missing 'old_string'")?;
         let new_str = args["new_string"].as_str().ok_or("Missing 'new_string'")?;
-        let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
+        let env = self
+            .env
+            .clone()
+            .unwrap_or_else(|| env_from_root(&self.root));
         let resolved = resolve_workspace_path(&self.root, path);
 
         let content = env

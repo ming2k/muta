@@ -933,7 +933,7 @@ impl App {
 
     /// Borrow the cached recursive project listing, kicking off an async scan
     /// on first access. Mirrors opencode's per-directory picker cache: one
-    /// [`scan_project_files`] call per App session, then pure filtering.
+    /// `scan_project_files` call per App session, then pure filtering.
     ///
     /// Returns `None` until the scan lands (those frames contribute no path
     /// candidates — an empty menu beats the frozen event loop the old

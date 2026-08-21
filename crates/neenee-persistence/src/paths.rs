@@ -317,7 +317,7 @@ impl Dirs {
     }
 
     /// One day's usage-statistics file: `usage/daily/<YYYY-MM-DD>.json`.
-    /// The day key is produced by [`crate::usage_stats::day_key_from_epoch_ms`].
+    /// The day key is produced by [`neenee_contracts::day_key_from_epoch_ms`].
     pub fn usage_stats_day_file(&self, day: &str) -> PathBuf {
         self.usage_stats_dir()
             .join("daily")

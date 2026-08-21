@@ -1,8 +1,8 @@
 //! Secret scrubbing middleware to prevent accidental credential leakage in tool outputs.
 
 use async_trait::async_trait;
-use neenee_contracts::execution::{ExecutionEnvironment, ToolMiddleware};
 use neenee_contracts::ToolOutput;
+use neenee_contracts::execution::{ExecutionEnvironment, ToolMiddleware};
 use regex::Regex;
 use std::sync::LazyLock;
 

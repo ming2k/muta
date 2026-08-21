@@ -699,7 +699,11 @@ describe("DaemonStore wire protocol", () => {
 
       expect(store.activeSessionId).toBe("sess-2");
       expect(
-        store.feed.map((i) => (i.kind === "message" ? i.message.content : `cmd:${i.record.name}`)),
+        store.feed.map((item) => {
+          if (item.kind === "message") return item.message.content;
+          if (item.kind === "command") return `cmd:${item.record.name}`;
+          return `interrupt:${item.record.reason}`;
+        }),
       ).toEqual(["first", "cmd:help", "third"]);
     });
 

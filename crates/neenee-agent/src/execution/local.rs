@@ -39,11 +39,7 @@ impl FsProvider for LocalFsProvider {
         }
         // Atomic write via temp file and rename when possible
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
-        let temp_name = format!(
-            ".tmp_{}_{}",
-            std::process::id(),
-            fastrand::u64(..)
-        );
+        let temp_name = format!(".tmp_{}_{}", std::process::id(), fastrand::u64(..));
         let temp_path = parent.join(temp_name);
 
         if let Err(e) = tokio::fs::write(&temp_path, content).await {
@@ -54,7 +50,9 @@ impl FsProvider for LocalFsProvider {
         if let Err(_e) = tokio::fs::rename(&temp_path, path).await {
             let _ = tokio::fs::remove_file(&temp_path).await;
             // Fallback direct write if rename across filesystem boundaries fails
-            tokio::fs::write(path, content).await.map_err(FsError::from)?;
+            tokio::fs::write(path, content)
+                .await
+                .map_err(FsError::from)?;
         }
 
         Ok(())

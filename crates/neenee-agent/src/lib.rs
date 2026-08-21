@@ -75,7 +75,8 @@ pub use neenee_contracts::{
     TodoList, TodoStatus, TokenUsage, Tool, ToolCall, ToolMiddleware, ToolOutput, ToolPolicy,
     ToolResult, ToolStream, Transport, UserQuestion, UserQuestionOption, UserQuestionReply,
     UserQuestionRequest, WebSearchConfig, estimate_bytes, estimate_tokens, is_context_overflow,
-    parse_retryable_error, prune_tool_results, public_error_message, retryable_error, truncate_utf8,
+    parse_retryable_error, prune_tool_results, public_error_message, retryable_error,
+    truncate_utf8,
 };
 
 // Same ambient std/tokio prelude the Agent struct used to inherit from
@@ -136,11 +137,11 @@ pub use round_lifecycle::{RoundBegin, RoundLifecycle};
 pub mod session_title;
 mod shell_input;
 use neenee_skills as skills;
+pub mod execution;
 mod tool_call;
 mod tool_integration;
 mod tool_manager;
 mod tool_scheduler;
-pub mod execution;
 pub mod tools;
 
 pub use context_projection::ContextProjectionGate;

@@ -58,7 +58,10 @@ impl Tool for ListDirTool {
         let recursive = args["recursive"].as_bool().unwrap_or(false);
         let max_results = args["max_results"].as_u64().unwrap_or(100) as usize;
 
-        let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
+        let env = self
+            .env
+            .clone()
+            .unwrap_or_else(|| env_from_root(&self.root));
         // Resolve the listed directory against the session's workspace root
         // so a default `.` lists the session's project, never the daemon's
         // coincidental process cwd. `join` passes absolute paths through.

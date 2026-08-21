@@ -10,7 +10,7 @@
 //! so the `/usage` report reflects every day's real consumption forever.
 //!
 //! The store is append-mostly and idempotent: each record carries its
-//! [`RequestUsageKey`] and a `recorded_at_ms` timestamp; replaying the same
+//! [`crate::RequestUsageKey`] and a `recorded_at_ms` timestamp; replaying the same
 //! key is a no-op (crash-safe retries never double count), and a later replay
 //! with a *stronger* source (reported usage arriving after an estimate was
 //! already persisted) upgrades the existing row in place.
@@ -48,7 +48,7 @@ pub struct UsageStatRecord {
     /// Wall-clock epoch milliseconds the attempt terminally settled
     /// (completed / interrupted / failed). Drives the event-log view.
     pub recorded_at_ms: u64,
-    /// Project bucket name (see [`crate::paths`]-side
+    /// Project bucket name (produced by the persistence layer's
     /// `project_bucket_name`) the session belonged to, so the report can
     /// group by project without leaking absolute paths. Empty when the
     /// recorder could not resolve a project root.

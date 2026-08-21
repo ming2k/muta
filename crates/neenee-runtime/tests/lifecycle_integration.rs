@@ -350,8 +350,8 @@ async fn port_bind_failure_is_a_readable_startup_failure() {
 ///
 /// `client::spawn_daemon` re-execs `current_exe()`, which inside a test
 /// harness is the test binary, not a CLI. So this test mirrors that spawn
-/// shape exactly (`daemon start --fg`, inherited env, detached process
-/// group) but with the real CLI binary cargo builds alongside the test.
+/// shape exactly (`daemon start --fg`, inherited env, detached session) but
+/// with the real CLI binary cargo builds alongside the test.
 /// The lifecycle-integration crate has no bin target of its own, so the
 /// binary is located via the workspace layout (`target/debug/neenee`).
 ///
@@ -398,7 +398,9 @@ async fn spawned_daemon_inherits_the_neenee_home_sandbox() {
     }
 
     // The spawn_daemon shape: same argv, environment carrying only the
-    // sandbox contract (the point under test), detached process group.
+    // sandbox contract (the point under test), and the production detachment
+    // primitive. Reusing the helper is deliberate: this test must catch a
+    // future `setpgid(2)`/`setsid(2)` ordering conflict before release.
     let mut command = std::process::Command::new(&cli);
     command.args(["daemon", "start", "--fg"]);
     command
@@ -407,11 +409,7 @@ async fn spawned_daemon_inherits_the_neenee_home_sandbox() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .current_dir("/");
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        command.process_group(0);
-    }
+    neenee_runtime::client::configure_daemon_detachment(&mut command);
     let child = command.spawn().expect("spawn the sandboxed daemon");
     let daemon_pid = child.id();
 

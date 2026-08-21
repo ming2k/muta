@@ -55,19 +55,18 @@ pub fn check_config_file(path: Option<PathBuf>) -> Vec<ConfigFinding> {
     // (e.g. a string where a number is expected) — the loudest possible
     // signal, because loading discarded the user's whole setup.
     let mut findings = Vec::new();
-    match toml::from_str::<crate::config::Config>(&content) {
-        Err(error) => findings.push(ConfigFinding {
+    if let Err(error) = toml::from_str::<crate::config::Config>(&content) {
+        findings.push(ConfigFinding {
             key: "<file>".to_string(),
             message: format!(
                 "parses as TOML but not as the config schema — \
                  the app fell back to defaults at load: {error}"
             ),
             is_legacy: false,
-        }),
-        // Parsing succeeded; the semantic shape is trustworthy for the
-        // unknown-key walk below.
-        Ok(_) => {}
+        });
     }
+    // When parsing succeeds, the semantic shape is trustworthy for the
+    // unknown-key walk below.
     findings.extend(unknown_keys(&parsed, CONFIG_KEYS, ""));
     findings
 }

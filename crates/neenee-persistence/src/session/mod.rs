@@ -3269,6 +3269,10 @@ mod tests {
     /// session with an armed job, one without), then asserts the scan finds
     /// exactly the armed one with its project root.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    // The crate-wide `paths::TEST_OVERRIDE_GUARD` (a std Mutex) is held
+    // across the awaited body intentionally to serialize the process-wide
+    // paths override. The single-threaded test runtime cannot block a peer.
     async fn armed_schedule_scan_finds_only_sessions_with_jobs() {
         locked!({
             let sandbox =

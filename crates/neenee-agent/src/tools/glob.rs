@@ -55,7 +55,10 @@ impl Tool for GlobTool {
         let pattern = args["pattern"].as_str().ok_or("Missing 'pattern'")?;
         let base = args["path"].as_str().unwrap_or(".");
 
-        let _env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
+        let _env = self
+            .env
+            .clone()
+            .unwrap_or_else(|| env_from_root(&self.root));
         // Resolve the base against the session's workspace root so a default
         // `.` (or any relative base) scans the session's project, never the
         // daemon's coincidental process cwd. `join` passes absolute bases

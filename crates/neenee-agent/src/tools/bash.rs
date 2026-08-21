@@ -182,7 +182,10 @@ impl Tool for BashTool {
                 .stdin(stdin_stdio)
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
-            let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
+            let env = self
+                .env
+                .clone()
+                .unwrap_or_else(|| env_from_root(&self.root));
             invocation.current_dir(env.workspace_root());
             invocation.spawn()
         }

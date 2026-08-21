@@ -214,7 +214,7 @@ mod tests {
             runtime_dir: None,
         }));
 
-        let mut store = store_with("anthropic", "claude-x", "high");
+        let store = store_with("anthropic", "claude-x", "high");
         store.save().unwrap();
 
         // A fresh load must see the same entry and not re-run the migration

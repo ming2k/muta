@@ -82,7 +82,10 @@ impl Tool for ReadTextTool {
         // Filesystem access goes through the workspace-resolved path; the
         // model-facing `path` text (errors, framing, display) stays exactly
         // what the model sent.
-        let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
+        let env = self
+            .env
+            .clone()
+            .unwrap_or_else(|| env_from_root(&self.root));
         let resolved = resolve_workspace_path(&self.root, path);
 
         // Reject directories with an explicit, actionable message instead of

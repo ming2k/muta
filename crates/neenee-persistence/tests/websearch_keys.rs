@@ -1,10 +1,9 @@
 #![cfg(test)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Migration tests for the `[websearch]` key split (config → credentials).
 
 use neenee_contracts::WebSearchConfig;
 use neenee_persistence::config::{Config, Credentials, WebSearchKeys};
-
-use std::sync::Mutex;
 
 /// Install a sandboxed `Dirs` pair; the returned guard holds the crate-wide
 /// test lock until dropped (keeps other tests from racing the override).
@@ -46,9 +45,11 @@ fn websearch_keys_are_not_serialized_into_config_toml() {
 
 #[test]
 fn websearch_keys_round_trip_through_credentials_toml() {
-    let mut creds = Credentials::default();
-    creds.websearch = WebSearchKeys {
-        tavily_api_key: Some(neenee_contracts::SecretString::new("tvly-1")),
+    let creds = Credentials {
+        websearch: WebSearchKeys {
+            tavily_api_key: Some(neenee_contracts::SecretString::new("tvly-1")),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let toml = toml::to_string_pretty(&creds).unwrap();
@@ -169,10 +170,12 @@ fn credentials_entry_wins_over_stale_config_inline_key() {
 
 #[test]
 fn secret_keys_only_extractor_leaves_behavior_defaults() {
-    let mut cfg = WebSearchConfig::default();
-    cfg.provider = "bocha".into();
-    cfg.timeout_secs = 99;
-    cfg.bocha_api_key = Some(neenee_contracts::SecretString::new("k"));
+    let cfg = WebSearchConfig {
+        provider: "bocha".into(),
+        timeout_secs: 99,
+        bocha_api_key: Some(neenee_contracts::SecretString::new("k")),
+        ..Default::default()
+    };
     let keys = cfg.secret_keys_only();
     assert_eq!(keys.provider, WebSearchConfig::default().provider);
     assert_eq!(keys.timeout_secs, WebSearchConfig::default().timeout_secs);

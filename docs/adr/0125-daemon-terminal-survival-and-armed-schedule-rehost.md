@@ -1,6 +1,6 @@
 # 0125. Daemon terminal survival (setsid) and autonomous-session rehost
 
-- **Status:** Accepted
+- **Status:** Accepted (daemon detachment superseded by ADR-0129)
 - **Date:** 2026-08-20
 - **Builds on:** ADR-0096 (unified daemon), ADR-0100 (lifecycle standard:
   "the daemon is not the authority — disk is"), ADR-0101 (shutdown

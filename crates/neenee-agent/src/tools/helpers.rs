@@ -31,7 +31,9 @@ pub(crate) fn workspace_base(ctx: &neenee_contracts::tool_registry::ToolContext)
 pub(crate) fn execution_environment(
     ctx: &neenee_contracts::tool_registry::ToolContext,
 ) -> std::sync::Arc<dyn neenee_contracts::execution::ExecutionEnvironment> {
-    if let Some(env) = ctx.get::<std::sync::Arc<dyn neenee_contracts::execution::ExecutionEnvironment>>() {
+    if let Some(env) =
+        ctx.get::<std::sync::Arc<dyn neenee_contracts::execution::ExecutionEnvironment>>()
+    {
         return env.clone();
     }
     let root = ctx
