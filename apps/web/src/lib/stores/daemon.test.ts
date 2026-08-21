@@ -257,6 +257,62 @@ describe("DaemonStore wire protocol", () => {
     });
   });
 
+  describe("RoundInterrupted (C11)", () => {
+    it("appends an interrupt feed item and toasts on the live event", () => {
+      const store = new DaemonStore();
+      const session = attachSession(store);
+
+      roundEvent(session, {
+        RoundInterrupted: { reason: "user", at_ms: 1_700_000_000_000, round: 3 },
+      });
+
+      expect(store.feed.map((i) => i.kind)).toEqual(["interrupt"]);
+      const item = store.feed[0];
+      if (item.kind === "interrupt") {
+        expect(item.record.reason).toBe("user");
+        expect(item.record.round).toBe(3);
+      }
+      expect(store.toasts.at(-1)?.severity).toBe("warning");
+    });
+
+    it("projects persisted records into the restored Welcome feed by timestamp", () => {
+      const store = new DaemonStore();
+      installFakeWebSocket();
+      FakeWebSocket.reset();
+      store.init({ wsUrl: "ws://test:1" });
+      FakeWebSocket.latest().open();
+      store.attach("sess-1");
+      const session = FakeWebSocket.latest();
+      session.open();
+      session.message({
+        type: "Welcome",
+        session_id: "sess-1",
+        round_counter: 2,
+        provider: "kimi-code",
+        model: "k2",
+        messages: [
+          { role: "User", content: "first", sent_at_ms: 1_000, hidden: false },
+          { role: "Assistant", content: "reply", sent_at_ms: 1_500, hidden: false },
+          { role: "User", content: "second", sent_at_ms: 5_000, hidden: false },
+        ],
+        round_interrupts: [
+          { reason: "terminated", at_ms: 9_000, round: 2 },
+          { reason: "user", at_ms: 3_000, round: 1 },
+        ],
+      });
+
+      // Sorted by timestamp: u(1000), a(1500), interrupt(3000), u(5000),
+      // interrupt(9000) — the markers land at their seams, not appended.
+      expect(store.feed.map((i) => i.kind)).toEqual([
+        "message",
+        "message",
+        "interrupt",
+        "message",
+        "interrupt",
+      ]);
+    });
+  });
+
   describe("tool folding", () => {
     it("tracks ToolCall/ToolStream/ToolResult/ToolCancelled in liveTools", () => {
       const store = new DaemonStore();
@@ -458,6 +514,27 @@ describe("DaemonStore wire protocol", () => {
 
       expect(store.takeRestoredDraft()).toEqual({ text: "hello", images: [] });
       expect(store.takeRestoredDraft()).toBeNull();
+    });
+
+    it("UnsentInput keeps the echo and the in-progress draft when the composer is busy", () => {
+      const store = new DaemonStore();
+      const session = attachSession(store);
+
+      store.sendChat("hello");
+      expect(store.feed).toHaveLength(1);
+
+      // The user was mid-composition when the interrupt landed.
+      store.composerIdle = false;
+
+      roundEvent(session, { UnsentInput: { prompt: "hello", images: [] } });
+      // The optimistic echo stays: with the composer keeping the user's
+      // draft, the echo is the only visible copy of the unsent prompt.
+      expect(store.feed).toHaveLength(1);
+      expect(store.feed[0]).toMatchObject({
+        kind: "message",
+        message: { role: "User", content: "hello" },
+      });
+      expect(store.restoredDraft).toBeNull();
     });
 
     it("UserInputInserted dedupes the optimistic echo but appends new text", () => {

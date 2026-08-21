@@ -406,8 +406,11 @@ impl<'a, 'f> Stream<'a, 'f> {
         let viewport_bottom = self.band.y + self.band.height;
 
         let body_before = self.content_lines;
+        // Round-interrupt markers are terminal and immutable (C11): they join
+        // the height-cache fast path alongside notices.
         let skippable = !msg.is_provider_retry()
             && (msg.is_notice()
+                || msg.is_round_interrupt()
                 || (!msg.is_envoy_task()
                     && if msg.is_tool_step() {
                         !msg.tool_step_status()
@@ -524,6 +527,18 @@ impl<'a, 'f> Stream<'a, 'f> {
                 &mut self.content_lines,
                 self.hovered_step == Some(mi),
                 self.focused_target == Some(InteractiveTarget::command_result(mi)),
+            );
+        } else if msg.is_round_interrupt() {
+            super::draw_round_interrupt(
+                self.frame,
+                self.band,
+                msg,
+                mi,
+                self.layout_map,
+                &mut self.skip_rows,
+                &mut self.current_y,
+                &mut self.content_lines,
+                self.theme,
             );
         } else {
             super::draw_message_body(

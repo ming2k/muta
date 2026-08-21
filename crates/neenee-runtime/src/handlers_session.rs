@@ -9,7 +9,7 @@ use neenee_agent::Agent;
 use neenee_agent::orchestration::send_harness_state;
 use neenee_contracts::{AgentResponse, LoopStatus, SessionOverview};
 use neenee_mcp::McpRuntime;
-use neenee_persistence::{config::Config, session::SessionStore};
+use neenee_persistence::{config::Config, embedding, session::SessionStore};
 use neenee_skills::SkillRegistry;
 use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
@@ -18,14 +18,31 @@ use crate::session_view::{build_session_context, build_sessions_overview};
 use crate::side::{SideRegistry, SideSession};
 
 /// `AgentRequest::DeleteSession` — delete by id (or short-id prefix) and push
-/// a fresh sessions-overview snapshot, or surface the storage error.
+/// a fresh sessions-overview snapshot, or surface the storage error. The
+/// project embedding index is pruned of the deleted session's entries so the
+/// on-disk union does not keep them forever.
 pub async fn delete(
     session: &Arc<SessionStore>,
+    embedding_store: &Arc<AsyncRwLock<embedding::EmbeddingStore>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     id: String,
 ) {
     match session.delete(&id).await {
-        Ok(()) => {
+        Ok(deleted_id) => {
+            // Prune the deleted session's entries from the project embedding
+            // index so the on-disk union does not keep them forever.
+            if let Err(error) = embedding_store
+                .write()
+                .await
+                .remove_session(&deleted_id)
+                .await
+            {
+                tracing::warn!(
+                    session = %deleted_id,
+                    %error,
+                    "could not prune deleted session from the embedding index"
+                );
+            }
             let _ = resp_tx.send(AgentResponse::SessionsOverview(
                 build_sessions_overview(session).await,
             ));
@@ -339,12 +356,14 @@ pub async fn emit_side_view_opened(
     };
     let messages = s.store.full_transcript().await;
     let commands = s.store.commands().await;
+    let round_interrupts = s.store.round_interrupts().await;
     let primary_id = primary_session.id().await;
     let _ = resp_tx.send(AgentResponse::SideViewOpened {
         side_id: s.id.clone(),
         primary_id,
         messages,
         commands,
+        round_interrupts,
     });
 }
 
@@ -362,6 +381,10 @@ pub async fn interrupt_side(
     let Some(s) = target else {
         return;
     };
+    // Park the user-interrupt reason before cancelling so the aside round's
+    // tail labels its own unwind (C11) — Esc Esc inside an aside view.
+    s.lifecycle
+        .record_interrupt(neenee_contracts::RoundInterruptReason::User);
     s.agent.reject_pending_permissions();
     s.agent.reject_pending_user_questions();
     s.agent.reject_pending_inputs();
@@ -385,6 +408,11 @@ pub async fn close_side(
 ) {
     let was_active = side.read().await.active().is_some_and(|s| s.id == side_id);
     if let Some(s) = side.write().await.remove(&side_id) {
+        // The aside's files are deleted right below, so the record itself is
+        // moot; parking the reason still labels the unwind if the tail races
+        // the removal (C11).
+        s.lifecycle
+            .record_interrupt(neenee_contracts::RoundInterruptReason::Superseded);
         s.agent.reject_pending_permissions();
         s.agent.reject_pending_user_questions();
         s.agent.reject_pending_inputs();

@@ -360,6 +360,28 @@ async fn run_inner(
     }
     tracing::info!(%bind, port, "neenee serve: listening");
 
+    // ── Boot rehost (ADR-0125) ───────────────────────────────────────────
+    // Autonomous sessions come back with the daemon: any persisted session
+    // with armed `/schedule` jobs is re-assembled so its scheduler keeps
+    // firing. Runs after the listener binds (startup latency stays flat;
+    // the scan is header-only and each assembly is the ordinary lazy-resume
+    // path) and yields to an early shutdown trigger so a stop-race cannot
+    // strand it mid-scan.
+    if Config::load().daemon.rehost_armed_schedules {
+        let rehost_registry = Arc::clone(&registry);
+        let rehost_gate = gate.clone();
+        let rehosted = tokio::select! {
+            result = rehost_registry.rehost_armed_sessions() => result,
+            _ = rehost_gate.triggered() => Vec::new(),
+        };
+        if !rehosted.is_empty() {
+            tracing::info!(
+                count = rehosted.len(),
+                "boot rehost: autonomous sessions restored"
+            );
+        }
+    }
+
     // ── Serving ───────────────────────────────────────────────────────────
     // Wait for a trigger, or the idle-exit timer (which itself is just
     // another trigger source, ADR-0100 rule 3).

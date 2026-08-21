@@ -8,7 +8,7 @@
 //! retained as an opt-in fallback for users who want keyless search and have a
 //! clean egress IP, but it is no longer the default.
 
-use super::{MOZILLA_UA, SearchProvider, SearchResult, format_results};
+use super::{MOZILLA_UA, ProviderOutput, SearchProvider, SearchResult};
 use async_trait::async_trait;
 
 pub(crate) struct DdgProvider;
@@ -18,7 +18,6 @@ pub(crate) struct DdgProvider;
 /// rate-limited / blocked DuckDuckGo CAPTCHA page.
 #[derive(Debug)]
 struct SearchAttempt {
-    source: &'static str,
     status: u16,
     results: Vec<SearchResult>,
     body_snippet: String,
@@ -30,18 +29,22 @@ impl SearchProvider for DdgProvider {
         "DuckDuckGo"
     }
 
-    async fn search(&self, client: &reqwest::Client, query: &str) -> Result<String, String> {
+    async fn search(
+        &self,
+        client: &reqwest::Client,
+        query: &str,
+    ) -> Result<ProviderOutput, String> {
         let lite = search_ddg_lite(client, query).await;
         if let Ok(a) = &lite
             && !a.results.is_empty()
         {
-            return Ok(format_results(query, a.source, a.results.clone()));
+            return Ok(ProviderOutput::Results(a.results.clone()));
         }
         let html = search_ddg_html(client, query).await;
         if let Ok(a) = &html
             && !a.results.is_empty()
         {
-            return Ok(format_results(query, a.source, a.results.clone()));
+            return Ok(ProviderOutput::Results(a.results.clone()));
         }
         Err(compose_ddg_failure(query, &lite, &html))
     }
@@ -313,7 +316,6 @@ async fn search_ddg_lite(client: &reqwest::Client, query: &str) -> Result<Search
     let results = parse_ddg_lite_results(&html);
     let snippet = body_snippet(&html);
     Ok(SearchAttempt {
-        source: "DuckDuckGo Lite",
         status,
         results,
         body_snippet: snippet,
@@ -341,7 +343,6 @@ async fn search_ddg_html(client: &reqwest::Client, query: &str) -> Result<Search
     let results = parse_ddg_results(&html);
     let snippet = body_snippet(&html);
     Ok(SearchAttempt {
-        source: "DuckDuckGo HTML",
         status,
         results,
         body_snippet: snippet,
@@ -399,13 +400,11 @@ mod tests {
     #[test]
     fn compose_ddg_failure_reports_block_not_no_results() {
         let lite = Ok(SearchAttempt {
-            source: "DuckDuckGo Lite",
             status: 200,
             results: Vec::new(),
             body_snippet: "If this error persists, please let us know.".to_string(),
         });
         let html = Ok(SearchAttempt {
-            source: "DuckDuckGo HTML",
             status: 200,
             results: Vec::new(),
             body_snippet: "".to_string(),

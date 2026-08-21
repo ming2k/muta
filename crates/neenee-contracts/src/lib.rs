@@ -106,9 +106,9 @@ pub use events::{
     InputRequest, LoopStatus, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity, NoticeSource,
     NoticeSurface, ParentStatus, PermissionDecision, PermissionRequest, PermissionRuleInfo,
     ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, QueuedUserInput, RoundEvent,
-    RoundSummary, SessionContextSnapshot, SessionDetail, SessionForkKind, SessionOverview,
-    SessionSnapshot, SkillInfo, ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply,
-    UserQuestionRequest,
+    RoundInterrupt, RoundInterruptReason, RoundSummary, SessionContextSnapshot, SessionDetail,
+    SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, ToolInfo, UserQuestion,
+    UserQuestionOption, UserQuestionReply, UserQuestionRequest,
 };
 pub mod monitor;
 pub use hooks::{

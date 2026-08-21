@@ -43,40 +43,98 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// parser in `run` — this pass stays silent so a malformed command line
 /// reports exactly once.
 fn install_home_override(args: &[String]) {
+    // `--home` plus the per-category flags (ADR-0014 §3 tier 1) resolve in
+    // the same one-time pre-parse; `PathsOverride` defines their precedence
+    // (a category-specific flag wins over the instance root for its own
+    // category only).
+    let mut config_dir: Option<PathBuf> = None;
+    let mut data_dir: Option<PathBuf> = None;
+    let mut state_dir: Option<PathBuf> = None;
+    let mut cache_dir: Option<PathBuf> = None;
+    let mut home: Option<PathBuf> = None;
     let mut iter = args.iter().peekable();
     while let Some(arg) = iter.next() {
-        if arg == "--home" {
+        let mut next_value = |flag: &str| -> Option<PathBuf> {
             if let Some(value) = iter.next() {
-                install_override(PathBuf::from(value));
+                return Some(PathBuf::from(value));
             }
-            return;
+            let _ = flag;
+            None
+        };
+        match arg.as_str() {
+            "--home" => home = next_value("--home").or(home),
+            "--config-dir" => config_dir = next_value("--config-dir").or(config_dir),
+            "--data-dir" => data_dir = next_value("--data-dir").or(data_dir),
+            "--state-dir" => state_dir = next_value("--state-dir").or(state_dir),
+            "--cache-dir" => cache_dir = next_value("--cache-dir").or(cache_dir),
+            _ => {}
         }
         if let Some(value) = arg.strip_prefix("--home=").filter(|v| !v.is_empty()) {
-            install_override(PathBuf::from(value));
-            return;
+            home = Some(PathBuf::from(value));
         }
+        for (flag, slot) in [
+            ("--config-dir=", &mut config_dir),
+            ("--data-dir=", &mut data_dir),
+            ("--state-dir=", &mut state_dir),
+            ("--cache-dir=", &mut cache_dir),
+        ] {
+            if let Some(value) = arg.strip_prefix(flag).filter(|v| !v.is_empty()) {
+                *slot = Some(PathBuf::from(value));
+            }
+        }
+    }
+    let any = home.is_some()
+        || config_dir.is_some()
+        || data_dir.is_some()
+        || state_dir.is_some()
+        || cache_dir.is_some();
+    if any {
+        install_override(home, config_dir, data_dir, state_dir, cache_dir);
+        return;
     }
     // Absent flag: record the no-op so `installed_home` and the `run`
     // consistency assertion stay well-defined.
     let _ = INSTALLED_HOME.set(None);
 
-    fn install_override(home: PathBuf) {
-        // Restate the flag as its env form for every child process: the
+    fn install_override(
+        home: Option<PathBuf>,
+        config_dir: Option<PathBuf>,
+        data_dir: Option<PathBuf>,
+        state_dir: Option<PathBuf>,
+        cache_dir: Option<PathBuf>,
+    ) {
+        // Restate the flags as their env forms for every child process: the
         // runtime's auto-spawn (`client::spawn_daemon`) and the detach path
         // build fresh command lines that cannot inherit a flag, but they do
         // inherit the environment. This makes `--home X` and
-        // `NEENEE_HOME=X` indistinguishable to any descendant — the flag is
-        // sugar over the env var, with identical inheritance semantics.
+        // `NEENEE_HOME=X` (and each `--*-dir` with its `NEENEE_*_DIR`)
+        // indistinguishable to any descendant — the flags are sugar over
+        // the env vars, with identical inheritance semantics.
         //
         // SAFETY: called once from `main` before any thread exists, so no
         // concurrent reader can observe the write (setenv is not thread-safe).
-        unsafe { std::env::set_var("NEENEE_HOME", &home) };
+        if let Some(home) = &home {
+            unsafe { std::env::set_var("NEENEE_HOME", home) };
+        }
+        for (dir, var) in [
+            (&config_dir, "NEENEE_CONFIG_DIR"),
+            (&data_dir, "NEENEE_DATA_DIR"),
+            (&state_dir, "NEENEE_STATE_DIR"),
+            (&cache_dir, "NEENEE_CACHE_DIR"),
+        ] {
+            if let Some(dir) = dir {
+                unsafe { std::env::set_var(var, dir) };
+            }
+        }
+        let _ = INSTALLED_HOME.set(home.clone());
         let dirs =
             neenee_persistence::paths::Dirs::resolve(&neenee_persistence::paths::PathsOverride {
-                home: Some(home.clone()),
-                ..Default::default()
+                home,
+                config_dir,
+                data_dir,
+                state_dir,
+                cache_dir,
             });
-        let _ = INSTALLED_HOME.set(Some(home));
         if let Err(previous) = neenee_persistence::paths::set_default(dirs) {
             tracing::debug!(
                 previous = ?previous,
@@ -155,13 +213,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         remote,
         token,
         home,
+        config_dir,
+        data_dir,
+        state_dir,
+        cache_dir,
         ..
     } = parsed;
 
     // The pre-parser in `main` already installed the override; assert the
     // two passes agree so the flag can never parse one way and install
-    // another (ADR-0121's single-source rule for path-layer flags).
+    // another (ADR-0121's single-source rule for path-layer flags). The
+    // per-category flags are consumed by the same pre-parser; binding them
+    // here keeps the two parses honest about all five selectors.
     debug_assert_eq!(home, installed_home());
+    debug_assert!(config_dir.is_none() && data_dir.is_none() && state_dir.is_none() && cache_dir.is_none()
+        || std::env::var_os("NEENEE_CONFIG_DIR").is_some()
+        || std::env::var_os("NEENEE_DATA_DIR").is_some()
+        || std::env::var_os("NEENEE_STATE_DIR").is_some()
+        || std::env::var_os("NEENEE_CACHE_DIR").is_some());
 
     match mode {
         Mode::Version => {
@@ -320,10 +389,23 @@ fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
     // invoking shell's foreground process group, or the terminal's Ctrl-C
     // SIGINTs it along with everything else — the exact opposite of what
     // "detach" promises.
+    //
+    // New session (ADR-0125): `setsid(2)` also severs the daemon from the
+    // invoking terminal's session, so terminal/compositor death cannot
+    // SIGHUP it (tmux-server semantics). See the twin comment in
+    // `client::spawn_daemon`.
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
     command
         .spawn()
@@ -683,56 +765,68 @@ async fn run_attached(
         fresh_pending = false;
         pick_pending = false;
         let handshake = client::connect(&info, action).await?;
-        let (tx, rx, hosted_session_id, round_counter, transcript, provider, model) =
-            match handshake {
-                client::Handshake::Attached {
-                    req_tx,
-                    resp_rx,
-                    session_id,
-                    round_counter,
-                    history,
-                    provider,
-                    model,
-                } => (
-                    req_tx,
-                    resp_rx,
-                    session_id,
-                    round_counter,
-                    history,
-                    provider,
-                    model,
-                ),
-                // A daemon that answers `Pick` wants the user to choose.
-                // Choosing is interactive (ADR-0116): reconnect as a picker
-                // carrier and let the TUI modal do the listing, with fuzzy
-                // filter, detail pane, and Enter-to-open — not a printed
-                // stderr list that makes the user copy an id by hand.
-                client::Handshake::Pick(_) => {
-                    let handshake = client::connect(&info, client::AttachAction::Picker).await?;
-                    match handshake {
-                        client::Handshake::Attached {
-                            req_tx,
-                            resp_rx,
-                            session_id,
-                            round_counter,
-                            history,
-                            provider,
-                            model,
-                        } => (
-                            req_tx,
-                            resp_rx,
-                            session_id,
-                            round_counter,
-                            history,
-                            provider,
-                            model,
-                        ),
-                        client::Handshake::Pick(_) => {
-                            return Err("the daemon offered no session to pick from".into());
-                        }
+        let (
+            tx,
+            rx,
+            hosted_session_id,
+            round_counter,
+            transcript,
+            round_interrupts,
+            provider,
+            model,
+        ) = match handshake {
+            client::Handshake::Attached {
+                req_tx,
+                resp_rx,
+                session_id,
+                round_counter,
+                history,
+                round_interrupts,
+                provider,
+                model,
+            } => (
+                req_tx,
+                resp_rx,
+                session_id,
+                round_counter,
+                history,
+                round_interrupts,
+                provider,
+                model,
+            ),
+            // A daemon that answers `Pick` wants the user to choose.
+            // Choosing is interactive (ADR-0116): reconnect as a picker
+            // carrier and let the TUI modal do the listing, with fuzzy
+            // filter, detail pane, and Enter-to-open — not a printed
+            // stderr list that makes the user copy an id by hand.
+            client::Handshake::Pick(_) => {
+                let handshake = client::connect(&info, client::AttachAction::Picker).await?;
+                match handshake {
+                    client::Handshake::Attached {
+                        req_tx,
+                        resp_rx,
+                        session_id,
+                        round_counter,
+                        history,
+                        round_interrupts,
+                        provider,
+                        model,
+                    } => (
+                        req_tx,
+                        resp_rx,
+                        session_id,
+                        round_counter,
+                        history,
+                        round_interrupts,
+                        provider,
+                        model,
+                    ),
+                    client::Handshake::Pick(_) => {
+                        return Err("the daemon offered no session to pick from".into());
                     }
                 }
-            };
+            }
+        };
         if autopilot_pending {
             let _ = tx.send(neenee_contracts::AgentRequest::SlashCommand(
                 "/autopilot on".to_string(),
@@ -771,6 +865,7 @@ async fn run_attached(
             Vec::new(),
             round_counter,
             vec![],
+            round_interrupts,
             tui_config,
             input_history_config,
             neenee_tui::SessionSource::Remote {

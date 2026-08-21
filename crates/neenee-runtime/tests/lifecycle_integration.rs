@@ -486,3 +486,97 @@ async fn spawned_daemon_inherits_the_neenee_home_sandbox() {
         "the drained daemon must remove its discovery record"
     );
 }
+
+/// ADR-0125: a hosted session with armed `/schedule` jobs is exempt from
+/// idle suspension — suspending it would park its tick loop and silently
+/// stop the schedule from firing. A schedule-free session under the same
+/// conditions still suspends (the memory-bounding behavior ADR-0113 added).
+#[tokio::test]
+async fn idle_suspension_spares_sessions_with_armed_schedules() {
+    sandbox_once();
+    let tmp = tempfile::tempdir().unwrap();
+    let registry = Arc::new(SessionRegistry::prehost_only());
+
+    // Two sessions past the TTL: one with an armed job, one without. Both
+    // need real content so the store persists them (empty sessions are the
+    // reaper's, not the suspender's). Each is hosted through the same
+    // `SessionStore` it was armed on, so the id the registry sees is the id
+    // the schedule belongs to.
+    async fn host_with_session(
+        registry: &Arc<SessionRegistry>,
+        session: Arc<SessionStore>,
+        project_root: &std::path::Path,
+    ) {
+        let (req_tx, _req_rx) = mpsc::unbounded_channel::<neenee_contracts::AgentRequest>();
+        let (bc_tx, _) = broadcast::channel::<neenee_contracts::AgentResponse>(16);
+        let tracker = Arc::new(Mutex::new(
+            neenee_runtime::monitor::MonitorTracker::bootstrap(
+                neenee_contracts::MonitoredSession::empty(session.id().await),
+                neenee_contracts::SessionStatus::Idle,
+            ),
+        ));
+        registry
+            .host(HostedSession {
+                project_root: project_root.to_path_buf(),
+                session,
+                req_tx,
+                events: bc_tx,
+                cancel: tokio_util::sync::CancellationToken::new(),
+                tracker,
+                sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                created_at: std::time::Instant::now(),
+                last_activity: tokio::sync::Mutex::new(std::time::Instant::now()),
+                last_seen_tick: std::sync::atomic::AtomicU64::new(0),
+                activity_tick: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                agent_for_session_end: None,
+            })
+            .await;
+    }
+
+    let armed_project = tmp.path().join("armed-project");
+    let armed_session = Arc::new(SessionStore::load_for_project(armed_project.clone()));
+    armed_session
+        .set_scheduled_jobs(vec![neenee_contracts::ScheduledJob::once(
+            "nightly".into(),
+            chrono::Utc::now() + chrono::Duration::hours(8),
+            "run the nightly check".into(),
+            chrono::Utc::now(),
+        )])
+        .await
+        .unwrap();
+    armed_session
+        .replace_messages(vec![neenee_contracts::Message::new(
+            neenee_contracts::Role::User,
+            "arm a schedule",
+        )])
+        .await
+        .unwrap();
+    host_with_session(&registry, armed_session.clone(), &armed_project).await;
+
+    let plain_project = tmp.path().join("plain-project");
+    let plain_session = Arc::new(SessionStore::load_for_project(plain_project.clone()));
+    plain_session
+        .replace_messages(vec![neenee_contracts::Message::new(
+            neenee_contracts::Role::User,
+            "no schedule here",
+        )])
+        .await
+        .unwrap();
+    host_with_session(&registry, plain_session.clone(), &plain_project).await;
+
+    // Zero TTL: everything idle-suspends unless exempted.
+    let suspended = registry
+        .suspend_idle_sessions_with(Duration::from_millis(0))
+        .await;
+
+    let armed_id = armed_session.id().await;
+    assert!(
+        !suspended.contains(&armed_id),
+        "an armed schedule must keep its session resident (suspended: {suspended:?})"
+    );
+    let plain_id = plain_session.id().await;
+    assert!(
+        suspended.contains(&plain_id),
+        "a schedule-free idle session should still suspend (suspended: {suspended:?})"
+    );
+}

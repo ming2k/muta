@@ -6,6 +6,30 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
         ConfigAction::Path => {
             println!("{}", Config::config_file_path().display());
         }
+        ConfigAction::Check => {
+            let findings = neenee_persistence::config_check::check_config_file(None);
+            if findings.is_empty() {
+                println!(
+                    "config.toml is valid and every key is understood by this version."
+                );
+                return Ok(());
+            }
+            let mut legacy = 0;
+            for finding in &findings {
+                if finding.is_legacy {
+                    legacy += 1;
+                }
+                println!("  {}: {}", finding.key, finding.message);
+            }
+            println!(
+                "\n{} finding(s), {} legacy key(s). Unknown keys are ignored at \
+                 load, so none of these block startup — but a typo silently \
+                 falls back to the default.",
+                findings.len(),
+                legacy
+            );
+            std::process::exit(1);
+        }
         ConfigAction::List => {
             let config = Config::load();
             println!(

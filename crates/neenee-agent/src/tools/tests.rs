@@ -87,13 +87,21 @@ mod tests {
                 .as_ref()
                 .map(|k| k.expose_secret().to_string())
                 .as_deref(),
-            Some("jina-test-key")
+            Some("jina-test-key"),
+            "deserialization still accepts the inline spelling (legacy files)"
         );
-        // A full config round-trips the new fields without dropping them.
+        // Secrets never serialize into config.toml (behavior-only contract);
+        // they persist in credentials.toml instead. A config round-trip
+        // therefore drops them by design — see the persistence crate's
+        // websearch-keys migration tests for the full path.
         let reencoded = toml::to_string(&cfg).unwrap();
+        assert!(
+            !reencoded.contains("jina-test-key"),
+            "secret leaked through config serialization: {reencoded}"
+        );
         let reloaded: WebSearchConfig = toml::from_str(&reencoded).unwrap();
         assert_eq!(reloaded.reader, "jina");
-        assert!(reloaded.jina_api_key.is_some());
+        assert!(reloaded.jina_api_key.is_none());
     }
 
     #[test]

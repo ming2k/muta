@@ -25,26 +25,56 @@ pub mod searxng;
 pub mod tavily;
 
 /// A single search hit. Backends that return structured results (DDG, SearXNG,
-/// Tavily) parse their responses into this; backends that return a pre-rendered
-/// text blob (Exa, Parallel) ignore it and return the blob directly.
+/// Tavily, Bocha) parse their responses into this; backends that return a
+/// pre-rendered text blob (Exa, Parallel) return it as [`ProviderOutput::Blob`]
+/// for the tool layer to budget.
 #[derive(Debug, Clone)]
-pub(super) struct SearchResult {
+pub(crate) struct SearchResult {
     pub title: String,
     pub url: String,
     pub snippet: String,
 }
 
-/// The plugin contract. A backend turns a query into ready-to-show text for the
-/// model. Implementations own their HTTP shape, parsing, and formatting; the
-/// tool layer only handles argument parsing, client/proxy setup, and fallback.
+/// What a backend produced for one query.
+///
+/// The tool layer owns the token budget for both shapes: structured results
+/// are formatted entry-by-entry with titles+URLs never truncated (they are the
+/// model's candidate list), and blobs go through the same token cap. This is
+/// the ADR-0118 known-limitation fix: providers no longer pre-format.
+pub(crate) enum ProviderOutput {
+    /// Parsed, structured hits — preferred: the tool layer can dedupe URLs,
+    /// cap per-domain counts, and budget each entry individually.
+    Results(Vec<SearchResult>),
+    /// A pre-rendered, model-optimized text blob from the backend (Exa,
+    /// Parallel). Passed through with the shared token cap.
+    Blob(String),
+}
+
+/// The plugin contract. A backend turns a query into either structured hits
+/// or a pre-rendered blob; the tool layer owns formatting and budgets.
+/// Implementations own their HTTP shape and parsing; the tool layer only
+/// handles argument parsing, client/proxy setup, and fallback.
 #[async_trait]
 pub(crate) trait SearchProvider: Send + Sync {
     /// Human-readable label included in the result header, e.g. `"Exa"`.
     fn name(&self) -> &'static str;
-    /// Run the search and return formatted text, or an error describing what
-    /// went wrong (surfaced verbatim to the model/user).
-    async fn search(&self, client: &reqwest::Client, query: &str) -> Result<String, String>;
+    /// Run the search, or return an error describing what went wrong
+    /// (surfaced verbatim to the model/user).
+    async fn search(&self, client: &reqwest::Client, query: &str)
+    -> Result<ProviderOutput, String>;
 }
+
+/// Names `build_provider` recognizes. Used by config validation to warn on
+/// typos instead of silently falling back to Exa.
+pub(super) const KNOWN_PROVIDERS: &[&str] = &[
+    "exa",
+    "parallel",
+    "duckduckgo",
+    "ddg",
+    "searxng",
+    "tavily",
+    "bocha",
+];
 
 /// Build a provider by its config name. Unknown names fall back to Exa (the
 /// default) rather than erroring at construction time, so a typo never leaves
@@ -55,6 +85,14 @@ pub(crate) trait SearchProvider: Send + Sync {
 /// boundary: the `pub(crate)` provider structs hold plain `String`s and never
 /// derive `Debug`, so the plaintext cannot leak through formatting.
 pub(crate) fn build_provider(cfg: &WebSearchConfig, name: &str) -> Box<dyn SearchProvider> {
+    if !KNOWN_PROVIDERS.contains(&name) {
+        tracing::warn!(
+            backend = name,
+            fallback = "exa",
+            "[websearch] unknown backend '{name}' — falling back to Exa. \
+             Known backends: exa, parallel, duckduckgo, searxng, tavily, bocha."
+        );
+    }
     match name {
         "parallel" => Box::new(parallel::ParallelProvider {
             api_key: cfg
@@ -91,33 +129,63 @@ pub(crate) fn build_provider(cfg: &WebSearchConfig, name: &str) -> Box<dyn Searc
 pub(super) const MOZILLA_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
     (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-/// Render structured results as the standard numbered list. Shared by the
-/// DDG/SearXNG/Tavily backends. Snippet text is server-controlled and
-/// unbounded per item, so the composed list goes through [`cap_output`] —
-/// the same guard the blob-style backends (Exa/Parallel) apply directly.
+/// Render structured results under a token budget.
+///
+/// **Titles and URLs are never truncated** — they are the model's candidate
+/// list; losing the tail of the list is strictly worse than a shorter
+/// snippet. Snippets are budgeted individually: when the remaining budget is
+/// exhausted, later entries degrade to title+URL only, and if even that does
+/// not fit, the list is cut with an explicit notice naming the number of
+/// dropped hits (so the model knows to narrow the query).
+///
+/// This replaces the old behaviour where a pre-formatted list was simply
+/// chopped at 4 000 tokens — which could cut mid-entry and swallow the URLs
+/// of every result after the cut.
 pub(super) fn format_results(query: &str, source: &str, results: Vec<SearchResult>) -> String {
     if results.is_empty() {
-        return format!("No results found for '{}' (via {}).", query, source);
+        return format!("No results found for '{query}' (via {source}).");
     }
-    let formatted = results
-        .iter()
-        .enumerate()
-        .map(|(idx, result)| {
-            format!(
-                "{}. {}\n   {}\n   {}",
-                idx + 1,
-                result.title,
-                result.url,
-                result.snippet
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    cap_output(&format!(
-        "Search results for '{}' (via {}):\n\n{}",
-        query, source, formatted
-    ))
+    let header = format!("Search results for '{query}' (via {source}):\n\n");
+    let mut remaining =
+        MAX_RESULT_TOKENS.saturating_sub(neenee_contracts::tokenizer::count_tokens(&header));
+    let mut out = String::with_capacity(header.len() + 1024);
+    out.push_str(&header);
+    let mut dropped = 0usize;
+    for (idx, result) in results.iter().enumerate() {
+        // The always-kept line: title + URL. Never truncated.
+        let head = format!("{}. {}\n   {}\n", idx + 1, result.title, result.url);
+        let head_tokens = neenee_contracts::tokenizer::count_tokens(&head);
+        if head_tokens + 12 >= remaining {
+            // Not even the title+URL line fits (12 ≈ the omitted-snippet
+            // marker's cost). Drop the entry; count it in the notice.
+            dropped = results.len() - idx;
+            break;
+        }
+        remaining -= head_tokens;
+        let snippet_tokens = neenee_contracts::tokenizer::count_tokens(&result.snippet);
+        if snippet_tokens <= remaining {
+            out.push_str(&head);
+            out.push_str(&format!("   {}\n", result.snippet));
+            remaining -= snippet_tokens;
+        } else {
+            // Degrade to title+URL only rather than cutting the list.
+            out.push_str(&head);
+            out.push_str("   [snippet omitted to fit the result budget]\n");
+            remaining = remaining.saturating_sub(12);
+        }
+    }
+    if dropped > 0 {
+        out.push_str(&format!(
+            "\n[... {dropped} more results omitted to fit the {}-token budget — narrow the query if the tail matters ...]",
+            MAX_RESULT_TOKENS
+        ));
+    }
+    out
 }
+
+/// Token budget for one `websearch` result (ADR-0120). Shared by the structured
+/// renderer and the blob pass-through.
+pub(super) const MAX_RESULT_TOKENS: usize = 4_000;
 
 /// Guard the model's context window against huge provider payloads.
 /// Token-bounded (ADR-0120): the cut lands on an exact token boundary and the
@@ -230,6 +298,59 @@ mod tests {
             snippet: "S".to_string(),
         }];
         assert!(format_results("q", "Tavily", r).contains("1. T\n   https://e.com"));
+    }
+
+    #[test]
+    fn format_results_never_drops_titles_or_urls() {
+        // 30 results with long snippets: the budget cannot hold them all, but
+        // every title+URL that fits must survive — they are the candidate
+        // list. Snippets degrade first, entries drop last, with a notice.
+        let results: Vec<SearchResult> = (0..30)
+            .map(|i| SearchResult {
+                title: format!("Result number {i} with a title"),
+                url: format!("https://example.com/page/{i}"),
+                snippet: "filler snippet. ".repeat(60),
+            })
+            .collect();
+        let out = format_results("q", "Exa", results.clone());
+        // Early entries keep their full snippet.
+        assert!(out.contains("1. Result number 0 with a title"));
+        assert!(out.contains("https://example.com/page/0"));
+        // The very first entries must never lose their URL.
+        assert!(out.contains("https://example.com/page/1"));
+        assert!(out.contains("https://example.com/page/2"));
+        // Budget engagement is visible one way or another.
+        let degraded = out.contains("[snippet omitted to fit the result budget]");
+        let dropped = out.contains("more results omitted to fit");
+        assert!(
+            degraded || dropped,
+            "expected either snippet degradation or dropped-entry notice:\n{out}"
+        );
+        // Total stays inside the budget.
+        let body = out.split("\n[... ").next().unwrap_or(&out).to_string();
+        assert!(
+            neenee_contracts::tokenizer::count_tokens(&body) <= MAX_RESULT_TOKENS + 40,
+            "body tokens = {}",
+            neenee_contracts::tokenizer::count_tokens(&body)
+        );
+    }
+
+    #[test]
+    fn format_results_prefers_full_snippet_over_degradation() {
+        // Small result set with short snippets: nothing degrades, nothing is
+        // dropped, and no budget notices appear.
+        let results: Vec<SearchResult> = (0..3)
+            .map(|i| SearchResult {
+                title: format!("T{i}"),
+                url: format!("https://e.com/{i}"),
+                snippet: format!("snippet {i}"),
+            })
+            .collect();
+        let out = format_results("q", "Exa", results);
+        assert!(!out.contains("[snippet omitted"));
+        assert!(!out.contains("more results omitted"));
+        assert!(out.contains("snippet 0"));
+        assert!(out.contains("snippet 2"));
     }
 
     #[test]

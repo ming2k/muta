@@ -40,6 +40,11 @@ use tokio::sync::Mutex;
 mod actions;
 mod render;
 
+/// Test-only bridge: the behavior-lock tests in `crate::tests` drive the
+/// insert staging directly (ADR-0126). The production path dispatches it
+/// inside `actions::process`; this re-export never leaves the test profile.
+#[cfg(test)]
+pub(crate) use actions::handle_insert_into_round;
 #[cfg(test)]
 pub(crate) use actions::handle_send_slash;
 
@@ -489,7 +494,7 @@ pub(super) enum OutboxSignal {
         session_id: String,
         input_id: String,
     },
-    /// A mid-round steer (`InsertUserInput`, `F4`) was admitted at a safe
+    /// A mid-round steer (`InsertUserInput`, `Ctrl+O`) was admitted at a safe
     /// turn boundary; the transcript listener already appended the visible
     /// user message. The loop drops the shadow outbox item.
     Inserted {
@@ -1567,23 +1572,51 @@ async fn drain_outbox_signals(app: &mut App, runtime: &UiRuntime) {
                 input_id,
             } => {
                 app.remove_dispatch(&session_id, &input_id);
+                // The item left the outbox, so a queue pointer at it would
+                // dangle. Dissolve *without* restoring the stashed draft —
+                // the composer is either empty (the user was elsewhere) or
+                // holding an edit of this very item whose commit already
+                // raced; either way the draft must not clobber it.
+                if app.queue_pointer.is_some() {
+                    app.queue_pointer = None;
+                    app.queue_pointer_draft.clear();
+                    app.queue_pointer_draft_images.clear();
+                    app.queue_pointer_draft_text_pastes.clear();
+                }
             }
             OutboxSignal::Unavailable {
                 session_id,
                 input_id,
             } => {
-                // The round closed before this insert could be admitted:
-                // the item returns to `Waiting` as a paused next-round
-                // entry (also the `ChatToSession` failure path).
-                app.requeue_dispatch(&session_id, &input_id);
+                // The round closed before this content could ship. For an
+                // outbox item this is a plain re-queue (paused next-round
+                // entry). For a transcript-owned insert (`Ctrl+O`) the held
+                // entry stays in the transcript — it never leaves the
+                // conversation — and its content is re-queued here under the
+                // same id so the next-round lifecycle (auto-drain, pointer
+                // recall) takes over. Both transcript buffers are searched:
+                // an aside (`/btw`) insert stages into `side_messages`.
+                let held = app
+                    .messages
+                    .iter()
+                    .chain(app.side_messages.iter())
+                    .rev()
+                    .find(|m| {
+                        m.insert_id.as_deref() == Some(input_id.as_str())
+                            && m.role == neenee_contracts::Role::User
+                    })
+                    .map(|m| (m.raw.clone(), Vec::new(), Vec::new()));
+                app.requeue_dispatch(&session_id, &input_id, held);
             }
             OutboxSignal::Inserted {
                 session_id,
                 input_id,
             } => {
-                // The steer crossed a safe turn boundary and the listener
-                // already committed it to the transcript — drop the shadow
-                // outbox item.
+                // The steer crossed a safe turn boundary: the listener
+                // already settled the transcript entry (delivery flip). The
+                // insert is transcript-owned, so there is no outbox item to
+                // drop — the remove is a defensive no-op kept for the legacy
+                // shadow-item shape.
                 app.remove_dispatch(&session_id, &input_id);
             }
             OutboxSignal::RoundCompleted { session_id } => {
@@ -1617,11 +1650,51 @@ async fn drain_unsent_input(app: &mut App, runtime: &UiRuntime) {
     // the prompt + images into the composer so the user can edit and resend
     // — the same restore `App::recall_queued` performs for a queued message.
     if let Some(unsent) = runtime.unsent_input_signal.lock().await.take() {
-        // Phase-1 unsend: the interrupted input becomes the new draft —
-        // the newest *unsent* slot. `adopt_as_draft` enters draft mode,
-        // replaces any stale remembered draft, and mirrors the staged
-        // attachments into both the pending slots and the draft stash.
-        app.adopt_as_draft(unsent.prompt, unsent.images, Vec::new());
+        // Phase-1 unsend: the interrupted input becomes the new draft — the
+        // newest *unsent* slot — but only if the composer is idle. Unlike a
+        // queue recall this is not a user gesture: if the user was mid-
+        // composition when the interrupt landed, their in-progress draft
+        // wins and the unsent prompt stays recoverable via the recorded
+        // history (Ctrl+R / ↑).
+        let idle = app.input.is_empty()
+            && app.pending_images.is_empty()
+            && app.pending_text_pastes.is_empty();
+        let adopted = idle && {
+            app.adopt_as_draft(
+                unsent.prompt,
+                unsent.images,
+                Vec::new(),
+                crate::app::DraftAdoption::OnlyIfIdle,
+            );
+            true
+        };
+        // The prompt never ships with paste chips — it was flattened by
+        // `expand_paste_chips` before send — so the paste slot must not
+        // leak chips from an older draft into the restored one. Only clear
+        // it when we actually adopted (a busy composer owns its chips).
+        if adopted {
+            app.pending_text_pastes.clear();
+            app.history_draft_text_pastes.clear();
+        }
+        // Feedback parity with the web panel's "Prompt not sent" toast: the
+        // transcript row for this prompt was already popped, so a silent
+        // composer refill would look like the send never happened at all.
+        let (title, body) = if adopted {
+            (
+                "Prompt not sent",
+                "Interrupted before any output; your prompt is back in the composer.",
+            )
+        } else {
+            (
+                "Prompt not sent",
+                "Interrupted before any output; the prompt is in history (Ctrl+R) — the composer kept your draft.",
+            )
+        };
+        app.notice_toast_message = title.to_string();
+        app.notice_toast_severity = NoticeSeverity::Warning;
+        app.notice_toast_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(2600));
+        let _ = body; // title-only bubble for now, mirroring the copy toast
     }
 }
 
@@ -1632,7 +1705,7 @@ fn auto_dispatch_ready_round(app: &mut App) {
     // A next-round item auto-runs only after both a natural-completion
     // event and the matching session's idle snapshot. Error, interrupt,
     // blocked-hook and vanished-session paths leave it visibly paused.
-    // A user block (`F3` / queue-modal-open) holds items back even from a
+    // A user block (`Ctrl+P` / queue-modal-open) holds items back even from a
     // ready session — the block is the explicit "don't send anything"
     // override.
     let ready_session = app
@@ -2190,6 +2263,7 @@ pub(super) async fn run_app_loop(
                             item.session_id == viewed_session_id
                                 && item.state == crate::app::QueuedDispatchState::Waiting
                         }),
+                        queue_pointer_armed: app.queue_pointer.is_some(),
                         history_searching: app.history_search,
                         model_searching: app.model_search,
                         modal_keymap_open: app.modal_keymap_open,

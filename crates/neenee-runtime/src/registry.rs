@@ -13,6 +13,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
+
+/// Wall-clock now in Unix-epoch milliseconds, for round-interrupt records
+/// (C11). Same convention as the TUI's `now_epoch_ms`. Shared with the
+/// driver's crash-residue inference.
+pub(crate) fn unix_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 #[derive(Clone)]
 pub struct HostParams {
     pub identity: AgentIdentity,
@@ -126,6 +137,12 @@ pub type WipRegistry = Arc<Mutex<HashMap<String, WipStatus>>>;
 /// create→attach→first-prompt gap, so an empty session a user is about to
 /// type into is never swept from under them.
 const IDLE_EMPTY_SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// How often the storage-maintenance pass (blob GC + usage-day retention)
+/// runs inside the idle reaper's tick loop. Both phases scan the whole data
+/// dir; daily is the right cadence for reclaiming garbage.
+const STORAGE_MAINTENANCE_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
 
 /// How often the idle-empty reaper sweeps. One minute keeps abandoned empty
 /// sessions bounded without meaningfully waking the daemon.
@@ -444,6 +461,16 @@ impl SessionRegistry {
             if status.is_active() {
                 continue;
             }
+            // An armed `/schedule` job is work that *will* run unattended
+            // (ADR-0125): suspending the session parks its tick loop, so a
+            // due cron or countdown would silently stop firing — exactly the
+            // autonomy the schedule was created for. Idle-suspension exists
+            // to bound memory, and a session with armed jobs is not idle in
+            // the meaningful sense. The rehost path re-arms these after a
+            // daemon restart; this guard keeps them armed between restarts.
+            if !entry.session.scheduled_jobs().await.is_empty() {
+                continue;
+            }
             // Activity clock: starts at host time and is refreshed below
             // whenever the tap tick advanced since the last sweep, so "idle"
             // means "no folded events for the whole TTL".
@@ -490,6 +517,28 @@ impl SessionRegistry {
                 "session '{session_id}' is not hosted on this server"
             ));
         };
+        // Record the terminated-with-process stop (C11) *before* dropping the
+        // driver future: the round task it kills here never runs its own tail,
+        // so this durable record is the only trace the round ever stopped.
+        // Best-effort — a persistence failure must not block teardown. The
+        // monitor tracker is the registry-side view of "a round is live";
+        // NeedsApproval/NeedsInput also count (parked work dies with the
+        // driver too).
+        let status = e.tracker.lock().await.row().status;
+        if status.is_active() {
+            let record = neenee_contracts::RoundInterrupt {
+                reason: neenee_contracts::RoundInterruptReason::Terminated,
+                at_ms: unix_epoch_ms(),
+                round: Some(e.session.round_counter().await),
+            };
+            if let Err(error) = e.session.record_round_interrupt(record).await {
+                tracing::warn!(
+                    session = %session_id,
+                    %error,
+                    "registry: could not record round interrupt on kill"
+                );
+            }
+        }
         e.cancel.cancel();
         let _ = e.events.send(AgentResponse::Exit);
         // SessionEnd observers fire best-effort after the driver is cancelled;
@@ -614,6 +663,11 @@ impl SessionRegistry {
     /// Spawn the background idle-empty reaper, sweeping every
     /// `IDLE_REAPER_INTERVAL` until `cancel` fires. The daemon calls this
     /// once at startup; the task stops cleanly on shutdown.
+    ///
+    /// The same tick runs the low-frequency storage-maintenance pass
+    /// ([`Self::run_storage_maintenance_once`]) at most once per day: blob
+    /// garbage collection and usage-day retention. Both are whole-data-dir
+    /// scans, far too expensive to run per session event.
     pub fn spawn_idle_reaper(self: &Arc<Self>, cancel: CancellationToken) {
         let registry = Arc::clone(self);
         tokio::spawn(async move {
@@ -621,6 +675,7 @@ impl SessionRegistry {
             // `interval` fires immediately on creation; skip the first tick so
             // a just-started daemon does not reap sessions still being set up.
             tick.tick().await;
+            let mut last_maintenance = std::time::Instant::now();
             loop {
                 tokio::select! {
                     _ = cancel.cancelled() => {
@@ -630,8 +685,35 @@ impl SessionRegistry {
                     _ = tick.tick() => {
                         registry.reap_idle_empty_sessions().await;
                         registry.suspend_idle_sessions().await;
+                        if last_maintenance.elapsed() >= STORAGE_MAINTENANCE_INTERVAL {
+                            last_maintenance = std::time::Instant::now();
+                            registry.spawn_storage_maintenance();
+                        }
                     }
                 }
+            }
+        });
+    }
+
+    /// One storage-maintenance pass: sweep unreferenced blobs and prune
+    /// over-age usage day files. Both phases are synchronous directory scans
+    /// proportional to the data dir's size, so the work runs on the blocking
+    /// pool.
+    pub fn spawn_storage_maintenance(self: &Arc<Self>) {
+        let dirs = neenee_persistence::paths::get();
+        let blobs = neenee_persistence::blobs::BlobStore::new(dirs.blobs_dir());
+        let projects = dirs.projects_dir();
+        let usage = neenee_persistence::usage_stats::UsageStatsStore::new();
+        tokio::task::spawn_blocking(move || {
+            let (count, bytes) = blobs.collect_garbage(&projects);
+            let days = usage.prune_old_days();
+            if count > 0 || days > 0 {
+                tracing::info!(
+                    blobs = count,
+                    bytes,
+                    pruned_days = days,
+                    "storage maintenance: reclaimed unreferenced data"
+                );
             }
         });
     }
@@ -857,6 +939,68 @@ impl SessionRegistry {
             }
         }
     }
+
+    /// Boot-time rehost of autonomous sessions (ADR-0125): scan every
+    /// project's persisted sessions for armed `/schedule` jobs and
+    /// re-assemble a hosted harness for each, so scheduled prompts keep
+    /// firing across daemon restarts (crash, upgrade, reboot) instead of
+    /// silently waiting for a human to attach.
+    ///
+    /// The scan reads snapshot headers only (no transcript decode), and each
+    /// assembly is the ordinary lazy-resume path — meaning a rehosted
+    /// session is indistinguishable from an attached one: it appears in the
+    /// dashboard, its idle-suspension guard keeps it resident, and its
+    /// scheduler fires from the first tick. A session whose project root no
+    /// longer exists is skipped with a warning (the harness would fail its
+    /// cwd-sensitive tooling anyway); rehost failures never block the daemon
+    /// from starting.
+    pub async fn rehost_armed_sessions(&self) -> Vec<String> {
+        if self.params.is_none() {
+            return Vec::new();
+        }
+        let armed =
+            tokio::task::spawn_blocking(neenee_persistence::session::sessions_with_armed_schedules)
+                .await
+                .unwrap_or_default();
+        let mut rehosted = Vec::new();
+        for entry in armed {
+            if self.sessions.lock().await.contains_key(&entry.session_id) {
+                continue; // already hosted (e.g. a client raced the boot scan)
+            }
+            if !entry.project_root.is_dir() {
+                tracing::warn!(
+                    session = %entry.session_id,
+                    project = %entry.project_root.display(),
+                    "rehost: project root is gone; leaving the session dormant"
+                );
+                continue;
+            }
+            match self
+                .assemble_hosted(
+                    crate::startup::SessionStart::Resume(entry.session_id.clone()),
+                    entry.project_root.clone(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    tracing::info!(
+                        session = %entry.session_id,
+                        project = %entry.project_root.display(),
+                        "rehosted session with armed schedule"
+                    );
+                    rehosted.push(entry.session_id);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        session = %entry.session_id,
+                        ?error,
+                        "rehost: could not re-assemble session; it stays dormant and lazy-resumes on attach"
+                    );
+                }
+            }
+        }
+        rehosted
+    }
     async fn assemble_hosted(
         &self,
         startup: crate::startup::SessionStart,
@@ -867,6 +1011,12 @@ impl SessionRegistry {
             principal,
             ui,
         } = self.params.as_ref().ok_or(AssembleErr::NoHost)?.clone();
+        // The session's lifetime token (ADR-0125): shared by the driver
+        // select below and the background `/schedule` scheduler inside the
+        // assemble, so one cancel stops the harness *and* its tick loop.
+        // Created before the assemble because the scheduler is spawned
+        // during it and receives the token as a spawn parameter.
+        let cancel = CancellationToken::new();
         let boot = bootstrap::assemble(BootstrapParams {
             identity,
             principal,
@@ -875,6 +1025,7 @@ impl SessionRegistry {
             project_root: Some(project_root.clone()),
             autopilot: false,
             extra_session_tools: None,
+            teardown_token: Some(cancel.clone()),
         })
         .await
         .map_err(AssembleErr::AssembleFailed)?;
@@ -956,7 +1107,6 @@ impl SessionRegistry {
                 }
             }
         });
-        let cancel = CancellationToken::new();
         let cd = cancel.clone();
         let driver = boot.driver;
         // Supervised driver spawn (the "evict" policy). The select arm keeps
@@ -1127,6 +1277,15 @@ impl SessionRegistry {
 enum AssembleErr {
     NoHost,
     AssembleFailed(Box<dyn std::error::Error>),
+}
+
+impl std::fmt::Debug for AssembleErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoHost => f.write_str("no host parameters"),
+            Self::AssembleFailed(e) => write!(f, "assemble failed: {e}"),
+        }
+    }
 }
 
 /// Project the picker's cheap header row into the monitor base row; every

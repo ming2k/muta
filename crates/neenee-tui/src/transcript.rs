@@ -111,6 +111,63 @@ pub(super) fn transcript_messages_from_core(
     transcript_from_core_inner(messages, config, true)
 }
 
+/// Rebuild the round-interrupt marker rows of the durable record list (C11)
+/// into the TUI document model: one compact warning entry per stopped round,
+/// placed at its timestamp seam by [`merge_round_interrupt_rows`]. Like the
+/// command ledger, the records are the source of truth on resume — the
+/// message stream is pure dialogue — and each row is stamped with the
+/// record's `at_ms` (via `sent_at_ms`) as its seam anchor.
+pub(super) fn transcript_interrupts_from_records(
+    records: Vec<neenee_contracts::RoundInterrupt>,
+) -> Vec<TranscriptMessage> {
+    records
+        .into_iter()
+        .map(|record| {
+            let at_ms = record.at_ms;
+            TranscriptMessage::round_interrupted(record).with_sent_at_ms(at_ms)
+        })
+        .collect()
+}
+
+/// Merge rebuilt round-interrupt rows into a restored transcript (C11),
+/// mirroring [`merge_command_rows`]'s seam rule: each marker lands **before
+/// the first user message whose send time is later than the stop** — at the
+/// seam between conversation turns, never inside one. An interrupt older
+/// than every seam, or carrying no comparable seam, lands at the tail: it
+/// was the last thing that happened before the transcript ended, which is
+/// exactly the "the process died mid-round" case the marker exists to show.
+pub(super) fn merge_round_interrupt_rows(
+    dialogue: Vec<TranscriptMessage>,
+    interrupts: Vec<TranscriptMessage>,
+) -> Vec<TranscriptMessage> {
+    use neenee_contracts::Role;
+
+    if interrupts.is_empty() {
+        return dialogue;
+    }
+    let mut out = Vec::with_capacity(dialogue.len() + interrupts.len());
+    let mut interrupts = interrupts.into_iter().peekable();
+
+    for message in dialogue {
+        if message.role == Role::User
+            && let Some(seam_ms) = message.sent_at_ms
+        {
+            while let Some(marker) = interrupts.peek() {
+                if marker.sent_at_ms.is_some_and(|ms| ms <= seam_ms) {
+                    #[allow(clippy::expect_used)]
+                    out.push(interrupts.next().expect("peeked interrupt exists"));
+                } else {
+                    break;
+                }
+            }
+        }
+        out.push(message);
+    }
+    // Markers after the last seam land at the tail, in record order.
+    out.extend(interrupts);
+    out
+}
+
 /// Rebuild the command rows of the ADR-0091 durable command ledger into the
 /// TUI document model: one compact, dimmed, non-conversational row per
 /// invocation, with the typed result as its expandable body. The ledger is the
@@ -497,7 +554,9 @@ pub(super) fn format_tool_call(name: &str, arguments: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::rebase_transcript_rounds;
+    use super::{
+        merge_round_interrupt_rows, rebase_transcript_rounds, transcript_interrupts_from_records,
+    };
     use crate::model::document::TranscriptMessage;
     use neenee_contracts::Role;
 
@@ -580,5 +639,69 @@ mod tests {
             Some(crate::model::document::ToolStepStatus::Ok),
             "the child read_text step completed normally"
         );
+    }
+
+    /// C11: interrupt markers re-project at their timestamp seam — before the
+    /// first user message sent *after* the stop — and a marker newer than
+    /// every seam lands at the tail (the process died mid-round).
+    #[test]
+    fn round_interrupt_markers_land_at_their_seams() {
+        use neenee_contracts::{RoundInterrupt, RoundInterruptReason};
+
+        let dialogue = vec![
+            TranscriptMessage::new(Role::User, "first").with_sent_at_ms(1_000),
+            TranscriptMessage::new(Role::Assistant, "reply 1"),
+            TranscriptMessage::new(Role::User, "second").with_sent_at_ms(5_000),
+            TranscriptMessage::new(Role::Assistant, "reply 2"),
+        ];
+        let markers = transcript_interrupts_from_records(vec![
+            RoundInterrupt {
+                reason: RoundInterruptReason::User,
+                at_ms: 3_000,
+                round: Some(1),
+            },
+            RoundInterrupt {
+                reason: RoundInterruptReason::Terminated,
+                at_ms: 9_000,
+                round: Some(2),
+            },
+        ]);
+
+        let merged = merge_round_interrupt_rows(dialogue, markers);
+
+        // 6 rows: u1, a1, marker1, u2, a2, marker2(tail).
+        assert_eq!(merged.len(), 6);
+        assert_eq!(merged[2].is_round_interrupt(), true);
+        assert_eq!(
+            merged[2].sent_at_ms,
+            Some(3_000),
+            "mid-transcript marker keeps its own timestamp"
+        );
+        assert!(
+            merged[5].is_round_interrupt(),
+            "post-tail marker at the end"
+        );
+        assert!(!merged[1].is_round_interrupt(), "seam order preserved");
+    }
+
+    /// The marker row's raw text carries the round + reason vocabulary shared
+    /// with the live path.
+    #[test]
+    fn round_interrupt_marker_text_uses_shared_vocabulary() {
+        use neenee_contracts::{RoundInterrupt, RoundInterruptReason};
+
+        let marker = TranscriptMessage::round_interrupted(RoundInterrupt {
+            reason: RoundInterruptReason::User,
+            at_ms: 42,
+            round: Some(3),
+        });
+        assert_eq!(marker.raw, "Interrupted · round 3 · Esc Esc");
+
+        let unnumbered = TranscriptMessage::round_interrupted(RoundInterrupt {
+            reason: RoundInterruptReason::Terminated,
+            at_ms: 42,
+            round: None,
+        });
+        assert_eq!(unnumbered.raw, "Interrupted · process exited");
     }
 }

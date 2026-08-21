@@ -169,6 +169,14 @@ impl Dirs {
         self.state_dir.join("providers.toml")
     }
 
+    /// `$XDG_STATE_HOME/neenee/route_settings.json` — the user's per-route
+    /// reasoning overrides (ADR-0014 category: state, *not* cache; deleting
+    /// them loses user configuration no endpoint can re-derive). See
+    /// [`crate::route_settings::RouteSettingsStore`].
+    pub fn route_settings_file(&self) -> PathBuf {
+        self.state_dir.join("route_settings.json")
+    }
+
     /// Legacy location in config_dir for backward compatibility.
     pub fn legacy_auth_file(&self) -> PathBuf {
         self.config_dir.join("auth.toml")
@@ -249,14 +257,6 @@ impl Dirs {
         self.project_dir(project_root).join("embeddings.json")
     }
 
-    /// Per-project advisory lock. Stored inside the project bucket so different
-    /// projects can run concurrently while the same project is serialised.
-    /// Opt-in as of ADR-0018 (the `--single-instance` flag); the default is
-    /// unlocked so multiple `neenee` instances can run in one project.
-    pub fn project_lock_file(&self, project_root: &Path) -> PathBuf {
-        self.project_dir(project_root).join("neenee.lock")
-    }
-
     /// Per-project directory holding every session file. As of ADR-0018 each
     /// live `neenee` instance pins its own `sessions/<id>.json` plus
     /// `sessions/<id>.jsonl` here, so concurrent instances never share a
@@ -288,14 +288,6 @@ impl Dirs {
     pub fn project_session_file(&self, project_root: &Path, id: &str) -> PathBuf {
         self.project_sessions_dir(project_root)
             .join(format!("{id}.json"))
-    }
-
-    /// Per-project one-shot migration lock. Guards the lazy move of the legacy
-    /// project-root `session.json` / `events.jsonl` into `sessions/<id>.*` so
-    /// two instances starting for the first time do not race the migration
-    /// (ADR-0018).
-    pub fn project_migration_lock(&self, project_root: &Path) -> PathBuf {
-        self.project_dir(project_root).join("sessions.lock")
     }
 
     /// Per-project persistent "always allow" permission rules. The cached

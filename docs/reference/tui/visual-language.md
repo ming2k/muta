@@ -30,9 +30,9 @@ TODOS 1/8 · write the docs   Ctrl+T expand   ↔↔   R3 segment: wide whitespa
 
 | Rung | Name | Relationship | Visual | Budget |
 |------|------|--------------|--------|--------|
-| **R0** | Atomic | Parts of one value | No symbol — 0–1 space | `24.1 KB`, `3 tool calls`, `round 1`, `F3 block` |
+| **R0** | Atomic | Parts of one value | No symbol — 0–1 space | `24.1 KB`, `3 tool calls`, `round 1`, `Ctrl+P block` |
 | **R1** | Modify | Trailing token is a state / measure / attribute of the leading one | ` · ` (space, middle dot, space) | `Thinking · 120 chars`, `↳ Completed · 3 calls · 1.2s`, `[Image #1 · 1.5 KB]`, `· blocked` |
-| **R2** | Enumerate | Same-rank peers | Plain whitespace, no glyph | `turn 2  sonnet`, `/skills  /repeat  /help`, `F4 insert  F3 block  F2 expand` |
+| **R2** | Enumerate | Same-rank peers | Plain whitespace, no glyph | `turn 2  sonnet`, `/skills  /repeat  /help`, `Ctrl+O insert  Ctrl+P block  Ctrl+Q expand` |
 | **R3** | Segment | Cross-group boundary (content vs keycap legend, panel identity vs preview) | Plain whitespace, wide | `BAR_LEGEND_GAP_MIN` (6 cols) |
 | **↑** | Hierarchy | Container → member, tree parent → child | ` › ` inline breadcrumb; `↳` + indent for tree nesting | `round 3 › turn 2`, `Connections › keybindings` |
 
@@ -40,7 +40,7 @@ TODOS 1/8 · write the docs   Ctrl+T expand   ↔↔   R3 segment: wide whitespa
 
 The pieces of a single logical value touch with no symbol and at most one
 space: a unit hugs its number (`1.5 KB`), a count follows its label
-(`3 tool calls`), a keycap precedes its action (`F3 block`, `Ctrl+T expand`),
+(`3 tool calls`), a keycap precedes its action (`Ctrl+P block`, `Ctrl+T expand`),
 a counter sits one space off its label (`round 1`, `turn 2`).
 
 ### R1 — Modify (修饰) — the only sanctioned dot
@@ -69,7 +69,7 @@ equal gaps are what make the group read as a list.
 
 - `turn 2  sonnet` (turn header: anchor  model)
 - `Ctrl-M  /models` (carousel keycap + command peers)
-- `F4 insert  F3 block  F2 expand` (queue-bar legend: three independent affordances)
+- `Ctrl+O insert  Ctrl+P block  Ctrl+Q expand` (queue-bar legend: three independent affordances)
 - `type filter  ↑↓ navigate  Enter activate` (modal footer hints)
 - `v1.2.3  local  #rust #tui` (skill metadata: version, source, tags)
 
@@ -81,7 +81,7 @@ keycap legend, so a truncated preview's `…` never butts against a key.
 
 ```
 TODOS 1/8 · write the docs   Ctrl+T expand
-QUEUE 2  fix the flaky test   F4 insert  F3 block  F2 expand
+QUEUE 2  fix the flaky test   Ctrl+O insert  Ctrl+P block  Ctrl+Q expand
 ```
 
 ### Hierarchy — never `·`
@@ -124,8 +124,8 @@ a later tweak to the ladder propagates everywhere.
 
 - ❌ `A · B` for same-rank peers — reads as "B modifies A".
 - ❌ `round 3 · turn 2` — different levels joined like siblings.
-- ❌ `·` inside a keycap unit — a key and its action are one value (`F3 block`,
-  never `F3 · block`).
+- ❌ `·` inside a keycap unit — a key and its action are one value (`Ctrl+P block`,
+  never `Ctrl+P · block`).
 - ❌ `·` as a generic list bullet in prose and comments — it is a render token,
   not a punctuation mark (the `showcase/` previews follow the same rule).
 
@@ -147,7 +147,7 @@ Conforming surfaces (R1 modifiers, kept):
 
 Migrated to whitespace / breadcrumb:
 
-- Queue-bar legend: `F4 insert  F3 block  F2 expand` (R2).
+- Queue-bar legend: `Ctrl+O insert  Ctrl+P block  Ctrl+Q expand` (R2).
 - Modal footer hints: `type filter  ↑↓ navigate  Enter activate` (R2).
 - Empty-state suggestions: `/skills  /repeat  /help` (R2).
 - Help copy: `copy  clear input  quit (×2)` (R2).

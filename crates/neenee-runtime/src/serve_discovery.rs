@@ -26,7 +26,7 @@
 
 use std::path::{Path, PathBuf};
 
-use neenee_persistence::paths::{self, Dirs};
+use neenee_persistence::paths;
 
 /// The discovery record, written once the bound port is known.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -214,24 +214,12 @@ pub fn write_global(record: &Discovery) -> Result<PathBuf, String> {
 /// Resolve the discovery-file path for `project_root` against the
 /// process-wide [`paths::get`] dirs (see module docs).
 pub fn discovery_path(project_root: &Path) -> PathBuf {
-    path_from_dirs(&paths::get(), project_root)
-}
-
-/// Write `record` to this project's discovery path. Atomic (temp file +
-/// rename, via [`neenee_persistence::fsutil::atomic_write_json`]) so a
-/// concurrent reader never sees a partial file; the `serve/` subdirectory is
-/// created as needed. An existing record is overwritten — last server wins;
-/// staleness validation is the reader's job. Returns the path written.
-pub fn write(project_root: &Path, record: &Discovery) -> Result<PathBuf, String> {
-    let path = discovery_path(project_root);
-    if path.exists() {
-        tracing::warn!(
-            path = %path.display(),
-            "serve discovery: overwriting existing discovery file (last server wins)"
-        );
-    }
-    write_to(&path, record)?;
-    Ok(path)
+    let _ = project_root;
+    // The pre-ADR-0096 per-project `serve/<bucket>.json` layout is dead:
+    // current clients discover through `daemon.json` only. This function is
+    // kept solely because the doc-commented layout is still described in
+    // `paths.md`'s legacy table; it resolves nothing new.
+    global_discovery_path()
 }
 
 /// Best-effort removal on clean shutdown (and of stale records by readers).
@@ -260,19 +248,6 @@ pub fn remove_if_matching_pid(path: &Path, expected_pid: u32) {
     remove(path);
 }
 
-/// The path-resolution rule, split from [`paths::get`] so tests can supply
-/// their own dirs without touching process-wide env. The runtime location is
-/// the instance dir (ADR-0121) and the fallback is the project bucket in
-/// data — the same rule [`global_discovery_path`] applies globally.
-fn path_from_dirs(dirs: &Dirs, project_root: &Path) -> PathBuf {
-    match &dirs.runtime_dir {
-        Some(runtime) => runtime
-            .join("serve")
-            .join(format!("{}.json", paths::project_bucket_name(project_root))),
-        None => dirs.project_dir(project_root).join("serve.json"),
-    }
-}
-
 /// Atomic write of one record to an explicit path.
 fn write_to(path: &Path, record: &Discovery) -> Result<(), String> {
     neenee_persistence::fsutil::atomic_write_json(path, record)
@@ -281,16 +256,6 @@ fn write_to(path: &Path, record: &Discovery) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn dirs(runtime_dir: Option<PathBuf>, data_dir: PathBuf) -> Dirs {
-        Dirs {
-            config_dir: data_dir.clone(),
-            data_dir,
-            state_dir: PathBuf::from("/unused/state"),
-            cache_dir: PathBuf::from("/unused/cache"),
-            runtime_dir,
-        }
-    }
 
     fn sample_record() -> Discovery {
         Discovery {
@@ -303,31 +268,6 @@ mod tests {
             version: Some("0.29.1".to_string()),
             grace_secs: None,
         }
-    }
-
-    #[test]
-    fn runtime_dir_is_preferred_when_present() {
-        let dirs = dirs(
-            Some(PathBuf::from("/run/user/1000/neenee")),
-            PathBuf::from("/data/neenee"),
-        );
-        let root = Path::new("/home/me/proj");
-        let bucket = paths::project_bucket_name(root);
-        assert_eq!(
-            path_from_dirs(&dirs, root),
-            PathBuf::from(format!("/run/user/1000/neenee/serve/{bucket}.json"))
-        );
-    }
-
-    #[test]
-    fn falls_back_to_project_bucket_without_runtime_dir() {
-        let dirs = dirs(None, PathBuf::from("/data/neenee"));
-        let root = Path::new("/home/me/proj");
-        let bucket = paths::project_bucket_name(root);
-        assert_eq!(
-            path_from_dirs(&dirs, root),
-            PathBuf::from(format!("/data/neenee/projects/{bucket}/serve.json"))
-        );
     }
 
     #[test]

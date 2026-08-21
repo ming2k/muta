@@ -37,6 +37,13 @@ use crate::paths;
 /// Bounds the work of a `/usage` query: 400 days ≈ 13 months of history.
 const REPORT_DAY_WINDOW: usize = 400;
 
+/// How many day files are **kept on disk**. Retention exceeds the report
+/// window deliberately (data older than the window is never read, but the
+/// user may lower `REPORT_DAY_WINDOW`-shaped settings before it is deleted);
+/// anything past this age is telemetry about long-gone work and is pruned by
+/// [`UsageStatsStore::prune_old_days`] so the store does not grow forever.
+const RETAINED_DAYS: usize = 400;
+
 /// On-disk shape of one day file: a plain list of records under a `records`
 /// key (leaving room for future per-day metadata) with a `version` tag.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -71,12 +78,34 @@ impl UsageStatsStore {
             .unwrap_or_else(|| paths::get().usage_stats_dir())
     }
 
+    fn daily_dir(&self) -> PathBuf {
+        self.root().join("daily")
+    }
+
     fn day_file(&self, day: &str) -> PathBuf {
         if self.root.is_some() {
             self.root().join("daily").join(format!("{day}.json"))
         } else {
             paths::get().usage_stats_day_file(day)
         }
+    }
+
+    /// Delete day files older than [`RETAINED_DAYS`] newest days. Best-effort
+    /// and cheap (a directory listing); called opportunistically from the
+    /// settle path so telemetry cannot grow unboundedly. Returns the number
+    /// of files removed.
+    pub fn prune_old_days(&self) -> usize {
+        let days = self.list_days();
+        if days.len() <= RETAINED_DAYS {
+            return 0;
+        }
+        let mut removed = 0;
+        for day in days.into_iter().skip(RETAINED_DAYS) {
+            if std::fs::remove_file(self.day_file(&day)).is_ok() {
+                removed += 1;
+            }
+        }
+        removed
     }
 
     /// Append one terminal request record to its day file. Idempotent per
@@ -169,8 +198,7 @@ impl UsageStatsStore {
     /// Day keys present on disk, newest first. Files that do not match the
     /// `YYYY-MM-DD.json` naming are ignored.
     fn list_days(&self) -> Vec<String> {
-        let daily_dir = self.root().join("daily");
-        let Ok(entries) = std::fs::read_dir(&daily_dir) else {
+        let Ok(entries) = std::fs::read_dir(self.daily_dir()) else {
             return Vec::new();
         };
         let mut days: Vec<String> = entries
@@ -231,20 +259,25 @@ fn persist_day_file(path: &Path, day_file: &DayFile) -> Result<(), String> {
 /// Insert-or-upgrade one record. Same-key replay is idempotent; a reported
 /// replay upgrades an estimated row (an estimate can never downgrade a
 /// reported one — mirroring `TokenSourceLedger::settle_request`).
+///
+/// The record list stays sorted by `key` so `find` can binary-search: the
+/// day file grows with the day's request count and the previous linear scan
+/// per insert made each settle cost `O(n²)` over a heavy day.
 fn upsert_record(day_file: &mut DayFile, entry: UsageStatRecord) {
-    if let Some(existing) = day_file
+    match day_file
         .records
-        .iter_mut()
-        .find(|r| r.record.key == entry.record.key)
+        .binary_search_by(|existing| existing.record.key.cmp(&entry.record.key))
     {
-        let upgrade = existing.record.source != RequestUsageSource::Reported
-            && entry.record.source == RequestUsageSource::Reported;
-        if upgrade {
-            *existing = entry;
+        Ok(index) => {
+            let existing = &mut day_file.records[index];
+            let upgrade = existing.record.source != RequestUsageSource::Reported
+                && entry.record.source == RequestUsageSource::Reported;
+            if upgrade {
+                *existing = entry;
+            }
         }
-        return;
+        Err(index) => day_file.records.insert(index, entry),
     }
-    day_file.records.push(entry);
 }
 
 /// Convenience: the day bucket key for a wall-clock instant, exposed for
@@ -488,5 +521,60 @@ mod tests {
                 .to_path_buf(),
         );
         assert_eq!(reread.report(10).grand_total.requests, 2);
+    }
+
+    /// `upsert_record` keeps the day file sorted by key (the invariant the
+    /// binary search in `upsert_record` relies on), stays idempotent on
+    /// replays, and upgrades estimated rows to reported ones without ever
+    /// letting a reported row regress.
+    #[test]
+    fn upsert_keeps_records_sorted_idempotent_and_upgrade_only() {
+        fn entry(session: &str, attempt: u32, source: RequestUsageSource) -> UsageStatRecord {
+            let mut record = sample_record(session, attempt, 100);
+            record.source = source;
+            UsageStatRecord {
+                day: "2026-08-20".to_string(),
+                recorded_at_ms: 1,
+                project: "p".to_string(),
+                record,
+            }
+        }
+
+        let mut day = DayFile::default();
+        // Insert out of key order: "s2" before "s1".
+        upsert_record(&mut day, entry("s2", 1, RequestUsageSource::Reported));
+        upsert_record(&mut day, entry("s1", 2, RequestUsageSource::Estimated));
+        upsert_record(&mut day, entry("s1", 1, RequestUsageSource::Estimated));
+
+        let keys: Vec<String> = day
+            .records
+            .iter()
+            .map(|r| format!("{}#{}", r.record.key.session_id, r.record.key.attempt))
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["s1#1", "s1#2", "s2#1"],
+            "records stay key-sorted"
+        );
+
+        // Same-key replay is a no-op (idempotent, no duplicate row).
+        let before = day.records.len();
+        upsert_record(&mut day, entry("s1", 1, RequestUsageSource::Estimated));
+        assert_eq!(day.records.len(), before);
+
+        // An estimated row upgrades to reported…
+        upsert_record(&mut day, entry("s1", 1, RequestUsageSource::Reported));
+        assert_eq!(
+            day.records[0].record.source,
+            RequestUsageSource::Reported,
+            "estimated upgrades to reported"
+        );
+        // …and a reported row never regresses to estimated.
+        upsert_record(&mut day, entry("s1", 1, RequestUsageSource::Estimated));
+        assert_eq!(
+            day.records[0].record.source,
+            RequestUsageSource::Reported,
+            "reported must not downgrade"
+        );
     }
 }

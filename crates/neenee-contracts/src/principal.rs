@@ -43,7 +43,8 @@ pub struct PrincipalRuntimeConfig {
     /// `0` (the default) means uncapped. Mirrors `[principal] hard_stop_turns`
     /// and `Agent::set_hard_stop_turns`.
     pub hard_stop_turns: usize,
-    /// Doom-loop guard config. Mirrors `[principal.nudge]` and
+    /// Doom-loop guard config. Mirrors `[principal.doom_guard]` (the
+    /// historical `nudge` spelling) and
     /// `Agent::set_doom_guard_config`. Default disabled.
     pub nudge: crate::DoomGuardConfig,
     /// Whether the model may supply stdin bytes for a `bash` call it emits.

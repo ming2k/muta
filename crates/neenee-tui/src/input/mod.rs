@@ -52,9 +52,13 @@ pub struct InputContext {
     /// input-box meaning. Mirrors `App::focused_target.is_some()`.
     pub has_focused_target: bool,
     /// Whether the send queue holds at least one staged user message. While
-    /// true, `↑` recalls the most-recently-queued message instead of walking
-    /// input history.
+    /// true, `↑` walks the queue pointer (before input history).
     pub has_queued: bool,
+    /// Whether the queue pointer ([`crate::app::App::queue_pointer`]) is
+    /// armed — the composer is currently a projection of a queue item. While
+    /// true, `↓` steps the pointer back toward the newest item (and past it
+    /// dissolves the pointer, restoring the draft) before any history role.
+    pub queue_pointer_armed: bool,
     /// Whether the history modal's search sub-layer is active. Only meaningful
     /// while [`Self::active_modal`] is `super::Modal::HistorySearch`: `false`
     /// is browse mode (typing is inert, `/` enters search), `true` borrows the
@@ -506,10 +510,11 @@ pub enum InputAction {
     HistoryPrev,
     /// Navigate history down.
     HistoryNext,
-    /// Recall the most-recently-queued message: pop it off the send queue,
-    /// remove its transcript marker, and load its text (and any pasted
-    /// images) back into the input box for editing. Only dispatched while
-    /// the queue is non-empty; otherwise `HistoryPrev` is used.
+    /// Legacy destructive recall (pop the newest queue item into the
+    /// composer). Superseded at the top level by the non-destructive
+    /// [`InputAction::QueuePointerPrev`] / [`InputAction::QueuePointerNext`]
+    /// pair; kept for the queue modal's explicit pull-to-composer re-edit,
+    /// where removing the item from the list *is* the point.
     RecallQueued,
     /// Re-edit the queue modal's *selected* item (not always the newest):
     /// recall it into the composer and close the modal. Bound to `Enter`
@@ -518,10 +523,18 @@ pub enum InputAction {
     RecallQueuedSelected,
     /// Toggle the user block on the viewed session's outbox. While blocked,
     /// no queued message auto-drains — not even after the round completes.
-    /// Reachable from `F3` (bar, no modal) and the queue modal's block
+    /// Reachable from `Ctrl+P` (bar, no modal) and the queue modal's block
     /// control.
     QueueToggleBlock,
-    /// `F4` at the top level: insert the current composer text into the
+    /// `↑` at the top level with a non-empty outbox: arm/step the queue
+    /// pointer toward older items (newest first). Non-destructive — the queue
+    /// is untouched; the composer becomes an editable projection of the
+    /// pointed-at item.
+    QueuePointerPrev,
+    /// `↓` while the queue pointer is armed: step toward newer items and,
+    /// past the newest, dissolve the pointer (restoring the stashed draft).
+    QueuePointerNext,
+    /// `Ctrl+O` at the top level: insert the current composer text into the
     /// running round (steer at the next safe turn boundary). Data-less — the
     /// event loop reads the composer buffer itself, exactly like the
     /// text-triggered modal commands do.
@@ -1313,21 +1326,24 @@ pub fn process_event(
                 // F1 is a declared global binding (registry → OpenHelp) and
                 // only reaches this arm inside a modal, where it is a no-op.
                 KeyCode::F(1) => InputAction::None,
-                // F3 is a declared global binding (registry →
+                // Ctrl+P is a declared global binding (registry →
                 // ToggleQueueBlock) at the top level. Inside the Queue modal
                 // it also toggles the block so the user can resume without
                 // closing the list. Inside any other modal it is a no-op.
-                KeyCode::F(3) => {
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if context.active_modal == super::Modal::Queue {
                         InputAction::QueueToggleBlock
                     } else {
                         InputAction::None
                     }
                 }
-                // F4 is a declared global binding (registry → InsertIntoRound) and
-                // only reaches this arm inside a modal, where the composer is
-                // borrowed (or hidden) — so it is a no-op there.
-                KeyCode::F(4) => InputAction::None,
+                // Ctrl+O is a declared global binding (registry →
+                // InsertIntoRound) and only reaches this arm inside a modal,
+                // where the composer is borrowed (or hidden) — so it is a
+                // no-op there.
+                KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    InputAction::None
+                }
                 // F5 is a declared global binding (registry → OpenBtwList).
                 // Inside the asides modal itself it re-queries the list (a
                 // refresh) rather than toggling the modal closed; inside any
@@ -2253,12 +2269,18 @@ pub fn process_event(
                                 && !context.has_exact_suggestion
                             {
                                 InputAction::SuggestPrev
-                            } else if context.has_queued && input.is_empty() {
-                                // A queued message is waiting to ship; ↑ recalls
-                                // the most-recently-queued one into the input for
-                                // editing instead of walking input history. Once
-                                // the queue drains, ↑ resumes its normal role.
-                                InputAction::RecallQueued
+                            } else if context.has_queued || context.queue_pointer_armed {
+                                // The outbox holds next-round items: ↑ walks a
+                                // non-destructive **pointer** over them (newest
+                                // first), projecting each item into the composer
+                                // for editing. Enter writes the edit back into
+                                // the pointed-at item in place — the queue's
+                                // length and order are untouched. Only an
+                                // exhausted queue hands ↑ on to input history.
+                                // (`queue_pointer_armed` keeps the gesture alive
+                                // even if the queue momentarily reads empty —
+                                // e.g. the target vanished mid-edit.)
+                                InputAction::QueuePointerPrev
                             } else if cursor_line_up(input, cursor_position) {
                                 // Multi-line draft: ↑ first walks the caret to the
                                 // previous line (preserving the column). Only when
@@ -2323,6 +2345,12 @@ pub fn process_event(
                                 && !context.has_exact_suggestion
                             {
                                 InputAction::SuggestNext
+                            } else if context.queue_pointer_armed {
+                                // The composer is a projection of a queue item:
+                                // ↓ steps the queue pointer toward newer items
+                                // (dissolving it — restoring the draft — past the
+                                // newest) instead of touching history.
+                                InputAction::QueuePointerNext
                             } else if cursor_line_down(input, cursor_position) {
                                 // Multi-line draft: ↓ first walks the caret to the
                                 // next line (preserving the column). Only when the

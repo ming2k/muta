@@ -7,10 +7,14 @@
 //! host running neenee would leak credentials or poke internal services.
 //!
 //! [`assert_public_url`] resolves the host and rejects any address that is not
-//! globally routable *before* the request is issued. This is the standard
-//! pre-flight SSRF mitigation: it does not defend against every exotic variant
-//! (DNS rebinding, redirect chains) on its own, but it closes the direct,
-//! high-likelihood vector.
+//! globally routable *before* the request is issued. Per-hop coverage is
+//! provided by disabling reqwest's automatic redirects (the shared client is
+//! built with `Policy::none()`) and following them explicitly via
+//! [`crate::tools::web::guarded_get`], which re-runs this guard on every hop —
+//! so a public URL bouncing to an internal address mid-flight is refused.
+//! Remaining exotic variants (DNS rebinding between the check and the connect)
+//! would require resolve-and-pin; this module closes the direct and redirect
+//! vectors.
 
 use std::net::IpAddr;
 
@@ -51,7 +55,7 @@ pub(crate) fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             let octets = v4.octets();
-            let [a, b, c, d] = octets;
+            let [a, b, c, _d] = octets;
             // Cloud instance-metadata endpoint (AWS/Azure/GCP): must be blocked
             // explicitly — it is link-local 169.254.169.254 and the strongest
             // SSRF prize.
@@ -76,7 +80,20 @@ pub(crate) fn is_public_ip(ip: IpAddr) -> bool {
             if a == 198 && (18..=19).contains(&b) {
                 return false;
             }
-            let _ = (c, d);
+            // TEST-NET-1/2 and 192.0.0.9 (IANA special-purpose) — not public.
+            if a == 192 && b == 0 && (c == 0 || c == 2) {
+                return false;
+            }
+            if a == 198 && b == 51 && c == 100 {
+                return false;
+            }
+            if a == 203 && b == 0 && c == 113 {
+                return false;
+            }
+            // 240.0.0.0/4 (reserved, incl. 255.255.255.255's neighbors).
+            if a >= 240 {
+                return false;
+            }
             true
         }
         IpAddr::V6(v6) => {
@@ -90,6 +107,10 @@ pub(crate) fn is_public_ip(ip: IpAddr) -> bool {
             // Unique-local fc00::/7 (RFC 4193) — IPv6's RFC1918 equivalent.
             let seg0 = v6.segments()[0];
             if (seg0 & 0xfe00) == 0xfc00 {
+                return false;
+            }
+            // Link-local fe80::/10 — IPv6's 169.254/16 equivalent.
+            if (seg0 & 0xffc0) == 0xfe80 {
                 return false;
             }
             // IPv4-mapped/IPv4-compatible (::ffff:a.b.c.d) — defer to the v4
@@ -158,6 +179,15 @@ mod tests {
         assert!(!is_public_ip("::1".parse().unwrap()));
         assert!(!is_public_ip("::".parse().unwrap()));
         assert!(!is_public_ip("fd00::1".parse().unwrap()));
+        assert!(!is_public_ip("fe80::1".parse().unwrap()));
+        assert!(!is_public_ip("::ffff:10.0.0.1".parse().unwrap()));
+        // Reserved / special-purpose v4 the basic checks used to miss.
+        assert!(!is_public_ip("240.0.0.1".parse().unwrap()));
+        assert!(!is_public_ip("255.0.0.1".parse().unwrap()));
+        assert!(!is_public_ip("192.0.2.1".parse().unwrap())); // TEST-NET-1
+        assert!(!is_public_ip("198.51.100.1".parse().unwrap())); // TEST-NET-2
+        assert!(!is_public_ip("203.0.113.1".parse().unwrap())); // TEST-NET-3
+        assert!(!is_public_ip("100.64.0.1".parse().unwrap())); // CGNAT
     }
 
     #[test]

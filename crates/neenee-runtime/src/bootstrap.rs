@@ -67,6 +67,11 @@ pub struct BootstrapParams {
     /// WIP-coordination tools). The assemble passes them through untouched;
     /// the registry publishes them once the session id is known.
     pub extra_session_tools: Option<Vec<Arc<dyn neenee_contracts::Tool>>>,
+    /// Session-lifetime cancellation token (ADR-0125): passed through to the
+    /// background `/schedule` scheduler so it stops when the harness is torn
+    /// down (suspension, kill, daemon drain) instead of ticking forever.
+    /// `None` = process-lifetime scheduling (single-session frontends).
+    pub teardown_token: Option<tokio_util::sync::CancellationToken>,
 }
 
 /// The assembled session harness: the driver (ready to `run`), the frontend
@@ -149,6 +154,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         project_root: project_override,
         autopilot: autopilot_at_start,
         extra_session_tools,
+        teardown_token,
     } = params;
     debug_assert!(
         matches!(
@@ -264,10 +270,17 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // scheduler runs against it from the first tick. Supervised: a panic in
     // the tick loop restarts with backoff instead of silently killing every
     // scheduled job in the session.
+    //
+    // Teardown token (ADR-0125): the registry passes the hosted session's
+    // cancellation token, so suspension/kill stops the tick with the harness.
+    // Before this the task leaked past teardown and ticked against a dead
+    // channel forever. `None` (a plain process-lifetime scheduler) remains
+    // available for single-session frontends that tear down with the process.
     neenee_agent::orchestration::start_supervised_schedule_scheduler(
         Arc::clone(&session),
         req_tx.clone(),
         std::time::Duration::from_secs(30),
+        teardown_token.clone(),
     );
 
     // C6: overlay the session's provider/model pin onto the effective config

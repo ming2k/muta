@@ -907,13 +907,15 @@ mod tests {
             ("../../crates/neenee-agent/src/agent.rs", 10_478),
             ("../../crates/neenee-contracts/src/pressure.rs", 11_207),
             ("../../README.zh-CN.md", 2_152),
-            ("../../CHANGELOG.md", 10_456),
+            ("../../CHANGELOG.md", 10_755),
         ];
         let t = Tokenizer::new();
         for (path, expected) in cases {
-            let Ok(text) = std::fs::read_to_string(path) else {
-                continue; // file moved; degrade to no-op rather than fail
-            };
+            // A missing corpus file must FAIL, not silently pass: the whole
+            // point of pinning repo files is that they exist (a moved file
+            // previously degraded this test to asserting nothing).
+            let text = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("corpus file {path} unreadable: {e}"));
             let text = &text[..text.len().min(40_000)];
             let got = t.count(text);
             let drift = (got as f64 - *expected as f64).abs() / *expected as f64;

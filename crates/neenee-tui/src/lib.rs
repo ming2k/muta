@@ -68,6 +68,7 @@ pub(crate) mod message_body;
 pub(crate) mod notice;
 pub(crate) mod page_header;
 pub(crate) mod primitives;
+pub(crate) mod round_interrupt;
 pub(crate) mod text_layout;
 pub(crate) mod theme;
 pub(crate) mod time;
@@ -124,8 +125,9 @@ use crate::model::document::{
 use crate::model::layout::LayoutMap;
 use crate::model::selection::{SelectionDrag, SelectionState};
 use crate::transcript::{
-    finalize_streaming_reasoning, merge_command_rows, rebase_transcript_rounds,
-    transcript_commands_from_ledger, transcript_messages_from_core,
+    finalize_streaming_reasoning, merge_command_rows, merge_round_interrupt_rows,
+    rebase_transcript_rounds, transcript_commands_from_ledger, transcript_interrupts_from_records,
+    transcript_messages_from_core,
 };
 use crate::view::Theme;
 
@@ -197,6 +199,7 @@ pub async fn run_tui(
     initial_commands: Vec<neenee_contracts::CommandRecord>,
     initial_round_count: u64,
     custom_commands: Vec<(String, String)>,
+    initial_round_interrupts: Vec<neenee_contracts::RoundInterrupt>,
     tui_config: config::TuiConfig,
     input_history_config: config::InputHistoryConfig,
     session: SessionSource,
@@ -251,6 +254,10 @@ pub async fn run_tui(
     let tui_config = Arc::new(tui_config);
     let mut restored = transcript_messages_from_core(initial_messages, &tui_config);
     restored = merge_command_rows(restored, transcript_commands_from_ledger(initial_commands));
+    restored = merge_round_interrupt_rows(
+        restored,
+        transcript_interrupts_from_records(initial_round_interrupts),
+    );
     rebase_transcript_rounds(&mut restored, initial_round_count);
     let messages = Arc::new(versioned::Versioned::new(restored));
     let messages_clone = messages.clone();
@@ -573,6 +580,28 @@ pub async fn run_tui(
                                 .insert(session_id.clone(), snapshot);
                         }
                         RoundEvent::UserInputUnavailable { input_id } => {
+                            // The round closed before an insert (`Ctrl+O`)
+                            // could be admitted. Two owners exist for the
+                            // content: the transcript entry staged at insert
+                            // time (keyed by `insert_id`) and — only for the
+                            // legacy queue-owned path — the outbox item. The
+                            // entry flips to `⏸ Held`: the turn ended
+                            // (naturally or interrupted), so this message now
+                            // waits to ship as the *next* round's prompt. The
+                            // event loop re-queues it into the outbox under
+                            // the same id, which both drains the held entry
+                            // when its round starts and re-enables
+                            // pointer-based recall/edit.
+                            {
+                                let mut msgs = buf.write().await;
+                                if let Some(entry) = msgs
+                                    .iter_mut()
+                                    .rev()
+                                    .find(|m| m.insert_id.as_deref() == Some(input_id.as_str()))
+                                {
+                                    entry.hold_pending_round();
+                                }
+                            }
                             outbox_signals_clone.lock().await.push_back(
                                 event_loop::OutboxSignal::Unavailable {
                                     session_id,
@@ -580,22 +609,52 @@ pub async fn run_tui(
                                 },
                             );
                         }
-                        // The mid-round insert path is live again via `F4`
+                        // The mid-round insert path is live via `Ctrl+O`
                         // (InsertIntoRound): the steer is admitted at a safe
-                        // turn boundary, so this event is the transcript
-                        // commit point — append the visible user message here
-                        // (exactly like `NextRoundStarted` below) and signal
-                        // the loop to drop the shadow outbox item. The
-                        // cancellation variants stay unused by this frontend
-                        // (nothing cancels a pending insert today) and remain
-                        // deliberate no-ops rather than being masked by a
-                        // catch-all.
+                        // turn boundary, so this event settles the transcript
+                        // entry the loop already staged as `⏸ Queued` (found
+                        // by correlation id) instead of pushing a duplicate —
+                        // one entry per insert, from staging to delivery. The
+                        // entry keeps its `Insert` origin so it renders the
+                        // `↳ insert` provenance. The cancellation variants
+                        // stay unused by this frontend (nothing cancels a
+                        // pending insert today) and remain deliberate no-ops
+                        // rather than being masked by a catch-all.
                         RoundEvent::UserInputInserted(input) => {
                             let input_id = input.id.clone();
-                            let visible = input.display_text.unwrap_or(input.text);
-                            let mut message = TranscriptMessage::new(Role::User, visible);
-                            message.sent_at_ms = input.sent_at_ms;
-                            buf.write().await.push(message);
+                            let visible = input
+                                .display_text
+                                .clone()
+                                .unwrap_or_else(|| input.text.clone());
+                            {
+                                let mut msgs = buf.write().await;
+                                // Find the newest staged entry with this
+                                // correlation id and settle it in place.
+                                // Fallback: if the correlating entry is gone
+                                // (rebuilt transcript, resumed session), push
+                                // a fresh one so the admitted steer is still
+                                // visible.
+                                let settled = msgs
+                                    .iter_mut()
+                                    .rev()
+                                    .find(|m| m.insert_id.as_deref() == Some(input_id.as_str()))
+                                    .map(|m| {
+                                        m.delivery =
+                                            crate::model::document::DeliveryStatus::Delivered;
+                                        m.origin = UserMessageOrigin::Insert;
+                                        if m.sent_at_ms.is_none() {
+                                            m.sent_at_ms = input.sent_at_ms;
+                                        }
+                                        true
+                                    })
+                                    .unwrap_or(false);
+                                if !settled {
+                                    let mut message = TranscriptMessage::new(Role::User, visible);
+                                    message.sent_at_ms = input.sent_at_ms;
+                                    message.origin = UserMessageOrigin::Insert;
+                                    msgs.push(message);
+                                }
+                            }
                             outbox_signals_clone.lock().await.push_back(
                                 event_loop::OutboxSignal::Inserted {
                                     session_id,
@@ -607,10 +666,35 @@ pub async fn run_tui(
                         RoundEvent::UserInputCancelFailed { .. } => {}
                         RoundEvent::NextRoundStarted(input) => {
                             let input_id = input.id.clone();
-                            let visible = input.display_text.unwrap_or(input.text);
-                            let mut message = TranscriptMessage::new(Role::User, visible);
-                            message.sent_at_ms = input.sent_at_ms;
-                            buf.write().await.push(message);
+                            let visible = input
+                                .display_text
+                                .clone()
+                                .unwrap_or_else(|| input.text.clone());
+                            {
+                                let mut msgs = buf.write().await;
+                                // A handed-back insert (`HeldNextRound`) now
+                                // ships as this round's prompt: settle its
+                                // held entry in place rather than pushing a
+                                // second copy. The entry keeps its `Insert`
+                                // origin so the `↳ insert` provenance stays
+                                // truthful about how the prompt arrived.
+                                let settled = msgs
+                                    .iter_mut()
+                                    .rev()
+                                    .find(|m| m.insert_id.as_deref() == Some(input_id.as_str()))
+                                    .map(|m| {
+                                        m.delivery =
+                                            crate::model::document::DeliveryStatus::Delivered;
+                                        m.origin = UserMessageOrigin::Insert;
+                                        true
+                                    })
+                                    .unwrap_or(false);
+                                if !settled {
+                                    let mut message = TranscriptMessage::new(Role::User, visible);
+                                    message.sent_at_ms = input.sent_at_ms;
+                                    msgs.push(message);
+                                }
+                            }
                             outbox_signals_clone.lock().await.push_back(
                                 event_loop::OutboxSignal::NextRoundStarted {
                                     session_id,
@@ -627,6 +711,19 @@ pub async fn run_tui(
                                 .lock()
                                 .await
                                 .push_back(event_loop::OutboxSignal::RoundCompleted { session_id });
+                        }
+                        RoundEvent::RoundInterrupted(record) => {
+                            // C11: the durable twin of the live stop. Append
+                            // the projection row (a warning notice) with the
+                            // record's own timestamp so the trailing ` · HH:MM`
+                            // shows when the stop happened. The reason label
+                            // rides in the notice body; the transcript merge
+                            // on resume renders the same row at its seam.
+                            let at_ms = record.at_ms;
+                            let mut msgs = buf.write().await;
+                            msgs.push(
+                                TranscriptMessage::round_interrupted(record).with_sent_at_ms(at_ms),
+                            );
                         }
                         RoundEvent::Notice(notice) => {
                             // Provider retry has a dedicated, self-refreshing
@@ -1489,6 +1586,7 @@ pub async fn run_tui(
                     side_id,
                     messages,
                     commands,
+                    round_interrupts,
                     ..
                 } => {
                     // ADR-0017 + ADR-0103 §6: enter the aside view. Record the
@@ -1502,6 +1600,10 @@ pub async fn run_tui(
                     let mut rebuilt = transcript_messages_from_core(messages, &tui_config_clone);
                     rebuilt =
                         merge_command_rows(rebuilt, transcript_commands_from_ledger(commands));
+                    rebuilt = merge_round_interrupt_rows(
+                        rebuilt,
+                        transcript_interrupts_from_records(round_interrupts),
+                    );
                     *side_messages_clone.write().await = rebuilt;
                     *side_view_signal_clone.lock().await =
                         Some(event_loop::SideViewSignal::Opened { side_id });
@@ -1554,10 +1656,15 @@ pub async fn run_tui(
                     session_id,
                     messages,
                     commands,
+                    round_interrupts,
                 } => {
                     let mut rebuilt = transcript_messages_from_core(messages, &tui_config_clone);
                     rebuilt =
                         merge_command_rows(rebuilt, transcript_commands_from_ledger(commands));
+                    rebuilt = merge_round_interrupt_rows(
+                        rebuilt,
+                        transcript_interrupts_from_records(round_interrupts),
+                    );
                     *messages_clone.write().await = rebuilt;
                     needs_round_rebase = true;
                     // The model-window revision changed; do not reuse an API
@@ -1847,6 +1954,10 @@ pub async fn run_tui(
         history_draft: String::new(),
         history_draft_images: Vec::new(),
         history_draft_text_pastes: Vec::new(),
+        queue_pointer: None,
+        queue_pointer_draft: String::new(),
+        queue_pointer_draft_images: Vec::new(),
+        queue_pointer_draft_text_pastes: Vec::new(),
         history_attachments: std::collections::HashMap::new(),
         history_attachments_order: std::collections::VecDeque::new(),
         session_history_backfill: Vec::new(),
@@ -2034,6 +2145,7 @@ pub async fn start_tui(
     initial_commands: Vec<neenee_contracts::CommandRecord>,
     initial_round_count: u64,
     custom_commands: Vec<(String, String)>,
+    initial_round_interrupts: Vec<neenee_contracts::RoundInterrupt>,
     tui_config: config::TuiConfig,
     input_history_config: config::InputHistoryConfig,
     session: SessionSource,
@@ -2050,6 +2162,7 @@ pub async fn start_tui(
         initial_commands,
         initial_round_count,
         custom_commands,
+        initial_round_interrupts,
         tui_config,
         input_history_config,
         session,

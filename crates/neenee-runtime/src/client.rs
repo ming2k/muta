@@ -611,11 +611,30 @@ fn spawn_daemon() -> Result<std::process::Child, String> {
     // Own process group (ADR-0101): a daemon spawned from an interactive
     // shell must not share the shell's foreground group, or the terminal's
     // Ctrl-C SIGINTs the "background" daemon along with everything else in
-    // the group. `setsid`-equivalent on Unix; harmless elsewhere.
+    // the group.
+    //
+    // New session (ADR-0125): `setsid(2)` detaches the daemon from the
+    // spawning terminal's *session*, which is what makes it compositor- and
+    // terminal-death-proof the way tmux's server is. `process_group(0)`
+    // alone only escapes the foreground process group — the daemon stays a
+    // member of the terminal's session, so when the terminal (or the
+    // compositor hosting it) dies, the kernel SIGHUPs the session's members
+    // and takes the daemon with it (ADR-0101 then dutifully drains and
+    // exits). `setsid` removes that coupling by construction; failure of
+    // the call is fatal on purpose — a half-detached daemon is exactly the
+    // lie "detached" cannot afford.
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
     command
         .spawn()
@@ -719,6 +738,10 @@ pub enum Handshake {
         session_id: String,
         round_counter: u64,
         history: Vec<Message>,
+        /// Durable round-interrupt records (C11) from the daemon's welcome,
+        /// so an attaching TUI projects the stopped rounds into its restored
+        /// transcript. Empty for older daemons.
+        round_interrupts: Vec<neenee_contracts::RoundInterrupt>,
         /// The provider/model the session is currently serving, carried on
         /// the welcome so the TUI's hint bar shows them from the first frame
         /// instead of waiting for the next provider mutation.
@@ -799,6 +822,7 @@ where
                         messages,
                         provider,
                         model,
+                        round_interrupts,
                     }) => {
                         return Ok(Reply::Welcome(Welcome {
                             session_id,
@@ -806,6 +830,7 @@ where
                             messages,
                             provider,
                             model,
+                            round_interrupts,
                         }));
                     }
                     Ok(Wire::Pick { sessions }) => return Ok(Reply::Pick(sessions)),
@@ -900,6 +925,7 @@ where
         session_id: welcome.session_id,
         round_counter: welcome.round_counter,
         history: welcome.messages,
+        round_interrupts: welcome.round_interrupts,
         provider: welcome.provider,
         model: welcome.model,
     })
@@ -1002,6 +1028,9 @@ struct Welcome {
     messages: Vec<Message>,
     provider: String,
     model: String,
+    /// Durable round-interrupt records (C11) carried on the daemon's
+    /// welcome; empty for older daemons that predate the field.
+    round_interrupts: Vec<neenee_contracts::RoundInterrupt>,
 }
 enum Reply {
     Welcome(Welcome),

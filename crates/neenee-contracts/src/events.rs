@@ -405,6 +405,10 @@ pub enum AgentResponse {
         /// [`AgentResponse::ConversationReplaced`].
         #[serde(default)]
         commands: Vec<crate::command::CommandRecord>,
+        /// Round-interrupt records for the aside (C11), same as
+        /// [`AgentResponse::ConversationReplaced`].
+        #[serde(default)]
+        round_interrupts: Vec<RoundInterrupt>,
     },
     /// The user left the `/btw` aside view (ADR-0103). The TUI returns to the
     /// primary transcript. Detach is non-destructive by default: the aside
@@ -448,6 +452,11 @@ pub enum AgentResponse {
         messages: Vec<Message>,
         #[serde(default)]
         commands: Vec<crate::command::CommandRecord>,
+        /// Round-interrupt records (C11): re-projected into the transcript at
+        /// their timestamp seams so the resumed session shows which rounds
+        /// were stopped, why, and when.
+        #[serde(default)]
+        round_interrupts: Vec<RoundInterrupt>,
     },
     /// Replace the sessions picker contents (and open the picker).
     SessionsOverview(Vec<SessionOverview>),
@@ -665,6 +674,86 @@ pub struct ContextTokenSnapshot {
     pub source: ContextTokenSource,
 }
 
+/// A durable record of one round being stopped before its natural terminal
+/// path (`RoundEvent::RoundCompleted`). Written by the harness whenever a
+/// round unwinds through an interrupt — user-requested, superseded by newer
+/// input, or killed with its host process — so a resumed session can show
+/// *that and why* the round stopped, at the moment it stopped.
+///
+/// This is a **projection record, not a conversation message**: it never
+/// enters `model_window` / `archived_transcript`, never reaches the model,
+/// and never costs context tokens (the deliberate decision documented in
+/// `docs/explanation/interrupt-semantics.md` — omission stays the
+/// model-facing signal). It rides in the session store beside the command
+/// ledger and, like the ledger, is re-projected into the transcript on
+/// resume by timestamp seam.
+///
+/// `at_ms` lives on the payload (not the event-log envelope) because log
+/// compaction rewrites the `.jsonl` and drops every envelope timestamp.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct RoundInterrupt {
+    /// The interrupt's cause, as observed at the stop site. Maps 1:1 to the
+    /// user-facing vocabulary; see [`RoundInterruptReason`].
+    pub reason: RoundInterruptReason,
+    /// Unix-epoch milliseconds at which the stop was recorded.
+    pub at_ms: u64,
+    /// The 1-based round that was stopped, when known. `None` on records
+    /// synthesized for the round the process abandoned at exit (see
+    /// `SessionStore::finalize_incomplete_interrupts`), where no agent-side
+    /// counter was available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Skipped when `None`: absent on the wire, never an explicit `null`.
+    #[ts(optional)]
+    pub round: Option<u64>,
+}
+
+impl RoundInterrupt {
+    /// The user-facing label for this record, e.g. `"Esc Esc"`,
+    /// `"new message"`, `"process exited"`. One vocabulary shared by the
+    /// TUI, the web panel, and headless output.
+    pub fn label(&self) -> &'static str {
+        self.reason.label()
+    }
+}
+
+/// Why a round stopped before completing. The closed classifier for
+/// [`RoundInterrupt::reason`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum RoundInterruptReason {
+    /// The user explicitly stopped the round: double-Esc in the primary
+    /// view, Esc Esc inside a `/btw` aside, or the equivalent control-plane
+    /// `Interrupt` request. Interrupt semantics documentation calls this
+    /// the plain "interrupt" path — the round unwinds and emits its own
+    /// cleanup because the generation is not bumped.
+    User,
+    /// A newer round replaced this one: the user sent a new message (or a
+    /// `!shell` command / scheduled follow-up) while this round was still
+    /// live, or switched sessions (`/resume`, `/session open|fork|new`).
+    /// The stale round's own cleanup is generation-suppressed, which before
+    /// this record existed left no trace at all.
+    Superseded,
+    /// The host process terminated with the round still in flight — a
+    /// daemon stop (signal, control verb, or kill), a TUI signal exit, or a
+    /// crash. Inferred on load when a recorded interrupt's round never
+    /// completed and no terminal interrupt was recorded for it.
+    Terminated,
+}
+
+impl RoundInterruptReason {
+    /// The single user-facing word/phrase for this reason. Kept short so it
+    /// fits the transcript's meta strip (`Interrupted · <label> · HH:MM`).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::User => "Esc Esc",
+            Self::Superseded => "new message",
+            Self::Terminated => "process exited",
+        }
+    }
+}
+
 /// A compact per-round accounting handed to frontends when a user round
 /// completes naturally. The "active" generation time is
 /// `duration_ms.saturating_sub(paused_ms)`; dividing `output_tokens` by it
@@ -766,6 +855,19 @@ pub enum RoundEvent {
     /// generation throughput (tokens/sec) that excludes the time the round
     /// spent parked on human decisions (permission prompts / ask_user).
     RoundCompleted(RoundSummary),
+    /// A round stopped before its natural terminal path, with the reason and
+    /// timestamp. Emitted exactly once per stopped round, after the round's
+    /// own cleanup — including the generation-suppressed case (a superseded
+    /// round), which previously left no visible trace. The durable twin of
+    /// this event (`RoundInterrupt`) is persisted in the session store and
+    /// re-projected into the transcript on resume; this live event never
+    /// reaches the model context.
+    ///
+    /// Distinct from [`RoundEvent::UnsentInput`] (a Phase-1 interrupt is an
+    /// *unsend*: the user message returned to the composer and nothing
+    /// committed) and from [`RoundEvent::ToolCancelled`] (per-tool). This
+    /// event covers the round as a whole on every interrupt phase.
+    RoundInterrupted(RoundInterrupt),
     Text(String),
     /// A typed slash-command result (ADR-0091). Replaces the `Text` replies
     /// commands used to emit: the TUI renders it as a distinct command block
@@ -861,13 +963,16 @@ pub enum RoundEvent {
     StreamEnd(String),
     StreamDiscard,
     /// The user interrupted the round before any model output reached the
-    /// client (Phase 1: request in-flight, no response bytes yet). The round's
-    /// user message has been removed from the conversation context and session
-    /// store, and the TUI should restore `prompt` (and any `images`) into the
-    /// input box for re-editing — the conversation is back to its pre-send
-    /// state. The cancelled network request may still bill its input tokens
-    /// on the provider side, but no assistant message, tool calls, or output
-    /// tokens are produced or recorded.
+    /// client (Phase 1: request in-flight, no content delta yet). The round's
+    /// user message has been removed from the conversation context and
+    /// session store, and the client should offer `prompt` (and any
+    /// `images`) back for re-editing — the conversation is back to its
+    /// pre-send state. Restoring into the composer is advisory: a client
+    /// whose composer holds in-progress input should leave it alone and
+    /// surface the prompt another way (history recall / a notice), since the
+    /// unsend arrives asynchronously. The cancelled network request may
+    /// still bill its input tokens on the provider side, but no assistant
+    /// message, tool calls, or output tokens are produced or recorded.
     UnsentInput {
         prompt: String,
         images: Vec<crate::ImagePart>,

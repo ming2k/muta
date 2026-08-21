@@ -36,6 +36,8 @@ pub(crate) use mouse::handle_selection_end_for_test;
 pub(super) use commands::split_command_word;
 
 #[cfg(test)]
+pub(crate) use commands::handle_insert_into_round;
+#[cfg(test)]
 pub(crate) use commands::handle_send_slash;
 
 /// How the event loop proceeds after a dispatched action. Arms that ended in
@@ -101,7 +103,7 @@ pub(super) async fn dispatch_action(
             commands::handle_send_chat(app, runtime, viewed_session_id, text).await;
         }
         input::InputAction::InsertIntoRound => {
-            commands::handle_insert_into_round(app, viewed_session_id);
+            commands::handle_insert_into_round(app, runtime, viewed_session_id).await;
         }
         input::InputAction::SendSlash(cmd) => {
             return commands::handle_send_slash(app, runtime, session, cmd).await;
@@ -511,6 +513,7 @@ pub(super) async fn dispatch_action(
                     text,
                     app.pending_images.clone(),
                     app.pending_text_pastes.clone(),
+                    crate::app::DraftAdoption::Replace,
                 );
             }
             // The selection replaces the in-progress draft, so the
@@ -1598,13 +1601,38 @@ pub(super) async fn dispatch_action(
             let session_rows = app.current_session_history();
             app.history_prev(&session_rows);
         }
+        input::InputAction::QueuePointerPrev => {
+            // Inline ↑ with a non-empty outbox: arm/step the queue pointer
+            // (newest → older). Non-destructive — nothing leaves the queue;
+            // the composer becomes an editable projection of the pointed-at
+            // item. An empty queue returns false, in which case ↑ falls
+            // through to its ordinary history role.
+            if !app.queue_pointer_prev(viewed_session_id) {
+                let session_rows = app.current_session_history();
+                app.history_prev(&session_rows);
+            }
+        }
+        input::InputAction::QueuePointerNext => {
+            // Inline ↓ while the pointer is armed: step toward newer items;
+            // past the newest it dissolves and restores the stashed draft.
+            // A dissolved pointer (false) hands the key back to history
+            // navigation, matching the history pointer's own exit.
+            if !app.queue_pointer_next(viewed_session_id) {
+                let session_rows = app.current_session_history();
+                app.history_next(&session_rows);
+            }
+        }
         input::InputAction::RecallQueued => {
-            // Top-level `↑` (in an empty composer while the queue is
-            // non-empty) recalls the newest staged item into the
-            // composer for editing. Purely local — no modal is open,
-            // no block state changes.
+            // Legacy destructive recall. No top-level key produces this
+            // anymore (↑ routes to the non-destructive queue pointer); the
+            // arm stays for the queue modal's explicit pull-to-composer
+            // gesture, where removing the item from the list is the point.
             match app.recall_queued(viewed_session_id) {
                 Some(crate::app::RecallQueued::Restored(dispatch)) => {
+                    app.queue_pointer = None;
+                    app.queue_pointer_draft.clear();
+                    app.queue_pointer_draft_images.clear();
+                    app.queue_pointer_draft_text_pastes.clear();
                     app.restore_dispatch(dispatch);
                 }
                 None => {}
@@ -1620,6 +1648,13 @@ pub(super) async fn dispatch_action(
             app.resume_queue(viewed_session_id);
             match app.recall_queued_at(viewed_session_id, idx) {
                 Some(crate::app::RecallQueued::Restored(dispatch)) => {
+                    // The item left the queue, so a pointer at it (or at a
+                    // neighbor the removal shifted) would dangle; dissolve
+                    // first and let the recall adopt the composer cleanly.
+                    app.queue_pointer = None;
+                    app.queue_pointer_draft.clear();
+                    app.queue_pointer_draft_images.clear();
+                    app.queue_pointer_draft_text_pastes.clear();
                     app.restore_dispatch(dispatch);
                 }
                 None => {}
@@ -1640,7 +1675,18 @@ pub(super) async fn dispatch_action(
             // now-shorter list.
             if app.active_modal == Modal::Queue {
                 let idx = app.modal_index;
-                app.remove_queued_at(viewed_session_id, idx);
+                let removed = app.remove_queued_at(viewed_session_id, idx);
+                // A pointer at the deleted item would dangle; dissolve it
+                // without restoring (the modal owns the surface and the
+                // composer's next projection recomputes anyway).
+                if let Some(removed) = removed.as_ref()
+                    && app.queue_pointer.as_deref() == Some(removed.id.as_str())
+                {
+                    app.queue_pointer = None;
+                    app.queue_pointer_draft.clear();
+                    app.queue_pointer_draft_images.clear();
+                    app.queue_pointer_draft_text_pastes.clear();
+                }
                 let count = app.pending_count(viewed_session_id);
                 if count == 0 {
                     app.modal_index = 0;

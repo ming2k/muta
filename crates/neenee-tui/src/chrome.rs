@@ -758,7 +758,7 @@ fn input_action_spans(
 ) -> Vec<Span<'static>> {
     // Route the keycap through the unified keycap style (brand + bold) so the
     // "Enter" affordance matches every other keycap in the app — the activity
-    // bar's Esc-to-interrupt hint, the queue bar's F2/F3 legend, the modal
+    // bar's Esc-to-interrupt hint, the queue bar's Ctrl legend, the modal
     // footers — instead of hand-rolling a divergent fg+bold combination here.
     // The keycap style carries no background, so the surface tint is applied
     // here once for the whole row.
@@ -1085,11 +1085,11 @@ pub struct QueueItemView {
     pub queued_at_ms: u64,
     /// The user's literal prompt text (the first run is previewed in the bar).
     pub text: String,
-    /// `true` while the item is an in-flight mid-round steer (`F4` —
-    /// [`crate::app::QueuedDispatchState::Inserting`]): handed to the
-    /// running round, waiting for admission at the next safe turn boundary.
-    /// The bar and the modal mark it with a `steer›` badge so it never reads
-    /// as an ordinary next-round entry.
+    /// `true` while the item is an in-flight mid-round steer. **Dead since
+    /// ADR-0126** — a live insert (`Ctrl+O`) is transcript-owned and never
+    /// enters the outbox — but retained so the view struct keeps its shape;
+    /// producers always pass `false`.
+    #[allow(dead_code)]
     pub steering: bool,
 }
 
@@ -1104,10 +1104,11 @@ pub struct QueueBarView<'a> {
     /// has not yet naturally completed. Recolors the count so the user can see
     /// the queue is paused, not forgotten.
     pub paused: bool,
-    /// `true` while the user has hard-blocked the outbox (`F3`, or the queue
-    /// modal being open). While blocked, no message auto-drains even after the
-    /// round completes. Surfaced as a distinct `blocked` tag + the legend key
-    /// flipping to `F3 resume`, so it never reads as an ordinary pause.
+    /// `true` while the user has hard-blocked the outbox (`Ctrl+P`, or the
+    /// queue modal being open). While blocked, no message auto-drains even
+    /// after the round completes. Surfaced as a distinct `blocked` tag + the
+    /// legend key flipping to `Ctrl+P resume`, so it never reads as an
+    /// ordinary pause.
     pub blocked: bool,
 }
 
@@ -1116,20 +1117,20 @@ pub struct QueueBarView<'a> {
 /// A brand-colored `QUEUE` label on the plain surface, quietly matching the
 /// todo bar above it. The single row carries, left → right: the identity
 /// (`QUEUE` + count, plus a `· blocked` state tag while the user holds the
-/// outbox), a one-line preview of the next item to pop (a `steer›` badge
-/// marks an in-flight mid-round steer), and the right-pinned keycap legend
-/// (`F4` insert into the running round, `F3` block/resume, `F2` expand).
+/// outbox), a one-line preview of the next item to pop, and the right-pinned
+/// keycap legend (`Ctrl+O` insert into the running round, `Ctrl+P`
+/// block/resume, `Ctrl+Q` expand).
 ///
 /// Width pressure degrades the middle and the legend before the identity:
 /// the preview truncates with `…`, then the legend sheds its labels and the
-/// `F2`/`F4` clusters (keeping `F3`, the state toggle), then the legend
-/// drops entirely. An empty queue is never rendered (the layout hides the
-/// row), so there is no empty-hint state.
+/// `Ctrl+Q`/`Ctrl+O` clusters (keeping `Ctrl+P`, the state toggle), then the
+/// legend drops entirely. An empty queue is never rendered (the layout hides
+/// the row), so there is no empty-hint state.
 ///
 /// `paused` recolors the count (warn) so the user can see the queue is held
 /// back because the running round has not yet completed, not forgotten. A user
-/// `blocked` state (error color + `blocked` tag + the legend's `F3 resume`)
-/// is the explicit "send nothing even after the round ends" override.
+/// `blocked` state (error color + `blocked` tag + the legend's `Ctrl+P
+/// resume`) is the explicit "send nothing even after the round ends" override.
 ///
 /// Returns the full bar rect so the event loop can make the region clickable
 /// (click → expand the Queue modal).
@@ -1150,9 +1151,9 @@ pub fn draw_queue_bar(
     let full_w = rect.width as usize;
 
     // ── Resolve the next item to pop ────────────────────────────────────────
-    // Dispatch is FIFO: the front-most item pops first. We preview the first
-    // item in dispatch order; an in-flight steer (`Inserting`) leads the deque
-    // and wears the `steer›` badge.
+    // Dispatch is FIFO: the front-most item pops first. Every bar item is a
+    // next-round entry now — a live mid-round insert (`Ctrl+O`) is a
+    // transcript entry and never appears here (ADR-0126).
     let next = items.first();
 
     let count = items.len();
@@ -1196,26 +1197,27 @@ pub fn draw_queue_bar(
     }
 
     // ── Right-side keycap legend ────────────────────────────────────────────
-    // The keys explain the three outbox affordances:
-    //   F4 — insert the composer text into the running round (mid-round steer)
-    //   F3 — block / resume the outbox (toggles; label flips with state)
-    //   F2 — expand the full queue list
+    // The keys explain the three outbox affordances (the Ctrl row, ADR-0124):
+    //   Ctrl+O — insert the composer text into the running round (mid-round steer)
+    //   Ctrl+P — block / resume the outbox (toggles; label flips with state)
+    //   Ctrl+Q — expand the full queue list
     // The keycap units are same-rank peers (R2), so they are separated by
     // plain whitespace — no dot. Under width pressure the labels drop first,
-    // then the F2 and F4 clusters, keeping `F3` (the state toggle) last.
+    // then the Ctrl+Q and Ctrl+O clusters, keeping `Ctrl+P` (the state
+    // toggle) last.
     let mk_right = |density: LegendDensity| -> Vec<Span<'static>> {
         let mut spans: Vec<Span<'static>> = Vec::new();
         let sep = |spans: &mut Vec<Span<'static>>| {
             spans.push(Span::styled(" ".repeat(JOIN_ENUMERATE_COLS), dim));
         };
         if !matches!(density, LegendDensity::Tiny) {
-            spans.push(keycap_span(theme, Key::F4.display()));
+            spans.push(keycap_span(theme, Key::CTRL_O.display()));
             if matches!(density, LegendDensity::Full) {
                 spans.push(Span::styled(" insert", dim));
             }
             sep(&mut spans);
         }
-        spans.push(keycap_span(theme, Key::F3.display()));
+        spans.push(keycap_span(theme, Key::CTRL_P.display()));
         if matches!(density, LegendDensity::Full) {
             spans.push(Span::styled(
                 if blocked { " resume" } else { " block" },
@@ -1224,26 +1226,17 @@ pub fn draw_queue_bar(
         }
         if matches!(density, LegendDensity::Full) {
             sep(&mut spans);
-            spans.push(keycap_span(theme, Key::F2.display()));
+            spans.push(keycap_span(theme, Key::CTRL_Q.display()));
             spans.push(Span::styled(" expand", dim));
         }
         spans
     };
 
     // ── Middle: next-item preview ───────────────────────────────────────────
-    // One-line, control-chars-collapsed; an in-flight mid-round steer leads
-    // with a brand-colored `steer›` badge so it never reads as an ordinary
-    // next-round entry. The preview is the most elastic segment: it truncates
-    // to whatever the identity and the legend leave behind, and disappears
-    // entirely on very narrow rows.
-    let preview_text = next.map(|item| {
-        let one_line = crate::overlays::common::one_line(item.text.trim());
-        if item.steering {
-            format!("steer› {one_line}")
-        } else {
-            one_line
-        }
-    });
+    // One-line, control-chars-collapsed. The preview is the most elastic
+    // segment: it truncates to whatever the identity and the legend leave
+    // behind, and disappears entirely on very narrow rows.
+    let preview_text = next.map(|item| crate::overlays::common::one_line(item.text.trim()));
 
     let left_w: usize = left.iter().map(|s| s.content.width()).sum();
     let right_w =
@@ -1334,11 +1327,11 @@ pub fn draw_queue_bar(
 /// How much of the queue bar's keycap legend survives under width pressure.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegendDensity {
-    /// Keys + labels: `F4 insert  F3 block  F2 expand`.
+    /// Keys + labels: `Ctrl+O insert  Ctrl+P block  Ctrl+Q expand`.
     Full,
-    /// Bare keycaps: `F4  F3  F2`.
+    /// Bare keycaps: `Ctrl+O  Ctrl+P  Ctrl+Q`.
     Compact,
-    /// Only the block/resume toggle: `F3`.
+    /// Only the block/resume toggle: `Ctrl+P`.
     Tiny,
 }
 
@@ -2529,7 +2522,7 @@ mod tests {
                 paused: true,
                 blocked: false,
             },
-            70,
+            92,
             &Theme::default(),
         );
         // Identity + count reflects the one item; no time label anymore.
@@ -2539,13 +2532,12 @@ mod tests {
         // plain whitespace, never a `·` (which would imply one modifies the
         // other).
         assert!(
-            text.contains("F4 insert  F3 block  F2 expand"),
+            text.contains("Ctrl+O insert  Ctrl+P block  Ctrl+Q expand"),
             "peer keycaps must use R2 whitespace: {text:?}"
         );
         assert!(!text.contains('·'), "no R1 dot between peers: {text:?}");
-        // A non-steering item previews plainly — no `steer›` badge (that marks
-        // an in-flight mid-round steer). The legend's `F4 insert` affordance
-        // is always present and is unrelated to the badge.
+        // A live insert is transcript-owned (ADR-0126) and never rides the
+        // bar, so every bar item previews plainly — no `steer›` badge.
         assert!(!text.contains("steer›"), "steer badge leaked: {text:?}");
         // The preview rides inline on the same row.
         assert!(
@@ -2555,9 +2547,12 @@ mod tests {
     }
 
     #[test]
-    fn queue_bar_marks_an_in_flight_steer_with_a_badge() {
-        // An `F4` steer already handed to the running round must never read
-        // as an ordinary next-round entry: it leads with the `steer›` badge.
+    fn queue_bar_ignores_the_legacy_steer_flag() {
+        // ADR-0126: a mid-round insert (`Ctrl+O`) is a transcript entry, not
+        // an outbox item, so a `steering: true` view item can no longer be
+        // produced by the projection. If one ever leaks through (a stale
+        // snapshot), the bar must still render it as an ordinary next-round
+        // entry — the badge vocabulary is retired with the state it marked.
         let item = QueueItemView {
             queued_at_ms: 1_700_000_000_000,
             text: "also cover the edge case".to_string(),
@@ -2569,15 +2564,16 @@ mod tests {
                 paused: false,
                 blocked: false,
             },
-            70,
+            92,
             &Theme::default(),
         );
-        assert!(text.contains("steer›"), "steer badge missing: {text:?}");
-        // The badge borrows the preview budget, so the text truncates — but
-        // the head of the message must survive the ellipsis.
         assert!(
-            text.contains("also cover the ed…"),
-            "steer preview missing: {text:?}"
+            !text.contains("steer›"),
+            "steer badge must not render: {text:?}"
+        );
+        assert!(
+            text.contains("also cover the edge case"),
+            "preview text missing: {text:?}"
         );
     }
 

@@ -5,6 +5,7 @@
   import ChatHeader from "./lib/components/ChatHeader.svelte";
   import MessageItem from "./lib/components/MessageItem.svelte";
   import CommandBlock from "./lib/components/CommandBlock.svelte";
+  import InterruptMarker from "./lib/components/InterruptMarker.svelte";
   import ToolCard from "./lib/components/ToolCard.svelte";
   import Composer from "./lib/components/Composer.svelte";
   import PermissionBanner from "./lib/components/PermissionBanner.svelte";
@@ -101,6 +102,8 @@
         {#each daemon.feed as item (item.key)}
           {#if item.kind === "message"}
             <MessageItem message={item.message} />
+          {:else if item.kind === "interrupt"}
+            <InterruptMarker record={item.record} />
           {:else}
             <CommandBlock record={item.record} />
           {/if}

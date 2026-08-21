@@ -4,7 +4,7 @@
 //! through the caller's own quota. Returns a pre-rendered, model-optimized text
 //! blob, which we pass through largely verbatim. This is the default backend.
 
-use super::{SearchProvider, cap_output, mcp_tools_call};
+use super::{ProviderOutput, SearchProvider, mcp_tools_call};
 use async_trait::async_trait;
 
 const EXA_URL: &str = "https://mcp.exa.ai/mcp";
@@ -20,7 +20,11 @@ impl SearchProvider for ExaProvider {
         "Exa"
     }
 
-    async fn search(&self, client: &reqwest::Client, query: &str) -> Result<String, String> {
+    async fn search(
+        &self,
+        client: &reqwest::Client,
+        query: &str,
+    ) -> Result<ProviderOutput, String> {
         let url = endpoint_with_key(self.api_key.as_deref());
         let text = mcp_tools_call(
             client,
@@ -29,16 +33,16 @@ impl SearchProvider for ExaProvider {
             serde_json::json!({
                 "query": query,
                 "type": "auto",
-                "numResults": 10,
+                // 5 hits: measured 10 hits ≈ 14k tokens, which the 4k-token
+                // budget would chop to ~28% — losing the URLs of the tail
+                // results. 5 keeps the whole list inside the budget.
+                "numResults": 5,
                 "livecrawl": "fallback",
             }),
             &[],
         )
         .await?;
-        Ok(cap_output(&format!(
-            "Search results for '{}' (via Exa):\n\n{}",
-            query, text
-        )))
+        Ok(ProviderOutput::Blob(text))
     }
 }
 

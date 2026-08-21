@@ -162,6 +162,19 @@ pub enum MessageKind {
         /// User-pinned flag — see [`MessageKind::ToolStep::user_pinned`].
         user_pinned: bool,
     },
+    /// A round-interrupt marker (C11): the round stopped before completing —
+    /// user interrupt (Esc Esc), superseded by newer input, or killed with
+    /// the process. The durable record rides the session store (never the
+    /// model window); this row is its transcript projection, created live
+    /// from `RoundEvent::RoundInterrupted` and re-created on resume by
+    /// timestamp seam. Renders as its own warning entry with the reason and
+    /// the stop time, so a resumed session answers "should I continue?"
+    /// at a glance.
+    RoundInterrupt {
+        /// The durable record — reason, `at_ms`, and (usually) the round.
+        record: neenee_contracts::RoundInterrupt,
+        user_pinned: bool,
+    },
 }
 
 /// Lifecycle of a command component (ADR-0108). Commands are synchronous
@@ -449,6 +462,13 @@ pub enum DeliveryStatus {
     /// is staged in the TUI's send queue and will be dispatched automatically
     /// when the harness returns to idle.
     Queued,
+    /// A mid-round insert (`Ctrl+O`) whose round ended — naturally or by an
+    /// interrupt (Esc Esc) — before it could be admitted at a turn boundary.
+    /// The entry stays in the transcript (it never leaves the conversation)
+    /// but is re-queued as the **next round's** prompt: it renders with the
+    /// same pending treatment as [`DeliveryStatus::Queued`] and flips to
+    /// delivered when that round starts.
+    HeldNextRound,
 }
 
 /// A structured transcript message.
@@ -508,6 +528,13 @@ pub struct TranscriptMessage {
     /// else stays at the default [`DeliveryStatus::Delivered`]. The renderer
     /// and the queue dispatch/recall paths key off this.
     pub delivery: DeliveryStatus,
+    /// Correlation id for a mid-round insert entry (`Ctrl+O`,
+    /// `AgentRequest::InsertUserInput`). Set when the entry is staged into the
+    /// transcript as [`DeliveryStatus::Queued`]; the response listener uses it
+    /// to find and settle the entry when the harness reports
+    /// `UserInputInserted` / `NextRoundStarted` / `UserInputUnavailable`.
+    /// `None` for every non-insert message.
+    pub insert_id: Option<String>,
     /// Provider/solution id that produced this message, mirrored from the
     /// core [`neenee_contracts::Message`] so the transcript stays traceable across
     /// model switches. `None` for messages that don't carry attribution.
@@ -555,6 +582,7 @@ impl TranscriptMessage {
             raw,
             kind: MessageKind::Text,
             delivery: DeliveryStatus::default(),
+            insert_id: None,
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
@@ -580,6 +608,25 @@ impl TranscriptMessage {
     pub fn queued(mut self) -> Self {
         self.delivery = DeliveryStatus::Queued;
         self
+    }
+
+    /// Correlate this message with a mid-round insert (`Ctrl+O`) by its
+    /// harness-side input id, so the response listener can settle the entry
+    /// when the insert is admitted or handed back. Builder-style companion of
+    /// [`Self::queued`].
+    pub fn with_insert_id(mut self, insert_id: impl Into<String>) -> Self {
+        self.insert_id = Some(insert_id.into());
+        self
+    }
+
+    /// Mark this insert entry as waiting for the **next** round: the round it
+    /// was steered into ended (naturally or interrupted) before admission, so
+    /// the content ships as a fresh round's prompt instead. Idempotent on
+    /// already-delivered messages — a late race can never un-deliver one.
+    pub fn hold_pending_round(&mut self) {
+        if self.delivery == DeliveryStatus::Queued {
+            self.delivery = DeliveryStatus::HeldNextRound;
+        }
     }
 
     /// Stamp the provider/solution id and model that produced this message.
@@ -670,6 +717,7 @@ impl TranscriptMessage {
                 children: Vec::new(),
             },
             delivery: DeliveryStatus::default(),
+            insert_id: None,
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
@@ -737,6 +785,7 @@ impl TranscriptMessage {
                 user_pinned: false,
             },
             delivery: DeliveryStatus::default(),
+            insert_id: None,
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
@@ -1216,6 +1265,11 @@ impl TranscriptMessage {
         matches!(self.kind, MessageKind::CommandResult { .. })
     }
 
+    /// Whether this row is a round-interrupt marker (C11).
+    pub fn is_round_interrupt(&self) -> bool {
+        matches!(self.kind, MessageKind::RoundInterrupt { .. })
+    }
+
     pub fn command_result_expanded(&self) -> Option<bool> {
         match &self.kind {
             MessageKind::CommandResult { expanded, .. } => Some(*expanded),
@@ -1538,6 +1592,7 @@ impl TranscriptMessage {
                 user_pinned: false,
             },
             delivery: DeliveryStatus::default(),
+            insert_id: None,
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
@@ -1584,6 +1639,7 @@ impl TranscriptMessage {
                 user_pinned: false,
             },
             delivery: DeliveryStatus::default(),
+            insert_id: None,
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,
@@ -1666,6 +1722,37 @@ impl TranscriptMessage {
         }
     }
 
+    /// Construct a round-interrupt marker row (C11) from its durable record.
+    /// The body is composed here (and re-composed identically on resume) so
+    /// the live row and the restored row render byte-identically: the round
+    /// number when known, the reason label, and nothing else — the timestamp
+    /// renders from `sent_at_ms` as the trailing ` · HH:MM` chip.
+    pub fn round_interrupted(record: neenee_contracts::RoundInterrupt) -> Self {
+        let raw = match record.round {
+            Some(round) => format!("Interrupted · round {} · {}", round, record.reason.label()),
+            None => format!("Interrupted · {}", record.reason.label()),
+        };
+        Self {
+            id: next_message_id(),
+            role: Role::System,
+            blocks: parse_blocks(&raw),
+            raw,
+            kind: MessageKind::RoundInterrupt {
+                record,
+                user_pinned: false,
+            },
+            delivery: DeliveryStatus::default(),
+            insert_id: None,
+            origin: UserMessageOrigin::Chat,
+            provider: None,
+            model: None,
+            effort: None,
+            round: None,
+            turn: None,
+            sent_at_ms: None,
+        }
+    }
+
     /// Construct a notice message. Replaces the ad-hoc
     /// `TranscriptMessage::new(Role::System, format!("Error: …"))` pattern with
     /// a typed severity so the renderer can pick color/icon from one place.
@@ -1689,6 +1776,7 @@ impl TranscriptMessage {
                 user_pinned: false,
             },
             delivery: DeliveryStatus::default(),
+            insert_id: None,
             origin: UserMessageOrigin::Chat,
             provider: None,
             model: None,

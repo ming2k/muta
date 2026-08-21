@@ -7,6 +7,182 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The queue family moved off the F-row to the Ctrl row (ADR-0126).**
+  `Ctrl+Q` opens the Queue modal (was `F2`), `Ctrl+P` blocks/resumes the
+  outbox (was `F3`, *pause*), and `Ctrl+O` inserts into the running round
+  (was `F4`, *open into the round*). Fn-dispatch is OS/terminal policy the
+  app cannot rely on — terminals, window managers, and browser embedders
+  freely remap or reserve the F-keys, which is why the old bindings silently
+  failed to work on many setups. Ctrl chords are distinct bytes under raw
+  mode, survive tmux/screen, sit one row above `Enter`, and carry mnemonics.
+  `F5` (the `/btw` asides list) keeps its slot.
+- **A mid-round insert (`Ctrl+O`) is a transcript entry from the moment it is
+  sent (ADR-0126).** The message lands in the scrollback immediately as a
+  user panel in the pending treatment (`⏸ Queued` header, dimmer band) —
+  visibly blocked on the running turn — without interrupting the running
+  turn's own streaming entry below it. It settles in place (same row, no
+  duplicate): admitted at a safe turn boundary → delivered with `↳ insert`
+  provenance; round ended first (natural completion *or* an `Esc Esc`
+  interrupt) → `⏸ Held for next round`, and its content joins the outbox as
+  a paused next-round item that ships as the next round's prompt. Inserts
+  are no longer outbox items and accept **no queue operations** (no recall,
+  edit, delete, reorder, or cancel) — they have already entered the
+  conversation. The `Inserting` state and the `steer›` badge are gone with
+  the shadow item they existed for.
+- **`InsertUserInput` no longer drops staged images** — the old send path
+  hardcoded `images: Vec::new()`, silently discarding anything pasted with a
+  `Ctrl+O` steer; the staged payloads now ship with the request.
+
+### Added
+
+- **Round interrupts are now recorded durably — with the reason and the
+  timestamp — and projected back into the transcript on resume
+  (ADR-0127).** Every path that stops a round before it completes now
+  writes one `RoundInterrupt` record to the session store and emits the
+  live `RoundEvent::RoundInterrupted`: an explicit **Esc Esc** (or the
+  control-plane `Interrupt`), a **superseded** round (a new message, a
+  `!command`, or a session switch killed the running one — previously
+  completely invisible), and **termination** (daemon stop/kill, or a hard
+  crash inferred at next load from the abandoned in-flight request). The
+  TUI renders each as its own warning entry — `▲ interrupted · HH:MM`
+  over `round N · Esc Esc` / `new message` / `process exited` — the web
+  panel shows an equivalent row, and `neenee -p` prints
+  `[Interrupted · <reason>]` (or a `round_interrupted` JSON event). On
+  resume the markers re-project at their timestamp seams, so a restored
+  session answers "this round stopped, here is why and when — continue?"
+  at a glance. The records are projection state like the command ledger:
+  they never enter the model-visible context (the deliberate no-marker
+  decision is unchanged) and cost zero tokens. The dashboard row now also
+  lands on `Interrupted` (with the reason as its note) for *every*
+  interrupt phase, not just the phase-1 unsend.
+- **Queue pointer: `↑`/`↓` walk the outbox non-destructively, and `Enter`
+  edits a queued message in place (ADR-0126).** With staged messages,
+  `↑` now arms a *pointer* at the newest queue item and projects its content
+  into the composer (further `↑` step toward older items; `↓` steps back and,
+  past the newest, restores the stashed draft) — nothing leaves the queue, so
+  the old pop-pop-pop recall dance is gone. `Enter` writes the edited content
+  back into the pointed-at item **in its own slot**: editing `a` of
+  `[a, b, c]` into `d` yields `[d, b, c]`, never `[b, c, d]` and never a
+  duplicate. If the pointed-at item shipped while you were editing (its round
+  completed behind your back), the pointer is treated as empty — your edit
+  stays in the composer and `Enter` sends it as a fresh message (queued if
+  the session is busy), so the gesture never dead-ends. The queue is walked
+  *before* input history; only an exhausted queue hands `↑` on to history
+  recall.
+- **Autonomous sessions come back with the daemon (ADR-0125).** On boot the
+  daemon scans every project's persisted sessions (header-only, no
+  transcript decode) and rehosts each one that still has armed `/schedule`
+  jobs through the ordinary lazy-resume path, so scheduled prompts keep
+  firing across daemon restarts (crash, upgrade, reboot) instead of waiting
+  for a human to attach. Rehosted sessions appear in the dashboard like any
+  hosted session; a missing project root or a failed assembly leaves that
+  session dormant (it still lazy-resumes on attach) and never blocks
+  startup. Opt out with `[daemon] rehost_armed_schedules = false`.
+
+### Changed
+
+- **A detached daemon now calls `setsid(2)` (ADR-0125).** Both spawn paths
+  (auto-start and `neenee daemon start`) previously used `process_group(0)`
+  only — a new process *group*, not a new *session* — so the daemon stayed
+  in the spawning terminal's session and was SIGHUPed (then drained, per
+  ADR-0101) when the terminal or its compositor exited. The daemon now
+  detaches the way tmux's server does: closing the terminal, the window, or
+  the compositor leaves it and every hosted session running. `kill -HUP`
+  semantics are unchanged.
+- **Armed `/schedule` jobs are never idle-suspended.** A session with
+  pending scheduled work is not idle in the meaningful sense: suspending it
+  would park its tick loop and silently stop the schedule from firing. The
+  idle-suspension sweep now exempts these sessions (their memory stays
+  bounded by the suspension of everything else).
+- **Phase-1 unsend restore no longer clobbers an in-progress draft.** The
+  `UnsentInput` composer restore is asynchronous, so it now only adopts an
+  idle composer: a half-typed draft the user was composing while the round
+  ran wins, and the interrupted prompt stays recoverable from the input
+  history (`Ctrl+R` / `↑`). Explicit gestures — queue recall and Ctrl+R
+  insert — still replace the draft. `App::adopt_as_draft` takes an explicit
+  `DraftAdoption` policy (`Replace` / `OnlyIfIdle`) so each path declares
+  its overwrite semantics instead of sharing one unconditional behaviour.
+- **The Phase-1 unsend guard is a named, unit-tested predicate.**
+  `is_phase1_unsend` (`orchestration.rs`) replaces the inline sentinel
+  check, documenting the boundary it enforces: the unsend window closes at
+  the first observed content delta or tool call, whichever comes first —
+  not at the first network response packet (transport noise arrives long
+  before any model output) and not at "request still local" (wire state is
+  unobservable at the harness layer). See the new boundary discussion in
+  `docs/explanation/interrupt-semantics.md`.
+- **TUI unsend restore now shows a "Prompt not sent" toast**, matching the
+  web panel's feedback instead of silently refilling the composer after the
+  transcript row was popped.
+- **Web panel: the `UnsentInput` restore no longer clobbers in-progress
+  typing either.** The composer reports its idleness to the daemon store
+  (`composerIdle`); an unsend adopts only an idle composer, and when the
+  user is mid-composition the optimistic echo stays in the transcript (the
+  only visible copy to re-copy from) with a toast explaining where the
+  prompt went. Same policy as the TUI's `DraftAdoption::OnlyIfIdle`.
+- **`UnsentInput`'s contract doc now says the composer restore is
+  advisory** (`events.rs` doc comment, `server-api.md`,
+  `server.asyncapi.yaml`): the harness has already reverted the
+  conversation, so clients own how to surface the prompt.
+
+### Fixed
+
+- **`/schedule` jobs are no longer consumed when their harness is gone
+  (ADR-0125).** `run_schedule_tick` used to fire-then-mutate: when the
+  session's driver channel was already torn down (suspended, killed, daemon
+  draining), the send silently failed *after* the job had been advanced — a
+  cron lost one interval per tick and a once-job vanished unrecoverably.
+  Dispatch is now deliver-first/mutate-second: an undeliverable fire leaves
+  the job armed for the next harness.
+- **The `/schedule` scheduler task no longer leaks past session teardown
+  (ADR-0125).** It was spawned fire-and-forget with no cancellation token,
+  so suspension/kill left it ticking against a dead channel every 30s for
+  the daemon's remaining lifetime. It now shares the hosted session's
+  teardown token with the driver.
+- **Stale `Ok(false)` in the Phase-1 unsend docs.** `execute_round` returns
+  `Result<(), HarnessError>`; the code comment and
+  `interrupt-semantics.md` still described a bool-returning signature from
+  an earlier revision.
+
+### Security
+
+- **Per-hop SSRF guard for the web tools (ADR-0124).** Redirects are no
+  longer followed by reqwest automatically: `guarded_get` follows them in
+  async code and re-runs the SSRF pre-flight on every hop, so a public URL
+  answering `302 → http://169.254.169.254/…` is refused mid-chain instead of
+  being followed into the cloud metadata endpoint. The guard now also blocks
+  IPv6 link-local (`fe80::/10`), TEST-NET-1/2/3, `192.0.0.0/24`, and
+  `240.0.0.0/4`. Response bodies are streamed with an 8 MiB hard cap — the
+  builtin reader previously buffered the entire body before truncating.
+- **Untrusted-content boundary for web results (ADR-0124).** `webfetch`
+  output is wrapped in `[BEGIN/END UNTRUSTED WEB CONTENT]` markers and a new
+  `system.web_untrusted_content` prompt section (active whenever a web tool
+  is admitted) teaches the model to treat fetched pages and search snippets
+  as data, never as instructions — closing the prompt-injection surface of a
+  shell-holding agent. The Tavily API key moved from the request body to
+  `Authorization: Bearer`, keeping it out of error-body echoes.
+
+### Changed
+
+- **Web tool output is token-budgeted, never mid-entry chopped
+  (ADR-0124).** `SearchProvider` now returns structured results
+  (`ProviderOutput::Results`/`Blob`) instead of a pre-rendered string, and
+  the tool layer owns the 4 000-token budget: titles and URLs are never
+  truncated, snippets degrade to title+URL first, and only then are tail
+  entries dropped with a notice naming the count. Exa requests 5 results
+  instead of 10 (measured: 10 results ≈ 14k tokens, previously chopped to
+  ~28% with the tail URLs lost). `webfetch` moves from a 16 000-byte cap to
+  the same 4 000-token cap; its truncation notice now suggests a narrower
+  URL/anchor instead of the misleading `raw=true` (which never raised the
+  cap).
+- `webfetch`/`snapshot` send a browser User-Agent (matching the search
+  backends) instead of `neenee/0.1`, which anti-bot layers rejected more
+  often. Unknown `[websearch] provider`/`fallback` names log a warning and
+  fall back to Exa instead of failing silently. The `websearch`
+  description's "current year" is computed per process, not per tool
+  construction, so long-lived daemon sessions keep the right year.
+
 ## [0.29.1] - 2026-08-20
 
 ### Changed

@@ -2,7 +2,7 @@
 //! drop-in for users who want a key-based hosted backend rather than the
 //! anonymous Exa/Parallel MCP endpoints.
 
-use super::{SearchProvider, SearchResult, format_results};
+use super::{ProviderOutput, SearchProvider, SearchResult};
 use async_trait::async_trait;
 
 const TAVILY_URL: &str = "https://api.tavily.com/search";
@@ -17,7 +17,11 @@ impl SearchProvider for TavilyProvider {
         "Tavily"
     }
 
-    async fn search(&self, client: &reqwest::Client, query: &str) -> Result<String, String> {
+    async fn search(
+        &self,
+        client: &reqwest::Client,
+        query: &str,
+    ) -> Result<ProviderOutput, String> {
         let key = self
             .api_key
             .as_deref()
@@ -28,8 +32,8 @@ impl SearchProvider for TavilyProvider {
             })?;
         let response = client
             .post(TAVILY_URL)
+            .bearer_auth(key)
             .json(&serde_json::json!({
-                "api_key": key,
                 "query": query,
                 "search_depth": "advanced",
                 "include_answer": false,
@@ -60,7 +64,7 @@ impl SearchProvider for TavilyProvider {
             .filter_map(parse_item)
             .take(10)
             .collect();
-        Ok(format_results(query, "Tavily", results))
+        Ok(ProviderOutput::Results(results))
     }
 }
 

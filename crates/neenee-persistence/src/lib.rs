@@ -2,18 +2,18 @@
 //!
 //! `neenee-contracts` holds the pure domain (types & traits), zero I/O. This
 //! crate sits one layer above it: the durable state and configuration a
-//! frontend needs to actually run a session — config loading, path
-//! resolution, the event-sourced session store (which carries the `/repeat`
-//! cron schedule as session-scoped state), blob storage, the embedding index,
-//! the per-project advisory lock, and model-usage telemetry.
+//! frontend needs to actually run a session — config loading and validation,
+//! path resolution, the event-sourced session store (which carries the
+//! `/schedule` cron calendar as session-scoped state), blob storage, the
+//! embedding index, and usage telemetry.
 //!
-//! This is the **local agent** persistence layer. It assumes a
-//! single-user workstation: paths resolve via XDG `ProjectDirs`, sessions
-//! are keyed by project root, and a process-level `flock` enforces
-//! single-instance-per-project. Other scenarios the project may grow
-//! (group-chat with multi-tenancy, always-on quant trading) will not fit
-//! this layer and should spawn sibling crates (`neenee-chat-store`,
-//! `neenee-trading-store`) sharing only `neenee-contracts`. See ADR-0005.
+//! This is the **local agent** persistence layer. It assumes a single-user
+//! workstation: paths resolve through XDG `ProjectDirs` (ADR-0014's `Dirs`
+//! is the single point of truth) and sessions are keyed by project root;
+//! cross-process writes to shared files serialise through companion
+//! `.lock` flocks (ADR-0018). Other scenarios the project may grow
+//! (group-chat with multi-tenancy) will not fit this layer and should spawn
+//! sibling crates sharing only `neenee-contracts`. See ADR-0005.
 //!
 //! Frontends depend on `neenee-contracts` + `neenee-persistence` and add their own
 //! presentation layer. They must never need to reach into a sibling
@@ -25,6 +25,7 @@
 pub mod blobs;
 pub mod cache;
 pub mod config;
+pub mod config_check;
 pub mod embedding;
 pub mod events;
 pub mod fsutil;
@@ -32,6 +33,7 @@ pub mod instances;
 pub mod lock;
 pub mod paths;
 pub mod provider_usage;
+pub mod route_settings;
 pub mod session;
 pub mod trusted_projects;
 pub mod usage_stats;

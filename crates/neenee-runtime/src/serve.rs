@@ -171,6 +171,10 @@ pub enum Wire {
         /// model resolves.
         #[serde(default)]
         model: String,
+        /// Durable round-interrupt records (C11), re-projected into the
+        /// transcript on the client side. Absent on older daemons.
+        #[serde(default)]
+        round_interrupts: Vec<neenee_contracts::RoundInterrupt>,
     },
     Pick {
         sessions: Vec<SessionOverview>,
@@ -937,6 +941,7 @@ where
         messages,
         provider,
         model,
+        round_interrupts: bound.session.round_interrupts().await,
     })
     .map_err(|e| format!("serialize welcome: {e}"))?;
     ws_sink

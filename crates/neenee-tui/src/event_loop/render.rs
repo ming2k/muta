@@ -208,6 +208,11 @@ pub(super) fn render_frame(
     // item to ship. The items are owned snapshots so the bar/modal
     // do not borrow `app` (which is mutated again right after the
     // draw closure).
+    //
+    // Every outbox item is a next-round item now: a live mid-round
+    // insert (`Ctrl+O`) is transcript-owned and never passes through
+    // the outbox (ADR-0126), so there is no `steering` slice to
+    // exclude from the modal either.
     let queue_items: Vec<view::QueueItemView> = app
         .pending_dispatch
         .iter()
@@ -215,19 +220,10 @@ pub(super) fn render_frame(
         .map(|item| view::QueueItemView {
             queued_at_ms: item.queued_at_ms,
             text: item.text.clone(),
-            steering: item.state == crate::app::QueuedDispatchState::Inserting,
+            steering: false,
         })
         .collect();
-    // The Queue modal's selectable range excludes in-flight
-    // steers (`Inserting` items are already with the running
-    // round), so its index space is the Waiting slice — kept in
-    // sync with `App::{recall_queued_at, remove_queued_at,
-    // move_queued}`.
-    let queue_modal_items: Vec<view::QueueItemView> = queue_items
-        .iter()
-        .filter(|item| !item.steering)
-        .cloned()
-        .collect();
+    let queue_modal_items: Vec<view::QueueItemView> = queue_items.clone();
 
     let transcript_render = view::draw_transcript(
         f,

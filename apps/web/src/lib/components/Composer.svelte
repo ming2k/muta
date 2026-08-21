@@ -16,7 +16,10 @@
   const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
   // Restore a prompt the daemon reports as never-sent (UnsentInput) so the
-  // user can re-edit and re-send instead of retyping.
+  // user can re-edit and re-send instead of retyping. The daemon only sets
+  // `restoredDraft` when this composer reported itself idle, so the
+  // asynchronous restore never clobbers in-progress typing (mirrors the
+  // TUI's `DraftAdoption::OnlyIfIdle`).
   $effect(() => {
     const draft = daemon.restoredDraft;
     if (!draft) return;
@@ -27,6 +30,12 @@
       images.push({ part, previewUrl: `data:${part.mime};base64,${part.data}` });
     }
     resize();
+  });
+
+  // Report composer idleness so the daemon's UnsentInput handler can decide
+  // between adopting the restored draft and keeping in-progress typing.
+  $effect(() => {
+    daemon.composerIdle = inputVal.length === 0 && images.length === 0;
   });
 
   function resize() {

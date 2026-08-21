@@ -86,6 +86,29 @@ pub(super) async fn handle_send_chat(
     app.suggestion_index = None;
     app.input_scroll = 0;
 
+    // Queue pointer is armed: Enter is an **in-place edit commit**, not a
+    // send. The composer holds a projection of the pointed-at queue item;
+    // the edit writes back into that item (same id, same slot), so the
+    // queue's length and order are untouched. If the target vanished while
+    // the user was editing (it shipped, was deleted, or was recalled), the
+    // commit dissolves the pointer and returns None — the composer then
+    // falls through to the ordinary send path below, exactly as if the user
+    // had typed a fresh message (queued if the session is busy).
+    if app.queue_pointer.is_some()
+        && let Some(()) = app.commit_queue_pointer(viewed_session_id)
+    {
+        // The edit landed (and the commit already dissolved the pointer and
+        // dropped its stash). Clear the composer — the content now lives in
+        // the queue item — and record the edited text in history.
+        let images = std::mem::take(&mut app.pending_images);
+        let text_pastes = std::mem::take(&mut app.pending_text_pastes);
+        app.input.clear();
+        app.cursor_position = 0;
+        app.record_input_history(text, images, text_pastes);
+        app.clear_history_draft();
+        return;
+    }
+
     // Stage the chips' backing payloads so they ship with
     // this message. The text is expanded into the real paste
     // contents at the moment of dispatch — either inline
@@ -103,7 +126,7 @@ pub(super) async fn handle_send_chat(
             // scrollback. A staged message always waits for the
             // running round to finish naturally before starting a
             // new one (next-round only). The mid-round insert
-            // path is the explicit `F4` gesture below, not a
+            // path is the explicit `Ctrl+O` gesture below, not a
             // busy Enter.
             let id = uuid::Uuid::new_v4().to_string();
             let queued_at_ms = now_epoch_ms();
@@ -191,8 +214,22 @@ pub(super) async fn handle_send_chat(
 }
 
 /// Loop stage (input dispatch): the `InsertIntoRound` arm of the action match.
-pub(super) fn handle_insert_into_round(app: &mut App, viewed_session_id: &str) {
-    // `F4` at the top level: steer the composed text into the
+///
+/// The insert becomes a **transcript entry immediately** (ADR-0126): it is
+/// appended to the scrollback as a user message flagged
+/// [`DeliveryStatus::Queued`] — visually "blocked on the running turn" — so
+/// the user sees it land in the conversation without disturbing the running
+/// turn's own rendering (the turn's streaming entry is a separate message and
+/// keeps appending below it). The entry is flipped to delivered when the
+/// harness admits it (`UserInputInserted`), and it is **not** owned by the
+/// outbox queue anymore: it cannot be recalled, edited, deleted, or reordered
+/// from the queue. It has already entered the conversation.
+pub(crate) async fn handle_insert_into_round(
+    app: &mut App,
+    runtime: &UiRuntime,
+    viewed_session_id: &str,
+) {
+    // `Ctrl+O` at the top level: steer the composed text into the
     // *running* round instead of staging it for the next one.
     // The registry resolved a data-less action, so take the
     // composer here — exactly like `SendChat` does.
@@ -202,10 +239,16 @@ pub(super) fn handle_insert_into_round(app: &mut App, viewed_session_id: &str) {
     app.suggestion_index = None;
     let images = std::mem::take(&mut app.pending_images);
     let text_pastes = std::mem::take(&mut app.pending_text_pastes);
+    // The composer's content is leaving the queue-pointer projection and
+    // entering the conversation: drop the pointer **without** restoring its
+    // stash (the stash would clobber the content just taken). The projection
+    // either becomes the insert entry (below) or is put back on the idle
+    // path — either way the stash is obsolete.
+    app.drop_queue_pointer_without_restore();
     let busy = app.running_sessions.contains(viewed_session_id);
     if !busy || (text.is_empty() && images.is_empty()) {
         // Nothing to steer into (idle) or nothing to say:
-        // restore the composer verbatim so a stray F4 never
+        // restore the composer verbatim so a stray Ctrl+O never
         // eats the draft.
         app.input = text;
         app.pending_images = images;
@@ -214,26 +257,36 @@ pub(super) fn handle_insert_into_round(app: &mut App, viewed_session_id: &str) {
     } else {
         let expanded = composer_attachments::expand_paste_chips(&text, &text_pastes);
         let expanded = composer_attachments::strip_orphan_image_chips(&expanded, images.len());
-        let id = app.stage_insert_dispatch(
-            viewed_session_id,
-            text.clone(),
-            images.clone(),
-            text_pastes.clone(),
-        );
-        app.record_input_history(text.clone(), images, text_pastes);
-        // The draft now lives in the outbox as an in-flight
-        // steer — it is no longer the unsent slot.
+        let id = app.new_insert_id();
+        app.record_input_history(text.clone(), images.clone(), text_pastes);
+        // The draft has entered the conversation (as a blocked insert
+        // entry) — it is no longer the unsent slot.
         app.clear_history_draft();
         app.follow_bottom = true;
         app.pin_summary_line = None;
+        // Commit the entry to the transcript now, in the `⏸ Queued`
+        // delivery state: it renders as a user panel that visibly
+        // waits on the running turn (see `message_body.rs`). The
+        // listener flips it to delivered on `UserInputInserted`.
+        let sent_at_ms = now_epoch_ms();
+        let entry = TranscriptMessage::new(Role::User, text.clone())
+            .with_origin(crate::model::document::UserMessageOrigin::Insert)
+            .with_sent_at_ms(sent_at_ms)
+            .with_insert_id(id.clone())
+            .queued();
+        if !app.in_side_view {
+            runtime.messages.write().await.push(entry);
+        } else {
+            runtime.side_messages.write().await.push(entry);
+        }
         let _ = app.tx.send(AgentRequest::InsertUserInput {
             session_id: viewed_session_id.to_string(),
             input: neenee_contracts::QueuedUserInput {
                 id,
                 text: expanded,
                 display_text: Some(text),
-                images: Vec::new(),
-                sent_at_ms: Some(now_epoch_ms()),
+                images,
+                sent_at_ms: Some(sent_at_ms),
             },
         });
     }
@@ -250,6 +303,11 @@ pub(crate) async fn handle_send_slash(
 ) -> ActionFlow {
     app.suggestion_index = None;
     app.input_scroll = 0;
+    // The composer's content left any queue-pointer projection (a queued
+    // message may itself start with `/`, in which case the projection was
+    // just dispatched as this command): drop the pointer without restoring
+    // so no stale projection survives into the next composer state.
+    app.drop_queue_pointer_without_restore();
     // A command is a synchronous control-plane operation, not a round
     // (ADR-0110): it never enters the round state machine, so it must not
     // arm the activity bar's liveness surface — no `is_responding`, no

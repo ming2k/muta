@@ -93,7 +93,13 @@ request.
 
 The resume path restores the visible transcript, the model window, the archived
 transcript, hidden harness context, projection metadata, task state, and any
-blobs that are still referenced by messages. It also restores
+blobs that are still referenced by messages. It also restores the session's
+**round-interrupt records** — one durable entry per round that stopped before
+completing (a user Esc Esc, a superseding message or session switch, or the
+process terminating mid-round), each carrying the reason and the timestamp.
+Like the command ledger these are projection state: they never enter the model
+window, and the transcript re-projects them at their timestamp seams so the
+resumed session shows exactly where and why work was cut short. It also restores
 the session's **provider/model pin** — if the session had switched providers or
 models, resume lands back on that choice rather than the global default, so a
 reopened session talks to the same model it was using. For the dual-write

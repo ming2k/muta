@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use neenee_contracts::{ChannelAuth, RemoteModelMetadata, SecretString};
 use neenee_persistence::config::{Credentials, DiscoveryCache, UserTransport};
 use neenee_persistence::instances::{Instances, ProviderInstance};
+use neenee_persistence::route_settings::RouteSettingsStore;
 use neenee_providers::provider_template_spec;
 use serde::Deserialize;
 
@@ -46,6 +47,7 @@ pub fn migrate_legacy_state() -> bool {
     let mut instances = Instances::default();
     let mut creds = Credentials::default();
     let mut cache = DiscoveryCache::load();
+    let mut routes = RouteSettingsStore::load();
 
     for legacy in &legacy_config.providers {
         let Some(first) = legacy.channels.first() else {
@@ -100,7 +102,7 @@ pub fn migrate_legacy_state() -> bool {
                 continue;
             };
             if channel.effort.is_some() || channel.thinking.is_some() {
-                let entry = cache.route_settings_for_mut(&legacy.id, model);
+                let entry = routes.settings_for_mut(&legacy.id, model);
                 entry.effort = channel.effort.clone();
                 entry.thinking = channel.thinking;
             }
@@ -131,7 +133,7 @@ pub fn migrate_legacy_state() -> bool {
                 instance.models.contains(model)
             };
             if serves {
-                let entry = cache.route_settings_for_mut(&instance.id, model);
+                let entry = routes.settings_for_mut(&instance.id, model);
                 entry.effort = settings.effort.clone();
                 entry.thinking = settings.thinking;
             }
@@ -154,7 +156,11 @@ pub fn migrate_legacy_state() -> bool {
     if instances.providers.is_empty() {
         return false;
     }
-    if instances.save().is_err() || creds.save().is_err() || cache.save().is_err() {
+    if instances.save().is_err()
+        || creds.save().is_err()
+        || cache.save().is_err()
+        || routes.save().is_err()
+    {
         return false;
     }
     tracing::info!(

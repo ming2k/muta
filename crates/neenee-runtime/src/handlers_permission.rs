@@ -28,6 +28,10 @@ pub async fn interrupt(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     lifecycle: &Arc<RoundLifecycle>,
 ) {
+    // Park the reason before anything else so the unwinding round's tail can
+    // label its own terminal event + durable record (C11): this stop is the
+    // user's explicit Esc Esc (or the control-plane Interrupt equivalent).
+    lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::User);
     agent.reject_pending_permissions();
     agent.reject_pending_user_questions();
     agent.reject_pending_inputs();

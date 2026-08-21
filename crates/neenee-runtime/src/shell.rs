@@ -65,6 +65,10 @@ pub async fn run_shell_command(
         previous,
     } = lifecycle.begin().await;
     if let Some(previous) = previous {
+        // Park the superseded reason before cancelling (C11): the `!` command
+        // replacing a live round is the same supersede semantics as a new
+        // chat message.
+        lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::Superseded);
         agent.reject_pending_permissions();
         agent.reject_pending_user_questions();
         agent.reject_pending_inputs();

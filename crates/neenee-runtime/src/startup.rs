@@ -9,6 +9,7 @@
 
 use tracing_appender::non_blocking::WorkerGuard;
 
+use crate::log_rotate::RetainedRollingFile;
 use neenee_persistence::paths;
 
 /// The CLI default control-plane port (ADR-0105): fixed so browser clients
@@ -558,8 +559,11 @@ pub fn init_tracing() -> Option<WorkerGuard> {
         return None;
     }
 
-    let (writer, guard) =
-        tracing_appender::non_blocking(tracing_appender::rolling::daily(&dir, "neenee.log"));
+    let (writer, guard) = tracing_appender::non_blocking(RetainedRollingFile::new(
+        dir.clone(),
+        "neenee.log",
+        crate::log_rotate::retention_from_env(),
+    ));
 
     // Per-target RUST_LOG wins; otherwise apply the NEENEE_LOG level to the
     // neenee crates and keep everything else quiet.

@@ -81,7 +81,7 @@ box and hint bar are persistent (when chrome is visible):
 |-----|--------|--------------|
 | Activity bar | `ACTIVITY_BAR_ROWS = 1` | Activity is non-empty and not `idle`; not in envoy view; chrome visible. Breathing-dot liveness anchor plus the live status label and the round elapsed timer. Click to open the Activity modal. See [Activity bar](activity-bar.md). |
 | Todo bar | `TODO_BAR_ROWS = 1` | A non-empty task list exists; not in envoy view; chrome visible. `TODOS` tag · done/total progress · current-item preview. Click to open the Activity modal on the Todos tab. See [Todo bar](todo-bar.md). |
-| Queue bar | `QUEUE_BAR_ROWS = 1` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. `QUEUE` identity · count · inline preview of the next item to pop · key legend (`F4` insert into the running round, `F3` block/resume, `F2` expand). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `F3`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
+| Queue bar | `QUEUE_BAR_ROWS = 1` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. `QUEUE` identity · count · inline preview of the next item to pop · key legend (`Ctrl+O` insert into the running round, `Ctrl+P` block/resume, `Ctrl+Q` expand). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `Ctrl+P`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
 | Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 3` | Not in envoy view; chrome visible |
 | Hint bar | `HINT_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Carries the next-Enter action (left) and the model/`@instance`/reasoning/context cluster (right). |
 
@@ -89,7 +89,7 @@ box and hint bar are persistent (when chrome is visible):
 ┌─────────────────────────────────────────────────────────────┐
 │ SESSION b3c4 ~/projects/xx                       autopilot │  ← head row
 │ TODOS 2/5 · write the documentation           Ctrl+T expand │  ← todo bar
-│ QUEUE 1  {next item preview…}  F4 insert  F3 block  F2 expand │  ← queue bar
+│ QUEUE 1  {next item preview…}  Ctrl+O insert  Ctrl+P block  Ctrl+Q expand │  ← queue bar
 │ ● making edits (23s · Esc Esc interrupt)                 │  ← activity bar
 │  > type here…                                               │  ← input box
 │ Enter send         Kimi K3 max @kimi-code  89.2k (8%)       │  ← hint bar

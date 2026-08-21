@@ -239,6 +239,32 @@ impl EmbeddingStore {
         &self.path
     }
 
+    /// Drop every entry belonging to `session_id` and persist. Called on
+    /// session deletion so the index does not accumulate entries for sessions
+    /// that no longer exist (previously the on-disk union kept them forever).
+    pub async fn remove_session(&mut self, session_id: &str) -> Result<(), String> {
+        let prefix = format!("{session_id} ");
+        let before = self.index.entries.len();
+        self.index
+            .entries
+            .retain(|e| !e.source.starts_with(&prefix));
+        let removed = before - self.index.entries.len();
+        if removed > 0 {
+            self.seen = self.rebuild_seen();
+            self.save().await?;
+        }
+        Ok(())
+    }
+
+    /// Rebuild the dedup set from the surviving entries.
+    fn rebuild_seen(&self) -> HashSet<String> {
+        self.index
+            .entries
+            .iter()
+            .map(|e| e.content_hash.clone())
+            .collect()
+    }
+
     async fn save(&self) -> Result<(), String> {
         // Serialise against other `neenee` instances in the same project so
         // concurrent saves don't interleave temp-file writes or lose updates

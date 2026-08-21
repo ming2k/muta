@@ -35,6 +35,7 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -88,6 +89,7 @@ fn enter_with_completion(
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -297,6 +299,7 @@ fn esc_closes_slash_completion_menu() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -345,6 +348,7 @@ fn esc_closes_path_completion_menu() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -392,6 +396,7 @@ fn esc_falls_through_when_no_completion_is_open() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -436,6 +441,7 @@ fn typing_in_compose_returns_insert_char() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -480,6 +486,7 @@ fn backspace_in_compose_returns_backspace_action() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -528,6 +535,7 @@ fn backspace_atomically_deletes_an_image_chip() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -576,6 +584,7 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -619,6 +628,7 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -694,6 +704,7 @@ fn enter_shell(input: &mut String) -> InputAction {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -738,6 +749,7 @@ fn escape_returns_from_always_confirmation() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -778,6 +790,7 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -821,6 +834,7 @@ fn star_in_models_modal_toggles_model_favorite() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -862,6 +876,7 @@ fn a_in_connections_modal_opens_template_chooser() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -905,6 +920,7 @@ fn enter_in_connections_modal_is_inert_no_activate_concept() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -947,6 +963,7 @@ fn esc_in_models_browse_closes_the_modal() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -988,6 +1005,7 @@ fn esc_in_connections_browse_closes_the_modal() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -1031,6 +1049,7 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -1074,6 +1093,7 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: true,
             modal_keymap_open: false,
@@ -1113,6 +1133,7 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
         in_side_view: false,
         has_focused_target: false,
         has_queued: false,
+        queue_pointer_armed: false,
         history_searching: false,
         model_searching: false,
         modal_keymap_open: false,
@@ -1174,6 +1195,7 @@ fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -1210,6 +1232,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
         in_side_view: false,
         has_focused_target: false,
         has_queued: false,
+        queue_pointer_armed: false,
         history_searching: false,
         model_searching: false,
         modal_keymap_open: false,
@@ -1257,6 +1280,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -1304,6 +1328,7 @@ fn key_in_side_view_with(
         in_side_view: true,
         has_focused_target: false,
         has_queued: false,
+        queue_pointer_armed: false,
         history_searching: false,
         model_searching: false,
         modal_keymap_open: false,
@@ -1352,6 +1377,7 @@ fn key_with_focus(code: KeyCode) -> InputAction {
             in_side_view: false,
             has_focused_target: true,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -1420,6 +1446,7 @@ fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -1610,6 +1637,7 @@ fn escape_in_btw_modal_closes_the_modal() {
             in_side_view: true,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -1654,6 +1682,7 @@ fn enter_in_btw_modal_focuses_the_selected_aside() {
             in_side_view: true,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -1730,6 +1759,7 @@ fn run_key(
             in_side_view: false,
             has_focused_target: has_focus,
             has_queued: false,
+            queue_pointer_armed: false,
             // Editing text in the history and model-picker modals only
             // happens inside their search sub-layer, so treat those cases
             // here as search mode (browse mode never reaches editing keys).
@@ -2080,6 +2110,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 in_side_view: false,
                 has_focused_target: false,
                 has_queued: false,
+                queue_pointer_armed: false,
                 history_searching: false,
                 model_searching: false,
                 modal_keymap_open: false,
@@ -2775,6 +2806,7 @@ fn run_history_key(
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: true,
             model_searching: false,
             modal_keymap_open: false,
@@ -2920,6 +2952,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -2959,6 +2992,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -3002,6 +3036,7 @@ fn up_with_queued(has_queued: bool) -> InputAction {
             in_side_view: false,
             has_focused_target: false,
             has_queued,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -3017,13 +3052,13 @@ fn up_with_queued(has_queued: bool) -> InputAction {
 }
 
 #[test]
-fn up_arrow_recalls_queued_when_queue_nonempty() {
-    // While at least one message is staged in the send queue, ↑ recalls
-    // the most-recently-queued one into the composer for editing instead
-    // of walking input history. This is the user-facing undo for a
-    // queued send: the user pressed Enter too eagerly while the AI was
-    // still responding, and ↑ is the natural "go back" gesture.
-    assert_eq!(up_with_queued(true), InputAction::RecallQueued);
+fn up_arrow_walks_the_queue_pointer_when_queue_nonempty() {
+    // While at least one message is staged in the send queue, ↑ arms the
+    // non-destructive queue pointer at the newest item instead of walking
+    // input history — the queue is the newer, more urgent surface. Nothing
+    // leaves the queue; the composer becomes an editable projection and
+    // Enter writes the edit back in place.
+    assert_eq!(up_with_queued(true), InputAction::QueuePointerPrev);
 }
 
 #[test]
@@ -3066,6 +3101,7 @@ fn compose_key_with_completion(
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             ..Default::default()
         },
@@ -3171,6 +3207,7 @@ fn queue_modal_char(c: char) -> InputAction {
             in_side_view: false,
             has_focused_target: false,
             has_queued: true,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -3186,13 +3223,19 @@ fn queue_modal_char(c: char) -> InputAction {
 }
 
 /// Helper: send a bare (no-modifier) key inside the Queue modal. Used for
-/// Enter (re-edit) and F3 (block toggle) routing.
+/// Enter (re-edit) routing.
 fn queue_modal_key(code: KeyCode) -> InputAction {
+    queue_modal_key_with_modifiers(code, KeyModifiers::NONE)
+}
+
+/// Helper: send a key (with explicit modifiers) inside the Queue modal. Used
+/// for Enter (re-edit) and Ctrl+P (block toggle) routing.
+fn queue_modal_key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> InputAction {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
     process_event(
-        Event::Key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE)),
+        Event::Key(crossterm::event::KeyEvent::new(code, modifiers)),
         &mut input,
         &mut cursor,
         InputContext {
@@ -3211,6 +3254,7 @@ fn queue_modal_key(code: KeyCode) -> InputAction {
             in_side_view: false,
             has_focused_target: false,
             has_queued: true,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -3258,12 +3302,12 @@ fn queue_modal_k_and_j_reorder() {
 }
 
 #[test]
-fn queue_modal_f3_toggles_block() {
-    // F3 is NoModal-gated in the registry, so inside the modal it falls
+fn queue_modal_ctrl_p_toggles_block() {
+    // Ctrl+P is NoModal-gated in the registry, so inside the modal it falls
     // through to the contextual arm — which honors it only in the Queue
     // modal so the user can resume without closing the list.
     assert_eq!(
-        queue_modal_key(KeyCode::F(3)),
+        queue_modal_key_with_modifiers(KeyCode::Char('p'), KeyModifiers::CONTROL),
         InputAction::QueueToggleBlock
     );
 }
@@ -3299,6 +3343,7 @@ fn up_arrow_in_browse_does_not_recall_queued() {
             in_side_view: false,
             has_focused_target: true,
             has_queued: true,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -3344,6 +3389,7 @@ fn run_paste(
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             // The history and model-picker modals only take text in their
             // search sub-layer; treat those cases as search mode here.
             history_searching: modal == crate::Modal::HistorySearch,
@@ -3482,6 +3528,7 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -3768,6 +3815,7 @@ fn oauth_key(c: char) -> InputAction {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -3811,6 +3859,7 @@ fn oauth_keycode(code: KeyCode) -> InputAction {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -3939,6 +3988,7 @@ fn mouse_ctx_for(modal: crate::Modal) -> InputContext {
         in_side_view: false,
         has_focused_target: false,
         has_queued: false,
+        queue_pointer_armed: false,
         history_searching: false,
         ..Default::default()
     }
@@ -4021,6 +4071,7 @@ fn ctrl_x_outside_history_modal_is_a_noop() {
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             ..Default::default()
         },
@@ -4065,6 +4116,7 @@ fn run_history_clear_key(
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             ..Default::default()
         },
@@ -4160,6 +4212,7 @@ fn editor_key(code: KeyCode, editor_field: u8, input: &mut String) -> InputActio
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             editor_field: Some(editor_field),
             ..Default::default()
@@ -4236,6 +4289,7 @@ fn compose_key(
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
+            queue_pointer_armed: false,
             history_searching: false,
             ..Default::default()
         },

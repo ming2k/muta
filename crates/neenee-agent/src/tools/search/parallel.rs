@@ -3,7 +3,7 @@
 //! `Authorization: Bearer <key>` header routes through the caller's own quota.
 //! Like Exa it returns a pre-rendered text blob, passed through verbatim.
 
-use super::{SearchProvider, cap_output, mcp_tools_call};
+use super::{ProviderOutput, SearchProvider, mcp_tools_call};
 use async_trait::async_trait;
 
 const PARALLEL_URL: &str = "https://search.parallel.ai/mcp";
@@ -19,7 +19,11 @@ impl SearchProvider for ParallelProvider {
         "Parallel"
     }
 
-    async fn search(&self, client: &reqwest::Client, query: &str) -> Result<String, String> {
+    async fn search(
+        &self,
+        client: &reqwest::Client,
+        query: &str,
+    ) -> Result<ProviderOutput, String> {
         let mut headers: Vec<(String, String)> =
             vec![("User-Agent".to_string(), "neenee/0.1".to_string())];
         if let Some(key) = self
@@ -41,9 +45,6 @@ impl SearchProvider for ParallelProvider {
             &headers,
         )
         .await?;
-        Ok(cap_output(&format!(
-            "Search results for '{}' (via Parallel):\n\n{}",
-            query, text
-        )))
+        Ok(ProviderOutput::Blob(text))
     }
 }

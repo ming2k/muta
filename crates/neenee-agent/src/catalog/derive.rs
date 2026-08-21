@@ -17,6 +17,7 @@ use neenee_contracts::catalog::{Channel, ProviderEntry, Transport};
 use neenee_contracts::{ChannelAuth, Effort, RemoteModelEndpoint, SecretString, ThinkingMode};
 use neenee_persistence::config::{Credentials, DiscoveryCache, UserTransport};
 use neenee_persistence::instances::{Instances, ProviderInstance};
+use neenee_persistence::route_settings::RouteSettingsStore;
 use neenee_providers::{
     NEENEE_USER_AGENT, provider_template_spec, route_for_model as template_route,
 };
@@ -27,12 +28,13 @@ pub(super) const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/
 pub fn derive_entries(
     instances: &Instances,
     cache: &DiscoveryCache,
+    routes: &RouteSettingsStore,
     creds: &Credentials,
 ) -> Vec<ProviderEntry> {
     instances
         .providers
         .iter()
-        .map(|instance| derive_entry(instance, cache, creds))
+        .map(|instance| derive_entry(instance, cache, routes, creds))
         .collect()
 }
 
@@ -40,12 +42,13 @@ pub fn derive_entries(
 pub fn derive_entry(
     instance: &ProviderInstance,
     cache: &DiscoveryCache,
+    routes: &RouteSettingsStore,
     creds: &Credentials,
 ) -> ProviderEntry {
     let models = route_models(instance, cache);
     let channels = models
         .iter()
-        .map(|model| derive_channel(instance, model, cache, creds))
+        .map(|model| derive_channel(instance, model, cache, routes, creds))
         .collect();
     ProviderEntry {
         id: instance.id.clone(),
@@ -84,15 +87,18 @@ pub fn route_models(instance: &ProviderInstance, cache: &DiscoveryCache) -> Vec<
 }
 
 /// Resolve one model's route: transport/endpoint/user-agent plus the resolved
-/// credential, reasoning knobs, and remote capability metadata.
+/// credential, reasoning knobs, and remote capability metadata. The reasoning
+/// knobs come from `routes` — the user's state store, not the cache
+/// (see [`RouteSettingsStore`]).
 pub fn derive_channel(
     instance: &ProviderInstance,
     model: &str,
     cache: &DiscoveryCache,
+    routes: &RouteSettingsStore,
     creds: &Credentials,
 ) -> Channel {
     let remote = cache.remote_metadata_for(&instance.id, model).cloned();
-    let route_settings = cache.route_settings_for(&instance.id, model);
+    let route_settings = routes.settings_for(&instance.id, model);
 
     // Effort applies to OpenAI/Anthropic/Google alike; thinking is an
     // Anthropic-protocol switch (ADR-0046: entry presence opts in, default on

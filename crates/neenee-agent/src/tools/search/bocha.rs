@@ -2,7 +2,7 @@
 //! reachable from mainland China networks (unlike Exa/Parallel/Tavily), which
 //! makes it a good key-based fallback that survives proxy outages.
 
-use super::{SearchProvider, SearchResult, format_results};
+use super::{ProviderOutput, SearchProvider, SearchResult};
 use async_trait::async_trait;
 
 const BOCHA_URL: &str = "https://api.bochaai.com/v1/web-search";
@@ -17,7 +17,11 @@ impl SearchProvider for BochaProvider {
         "Bocha"
     }
 
-    async fn search(&self, client: &reqwest::Client, query: &str) -> Result<String, String> {
+    async fn search(
+        &self,
+        client: &reqwest::Client,
+        query: &str,
+    ) -> Result<ProviderOutput, String> {
         let key = self
             .api_key
             .as_deref()
@@ -62,7 +66,7 @@ impl SearchProvider for BochaProvider {
             .filter_map(parse_item)
             .take(10)
             .collect();
-        Ok(format_results(query, "Bocha", results))
+        Ok(ProviderOutput::Results(results))
     }
 }
 

@@ -144,7 +144,8 @@ pub(crate) const ACTIVITY_BAR_ROWS: u16 = 1;
 pub(crate) const TODO_BAR_ROWS: u16 = 1;
 /// Minimum gap between a footer bar's left content and its right-pinned
 /// keycap legend (the todo bar's `Ctrl+T expand`, the queue bar's
-/// `F4 insert  F3 block  F2 expand`). Deliberately wider than the 2-col inter-cluster
+/// `Ctrl+O insert  Ctrl+P block  Ctrl+Q expand`). Deliberately wider than the
+/// 2-col inter-cluster
 /// gap used by the hint bar: a legend is a keyboard affordance, not
 /// prose, so it needs real visual distance from the content — especially when
 /// content truncates to fill the row, where a small gap would let a `…` butt
@@ -156,7 +157,7 @@ pub(crate) const BAR_LEGEND_GAP_MIN: usize = 6;
 // ladder. The rung encodes the *semantic distance* between the two tokens:
 // the tighter the relationship, the quieter the join.
 //
-//   R0  Atomic   `Image #1`, `24.1 KB`, `3 tool calls`, `F3 block`
+//   R0  Atomic   `Image #1`, `24.1 KB`, `3 tool calls`, `Ctrl+P block`
 //                Parts of one value — no symbol, 0–1 space.
 //   R1  Modify   `Thinking · 120 tokens`, `↳ Completed · 3 calls · 1.2s`
 //                The trailing token is a state / measure / attribute of the

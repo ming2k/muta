@@ -4,32 +4,38 @@
 //! pre-dispatch doom-loop guard (`neenee_agent::doom_guard`). It lives in
 //! `neenee-contracts` (the domain layer) so the harness↔TUI protocol can carry it
 //! without a `neenee-persistence` dependency; `neenee-persistence::config` re-exports it as
-//! the `[principal.nudge]` TOML table, and `neenee-agent` applies it to each
+//! the `[principal.doom_guard]` TOML table, and `neenee-agent` applies it to each
 //! round's guard at ReAct-turn boundaries.
 //!
-//! Default is **disabled** — opt in through the advanced
-//! `[principal.nudge]` sub-table in `config.toml`.
+//! Default is **enabled** (`window: 16`) — flipped on in ADR-0113 §5: the
+//! guard is signature bookkeeping with normalized locators, a model making
+//! progress never trips it, and the cheapest token-burning loop (variant
+//! `sleep N; make`) is exactly what a default-off guard never catches. Turn
+//! it off explicitly with `[principal.doom_guard] enabled = false`.
 //!
-//! The TOML key is kept as `nudge` for backward compatibility (existing
-//! `config.toml` files keep working; serde ignores the now-removed
-//! `threshold`/`escalate_at`/`path_threshold` keys silently).
+//! The canonical TOML key is `doom_guard` (`[principal.doom_guard]`); the
+//! historical `nudge` spelling is accepted as a serde alias so existing
+//! `config.toml` files keep loading; the next save writes the new key. The
+//! now-removed `threshold`/`escalate_at`/`path_threshold` keys are ignored
+//! silently.
 
 use serde::{Deserialize, Serialize};
 
-/// User-tunable doom-guard behaviour, deserialized from the `[principal.nudge]`
-/// sub-table of `config.toml`. Governs the pre-dispatch doom-loop guard
-/// (`neenee_agent::doom_guard`): when the model is about to re-issue a watched
-/// tool call it already ran this round, the guard blocks it before it executes
-/// and injects an explanatory note so the model changes approach.
+/// User-tunable doom-guard behaviour, deserialized from the
+/// `[principal.doom_guard]` sub-table of `config.toml` (the historical
+/// `[principal.nudge]` spelling — the historical name — deserializes
+/// identically via serde alias).
+/// Governs the pre-dispatch doom-loop guard (`neenee_agent::doom_guard`):
+/// when the model is about to re-issue a watched tool call it already ran
+/// this round, the guard blocks it before it executes and injects an
+/// explanatory note so the model changes approach.
 ///
-/// **Default is disabled.** The guard is an opt-in safety net, not a
-/// default-on interruption: a model making progress should never see a block,
-/// and a stuck model has the `abort` tool (the user has `Esc`). Turn it on when
-/// you want the harness to break doom loops automatically.
+/// **Default is enabled** (`window: 16`) — see the module docs and
+/// ADR-0113 §5 for why the original opt-in default was flipped.
 ///
 /// ```toml
-/// [principal.nudge]
-/// enabled = true   # master switch (default true; set false to disable)
+/// [principal.doom_guard]
+/// enabled = false  # opt out of the variant-loop defense
 /// window  = 16     # sliding-window size (recent watched signatures)
 /// ```
 ///

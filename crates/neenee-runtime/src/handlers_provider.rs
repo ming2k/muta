@@ -15,6 +15,7 @@ use neenee_contracts::{
 };
 use neenee_persistence::config::{Config, Credentials, DiscoveryCache, UserTransport};
 use neenee_persistence::instances::{Instances, ProviderInstance};
+use neenee_persistence::route_settings::RouteSettingsStore;
 use neenee_persistence::{
     provider_usage::ProviderUsage,
     session::{ProviderSelection, SessionStore},
@@ -391,11 +392,17 @@ pub async fn edit_model(
     let Some(instance) = stores.instances.get(&provider_id) else {
         return;
     };
-    let transport =
-        catalog::derive_channel(instance, &model, &stores.cache, &stores.creds).transport;
+    let transport = catalog::derive_channel(
+        instance,
+        &model,
+        &stores.cache,
+        &stores.routes,
+        &stores.creds,
+    )
+    .transport;
 
-    let mut cache = DiscoveryCache::load();
-    let entry = cache.route_settings_for_mut(&provider_id, &model);
+    let mut routes = RouteSettingsStore::load();
+    let entry = routes.settings_for_mut(&provider_id, &model);
     match transport {
         neenee_contracts::catalog::Transport::Anthropic { .. } => {
             entry.effort = valid_effort;
@@ -409,12 +416,9 @@ pub async fn edit_model(
         neenee_contracts::catalog::Transport::Google { .. } => {}
     }
     if entry.is_empty() {
-        cache
-            .route_settings
-            .get_mut(&provider_id)
-            .and_then(|m| m.remove(&model));
+        routes.remove(&provider_id, &model);
     }
-    if cache.save().is_err() {
+    if routes.save().is_err() {
         tracing::warn!("edit_model: could not persist route settings");
     }
 
@@ -466,11 +470,11 @@ pub async fn edit_model_reasoning(
     });
 
     let provider_id = config.default_provider.clone();
-    let mut cache = DiscoveryCache::load();
-    let entry = cache.route_settings_for_mut(&provider_id, &model);
+    let mut routes = RouteSettingsStore::load();
+    let entry = routes.settings_for_mut(&provider_id, &model);
     entry.effort = valid_effort;
     entry.thinking = thinking;
-    if cache.save().is_err() {
+    if routes.save().is_err() {
         tracing::warn!("edit_model_reasoning: could not persist route settings");
     }
 
@@ -540,6 +544,12 @@ pub async fn delete(
     if cache.save().is_err() {
         tracing::warn!("delete: could not persist discovery cache");
     }
+    // The deleted instance's route settings go with it (state, not cache).
+    let mut routes = RouteSettingsStore::load();
+    routes.retain_instance_except(&id);
+    if routes.save().is_err() {
+        tracing::warn!("delete: could not persist route settings");
+    }
 
     let was_active = config.default_provider == id;
     if was_active {
@@ -548,6 +558,7 @@ pub async fn delete(
             &catalog::Stores {
                 instances: Instances::load(),
                 cache: DiscoveryCache::load(),
+                routes: RouteSettingsStore::load(),
                 creds: Credentials::load(),
             },
         );

@@ -24,7 +24,10 @@ async fn main() {
 }
 
 async fn run(project_root: &std::path::Path) -> Result<(), String> {
-    let path = serve_discovery::discovery_path(project_root);
+    let _ = project_root;
+    // ADR-0096: discovery is global (`daemon.json` under the instance dir),
+    // not per-project — the pre-0096 `serve/<bucket>.json` layout is dead.
+    let path = serve_discovery::global_discovery_path();
     let bytes = std::fs::read(&path)
         .map_err(|e| format!("no discovery record at {}: {e}", path.display()))?;
     let info: Discovery = serde_json::from_slice(&bytes).map_err(|e| format!("corrupt: {e}"))?;

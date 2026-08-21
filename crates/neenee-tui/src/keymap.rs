@@ -128,10 +128,20 @@ pub mod keyvocab {
     pub const ENTER: &str = "Enter";
     /// `Tab` — the display form of [`super::Key::TAB`].
     pub const TAB: &str = "Tab";
-    /// `F2` — the display form of [`super::Key::F2`]. Kept for completeness;
-    /// call sites currently use `Key::F2.display()`.
+    /// `F2` — legacy display token. The F-key queue family moved to the Ctrl
+    /// row (ADR-0124); kept so historical copy stays spellable until every
+    /// surface is migrated.
     #[allow(dead_code)]
     pub const F2: &str = "F2";
+    /// `Ctrl+Q` — the display form of [`super::Key::CTRL_Q`] (open the queue
+    /// modal).
+    pub const CTRL_Q: &str = "Ctrl+Q";
+    /// `Ctrl+P` — the display form of [`super::Key::CTRL_P`] (block/resume the
+    /// queue).
+    pub const CTRL_P: &str = "Ctrl+P";
+    /// `Ctrl+O` — the display form of [`super::Key::CTRL_O`] (insert into the
+    /// running round).
+    pub const CTRL_O: &str = "Ctrl+O";
     /// `Ctrl+T` — the display form of [`super::Key::CTRL_T`]. Kept for
     /// completeness; call sites currently use `Key::CTRL_T.display()`.
     #[allow(dead_code)]
@@ -155,6 +165,9 @@ fn chord_token(code: KeyCode) -> &'static str {
             'j' => "j",
             'k' => "k",
             'm' => "m",
+            'o' => "o",
+            'p' => "p",
+            'q' => "q",
             'r' => "r",
             't' => "t",
             'u' => "u",
@@ -206,6 +219,9 @@ fn display_token(code: KeyCode) -> &'static str {
             'j' => "J",
             'k' => "K",
             'm' => "M",
+            'o' => "O",
+            'p' => "P",
+            'q' => "Q",
             'r' => "R",
             't' => "T",
             'u' => "U",
@@ -290,6 +306,9 @@ fn chord_str(prefix: &'static str, core: &'static str) -> &'static str {
         ("ctrl+", "j") => "ctrl+j",
         ("ctrl+", "k") => "ctrl+k",
         ("ctrl+", "m") => "ctrl+m",
+        ("ctrl+", "o") => "ctrl+o",
+        ("ctrl+", "p") => "ctrl+p",
+        ("ctrl+", "q") => "ctrl+q",
         ("ctrl+", "r") => "ctrl+r",
         ("ctrl+", "t") => "ctrl+t",
         ("ctrl+", "u") => "ctrl+u",
@@ -329,6 +348,9 @@ fn display_str(prefix: &'static str, core: &'static str) -> &'static str {
         ("Ctrl+", "J") => "Ctrl+J",
         ("Ctrl+", "K") => "Ctrl+K",
         ("Ctrl+", "M") => "Ctrl+M",
+        ("Ctrl+", "O") => "Ctrl+O",
+        ("Ctrl+", "P") => "Ctrl+P",
+        ("Ctrl+", "Q") => "Ctrl+Q",
         ("Ctrl+", "R") => "Ctrl+R",
         ("Ctrl+", "T") => "Ctrl+T",
         ("Ctrl+", "U") => "Ctrl+U",
@@ -451,20 +473,23 @@ impl Key {
         modifiers: KeyModifiers::CONTROL,
         code: KeyCode::Char('t'),
     };
-    /// F2 (open queue) — surfaced in the queue legend.
-    pub const F2: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::F(2),
+    /// Ctrl+Q (open the queue modal) — the queue family lives on the Ctrl row:
+    /// `Ctrl+O` insert, `Ctrl+P` pause, `Ctrl+Q` expand. Mnemonic and
+    /// Fn-layer-free, unlike the F-keys it replaces (ADR-0124).
+    pub const CTRL_Q: Key = Key {
+        modifiers: KeyModifiers::CONTROL,
+        code: KeyCode::Char('q'),
     };
-    /// F3 (block/resume queue) — surfaced in the queue legend.
-    pub const F3: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::F(3),
+    /// Ctrl+P (block/resume the queue) — "pause". Companion of [`Self::CTRL_Q`].
+    pub const CTRL_P: Key = Key {
+        modifiers: KeyModifiers::CONTROL,
+        code: KeyCode::Char('p'),
     };
-    /// F4 (insert into the running round) — surfaced in the queue legend.
-    pub const F4: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::F(4),
+    /// Ctrl+O (insert into the running round) — the steer gesture. Companion
+    /// of [`Self::CTRL_P`] / [`Self::CTRL_Q`] on the same keycap row.
+    pub const CTRL_O: Key = Key {
+        modifiers: KeyModifiers::CONTROL,
+        code: KeyCode::Char('o'),
     };
 }
 
@@ -547,10 +572,23 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             action: Action::OpenTodos,
             description: "open todos",
         },
+        // The queue family lives on the Ctrl row (ADR-0124), replacing the
+        // old F2/F3/F4 bindings. Three reasons the F-row was the wrong layer:
+        //   1. Fn-dispatch is OS/terminal policy, not app policy — many
+        //      terminals, window managers, and browser embedders reserve or
+        //      remap the F-keys, so the binding silently fails there.
+        //   2. The F-row is *unlabeled state*: nothing on the keyboard tells
+        //      a user F4 means "insert into the running round".
+        //   3. The keys sit far from home row for the app's most
+        //      time-sensitive gesture (steering a running turn).
+        // Ctrl chords are distinct bytes on every terminal (raw mode keeps
+        // ISIG/IXON off), survive tmux/screen, and sit one row from the
+        // Enter the same gesture ends with. Mnemonics: Q = queue list,
+        // P = pause the queue, O = insert ("open into the running round").
         Binding {
             key: Key {
-                modifiers: KeyModifiers::NONE,
-                code: KeyCode::F(2),
+                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('q'),
             },
             gate: Gate::NoModal,
             action: Action::OpenQueue,
@@ -558,9 +596,10 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
         },
         // F5 opens the `/btw` asides list (ADR-0103). A function key rather
         // than a Ctrl combo: Ctrl+G is byte-collided with readline's
-        // abort-to-start-of-line in terminals without the Kitty protocol, and
-        // the F-row already hosts the queue family (F2/F3/F4) so this keeps
-        // the "list surfaces live on F-keys" shape.
+        // abort-to-start-of-line in terminals without the Kitty protocol.
+        // (The queue family moved off the F-row to Ctrl+O/P/Q — ADR-0124 —
+        // but this list surface keeps F5, a rarer, less time-sensitive
+        // affordance with no clean free Ctrl slot.)
         Binding {
             key: Key {
                 modifiers: KeyModifiers::NONE,
@@ -572,8 +611,8 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
         },
         Binding {
             key: Key {
-                modifiers: KeyModifiers::NONE,
-                code: KeyCode::F(3),
+                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('p'),
             },
             gate: Gate::NoModal,
             action: Action::ToggleQueueBlock,
@@ -581,8 +620,8 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
         },
         Binding {
             key: Key {
-                modifiers: KeyModifiers::NONE,
-                code: KeyCode::F(4),
+                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('o'),
             },
             gate: Gate::NoModal,
             action: Action::InsertIntoRound,
@@ -754,51 +793,52 @@ mod tests {
     }
 
     #[test]
-    fn f2_opens_queue_from_top_level() {
-        // F2 is the global binding for the queue (outbox) overview modal.
+    fn ctrl_q_opens_queue_from_top_level() {
+        // Ctrl+Q is the global binding for the queue (outbox) overview modal
+        // (ADR-0124 — the queue family moved off the F-row onto the Ctrl row).
         let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::F(2), KeyModifiers::NONE), Modal::None);
+        let action = registry.resolve(key(KeyCode::Char('q'), KeyModifiers::CONTROL), Modal::None);
         assert_eq!(action, Some(InputAction::OpenQueue));
     }
 
     #[test]
-    fn f2_does_not_fire_while_a_modal_is_open() {
+    fn ctrl_q_does_not_fire_while_a_modal_is_open() {
         let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::F(2), KeyModifiers::NONE), Modal::Help);
+        let action = registry.resolve(key(KeyCode::Char('q'), KeyModifiers::CONTROL), Modal::Help);
         assert_eq!(action, None);
     }
 
     #[test]
-    fn f3_toggles_queue_block_from_top_level() {
-        // F3 is the global binding for the queue block/resume override. It is
-        // gated NoModal: inside a modal the contextual input handler routes
-        // it instead (only the Queue modal honors it there).
+    fn ctrl_p_toggles_queue_block_from_top_level() {
+        // Ctrl+P is the global binding for the queue block/resume override.
+        // It is gated NoModal: inside a modal the contextual input handler
+        // routes it instead (only the Queue modal honors it there).
         let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::F(3), KeyModifiers::NONE), Modal::None);
+        let action = registry.resolve(key(KeyCode::Char('p'), KeyModifiers::CONTROL), Modal::None);
         assert_eq!(action, Some(InputAction::QueueToggleBlock));
     }
 
     #[test]
-    fn f3_does_not_fire_via_registry_while_a_modal_is_open() {
-        // The global registry is NoModal-gated, so F3 resolves to None inside
-        // any modal. (The Queue modal routes F3 through its contextual arm;
-        // other modals treat it as a no-op.)
+    fn ctrl_p_does_not_fire_via_registry_while_a_modal_is_open() {
+        // The global registry is NoModal-gated, so Ctrl+P resolves to None
+        // inside any modal. (The Queue modal routes Ctrl+P through its
+        // contextual arm; other modals treat it as a no-op.)
         let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::F(3), KeyModifiers::NONE), Modal::Help);
+        let action = registry.resolve(key(KeyCode::Char('p'), KeyModifiers::CONTROL), Modal::Help);
         assert_eq!(action, None);
     }
 
     #[test]
-    fn f4_inserts_into_the_running_round_from_top_level() {
-        // F4 is the global binding for the mid-round steer: the composed text
-        // is inserted into the running round instead of staged for the next
-        // one. It is gated NoModal — inside a modal the composer is borrowed,
-        // so the contextual arm treats F4 as a no-op.
+    fn ctrl_o_inserts_into_the_running_round_from_top_level() {
+        // Ctrl+O is the global binding for the mid-round steer: the composed
+        // text is inserted into the running round instead of staged for the
+        // next one. It is gated NoModal — inside a modal the composer is
+        // borrowed, so the contextual arm treats Ctrl+O as a no-op.
         let registry = Registry::new();
-        let action = registry.resolve(key(KeyCode::F(4), KeyModifiers::NONE), Modal::None);
+        let action = registry.resolve(key(KeyCode::Char('o'), KeyModifiers::CONTROL), Modal::None);
         assert_eq!(action, Some(InputAction::InsertIntoRound));
 
-        let action = registry.resolve(key(KeyCode::F(4), KeyModifiers::NONE), Modal::Queue);
+        let action = registry.resolve(key(KeyCode::Char('o'), KeyModifiers::CONTROL), Modal::Queue);
         assert_eq!(action, None);
     }
 
@@ -924,7 +964,9 @@ mod tests {
 
         // Modifier chords: capitalized prefix + capitalized core.
         assert_eq!(Key::CTRL_T.display(), "Ctrl+T");
-        assert_eq!(Key::F2.display(), "F2");
+        assert_eq!(Key::CTRL_O.display(), "Ctrl+O");
+        assert_eq!(Key::CTRL_P.display(), "Ctrl+P");
+        assert_eq!(Key::CTRL_Q.display(), "Ctrl+Q");
         let ctrl_shift_c = Key {
             modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             code: KeyCode::Char('c'),
@@ -939,9 +981,9 @@ mod tests {
 
     #[test]
     fn const_aliases_match_their_constructed_keys() {
-        // The frequently-used `Key::ESC`/`ENTER`/`TAB`/`CTRL_T`/`F2` consts
-        // must agree with the equivalent ad-hoc construction, so swapping a
-        // hand-built literal for the alias is a pure refactor.
+        // The frequently-used `Key::ESC`/`ENTER`/`TAB`/`CTRL_T`/queue-family
+        // consts must agree with the equivalent ad-hoc construction, so
+        // swapping a hand-built literal for the alias is a pure refactor.
         assert_eq!(
             Key::ESC,
             Key {
@@ -957,10 +999,24 @@ mod tests {
             }
         );
         assert_eq!(
-            Key::F2,
+            Key::CTRL_O,
             Key {
-                modifiers: KeyModifiers::NONE,
-                code: KeyCode::F(2),
+                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('o'),
+            }
+        );
+        assert_eq!(
+            Key::CTRL_P,
+            Key {
+                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('p'),
+            }
+        );
+        assert_eq!(
+            Key::CTRL_Q,
+            Key {
+                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('q'),
             }
         );
         // And their display names match what the footer expects.
@@ -968,7 +1024,9 @@ mod tests {
         assert_eq!(Key::ENTER.display(), "Enter");
         assert_eq!(Key::TAB.display(), "Tab");
         assert_eq!(Key::CTRL_T.display(), "Ctrl+T");
-        assert_eq!(Key::F2.display(), "F2");
+        assert_eq!(Key::CTRL_O.display(), "Ctrl+O");
+        assert_eq!(Key::CTRL_P.display(), "Ctrl+P");
+        assert_eq!(Key::CTRL_Q.display(), "Ctrl+Q");
     }
 
     #[test]
@@ -980,8 +1038,10 @@ mod tests {
         assert_eq!(keyvocab::ESC, Key::ESC.display());
         assert_eq!(keyvocab::ENTER, Key::ENTER.display());
         assert_eq!(keyvocab::TAB, Key::TAB.display());
-        assert_eq!(keyvocab::F2, Key::F2.display());
         assert_eq!(keyvocab::CTRL_T, Key::CTRL_T.display());
+        assert_eq!(keyvocab::CTRL_O, Key::CTRL_O.display());
+        assert_eq!(keyvocab::CTRL_P, Key::CTRL_P.display());
+        assert_eq!(keyvocab::CTRL_Q, Key::CTRL_Q.display());
         // SHIFT_TAB matches the BackTab display form.
         assert_eq!(
             keyvocab::SHIFT_TAB,

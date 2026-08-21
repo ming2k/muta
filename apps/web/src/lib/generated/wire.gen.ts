@@ -739,7 +739,7 @@ dimension: string, status: ReviewStatus, detail: string, };
 
 export type Role = "User" | "Assistant" | "System" | "Tool";
 
-export type RoundEvent = { "Notice": AgentNotice } | { "ContextTokens": ContextTokenSnapshot } | { "UserInputInserted": QueuedUserInput } | { "UserInputUnavailable": { input_id: string, } } | { "UserInputCancelled": { input_id: string, } } | { "UserInputCancelFailed": { input_id: string, } } | { "NextRoundStarted": QueuedUserInput } | { "RoundCompleted": RoundSummary } | { "Text": string } | { "CommandResult": { 
+export type RoundEvent = { "Notice": AgentNotice } | { "ContextTokens": ContextTokenSnapshot } | { "UserInputInserted": QueuedUserInput } | { "UserInputUnavailable": { input_id: string, } } | { "UserInputCancelled": { input_id: string, } } | { "UserInputCancelFailed": { input_id: string, } } | { "NextRoundStarted": QueuedUserInput } | { "RoundCompleted": RoundSummary } | { "RoundInterrupted": RoundInterrupt } | { "Text": string } | { "CommandResult": { 
 /**
  * Command word without the leading slash (e.g. `"search"`), or
  * `"shell"` for a `!command` passthrough.
@@ -757,6 +757,48 @@ round: number,
  * 0-indexed model-request position within `round`.
  */
 turn: number, } } | "StreamStart" | { "StreamDelta": string } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "StreamEnd": string } | "StreamDiscard" | { "UnsentInput": { prompt: string, images: Array<ImagePart>, } } | { "Envoy": { parent_call_id: string, event: EnvoyEvent, } };
+
+/**
+ * A durable record of one round being stopped before its natural terminal
+ * path (`RoundEvent::RoundCompleted`). Written by the harness whenever a
+ * round unwinds through an interrupt — user-requested, superseded by newer
+ * input, or killed with its host process — so a resumed session can show
+ * *that and why* the round stopped, at the moment it stopped.
+ *
+ * This is a **projection record, not a conversation message**: it never
+ * enters `model_window` / `archived_transcript`, never reaches the model,
+ * and never costs context tokens (the deliberate decision documented in
+ * `docs/explanation/interrupt-semantics.md` — omission stays the
+ * model-facing signal). It rides in the session store beside the command
+ * ledger and, like the ledger, is re-projected into the transcript on
+ * resume by timestamp seam.
+ *
+ * `at_ms` lives on the payload (not the event-log envelope) because log
+ * compaction rewrites the `.jsonl` and drops every envelope timestamp.
+ */
+export type RoundInterrupt = { 
+/**
+ * The interrupt's cause, as observed at the stop site. Maps 1:1 to the
+ * user-facing vocabulary; see [`RoundInterruptReason`].
+ */
+reason: RoundInterruptReason, 
+/**
+ * Unix-epoch milliseconds at which the stop was recorded.
+ */
+at_ms: number, 
+/**
+ * The 1-based round that was stopped, when known. `None` on records
+ * synthesized for the round the process abandoned at exit (see
+ * `SessionStore::finalize_incomplete_interrupts`), where no agent-side
+ * counter was available.
+ */
+round?: number, };
+
+/**
+ * Why a round stopped before completing. The closed classifier for
+ * [`RoundInterrupt::reason`].
+ */
+export type RoundInterruptReason = "user" | "superseded" | "terminated";
 
 /**
  * A compact per-round accounting handed to frontends when a user round

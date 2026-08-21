@@ -15,6 +15,7 @@
 
 use super::web::html_to_text;
 use crate::tools::reader::jina::ReadPage;
+use crate::tools::web::guarded_get;
 
 pub mod jina;
 
@@ -83,25 +84,14 @@ async fn builtin_read(
     url: &str,
     raw: bool,
 ) -> Result<ReaderOutput, String> {
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {e}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("HTTP {status} for {url}"));
-    }
+    let response = guarded_get(client, url, reqwest::header::HeaderMap::new()).await?;
     let content_type = response
-        .headers()
+        .headers
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read body: {e}"))?;
+    let body = String::from_utf8_lossy(&response.body).to_string();
     let text = if raw || !content_type.contains("html") {
         body
     } else {

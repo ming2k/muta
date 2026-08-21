@@ -156,6 +156,37 @@ impl SessionDriver {
         let initial_session_id = session.id().await;
         token_ledger.restore_session(&initial_session_id, session.request_usage_records().await);
         token_ledger.set_active_session(initial_session_id.clone());
+        // Crash-residue interrupt record (C11): a persisted request still
+        // `InFlight` when the session loads was on the wire when the host
+        // process died — `restore_session` just flipped it to `Abandoned`.
+        // The round it belonged to never reached any terminal path, so
+        // synthesize the `Terminated` record here; without it, a hard kill
+        // (SIGKILL, panic, power loss) leaves the resumed transcript with an
+        // unexplained dangling round. Round identity comes from the record's
+        // own `RequestUsageKey.round`. Best-effort: a persistence failure
+        // must not block startup.
+        {
+            let abandoned = session.request_usage_records().await;
+            let mut synthesized: Vec<neenee_contracts::RoundInterrupt> = Vec::new();
+            for record in &abandoned {
+                if record.status == neenee_contracts::RequestUsageStatus::Abandoned
+                    && !synthesized
+                        .iter()
+                        .any(|r| r.round == Some(record.key.round))
+                {
+                    synthesized.push(neenee_contracts::RoundInterrupt {
+                        reason: neenee_contracts::RoundInterruptReason::Terminated,
+                        at_ms: crate::registry::unix_epoch_ms(),
+                        round: Some(record.key.round),
+                    });
+                }
+            }
+            for record in synthesized {
+                if let Err(error) = session.record_round_interrupt(record).await {
+                    tracing::warn!(?error, "could not record crash-residue interrupt");
+                }
+            }
+        }
         let initial_context = agent
             .estimate_next_request_tokens(&session.model_window().await)
             .total_tokens;
@@ -478,8 +509,10 @@ impl SessionDriver {
                 AgentRequest::DeleteSession { id } => {
                     let session = session.clone();
                     let resp_tx = resp_tx.clone();
+                    let embedding_store = embedding_store_for_commands.clone();
                     tokio::spawn(async move {
-                        crate::handlers_session::delete(&session, &resp_tx, id).await;
+                        crate::handlers_session::delete(&session, &embedding_store, &resp_tx, id)
+                            .await;
                     });
                 }
                 AgentRequest::RenameSession { id, title } => {

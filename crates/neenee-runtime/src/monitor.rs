@@ -183,6 +183,14 @@ impl MonitorTracker {
             RoundEvent::UnsentInput { .. } => {
                 self.finish_round(SessionStatus::Interrupted);
             }
+            RoundEvent::RoundInterrupted(record) => {
+                // Every interrupted round now carries an explicit record
+                // (C11) — including the previously invisible supersede and
+                // phase-2/3 interrupt paths. Fold it as the row's terminal
+                // state with the reason as the note.
+                self.finish_round(SessionStatus::Interrupted);
+                self.note = Some(truncate(record.label(), 120));
+            }
             RoundEvent::Activity(text) => {
                 self.activity = Some(truncate(text, 120));
             }
@@ -430,6 +438,25 @@ mod tests {
             images: Vec::new(),
         }));
         assert_eq!(t.row().status, SessionStatus::Interrupted);
+    }
+
+    #[test]
+    fn round_interrupted_event_reports_interrupted_with_reason_note() {
+        // C11: the explicit record covers every interrupt phase (including
+        // supersede and phase-2/3, which previously left the row stuck on
+        // Running) and folds the reason into the note.
+        let mut t = tracker();
+        t.observe(&round_event(RoundEvent::TurnStarted { round: 1, turn: 0 }));
+        t.observe(&round_event(RoundEvent::RoundInterrupted(
+            neenee_contracts::RoundInterrupt {
+                reason: neenee_contracts::RoundInterruptReason::User,
+                at_ms: 1_700_000_000_000,
+                round: Some(1),
+            },
+        )));
+        let row = t.row();
+        assert_eq!(row.status, SessionStatus::Interrupted);
+        assert_eq!(row.note.as_deref(), Some("Esc Esc"));
     }
 
     #[test]

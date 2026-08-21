@@ -75,6 +75,7 @@ use crate::{composer, empty_state};
 // Re-exported so layout-strategy code reaches them via the crate-root facade.
 pub(crate) use crate::message_body::draw_message_body;
 pub(crate) use crate::notice::draw_notice;
+pub(crate) use crate::round_interrupt::draw_round_interrupt;
 
 use neenee_tui_engine::{
     Alignment, Block as RtBlock, Constraint, Direction, Frame, Layout, Line, Paragraph, Rect, Span,
@@ -3325,7 +3326,6 @@ mod tests {
             TranscriptMessage::new(neenee_contracts::Role::User, "first queued").queued(),
             TranscriptMessage::new(neenee_contracts::Role::User, "second queued").queued(),
         ];
-
         terminal.draw(|f| {
             let mut layout_map = LayoutMap::new();
             let _ = draw_transcript(
@@ -3392,6 +3392,91 @@ mod tests {
             badge_count, 2,
             "each queued user message must render one badge row, got {}",
             badge_count
+        );
+    }
+
+    /// ADR-0126: a *held* insert — one whose round ended (naturally or by an
+    /// Esc Esc interrupt) before admission — renders the same pending panel
+    /// as a queued message, with a label that spells out the different fate:
+    /// `⏸ Held for next round`, not the plain `⏸ Queued`.
+    #[test]
+    fn held_insert_renders_the_held_label_and_dimmer_bg() {
+        use crate::model::document::DeliveryStatus;
+        let theme = Theme::default();
+        let delivered_bg = theme.user_surface();
+        let width = 56u16;
+        let mut terminal = neenee_tui_engine::TestTerminal::new(width, 16);
+
+        let mut held = TranscriptMessage::new(neenee_contracts::Role::User, "held steer");
+        held.delivery = DeliveryStatus::HeldNextRound;
+        held.origin = crate::model::document::UserMessageOrigin::Insert;
+        let messages = vec![held];
+
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            let _ = draw_transcript(
+                f,
+                &mut layout_map,
+                TranscriptView {
+                    messages: &messages,
+                    scroll: 0,
+                    selection: &SelectionState::None,
+                    cell_selection: None,
+                    activity: "",
+                    awaiting_permission: false,
+                    spinner_phase: 0,
+                    input: "",
+                    byte_cursor: 0,
+                    chrome_hidden: false,
+                    queue_bar: QueueBarView {
+                        items: &[],
+                        paused: false,
+                        blocked: false,
+                    },
+                    envoy_bar: None,
+                    side_banner: None,
+                    page_hints: None,
+                    session_head: None,
+                    todos: None,
+                    round_started_at: None,
+                    hovered_step: None,
+                    focused_target: None,
+                    logo: None,
+                    guidance: EmptyStateGuidance::Tour,
+                    carousel_index: 0,
+                    theme: &theme,
+                    layout: crate::layout::Strategy::default(),
+                    height_cache: None,
+                },
+            );
+        });
+
+        let buffer = terminal.buffer();
+        // The held panel carries the dimmer pending band, never the delivered
+        // one.
+        for y in 0..buffer.area().height {
+            for x in 2..4 {
+                assert_ne!(
+                    buffer[(x, y)].bg,
+                    delivered_bg,
+                    "a held panel must never carry the delivered bg, found at ({},{})",
+                    x,
+                    y
+                );
+            }
+        }
+        // The full label renders (spelled out, unlike the compact `⏸ Queued`).
+        let row_text = |y: u16| -> String {
+            (0..buffer.area().width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect()
+        };
+        let rendered = (0..buffer.area().height)
+            .map(row_text)
+            .any(|row| row.contains("Held for next round"));
+        assert!(
+            rendered,
+            "the held entry must spell out its fate (⏸ Held for next round)"
         );
     }
 

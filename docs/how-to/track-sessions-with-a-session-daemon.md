@@ -33,6 +33,11 @@ the daemon when none is running. Run it explicitly to keep it under
 systemd/tmux, or to expose the control plane to other machines — see
 [How to expose the daemon to LAN clients](expose-the-daemon-to-lan-clients.md).
 
+A detached daemon runs in its own session (`setsid`), so it survives the
+terminal — or the compositor hosting it — that spawned it: closing the last
+terminal window does not stop the daemon or its sessions (ADR-0125). Use
+`neenee daemon stop` or `kill <pid>` when you mean to stop it.
+
 ## 2. Work as usual — everything is a client
 
 ```bash
@@ -129,6 +134,13 @@ hosted and nobody attached; pass `--idle-exit 0` (or set the config key) for
 an always-on deployment — see
 [`assets/neenee.service`](https://github.com/ming2k/neenee/blob/main/assets/neenee.service)
 for a ready systemd user unit.
+
+After a restart, the daemon brings autonomous sessions back on its own
+(ADR-0125): any persisted session with armed `/schedule` jobs is rehosted at
+boot — scheduled prompts keep firing across daemon restarts, crashes, and
+reboots without anyone attaching first. Opt out with
+`[daemon] rehost_armed_schedules = false` (sessions then stay dormant until
+attached, the pre-0125 behavior).
 
 ## 6. Build your own panel
 

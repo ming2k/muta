@@ -398,6 +398,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Message'
+        round_interrupts:
+          type: array
+          description: >
+            Durable round-interrupt records (C11) to re-project into the
+            transcript at their timestamp seams. Absent on older daemons.
+          items:
+            $ref: '#/components/schemas/RoundInterrupt'
         provider:
           type: string
           description: >
@@ -983,7 +990,23 @@ components:
       type: object
       required: [ConversationReplaced]
       properties:
-        ConversationReplaced: { type: array, items: { $ref: '#/components/schemas/Message' } }
+        ConversationReplaced:
+          type: object
+          required: [session_id, messages]
+          description: >-
+            Replacement snapshot after a session switch: dialogue, the
+            command ledger (ADR-0091), and the round-interrupt records
+            (C11) — the frontend rebuilds the whole document from these.
+          properties:
+            session_id: { type: string }
+            messages: { type: array, items: { $ref: '#/components/schemas/Message' } }
+            commands:
+              type: array
+              items: { $ref: '#/components/schemas/CommandRecord' }
+            round_interrupts:
+              type: array
+              items: { $ref: '#/components/schemas/RoundInterrupt' }
+          additionalProperties: false
       additionalProperties: false
     ResponseSessionsOverview:
       type: object
@@ -1052,6 +1075,7 @@ components:
         - { $ref: '#/components/schemas/EventStreamEnd' }
         - { type: string, const: StreamDiscard }
         - { $ref: '#/components/schemas/EventUnsentInput' }
+        - { $ref: '#/components/schemas/EventRoundInterrupted' }
         - { $ref: '#/components/schemas/EventEnvoy' }
     EventNotice:
       type: object
@@ -1192,10 +1216,24 @@ components:
         UnsentInput:
           type: object
           required: [prompt, images]
+          description: >-
+            Phase-1 interrupt payload: the round was cancelled before any
+            content delta reached the client and the conversation was
+            reverted to its pre-send state. `prompt`/`images` are offered
+            back for re-editing; restoring into the composer is advisory
+            (a client with in-progress input should surface the prompt
+            another way rather than clobber it).
           properties:
             prompt: { type: string }
             images: { type: array, items: { $ref: '#/components/schemas/ImagePart' } }
           additionalProperties: false
+      additionalProperties: false
+    EventRoundInterrupted:
+      type: object
+      required: [RoundInterrupted]
+      properties:
+        RoundInterrupted:
+          $ref: '#/components/schemas/RoundInterrupt'
       additionalProperties: false
     EventEnvoy:
       type: object
@@ -1336,6 +1374,32 @@ components:
         sent_at_ms: { type: [integer, 'null'], minimum: 0 }
         timestamp: { type: [integer, 'null'], minimum: 0, description: Unix-epoch seconds. }
       additionalProperties: true
+    RoundInterrupt:
+      description: |
+        Durable record of one round stopped before completing (C11).
+        Projection state only — never part of the model-visible context.
+      type: object
+      required: [reason, at_ms]
+      properties:
+        reason:
+          enum: [user, superseded, terminated]
+          description: >
+            `user` — explicit Esc Esc / control-plane interrupt; `superseded`
+            — a newer round or session switch replaced this one; `terminated`
+            — the host process stopped or died with the round in flight.
+        at_ms: { type: integer, minimum: 0, description: Unix-epoch milliseconds at the stop. }
+        round: { type: [integer, 'null'], minimum: 0, description: 1-based stopped round, when known. }
+    CommandRecord:
+      description: Durable command-ledger row (ADR-0091).
+      type: object
+      required: [name, args, status, timestamp]
+      properties:
+        name: { type: string, description: Command word, or "shell" for a `!command` passthrough. }
+        args: { type: string }
+        status: { enum: [Success, Error] }
+        result: { type: [object, 'null'], additionalProperties: true }
+        timestamp: { type: integer, minimum: 0, description: Unix-epoch milliseconds at invocation. }
+        duration_ms: { type: [integer, 'null'], minimum: 0 }
     ToolStream:
       oneOf:
         - type: object

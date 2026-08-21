@@ -57,6 +57,9 @@ async fn supersede_for_session_switch(
     agent: &Agent,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
 ) {
+    // Park the reason before superseding so the in-flight round's suppressed
+    // tail still records *why* it died (C11): a session switch supersedes it.
+    lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::Superseded);
     lifecycle.supersede();
     agent.reject_pending_permissions();
     agent.reject_pending_user_questions();
@@ -85,6 +88,11 @@ pub(crate) async fn teardown_sides_for_session_switch(
     let was_active = side.read().await.active().is_some();
     for id in ids {
         if let Some(s) = side.write().await.remove(&id) {
+            // The aside's files are deleted right below, so its round-interrupt
+            // record is moot — but parking the reason still labels the unwind
+            // if the aside's tail races the removal (C11).
+            s.lifecycle
+                .record_interrupt(neenee_contracts::RoundInterruptReason::Superseded);
             s.agent.reject_pending_permissions();
             s.agent.reject_pending_user_questions();
             s.agent.reject_pending_inputs();
@@ -736,71 +744,44 @@ pub async fn dispatch(
                 )
                 .await;
             } else {
+                // Lexical ranking over the live transcript + command ledger.
+                // The embedding-index machinery (persisted vectors from a
+                // hash-based mock provider) was real cost with no semantics;
+                // until a real embedding provider exists, `/search` is
+                // deterministic lexical scoring over the in-memory transcript
+                // — no index file, no rewrite per search.
                 let messages = session.full_transcript().await;
                 let commands = session.commands().await;
-                {
-                    let mut store = embedding_store_for_commands.write().await;
-                    let session_id = session.id().await;
-                    if let Err(error) = store.index(&messages, &session_id).await {
-                        record_error_with_duration(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            error,
-                            Some(start_instant.elapsed().as_millis() as u64),
-                        )
-                        .await;
-                        return;
-                    }
-                    if let Err(error) = store.index_commands(&commands, &session_id).await {
-                        record_error_with_duration(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            error,
-                            Some(start_instant.elapsed().as_millis() as u64),
-                        )
-                        .await;
-                        return;
-                    }
-                }
-                match embedding_store_for_commands
-                    .read()
-                    .await
-                    .search(query, 5)
-                    .await
-                {
-                    Ok(results) => {
-                        let hits = results
-                            .into_iter()
-                            .map(|(text, score)| neenee_contracts::SearchHit { text, score })
-                            .collect::<Vec<_>>();
-                        record_command_with_duration(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            CommandResult::Search {
-                                query: query.to_string(),
-                                hits,
-                            },
-                            Some(start_instant.elapsed().as_millis() as u64),
-                        )
-                        .await;
-                    }
-                    Err(error) => {
-                        record_error_with_duration(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            error,
-                            Some(start_instant.elapsed().as_millis() as u64),
-                        )
-                        .await;
-                    }
+                let hits = crate::search_lexical::search(query, &messages, &commands, 5);
+                let hits = hits
+                    .into_iter()
+                    .map(|hit| neenee_contracts::SearchHit {
+                        text: hit.text,
+                        score: hit.score,
+                    })
+                    .collect::<Vec<_>>();
+                if hits.is_empty() {
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text("No matching messages in this session.".to_string()),
+                    )
+                    .await;
+                } else {
+                    record_command_with_duration(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Search {
+                            query: query.to_string(),
+                            hits,
+                        },
+                        Some(start_instant.elapsed().as_millis() as u64),
+                    )
+                    .await;
                 }
             }
         }
@@ -880,6 +861,7 @@ pub async fn dispatch(
                                     session_id: session.id().await,
                                     messages: transcript,
                                     commands: session.commands().await,
+                                    round_interrupts: session.round_interrupts().await,
                                 });
                                 // The live provider tracks the opened session's
                                 // own provider pin (or the global default).
@@ -2296,9 +2278,21 @@ mod schedule_spec_tests {
         assert_eq!(prompt, "morning standup");
     }
 
-    /// convenience wrapper so the tests read like the public parse path
+    /// Convenience wrapper so the tests read like the public parse path.
+    /// Propagates errors with `expect` — an earlier `unwrap_or(("",""))`
+    /// here meant a parse regression turned every one of these tests into
+    /// a vacuous green pass on empty strings.
     fn split_schedule_arg(rest: &str) -> (String, String) {
-        split_schedule_spec(rest).unwrap_or(("".into(), "".into()))
+        split_schedule_spec(rest).expect("schedule spec must parse")
+    }
+
+    #[test]
+    fn garbage_input_is_none_not_empty_strings() {
+        // Pin the other direction too: unparseable input is surfaced as a
+        // `None` by `split_schedule_spec` itself (the command handler turns
+        // that into a usage notice), never as empty strings.
+        assert!(split_schedule_spec("definitely not a schedule").is_none());
+        assert!(split_schedule_spec("10m").is_none(), "spec without a prompt");
     }
 }
 

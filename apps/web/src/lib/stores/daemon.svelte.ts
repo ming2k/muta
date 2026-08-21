@@ -34,11 +34,25 @@ import type {
   ProviderPickerSnapshot,
   QueuedUserInput,
   RoundEvent,
+  RoundInterrupt,
   RoundSummary,
   TodoList,
   UserQuestionRequest,
   Wire,
 } from "../types.js";
+
+/** User-facing label for a round-interrupt reason (C11), mirroring the Rust
+ * `RoundInterruptReason::label` so the panel and TUI agree verbatim. */
+export function interruptLabel(reason: RoundInterrupt["reason"]): string {
+  switch (reason) {
+    case "user":
+      return "Esc Esc";
+    case "superseded":
+      return "new message";
+    case "terminated":
+      return "process exited";
+  }
+}
 
 /**
  * Client build identifier for the ADR-0100 version handshake. The daemon
@@ -140,11 +154,13 @@ export interface LiveToolExecution {
 
 /**
  * The transcript feed: dialogue messages plus slash-command blocks (ADR-0091)
- * in arrival order. `key` is a stable per-session-ui id for keyed each blocks.
+ * plus round-interrupt markers (C11), in arrival order. `key` is a stable
+ * per-session-ui id for keyed each blocks.
  */
 export type FeedItem =
   | { kind: "message"; key: string; message: Message }
-  | { kind: "command"; key: string; record: CommandRecord };
+  | { kind: "command"; key: string; record: CommandRecord }
+  | { kind: "interrupt"; key: string; record: RoundInterrupt };
 
 /** Resolved connection settings for the daemon endpoint. */
 export interface DaemonConfig {
@@ -310,8 +326,18 @@ export class DaemonStore {
   /**
    * Draft restored into the composer after `UnsentInput` (the round was
    * interrupted before any output; the prompt never reached the model).
+   * One-shot: consumed by the composer via `takeRestoredDraft`. Only set
+   * when the composer reports itself idle — the restore is asynchronous and
+   * must not clobber in-progress typing (same policy as the TUI).
    */
   public restoredDraft = $state<{ text: string; images: ImagePart[] } | null>(null);
+
+  /**
+   * Composer idleness, reported by the composer component so the
+   * asynchronous `UnsentInput` restore can adopt only an idle composer
+   * (mirrors the TUI's `DraftAdoption::OnlyIfIdle`).
+   */
+  public composerIdle = true;
 
   public wsUrl = $state<string>(DEFAULT_WS_URL);
   public project = $state<string | null>(null);
@@ -669,9 +695,13 @@ export class DaemonStore {
         this.sessionError = null;
         this.roundCounter = frame.round_counter;
         this.providerInfo = { provider: frame.provider, model: frame.model };
-        this.feed = frame.messages
-          .filter((m) => !m.hidden)
-          .map((m) => this.messageItem(m));
+        // C11: re-project the durable round-interrupt records into the feed
+        // alongside the restored dialogue, merged by timestamp.
+        this.feed = this.buildReplacedFeed(
+          frame.messages.filter((m) => !m.hidden),
+          [],
+          frame.round_interrupts ?? [],
+        );
         break;
       case "Pick":
         this.sessionError =
@@ -732,6 +762,7 @@ export class DaemonStore {
       this.feed = this.buildReplacedFeed(
         resp.ConversationReplaced.messages.filter((m) => !m.hidden),
         resp.ConversationReplaced.commands ?? [],
+        resp.ConversationReplaced.round_interrupts ?? [],
       );
     } else if ("Error" in resp) {
       this.sessionError = resp.Error;
@@ -743,15 +774,25 @@ export class DaemonStore {
 
   /**
    * Rebuild the feed after a session switch: dialogue messages plus the
-   * persisted command ledger, merged by timestamp (both epoch ms).
+   * persisted command ledger plus the round-interrupt records (C11), all
+   * merged by timestamp (epoch ms).
    */
-  private buildReplacedFeed(messages: Message[], commands: CommandRecord[]): FeedItem[] {
+  private buildReplacedFeed(
+    messages: Message[],
+    commands: CommandRecord[],
+    interrupts: RoundInterrupt[] = [],
+  ): FeedItem[] {
     const items: FeedItem[] = [
       ...messages.map((m) => this.messageItem(m)),
       ...commands.map((c) => this.commandItem(c)),
+      ...interrupts.map((r) => this.interruptItem(r)),
     ];
     const time = (item: FeedItem): number =>
-      item.kind === "message" ? messageTimeMs(item.message) : item.record.timestamp;
+      item.kind === "message"
+        ? messageTimeMs(item.message)
+        : item.kind === "command"
+          ? item.record.timestamp
+          : item.record.at_ms;
     return items.sort((a, b) => time(a) - time(b));
   }
 
@@ -873,6 +914,21 @@ export class DaemonStore {
       this.roundCounter = event.RoundCompleted.round;
       this.activity = null;
       this.currentTurn = null;
+    } else if ("RoundInterrupted" in event) {
+      // C11: the round stopped before completing — user interrupt, superseded
+      // by newer input, or killed with the process. Append the projection row
+      // and surface a toast so the stop is visible even mid-scroll.
+      const record = event.RoundInterrupted;
+      this.pushFeed({ kind: "interrupt", key: this.feedKey(), record });
+      this.pushToast(
+        "warning",
+        "Round interrupted",
+        `Stopped by ${interruptLabel(record.reason)}${
+          record.round != null ? ` (round ${record.round})` : ""
+        }.`,
+      );
+      this.activity = null;
+      this.currentTurn = null;
     } else if ("TurnStarted" in event) {
       this.currentTurn = event.TurnStarted.turn;
       this.roundCounter = event.TurnStarted.round;
@@ -946,21 +1002,41 @@ export class DaemonStore {
     });
   }
 
-  /** The round died before any output: drop the optimistic echo, restore the draft. */
+  /**
+   * The round died before any output: drop the optimistic echo and offer the
+   * prompt back for re-editing. Adopting into the composer happens only when
+   * the composer is idle — the unsend arrives asynchronously, and in-progress
+   * typing must win (same policy as the TUI's `DraftAdoption::OnlyIfIdle`).
+   */
   private handleUnsentInput(unsent: { prompt: string; images: ImagePart[] }) {
-    for (let i = this.feed.length - 1; i >= 0; i--) {
-      const item = this.feed[i];
-      if (item.kind === "message" && item.message.role === "User") {
-        if (item.message.content === unsent.prompt) this.feed.splice(i, 1);
-        break;
+    // Non-idle case keeps the echoed user message in the feed: with the
+    // composer keeping the user's in-progress draft, the echo is the only
+    // visible copy of the unsent prompt to copy from. (The harness still
+    // reverted the conversation itself; this echo is client-side only.)
+    const adopt = this.composerIdle;
+    if (adopt) {
+      for (let i = this.feed.length - 1; i >= 0; i--) {
+        const item = this.feed[i];
+        if (item.kind === "message" && item.message.role === "User") {
+          if (item.message.content === unsent.prompt) this.feed.splice(i, 1);
+          break;
+        }
       }
     }
-    this.restoredDraft = { text: unsent.prompt, images: unsent.images };
-    this.pushToast(
-      "warning",
-      "Prompt not sent",
-      "Interrupted before any output; your prompt was restored to the composer.",
-    );
+    if (adopt) {
+      this.restoredDraft = { text: unsent.prompt, images: unsent.images };
+      this.pushToast(
+        "warning",
+        "Prompt not sent",
+        "Interrupted before any output; your prompt was restored to the composer.",
+      );
+    } else {
+      this.pushToast(
+        "warning",
+        "Prompt not sent",
+        "Interrupted before any output; your composer kept your draft — the unsent prompt is in the transcript above.",
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1198,6 +1274,10 @@ export class DaemonStore {
 
   private commandItem(record: CommandRecord): FeedItem {
     return { kind: "command", key: this.feedKey(), record };
+  }
+
+  private interruptItem(record: RoundInterrupt): FeedItem {
+    return { kind: "interrupt", key: this.feedKey(), record };
   }
 
   private clearSessionState() {

@@ -60,6 +60,6 @@ wire-level contract with model servers, and the terminal rendering surface.
 | [Table hit-testing and cell-locked selection](table-hit-testing.md) | How table cells get a parallel hit-test system: layout, dual coordinate maps, cell-locked drag, and border-stripped copy |
 | [Request flow](request-flow.md) | HTTP transaction shape, SSE streaming, and the ReAct loop's message evolution |
 | [Tool-call wire formats](tool-call-wire-formats.md) | How OpenAI Chat Completions and Anthropic Messages serialize tool declarations and tool-call arguments |
-| [Interrupt semantics](interrupt-semantics.md) | Why neenee is streaming-only, the three-phase interrupt model (pre-response unsend / local drop / remote tool cancel), what survives in context, and the billing reality of an interrupted round |
+| [Interrupt semantics](interrupt-semantics.md) | Why neenee is streaming-only, the three-phase interrupt model (pre-response unsend / local drop / remote tool cancel), what survives in context, the billing reality of an interrupted round, and the durable round-interrupt record (reason + timestamp, projected back on resume) |
 | [Provider capabilities](provider-capabilities.md) | Where tool calling and reasoning actually live across model weights, serving runtime, and client |
 | [Guided decoding](guided-decoding.md) | Constrained decoding, FSM compilation, and chat templates — the layer that guarantees valid tool calls |

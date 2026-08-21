@@ -1435,6 +1435,7 @@ dependencies = [
 name = "neenee-cli"
 version = "0.29.1"
 dependencies = [
+ "libc",
  "neenee-agent",
  "neenee-contracts",
  "neenee-mcp",
@@ -1505,9 +1506,11 @@ dependencies = [
  "inventory",
  "libc",
  "neenee-contracts",
+ "neenee-persistence",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tokio",
  "toml",
  "tracing",

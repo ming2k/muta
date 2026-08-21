@@ -2,21 +2,23 @@
 //!
 //! The persistent queue bar below the transcript gap shows a one-line summary
 //! (identity, next-item preview, key legend); this modal is its expand
-//! surface, opened by clicking that bar or pressing `F2`. It lists every
+//! surface, opened by clicking that bar or pressing `Ctrl+Q`. It lists every
 //! queued dispatch for the viewed session in dispatch order (front pops
 //! first), each with its queued time and (truncated) text.
 //!
 //! Opening the modal **auto-blocks** the outbox (no message auto-drains) so
 //! the list can be managed safely: `↑`/`↓` move the highlight, `Enter` re-edits
 //! the *selected* item (pulls it back to the composer), `D` deletes it, `J`/`K`
-//! reorder it, and `F3` toggles the persistent block. Closing the modal (Esc /
-//! outside-click) resumes normal auto-drain. `Esc` / outside-click close.
+//! reorder it, and `Ctrl+P` toggles the persistent block. Closing the modal
+//! (Esc / outside-click) resumes normal auto-drain. `Esc` / outside-click
+//! close.
 //!
-//! Only **manageable** (next-round, `Waiting`) items are listed: in-flight
-//! mid-round steers (`F4`, shown in the queue bar with a `steer›` badge) are
-//! already with the running round, so they cannot be re-edited, deleted, or
-//! reordered here — a race loss returns them to this list as ordinary
-//! entries, at which point they become manageable again.
+//! Every listed item is a **next-round** entry: either a busy Enter staged
+//! while a round runs, or a mid-round insert whose round ended before
+//! admission. A *live* insert (`Ctrl+O`) is transcript-owned (ADR-0126) — it
+//! renders in the scrollback as a `⏸ Queued` entry and never appears here;
+//! if its round closes first it is handed back into this list and becomes
+//! manageable like any other item.
 
 use neenee_tui_engine::{
     Frame, {Line, Span},
@@ -134,8 +136,8 @@ pub fn draw_queue_modal(
                 FooterHint::primary(keyvocab::ENTER, "edit"),
                 FooterHint::always(keyvocab::ESC, "close"),
                 FooterHint::secondary("J/K", "reorder"),
-                FooterHint::secondary("F3", if blocked { "resume" } else { "block" }),
-                FooterHint::secondary("F4", "insert"),
+                FooterHint::secondary(keyvocab::CTRL_P, if blocked { "resume" } else { "block" }),
+                FooterHint::secondary(keyvocab::CTRL_O, "insert"),
             ],
             empty_footer_hints: &[FooterHint::always(keyvocab::ESC, "close")],
             // Destructive delete sits at band 70 (outlives secondaries, never

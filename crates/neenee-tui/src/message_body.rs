@@ -266,7 +266,12 @@ pub fn draw_message_body(
                     link_ranges,
                 } = inline;
                 let is_user = msg.role == neenee_contracts::Role::User;
-                let is_queued = is_user && msg.delivery == DeliveryStatus::Queued;
+                // Both pending deliveries render as a waiting panel: a
+                // mid-round insert blocked on the running turn
+                // (`Queued`), and one whose round ended first and now
+                // waits to ship as the next round's prompt
+                // (`HeldNextRound`).
+                let is_queued = is_user && msg.delivery != DeliveryStatus::Delivered;
                 // A `Role::Tool` body reaching here is a command result
                 // (ADR-0111): a harness artifact, not model prose, so it
                 // reads one step quieter than assistant text. Tool *steps*
@@ -343,10 +348,14 @@ pub fn draw_message_body(
                                 )
                             };
                             let strip = if is_queued {
+                                let label = match msg.delivery {
+                                    DeliveryStatus::HeldNextRound => "⏸ Held for next round",
+                                    _ => "⏸ Queued",
+                                };
                                 MetaStrip::new()
                                     .left_pad(USER_MESSAGE_OUTER_GUTTER_COLS)
                                     .lead(round_gutter.clone(), MetaTone::Accent)
-                                    .status("⏸ Queued", MetaTone::WarningItalic)
+                                    .status(label, MetaTone::WarningItalic)
                                     .fill_tail(theme.surface())
                             } else {
                                 let mut strip = MetaStrip::new()

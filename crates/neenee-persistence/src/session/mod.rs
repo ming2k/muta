@@ -32,7 +32,9 @@ use tokio::sync::Mutex;
 /// `provider_selection`. A session that has run `/models` pins its own
 /// provider + model here so the live selection does not leak into the global
 /// `config.toml` or affect other concurrent sessions.
-const CURRENT_SCHEMA_VERSION: u32 = 10;
+/// C11 added `round_interrupts` (durable round-interrupt records): a
+/// structural no-op — legacy snapshots load with an empty list.
+const CURRENT_SCHEMA_VERSION: u32 = 11;
 
 /// A session-scoped provider + model pin (C6). When present it overrides the
 /// global `config.default_provider` / `config.default_model` for this session
@@ -168,6 +170,17 @@ struct SessionData {
     /// existing stored checksums stay valid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     commands: Vec<neenee_contracts::CommandRecord>,
+    /// Durable round-interrupt records (C11): one entry per round stopped
+    /// before its natural terminal path — user interrupt (Esc Esc),
+    /// superseded by newer input, or killed with the process. Pure
+    /// projection state like the command ledger: never enters the model
+    /// window, never reaches the model. Re-projected into the transcript on
+    /// resume by timestamp seam so the user can decide whether to continue.
+    /// `#[serde(default, skip_serializing_if = "Vec::is_empty")]` keeps
+    /// legacy canonical JSON byte-identical so existing checksums stay
+    /// valid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    round_interrupts: Vec<neenee_contracts::RoundInterrupt>,
 }
 
 impl Default for SessionData {
@@ -195,6 +208,7 @@ impl Default for SessionData {
             round_counter: 0,
             request_usage_records: Vec::new(),
             commands: Vec::new(),
+            round_interrupts: Vec::new(),
         }
     }
 }
@@ -532,6 +546,12 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::ProviderSelectionSet { selection } => {
                 data.provider_selection = selection.clone();
             }
+            SessionEvent::RoundInterruptRecorded { record } => {
+                data.round_interrupts.push(record.clone());
+            }
+            SessionEvent::RoundInterruptsCleared {} => {
+                data.round_interrupts.clear();
+            }
             SessionEvent::Reset { id } => {
                 let project_root = data.project_root.clone();
                 let schema_version = data.schema_version;
@@ -660,6 +680,15 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             seq: events.len() as u64,
             timestamp: data.updated_at,
             event: SessionEvent::RequestUsageUpsert {
+                record: record.clone(),
+            },
+        });
+    }
+    for record in &data.round_interrupts {
+        events.push(crate::events::EventEnvelope {
+            seq: events.len() as u64,
+            timestamp: data.updated_at,
+            event: SessionEvent::RoundInterruptRecorded {
                 record: record.clone(),
             },
         });
@@ -1045,6 +1074,78 @@ impl SessionStore {
         Ok(())
     }
 
+    /// The durable round-interrupt records (C11): one per round stopped
+    /// before completing, newest last. Pure projection state — never part
+    /// of the model-visible transcript.
+    pub async fn round_interrupts(&self) -> Vec<neenee_contracts::RoundInterrupt> {
+        self.state.lock().await.data.round_interrupts.clone()
+    }
+
+    /// Append one round-interrupt record (C11). Called on every round stop
+    /// path with the observed reason and a wall-clock timestamp. Best-effort
+    /// duplicate guard: a record for the same round with the same reason is
+    /// not appended twice (the runtime can observe a stop from two sites —
+    /// e.g. the round task's tail and the process-kill path).
+    pub async fn record_round_interrupt(
+        &self,
+        record: neenee_contracts::RoundInterrupt,
+    ) -> Result<(), String> {
+        let (path, data, should_persist) = {
+            let mut state = self.state.lock().await;
+            let already =
+                state.data.round_interrupts.iter().any(|existing| {
+                    existing.reason == record.reason && existing.round == record.round
+                });
+            if already {
+                return Ok(());
+            }
+            state.data.round_interrupts.push(record.clone());
+            state.data.updated_at = unix_timestamp();
+            let empty_unpersisted = Self::should_skip_persist(&state);
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state
+                    .event_log
+                    .append(SessionEvent::RoundInterruptRecorded { record })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
+        };
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Clear every round-interrupt record (C11). Called when the interrupted
+    /// round's outcome is superseded — the user re-sent and the fresh round
+    /// completed, or the session moved on — so the projection shows the
+    /// durable history without stale "interrupted" markers for rounds that
+    /// later resolved.
+    pub async fn clear_round_interrupts(&self) -> Result<(), String> {
+        let (path, data, should_persist) = {
+            let mut state = self.state.lock().await;
+            if state.data.round_interrupts.is_empty() {
+                return Ok(());
+            }
+            state.data.round_interrupts.clear();
+            state.data.updated_at = unix_timestamp();
+            let empty_unpersisted = Self::should_skip_persist(&state);
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state
+                    .event_log
+                    .append(SessionEvent::RoundInterruptsCleared {})?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
+        };
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Durable lifecycle-aware request accounting for the active session.
     pub async fn request_usage_records(&self) -> Vec<neenee_contracts::RequestUsageRecord> {
         self.state.lock().await.data.request_usage_records.clone()
@@ -1053,6 +1154,11 @@ impl SessionStore {
     /// Replace the session's request ledger. Callers pass records already
     /// scoped to the active session; the store validates that boundary before
     /// appending the snapshot event.
+    ///
+    /// The diff is computed through a key→record index built once per call
+    /// (`O((n+m) log n)`); the previous nested scans (`any`-inside-`any`
+    /// plus a `find` per record) made every post-round persist quadratic in
+    /// the session's lifetime request count.
     pub async fn set_request_usage_records(
         &self,
         records: Vec<neenee_contracts::RequestUsageRecord>,
@@ -1065,27 +1171,35 @@ impl SessionStore {
             {
                 return Err("request usage record belongs to another session".to_string());
             }
+            // Index the incoming set once; every membership test below is a
+            // lookup instead of a rescan.
+            let incoming: std::collections::BTreeMap<
+                &neenee_contracts::RequestUsageKey,
+                &neenee_contracts::RequestUsageRecord,
+            > = records.iter().map(|r| (&r.key, r)).collect();
             if state
                 .data
                 .request_usage_records
                 .iter()
-                .any(|existing| !records.iter().any(|record| record.key == existing.key))
+                .any(|existing| !incoming.contains_key(&existing.key))
             {
                 return Err("request usage records are append/update only".to_string());
             }
             if state.data.request_usage_records == records {
                 return Ok(());
             }
+            let existing: std::collections::BTreeMap<
+                &neenee_contracts::RequestUsageKey,
+                &neenee_contracts::RequestUsageRecord,
+            > = state
+                .data
+                .request_usage_records
+                .iter()
+                .map(|r| (&r.key, r))
+                .collect();
             let changed = records
                 .iter()
-                .filter(|record| {
-                    state
-                        .data
-                        .request_usage_records
-                        .iter()
-                        .find(|existing| existing.key == record.key)
-                        != Some(*record)
-                })
+                .filter(|record| existing.get(&record.key) != Some(record))
                 .cloned()
                 .collect::<Vec<_>>();
             state.data.request_usage_records = records.clone();
@@ -1576,7 +1690,10 @@ impl SessionStore {
     /// removes its snapshot and event log, then repoints the store at a fresh
     /// empty session; other sessions just have their two files removed from
     /// the sessions directory.
-    pub async fn delete(&self, id: &str) -> Result<(), String> {
+    ///
+    /// Returns the **resolved full id** of the deleted session so callers can
+    /// prune derived per-session state (e.g. the project embedding index).
+    pub async fn delete(&self, id: &str) -> Result<String, String> {
         let (resolved, snapshot, is_active) = {
             let state = self.state.lock().await;
             let (resolved, path) = self.resolve_session(id, &state)?;
@@ -1584,6 +1701,7 @@ impl SessionStore {
         };
 
         let log = snapshot.with_extension("jsonl");
+        let resolved_for_task = resolved.clone();
         tokio::task::spawn_blocking(move || {
             let existed = snapshot.exists() || log.exists();
             let _ = fs::remove_file(&snapshot);
@@ -1592,7 +1710,7 @@ impl SessionStore {
             if !existed {
                 return Err(format!(
                     "Could not delete session '{}': files not found.",
-                    resolved
+                    resolved_for_task
                 ));
             }
             Ok(())
@@ -1605,7 +1723,7 @@ impl SessionStore {
         if is_active {
             self.reset().await?;
         }
-        Ok(())
+        Ok(resolved)
     }
 
     /// Set (or clear) a session's manual title by id or short id prefix — the
@@ -2073,6 +2191,72 @@ fn load_snapshot(path: &Path) -> Result<SessionData, String> {
     let content = fs::read_to_string(path).map_err(|e| format!("could not read snapshot: {e}"))?;
     serde_json::from_str::<SessionData>(&content)
         .map_err(|e| format!("could not parse snapshot: {e}"))
+}
+
+/// A dormant session with armed scheduled work, discovered on disk by
+/// [`sessions_with_armed_schedules`]: the session id and the project root it
+/// belongs to (read from the snapshot itself — project bucket names are a
+/// one-way hash, so the path cannot be recovered from the directory name).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArmedSession {
+    pub session_id: String,
+    pub project_root: PathBuf,
+}
+
+/// Minimal projection of a session snapshot for autonomous-work discovery:
+/// everything else (the huge `model_window` / `archived_transcript` arrays)
+/// is skipped by the `RawValue` deferral, so scanning every session on disk
+/// costs a header read per file, not a transcript decode.
+#[derive(Default, Deserialize)]
+struct ScheduleProbeHeader {
+    id: String,
+    #[serde(default)]
+    project_root: PathBuf,
+    #[serde(default)]
+    scheduled_jobs: Vec<neenee_contracts::ScheduledJob>,
+}
+
+/// Discover every persisted session (across all project buckets) that still
+/// has armed `/schedule` jobs. The daemon calls this once at boot to rehost
+/// autonomous sessions (ADR-0125) — the durable-schedule feature's contract
+/// is "the prompt fires even if the daemon that armed it is gone", and a
+/// schedule that stops firing because the daemon restarted breaks it.
+///
+/// Files that cannot be read or parsed are skipped silently: this is a
+/// best-effort rehost scan, and a corrupt snapshot must not block the daemon
+/// from starting (its session still lazy-resumes on attach, where the full
+/// error surface applies).
+pub fn sessions_with_armed_schedules() -> Vec<ArmedSession> {
+    let projects_dir = paths::get().projects_dir();
+    let mut found = Vec::new();
+    let Ok(buckets) = fs::read_dir(&projects_dir) else {
+        return found;
+    };
+    for bucket in buckets.flatten() {
+        let sessions_dir = bucket.path().join("sessions");
+        let Ok(entries) = fs::read_dir(&sessions_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|v| v.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(header) = serde_json::from_str::<ScheduleProbeHeader>(&content) else {
+                continue;
+            };
+            if !header.scheduled_jobs.is_empty() {
+                found.push(ArmedSession {
+                    session_id: header.id,
+                    project_root: header.project_root,
+                });
+            }
+        }
+    }
+    found
 }
 
 /// Header-only view of a session snapshot, used by [`SessionStore::list`] to
@@ -2989,6 +3173,61 @@ mod tests {
         assert_eq!(data.schema_version, CURRENT_SCHEMA_VERSION);
         let raw = serde_json::to_string(&data).unwrap();
         assert!(raw.contains("\"schema_version\":"));
+    }
+
+    /// ADR-0125 boot rehost scan: sessions with armed `/schedule` jobs are
+    /// discoverable across every project bucket, and sessions without jobs
+    /// are invisible to the scan. Writes two real snapshots through
+    /// `SessionStore::load_for_project` under a sandboxed data dir (one
+    /// session with an armed job, one without), then asserts the scan finds
+    /// exactly the armed one with its project root.
+    #[tokio::test]
+    async fn armed_schedule_scan_finds_only_sessions_with_jobs() {
+        locked!({
+            let sandbox =
+                std::env::temp_dir().join(format!("neenee-armed-scan-{}", uuid::Uuid::new_v4()));
+            let data_dir = sandbox.join("data");
+            let project = sandbox.join("my-project");
+            fs::create_dir_all(&project).unwrap();
+            fs::create_dir_all(&data_dir).unwrap();
+            paths::set_test_default(Some(paths::Dirs::resolve(&paths::PathsOverride {
+                data_dir: Some(data_dir.clone()),
+                ..Default::default()
+            })));
+
+            // One project, two sessions: armed and unarmed. Both stores go
+            // through `load_for_project` (the production path), which pins
+            // the real project root into the snapshot.
+            let armed = SessionStore::load_for_project(project.clone());
+            armed
+                .set_scheduled_jobs(vec![neenee_contracts::ScheduledJob::once(
+                    "j1".into(),
+                    chrono::Utc::now() + chrono::Duration::hours(1),
+                    "later".into(),
+                    chrono::Utc::now(),
+                )])
+                .await
+                .unwrap();
+            // The store skips persisting "empty" sessions, so both sessions
+            // need a message to reach disk.
+            armed
+                .replace_messages(vec![Message::new(neenee_contracts::Role::User, "hi")])
+                .await
+                .unwrap();
+            let unarmed = SessionStore::load_for_project(project.clone());
+            unarmed
+                .replace_messages(vec![Message::new(neenee_contracts::Role::User, "hi")])
+                .await
+                .unwrap();
+
+            let found = sessions_with_armed_schedules();
+            assert_eq!(found.len(), 1, "only the armed session: {found:?}");
+            assert_eq!(found[0].session_id, armed.id().await);
+            assert_eq!(found[0].project_root, project.canonicalize().unwrap());
+
+            let _ = fs::remove_dir_all(sandbox);
+            paths::set_test_default(None);
+        });
     }
 
     #[test]
@@ -4065,6 +4304,104 @@ mod tests {
         assert_eq!(loaded.commands().await.len(), 1);
         assert_eq!(loaded.commands().await[0].name, "sessions");
         assert_eq!(loaded.model_window().await.len(), 1);
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn round_interrupts_round_trip_through_persistence() {
+        // C11: interrupt records must survive a session close + reopen —
+        // they are the durable answer to "why did this round stop".
+        let directory =
+            std::env::temp_dir().join(format!("neenee-round-interrupts-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        // Materialize the session with dialogue first (an interrupt record on
+        // a never-persisted empty session stays in memory, like commands).
+        store
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "hello")])
+            .await
+            .unwrap();
+        store
+            .record_round_interrupt(neenee_contracts::RoundInterrupt {
+                reason: neenee_contracts::RoundInterruptReason::User,
+                at_ms: 1_700_000_000_000,
+                round: Some(1),
+            })
+            .await
+            .unwrap();
+        store
+            .record_round_interrupt(neenee_contracts::RoundInterrupt {
+                reason: neenee_contracts::RoundInterruptReason::Terminated,
+                at_ms: 1_700_000_060_000,
+                round: Some(2),
+            })
+            .await
+            .unwrap();
+        // Duplicate guard: same round + reason is a no-op.
+        store
+            .record_round_interrupt(neenee_contracts::RoundInterrupt {
+                reason: neenee_contracts::RoundInterruptReason::Terminated,
+                at_ms: 1_700_000_060_001,
+                round: Some(2),
+            })
+            .await
+            .unwrap();
+
+        let records = store.round_interrupts().await;
+        assert_eq!(records.len(), 2, "duplicate (round, reason) is dropped");
+        assert_eq!(
+            records[0].reason,
+            neenee_contracts::RoundInterruptReason::User
+        );
+        assert_eq!(records[1].round, Some(2));
+
+        // Reopen: the log is authoritative, so the records must reload.
+        let loaded = SessionStore::for_path(path.clone());
+        let reloaded = loaded.round_interrupts().await;
+        assert_eq!(reloaded, records, "interrupt records survive reload");
+
+        // Clearing removes them and also round-trips.
+        loaded.clear_round_interrupts().await.unwrap();
+        let cleared = SessionStore::for_path(path.clone());
+        assert!(
+            cleared.round_interrupts().await.is_empty(),
+            "cleared records stay cleared after reload"
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn legacy_snapshot_without_round_interrupts_loads() {
+        // C11: a pre-v11 snapshot (no `round_interrupts` key) loads with an
+        // empty list — `#[serde(default)]`, no migration needed.
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-round-interrupts-legacy-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("session.json");
+        let legacy = serde_json::json!({
+            "id": "legacy-interrupts",
+            "parent_id": null,
+            "created_at": 0u64,
+            "project_root": ".",
+            "model_window": [],
+            "archived_transcript": [],
+            "todos": { "items": [] },
+            "scheduled_jobs": [],
+            "schema_version": 10u32,
+        });
+        fs::write(&path, serde_json::to_string(&legacy).unwrap()).unwrap();
+        fs::write(
+            path.with_extension("jsonl"),
+            "{\"seq\":0,\"timestamp\":1,\"type\":\"started\",\"id\":\"legacy-interrupts\",\"parent_id\":null,\"created_at\":0,\"project_root\":\".\",\"schema_version\":10}\n",
+        )
+        .unwrap();
+
+        let store = SessionStore::for_path(path.clone());
+        assert!(store.round_interrupts().await.is_empty());
 
         let _ = fs::remove_dir_all(directory);
     }

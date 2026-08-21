@@ -12,14 +12,24 @@ use serde::{Deserialize, Serialize};
 /// User-tunable web-tool configuration, deserialized from the `[websearch]`
 /// table of `config.toml`. All fields default sensibly, so a `config.toml`
 /// with no `[websearch]` table (or a partially specified one) is valid.
+///
+/// # Where the keys live
+///
+/// `config.toml` is behavior-only and shareable; the six API keys are
+/// secrets and are **not** serialized here. They persist in
+/// `credentials.toml` under `[websearch]` (`neenee-persistence::config`
+/// performs the load-time merge and the one-shot migration from the
+/// historical in-`[websearch]` spelling). The fields remain plain
+/// `Option<SecretString>` members so the in-memory shape every consumer
+/// reads is unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WebSearchConfig {
     /// Primary search backend. One of: `"exa"` (default; hosted MCP, anonymous
-    /// or `exa_api_key`), `"parallel"` (hosted MCP), `"duckduckgo"` (best-effort
-    /// scraping, frequently blocked), `"searxng"` (self-hosted, keyless), or
-    /// `"tavily"` (hosted API, requires `tavily_api_key`), or `"bocha"` (hosted
-    /// AI search API, requires `bocha_api_key`; directly reachable from
+    /// or an Exa key in `credentials.toml`), `"parallel"` (hosted MCP), `"duckduckgo"`
+    /// (best-effort scraping, frequently blocked), `"searxng"` (self-hosted,
+    /// keyless), or `"tavily"` (hosted API, requires a Tavily key), or `"bocha"`
+    /// (hosted AI search API, requires a Bocha key; directly reachable from
     /// mainland China without a proxy).
     pub provider: String,
     /// Fallback backend tried when `provider` fails. Empty string disables it.
@@ -32,20 +42,30 @@ pub struct WebSearchConfig {
     /// Per-request timeout in seconds (default 20).
     pub timeout_secs: u64,
     /// Exa API key (optional; anonymous use works without it).
+    /// Persisted in `credentials.toml [websearch]`, never in `config.toml`.
+    #[serde(skip_serializing)]
     pub exa_api_key: Option<crate::SecretString>,
     /// Parallel Search API key (optional; anonymous use works without it).
+    /// Persisted in `credentials.toml [websearch]`, never in `config.toml`.
+    #[serde(skip_serializing)]
     pub parallel_api_key: Option<crate::SecretString>,
     /// SearXNG JSON search endpoint, e.g. `http://localhost:8080/search`.
     /// Required when `provider = "searxng"`.
     pub searxng_url: Option<String>,
     /// Tavily API key. Required when `provider = "tavily"`.
+    /// Persisted in `credentials.toml [websearch]`, never in `config.toml`.
+    #[serde(skip_serializing)]
     pub tavily_api_key: Option<crate::SecretString>,
     /// Bocha AI Search API key (api.bochaai.com). Required when
     /// `provider = "bocha"`. Directly reachable from mainland China networks,
-    /// so it works without a proxy.
+    /// so it works without a proxy. Persisted in `credentials.toml
+    /// [websearch]`, never in `config.toml`.
+    #[serde(skip_serializing)]
     pub bocha_api_key: Option<crate::SecretString>,
     /// Jina Reader API key (r.jina.ai). Optional — the reader works
     /// anonymously with a lower rate limit; a key raises the quota.
+    /// Persisted in `credentials.toml [websearch]`, never in `config.toml`.
+    #[serde(skip_serializing)]
     pub jina_api_key: Option<crate::SecretString>,
     /// Page-content backend used by `webfetch` for HTML pages. One of:
     /// `"builtin"` (default; direct fetch + local HTML stripping — zero
@@ -57,6 +77,22 @@ pub struct WebSearchConfig {
     /// This is the "depth" half of the two-stage research pipeline
     /// (websearch = breadth, webfetch = depth); see ADR-0117.
     pub reader: String,
+}
+
+impl WebSearchConfig {
+    /// Extract the six secret keys from this table, leaving every field at
+    /// its default. Used by the persistence layer to move keys found in the
+    /// historical in-`config.toml` location into `credentials.toml`.
+    pub fn secret_keys_only(&self) -> Self {
+        Self {
+            exa_api_key: self.exa_api_key.clone(),
+            parallel_api_key: self.parallel_api_key.clone(),
+            tavily_api_key: self.tavily_api_key.clone(),
+            bocha_api_key: self.bocha_api_key.clone(),
+            jina_api_key: self.jina_api_key.clone(),
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for WebSearchConfig {

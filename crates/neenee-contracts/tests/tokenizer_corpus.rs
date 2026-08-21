@@ -93,22 +93,23 @@ fn inline_corpus_matches_reference_exactly() {
 fn file_corpus_stays_within_two_percent() {
     // (path relative to this crate, reference count of the first 40 KB)
     let cases: &[(&str, usize)] = &[
-        ("../../../crates/neenee-agent/src/agent.rs", 10_478),
-        ("../../../crates/neenee-contracts/src/pressure.rs", 11_207),
-        ("../../../crates/neenee-agent/src/orchestration.rs", 10_411),
-        ("../../../README.zh-CN.md", 2_093),
-        ("../../../CHANGELOG.md", 10_366),
-        ("../../../docs/adr/0044-layered-token-accounting.md", 1_742),
+        ("../../crates/neenee-agent/src/agent.rs", 10_478),
+        ("../../crates/neenee-contracts/src/pressure.rs", 11_207),
+        ("../../crates/neenee-agent/src/orchestration.rs", 10_411),
+        ("../../README.zh-CN.md", 2_152),
+        ("../../CHANGELOG.md", 10_755),
+        ("../../docs/adr/0044-layered-token-accounting.md", 1_742),
         (
-            "../../../docs/explanation/agent-design/token-accounting.md",
-            4_588,
+            "../../docs/explanation/agent-design/token-accounting.md",
+            5_287,
         ),
     ];
     let t = Tokenizer::new();
     for (path, expected) in cases {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            continue; // file moved; degrade to no-op rather than fail
-        };
+        // A missing corpus file must FAIL (see the in-crate twin of this
+        // test): a silently-skipped corpus is a test that asserts nothing.
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("corpus file {path} unreadable: {e}"));
         let text = &text[..text.len().min(40_000)];
         let got = t.count(text);
         let drift = (got as f64 - *expected as f64).abs() / *expected as f64;

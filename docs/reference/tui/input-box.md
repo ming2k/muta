@@ -129,23 +129,36 @@ keystrokes through the same surface but render their own framing around it.
 
 ## History pointer model
 
-The `↑`/`↓` inline history recall treats the composer as a **pointer** over two
+The `↑`/`↓` inline recall treats the composer as a **pointer** over three
 kinds of slot, so the arrow keys are predictable and nothing you type is ever
 silently lost:
 
 | Slot | Contents | Behaviour |
 |------|----------|-----------|
-| **Draft** (the newest position) | The input that has **not been successfully sent**: what you are composing right now, an input restored by interrupting a round before output (`UnsentInput`), an entry inserted from Ctrl+R, or a message recalled from the queue | Editable and **remembered**. Walk into history with `↑` and back with `↓` and the draft comes back exactly as you left it (text + attachments) |
+| **Draft** (the newest position) | The input that has **not been successfully sent**: what you are composing right now, an input restored by interrupting a round before output (`UnsentInput`), or an entry inserted from Ctrl+R | Editable and **remembered**. Walk into history with `↑` and back with `↓` and the draft comes back exactly as you left it (text + attachments) |
+| **Queue row** (an outbox item) | A staged next-round message: a busy-Enter item, or a `Ctrl+O` insert whose round ended before admission | **Editable projection**. `↑`/`↓` walk the pointer across the queue without removing anything; `Enter` writes the edit back **into that item, in place** — the queue's length and order are untouched |
 | **History row** `p` | A previously sent prompt from this session's history, newest-first | **Read-only snapshot**. You can edit it before sending, but the edit is temporary — once the pointer moves away, coming back to the row reloads the original text |
 
-Navigation:
+Navigation (the queue comes first — it is the newer, more urgent surface):
 
-- `↑` moves the pointer toward **older** rows (clamping at the oldest). The
-  first `↑` stashes the draft, so a stray `↑` never loses what you were
-  typing.
-- `↓` moves the pointer back toward the **newest** row, and pressing it once
-  more past the newest row returns to the draft (restoring the stashed text
-  and attachments).
+- With the queue non-empty, `↑` arms the **queue pointer** at the newest item
+  and steps toward older items (clamping at the oldest). The first press
+  stashes the draft, so a stray `↑` never loses what you were typing.
+- `↓` walks the queue pointer back toward newer items; past the newest it
+  dissolves the pointer and restores the stashed draft.
+- Only an exhausted queue hands `↑` on to input history, where the same
+  gestures walk the history rows instead.
+
+**Committing a queue edit.** `Enter` while the pointer is armed writes the
+composer's content back into the pointed-at item *in that item's slot*:
+editing `a` of a `[a, b, c]` queue into `d` yields `[d, b, c]` — never
+`[b, c, d]` (a requeue) and never a duplicate.
+
+**When the pointed-at item vanishes.** The item may ship, be deleted, or be
+recalled while you are editing (its round completed behind your back). The
+pointer is then empty: your edit stays in the composer, and the next `Enter`
+treats it as a **fresh message** — sent immediately if the session is idle,
+queued at the back if it is busy. The gesture never dead-ends on a race.
 
 What counts as "the newest / unsent" slot is defined by **send success**:
 
@@ -154,9 +167,12 @@ What counts as "the newest / unsent" slot is defined by **send success**:
 - Interrupting a round before any output is produced unsends the message: the
   harness reverts the conversation and hands the prompt back, where it is
   **adopted as the draft again** (the newest unsent slot), so `↓` past the
-  newest row restores it rather than a stale earlier draft.
-- Inserting from Ctrl+R or recalling from the queue likewise **replaces** the
-  draft: the adopted input is what `↓` restores, never an older remembered
+  newest row restores it rather than a stale earlier draft. The unsend
+  restore is asynchronous, so it only adopts an **idle** composer — a draft
+  you are actively typing wins, and the interrupted prompt stays recoverable
+  from the input history (`Ctrl+R` / `↑`).
+- Inserting from Ctrl+R likewise **replaces** the draft (an explicit user
+  gesture): the adopted input is what `↓` restores, never an older remembered
   draft.
 
 The draft is a per-session, in-memory slot — it survives an accidental `↑`/`↓`

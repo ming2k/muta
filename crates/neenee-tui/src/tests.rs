@@ -1680,6 +1680,10 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         history_draft: String::new(),
         history_draft_images: Vec::new(),
         history_draft_text_pastes: Vec::new(),
+        queue_pointer: None,
+        queue_pointer_draft: String::new(),
+        queue_pointer_draft_images: Vec::new(),
+        queue_pointer_draft_text_pastes: Vec::new(),
         history_attachments: std::collections::HashMap::new(),
         history_attachments_order: std::collections::VecDeque::new(),
         session_history_backfill: Vec::new(),
@@ -2537,6 +2541,190 @@ fn recall_queued_is_lifo_and_restores_input() {
     );
 }
 
+// ── Queue pointer navigation (ADR-0126) ─────────────────────────────────────
+
+#[test]
+fn queue_pointer_walks_without_removing_items() {
+    // The pointer is non-destructive: three ↑ presses walk c → b → a while
+    // the queue keeps all three items in order.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_dispatch
+        .push_back(queued_dispatch("a", "session-a", "msg a"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("b", "session-b", "msg b other session"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("c", "session-a", "msg c"));
+
+    // First ↑ arms at the newest session-a item ("c") and stashes the draft.
+    app.input = "my draft".to_string();
+    assert!(app.queue_pointer_prev("session-a"));
+    assert_eq!(app.input, "msg c");
+    assert_eq!(app.queue_pointer.as_deref(), Some("c"));
+    assert_eq!(app.pending_count("session-a"), 2, "nothing left the queue");
+
+    // Second ↑ → "a" (the only older item); third ↑ clamps there.
+    assert!(app.queue_pointer_prev("session-a"));
+    assert_eq!(app.input, "msg a");
+    assert!(app.queue_pointer_prev("session-a"));
+    assert_eq!(app.input, "msg a", "clamped at the oldest item");
+    assert_eq!(app.pending_count("session-a"), 2);
+}
+
+#[test]
+fn queue_pointer_down_restores_the_draft() {
+    // ↓ walks back toward newer items and, past the newest, dissolves the
+    // pointer and restores the stashed draft — the same exit as the history
+    // pointer.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_dispatch
+        .push_back(queued_dispatch("a", "session-a", "msg a"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("c", "session-a", "msg c"));
+
+    app.input = "my draft".to_string();
+    assert!(app.queue_pointer_prev("session-a")); // → c
+    assert!(app.queue_pointer_prev("session-a")); // → a
+    assert!(app.queue_pointer_next("session-a")); // → c
+    assert_eq!(app.input, "msg c");
+    // Past the newest: the press dissolves the pointer (consumed) and
+    // restores the stashed draft.
+    assert!(app.queue_pointer_next("session-a"), "dissolve consumes the key");
+    assert!(app.queue_pointer.is_none());
+    assert_eq!(app.input, "my draft");
+    // An unarmed ↓ is inert (the caller falls through to history).
+    assert!(!app.queue_pointer_next("session-a"));
+}
+
+#[test]
+fn queue_pointer_commit_edits_in_place() {
+    // Enter writes the edited content back into the pointed-at item — in
+    // place. Queue a=α, b=β, c=γ; walk to a; edit to δ; Enter → the queue is
+    // δ, β, γ (same length, same order, same slot) — never β, γ, δ and never
+    // a duplicate.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_dispatch
+        .push_back(queued_dispatch("a", "session-a", "alpha"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("b", "session-a", "beta"));
+    app.pending_dispatch
+        .push_back(queued_dispatch("c", "session-a", "gamma"));
+
+    assert!(app.queue_pointer_prev("session-a")); // → c
+    assert!(app.queue_pointer_prev("session-a")); // → b
+    assert!(app.queue_pointer_prev("session-a")); // → a
+    app.input = "delta".to_string();
+    assert!(app.commit_queue_pointer("session-a").is_some());
+
+    let texts: Vec<&str> = app
+        .pending_dispatch
+        .iter()
+        .filter(|d| d.session_id == "session-a")
+        .map(|d| d.text.as_str())
+        .collect();
+    assert_eq!(texts, vec!["delta", "beta", "gamma"], "edit lands in place");
+    assert!(app.queue_pointer.is_none(), "commit dissolves the pointer");
+    assert_eq!(app.pending_count("session-a"), 3, "queue length unchanged");
+}
+
+#[test]
+fn queue_pointer_vanished_target_sends_as_new_message() {
+    // If the pointed-at item shipped while the user was editing, the pointer
+    // is empty: the composer keeps the edit and Enter falls through to an
+    // ordinary send (the caller's fresh-message path).
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.pending_dispatch
+        .push_back(queued_dispatch("a", "session-a", "alpha"));
+    assert!(app.queue_pointer_prev("session-a"));
+    app.input = "edited".to_string();
+
+    // The item leaves the queue (shipped) behind the user's back…
+    app.remove_dispatch("session-a", "a");
+    // …so the commit dissolves the pointer but preserves the edit.
+    assert!(app.commit_queue_pointer("session-a").is_none());
+    assert!(app.queue_pointer.is_none());
+    assert_eq!(app.input, "edited", "the edit must survive the race");
+}
+
+/// ADR-0126 behavior lock: `Ctrl+O` stages the insert as a **transcript
+/// entry** the moment it is sent — queued delivery state, `↳ insert` origin,
+/// a correlation `insert_id` — and the outbox stays untouched. The staged
+/// images ship with the request (they were silently dropped before).
+#[tokio::test]
+async fn insert_into_round_stages_a_transcript_entry_and_ships_images() {
+    use crate::model::document::{DeliveryStatus, UserMessageOrigin};
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+    app.running_sessions.insert("session-a".to_string());
+    app.input = "steer this".to_string();
+    let image = neenee_contracts::ImagePart {
+        mime: "image/png".to_string(),
+        data: "abc".to_string(),
+    };
+    app.pending_images = vec![image];
+
+    // Replace the sink channel with a live receiver so the request the
+    // handler sends can be inspected.
+    let (tx, mut requests) = mpsc::unbounded_channel();
+    app.tx = tx;
+    super::event_loop::handle_insert_into_round(&mut app, &runtime, "session-a").await;
+
+    // The transcript owns the insert immediately, in the pending state.
+    let messages = runtime.messages.read().await.clone();
+    let entry = messages.last().expect("the insert entry was pushed");
+    assert_eq!(entry.role, neenee_contracts::Role::User);
+    assert_eq!(entry.raw, "steer this");
+    assert_eq!(entry.delivery, DeliveryStatus::Queued);
+    assert_eq!(entry.origin, UserMessageOrigin::Insert);
+    assert!(
+        entry.insert_id.is_some(),
+        "the entry carries its correlation id"
+    );
+
+    // The outbox is not involved.
+    assert_eq!(
+        app.pending_count("session-a"),
+        0,
+        "an insert must never become an outbox item"
+    );
+
+    // The request ships the staged images (regression: the old path sent
+    // `Vec::new()` and dropped them) and carries the same correlation id.
+    let sent = requests.try_recv().expect("the insert request was sent");
+    match sent {
+        neenee_contracts::AgentRequest::InsertUserInput { input, .. } => {
+            assert_eq!(input.images.len(), 1, "staged images must ship");
+            assert_eq!(input.images[0].data, "abc");
+            assert_eq!(
+                entry.insert_id.as_deref(),
+                Some(input.id.as_str()),
+                "the entry and the request share the correlation id"
+            );
+        }
+        other => panic!("expected InsertUserInput, got {other:?}"),
+    }
+}
+
+/// ADR-0126 behavior lock: an idle `Ctrl+O` restores the composer verbatim —
+/// a stray chord never eats the draft.
+#[tokio::test]
+async fn insert_into_round_while_idle_restores_the_draft() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+    app.input = "my draft".to_string();
+    app.pending_text_pastes = vec!["big paste".to_string()];
+
+    super::event_loop::handle_insert_into_round(&mut app, &runtime, "session-a").await;
+
+    assert_eq!(app.input, "my draft");
+    assert_eq!(app.pending_text_pastes.len(), 1);
+    assert_eq!(
+        runtime.messages.read().await.len(),
+        0,
+        "nothing staged while idle"
+    );
+}
+
 #[test]
 fn recall_queued_restores_staged_images() {
     // Images staged with the queued message (Ctrl+V before pressing
@@ -3138,6 +3326,7 @@ async fn adopt_as_draft_replaces_stale_draft_and_is_restored() {
         "interrupted input".to_string(),
         vec![image.clone()],
         Vec::new(),
+        crate::app::DraftAdoption::Replace,
     );
 
     assert_eq!(app.input, "interrupted input");
@@ -3155,6 +3344,51 @@ async fn adopt_as_draft_replaces_stale_draft_and_is_restored() {
     assert!(!app.history_next(&rows));
     assert_eq!(app.input, "interrupted input");
     assert_eq!(app.pending_images.len(), 1);
+}
+
+/// The Phase-1 unsend restore is asynchronous, not a user gesture: it must
+/// never clobber a draft the user is composing while the round ran. The
+/// interrupted prompt stays recoverable via the recorded history instead.
+#[tokio::test]
+async fn unsent_restore_preserves_in_progress_draft() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+
+    // The user was mid-composition when the interrupt landed.
+    app.input = "half-typed next message".to_string();
+    app.adopt_as_draft(
+        "interrupted input".to_string(),
+        Vec::new(),
+        Vec::new(),
+        crate::app::DraftAdoption::OnlyIfIdle,
+    );
+
+    assert_eq!(
+        app.input, "half-typed next message",
+        "the in-progress draft wins over the async restore"
+    );
+    assert_eq!(app.history_index, None);
+
+    // An idle composer still adopts as before.
+    app.input.clear();
+    app.adopt_as_draft(
+        "interrupted input".to_string(),
+        Vec::new(),
+        Vec::new(),
+        crate::app::DraftAdoption::OnlyIfIdle,
+    );
+    assert_eq!(app.input, "interrupted input");
+
+    // Explicit gestures (queue recall) keep replacing even a busy composer.
+    app.input = "another half-typed".to_string();
+    app.adopt_as_draft(
+        "recalled from queue".to_string(),
+        Vec::new(),
+        Vec::new(),
+        crate::app::DraftAdoption::Replace,
+    );
+    assert_eq!(app.input, "recalled from queue");
 }
 
 /// History rows are read-only snapshots: editing one is temporary and is
@@ -3526,71 +3760,56 @@ fn move_queued_swaps_within_session_and_clamps_at_edges() {
 }
 
 #[test]
-fn inserting_dispatch_is_excluded_from_dispatch_recall_and_edits() {
-    // An in-flight `F4` steer (`Inserting`) is already with the running
-    // round: it must not pop via FIFO dispatch, must not be recallable, and
-    // must be invisible to the queue modal's index space (delete / reorder /
-    // re-edit). Only `UserInputUnavailable` (requeue) or `UserInputInserted`
-    // (remove) resolves it.
+fn inserts_are_transcript_owned_not_outbox_items() {
+    // ADR-0126: a mid-round insert (`Ctrl+O`) never enters the outbox. It
+    // becomes a transcript entry (`DeliveryStatus::Queued`) the moment it is
+    // sent, so the outbox cannot dispatch, recall, delete, or reorder it —
+    // and `UserInputUnavailable` hands it back by *staging a new outbox item*
+    // (same id), at which point it becomes an ordinary manageable entry.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.pending_dispatch
         .push_back(queued_dispatch("w1", "session-a", "waiting one"));
-    let steer_id = app.stage_insert_dispatch(
-        "session-a",
-        "steer this".to_string(),
-        Vec::new(),
-        Vec::new(),
-    );
-    app.pending_dispatch
-        .push_back(queued_dispatch("w2", "session-a", "waiting two"));
 
-    // The steer counts in the outbox total but never dispatches…
-    assert_eq!(app.pending_count("session-a"), 3);
+    // Race loss: the harness hands the insert back. There is no outbox item
+    // to flip, so the content is staged as a fresh `Waiting` item under the
+    // same id.
+    app.requeue_dispatch(
+        "session-a",
+        "steer-1",
+        Some(("steer this".to_string(), Vec::new(), Vec::new())),
+    );
+    assert_eq!(app.pending_count("session-a"), 2);
+    let order: Vec<&str> = app
+        .pending_dispatch
+        .iter()
+        .filter(|d| d.session_id == "session-a")
+        .map(|d| d.id.as_str())
+        .collect();
+    assert_eq!(
+        order,
+        vec!["w1", "steer-1"],
+        "handed-back insert joins the FIFO tail"
+    );
+
+    // The handed-back item is an ordinary queue item now: FIFO dispatch pops
+    // the front (w1)…
     let popped = app
         .begin_next_round_dispatch("session-a")
         .expect("a Waiting item pops first");
     assert_eq!(popped.id, "w1");
-    // (Dispatching items stay in the outbox until `NextRoundStarted` removes
-    // them, so the count is still 3 here.)
-
-    // …never recalled (recall is Waiting-only, LIFO → "w2")…
-    let Some(RecallQueued::Restored(dispatch)) = app.recall_queued("session-a") else {
-        panic!("expected recall of the newest Waiting item");
-    };
-    assert_eq!(dispatch.id, "w2");
-
-    // …and invisible to the modal's selectable index space (the steer and
-    // the Dispatching item are both out of range, so only… nothing is
-    // addressable).
-    assert!(app.remove_queued_at("session-a", 0).is_none());
-    assert!(app.recall_queued_at("session-a", 0).is_none());
-    app.move_queued("session-a", 0, 1); // no-op, must not panic
-    assert_eq!(
-        app.pending_dispatch
-            .iter()
-            .filter(|d| {
-                d.session_id == "session-a" && d.state == QueuedDispatchState::Inserting
-            })
-            .count(),
-        1,
-        "the steer must still be there, untouched"
+    // …and the modal can recall it like any other entry.
+    assert!(
+        app.recall_queued_at("session-a", 0).is_some(),
+        "the handed-back insert is modal-addressable"
     );
 
-    // Clean up the Dispatching leftover so the rest of the test reasons
-    // about the steer alone.
-    app.remove_dispatch("session-a", "w1");
+    // Only the Dispatching leftover (w1) remains; a live insert never
+    // touched the outbox at any point in its lifecycle.
     assert_eq!(app.pending_count("session-a"), 1);
-
-    // A race loss returns the steer to Waiting as a paused next-round item…
-    app.requeue_dispatch("session-a", &steer_id);
-    assert!(app.recall_queued_at("session-a", 0).is_some());
-    // …and a fresh steer resolves to removal on admission.
-    let steer_id =
-        app.stage_insert_dispatch("session-a", "again".to_string(), Vec::new(), Vec::new());
-    let removed = app
-        .remove_dispatch("session-a", &steer_id)
-        .expect("admission drops the shadow item");
-    assert_eq!(removed.id, steer_id);
+    assert!(app
+        .pending_dispatch
+        .iter()
+        .all(|d| d.state == QueuedDispatchState::Dispatching));
 }
 
 #[test]

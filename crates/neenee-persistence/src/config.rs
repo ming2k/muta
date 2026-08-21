@@ -44,10 +44,10 @@ pub const THINKING_KEY: &str = "thinking";
 /// # turning the principal itself autopilot.
 /// # skip_interactive_input = false
 ///
-/// # Advanced doom-loop guard. Default disabled; opt in here when deterministic
-/// # repeated-call blocking is desired. See [`DoomGuardConfig`]. (TOML key
-/// # stays `nudge` for backward compatibility.)
-/// # [principal.nudge]
+/// # Doom-loop guard (variant-loop defense). On by default (ADR-0113 §5);
+/// opt out here. See [`DoomGuardConfig`]. The historical `nudge` key
+/// spelling still loads; saves write `doom_guard`.
+/// # [principal.doom_guard]
 /// # enabled = false
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -85,13 +85,15 @@ pub struct PrincipalConfig {
     /// the principal autopilot, so ordinary tool confirmations still apply.
     pub skip_interactive_input: bool,
     /// Doom-loop guard configuration (`neenee_agent::doom_guard`). Default
-    /// **disabled** — opt in via the advanced `[principal.nudge]` sub-table.
-    /// See [`DoomGuardConfig`] for the per-field semantics.
+    /// **enabled** (`window: 16`, ADR-0113 §5) — opt out via
+    /// `[principal.doom_guard] enabled = false`. See [`DoomGuardConfig`]
+    /// for the per-field semantics.
+    #[serde(rename = "doom_guard", alias = "nudge")]
     pub nudge: DoomGuardConfig,
 }
 
 // `DoomGuardConfig` is defined in `neenee_contracts::doom_guard_config` and re-exported
-// above via `use neenee_contracts::DoomGuardConfig`. It is the `[principal.nudge]`
+// above via `use neenee_contracts::DoomGuardConfig`. It is the `[principal.doom_guard]`
 // TOML table and the wire type for `AgentRequest::UpdateDoomGuardConfig`. See
 // `neenee_contracts::DoomGuardConfig` for the per-field semantics and defaults.
 
@@ -469,10 +471,11 @@ pub struct FittedModelInfo {
     pub efforts: Vec<String>,
 }
 
-/// Per-(instance, model) reasoning overrides, persisted in the discovery cache
-/// keyed `route_settings[<instance_id>][<model_id>]`. Unlike the *derived*
-/// capability fields ([`FittedModelInfo`]), `effort` / `thinking` are the
-/// user's own per-route choices (set from the model `e` editor) — the entry's
+/// Per-(instance, model) reasoning overrides — the user's own per-route
+/// choices (set from the model `e` editor), persisted in **state** via
+/// [`crate::route_settings::RouteSettingsStore`] (keyed
+/// `providers[<instance_id>][<model_id>]`). Unlike the *derived* capability
+/// fields ([`FittedModelInfo`]), these are not rebuildable: the entry's
 /// presence opts the model in to reasoning on Anthropic-protocol routes,
 /// `thinking` defaulting **on** unless explicitly `false` (ADR-0046).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -527,6 +530,76 @@ pub struct Credentials {
     /// API keys keyed by provider instance id.
     #[serde(default)]
     pub providers: BTreeMap<String, SecretString>,
+    /// The web-tool API keys (`[websearch]`): search backends + the Jina
+    /// reader. Kept here — not in `config.toml`'s `[websearch]` — so
+    /// `config.toml` stays behavior-only and shareable. Merged into
+    /// [`Config::websearch`] at load time by [`Config::load`].
+    #[serde(default, skip_serializing_if = "WebSearchKeys::is_empty")]
+    pub websearch: WebSearchKeys,
+}
+
+/// The six web-tool API keys, persisted as `credentials.toml [websearch]`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebSearchKeys {
+    pub exa_api_key: Option<SecretString>,
+    pub parallel_api_key: Option<SecretString>,
+    pub tavily_api_key: Option<SecretString>,
+    pub bocha_api_key: Option<SecretString>,
+    pub jina_api_key: Option<SecretString>,
+}
+
+impl WebSearchKeys {
+    /// Whether any key is set — drives `skip_serializing_if` so a clean
+    /// credentials file does not grow an empty table.
+    pub fn is_empty(&self) -> bool {
+        self.exa_api_key.is_none()
+            && self.parallel_api_key.is_none()
+            && self.tavily_api_key.is_none()
+            && self.bocha_api_key.is_none()
+            && self.jina_api_key.is_none()
+    }
+
+    /// Overlay onto a `[websearch]` config table: a key set here wins, an
+    /// absent one leaves whatever the config already carries (which after
+    /// migration is always `None`).
+    fn merge_into(self, websearch: &mut neenee_contracts::WebSearchConfig) {
+        if self.exa_api_key.is_some() {
+            websearch.exa_api_key = self.exa_api_key;
+        }
+        if self.parallel_api_key.is_some() {
+            websearch.parallel_api_key = self.parallel_api_key;
+        }
+        if self.tavily_api_key.is_some() {
+            websearch.tavily_api_key = self.tavily_api_key;
+        }
+        if self.bocha_api_key.is_some() {
+            websearch.bocha_api_key = self.bocha_api_key;
+        }
+        if self.jina_api_key.is_some() {
+            websearch.jina_api_key = self.jina_api_key;
+        }
+    }
+
+    /// Fill any unset key from `other` (used when folding the historical
+    /// `config.toml` location into the credentials file).
+    fn absorb(&mut self, other: WebSearchKeys) {
+        if self.exa_api_key.is_none() {
+            self.exa_api_key = other.exa_api_key;
+        }
+        if self.parallel_api_key.is_none() {
+            self.parallel_api_key = other.parallel_api_key;
+        }
+        if self.tavily_api_key.is_none() {
+            self.tavily_api_key = other.tavily_api_key;
+        }
+        if self.bocha_api_key.is_none() {
+            self.bocha_api_key = other.bocha_api_key;
+        }
+        if self.jina_api_key.is_none() {
+            self.jina_api_key = other.jina_api_key;
+        }
+    }
 }
 
 impl Credentials {
@@ -590,17 +663,16 @@ impl Credentials {
     }
 }
 
-/// Discovered model lists, fitted capabilities, and per-route reasoning
-/// overrides, cached under `$XDG_CACHE_HOME/neenee/models_discovery.json`.
+/// Discovered model lists and fitted capabilities, cached under
+/// `$XDG_CACHE_HOME/neenee/models_discovery.json`.
 ///
 /// Everything here is keyed by **provider instance** then model id — the
-/// per-route facts the catalog needs to derive channels at runtime. The
-/// derived fields (`provider_models`, `fitted_models`) are rebuildable by live
-/// discovery; `route_settings` holds the user's own per-(instance, model)
-/// reasoning choices and is written by the model `e` editor. Keeping all
-/// per-route facts in one store (rather than config.toml) means `config.toml`
-/// stays behavior-only and two instances of the same template never duplicate
-/// or drift a route set.
+/// per-route facts the catalog needs to derive channels at runtime. Both
+/// fields are rebuildable by live discovery, which is exactly why this is a
+/// cache: wiping the file costs one re-discovery, never user data. The
+/// user's per-route *reasoning choices* deliberately do **not** live here —
+/// they are state, in
+/// [`crate::route_settings::RouteSettingsStore`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscoveryCache {
     /// Cached discovered model lists, keyed by provider instance id:
@@ -610,16 +682,20 @@ pub struct DiscoveryCache {
     /// Fitted capability metadata, keyed by instance id then model id.
     #[serde(default)]
     pub fitted_models: BTreeMap<String, BTreeMap<String, FittedModelInfo>>,
-    /// Per-(instance, model) reasoning overrides (the user's choices, not the
-    /// endpoint's): `route_settings[instance_id][model_id]`.
-    #[serde(default)]
-    pub route_settings: BTreeMap<String, BTreeMap<String, RouteSettings>>,
     /// Trusted per-(instance, model) capability metadata advertised by the
     /// provider's live `GET /models` (endpoint, thinking, effort tiers …),
     /// mirror of `DiscoveredModel::remote_metadata`. Keyed instance id then
     /// model id; re-derived by every successful live discovery.
     #[serde(default)]
     pub remote_metadata: BTreeMap<String, BTreeMap<String, RemoteModelMetadata>>,
+    // NOTE: the user's per-route reasoning overrides used to live here as
+    // `route_settings`. They moved to
+    // `$XDG_STATE_HOME/neenee/route_settings.json`
+    // (`crate::route_settings::RouteSettingsStore`) — a cache is derived and
+    // deletable, user settings are not. The field is intentionally *absent*
+    // (not aliased): `RouteSettingsStore::load` performs the one-shot fold,
+    // and an unknown `route_settings` key in an old cache file is ignored by
+    // serde like any other unknown key.
 }
 
 impl DiscoveryCache {
@@ -643,33 +719,11 @@ impl DiscoveryCache {
         Ok(())
     }
 
-    /// The reasoning override for one route, if set.
-    pub fn route_settings_for(&self, instance_id: &str, model_id: &str) -> Option<&RouteSettings> {
-        self.route_settings
-            .get(instance_id)
-            .and_then(|models| models.get(model_id))
-    }
-
-    /// Borrow a route's reasoning settings mutably, inserting a default entry
-    /// when absent, so a caller can set one field without rebuilding the store.
-    pub fn route_settings_for_mut(
-        &mut self,
-        instance_id: &str,
-        model_id: &str,
-    ) -> &mut RouteSettings {
-        self.route_settings
-            .entry(instance_id.to_string())
-            .or_default()
-            .entry(model_id.to_string())
-            .or_default()
-    }
-
     /// Remove the per-instance records for `instance_id` (used on instance
     /// deletion).
     pub fn remove_instance(&mut self, instance_id: &str) {
         self.provider_models.remove(instance_id);
         self.fitted_models.remove(instance_id);
-        self.route_settings.remove(instance_id);
         self.remote_metadata.remove(instance_id);
     }
 
@@ -788,6 +842,8 @@ pub struct Config {
 ///                                # and zero attached clients; 0 = never
 /// local_auth = true             # bearer-token the loopback listener too
 ///                                # (ADR-0105); false = trust local processes
+/// rehost_armed_schedules = true # rehost sessions with armed /schedule jobs
+///                                # at boot (ADR-0125); false = cold start
 /// ```
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
 #[serde(default)]
@@ -813,6 +869,13 @@ pub struct DaemonConfig {
     /// posture; the UDS listener is always exempt (filesystem permissions
     /// are its boundary). Default: true.
     pub local_auth: bool,
+    /// Rehost autonomous sessions at daemon boot (ADR-0125): scan every
+    /// project's persisted sessions and re-assemble a hosted harness for
+    /// each one that still has armed `/schedule` jobs, so a scheduled
+    /// prompt keeps firing across daemon restarts (crash, upgrade, reboot)
+    /// instead of waiting for a human to attach. Default: true. Set `false`
+    /// to start cold every time (the pre-0125 behavior).
+    pub rehost_armed_schedules: bool,
 }
 
 impl Default for DaemonConfig {
@@ -821,6 +884,7 @@ impl Default for DaemonConfig {
             shutdown_grace_secs: 10,
             idle_exit_minutes: 5,
             local_auth: true,
+            rehost_armed_schedules: true,
         }
     }
 }
@@ -913,10 +977,20 @@ impl Default for Config {
     }
 }
 
+/// Whether none of the six web-tool keys is set (helper for
+/// [`Config::merge_websearch_keys`]).
+fn keys_eq_none(keys: &neenee_contracts::WebSearchConfig) -> bool {
+    keys.exa_api_key.is_none()
+        && keys.parallel_api_key.is_none()
+        && keys.tavily_api_key.is_none()
+        && keys.bocha_api_key.is_none()
+        && keys.jina_api_key.is_none()
+}
+
 impl Config {
     pub fn load() -> Self {
         let config_path = Self::config_file_path();
-        match fs::read_to_string(&config_path) {
+        let mut config = match fs::read_to_string(&config_path) {
             Ok(content) => match toml::from_str(&content) {
                 Ok(parsed) => parsed,
                 Err(error) => {
@@ -937,7 +1011,40 @@ impl Config {
             },
             // Absent is the normal first-run condition; nothing to report.
             Err(_) => Config::default(),
+        };
+        Self::merge_websearch_keys(&mut config);
+        config
+    }
+
+    /// Merge `credentials.toml [websearch]` into the in-memory `[websearch]`
+    /// table, and migrate any keys found in `config.toml [websearch]` (the
+    /// historical location) into the credentials file — one-shot and
+    /// idempotent. `config.toml` is behavior-only and shareable; the six API
+    /// keys are secrets and must not live there.
+    fn merge_websearch_keys(config: &mut Config) {
+        // Pull the secret keys out of the parsed table. Serialization already
+        // skips them (they cannot come back through a save); this moves any
+        // keys a pre-migration file still carries.
+        let keys_in_config = config.websearch.secret_keys_only();
+        let from_config = (!keys_eq_none(&keys_in_config)).then_some(WebSearchKeys {
+            exa_api_key: keys_in_config.exa_api_key,
+            parallel_api_key: keys_in_config.parallel_api_key,
+            tavily_api_key: keys_in_config.tavily_api_key,
+            bocha_api_key: keys_in_config.bocha_api_key,
+            jina_api_key: keys_in_config.jina_api_key,
+        });
+        let mut creds = Credentials::load();
+        if let Some(migrated) = from_config {
+            // Fold into the credentials store (an explicit credentials entry
+            // wins: it is the location the user edits going forward) and
+            // persist both files. A failed save is non-fatal — the keys stay
+            // in memory for this run and the migration retries next load.
+            creds.websearch.absorb(migrated);
+            if let Err(e) = creds.save() {
+                tracing::warn!("could not migrate websearch keys into credentials.toml: {e}");
+            }
         }
+        creds.websearch.clone().merge_into(&mut config.websearch);
     }
 
     /// Load only the `[mcp.*]` table from a project-local `.neenee/config.toml`
@@ -1307,6 +1414,32 @@ mod tests {
     }
 
     #[test]
+    fn doom_guard_table_writes_canonical_key_and_accepts_legacy_nudge_alias() {
+        // Unlike the ADR-0120 ignore-and-drop policy, the guard's rename is
+        // aliased, not ignored: the default is ON, so an explicit
+        // `enabled = false` under the old `nudge` key must survive — dropping
+        // it would silently flip the user's opt-out back to blocking.
+        let legacy: Config =
+            toml::from_str("[principal.nudge]\nenabled = false\nwindow = 24\n").unwrap();
+        let canonical: Config =
+            toml::from_str("[principal.doom_guard]\nenabled = false\nwindow = 24\n").unwrap();
+        assert_eq!(legacy.principal.nudge, canonical.principal.nudge);
+        assert!(!canonical.principal.nudge.enabled);
+        assert_eq!(canonical.principal.nudge.window, 24);
+
+        // Save always writes the canonical key; the alias is load-only.
+        let serialized = toml::to_string(&canonical).unwrap();
+        assert!(
+            serialized.contains("[principal.doom_guard]"),
+            "got: {serialized}"
+        );
+        assert!(
+            !serialized.contains("nudge"),
+            "legacy key must not be re-emitted: {serialized}"
+        );
+    }
+
+    #[test]
     fn tool_variants_table_parses_and_resolves_per_model() {
         // The table name mirrors the Config field name (`tool_variants`), as
         // serde maps struct fields to TOML keys verbatim. The model id is
@@ -1463,7 +1596,7 @@ deepseek = "new-key"
     }
 
     #[test]
-    fn discovery_cache_route_settings_and_remote_round_trip() {
+    fn discovery_cache_and_remote_round_trip() {
         let (tmp, _guard, _override_guard) = sandbox_config_dir();
         let mut cache = DiscoveryCache::default();
         cache.provider_models.insert(
@@ -1483,27 +1616,17 @@ deepseek = "new-key"
             );
             m
         });
-        cache
-            .route_settings_for_mut("deepseek", "deepseek-v4-flash")
-            .effort = Some("high".to_string());
         cache.save().unwrap();
 
         let mut reloaded = DiscoveryCache::load();
         assert_eq!(
-            reloaded
-                .route_settings_for("deepseek", "deepseek-v4-flash")
-                .and_then(|r| r.effort.as_deref()),
-            Some("high")
-        );
-        assert_eq!(
             reloaded.fitted_models["kimi"]["kimi-for-coding"].context_window,
             262_144
         );
-        assert!(reloaded.route_settings_for("deepseek", "nope").is_none());
+        assert!(reloaded.remote_metadata_for("deepseek", "nope").is_none());
 
         reloaded.remove_instance("deepseek");
         assert!(reloaded.provider_models.is_empty());
-        assert!(reloaded.route_settings.is_empty());
         reloaded.save().unwrap();
         assert!(DiscoveryCache::load().provider_models.is_empty());
 

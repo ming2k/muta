@@ -43,17 +43,19 @@ pub enum QueuedDispatchState {
     /// A fresh round is being started for this item (`ChatToSession` sent,
     /// `NextRoundStarted` not yet received).
     Dispatching,
-    /// Handed to the *running* round via `InsertUserInput` (`F4`); not yet
-    /// admitted at a safe turn boundary. Excluded from FIFO dispatch and
-    /// recall; the bar/modal show it as `steer›`. Resolved by
-    /// `UserInputInserted` (success — the item is dropped) or
-    /// `UserInputUnavailable` (the round closed first — back to `Waiting`).
-    Inserting,
 }
 
-/// A user message owned by the compact outbox. It is intentionally absent
-/// from the transcript until the harness admits or dispatches it, so pending
-/// state never scrolls away or masquerades as conversation history.
+/// A user message owned by the compact outbox (the **next-round** queue).
+///
+/// Two kinds of content live here: a busy Enter (staged while a round runs)
+/// and a mid-round insert (`Ctrl+O`) whose round ended before admission
+/// (handed back by `UserInputUnavailable`) — both wait to become the **next**
+/// round's prompt. The item is intentionally absent from the transcript until
+/// the harness dispatches it, so pending state never scrolls away or
+/// masquerades as conversation history. (A *live* insert is different: it is
+/// a transcript entry from the moment it is sent — see
+/// [`crate::model::document::DeliveryStatus::Queued`] — and never passes
+/// through the outbox.)
 #[derive(Debug, Clone)]
 pub struct QueuedDispatch {
     pub id: String,
@@ -219,6 +221,22 @@ pub struct SessionChrome {
     pub current_turn: u64,
     /// When this session's current round started (elapsed-timer segment).
     pub round_started_at: Option<std::time::Instant>,
+}
+
+/// Whether [`App::adopt_as_draft`] may clobber a composer that currently
+/// holds unsent, unsaved work. Explicit user gestures (queue recall,
+/// Ctrl+R insert) may — the user asked for it. Asynchronous events
+/// (a Phase-1 unsend restore) may not — the in-progress draft they would
+/// destroy was never sent anywhere and has no other copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DraftAdoption {
+    /// Replace whatever the composer holds. For user-initiated paths where
+    /// the current content is either sent or superseded.
+    Replace,
+    /// Adopt only if the composer is idle (empty text, no staged
+    /// attachments). Otherwise leave the in-progress draft untouched. For
+    /// the asynchronous Phase-1 unsend restore.
+    OnlyIfIdle,
 }
 
 pub struct App {
@@ -719,6 +737,32 @@ pub struct App {
     /// FIFO insertion order of [`Self::history_attachments`] keys, so the
     /// cache can be pruned oldest-first when it outgrows its cap.
     pub history_attachments_order: VecDeque<(String, Option<String>)>,
+    /// The inline ↑/↓ **queue pointer** — the id of the outbox item
+    /// ([`Self::pending_dispatch`]) the composer is currently editing. Forms
+    /// a pointer model over the queue that mirrors the history pointer:
+    ///
+    /// - `None` — the composer is the **draft** (or a history row): queue
+    ///   navigation is not active.
+    /// - `Some(id)` — the composer shows the queue item's content as an
+    ///   **editable projection**: ↑/↓ move the pointer across the queue
+    ///   (newest → oldest and back) without removing anything, and Enter
+    ///   writes the edited content back **into that item in place** (the
+    ///   queue's length and order are untouched).
+    ///
+    /// Held as an id (not an index) so dispatch/reorder/delete cannot
+    /// invalidate it silently; a vanished target makes Enter fall back to an
+    /// ordinary send (see [`Self::queue_pointer_target`]).
+    ///
+    /// The pointer walks the queue *before* history: ↑ from the draft enters
+    /// the queue first (the outbox is the newer, more urgent surface), and
+    /// only an exhausted queue hands ↑ on to input history.
+    pub queue_pointer: Option<String>,
+    /// The draft stashed aside when the queue pointer is armed — the exact
+    /// counterpart of [`Self::history_draft`] for queue navigation, restored
+    /// when ↓ walks back past the newest queue item.
+    pub queue_pointer_draft: String,
+    pub queue_pointer_draft_images: Vec<ImagePart>,
+    pub queue_pointer_draft_text_pastes: Vec<String>,
     /// Images pasted (Ctrl+V) and waiting to be sent with the next message.
     /// Each entry is paired 1-to-1 with an `[Image #N]` chip inside
     /// [`App::input`]; the chip's `#N` is `index + 1` after
@@ -729,16 +773,18 @@ pub struct App {
     /// the matching chip in the input is just a short label so the input
     /// box stays compact. Order matches the chip numbering.
     pub pending_text_pastes: Vec<String>,
-    /// Session-affine compact outbox. Pending items are never appended to the
-    /// transcript; the footer shows counts and ↑ recalls the newest item.
-    /// Every staged message waits for the running round to finish naturally
-    /// before starting a new one (next-round only).
+    /// Session-affine compact outbox — the **next-round queue**. Pending items
+    /// are never appended to the transcript; the queue bar shows counts and
+    /// ↑/↓ walk a non-destructive pointer over the items (see
+    /// [`Self::queue_pointer`]). Every staged message waits for the running
+    /// round to finish naturally before starting a new one (next-round only).
     pub pending_dispatch: VecDeque<QueuedDispatch>,
     /// Sessions whose outbox is hard-blocked by the user. While a session is
     /// blocked, no queued message auto-drains — not even after its round
     /// reaches natural completion and the harness goes idle. The queue modal
     /// blocks a session on open (so items can be managed safely) and resumes
-    /// on close; `F3` toggles the block from the bar without opening the modal.
+    /// on close; `Ctrl+P` toggles the block from the bar without opening
+    /// the modal.
     /// Independent of the transient "paused" coloring: a session can be idle
     /// (visibly paused) without being blocked, and vice versa.
     pub queue_blocked_sessions: std::collections::HashSet<String>,
@@ -1384,14 +1430,15 @@ impl App {
 
     /// Is this session's outbox hard-blocked by the user? While blocked, no
     /// queued message auto-drains — not even after natural completion + idle.
-    /// The queue modal blocks on open and resumes on close; `F3` toggles from
+    /// The queue modal blocks on open and resumes on close; `Ctrl+P` toggles
+    /// from
     /// the bar. A no-op (and leaves the block off) for a session with no
     /// staged items.
     pub fn is_queue_blocked(&self, session_id: &str) -> bool {
         self.queue_blocked_sessions.contains(session_id)
     }
 
-    /// Toggle the user block on the viewed session's outbox. Mirrors `F3` /
+    /// Toggle the user block on the viewed session's outbox. Mirrors `Ctrl+P` /
     /// the queue modal's block control. Returns the new state so the caller
     /// can reflect it in the render snapshot.
     pub fn toggle_queue_block(&mut self, session_id: &str) -> bool {
@@ -1413,18 +1460,16 @@ impl App {
 
     /// Force the block off. Used when the queue modal closes (auto-resume), so
     /// the outbox returns to its normal auto-drain behavior the moment the
-    /// user stops managing it — unless they explicitly blocked it with `F3`
-    /// outside the modal (that toggle is honored because the modal close path
-    /// only resumes what its own open path blocked).
+    /// user stops managing it — unless they explicitly blocked it with
+    /// `Ctrl+P` outside the modal (that toggle is honored because the modal
+    /// close path only resumes what its own open path blocked).
     pub fn resume_queue(&mut self, session_id: &str) {
         self.queue_blocked_sessions.remove(session_id);
     }
 
     /// Remove the viewed session's outbox item at display index `idx`. Used by
-    /// the queue modal's `D` delete. In-flight steers (`Inserting`) are
-    /// excluded from the selectable range — they are already with the running
-    /// round, so the outbox can no longer drop them. Returns the removed
-    /// dispatch (mostly for tests).
+    /// the queue modal's `D` delete. Returns the removed dispatch (mostly for
+    /// tests).
     pub fn remove_queued_at(&mut self, session_id: &str, idx: usize) -> Option<QueuedDispatch> {
         let position = self
             .pending_dispatch
@@ -1443,9 +1488,7 @@ impl App {
     /// / next to pop, `delta > 0` toward the tail). Other items in the slice
     /// shift to make room (a true reorder, not a swap). Clamped at the slice
     /// boundaries so an item can never escape into another session's region
-    /// of the deque. In-flight steers (`Inserting`) are excluded from the
-    /// slice entirely: they are already with the running round, so display
-    /// order no longer affects them.
+    /// of the deque.
     pub fn move_queued(&mut self, session_id: &str, idx: usize, delta: i32) {
         // Collect the positions (into the global deque) of this session's
         // Waiting items in display order — the selectable range.
@@ -1484,16 +1527,41 @@ impl App {
     }
 
     /// A staged next-round item failed to start its round (e.g. no provider
-    /// configured). Mark it `Waiting` again so the user can recall it or let
-    /// it auto-retry once the blocker clears. Replaces the old
-    /// insert-specific `promote_to_next_round` / `cancel_failed` paths.
-    pub fn requeue_dispatch(&mut self, session_id: &str, input_id: &str) {
+    /// configured), or a mid-round insert's round ended before admission.
+    ///
+    /// For an item still in the outbox this just flips it back to `Waiting`.
+    /// For a **transcript-owned insert** (`Ctrl+O` handed back by
+    /// `UserInputUnavailable`) there is no outbox item — the content lives in
+    /// the transcript entry — so the caller stages one here (`text` /
+    /// attachments from the held entry) under the same id: the queue then
+    /// owns its auto-dispatch / pointer-recall lifecycle, and the entry is
+    /// dropped from the outbox when its round starts (`NextRoundStarted`),
+    /// exactly like a busy-Enter item. Pushes to the back (FIFO among
+    /// handed-back inserts; they left the running round in send order).
+    pub fn requeue_dispatch(
+        &mut self,
+        session_id: &str,
+        input_id: &str,
+        held: Option<(String, Vec<ImagePart>, Vec<String>)>,
+    ) {
         if let Some(item) = self
             .pending_dispatch
             .iter_mut()
             .find(|item| item.session_id == session_id && item.id == input_id)
         {
             item.state = QueuedDispatchState::Waiting;
+            return;
+        }
+        if let Some((text, images, text_pastes)) = held {
+            self.pending_dispatch.push_back(QueuedDispatch {
+                id: input_id.to_string(),
+                session_id: session_id.to_string(),
+                state: QueuedDispatchState::Waiting,
+                text,
+                queued_at_ms: crate::event_loop::now_epoch_ms(),
+                images,
+                text_pastes,
+            });
         }
     }
 
@@ -1524,9 +1592,7 @@ impl App {
     /// Used by the queue modal's `Enter` re-edit, which keys off the `↑/↓`
     /// selection rather than always targeting the newest — so a mid-queue item
     /// can be pulled back to the composer too. The item is removed from the
-    /// outbox, exactly like [`Self::recall_queued`]. In-flight steers
-    /// (`Inserting`) are excluded from the selectable range, matching the
-    /// modal's row list.
+    /// outbox, exactly like [`Self::recall_queued`].
     pub fn recall_queued_at(&mut self, session_id: &str, idx: usize) -> Option<RecallQueued> {
         let position = self
             .pending_dispatch
@@ -1542,34 +1608,213 @@ impl App {
             .map(RecallQueued::Restored)
     }
 
+    /// Recall an outbox item back into the composer. A user gesture (queue
+    /// recall / modal re-edit), so it replaces whatever the composer holds.
     pub fn restore_dispatch(&mut self, dispatch: QueuedDispatch) {
-        self.adopt_as_draft(dispatch.text, dispatch.images, dispatch.text_pastes);
+        self.adopt_as_draft(
+            dispatch.text,
+            dispatch.images,
+            dispatch.text_pastes,
+            DraftAdoption::Replace,
+        );
     }
 
-    /// Stage a composed message as an in-flight mid-round steer (`F4`). The
-    /// item is pushed to the back of the outbox marked [`QueuedDispatchState::Inserting`]
-    /// so it stays visible in the bar/modal (as `steer›`) until the harness
-    /// reports admission (`UserInputInserted`) or hands it back
-    /// (`UserInputUnavailable` → [`Self::requeue_dispatch`]). Returns the new
-    /// item's id.
-    pub fn stage_insert_dispatch(
-        &mut self,
-        session_id: &str,
-        text: String,
-        images: Vec<ImagePart>,
-        text_pastes: Vec<String>,
-    ) -> String {
-        let id = uuid::Uuid::new_v4().to_string();
-        self.pending_dispatch.push_back(QueuedDispatch {
-            id: id.clone(),
-            session_id: session_id.to_string(),
-            state: QueuedDispatchState::Inserting,
-            text,
-            queued_at_ms: crate::event_loop::now_epoch_ms(),
-            images,
-            text_pastes,
+    // ── Queue pointer navigation (↑/↓ over the outbox) ──────────────────────
+    //
+    // The pointer is the queue's edit surface: ↑/↓ walk it without removing
+    // anything (the outbox is a list, not a stack), and Enter commits the
+    // composer's content back into the pointed-at item — in place, so the
+    // queue's length and order survive the edit. This replaces the older
+    // destructive `recall_queued` gesture at the top level (the modal's
+    // explicit pull-to-composer re-edit keeps that behavior, where removing
+    // the item is the point).
+
+    /// The ids of this session's waiting (next-round) items, front-of-queue
+    /// first. `Dispatching` items are excluded: their round has already
+    /// started, so editing them would be a lie.
+    fn queue_pointer_ids(&self, session_id: &str) -> Vec<String> {
+        self.pending_dispatch
+            .iter()
+            .filter(|item| {
+                item.session_id == session_id && item.state == QueuedDispatchState::Waiting
+            })
+            .map(|item| item.id.clone())
+            .collect()
+    }
+
+    /// Resolve [`Self::queue_pointer`] to the live item it points at, if the
+    /// target still exists and still belongs to this session. A vanished
+    /// target (dispatched, deleted, recalled elsewhere) is `None` — callers
+    /// treat that as "the pointer is empty".
+    pub fn queue_pointer_target(&self, session_id: &str) -> Option<&QueuedDispatch> {
+        let id = self.queue_pointer.as_deref()?;
+        self.pending_dispatch
+            .iter()
+            .find(|item| item.session_id == session_id && item.id == id)
+    }
+
+    /// Load a queue item's content into the composer as the pointer's
+    /// projection (text + attachments, cursor at the end, completion latch
+    /// held). Shared by the arm and the step so every landing is identical.
+    fn load_queue_pointer_row(&mut self, dispatch: &QueuedDispatch) {
+        self.input = dispatch.text.clone();
+        self.pending_images = dispatch.images.clone();
+        self.pending_text_pastes = dispatch.text_pastes.clone();
+        self.set_cursor_end();
+        self.suggestion_index = None;
+        self.completion_dismissed = true;
+    }
+
+    /// Stash the live draft into the pointer's draft slots (the counterpart
+    /// of the history pointer's stash), so walking back out restores exactly
+    /// what the user was composing.
+    fn stash_queue_pointer_draft(&mut self) {
+        self.queue_pointer_draft = std::mem::take(&mut self.input);
+        self.queue_pointer_draft_images = std::mem::take(&mut self.pending_images);
+        self.queue_pointer_draft_text_pastes = std::mem::take(&mut self.pending_text_pastes);
+    }
+
+    /// `↑` from the draft (or a history row): arm the queue pointer at the
+    /// **newest** waiting item (the back of the deque) and project it into the
+    /// composer. Returns `false` when the session's queue has no waiting
+    /// items — the caller then hands ↑ on to input history.
+    pub fn queue_pointer_prev(&mut self, session_id: &str) -> bool {
+        let ids = self.queue_pointer_ids(session_id);
+        let Some(newest) = ids.last() else {
+            return false;
+        };
+        if self.queue_pointer.is_none() {
+            // Leaving the draft (or a history row): stash what the composer
+            // held so the exit path can restore it, and leave history mode —
+            // the pointer owns the composer now.
+            self.history_index = None;
+            self.stash_queue_pointer_draft();
+        }
+        // Already armed → step toward the front (older). `pos == 0` is the
+        // oldest item: stay there (clamped) rather than jumping back to the
+        // newest. A vanished target (not found in `ids`) resets to the
+        // newest, the sensible default when the world changed under us.
+        let next_id = match self
+            .queue_pointer
+            .as_deref()
+            .and_then(|cur| ids.iter().position(|id| id == cur))
+        {
+            Some(pos) if pos > 0 => ids[pos - 1].clone(),
+            Some(_) => self.queue_pointer.clone().unwrap_or_else(|| newest.clone()),
+            None => newest.clone(),
+        };
+        self.queue_pointer = Some(next_id);
+        if let Some(dispatch) = self.queue_pointer_target(session_id).cloned() {
+            self.load_queue_pointer_row(&dispatch);
+        }
+        true
+    }
+
+    /// `↓` while the pointer is armed: step toward the **newer** items and,
+    /// past the newest, dissolve the pointer and restore the stashed draft.
+    /// Returns `true` whenever the key was consumed by the pointer (stepping
+    /// *or* dissolving); `false` only when the pointer was not armed, so the
+    /// caller falls through to history navigation.
+    pub fn queue_pointer_next(&mut self, session_id: &str) -> bool {
+        let Some(cur) = self.queue_pointer.clone() else {
+            return false;
+        };
+        let ids = self.queue_pointer_ids(session_id);
+        let pos = ids.iter().position(|id| id == &cur);
+        match pos {
+            Some(p) if p + 1 < ids.len() => {
+                self.queue_pointer = Some(ids[p + 1].clone());
+                if let Some(dispatch) = self.queue_pointer_target(session_id).cloned() {
+                    self.load_queue_pointer_row(&dispatch);
+                }
+                true
+            }
+            // Past the newest item (or the target vanished): back to the
+            // draft, exactly as the history pointer restores its stash.
+            _ => self.dissolve_queue_pointer(),
+        }
+    }
+
+    /// Dissolve the pointer and restore the stashed draft. Also the teardown
+    /// path for sends and session switches, so a stale pointer never leaks
+    /// into the next composer state. Returns `true` so callers can treat the
+    /// key as consumed.
+    pub fn dissolve_queue_pointer(&mut self) -> bool {
+        if self.queue_pointer.is_none() {
+            return false;
+        }
+        self.queue_pointer = None;
+        self.input = std::mem::take(&mut self.queue_pointer_draft);
+        self.pending_images = std::mem::take(&mut self.queue_pointer_draft_images);
+        self.pending_text_pastes = std::mem::take(&mut self.queue_pointer_draft_text_pastes);
+        self.set_cursor_end();
+        self.suggestion_index = None;
+        self.completion_dismissed = true;
+        true
+    }
+
+    /// Drop the pointer and its stash **without** restoring the stash into
+    /// the composer. Used when the composer's content is leaving the
+    /// projection for somewhere permanent (an insert entry, a send): the
+    /// content in hand supersedes whatever the stash held, and restoring it
+    /// would clobber what the user is actively acting on. Idempotent.
+    pub fn drop_queue_pointer_without_restore(&mut self) {
+        self.queue_pointer = None;
+        self.queue_pointer_draft.clear();
+        self.queue_pointer_draft_images.clear();
+        self.queue_pointer_draft_text_pastes.clear();
+    }
+
+    /// Commit the composer's current content into the pointed-at queue item,
+    /// **in place** — the queue's length and order are untouched; only the
+    /// item's content changes — and dissolve the pointer (the projection has
+    /// been written back; the content now lives in the item). Returns:
+    ///
+    /// - `Some(())` — the item was updated and the pointer dissolved;
+    /// - `None` — the pointer was not armed, or its target vanished while
+    ///   the user was editing (it shipped, was deleted, or was recalled). In
+    ///   the vanished case the pointer is dissolved **without** restoring
+    ///   the stashed draft, so the user's edited content stays in the
+    ///   composer and the caller sends it as a fresh message — the
+    ///   experience must not dead-end on a race.
+    pub fn commit_queue_pointer(&mut self, session_id: &str) -> Option<()> {
+        let id = self.queue_pointer.clone()?;
+        let text = self.input.clone();
+        let images = self.pending_images.clone();
+        let text_pastes = self.pending_text_pastes.clone();
+        let target = self.pending_dispatch.iter_mut().find(|item| {
+            item.session_id == session_id
+                && item.id == id
+                && item.state == QueuedDispatchState::Waiting
         });
-        id
+        // Either way the pointer is spent; drop its stashed draft too (the
+        // projection either landed in the item, or the composer is about to
+        // ship as a fresh message — the stash is obsolete in both).
+        self.queue_pointer = None;
+        self.queue_pointer_draft.clear();
+        self.queue_pointer_draft_images.clear();
+        self.queue_pointer_draft_text_pastes.clear();
+        match target {
+            Some(item) => {
+                item.text = text;
+                item.images = images;
+                item.text_pastes = text_pastes;
+                Some(())
+            }
+            None => None,
+        }
+    }
+
+    /// Stage a composed message as an in-flight mid-round steer (`Ctrl+O`).
+    ///
+    /// The insert is **transcript-owned** (ADR-0126): it becomes a
+    /// `DeliveryStatus::Queued` entry the moment it is sent and never enters
+    /// the outbox — so this helper only mints the correlation id the loop
+    /// uses to settle that entry when the harness admits it
+    /// (`UserInputInserted`) or hands it back (`UserInputUnavailable` →
+    /// [`Self::requeue_dispatch`]).
+    pub fn new_insert_id(&self) -> String {
+        uuid::Uuid::new_v4().to_string()
     }
 
     /// Adopt `text` (plus its staged attachments) as the new **draft** — the
@@ -1577,9 +1822,14 @@ impl App {
     /// (`history_index = None`). This is the single entry point for every
     /// path that places input into the composer as "the newest unsent input":
     /// the Phase-1 unsend restore, the Ctrl+R history insert, and the queue
-    /// recall. Whatever the draft held before is replaced (that content was
-    /// either sent or superseded), so ↓ past the newest history row later
-    /// restores *this* input, never a stale one.
+    /// recall. With [`DraftAdoption::Replace`], whatever the draft held
+    /// before is replaced (that content was either sent or superseded), so ↓
+    /// past the newest history row later restores *this* input, never a
+    /// stale one.
+    ///
+    /// [`DraftAdoption::OnlyIfIdle`] guards the one path that is not a user
+    /// gesture: the unsend restore arrives asynchronously and must not eat a
+    /// half-typed draft the user was composing while the round ran.
     ///
     /// The staged attachments are stored both in `pending_*` (what ships on
     /// send) and mirrored into the `history_draft_*` slots (what ↓ restores).
@@ -1588,7 +1838,15 @@ impl App {
         text: String,
         images: Vec<ImagePart>,
         text_pastes: Vec<String>,
+        policy: DraftAdoption,
     ) {
+        if policy == DraftAdoption::OnlyIfIdle
+            && (!self.input.is_empty()
+                || !self.pending_images.is_empty()
+                || !self.pending_text_pastes.is_empty())
+        {
+            return;
+        }
         self.history_index = None;
         self.input = text;
         self.set_cursor_end();
@@ -1611,7 +1869,8 @@ impl App {
     /// draft's content is successfully sent: the input has been historicised
     /// (`record_input_history` already recorded it), so it is no longer the
     /// "unsent" slot and must not come back on a later ↓. A Phase-1 unsend
-    /// re-adopts it via [`Self::adopt_as_draft`].
+    /// re-adopts it via [`Self::adopt_as_draft`] with
+    /// [`DraftAdoption::OnlyIfIdle`].
     pub fn clear_history_draft(&mut self) {
         self.history_draft.clear();
         self.history_draft_images.clear();
@@ -1633,6 +1892,14 @@ impl App {
     pub fn on_viewed_session_changed(&mut self) {
         self.history_index = None;
         self.clear_history_draft();
+        // The queue pointer is scoped like the history cursor: its target
+        // belongs to the conversation being left, so a carried pointer would
+        // dangle into the new session's outbox. Dissolve without restoring
+        // (the composer is emptied right below anyway).
+        self.queue_pointer = None;
+        self.queue_pointer_draft.clear();
+        self.queue_pointer_draft_images.clear();
+        self.queue_pointer_draft_text_pastes.clear();
         self.input.clear();
         self.pending_images.clear();
         self.pending_text_pastes.clear();

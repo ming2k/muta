@@ -125,6 +125,9 @@ pub enum ConfigAction {
     Path,
     Get(String),
     Set { key: String, value: String },
+    /// `neenee config check` — validate `config.toml` against the schema:
+    /// hard errors, typo'd keys, and dead legacy spellings.
+    Check,
 }
 
 /// `neenee auth …`
@@ -190,6 +193,16 @@ pub struct CliArgs {
     /// `<dir>/neenee/`. The CLI form of `NEENEE_HOME`; parsed here,
     /// installed once in `main` before any path is resolved.
     pub home: Option<PathBuf>,
+    /// `--config-dir` / `--data-dir` / `--state-dir` / `--cache-dir`
+    /// (ADR-0014 §3 tier 1): per-category overrides for setups where only
+    /// one location must move (e.g. a shared config on NFS, data on a big
+    /// disk). Parsed here, installed with the same one-time pre-parse as
+    /// `--home`; each is the CLI form of its `NEENEE_*_DIR` env var and a
+    /// category-specific flag **wins** over `--home` for that category.
+    pub config_dir: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
+    pub state_dir: Option<PathBuf>,
+    pub cache_dir: Option<PathBuf>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -256,6 +269,11 @@ const CONFIG_SUBS: &[Spec] = &[
         name: "path",
         names: &["path"],
         about: "print the configuration file path",
+    },
+    Spec {
+        name: "check",
+        names: &["check"],
+        about: "validate config.toml: syntax errors, typo'd keys, dead legacy keys",
     },
 ];
 
@@ -527,6 +545,10 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     let mut remote: Option<String> = None;
     let mut token: Option<String> = None;
     let mut home: Option<PathBuf> = None;
+    let mut config_dir: Option<PathBuf> = None;
+    let mut data_dir: Option<PathBuf> = None;
+    let mut state_dir: Option<PathBuf> = None;
+    let mut cache_dir: Option<PathBuf> = None;
     let mut rest: Vec<String> = Vec::new();
 
     let mut iter = args.iter().peekable();
@@ -538,6 +560,19 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
             }
             "--home" => {
                 home = Some(PathBuf::from(flag_value("--home", inline, &mut iter)?));
+            }
+            "--config-dir" => {
+                config_dir =
+                    Some(PathBuf::from(flag_value("--config-dir", inline, &mut iter)?));
+            }
+            "--data-dir" => {
+                data_dir = Some(PathBuf::from(flag_value("--data-dir", inline, &mut iter)?));
+            }
+            "--state-dir" => {
+                state_dir = Some(PathBuf::from(flag_value("--state-dir", inline, &mut iter)?));
+            }
+            "--cache-dir" => {
+                cache_dir = Some(PathBuf::from(flag_value("--cache-dir", inline, &mut iter)?));
             }
             "--autopilot" | "--yolo" | "-y" => autopilot = true,
             "--interactive" | "-i" => interactive = true,
@@ -582,6 +617,10 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
         remote: remote.clone(),
         token: token.clone(),
         home: home.clone(),
+        config_dir: config_dir.clone(),
+        data_dir: data_dir.clone(),
+        state_dir: state_dir.clone(),
+        cache_dir: cache_dir.clone(),
     };
     let ok = |mode| Ok(base(mode));
 
@@ -789,6 +828,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
             match extra_str.as_slice() {
                 [] | ["list"] | ["show"] => Mode::Config(ConfigAction::List),
                 ["path"] => Mode::Config(ConfigAction::Path),
+                ["check"] => Mode::Config(ConfigAction::Check),
                 ["get", key] => Mode::Config(ConfigAction::Get((*key).to_string())),
                 ["set", key, value] => Mode::Config(ConfigAction::Set {
                     key: (*key).to_string(),

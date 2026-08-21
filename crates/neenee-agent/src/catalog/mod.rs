@@ -25,6 +25,7 @@ pub use picker::build_picker_state;
 use neenee_contracts::catalog::ProviderEntry;
 use neenee_persistence::config::{Config, Credentials, DiscoveryCache};
 use neenee_persistence::instances::Instances;
+use neenee_persistence::route_settings::RouteSettingsStore;
 
 #[cfg(test)]
 mod tests;
@@ -34,6 +35,7 @@ mod tests;
 pub struct Stores {
     pub instances: Instances,
     pub cache: DiscoveryCache,
+    pub routes: RouteSettingsStore,
     pub creds: Credentials,
 }
 
@@ -42,6 +44,7 @@ impl Stores {
         Self {
             instances: Instances::load(),
             cache: DiscoveryCache::load(),
+            routes: RouteSettingsStore::load(),
             creds: Credentials::load(),
         }
     }
@@ -63,7 +66,12 @@ pub fn effective_default_provider_id(config: &Config, stores: &Stores) -> String
 
 pub fn build_catalog() -> Vec<ProviderEntry> {
     let stores = Stores::load();
-    derive_entries(&stores.instances, &stores.cache, &stores.creds)
+    derive_entries(
+        &stores.instances,
+        &stores.cache,
+        &stores.routes,
+        &stores.creds,
+    )
 }
 
 pub fn build_provider_for(
@@ -80,9 +88,14 @@ pub fn build_provider_for_model(
     session_id: Option<&str>,
 ) -> Option<std::sync::Arc<dyn neenee_contracts::Provider>> {
     let stores = Stores::load();
-    let entry = derive_entries(&stores.instances, &stores.cache, &stores.creds)
-        .into_iter()
-        .find(|e| e.id == provider_id)?;
+    let entry = derive_entries(
+        &stores.instances,
+        &stores.cache,
+        &stores.routes,
+        &stores.creds,
+    )
+    .into_iter()
+    .find(|e| e.id == provider_id)?;
     let wanted = model_id.or(config.default_model.as_deref());
     let channel = wanted
         .and_then(|m| entry.channel_for_model(m))

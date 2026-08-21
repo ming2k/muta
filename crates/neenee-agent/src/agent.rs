@@ -226,7 +226,7 @@ pub struct Agent {
     hard_stop_turns: Arc<std::sync::Mutex<usize>>,
     /// Advanced pre-dispatch doom-loop guard configuration. Default
     /// **disabled** ([`neenee_contracts::DoomGuardConfig::default`]); seeded from
-    /// `[principal.nudge]` in `config.toml` and forced to
+    /// `[principal.doom_guard]` in `config.toml` and forced to
     /// [`neenee_contracts::DoomGuardConfig::disabled`] for envoys and the review
     /// diagnostic. Held behind an `Arc<RwLock>` because principal-profile
     /// overlays can replace the configuration atomically; the per-round guard
@@ -1146,7 +1146,7 @@ impl Agent {
     /// reconstructs its per-round guard from the new settings; the current
     /// round, if any, keeps its already-built guard state.
     ///
-    /// Wired from `[principal.nudge]` in `config.toml` at startup and forced to
+    /// Wired from `[principal.doom_guard]` in `config.toml` at startup and forced to
     /// [`neenee_contracts::DoomGuardConfig::disabled`] on envoys and the review
     /// diagnostic so they run unobstructed regardless of user settings.
     pub fn set_doom_guard_config(&self, config: neenee_contracts::DoomGuardConfig) {

@@ -53,6 +53,16 @@ pub fn round_response(session_id: &str, event: RoundEvent) -> AgentResponse {
     }
 }
 
+/// Wall-clock now in Unix-epoch milliseconds. The timestamp source for
+/// round-interrupt records (C11): it must be a payload field because event-log
+/// compaction drops envelope timestamps.
+pub(crate) fn unix_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 pub struct ProxyProvider {
     pub holder: Arc<RwLock<Arc<dyn Provider>>>,
     /// Whether `/debug trace` is armed. Read on every call so the
@@ -357,6 +367,38 @@ fn write_capture(capture: &PendingCapture, items: &[serde_json::Value]) {
     if let Err(error) = neenee_persistence::fsutil::atomic_write_bytes(&file, &bytes) {
         tracing::warn!(%error, file = %file.display(), "network capture write failed");
     }
+    prune_capture_dir(&capture.dir);
+}
+
+/// How many capture files one directory keeps. A capture is the full request
+/// context of one round-trip — on a long session each file is as big as the
+/// context itself, so an armed `/debug trace` writing unbounded captures
+/// grows the data dir faster than everything else combined. Debug data is
+/// disposable by definition; the newest [`MAX_CAPTURE_FILES`] are plenty to
+/// diagnose a provider issue.
+const MAX_CAPTURE_FILES: usize = 50;
+
+/// Delete the oldest captures beyond [`MAX_CAPTURE_FILES`]. Names sort
+/// chronologically (timestamp first), so a name sort is an age sort.
+fn prune_capture_dir(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            (name.ends_with(".json") && e.file_type().is_ok_and(|t| !t.is_dir())).then_some(name)
+        })
+        .collect();
+    if names.len() <= MAX_CAPTURE_FILES {
+        return;
+    }
+    names.sort();
+    let excess = names.len() - MAX_CAPTURE_FILES;
+    for name in names.into_iter().take(excess) {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
 }
 
 /// Lowercase alnum/hyphen filename component, empty -> `"anon"`.
@@ -562,6 +604,13 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         previous,
     } = context.lifecycle.begin().await;
     if let Some(previous) = previous {
+        // A newer round is replacing the still-live predecessor: park the
+        // superseded reason *before* cancelling so the predecessor's tail can
+        // label its own unwind (C11). Without this the stale round's
+        // generation-guarded cleanup is silent and leaves no trace.
+        context
+            .lifecycle
+            .record_interrupt(neenee_contracts::RoundInterruptReason::Superseded);
         context.agent.reject_pending_permissions();
         context.agent.reject_pending_user_questions();
         context.agent.reject_pending_inputs();
@@ -581,6 +630,9 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         &context.session_id,
         RoundEvent::Activity("starting request".to_string()),
     ));
+    // The spawned tail records the round-interrupt into its own store handle
+    // (C11); `RoundContext` consumes `context.session`, so keep an extra Arc.
+    let session_for_tail = Arc::clone(&context.session);
 
     tokio::spawn(async move {
         // Supervised round task: the tail below (close_user_input_round →
@@ -637,6 +689,15 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
             ));
         }
         let is_current = context.lifecycle.is_current(generation);
+        // Consume the reason parked by whichever stop site cancelled this
+        // round (C11). Taken before the match so every interrupted arm —
+        // including the generation-suppressed one below — sees it.
+        let interrupt_reason = context.lifecycle.take_interrupt();
+        let interrupt_record = interrupt_reason.map(|reason| neenee_contracts::RoundInterrupt {
+            reason,
+            at_ms: unix_epoch_ms(),
+            round: result.as_ref().err().map(|_| context.agent.round_count()),
+        });
         match result {
             Ok(_) => {}
             Err(HarnessError::Interrupted) if is_current => {
@@ -653,6 +714,25 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
             }
             Err(_) => {}
         }
+        if let Some(record) = interrupt_record {
+            // One record + one live event per stopped round, on *every*
+            // interrupted path: the visible `[Interrupted]` arm above, the
+            // generation-suppressed supersede arm (the silent `Err(_) => {}`
+            // above — previously no trace at all), and the phase-1 unsend
+            // (which returned `Ok(())` after emitting `UnsentInput`). The
+            // record is durable projection state; the live event lets every
+            // attached frontend render the stop with its reason immediately.
+            if let Err(error) = session_for_tail
+                .record_round_interrupt(record.clone())
+                .await
+            {
+                tracing::warn!(?error, "could not persist round interrupt record");
+            }
+            let _ = context.tx.send(round_response(
+                &context.session_id,
+                RoundEvent::RoundInterrupted(record),
+            ));
+        }
         if context.lifecycle.finish(generation).await {
             send_harness_state(
                 &context.tx,
@@ -662,6 +742,32 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
             );
         }
     });
+}
+
+/// Phase-1 unsend guard: is this interrupted round reversible at the
+/// conversation layer?
+///
+/// The boundary is **the first observed content delta**, not the first
+/// response packet on the wire. A round is unsendable exactly while it has
+/// produced no observable commitment of its own — no streamed
+/// text/reasoning delta (`streamed_text`) and no dispatched tool call
+/// (`tool_activity`) — because only then can the harness restore the
+/// conversation to its pre-send state without discarding committed content
+/// or tool side effects. Both sentinels are monotonic across the round
+/// (never reset between turns), so a guard that held for turn 1 continues
+/// to hold through turns 2+; the moment either flips, the window closes
+/// permanently.
+///
+/// Kept as a free function of raw sentinel values (not `&AtomicBool`) so
+/// the invariant is directly unit-testable — see `phase1_guard_tests`.
+/// Generic over the success payload so the guard is decoupled from what a
+/// successful round carries (currently `RoundOutcome`).
+fn is_phase1_unsend<T>(
+    result: &Result<T, HarnessError>,
+    streamed_text: bool,
+    tool_activity: bool,
+) -> bool {
+    matches!(result, Err(HarnessError::Interrupted)) && !streamed_text && !tool_activity
 }
 
 pub async fn execute_round(
@@ -980,28 +1086,15 @@ pub async fn execute_round(
             _ = tokio::time::sleep(std::time::Duration::from_millis(delay_ms)) => {}
         }
     };
-    // Phase-1 unsend: if the user interrupted before any model output reached
-    // the client (no streamed text) and no tool has executed this round, the
-    // round is reversible at the conversation layer. Pop the user message back
-    // out of the context, revert the session store to its pre-round state, and
-    // hand the prompt back to the TUI for re-editing. Returning `Ok(false)`
-    // (rather than propagating `Err(Interrupted)`) keeps
-    // `start_interactive_round`'s interrupt handler from emitting the generic
-    // "... [Interrupted]" notice — the unsend is the user's intent here.
-    //
-    // Billing caveat (see docs/explanation/interrupt-semantics.md): the
-    // network request was already on the wire, so the provider may still bill
-    // the input tokens of the cancelled request. The unsend only guarantees a
-    // clean conversation context and zero output tokens — it cannot un-send
-    // the packet.
-    if matches!(result, Err(HarnessError::Interrupted))
-        && !streamed_text.load(Ordering::SeqCst)
-        && !tool_activity.load(Ordering::SeqCst)
-    {
+    if is_phase1_unsend(
+        &result,
+        streamed_text.load(Ordering::SeqCst),
+        tool_activity.load(Ordering::SeqCst),
+    ) {
         // The user message is the last entry in `round_history` (pushed before
-        // the streaming round). Only a non-hidden round is unsentable: hidden
-        // control prompts are harness-
-        // internal and should not be surfaced as editable user input.
+        // the streaming round). Only a non-hidden round is unsendable: hidden
+        // control prompts are harness-internal and should not be surfaced as
+        // editable user input.
         if round_history
             .last()
             .is_some_and(|m| m.role == Role::User && !input.hidden)
@@ -1471,23 +1564,51 @@ pub async fn run_schedule_tick(
                         continue;
                     }
                 };
+                // Deliver first, mutate second (ADR-0125): if the driver's
+                // channel is gone (session suspended/killed/daemon draining),
+                // the job must stay armed on disk instead of silently
+                // consuming its fire. A dropped send used to advance
+                // `next_fire` — and a dropped once-job is unrecoverable.
+                if tx
+                    .send(AgentRequest::Chat {
+                        text: job.prompt.clone(),
+                        images: Vec::new(),
+                        sent_at_ms: None,
+                    })
+                    .is_err()
+                {
+                    tracing::warn!(
+                        job = %job.id,
+                        "schedule dispatch failed (session harness gone); job stays armed"
+                    );
+                    keep.push(job);
+                    continue;
+                }
                 job.last_fire = Some(now);
                 job.next_fire = next;
-                let _ = tx.send(AgentRequest::Chat {
-                    text: job.prompt.clone(),
-                    images: Vec::new(),
-                    sent_at_ms: None,
-                });
                 keep.push(job);
                 dispatched += 1;
             }
             Schedule::Once { .. } => {
-                // One-shot: fire and drop.
-                let _ = tx.send(AgentRequest::Chat {
-                    text: job.prompt.clone(),
-                    images: Vec::new(),
-                    sent_at_ms: None,
-                });
+                // One-shot: deliver first, drop second — same ordering
+                // invariant as the cron arm. An undeliverable once-job
+                // stays armed for the next harness (a re-attached session
+                // or a rehosting daemon) instead of vanishing.
+                if tx
+                    .send(AgentRequest::Chat {
+                        text: job.prompt.clone(),
+                        images: Vec::new(),
+                        sent_at_ms: None,
+                    })
+                    .is_err()
+                {
+                    tracing::warn!(
+                        job = %job.id,
+                        "schedule dispatch failed (session harness gone); once-job stays armed"
+                    );
+                    keep.push(job);
+                    continue;
+                }
                 tracing::info!(job = %job.id, "scheduled once-job fired and removed");
                 dispatched += 1;
             }
@@ -1506,22 +1627,41 @@ pub async fn run_schedule_tick(
 /// dispatching each prompt as a normal `AgentRequest::Chat` round through `tx`.
 /// Drives both recurring `/schedule <cron>` jobs and one-shot
 /// `/schedule <countdown|absolute-time>` jobs.
+///
+/// The loop runs until `teardown` fires (or forever when `None` is passed —
+/// the process-lifetime shape a single-session frontend uses). The daemon
+/// passes the session's own cancellation token so suspension/kill stops the
+/// tick: previously the task leaked past teardown and kept ticking against a
+/// dead channel every 30s for as long as the daemon lived.
 pub fn start_schedule_scheduler(
     session: Arc<SessionStore>,
     tx: mpsc::UnboundedSender<AgentRequest>,
     tick_interval: std::time::Duration,
+    teardown: Option<tokio_util::sync::CancellationToken>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(tick_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            ticker.tick().await;
+            tokio::select! {
+                _ = ticker.tick() => {}
+                _ = teardown_cancelled(&teardown) => break,
+            }
             let now = chrono::Utc::now();
             if let Err(err) = run_schedule_tick(&session, &tx, now).await {
                 tracing::warn!("schedule scheduler tick failed: {err}");
             }
         }
     })
+}
+
+/// Resolves the optional teardown future for the tick-loop `select!` arm.
+/// `None` means "run for the process lifetime": a future that never resolves.
+async fn teardown_cancelled(teardown: &Option<tokio_util::sync::CancellationToken>) {
+    match teardown {
+        Some(token) => token.cancelled().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Backoff schedule (ms) for supervised scheduler restarts after a panic.
@@ -1543,6 +1683,7 @@ pub fn start_supervised_schedule_scheduler(
     session: Arc<SessionStore>,
     tx: mpsc::UnboundedSender<AgentRequest>,
     tick_interval: std::time::Duration,
+    teardown: Option<tokio_util::sync::CancellationToken>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let session = std::sync::Arc::new(session);
@@ -1550,7 +1691,7 @@ pub fn start_supervised_schedule_scheduler(
         let mut attempt = 0usize;
         loop {
             let outcome = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
-                tick_loop(&session, &tx, tick_interval),
+                tick_loop(&session, &tx, tick_interval, teardown.clone()),
             ))
             .await;
             if outcome.is_ok() {
@@ -1571,23 +1712,30 @@ pub fn start_supervised_schedule_scheduler(
                 backoff_ms,
                 "schedule scheduler panicked; restarting with backoff"
             );
-            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}
+                _ = teardown_cancelled(&teardown) => return,
+            }
         }
     })
 }
 
 /// The scheduler's tick loop, factored out so the supervised wrapper can
-/// re-enter it after a panic. Only returns on cancellation; any other exit
-/// is a panic unwinding through it.
+/// re-enter it after a panic. Returns on teardown-cancellation; any other
+/// exit is a panic unwinding through it.
 async fn tick_loop(
     session: &Arc<SessionStore>,
     tx: &Arc<mpsc::UnboundedSender<AgentRequest>>,
     tick_interval: std::time::Duration,
+    teardown: Option<tokio_util::sync::CancellationToken>,
 ) {
     let mut ticker = tokio::time::interval(tick_interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        ticker.tick().await;
+        tokio::select! {
+            _ = ticker.tick() => {}
+            _ = teardown_cancelled(&teardown) => return,
+        }
         let now = chrono::Utc::now();
         if let Err(err) = run_schedule_tick(session, tx, now).await {
             tracing::warn!("schedule scheduler tick failed: {err}");
@@ -1715,6 +1863,70 @@ mod schedule_tests {
         let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
         assert_eq!(dispatched, 0);
     }
+
+    /// Regression (ADR-0125): dispatch is deliver-first, mutate-second. A
+    /// dead driver channel (session suspended/killed, daemon draining) used
+    /// to consume the fire anyway — the cron advanced its `next_fire` and
+    /// the once-job was dropped outright, so the prompt silently never ran
+    /// and no later harness could recover it.
+    #[tokio::test]
+    async fn tick_keeps_jobs_armed_when_the_driver_channel_is_dead() {
+        let session = fresh_session().await;
+        let now = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let once = ScheduledJob::once(
+            "once1".into(),
+            now,
+            "unrecoverable if dropped".into(),
+            chrono::Utc::now(),
+        );
+        session
+            .set_scheduled_jobs(vec![cron_job("* * * * *", "run tests", now), once])
+            .await
+            .unwrap();
+        // Drop the receiver: the sender reports a closed channel, exactly
+        // like a torn-down session harness whose driver is gone.
+        let (tx, rx) = mpsc::unbounded_channel::<AgentRequest>();
+        drop(rx);
+
+        let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
+        assert_eq!(dispatched, 0, "nothing was delivered");
+        // Both jobs stay armed with their original due time: the cron did
+        // not advance and the once-job was not consumed.
+        let after = session.scheduled_jobs().await;
+        assert_eq!(after.len(), 2, "both jobs must stay armed");
+        for job in &after {
+            assert!(
+                job.next_fire <= now,
+                "job {} must keep its original due time",
+                job.id
+            );
+        }
+        assert!(
+            after.iter().all(|j| j.last_fire.is_none()),
+            "no fire may be recorded for an undelivered prompt"
+        );
+    }
+
+    /// The scheduler loop stops when the session's teardown token fires —
+    /// the leak this closes: an orphaned tick task kept touching the store
+    /// every 30s for the daemon's remaining lifetime after suspension.
+    #[tokio::test]
+    async fn scheduler_stops_on_teardown() {
+        let session = fresh_session().await;
+        let (tx, _rx) = mpsc::unbounded_channel::<AgentRequest>();
+        let teardown = tokio_util::sync::CancellationToken::new();
+        let handle = start_schedule_scheduler(
+            Arc::new(session),
+            tx,
+            std::time::Duration::from_millis(10),
+            Some(teardown.clone()),
+        );
+        assert!(!handle.is_finished());
+        teardown.cancel();
+        // The loop observes the token on its next select arm (≤ a tick).
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(handle.is_finished());
+    }
 }
 
 #[cfg(test)]
@@ -1817,5 +2029,101 @@ mod title_tests {
         let (title, manual) = session.title().await;
         assert_eq!(title.as_deref(), Some("My own title"));
         assert!(manual, "manual flag survives");
+    }
+}
+
+#[cfg(test)]
+mod phase1_guard_tests {
+    use super::is_phase1_unsend;
+    use neenee_contracts::HarnessError;
+
+    const OK: Result<(), HarnessError> = Ok(());
+    const INTERRUPTED: Result<(), HarnessError> = Err(HarnessError::Interrupted);
+
+    /// Only an interrupt opens the window at all: any other outcome (success
+    /// or a provider error) is not an unsend, regardless of the sentinels.
+    #[test]
+    fn non_interrupt_outcomes_never_unsend() {
+        assert!(!is_phase1_unsend(&OK, false, false));
+        let other: Result<(), HarnessError> = Err(HarnessError::Other("boom".into()));
+        assert!(!is_phase1_unsend(&other, false, false));
+        let retryable: Result<(), HarnessError> = Err(HarnessError::Retryable {
+            message: "overload".into(),
+            retry_after_ms: None,
+        });
+        assert!(!is_phase1_unsend(&retryable, false, false));
+    }
+
+    /// The happy path: interrupted with neither sentinel flipped — the
+    /// request was in flight, no content delta ever reached the client.
+    #[test]
+    fn interrupted_before_any_output_unsends() {
+        assert!(is_phase1_unsend(&INTERRUPTED, false, false));
+    }
+
+    /// The first streamed content delta closes the window: once the client
+    /// has observed model output, the round is no longer conversation-
+    /// reversible and must fall through to the Phase-2 drop path instead.
+    #[test]
+    fn first_content_delta_closes_the_window() {
+        assert!(!is_phase1_unsend(&INTERRUPTED, true, false));
+    }
+
+    /// A dispatched tool call closes the window even with no streamed text:
+    /// tool execution is a real-world side effect the unsend cannot undo.
+    #[test]
+    fn any_tool_activity_closes_the_window() {
+        assert!(!is_phase1_unsend(&INTERRUPTED, false, true));
+        assert!(!is_phase1_unsend(&INTERRUPTED, true, true));
+    }
+}
+
+#[cfg(test)]
+mod capture_prune_tests {
+    use super::*;
+
+    /// An armed `/debug trace` writes one full-context capture per round-trip
+    /// and nothing ever removed them — on a long session the capture dir grew
+    /// faster than every other data path combined. Retention keeps the newest
+    /// [`MAX_CAPTURE_FILES`] and deletes older ones in age order.
+    #[test]
+    fn capture_prune_keeps_newest_max_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for i in 0..(MAX_CAPTURE_FILES + 5) {
+            let name = format!("20260101-0000{i:02}.000_0001_anon_m.json");
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        // A foreign file must not count toward or be affected by retention.
+        std::fs::write(root.join("notes.txt"), b"x").unwrap();
+
+        prune_capture_dir(root);
+
+        let mut remaining: Vec<String> = std::fs::read_dir(root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        remaining.sort();
+        assert_eq!(remaining.len(), MAX_CAPTURE_FILES + 1);
+        assert!(remaining.contains(&"notes.txt".to_string()));
+        // The five oldest captures are gone; the newest survives.
+        assert!(!remaining.contains(&"20260101-000000.000_0001_anon_m.json".to_string()));
+        assert!(remaining.contains(&format!(
+            "20260101-0000{}.000_0001_anon_m.json",
+            MAX_CAPTURE_FILES + 4
+        )));
+    }
+
+    #[test]
+    fn capture_prune_is_noop_at_or_below_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("20260101-000000.000_0001_anon_m.json"),
+            b"x",
+        )
+        .unwrap();
+        prune_capture_dir(dir.path());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

@@ -18,6 +18,14 @@
 //! - **Session switch** (`supersede` + `cancel_current`): the generation bump
 //!   invalidates the in-flight round, so its generation-guarded cleanup is
 //!   suppressed and the switch handler owns the terminal events.
+//!
+//! Both paths record *why* they stopped (C11): [`Self::record_interrupt`]
+//! parks a reason on the lifecycle the moment the cancellation is requested,
+//! and the unwinding round task reads it back via [`Self::take_interrupt`]
+//! when it emits its terminal cleanup. This is what lets one
+//! `HarnessError::Interrupted` unwind render as "Esc Esc" versus "new
+//! message" versus "process exited" without threading a reason through every
+//! producer of the error.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock as AsyncRwLock;
@@ -31,6 +39,11 @@ use tokio_util::sync::CancellationToken;
 pub struct RoundLifecycle {
     token_slot: AsyncRwLock<Option<CancellationToken>>,
     generation: AtomicU64,
+    /// The reason the current/most-recent round was stopped, parked by the
+    /// stop site ([`Self::record_interrupt`]) and consumed by the unwinding
+    /// round task ([`Self::take_interrupt`]). `Mutex` (not `RwLock`) because
+    /// [`Self::take_interrupt`] mutates.
+    interrupt_reason: std::sync::Mutex<Option<neenee_contracts::RoundInterruptReason>>,
 }
 
 /// The result of [`RoundLifecycle::begin`].
@@ -99,6 +112,28 @@ impl RoundLifecycle {
         } else {
             false
         }
+    }
+
+    /// Park the reason an in-flight round is being stopped (C11). Called by
+    /// the stop site at the same moment it requests the cancellation, so the
+    /// unwinding round task can label its own terminal event without a
+    /// reason ever being threaded through the error type. Last writer wins:
+    /// a supersede that follows a plain interrupt re-labels the same unwind.
+    pub fn record_interrupt(&self, reason: neenee_contracts::RoundInterruptReason) {
+        *self
+            .interrupt_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(reason);
+    }
+
+    /// Consume the parked interrupt reason, if any (C11). Called once by the
+    /// unwinding round task when it emits its terminal cleanup; the take
+    /// semantics prevent a later round from reading a stale label.
+    pub fn take_interrupt(&self) -> Option<neenee_contracts::RoundInterruptReason> {
+        self.interrupt_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
     }
 
     /// Coarse activity signal for watchers (e.g. the `/btw` parent-status

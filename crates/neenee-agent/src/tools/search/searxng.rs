@@ -2,7 +2,7 @@
 //! Keyless and fully under the operator's control, making it the recommended
 //! backend for users behind censored networks or who want query privacy.
 
-use super::{MOZILLA_UA, SearchProvider, SearchResult, format_results};
+use super::{MOZILLA_UA, ProviderOutput, SearchProvider, SearchResult};
 use async_trait::async_trait;
 
 pub(crate) struct SearxngProvider {
@@ -15,7 +15,11 @@ impl SearchProvider for SearxngProvider {
         "SearXNG"
     }
 
-    async fn search(&self, client: &reqwest::Client, query: &str) -> Result<String, String> {
+    async fn search(
+        &self,
+        client: &reqwest::Client,
+        query: &str,
+    ) -> Result<ProviderOutput, String> {
         let base = self
             .url
             .as_deref()
@@ -56,7 +60,7 @@ impl SearchProvider for SearxngProvider {
             .filter_map(parse_item)
             .take(10)
             .collect();
-        Ok(format_results(query, "SearXNG", results))
+        Ok(ProviderOutput::Results(results))
     }
 }
 

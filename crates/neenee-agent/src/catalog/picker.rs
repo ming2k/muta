@@ -32,7 +32,12 @@ pub(super) fn active_model_id_for_entry(
 
 pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPickerSnapshot {
     let stores = Stores::load();
-    let entries = derive_entries(&stores.instances, &stores.cache, &stores.creds);
+    let entries = derive_entries(
+        &stores.instances,
+        &stores.cache,
+        &stores.routes,
+        &stores.creds,
+    );
     let default_id = effective_default_provider_id(config, &stores);
     let rows = entries
         .iter()

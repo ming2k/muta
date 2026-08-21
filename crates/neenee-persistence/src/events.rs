@@ -101,6 +101,17 @@ pub enum SessionEvent {
     ProviderSelectionSet {
         selection: Option<crate::session::ProviderSelection>,
     },
+    /// One round-interrupt record was appended (C11). The record carries its
+    /// own `at_ms` because envelope timestamps are destroyed by log
+    /// compaction. Replayed by appending to
+    /// `data.round_interrupts`; `clear_round_interrupts` removes them.
+    RoundInterruptRecorded {
+        record: neenee_contracts::RoundInterrupt,
+    },
+    /// All round-interrupt records were cleared (C11) — the interrupted
+    /// round either completed on retry or the user resumed and moved on.
+    /// Snapshot semantics: the list becomes empty.
+    RoundInterruptsCleared {},
 }
 
 /// Wrapper around a [`SessionEvent`] that adds metadata for ordering and
@@ -121,6 +132,13 @@ pub struct EventLog {
     /// instead of re-reading and re-parsing the entire log on every event (the
     /// old behaviour was O(n) per append — quadratic over a long session).
     next_seq: std::sync::atomic::AtomicU64,
+    /// Cached high-water `seq`, encoded: `0` = not yet resolved;
+    /// `Some(seq)` is stored as `seq + 1`; `None` (a scanned-empty log) is
+    /// stored as `1`. This makes every real seq and both resolved states
+    /// representable without a second flag word — `high_seq()` is on every
+    /// snapshot persist, and re-parsing the whole log each time was the same
+    /// quadratic trap the `next_seq` cache fixed for `append`.
+    high_seq_cache: std::sync::atomic::AtomicU64,
 }
 
 impl EventLog {
@@ -128,6 +146,7 @@ impl EventLog {
         Self {
             path,
             next_seq: std::sync::atomic::AtomicU64::new(u64::MAX),
+            high_seq_cache: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -191,10 +210,38 @@ impl EventLog {
 
     /// The highest `seq` present in the log, or `None` when the log is empty.
     /// Used to decide whether a snapshot's watermark is already at the
-    /// high-water mark (tail empty) without replaying. Reads to the end of the
-    /// file once; cheaper than `load` because envelopes are not retained.
+    /// high-water mark (tail empty) without replaying.
+    ///
+    /// O(1) after the first call: the high-water mark is cached and advanced
+    /// by `append`/`rewrite`, so a snapshot persist on a long session no
+    /// longer re-reads and re-parses the whole log every time (the previous
+    /// per-persist full scan made persistence cost grow linearly with log
+    /// size — quadratic over a session's lifetime).
     pub fn high_seq(&self) -> Option<u64> {
-        let file = File::open(&self.path).ok()?;
+        // Encoding: 0 = not yet resolved; 1 = resolved "no events";
+        // seq + 2 = resolved high-water mark. The +2 keeps `Some(0)` (a
+        // one-event log) distinct from both sentinels — an earlier +1 draft
+        // collided `Some(0)` with "no events" and re-broke compaction.
+        let cached = self
+            .high_seq_cache
+            .load(std::sync::atomic::Ordering::Acquire);
+        if cached >= 2 {
+            return Some(cached - 2);
+        }
+        // `1` is the resolved "no events" state.
+        if cached == 1 {
+            return None;
+        }
+        let scanned = Self::scan_high_seq(&self.path);
+        self.high_seq_cache.store(
+            scanned.map_or(1, |seq| seq + 2),
+            std::sync::atomic::Ordering::Release,
+        );
+        scanned
+    }
+
+    fn scan_high_seq(path: &Path) -> Option<u64> {
+        let file = File::open(path).ok()?;
         let reader = BufReader::new(file);
         let mut max: Option<u64> = None;
         for line in reader.lines().map_while(Result::ok) {
@@ -263,6 +310,18 @@ impl EventLog {
             .and_then(|_| file.write_all(b"\n"))
             .and_then(|_| file.sync_all())
             .map_err(|e| format!("could not append event: {e}"))?;
+        // Keep the high-water cache coherent. Encoding (seq + 2) preserves
+        // order across the unresolved (0) and resolved-None (1) states, so a
+        // conditional max is correct — including the first append (seq 0,
+        // encoded 2) escaping an unresolved or empty cache.
+        let encoded = next_seq + 2;
+        let prior = self
+            .high_seq_cache
+            .load(std::sync::atomic::Ordering::Acquire);
+        if encoded > prior {
+            self.high_seq_cache
+                .store(encoded, std::sync::atomic::Ordering::Release);
+        }
         Ok(next_seq)
     }
 
@@ -270,13 +329,23 @@ impl EventLog {
     /// log into a seed snapshot or when pruning old events.
     pub fn rewrite(&self, events: Vec<EventEnvelope>) -> Result<(), String> {
         let mut lines = Vec::new();
+        let mut max_seq: Option<u64> = None;
         for envelope in events {
+            max_seq = Some(max_seq.map_or(envelope.seq, |m| m.max(envelope.seq)));
             let mut line = serde_json::to_vec(&envelope).map_err(|e| e.to_string())?;
             line.push(b'\n');
             lines.extend(line);
         }
         fsutil::atomic_write_bytes(&self.path, &lines)
-            .map_err(|e| format!("could not rewrite event log: {e}"))
+            .map_err(|e| format!("could not rewrite event log: {e}"))?;
+        // The rewrite replaced the log wholesale; re-anchor the cache to the
+        // new content (compaction's single seed typically *lowers* the mark,
+        // so a max() here would be wrong).
+        self.high_seq_cache.store(
+            max_seq.map_or(1, |seq| seq + 2),
+            std::sync::atomic::Ordering::Release,
+        );
+        Ok(())
     }
 
     pub fn path(&self) -> &Path {
@@ -475,14 +544,56 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(dir);
     }
-}
-#[test]
-fn round_counter_event_writes_canonical_tag() {
-    // ADR-0120 policy: the pre-rename `turn_counter_set` tag is not aliased
-    // and must fail to deserialize.
-    let legacy = serde_json::from_str::<SessionEvent>(r#"{"type":"turn_counter_set","counter":7}"#);
-    assert!(legacy.is_err(), "legacy tag must not parse");
+    #[test]
+    fn round_counter_event_writes_canonical_tag() {
+        // ADR-0120 policy: the pre-rename `turn_counter_set` tag is not aliased
+        // and must fail to deserialize.
+        let legacy =
+            serde_json::from_str::<SessionEvent>(r#"{"type":"turn_counter_set","counter":7}"#);
+        assert!(legacy.is_err(), "legacy tag must not parse");
 
-    let serialized = serde_json::to_string(&SessionEvent::RoundCounterSet { counter: 7 }).unwrap();
-    assert!(serialized.contains("\"type\":\"round_counter_set\""));
+        let serialized =
+            serde_json::to_string(&SessionEvent::RoundCounterSet { counter: 7 }).unwrap();
+        assert!(serialized.contains("\"type\":\"round_counter_set\""));
+    }
+    /// `high_seq` is cached and stays coherent across appends, rewrites (the
+    /// compaction seed *lowers* the mark), and empty logs — the per-persist
+    /// full-log scan it replaced made each snapshot write cost O(log size).
+    #[test]
+    fn high_seq_cache_tracks_append_and_rewrite() {
+        let dir = std::env::temp_dir().join(format!("neenee-events-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.jsonl");
+        let log = EventLog::new(path.clone());
+
+        // Empty log: None, cached.
+        assert_eq!(log.high_seq(), None);
+        assert_eq!(log.high_seq(), None);
+
+        let mk = || SessionEvent::Started {
+            id: "s".into(),
+            parent_id: None,
+            created_at: 0,
+            project_root: PathBuf::from("/tmp"),
+            schema_version: 1,
+        };
+        let first = log.append(mk()).unwrap();
+        let second = log.append(mk()).unwrap();
+        assert_eq!(log.high_seq(), Some(second));
+        assert!(second > first, "seq must advance");
+
+        // A rewrite to a single seed with a LOWER seq must lower the mark
+        // (compaction does exactly this).
+        log.rewrite(vec![EventEnvelope {
+            seq: 0,
+            timestamp: 0,
+            event: mk(),
+        }])
+        .unwrap();
+        assert_eq!(log.high_seq(), Some(0), "rewrite re-anchors the mark");
+
+        // A fresh handle over the same file must still scan correctly.
+        let fresh = EventLog::new(path);
+        assert_eq!(fresh.high_seq(), Some(0));
+    }
 }

@@ -56,6 +56,7 @@ pub async fn run_headless(
             session_id,
             round_counter,
             history,
+            round_interrupts: _,
             provider,
             model,
         } => (
@@ -251,6 +252,28 @@ pub async fn run_headless(
                         accumulated_text.push_str(&delta);
                         print!("{delta}");
                         io::stdout().flush()?;
+                    }
+                }
+                RoundEvent::RoundInterrupted(record) => {
+                    // C11: the round stopped before completing. Machine
+                    // readers get the typed reason + timestamp; humans get a
+                    // one-line notice.
+                    if json {
+                        let event_obj = serde_json::json!({
+                            "type": "round_interrupted",
+                            "reason": record.reason,
+                            "reason_label": record.label(),
+                            "at_ms": record.at_ms,
+                            "round": record.round,
+                        });
+                        println!("{}", serde_json::to_string(&event_obj)?);
+                        io::stdout().flush()?;
+                    } else if is_tty {
+                        eprintln!("\n\x1b[33m[Interrupted · {}]\x1b[0m", record.label());
+                        io::stderr().flush()?;
+                    } else {
+                        eprintln!("\n[Interrupted · {}]", record.label());
+                        io::stderr().flush()?;
                     }
                 }
                 RoundEvent::Error(err) => {

@@ -124,7 +124,11 @@ The server answers one of:
 
 - `Welcome` binds the connection: `messages` is the full persisted transcript
   (a replacement snapshot, not incremental), `round_counter` the authoritative
-  monotonic round counter. Process it before rendering subsequent live events.
+  monotonic round counter, and `round_interrupts` (C11, optional — absent on
+  older daemons) the durable round-interrupt records, each
+  `{ reason: "user" | "superseded" | "terminated", at_ms, round }`, to
+  re-project into the transcript at their timestamp seams. Process it before
+  rendering subsequent live events.
 - `Pick` means several sessions are hosted and the client must choose
   (`Attach(Some(id))` on a new connection).
 - `Error` is terminal. `code` (ADR-0105, optional) is the stable
@@ -341,7 +345,11 @@ Send:
 ```
 
 If interruption happens before any output, the server can emit `UnsentInput`,
-which includes the prompt and images to restore to the input editor.
+which includes the prompt and images to restore to the input editor. The
+restore is advisory: the harness has already reverted the conversation, so
+the client owns how to surface the prompt — adopting it into an idle
+composer, or (if the user is mid-composition) leaving the composer alone and
+offering the prompt via history/notice instead.
 
 ### End session (ADR-0112)
 

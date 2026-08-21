@@ -17,6 +17,7 @@ use neenee_persistence::config::{
     Config, Credentials, DiscoveryCache, FittedModelInfo, UserTransport,
 };
 use neenee_persistence::instances::{Instances, ProviderInstance};
+use neenee_persistence::route_settings::RouteSettingsStore;
 use neenee_providers::{DEEPSEEK_BUILTIN_MODELS, route_for_model};
 
 use std::sync::Mutex;
@@ -113,6 +114,7 @@ fn custom_instance_serves_its_declared_models() {
             providers: vec![custom],
         },
         &DiscoveryCache::default(),
+        &RouteSettingsStore::default(),
         &Credentials::default(),
     )
     .pop()
@@ -132,6 +134,7 @@ fn deepseek_route_is_the_responses_transport() {
         &deepseek,
         "deepseek-v4-flash",
         &DiscoveryCache::default(),
+        &RouteSettingsStore::default(),
         &Credentials::default(),
     );
     match &channel.transport {
@@ -151,6 +154,7 @@ fn opencode_go_routes_models_by_wire_format() {
         &go,
         "glm-5.2",
         &DiscoveryCache::default(),
+        &RouteSettingsStore::default(),
         &Credentials::default(),
     );
     assert!(
@@ -161,6 +165,7 @@ fn opencode_go_routes_models_by_wire_format() {
         &go,
         "minimax-m3",
         &DiscoveryCache::default(),
+        &RouteSettingsStore::default(),
         &Credentials::default(),
     );
     assert!(
@@ -182,6 +187,7 @@ fn instance_base_url_override_wins_over_the_template_default() {
         &deepseek,
         "deepseek-v4-flash",
         &DiscoveryCache::default(),
+        &RouteSettingsStore::default(),
         &Credentials::default(),
     );
     match &channel.transport {
@@ -232,12 +238,13 @@ fn credential_resolves_env_then_credentials_then_empty() {
 
 #[test]
 fn reasoning_route_settings_apply_to_anthropic_routes() {
-    let mut cache = DiscoveryCache::default();
-    cache
-        .route_settings_for_mut("anthropic", "claude-opus-4-8")
+    let cache = DiscoveryCache::default();
+    let mut routes = RouteSettingsStore::default();
+    routes
+        .settings_for_mut("anthropic", "claude-opus-4-8")
         .effort = Some("max".to_string());
-    cache
-        .route_settings_for_mut("anthropic", "claude-opus-4-8")
+    routes
+        .settings_for_mut("anthropic", "claude-opus-4-8")
         .thinking = Some(false);
 
     let anthropic = instance("anthropic", Some("anthropic"));
@@ -245,6 +252,7 @@ fn reasoning_route_settings_apply_to_anthropic_routes() {
         &anthropic,
         "claude-opus-4-8",
         &cache,
+        &routes,
         &Credentials::default(),
     );
     match &channel.transport {
@@ -261,6 +269,7 @@ fn reasoning_route_settings_apply_to_anthropic_routes() {
         &anthropic,
         "claude-sonnet-4-6",
         &cache,
+        &routes,
         &Credentials::default(),
     );
     match &sonnet.transport {
@@ -294,7 +303,13 @@ fn copilot_route_uses_remote_endpoint_metadata() {
         auth: neenee_contracts::ChannelAuth::CopilotOAuth,
         ..Default::default()
     };
-    let channel = derive_channel(&copilot, "gpt-5", &cache, &Credentials::default());
+    let channel = derive_channel(
+        &copilot,
+        "gpt-5",
+        &cache,
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    );
     assert!(
         matches!(
             &channel.transport,
@@ -518,19 +533,19 @@ api_key = "sk-legacy"
         Some("sk-legacy")
     );
 
-    // Per-channel reasoning rode into the route store.
-    let cache = DiscoveryCache::load();
+    // Per-channel reasoning rode into the route store (state, not cache).
+    let routes = RouteSettingsStore::load();
     assert_eq!(
-        cache
-            .route_settings_for("deepseek", "deepseek-v4-pro")
+        routes
+            .settings_for("deepseek", "deepseek-v4-pro")
             .and_then(|r| r.effort.as_deref()),
         Some("high")
     );
     // Legacy `[model_reasoning]` applied to every serving instance (it wins
     // over the per-channel value, since it is applied last).
     assert_eq!(
-        cache
-            .route_settings_for("deepseek", "deepseek-v4-flash")
+        routes
+            .settings_for("deepseek", "deepseek-v4-flash")
             .and_then(|r| r.effort.as_deref()),
         Some("max")
     );

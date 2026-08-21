@@ -48,6 +48,7 @@ import type {
   PermissionDecision,
   ProviderPickerSnapshot,
   RoundEvent,
+  RoundInterrupt,
   RoundSummary,
 } from "./generated/wire.gen.js";
 
@@ -112,6 +113,8 @@ export interface WelcomePayload {
   messages: Message[];
   provider: string;
   model: string;
+  /** Round-interrupt records (C11); absent on older daemons. */
+  round_interrupts?: RoundInterrupt[];
 }
 
 export interface ConversationReplacedPayload {
@@ -119,6 +122,8 @@ export interface ConversationReplacedPayload {
   messages: Message[];
   /** Command-ledger rows (ADR-0091); absent on older daemons. */
   commands?: CommandRecord[];
+  /** Round-interrupt records (C11); absent on older daemons. */
+  round_interrupts?: RoundInterrupt[];
 }
 
 export type AgentResponse =
