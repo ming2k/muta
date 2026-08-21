@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-08-21
+
 ### Fixed
 
 - **Daemon auto-start works again on Unix.** Version 0.30.0 configured a
@@ -4185,7 +4187,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.30.1...HEAD
+[0.30.1]: https://github.com/ming2k/neenee/releases/tag/v0.30.1
 [0.30.0]: https://github.com/ming2k/neenee/releases/tag/v0.30.0
 [0.29.1]: https://github.com/ming2k/neenee/releases/tag/v0.29.1
 [0.29.0]: https://github.com/ming2k/neenee/releases/tag/v0.29.0
