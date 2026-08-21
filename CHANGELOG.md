@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.3] - 2026-08-21
+
+### Fixed
+
+- Retry-checkpoint integration tests now compare provider-visible semantic
+  history rather than request-projection timestamps, eliminating failures
+  caused by coverage instrumentation and slower Windows runners.
+
 ## [0.30.2] - 2026-08-21
 
 ### Added
@@ -4216,7 +4224,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.30.2...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.30.3...HEAD
+[0.30.3]: https://github.com/ming2k/neenee/releases/tag/v0.30.3
 [0.30.2]: https://github.com/ming2k/neenee/releases/tag/v0.30.2
 [0.30.1]: https://github.com/ming2k/neenee/releases/tag/v0.30.1
 [0.30.0]: https://github.com/ming2k/neenee/releases/tag/v0.30.0
