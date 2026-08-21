@@ -649,7 +649,8 @@ mod tests {
             .expect("ok");
         match out {
             neenee_contracts::ToolOutput::Shell { stdout, .. } => {
-                assert_eq!(stdout.trim(), marker.as_os_str().to_string_lossy());
+                let expected = marker.canonicalize().expect("canonical workspace root");
+                assert_eq!(stdout.trim(), expected.as_os_str().to_string_lossy());
             }
             other => panic!("expected Shell, got {:?}", other),
         }

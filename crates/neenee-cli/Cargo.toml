@@ -22,5 +22,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+libc = { workspace = true }
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

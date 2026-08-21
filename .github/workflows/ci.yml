@@ -282,6 +282,14 @@ jobs:
       checks: write
     steps:
       - uses: actions/checkout@v4
+      # Keep CI tooling independent from the workspace MSRV. audit-check
+      # otherwise compiles the latest cargo-audit under rust-toolchain.toml;
+      # its transitive dependencies may legitimately require a newer compiler
+      # than the product. install-action verifies the release checksum and
+      # installs the pinned prebuilt binary instead.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.22.2
       - uses: rustsec/audit-check@v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

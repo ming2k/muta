@@ -742,11 +742,9 @@ pub(super) async fn dispatch_action(
                                     }
                                 }
                             }
-                            1 => {
+                            1 if app.config_detail_index == 1 => {
                                 // Transcript category:
-                                if app.config_detail_index == 1 {
-                                    app.expand_auto_scroll = !app.expand_auto_scroll;
-                                }
+                                app.expand_auto_scroll = !app.expand_auto_scroll;
                             }
                             2 if app.config_detail_index == 0 => {
                                 // Behavior category:

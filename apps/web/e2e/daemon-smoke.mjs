@@ -12,14 +12,18 @@
  *   7. Version-skewed Select       → Error frame with code version_mismatch
  *
  * Env: DAEMON_URL (default http://127.0.0.1:9800), DAEMON_TOKEN (required
- * when the daemon has local_auth on), CLIENT_VERSION (default "0.24.0").
+ * when the daemon has local_auth on), CLIENT_VERSION (defaults to the web
+ * package version, matching the production client's single source of truth).
  * Exits non-zero on the first failed step.
  */
+
+import { readFileSync } from "node:fs";
 
 const BASE = (process.env.DAEMON_URL ?? "http://127.0.0.1:9800").replace(/\/+$/, "");
 const WS_URL = BASE.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
 const TOKEN = process.env.DAEMON_TOKEN ?? "";
-const VERSION = process.env.CLIENT_VERSION ?? "0.24.0";
+const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const VERSION = process.env.CLIENT_VERSION ?? packageJson.version;
 
 let step = "startup";
 const timer = setTimeout(() => fail(step, "timeout"), 30_000);

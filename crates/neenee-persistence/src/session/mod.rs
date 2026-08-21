@@ -778,6 +778,12 @@ impl SessionStore {
     /// session the caller picks one via the `/sessions` picker or
     /// [`Self::open`] / [`Self::resume`].
     pub fn load_for_project(project_root: PathBuf) -> Self {
+        // Establish one physical identity at the persistence boundary. This
+        // prevents aliases such as macOS `/var` -> `/private/var` (and normal
+        // symlinks elsewhere) from splitting one project across durable
+        // session identities. Non-existent roots retain their caller-supplied
+        // spelling so tests and future create-on-demand flows remain valid.
+        let project_root = project_root.canonicalize().unwrap_or(project_root);
         let dirs = paths::get();
         let sessions_dir = dirs.project_sessions_dir(&project_root);
         if let Err(e) = std::fs::create_dir_all(&sessions_dir) {

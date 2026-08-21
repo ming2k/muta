@@ -1352,7 +1352,10 @@ fn resolve_explicit_dir_absolute_prefix_uses_root() {
     // `/etc/h` resolves to `/etc` with prefix `h`, independent of cwd.
     let dummy_cwd = std::path::PathBuf::from("/some/project");
     let (dir, prefix) = resolve_explicit_dir("/etc/h", &dummy_cwd).expect("resolved");
-    assert_eq!(dir, std::path::PathBuf::from("/etc"));
+    assert_eq!(
+        dir,
+        std::path::PathBuf::from("/etc").canonicalize().unwrap()
+    );
     assert_eq!(prefix, "h");
 }
 

@@ -1912,9 +1912,9 @@ impl Agent {
             .user_input_queue
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if !queue
+        if queue
             .as_ref()
-            .is_some_and(|round| round.generation == generation)
+            .is_none_or(|round| round.generation != generation)
         {
             return Vec::new();
         }
