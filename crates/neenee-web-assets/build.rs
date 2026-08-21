@@ -53,15 +53,24 @@ fn main() {
             fs::copy(abs, &staged).unwrap();
         }
         println!("cargo:rerun-if-changed={}", abs.display());
-        code.push_str(&format!(
-            "    (\"{rel}\", \"{}\", include_bytes!(\"{}\")),\n",
-            content_type(rel),
-            staged.display()
-        ));
+        push_entry(&mut code, rel, content_type(rel), &staged);
     }
     code.push_str("];\n");
     code.push_str(&format!("pub static REAL_DIST: bool = {real_dist};\n"));
     fs::write(out_dir.join("assets.rs"), code).unwrap();
+}
+
+/// Append one generated entry using Rust's string-literal escaping.
+///
+/// In particular, Windows paths contain backslashes, which cannot be pasted
+/// verbatim between quotes (`D:\\a` would otherwise contain the `\\a` escape).
+/// Debug formatting a string produces a quoted, escaped Rust string literal
+/// and also keeps unusual asset names from breaking the generated source.
+fn push_entry(code: &mut String, rel: &str, mime: &str, staged: &Path) {
+    let staged = staged.to_string_lossy();
+    code.push_str(&format!(
+        "    ({rel:?}, {mime:?}, include_bytes!({staged:?})),\n"
+    ));
 }
 
 fn collect(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
@@ -110,3 +119,27 @@ cargo build -p neenee-cli</code></pre>
 <p>(looked for a dist at: <code>{}</code>)</p>
 </main></body></html>
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_entry_escapes_windows_paths_and_asset_names() {
+        let mut code = String::new();
+        push_entry(
+            &mut code,
+            "assets/quoted\"name.js",
+            "text/javascript; charset=utf-8",
+            Path::new(r#"D:\a\neenee\out\web-assets\quoted"name.js"#),
+        );
+
+        assert_eq!(
+            code,
+            concat!(
+                r#"    ("assets/quoted\"name.js", "text/javascript; charset=utf-8", include_bytes!("D:\\a\\neenee\\out\\web-assets\\quoted\"name.js")),"#,
+                "\n"
+            )
+        );
+    }
+}
