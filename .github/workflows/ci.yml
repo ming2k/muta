@@ -192,18 +192,18 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-    env:
-      # ADR-0121: belt-and-braces. Every suite sandboxes itself, but a
-      # process-wide NEENEE_HOME means a test that forgets its own sandbox
-      # still resolves inside the throwaway root instead of the runner's
-      # HOME (and can never reach a developer's real home when run locally
-      # with NEENEE_HOME exported).
-      NEENEE_HOME: ${{ runner.temp }}/neenee-test-home
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --locked --no-fail-fast
+      - name: Run workspace tests in an isolated home
+        # ADR-0121: belt-and-braces. Every suite sandboxes itself, but a
+        # process-wide NEENEE_HOME means a test that forgets its own sandbox
+        # still resolves inside the throwaway root instead of the runner's
+        # HOME. The runner context is valid at step scope, not job env scope.
+        env:
+          NEENEE_HOME: ${{ runner.temp }}/neenee-test-home
+        run: cargo test --workspace --locked --no-fail-fast
 
   msrv:
     name: MSRV (1.95)
