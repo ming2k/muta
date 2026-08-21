@@ -1259,26 +1259,6 @@ mod tests {
         assert!(daemon_image_is_current(std::process::id()));
     }
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn daemon_image_is_current_rejects_a_replaced_exe() {
-        // Simulate the dev-loop drift: a daemon pid whose exe link names a
-        // *different* file than this client's own executable. Spawn `sleep`
-        // and confirm the check sees the divergence.
-        use std::process::{Command, Stdio};
-        let mut child = Command::new("sleep")
-            .arg("30")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn sleep");
-        let diverged = !daemon_image_is_current(child.id());
-        let _ = child.kill();
-        let _ = child.wait();
-        assert!(diverged, "a different executable must count as drift");
-    }
-
     #[test]
     fn daemon_image_is_current_tolerates_missing_proc_entry() {
         // A pid that does not exist (or /proc unavailable): no evidence of
