@@ -156,21 +156,17 @@ pub(crate) fn format_diagnostics(diag: &DaemonDiagnostics) -> String {
 
     // Endpoints
     out.push_str("  Control Endpoints:\n");
-    if diag.uds_exists {
-        let uds_status = if diag.uds_connectable {
+    if let Some(endpoint) = &diag.local_endpoint {
+        let local_status = if diag.local_endpoint_connectable {
             "active (connectable)"
-        } else {
+        } else if diag.local_endpoint_exists {
             "unresponsive"
+        } else {
+            "not created"
         };
-        out.push_str(&format!(
-            "    • UDS: unix://{} ({uds_status})\n",
-            diag.uds_path.display()
-        ));
+        out.push_str(&format!("    • Local: {endpoint} ({local_status})\n"));
     } else {
-        out.push_str(&format!(
-            "    • UDS: unix://{} (not created)\n",
-            diag.uds_path.display()
-        ));
+        out.push_str("    • Local: unavailable (endpoint resolution failed)\n");
     }
 
     let tcp_status = if diag.tcp_listening {
@@ -451,9 +447,11 @@ mod tests {
             lock_held: false,
             lock_holder_pid: None,
             lock_holder_alive: false,
-            uds_path: std::path::PathBuf::from("/run/user/1000/neenee/daemon.sock"),
-            uds_exists: false,
-            uds_connectable: false,
+            local_endpoint: Some(neenee_platform::ipc::LocalEndpoint::UnixSocket(
+                std::path::PathBuf::from("/run/user/1000/neenee/daemon.sock"),
+            )),
+            local_endpoint_exists: false,
+            local_endpoint_connectable: false,
             tcp_port: 9800,
             tcp_listening: false,
             startup_log_path: std::path::PathBuf::from("/tmp/startup.log"),
@@ -466,6 +464,7 @@ mod tests {
         let diag = DaemonDiagnostics {
             discovery_record: Some(neenee_runtime::client::DaemonInfo {
                 pid: 12345,
+                process_birth_token: None,
                 port: 9800,
                 token: None,
                 project_root: String::new(),
@@ -473,6 +472,7 @@ mod tests {
                 uds_path: Some(std::path::PathBuf::from(
                     "/run/user/1000/neenee/daemon.sock",
                 )),
+                local_endpoint: None,
                 version: Some("0.25.1".to_string()),
                 grace_secs: Some(10),
             }),
@@ -480,8 +480,8 @@ mod tests {
             lock_held: true,
             lock_holder_pid: Some(12345),
             lock_holder_alive: true,
-            uds_exists: true,
-            uds_connectable: true,
+            local_endpoint_exists: true,
+            local_endpoint_connectable: true,
             tcp_listening: true,
             ..base_diag()
         };
@@ -501,8 +501,8 @@ mod tests {
             lock_held: true,
             lock_holder_pid: Some(9999),
             lock_holder_alive: true,
-            uds_exists: true,
-            uds_connectable: false,
+            local_endpoint_exists: true,
+            local_endpoint_connectable: false,
             tcp_listening: false,
             last_startup_log: Some("panic: something went wrong".to_string()),
             ..base_diag()

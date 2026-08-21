@@ -3,7 +3,7 @@
 //! (ADR-0093/0096). `neenee` / `neenee attach` / `neenee status` drive
 //! sessions owned by the unified session daemon (`neenee-server`) through
 //! this module. Discovery is global (one daemon per user); connections
-//! prefer the Unix domain socket and fall back to TCP.
+//! prefer platform-native local IPC and fall back to TCP.
 //!
 //! The wire protocol this client speaks is [`crate::serve::Wire`] — client
 //! and server live in the same crate so the protocol cannot drift.
@@ -114,33 +114,28 @@ pub fn discover(_project_root: &Path) -> Option<DaemonInfo> {
         && let Some(pid) = neenee_persistence::lock::ProcessLock::probe_holder(&lock_path)
         && is_process_alive(pid)
     {
-        #[cfg(unix)]
-        let uds = discovery::default_uds_path();
-        #[cfg(unix)]
-        let uds_connectable = if uds.exists() {
-            std::os::unix::net::UnixStream::connect(&uds).is_ok()
-        } else {
-            false
-        };
-        #[cfg(not(unix))]
-        let uds_connectable = false;
+        let local_endpoint = discovery::default_local_endpoint().ok();
+        let local_connectable = local_endpoint
+            .as_ref()
+            .is_some_and(|endpoint| neenee_platform::ipc::probe(endpoint).connectable);
 
         let tcp_addr =
             std::net::SocketAddr::from(([127, 0, 0, 1], crate::startup::env_default_port()));
         let tcp_connectable =
             std::net::TcpStream::connect_timeout(&tcp_addr, Duration::from_millis(300)).is_ok();
 
-        if uds_connectable || tcp_connectable {
+        if local_connectable || tcp_connectable {
             let recovered = DaemonInfo {
                 pid,
+                process_birth_token: neenee_platform::process::process_identity(pid)
+                    .ok()
+                    .map(|identity| identity.birth_token),
                 port: crate::startup::env_default_port(),
                 token: None,
                 project_root: String::new(),
                 started_at: 0,
-                #[cfg(unix)]
-                uds_path: if uds.exists() { Some(uds) } else { None },
-                #[cfg(not(unix))]
                 uds_path: None,
+                local_endpoint,
                 version: Some(crate::serve::daemon_version().to_string()),
                 grace_secs: None,
             };
@@ -160,14 +155,23 @@ pub fn discover(_project_root: &Path) -> Option<DaemonInfo> {
 fn discover_at(path: &Path) -> Option<DaemonInfo> {
     let bytes = std::fs::read(path).ok()?;
     let info: DaemonInfo = serde_json::from_slice(&bytes).ok()?;
-    if !is_process_alive(info.pid) {
-        discovery::remove(path);
+    if !daemon_process_matches(&info) {
+        // Readers never delete shared discovery state: a successor can replace
+        // the record after this read. The next lock-owning daemon overwrites a
+        // stale record, and the daemon's own lease removes its matching record.
         return None;
     }
     if !is_alive(&info) {
         return None;
     }
     Some(info)
+}
+
+fn daemon_process_matches(info: &DaemonInfo) -> bool {
+    neenee_platform::process::process_identity(info.pid).is_ok_and(|identity| {
+        info.process_birth_token
+            .is_none_or(|expected| expected == identity.birth_token)
+    })
 }
 
 /// Directional relation between client version and daemon version.
@@ -319,18 +323,17 @@ fn same_inode(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
     a.dev() == b.dev() && a.ino() == b.ino()
 }
 
-/// Liveness probe: prefer the UDS (the daemon's primary local channel),
-/// fall back to the TCP port. Either reachable means the daemon is up.
+/// Liveness probe: prefer native local IPC and fall back to TCP. Either
+/// reachable endpoint means the daemon is up.
 fn is_alive(info: &DaemonInfo) -> bool {
-    if !is_process_alive(info.pid) {
+    if !daemon_process_matches(info) {
         return false;
     }
-    #[cfg(unix)]
-    if let Some(uds) = &info.uds_path {
-        use std::os::unix::net::UnixStream;
-        if UnixStream::connect(uds).is_ok() {
-            return true;
-        }
+    if info
+        .effective_local_endpoint()
+        .is_some_and(|endpoint| neenee_platform::ipc::probe(&endpoint).connectable)
+    {
+        return true;
     }
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], info.port));
     std::net::TcpStream::connect_timeout(&addr, LIVENESS_TIMEOUT).is_ok()
@@ -338,55 +341,24 @@ fn is_alive(info: &DaemonInfo) -> bool {
 
 /// Whether a process with `pid` exists and can receive signals.
 pub fn is_process_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        false
-    }
+    neenee_platform::process::process_identity(pid).is_ok()
 }
 
-/// Wait up to `timeout` for process `pid` to exit.
-async fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
+/// Wait up to `timeout` for this exact process incarnation to exit. Comparing
+/// the birth token prevents a recycled PID from extending the wait or becoming
+/// the target of a later escalation.
+async fn wait_for_process_exit(
+    identity: neenee_platform::process::ProcessIdentity,
+    timeout: Duration,
+) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if !is_process_alive(pid) {
+        if !neenee_platform::process::process_is_alive(identity) {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    !is_process_alive(pid)
-}
-
-/// Whether the socket file at `path` was created by `pid`'s daemon —
-/// i.e. the daemon is dead and left it behind. A live holder (probed by
-/// connecting) means a successor daemon owns the socket now, and a
-/// stopper must not unlink it (ADR-0116 Tier-4 pid guard, mirroring the
-/// discovery record's `remove_if_matching_pid`).
-#[cfg(unix)]
-fn uds_belongs_to_pid(path: &std::path::Path, pid: u32) -> bool {
-    if !path.exists() {
-        return false;
-    }
-    if is_process_alive(pid) {
-        // The daemon that spawned this stop is somehow still alive; its
-        // socket is live state, not a leftover.
-        return false;
-    }
-    // The recorded daemon is gone: whatever answers (or does not) on the
-    // socket now belongs to someone else. Only a *responsive* socket
-    // indicates a successor; a dead file is a leftover this stop should
-    // clean up.
-    !uds_answers(path)
-}
-
-/// Best-effort connect probe: does anything accept on this UDS path?
-#[cfg(unix)]
-fn uds_answers(path: &std::path::Path) -> bool {
-    std::os::unix::net::UnixStream::connect(path).is_ok()
+    !neenee_platform::process::process_is_alive(identity)
 }
 
 /// The drain budget a stopper should allow when the discovery record
@@ -404,13 +376,14 @@ const FALLBACK_GRACE: Duration = Duration::from_secs(15);
 ///    couple of seconds. Any signal arriving mid-drain escalates the
 ///    daemon to a forced exit that skips session teardown, so escalating
 ///    early destroys the graceful drain the stop just requested.
-/// 2. Tier 2 (OS Signal): if the versions skew, the verb could not be
-///    delivered, or the budget elapsed without an exit, `SIGTERM` the pid
-///    and wait the same budget (the daemon drains the same way on SIGTERM).
-/// 3. Tier 3 (Force): if it still lives, `SIGKILL`.
-/// 4. Tier 4 (Cleanup): remove the discovery record, and the UDS socket
-///    only if it still belongs to this daemon's pid (a successor spawned
-///    during the stop window must not lose its socket).
+/// 2. Tier 2 (native graceful request): if the versions skew, the verb could
+///    not be delivered, or the budget elapsed without an exit, request native
+///    graceful termination where the OS defines it (SIGTERM on Unix).
+/// 3. Tier 3 (Force): identity-conditionally force-terminate the process.
+/// 4. Tier 4 (Cleanup): after the exact process incarnation is gone, acquire
+///    the instance lock and identity-conditionally remove the discovery record.
+///    Native listener state is RAII-owned; a killed Unix daemon's stale socket
+///    is removed by the next lock-owning bind, never by a racing stopper.
 pub async fn stop(info: &DaemonInfo) -> Result<(), String> {
     // The daemon's own drain budget, when it advertised one: the single
     // number every tier below is coordinated against.
@@ -418,60 +391,66 @@ pub async fn stop(info: &DaemonInfo) -> Result<(), String> {
         .grace_secs
         .map(Duration::from_secs)
         .unwrap_or(FALLBACK_GRACE);
-    let mut stopped = false;
+    let target_identity = neenee_platform::process::process_identity(info.pid).ok();
+    if let (Some(expected), Some(actual)) = (
+        info.process_birth_token,
+        target_identity.map(|identity| identity.birth_token),
+    ) && expected != actual
+    {
+        return Err(format!(
+            "refusing to stop pid {}: discovery process identity is stale",
+            info.pid
+        ));
+    }
+    let mut stopped = target_identity.is_none();
 
     // Tier 1: Try graceful protocol shutdown if versions are compatible.
-    if versions_compatible(info)
+    if let Some(identity) = target_identity
+        && versions_compatible(info)
         && let Ok(Ok(())) = tokio::time::timeout(
             Duration::from_millis(1500),
             control(info, crate::serve::ControlRequest::Shutdown),
         )
         .await
     {
-        stopped = wait_for_process_exit(info.pid, grace).await;
+        stopped = wait_for_process_exit(identity, grace).await;
     }
 
-    // Tier 2 & 3: Fall back to OS signals if protocol did not stop it.
-    // SIGTERM drains through the same budgeted phases as the verb, so it
-    // too waits the full grace before the SIGKILL escalation.
+    // Tier 2 & 3: request native graceful termination where supported, then
+    // force-terminate the identity-checked process. Unix SIGTERM drains
+    // through the same phases as the verb; Windows shutdown is protocol-only.
     if !stopped {
-        #[cfg(unix)]
-        {
-            let pid = info.pid as libc::pid_t;
-            if is_process_alive(info.pid) {
-                let _ = unsafe { libc::kill(pid, libc::SIGTERM) };
-                stopped = wait_for_process_exit(info.pid, grace).await;
-
-                if !stopped && is_process_alive(info.pid) {
-                    let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
-                    stopped = wait_for_process_exit(info.pid, Duration::from_millis(1000)).await;
-                }
-            } else {
-                stopped = true;
+        if let Some(identity) = target_identity {
+            if neenee_platform::process::request_termination(identity).is_ok() {
+                stopped = wait_for_process_exit(identity, grace).await;
             }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/PID", &info.pid.to_string(), "/F"])
-                .output();
+            if !stopped && neenee_platform::process::process_is_alive(identity) {
+                let _ = neenee_platform::process::force_terminate(identity);
+                stopped = wait_for_process_exit(identity, Duration::from_millis(1000)).await;
+            }
+        } else {
             stopped = true;
         }
     }
 
-    // Tier 4: Cleanup discovery record & socket. The record removal is
-    // pid-guarded (`remove_if_matching_pid`); the UDS socket now is too:
-    // a successor daemon may have been spawned while we waited out the
-    // grace above, and unlinking *its* socket would break live clients.
-    discovery::remove_if_matching_pid(&discovery::global_discovery_path(), info.pid);
-    #[cfg(unix)]
-    if let Some(uds) = &info.uds_path
-        && uds_belongs_to_pid(uds, info.pid)
+    let gone = stopped
+        || target_identity
+            .is_none_or(|identity| !neenee_platform::process::process_is_alive(identity));
+    // Tier 4: hold the same instance lock a successor requires before touching
+    // shared discovery state. If a successor already owns it, its record is
+    // categorically not ours to remove. Never unlink a Unix socket here; the
+    // next lock-owning listener bind handles stale filesystem state.
+    if gone
+        && let Ok(_cleanup_lock) =
+            neenee_persistence::lock::ProcessLock::acquire(&discovery::global_lock_path())
     {
-        let _ = std::fs::remove_file(uds);
+        discovery::remove_if_matching_process(
+            &discovery::global_discovery_path(),
+            info.pid,
+            info.process_birth_token,
+        );
     }
-
-    if stopped || !is_process_alive(info.pid) {
+    if gone {
         Ok(())
     } else {
         Err(format!("could not stop daemon (pid {})", info.pid))
@@ -586,15 +565,9 @@ fn spawn_daemon() -> Result<std::process::Child, String> {
         .stdout(std::process::Stdio::null());
 
     let startup_log = startup_log_path();
-    if let Some(parent) = startup_log.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(file) = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&startup_log)
-    {
+    let private_log = neenee_platform::secure_file::create_private_parent(&startup_log)
+        .and_then(|()| neenee_platform::secure_file::create_private_file(&startup_log));
+    if let Ok(file) = private_log {
         command.stderr(file);
     } else {
         command.stderr(std::process::Stdio::null());
@@ -607,7 +580,9 @@ fn spawn_daemon() -> Result<std::process::Child, String> {
     // still consults the daemon's cwd (rather than a session-scoped root)
     // would silently land in that project. Per-session scoping is explicit
     // via the Select frame's `project` field.
-    command.current_dir("/");
+    let daemon_cwd = neenee_persistence::paths::get().data_dir.clone();
+    let _ = std::fs::create_dir_all(&daemon_cwd);
+    command.current_dir(daemon_cwd);
     configure_daemon_detachment(&mut command);
     command
         .spawn()
@@ -626,24 +601,7 @@ fn spawn_daemon() -> Result<std::process::Child, String> {
 /// half-detached daemon would violate the lifecycle contract, so callers must
 /// treat that failure as fatal.
 pub fn configure_daemon_detachment(command: &mut std::process::Command) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-
-        // SAFETY: `setsid(2)` is async-signal-safe and this closure performs
-        // no allocation or other work between `fork` and `exec`.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-
-    #[cfg(not(unix))]
-    let _ = command;
+    neenee_platform::process::configure_daemon_std(command);
 }
 
 /// Comprehensive diagnostics for the daemon control plane and system status.
@@ -664,9 +622,9 @@ pub struct DaemonDiagnostics {
     pub lock_held: bool,
     pub lock_holder_pid: Option<u32>,
     pub lock_holder_alive: bool,
-    pub uds_path: PathBuf,
-    pub uds_exists: bool,
-    pub uds_connectable: bool,
+    pub local_endpoint: Option<neenee_platform::ipc::LocalEndpoint>,
+    pub local_endpoint_exists: bool,
+    pub local_endpoint_connectable: bool,
     pub tcp_port: u16,
     pub tcp_listening: bool,
     pub startup_log_path: PathBuf,
@@ -685,20 +643,14 @@ pub fn diagnose_daemon() -> DaemonDiagnostics {
     let lock_holder_pid = neenee_persistence::lock::ProcessLock::probe_holder(&lock_path);
     let lock_holder_alive = lock_holder_pid.map(is_process_alive).unwrap_or(false);
 
-    #[cfg(unix)]
-    let uds_path = discovery::default_uds_path();
-    #[cfg(not(unix))]
-    let uds_path = PathBuf::from("");
-
-    let uds_exists = uds_path.exists();
-    #[cfg(unix)]
-    let uds_connectable = if uds_exists {
-        std::os::unix::net::UnixStream::connect(&uds_path).is_ok()
-    } else {
-        false
-    };
-    #[cfg(not(unix))]
-    let uds_connectable = false;
+    let local_endpoint = raw_record
+        .as_ref()
+        .and_then(discovery::Discovery::effective_local_endpoint)
+        .or_else(|| discovery::default_local_endpoint().ok());
+    let local_probe = local_endpoint
+        .as_ref()
+        .map(neenee_platform::ipc::probe)
+        .unwrap_or_default();
 
     let port = discovery_record
         .as_ref()
@@ -726,9 +678,9 @@ pub fn diagnose_daemon() -> DaemonDiagnostics {
         lock_held,
         lock_holder_pid,
         lock_holder_alive,
-        uds_path,
-        uds_exists,
-        uds_connectable,
+        local_endpoint,
+        local_endpoint_exists: local_probe.exists,
+        local_endpoint_connectable: local_probe.connectable,
         tcp_port: port,
         tcp_listening,
         startup_log_path: startup_log,
@@ -757,18 +709,17 @@ pub enum Handshake {
 }
 
 pub async fn connect(info: &DaemonInfo, action: AttachAction) -> Result<Handshake, String> {
-    // Prefer the Unix domain socket (the daemon's primary local channel,
-    // ADR-0096); fall back to TCP for exposed/legacy deployments.
-    #[cfg(unix)]
-    if let Some(uds) = &info.uds_path
-        && let Ok(stream) = tokio::net::UnixStream::connect(uds).await
+    // Prefer the platform-native local endpoint; fall back to TCP for
+    // exposed and legacy deployments.
+    if let Some(endpoint) = info.effective_local_endpoint()
+        && let Ok(stream) = neenee_platform::ipc::connect(&endpoint).await
     {
         let request = "ws://localhost/"
             .into_client_request()
-            .map_err(|e| format!("bad uds ws request: {e}"))?;
+            .map_err(|e| format!("bad local IPC ws request: {e}"))?;
         let (ws, _) = tokio_tungstenite::client_async(request, stream)
             .await
-            .map_err(|e| format!("ws handshake over uds: {e}"))?;
+            .map_err(|e| format!("ws handshake over local IPC: {e}"))?;
         return finish_handshake(ws.split(), action).await;
     }
     let url = format!("ws://127.0.0.1:{}/", info.port);
@@ -939,8 +890,8 @@ where
 /// Issue one control-plane verb (ADR-0096) to the daemon and await its reply:
 /// create, prompt, interrupt, answer a permission, or kill — without attaching
 /// as a session client. The dashboard's session-management keys (`i` interrupt,
-/// `p` prompt, `n` new session) go through here. Prefers the Unix socket, falls
-/// back to TCP, exactly like [`connect`].
+/// `p` prompt, `n` new session) go through here. Prefers native local IPC and
+/// falls back to TCP, exactly like [`connect`].
 pub async fn control(
     info: &DaemonInfo,
     request: crate::serve::ControlRequest,
@@ -948,16 +899,15 @@ pub async fn control(
     use crate::serve::AttachAction;
     let action = AttachAction::Control(request);
 
-    #[cfg(unix)]
-    if let Some(uds) = &info.uds_path
-        && let Ok(stream) = tokio::net::UnixStream::connect(uds).await
+    if let Some(endpoint) = info.effective_local_endpoint()
+        && let Ok(stream) = neenee_platform::ipc::connect(&endpoint).await
     {
         let req = "ws://localhost/"
             .into_client_request()
-            .map_err(|e| format!("bad uds ws request: {e}"))?;
+            .map_err(|e| format!("bad local IPC ws request: {e}"))?;
         let (ws, _) = tokio_tungstenite::client_async(req, stream)
             .await
-            .map_err(|e| format!("ws handshake over uds: {e}"))?;
+            .map_err(|e| format!("ws handshake over local IPC: {e}"))?;
         return finish_control(ws.split(), action).await;
     }
     let url = format!("ws://127.0.0.1:{}/", info.port);
@@ -1050,21 +1000,20 @@ pub async fn monitor_stream(
     info: &DaemonInfo,
     action: MonitorAction,
 ) -> Result<tokio::sync::mpsc::UnboundedReceiver<MonitorEvent>, String> {
-    // Prefer the Unix domain socket (the daemon's primary local channel,
-    // ADR-0096); fall back to TCP for exposed/legacy deployments — the same
+    // Prefer platform-native local IPC; fall back to TCP for exposed/legacy
+    // deployments — the same
     // transport policy as `remote::connect`/`remote::control`, so the monitor
     // stream works against a UDS-only daemon.
-    #[cfg(unix)]
-    if let Some(uds) = &info.uds_path
-        && let Ok(stream) = tokio::net::UnixStream::connect(uds).await
+    if let Some(endpoint) = info.effective_local_endpoint()
+        && let Ok(stream) = neenee_platform::ipc::connect(&endpoint).await
     {
         let request = "ws://localhost/"
             .into_client_request()
-            .map_err(|e| format!("bad uds ws request: {e}"))?;
+            .map_err(|e| format!("bad local IPC ws request: {e}"))?;
         let (ws, _) = tokio_tungstenite::client_async(request, stream)
             .await
-            .map_err(|e| format!("ws handshake over uds: {e}"))?;
-        return finish_monitor(ws.split(), action, "uds").await;
+            .map_err(|e| format!("ws handshake over local IPC: {e}"))?;
+        return finish_monitor(ws.split(), action, "local IPC").await;
     }
     let url = format!("ws://127.0.0.1:{}/", info.port);
     let mut request = url
@@ -1296,11 +1245,13 @@ mod tests {
     fn test_version_mismatch_messages() {
         let daemon_older = DaemonInfo {
             pid: 1234,
+            process_birth_token: None,
             port: 9800,
             token: None,
             project_root: String::new(),
             started_at: 0,
             uds_path: None,
+            local_endpoint: None,
             version: Some("0.24.0".to_string()),
             grace_secs: None,
         };
@@ -1310,11 +1261,13 @@ mod tests {
 
         let daemon_newer = DaemonInfo {
             pid: 1234,
+            process_birth_token: None,
             port: 9800,
             token: None,
             project_root: String::new(),
             started_at: 0,
             uds_path: None,
+            local_endpoint: None,
             version: Some("99.0.0".to_string()),
             grace_secs: None,
         };
@@ -1324,11 +1277,13 @@ mod tests {
 
         let daemon_none = DaemonInfo {
             pid: 1234,
+            process_birth_token: None,
             port: 9800,
             token: None,
             project_root: String::new(),
             started_at: 0,
             uds_path: None,
+            local_endpoint: None,
             version: None,
             grace_secs: None,
         };
@@ -1338,11 +1293,13 @@ mod tests {
 
         let daemon_equal_drift = DaemonInfo {
             pid: u32::MAX - 10,
+            process_birth_token: None,
             port: 9800,
             token: None,
             project_root: String::new(),
             started_at: 0,
             uds_path: None,
+            local_endpoint: None,
             version: Some(crate::serve::daemon_version().to_string()),
             grace_secs: None,
         };
@@ -1353,11 +1310,13 @@ mod tests {
     fn record(port: u16, token: Option<String>) -> DaemonInfo {
         DaemonInfo {
             pid: 99999999, // Unused/dead pid
+            process_birth_token: None,
             port,
             token,
             project_root: "/tmp/proj".to_string(),
             started_at: 0,
             uds_path: None,
+            local_endpoint: None,
             version: None,
             grace_secs: None,
         }
@@ -1367,7 +1326,7 @@ mod tests {
         l.local_addr().unwrap().port()
     }
     #[test]
-    fn discover_at_returns_none_and_removes_stale_record_for_dead_pid() {
+    fn discover_at_returns_none_without_racing_to_delete_stale_record() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("serve.json");
         std::fs::write(
@@ -1377,8 +1336,8 @@ mod tests {
         .unwrap();
         assert!(discover_at(&path).is_none());
         assert!(
-            !path.exists(),
-            "stale discovery file with dead PID must be removed"
+            path.exists(),
+            "a reader must leave stale cleanup to the lock-owning lifecycle path"
         );
     }
     #[test]
@@ -1387,11 +1346,13 @@ mod tests {
         let path = tmp.path().join("serve.json");
         let live_rec = DaemonInfo {
             pid: std::process::id(),
+            process_birth_token: None,
             port: dead_port(),
             token: None,
             project_root: "/tmp/proj".to_string(),
             started_at: 0,
             uds_path: None,
+            local_endpoint: None,
             version: None,
             grace_secs: None,
         };
@@ -1416,40 +1377,38 @@ mod tests {
     async fn stop_handles_already_dead_process_and_cleans_up() {
         let info = DaemonInfo {
             pid: 99999999, // Unused pid
+            process_birth_token: None,
             port: 1,
             token: None,
             project_root: String::new(),
             started_at: 0,
             uds_path: None,
+            local_endpoint: None,
             version: Some("0.24.0".to_string()),
             grace_secs: None,
         };
         let res = stop(&info).await;
         assert!(res.is_ok());
     }
-}
 
-#[test]
-#[cfg(unix)]
-fn uds_guard_never_unlinks_a_live_successor_socket() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("daemon.sock");
-
-    // Missing file: nothing to clean, not ours.
-    assert!(!uds_belongs_to_pid(&path, 42));
-
-    let dead_pid = 999_999_998u32; // not this process, not alive
-
-    // A live listener (a successor daemon) answers: never unlink it,
-    // even though the recorded pid is dead.
-    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
-    assert!(!uds_belongs_to_pid(&path, dead_pid));
-    drop(listener);
-
-    // The listener is gone but the file remains (exactly what a
-    // SIGKILLed daemon leaves): nobody answers, the recorded pid is
-    // dead — a stale socket this stop should remove.
-    assert!(uds_belongs_to_pid(&path, dead_pid));
+    #[tokio::test]
+    async fn stop_refuses_a_recycled_pid_identity() {
+        let identity = neenee_platform::process::process_identity(std::process::id()).unwrap();
+        let info = DaemonInfo {
+            pid: identity.pid,
+            process_birth_token: Some(identity.birth_token.wrapping_add(1)),
+            port: 1,
+            token: None,
+            project_root: String::new(),
+            started_at: 0,
+            uds_path: None,
+            local_endpoint: None,
+            version: Some("0.24.0".to_string()),
+            grace_secs: None,
+        };
+        let error = stop(&info).await.unwrap_err();
+        assert!(error.contains("process identity is stale"));
+    }
 }
 
 #[test]

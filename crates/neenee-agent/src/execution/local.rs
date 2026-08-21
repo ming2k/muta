@@ -9,7 +9,6 @@ use neenee_contracts::execution::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::process::Command;
 
 /// Local host filesystem provider.
 #[derive(Debug, Default, Clone)]
@@ -137,25 +136,16 @@ impl ProcessRunner for LocalProcessRunner {
         env: Option<&HashMap<String, String>>,
         timeout: Duration,
     ) -> Result<ProcessOutput, String> {
-        let mut cmd = Command::new("bash");
-        cmd.arg("-c").arg(command);
+        let mut cmd = neenee_platform::shell::native_shell(command);
         cmd.current_dir(cwd);
-
-        #[cfg(unix)]
-        cmd.process_group(0);
-
         if let Some(env_map) = env {
             cmd.envs(env_map);
         }
 
-        let child = cmd
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn bash: {e}"))?;
-
-        #[cfg(unix)]
-        let child_id = child.id();
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let (child, process_tree) = neenee_platform::process::spawn_owned(&mut cmd)
+            .map_err(|e| format!("failed to spawn and contain native shell: {e}"))?;
 
         let wait_fut = child.wait_with_output();
         match tokio::time::timeout(timeout, wait_fut).await {
@@ -167,13 +157,7 @@ impl ProcessRunner for LocalProcessRunner {
             }),
             Ok(Err(e)) => Err(format!("Command execution failed: {e}")),
             Err(_) => {
-                #[cfg(unix)]
-                if let Some(pid) = child_id {
-                    // SAFETY: kill process group using negative pid
-                    unsafe {
-                        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-                    }
-                }
+                let _ = process_tree.terminate();
 
                 Ok(ProcessOutput {
                     exit_code: None,

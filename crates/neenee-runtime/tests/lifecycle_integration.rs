@@ -155,8 +155,11 @@ fn options(uds: std::path::PathBuf, port: u16) -> HostOptions {
         // Tests drive the control plane without credentials.
         local_auth: false,
         port_fallback: false,
-        #[cfg(unix)]
-        uds_path: Some(uds),
+        local_endpoint: neenee_platform::ipc::endpoint_for_instance(
+            uds,
+            &format!("lifecycle-{port}"),
+        )
+        .ok(),
     }
 }
 

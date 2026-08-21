@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Native Windows support.** The local control plane uses a current-user-only
+  Named Pipe, cross-process locks use `LockFileEx`, owned subprocesses are
+  contained in kill-on-close Job Objects, private files receive protected
+  user DACLs, and user scripts run through non-interactive PowerShell.
+- Windows check/test jobs, an `x86_64-pc-windows-msvc` release zip, SHA-256
+  release sidecars, and a checksum-verifying PowerShell installer.
+
+### Changed
+
+- Platform-neutral daemon, persistence, and process policy now depends on the
+  small native capabilities in `neenee-platform`. XDG remains Linux's native
+  placement and a portable override vocabulary; macOS and Windows use their
+  native default directories.
+- Unix/macOS/Linux installs now verify the release SHA-256 before replacing
+  the executable.
+
+### Fixed
+
+- Non-Unix process locks and lock probes no longer report success without
+  mutual exclusion. Windows atomic writes now replace existing files instead
+  of failing on `rename` semantics, and subprocess timeouts terminate the
+  whole descendant tree instead of only the direct process.
+
 ## [0.30.1] - 2026-08-21
 
 ### Fixed

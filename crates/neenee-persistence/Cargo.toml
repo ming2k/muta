@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 neenee-contracts = { path = "../neenee-contracts" }
+neenee-platform = { path = "../neenee-platform" }
 tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
 futures = { workspace = true }
 serde = { workspace = true }

@@ -1,12 +1,14 @@
 # Paths
 
 Where neenee reads and writes files. Lookup-oriented: for the conceptual
-model, see [Persistence and the XDG layout](../explanation/persistence.md);
+model, see [Platform-native persistence categories](../explanation/persistence.md);
 for the durable policy, see [ADR-0014](../adr/0014-xdg-persistence-architecture.md).
 
 ## Override precedence
 
-Each XDG category resolves through the same fixed precedence, highest first.
+Each semantic category resolves through the same fixed precedence, highest
+first. XDG variables are Linux-native and remain portable explicit overrides;
+native defaults are used when they are absent.
 
 | # | Source | Notes |
 |---|--------|-------|
@@ -14,8 +16,8 @@ Each XDG category resolves through the same fixed precedence, highest first.
 | 2 | `NEENEE_CONFIG_DIR`, `NEENEE_DATA_DIR`, `NEENEE_STATE_DIR`, `NEENEE_CACHE_DIR` | App-specific env override; more specific than the root, so one category can be carved out of a sandbox |
 | 3 | `NEENEE_HOME` | Instance root (ADR-0121): `<dir>/neenee/{config,data,state,cache}` + `<dir>/neenee/instance` for daemon runtime files. One variable isolates the entire footprint — the dev/test sandbox shape. Relative or empty values are ignored |
 | 4 | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | Standard XDG env override; relative values ignored per spec |
-| 5 | Native per-OS default | `directories` crate: `~/.config` etc. on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows |
-| 6 | `$HOME/.config`, `$HOME/.local/share`, `$HOME/.local/state`, `$HOME/.cache` | Spec default when nothing else applies |
+| 5 | Native per-OS default | `directories` crate: XDG defaults on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` / `%LOCALAPPDATA%` on Windows |
+| 6 | `$HOME/.config`, `$HOME/.local/share`, `$HOME/.local/state`, `$HOME/.cache` | Unix-only last-resort default when native resolution is unavailable |
 | 7 | Current working directory | Last resort; never panics |
 
 All four categories honour the same stack — no per-subsystem special cases.
@@ -25,7 +27,8 @@ ambient desktop environment.
 
 The daemon runtime files resolve through the same idea, terminated by
 [`instance_dir`]: `--home`/`NEENEE_HOME` (`<dir>/neenee/instance`) >
-`$XDG_RUNTIME_DIR/neenee` > data dir fallback. `NEENEE_PORT` is the
+`$XDG_RUNTIME_DIR/neenee` > the native fallback (data on Unix,
+`%LOCALAPPDATA%\neenee\state\instance` on Windows). `NEENEE_PORT` is the
 port-layer sibling: it overrides the well-known 9800 default (an explicit
 `--port` still wins).
 
@@ -124,13 +127,15 @@ exists.
 
 | Path | Purpose | Lossy? |
 |------|---------|--------|
-| `daemon.lock` | Cross-process single-instance `flock` | Ephemeral |
-| `daemon.json` | Unified session-daemon discovery record (pid, TCP port, UDS path, token when exposed, daemon `version`); written on startup after the port is bound, removed on every shutdown path — graceful, forced, or panic (ADR-0096/0101) | Ephemeral |
-| `daemon.sock` | The daemon's Unix-domain control-plane socket (0600); removed on shutdown (ADR-0096) | Ephemeral |
+| `daemon.lock` | Cross-process single-instance lock (`flock` on Unix, `LockFileEx` on Windows) | Ephemeral |
+| `daemon.json` | Unified session-daemon discovery record (pid, TCP port, native local endpoint, token when exposed, daemon `version`); written on startup after the endpoints bind and removed on every shutdown path | Ephemeral |
+| `daemon.sock` | Unix only: owner-only Unix-domain control-plane socket; listener drop removes it, and the next lock-owning bind safely replaces state left by a killed daemon | Ephemeral |
+| `\\.\pipe\neenee-<user-sid>-daemon-<instance-hash>` | Windows only: instance-isolated Named Pipe with a protected DACL granting the current user and LocalSystem | Ephemeral |
 | `serve/<bucket>.json` | Legacy pre-ADR-0096 per-project discovery records; ignored by current clients (harmless litter) | Ephemeral |
 
-Without any override, the daemon falls back to the data directory for these
-files when `$XDG_RUNTIME_DIR` is unset.
+Without an instance/runtime override, macOS and Linux fall back to the data
+directory; Windows uses `%LOCALAPPDATA%\neenee\state\instance` so ephemeral
+coordination never roams with the user profile.
 
 ## Project working tree (not under XDG)
 
@@ -158,16 +163,20 @@ The override stack is identical; only the fallback locations differ.
 |----------|-------|---------|
 | Config | `~/Library/Application Support/neenee` | `%APPDATA%\neenee\config` |
 | Data | `~/Library/Application Support/neenee` | `%APPDATA%\neenee\data` |
-| State | `~/Library/Application Support/state` (no native state dir on macOS; falls back to the data dir's sibling `../state`) | `%LOCALAPPDATA%\neenee\state` |
+| State | `~/Library/Application Support/neenee/state` (macOS has no separate native state root) | `%LOCALAPPDATA%\neenee\state` |
 | Cache | `~/Library/Caches/neenee` | `%LOCALAPPDATA%\neenee\cache` |
 
-`XDG_*_HOME` env vars still take precedence over these on every platform.
+On Windows, daemon discovery and lock records fall back to
+`%LOCALAPPDATA%\neenee\state\instance`; they never enter the roaming profile.
+`XDG_*_HOME` env vars remain accepted as explicit cross-platform overrides.
+They do not replace these native defaults merely because the process runs on
+Windows or macOS.
 
 ## Isolated instances (development and testing)
 
 `--home <dir>` (or `NEENEE_HOME=<dir>`) gives neenee a fully separate
-footprint: config, credentials, sessions, skills, logs, the daemon's
-socket/lock/discovery record, and (via `NEENEE_PORT`) the default TCP port.
+footprint: config, credentials, sessions, skills, logs, the daemon's native
+endpoint/lock/discovery record, and (via `NEENEE_PORT`) the default TCP port.
 A sandboxed client spawns its on-demand daemon with the inherited
 environment, so the daemon lands in the same sandbox — the host
 installation's daemon and data are never touched.

@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 neenee-contracts = { path = "../neenee-contracts" }
 neenee-persistence = { path = "../neenee-persistence" }
+neenee-platform = { path = "../neenee-platform" }
 neenee-providers = { path = "../neenee-providers" }
 neenee-skills = { path = "../neenee-skills" }
 neenee-agent = { path = "../neenee-agent" }

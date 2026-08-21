@@ -53,27 +53,24 @@ impl Hook for CommandHook {
         let stdin_json = context_to_json(ctx);
         let cwd = ctx.cwd.as_deref().unwrap_or_else(|| Path::new("."));
 
-        let mut command = tokio::process::Command::new("sh");
-        #[cfg(unix)]
-        command.process_group(0); // hooks may spawn children; group-kill on timeout
+        let mut command = neenee_platform::shell::native_shell(&self.command);
         command
-            .arg("-c")
-            .arg(&self.command)
             .current_dir(cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         // Inherit NEENEE_* and the ambient environment so scripts can reach
         // configured tools; nothing secret is added.
-        let spawn = match command.spawn() {
-            Ok(child) => child,
+        let (child, process_tree) = match neenee_platform::process::spawn_owned(&mut command) {
+            Ok(owned) => owned,
             Err(error) => {
                 tracing::warn!(command = %self.command, ?error, "hook spawn failed");
                 return HookOutcome::Pass;
             }
         };
 
-        let result = match write_stdin_and_collect(spawn, stdin_json.as_bytes()).await {
+        let result = match write_stdin_and_collect(child, process_tree, stdin_json.as_bytes()).await
+        {
             Ok(r) => r,
             Err(error) => {
                 tracing::warn!(command = %self.command, ?error, "hook io failed");
@@ -96,6 +93,7 @@ struct CommandResult {
 /// stdout/stderr. Bounded by [`HOOK_TIMEOUT`].
 async fn write_stdin_and_collect(
     mut child: tokio::process::Child,
+    process_tree: neenee_platform::process::OwnedProcessTree,
     stdin_bytes: &[u8],
 ) -> std::io::Result<CommandResult> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -152,20 +150,11 @@ async fn write_stdin_and_collect(
         }
         Ok(Err(error)) => Err(error),
         Err(_) => {
-            // Timed out; best-effort kill. `child.wait()` borrows, so the child
-            // is still ours to kill here. The group kill also reaches hook
-            // children the shell backgrounded (process_group(0) at spawn made
-            // the hook a group leader) — a lingering hook child would outlive
-            // its budget silently otherwise.
-            #[cfg(unix)]
-            if let Some(pid) = child.id() {
-                // SAFETY: teardown-path signal; ESRCH (already dead) is fine.
-                unsafe {
-                    libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-                }
-            }
-            #[cfg(not(unix))]
-            let _ = child.start_kill();
+            // Timed out; best-effort native tree kill. `child.wait()` borrows,
+            // so the child is still ours to kill here. This also reaches hook
+            // children the shell backgrounded; a lingering hook child must not
+            // silently outlive its budget.
+            let _ = process_tree.terminate();
             Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "hook timed out",

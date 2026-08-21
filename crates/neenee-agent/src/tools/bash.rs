@@ -1,14 +1,13 @@
 use async_trait::async_trait;
 use neenee_contracts::Tool;
 use serde_json::json;
-use tokio::process::Command;
 use tokio::time::Duration;
 
 use crate::tools::helpers::{
     WorkspaceBase, env_from_root, execution_environment, json_string, workspace_base,
 };
 
-/// Execute a bash command.
+/// Execute a command in the platform's native non-interactive shell.
 ///
 /// Commands run in the session's workspace root (captured at factory time),
 /// not the daemon process's cwd — under the unified daemon (ADR-0096) those
@@ -19,7 +18,7 @@ pub struct BashTool {
 }
 
 impl BashTool {
-    /// Build a bash tool bound to an explicit workspace root. The session
+    /// Build the compatibility-named `bash` tool against a workspace root.
     /// runtime uses this for the `!`-prefix shell path, which bypasses the
     /// factory-based toolset assembly but must still run in the session's
     /// project (not the daemon's process cwd, ADR-0096).
@@ -27,7 +26,7 @@ impl BashTool {
         Self { root, env: None }
     }
 
-    /// Build a bash tool backed by a custom execution environment.
+    /// Build the shell tool backed by a custom execution environment.
     pub fn with_env(env: std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>) -> Self {
         let root = Some(env.workspace_root().to_path_buf());
         Self {
@@ -42,12 +41,14 @@ impl Tool for BashTool {
     fn name(&self) -> &str {
         "bash"
     }
-    /// `bash` runs commands — its primary purpose is execution, not workspace
+    /// The compatibility-named `bash` tool runs native-shell commands — its
+    /// primary purpose is execution, not workspace
     /// mutation — so it sits in the `Execute` tier between pure reads and
     /// file-writing tools. The broker still gates it (`Execute > Read`). See
     /// ADR-0012.
     fn description(&self) -> &str {
-        "Execute a shell command. Use for git, build, test, or any system operation. \
+        "Execute a command using the native non-interactive shell (`sh` on Unix, \
+         PowerShell on Windows). Use for git, build, test, or any system operation. \
          A command that produces no output for 10 seconds is treated as blocked \
          (e.g. waiting on stdin) and is killed early even if `timeout` is longer; \
          long but healthy commands keep producing output and are not affected."
@@ -129,8 +130,8 @@ impl Tool for BashTool {
         let timeout_duration = Duration::from_secs(timeout_secs);
 
         // Resolve the stdin policy into the `Stdio` the child is spawned with.
-        // `Closed` → `/dev/null` (the default hard floor: a child blocking on
-        // `read(stdin)` gets instant EOF). `Prefilled` → a pipe we write the
+        // `Closed` → the platform null device (the default hard floor: a child
+        // blocking on `read(stdin)` gets instant EOF). `Prefilled` → a pipe we write the
         // bytes into right after spawn; the pipe buffer holds them ahead of
         // the child's first read. (L1 — see disclosure/bash design doc.)
         let stdin_bytes = match &stdin_policy {
@@ -143,27 +144,22 @@ impl Tool for BashTool {
             std::process::Stdio::null()
         };
 
-        let mut child = if cfg!(target_os = "windows") {
-            Command::new("cmd")
-                .args(["/C", command])
-                .kill_on_drop(true)
-                .stdin(stdin_stdio)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-        } else {
+        let (mut child, process_tree) = {
             // Isolate the child from neenee's controlling terminal. neenee's
             // TUI runs in raw mode + alt screen on the *real* terminal, and a
-            // plain `sh -c` child inherits our session/process group, i.e. it
-            // shares our controlling tty. Any program that opens /dev/tty
+            // uncontained shell child can inherit terminal/process state.
+            // On Unix, a plain `sh -c` child shares our controlling tty. Any
+            // program that opens /dev/tty
             // (pinentry-curses, whiptail, dialog, sudo's password prompt,
             // `clear`/`reset`, ncurses tools pulled in transitively by
             // git/apt/…) then writes raw escape sequences *straight* to our
             // alternate screen, bypassing the retained grid + diff renderer
             // and scrambling the layout. `.process_group(0)` calls
             // `setpgid(0, 0)` between fork and exec so the child lands in its
-            // own process group; combined with the non-tty stdout/stderr
-            // pipes this keeps such programs off our screen. Those that then
+            // own process group; Windows starts the child suspended, assigns
+            // it to a kill-on-close Job Object, and only then resumes it.
+            // Combined with non-tty stdout/stderr pipes, this keeps terminal
+            // programs off our screen. Those that then
             // block waiting on a (now-inaccessible) tty are surfaced fast by
             // the idle watchdog (L2) with a remedy footer.
             //
@@ -172,12 +168,9 @@ impl Tool for BashTool {
             // is spawned from whichever client came first, so its cwd belongs
             // to a different project than the session invoking this tool.
             // `Command::current_dir` chdirs between fork and exec, so the
-            // rest of the spawn (process group, pipes) is unaffected.
-            let mut invocation = Command::new("sh");
+            // rest of the native spawn containment and pipes is unaffected.
+            let mut invocation = neenee_platform::shell::native_shell(command);
             invocation
-                .arg("-c")
-                .arg(command)
-                .process_group(0)
                 .kill_on_drop(true)
                 .stdin(stdin_stdio)
                 .stdout(std::process::Stdio::piped())
@@ -187,9 +180,9 @@ impl Tool for BashTool {
                 .clone()
                 .unwrap_or_else(|| env_from_root(&self.root));
             invocation.current_dir(env.workspace_root());
-            invocation.spawn()
+            neenee_platform::process::spawn_owned(&mut invocation)
         }
-        .map_err(|e| format!("Failed to execute: {}", e))?;
+        .map_err(|e| format!("Failed to execute and contain process tree: {e}"))?;
 
         // For a prefilled stdin, write the bytes into the pipe and drop our
         // handle so the child sees EOF once it has consumed them. The pipe
@@ -351,7 +344,7 @@ impl Tool for BashTool {
             }
 
             let exit = if idle_blocked {
-                crate::tools::kill_process_group(&child);
+                let _ = process_tree.terminate();
                 child.wait().await.ok().and_then(|s| s.code())
             } else {
                 child.wait().await.ok().and_then(|s| s.code())
@@ -379,14 +372,14 @@ impl Tool for BashTool {
 
         // The wall-clock timeout races the drain future; on timeout the
         // future is cancelled mid-await and this side fires the group kill
-        // itself (grandchildren included), then reaps within a bounded
+        // itself (descendants included), then reaps within a bounded
         // grace so a wedged child cannot hang the tool.
         let outcome = match tokio::time::timeout(timeout_duration, run).await {
             Ok(step) => step,
             Err(_) => Err(format!("Command timed out after {} seconds", timeout_secs)),
         };
         if outcome.is_err() {
-            crate::tools::kill_process_group(&child);
+            let _ = process_tree.terminate();
             let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
         }
         outcome
@@ -420,12 +413,29 @@ fn head_tail(s: &str, head: usize) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn native_command<'a>(posix: &'a str, _powershell: &'a str) -> &'a str {
+        posix
+    }
+
+    #[cfg(windows)]
+    fn native_command<'a>(_posix: &'a str, powershell: &'a str) -> &'a str {
+        powershell
+    }
+
+    fn arguments(command: &str) -> String {
+        serde_json::json!({ "command": command }).to_string()
+    }
+
     /// A healthy command captures stdout and exits cleanly with `Exited`.
     #[tokio::test]
     async fn bash_captures_stdout_and_exits() {
         let tool = BashTool::new(None);
         let out = tool
-            .call_structured(r#"{"command":"printf hello"}"#)
+            .call_structured(&arguments(native_command(
+                "printf hello",
+                "[Console]::Out.Write('hello')",
+            )))
             .await
             .expect("ok");
         match out {
@@ -457,7 +467,10 @@ mod tests {
         // immediately (EOF) rather than blocking.
         let out = tokio::time::timeout(
             Duration::from_secs(5),
-            tool.call_structured(r#"{"command":"read x"}"#),
+            tool.call_structured(&arguments(native_command(
+                "read x",
+                "if ($null -eq [Console]::In.ReadLine()) { exit 7 }",
+            ))),
         )
         .await
         .expect("closed stdin must NOT hang past 5s");
@@ -480,7 +493,10 @@ mod tests {
         let out = tool
             .call_structured_with_events(
                 "",
-                r#"{"command":"cat"}"#,
+                &arguments(native_command(
+                    "cat",
+                    "[Console]::Out.Write([Console]::In.ReadToEnd())",
+                )),
                 Box::new(|_| {}),
                 &mut on_stream,
                 neenee_contracts::StdinPolicy::Prefilled {
@@ -503,6 +519,7 @@ mod tests {
     /// child opening `/dev/tty` cannot reach neenee's controlling terminal.
     /// Verifies the isolation that keeps pinentry/whiptail/dialog from taking
     /// over the alternate screen.
+    #[cfg(unix)]
     #[tokio::test]
     async fn bash_child_runs_in_its_own_process_group() {
         let tool = BashTool::new(None);
@@ -577,6 +594,49 @@ mod tests {
         panic!("grandchild pid {pid} survived the group kill");
     }
 
+    /// Windows containment is a Job Object, not a process group. The timeout
+    /// must close the job only after terminating every process assigned to it,
+    /// including a PowerShell-spawned grandchild.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn bash_timeout_kills_grandchildren() {
+        let tool = BashTool::new(None);
+        let marker = std::env::temp_dir().join(format!(
+            "neenee-grandchild-{}.txt",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let escaped_marker = marker
+            .to_string_lossy()
+            .replace('`', "``")
+            .replace('"', "`\"");
+        let command = format!(
+            "$p = Start-Process powershell.exe -WindowStyle Hidden -PassThru \
+             -ArgumentList '-NoLogo','-NoProfile','-NonInteractive','-Command',\
+             'Start-Sleep -Seconds 60'; \
+             Set-Content -LiteralPath \"{escaped_marker}\" -Value $p.Id; \
+             Write-Output started; Wait-Process -Id $p.Id"
+        );
+        let out = tool
+            .call_structured(&serde_json::json!({ "command": command, "timeout": 2 }).to_string())
+            .await;
+        assert!(
+            matches!(&out, Err(error) if error.contains("timed out")),
+            "expected timeout error, got {out:?}"
+        );
+
+        let pid_text = std::fs::read_to_string(&marker).unwrap_or_default();
+        let pid: u32 = pid_text.trim().parse().unwrap_or(0);
+        let _ = std::fs::remove_file(&marker);
+        assert!(pid > 0, "grandchild did not record its pid ({pid_text:?})");
+        for _ in 0..50 {
+            if neenee_platform::process::process_identity(pid).is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("grandchild pid {pid} survived the Job Object termination");
+    }
+
     /// A huge-output command is capped in memory: the structured payload's
     /// head and tail survive with a drop marker between them, and the
     /// `truncated` hint is set so text consumers render the truncation note.
@@ -586,9 +646,11 @@ mod tests {
         // ~800k chars: an order of magnitude above the 64k-char collection
         // threshold (SHELL_MAX_OUTPUT_CHARS × 8).
         let out = tool
-            .call_structured(
-                r#"{"command":"for i in $(seq 1 80000); do printf 'abcdefghij'; done; echo TAIL-MARKER"}"#,
-            )
+            .call_structured(&arguments(native_command(
+                "for i in $(seq 1 80000); do printf 'abcdefghij'; done; echo TAIL-MARKER",
+                "[Console]::Out.Write((('abcdefghij' * 80000) -join '')); \
+                 [Console]::Out.WriteLine('TAIL-MARKER')",
+            )))
             .await
             .expect("ok");
         match out {
@@ -620,7 +682,10 @@ mod tests {
     async fn bash_captures_expanded_tabs() {
         let tool = BashTool::new(None);
         let out = tool
-            .call_structured(r#"{"command":"printf 'a\\tb\\n'"}"#)
+            .call_structured(&arguments(native_command(
+                "printf 'a\\tb\\n'",
+                "[Console]::Out.Write(\"a`tb`n\")",
+            )))
             .await
             .expect("ok");
         match out {

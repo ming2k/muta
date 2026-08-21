@@ -1,6 +1,6 @@
 # 0014. Unified XDG persistence architecture
 
-- **Status:** Accepted
+- **Status:** Partially superseded by ADR-0130
 - **Date:** 2026-06-23
 
 ## Context

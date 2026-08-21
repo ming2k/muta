@@ -12,12 +12,12 @@ Conceptual background and design rationale.
 
 ## Storage and persistence
 
-How neenee decides where each file lives, why it follows the XDG Base
-Directory Specification, and what is safe to delete.
+How neenee classifies files by lifetime, maps those categories to native OS
+locations, and accepts XDG paths as Linux defaults or explicit overrides.
 
 | Page | Purpose |
 |------|--------|
-| [Persistence and the XDG layout](persistence.md) | The four-category model (config / data / state / cache), override precedence, and what each category means operationally |
+| [Platform-native persistence categories](persistence.md) | The four-category model (config / data / state / cache), native locations, override precedence, and operational lifetimes |
 
 ## Agent design
 

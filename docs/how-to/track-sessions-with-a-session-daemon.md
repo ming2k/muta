@@ -113,9 +113,9 @@ verbs the web panel and scripts use (the TUI uses attach + `/dashboard`):
 | `KillSession { session_id }` | Tear a session down |
 | `Shutdown` | Stop the daemon itself — the same graceful drain as Ctrl-C/SIGTERM (what `neenee daemon stop` sends) |
 
-Over the Unix socket (default) these need no token — the socket's `0600`
-permissions are the boundary. Over an exposed TCP listener every call needs
-`Authorization: Bearer <token>`.
+Over native local IPC these need no token: Unix uses a `0600` socket and
+Windows uses a Named Pipe protected for the current user. Over an exposed TCP
+listener every call needs `Authorization: Bearer <token>`.
 
 ## 5. Stop the daemon
 
@@ -123,6 +123,9 @@ permissions are the boundary. Over an exposed TCP listener every call needs
 neenee daemon stop       # graceful, through the control plane
 kill <pid>               # SIGTERM runs the same drain (pid is in `neenee daemon status`)
 ```
+
+On Windows, use `neenee daemon stop`; the protocol drain is the portable
+shutdown contract. Process termination is only the final force tier.
 
 Both run the same budgeted drain: stop accepting, close live connections
 (watch clients get a `daemon_draining` frame first), fire every session's

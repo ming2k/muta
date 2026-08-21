@@ -16,7 +16,7 @@ and for day-to-day use see
 ├─ neenee daemon start (the daemon) ─ one process per user; owns every session
 │    session plane:  a SessionRegistry hosting N sessions across N projects
 │    control plane:  observe (Monitor) · drive (Attach) · manage (Control)
-│      ├─ Unix socket  (default; file permissions are the auth boundary)
+│      ├─ native local IPC (Unix socket / Windows Named Pipe)
 │      └─ TCP + token  (--public; for LAN clients and the web panel)
 │
 └─ clients ───────────────────────── all speak the control plane
@@ -66,9 +66,10 @@ socket:
 
 Two transports carry it:
 
-- **Unix domain socket** (default, `$XDG_RUNTIME_DIR/neenee/daemon.sock`) —
-  the local channel for the CLI and TUI. `0600` in a `0700` runtime dir;
-  the filesystem *is* the authentication, so no token.
+- **Native local IPC** — Unix uses an owner-only domain socket; Windows uses a
+  Named Pipe with a protected current-user DACL and remote clients disabled.
+  The OS access boundary authenticates local CLI and TUI clients, so this
+  channel needs no bearer token.
 - **TCP + bearer token** (`neenee daemon start --fg --public`) — for LAN clients and
   the web panel. Exposing is always an explicit opt-in that carries a token
   (ADR-0054's model); TLS is fronted by a reverse proxy. See
@@ -89,14 +90,14 @@ and calls control verbs — no web-specific server exists or is needed.
 1. Any `neenee` or `neenee attach` finds no live daemon record
    (`daemon.json`) and spawns the daemon detached; or you run
    `neenee daemon start` yourself (detached by default; `--fg` for supervisors).
-2. The daemon binds the UDS (always) and a TCP port (loopback by default,
+2. The daemon binds native local IPC and a TCP port (loopback by default,
    exposed with `--public`), writes the global discovery record, and waits.
 3. Sessions are created on demand (a client's attach, or a control
    `create_session`) and assembled lazily from disk on first attach.
 4. Clients observe via `status` / `/host`, drive via attach, manage via the
    control verbs. Closing a client never disturbs the session.
 5. On shutdown the daemon cancels its sessions' drivers and removes the
-   discovery record and socket.
+   discovery record and any filesystem-backed local endpoint.
 
 ## What this replaced
 

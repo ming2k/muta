@@ -12,11 +12,11 @@ Its machine-readable contract is [`server.asyncapi.yaml`](server.asyncapi.yaml).
 ## Roles and entry points
 
 The daemon (`neenee daemon start --fg` — the single binary, ADR-0102) serves one
-control-plane endpoint per user, on a Unix domain socket plus a TCP loopback
-listener by default (fixed port 9800, ephemeral fallback), and on all
-interfaces when `--public` (ADR-0096/0105). Three client roles share the
-protocol, distinguished by the first frame the client sends after the
-upgrade (`Select`):
+control-plane endpoint per user, on owner-only native local IPC plus a TCP
+loopback listener by default (fixed port 9800, ephemeral fallback), and on all
+interfaces when `--public` (ADR-0096/0105/0130). Unix uses a domain socket and
+Windows uses a Named Pipe. Three client roles share the protocol,
+distinguished by the first frame the client sends after the upgrade (`Select`):
 
 | Role | Handshake | Direction | Purpose |
 |------|-----------|-----------|---------|
@@ -29,11 +29,13 @@ the unified daemon; the protocol below is the daemon's control plane.
 
 ## Bind and authentication
 
-- **Unix domain socket (default, ADR-0096):** the daemon's primary local
-  channel at `$XDG_RUNTIME_DIR/neenee/daemon.sock`, `0600` inside a `0700`
-  runtime dir. No bearer token — the filesystem permissions are the auth
-  boundary. CLI and TUI use this. The instance root selector
-  (`--home` / `NEENEE_HOME`) moves this directory wholesale (ADR-0121).
+- **Native local IPC (default, ADR-0096/0130):** Unix uses
+  `$XDG_RUNTIME_DIR/neenee/daemon.sock`, `0600` inside a `0700` directory.
+  Windows uses `\\.\pipe\neenee-<user-sid>-daemon-<instance-hash>`, rejects remote clients,
+  and applies a protected DACL for the current user and LocalSystem. No bearer
+  token is required because the OS endpoint is the authentication boundary.
+  The instance root selector moves Unix runtime files; Windows instance
+  isolation is encoded in the discovered endpoint and state root.
 - **TCP loopback (default port 9800, ADR-0105):** binds `127.0.0.1` and, with
   `[daemon] local_auth` on (the default), **requires a bearer token**,
   generated per daemon start and published in the owner-only (0600)
@@ -81,13 +83,14 @@ the request head. Plain HTTP serves:
 
 | Mode | Bind | Auth | Use |
 |------|------|------|-----|
-| default (Unix socket) | `$XDG_RUNTIME_DIR/neenee/daemon.sock` | none — filesystem permissions (`0600` in a `0700` runtime dir) are the boundary | local CLI / TUI |
+| default (Unix) | `$XDG_RUNTIME_DIR/neenee/daemon.sock` | none — filesystem permissions (`0600` in a `0700` runtime dir) | local CLI / TUI |
+| default (Windows) | `\\.\pipe\neenee-<user-sid>-daemon-<instance-hash>` | none — protected current-user DACL; remote pipe clients rejected | local CLI / TUI |
 | default (TCP loopback) | `127.0.0.1:9800` | bearer token (default; `local_auth = false` disables) + loopback-origin check | local co-processes, the web panel |
 | `--public` | `0.0.0.0` | bearer token (mandatory) | remote client / another machine |
 
-Because the default binds a Unix socket plus loopback, a casual host exposes
-nothing beyond this machine. Exposure is an explicit opt-in that cannot
-happen without a token. See ADR-0054 and ADR-0105 for the rationale. For a
+Because the default binds native local IPC plus loopback, a casual host
+exposes nothing beyond this machine. Exposure is an explicit opt-in that
+cannot happen without a token. See ADR-0054, ADR-0105, and ADR-0130 for the rationale. For a
 remote client walkthrough see
 [How to expose the daemon to LAN clients](../how-to/expose-the-daemon-to-lan-clients.md).
 

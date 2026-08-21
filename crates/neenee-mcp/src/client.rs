@@ -84,6 +84,7 @@ pub struct McpLoadResult {
 }
 
 struct McpTransport {
+    process_tree: neenee_platform::process::OwnedProcessTree,
     _child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
@@ -91,17 +92,10 @@ struct McpTransport {
 
 impl Drop for McpTransport {
     fn drop(&mut self) {
-        // `kill_on_drop` fires here too, but it signals only the direct
-        // child. With `process_group(0)` at spawn, a group kill also takes
-        // down the wrapped server (`npx`/`uvx` wrappers) — without this, a
-        // reconfigured or disabled MCP server leaked its grandchild.
-        #[cfg(unix)]
-        if let Some(pid) = self._child.id() {
-            // SAFETY: teardown-path signal; ESRCH (already dead) is fine.
-            unsafe {
-                libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-            }
-        }
+        // `kill_on_drop` signals only the direct child. Native tree
+        // containment also takes down wrapped servers (`npx`/`uvx`), so a
+        // reconfigured or disabled MCP source cannot leak its grandchild.
+        let _ = self.process_tree.terminate();
     }
 }
 
@@ -118,13 +112,9 @@ impl McpClient {
             .ok_or_else(|| "MCP command must not be empty".to_string())?;
 
         let mut command = Command::new(program);
-        // Group isolation: MCP servers are usually wrappers (`npx`, `uvx`)
-        // around a real server process. `kill_on_drop` signals only the
-        // direct child, so the wrapped server would survive a reconfigure/
-        // disable. A dedicated process group lets teardown kill the whole
-        // tree (see `kill_mcp_group`).
-        #[cfg(unix)]
-        command.process_group(0);
+        // MCP servers are usually wrappers (`npx`, `uvx`) around a real
+        // server process. Native owned-tree containment ensures teardown
+        // reaches the wrapped process too.
         command
             .args(args)
             .envs(&config.environment)
@@ -133,8 +123,7 @@ impl McpClient {
             .stderr(Stdio::null())
             .kill_on_drop(true);
 
-        let mut child = command
-            .spawn()
+        let (mut child, process_tree) = neenee_platform::process::spawn_owned(&mut command)
             .map_err(|error| format!("failed to spawn '{}': {}", program, error))?;
         let stdin = child
             .stdin
@@ -146,6 +135,7 @@ impl McpClient {
             .ok_or_else(|| "MCP server stdout is unavailable".to_string())?;
         let client = Arc::new(Self {
             transport: Mutex::new(McpTransport {
+                process_tree,
                 _child: child,
                 stdin,
                 stdout: BufReader::new(stdout),

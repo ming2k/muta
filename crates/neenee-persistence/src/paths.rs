@@ -6,14 +6,14 @@
 //!
 //! 1. `--home <dir>` CLI flag (expressed via the matching
 //!    [`PathsOverride`]) — the **instance root** (ADR-0121).
-//! 2. `NEENEE_HOME` — the env form of the same selector: one variable
-//!    moves the entire footprint (`<home>/neenee/{config,data,state,
-//!    cache}` plus the daemon's runtime files under `instance/`), so a
-//!    dev or test build can never touch the host installation's state.
-//! 3. `NEENEE_CONFIG_DIR` / `NEENEE_DATA_DIR` / `NEENEE_STATE_DIR` /
+//! 2. `NEENEE_CONFIG_DIR` / `NEENEE_DATA_DIR` / `NEENEE_STATE_DIR` /
 //!    `NEENEE_CACHE_DIR` environment variables (app-specific
 //!    per-category overrides; more specific than the root, so one
 //!    category can still be carved out of a sandbox).
+//! 3. `NEENEE_HOME` — the env form of the instance selector: one variable
+//!    moves the entire footprint (`<home>/neenee/{config,data,state,
+//!    cache}` plus the daemon's runtime files under `instance/`), so a
+//!    dev or test build can never touch the host installation's state.
 //! 4. `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 //!    `XDG_CACHE_HOME` / `XDG_RUNTIME_DIR` environment variables
 //!    (standard XDG overrides; relative values are ignored per spec).
@@ -23,8 +23,9 @@
 //!    `directories` crate cannot resolve a native location.
 //!
 //! On Linux `$XDG_RUNTIME_DIR` is honoured for the daemon's runtime files;
-//! if it is unset the data directory is used (portable fallback). The
-//! daemon-facing derivation of that rule lives in [`Dirs::instance_dir`].
+//! if it is unset macOS/Linux use the data directory and Windows uses a
+//! machine-local state subdirectory. The daemon-facing derivation of that
+//! rule lives in [`Dirs::instance_dir`].
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -73,7 +74,11 @@ pub struct Dirs {
 impl Dirs {
     /// Resolve using the given CLI overrides combined with env / native.
     pub fn resolve(overrides: &PathsOverride) -> Self {
-        let project = ProjectDirs::from("ai", "neenee", "neenee");
+        // A single application component is intentional. Supplying the app
+        // name as both organization and application produces
+        // `%APPDATA%\neenee\neenee` on Windows and an equally duplicated
+        // macOS bundle path. Linux ignores those fields, which hid the bug.
+        let project = ProjectDirs::from("", "", "neenee");
         // The instance root (ADR-0121): the `--home` flag beats the
         // `NEENEE_HOME` env var; both are normalised to the `neenee`-suffixed
         // base once, so every category and the instance dir hang off one
@@ -334,17 +339,22 @@ impl Dirs {
     /// It is exactly [`Self::runtime_dir`] when a runtime location resolves
     /// (`--home`/`NEENEE_HOME` → `<home>/neenee/instance`, else
     /// `$XDG_RUNTIME_DIR/neenee`), else the data dir as the portable
-    /// fallback — the same rule every daemon-facing call site applied
-    /// before ADR-0121, now named once.
+    /// fallback. Windows instead uses `state_dir/instance`, keeping process
+    /// coordination out of the roaming profile. The rule is named once here.
     ///
     /// Code that touches daemon runtime files must use this method — never
     /// `runtime_dir` directly — so every daemon-facing path observes the
     /// same override stack. `runtime_dir` stays public as the raw resolved
     /// location for diagnostics and tests that anchor other ephemeral files.
     pub fn instance_dir(&self) -> PathBuf {
-        self.runtime_dir
-            .clone()
-            .unwrap_or_else(|| self.data_dir.clone())
+        self.runtime_dir.clone().unwrap_or_else(|| {
+            #[cfg(windows)]
+            {
+                return self.state_dir.join("instance");
+            }
+            #[cfg(not(windows))]
+            self.data_dir.clone()
+        })
     }
 
     /// Best-effort initial creation of every directory neenee may write to.
@@ -511,10 +521,25 @@ impl Kind {
         Some(match self {
             Kind::Config => p.config_dir().to_path_buf(),
             Kind::Data => p.data_dir().to_path_buf(),
-            Kind::State => p
-                .state_dir()
-                .map(|d| d.to_path_buf())
-                .unwrap_or_else(|| p.data_dir().join("../state")),
+            Kind::State => p.state_dir().map(Path::to_path_buf).unwrap_or_else(|| {
+                #[cfg(windows)]
+                {
+                    // State is machine-local and must not roam with the user
+                    // profile. `data_local_dir` ends in `data`; use its app
+                    // parent to produce `%LOCALAPPDATA%\neenee\state`.
+                    return p
+                        .data_local_dir()
+                        .parent()
+                        .unwrap_or_else(|| p.data_local_dir())
+                        .join("state");
+                }
+                #[cfg(not(windows))]
+                {
+                    // macOS has no separate state directory. Keep it namespaced
+                    // under this application's Application Support directory.
+                    p.data_dir().join("state")
+                }
+            }),
             Kind::Cache => p.cache_dir().to_path_buf(),
         })
     }
@@ -666,6 +691,10 @@ mod tests {
     /// env vars omit the guard and can still run in parallel.
     static ENV_GUARD: Mutex<()> = Mutex::new(());
 
+    fn absolute_test_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join("neenee-path-tests").join(name)
+    }
+
     macro_rules! env_locked {
         ($body:block) => {{
             let _guard = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -686,19 +715,45 @@ mod tests {
     }
 
     #[test]
+    fn native_project_identity_has_one_application_component() {
+        let project = ProjectDirs::from("", "", "neenee").expect("native project dirs");
+        assert_eq!(project.project_path(), Path::new("neenee"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_state_is_machine_local_and_app_scoped() {
+        let project = ProjectDirs::from("", "", "neenee").expect("native project dirs");
+        let state = Kind::State
+            .native(Some(&project))
+            .expect("native state dir");
+        assert!(state.ends_with(Path::new("neenee").join("state")));
+        assert!(state.starts_with(project.data_local_dir().parent().unwrap()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_state_stays_inside_application_support_namespace() {
+        let project = ProjectDirs::from("", "", "neenee").expect("native project dirs");
+        let state = Kind::State
+            .native(Some(&project))
+            .expect("native state dir");
+        assert_eq!(state, project.data_dir().join("state"));
+    }
+
+    #[test]
     fn resolve_honours_neenee_env_over_xdg_env() {
         env_locked!({
+            let neenee_data = absolute_test_root("neenee-data");
+            let xdg_data = absolute_test_root("xdg-data");
             unsafe {
-                std::env::set_var("NEENEE_DATA_DIR", "/tmp/neenee-paths-test-data");
+                std::env::set_var("NEENEE_DATA_DIR", &neenee_data);
             }
             unsafe {
-                std::env::set_var("XDG_DATA_HOME", "/tmp/should-not-be-used");
+                std::env::set_var("XDG_DATA_HOME", xdg_data);
             }
             let dirs = Dirs::resolve(&PathsOverride::default());
-            assert_eq!(
-                dirs.data_dir,
-                PathBuf::from("/tmp/neenee-paths-test-data/neenee")
-            );
+            assert_eq!(dirs.data_dir, neenee_data.join("neenee"));
             unsafe {
                 std::env::remove_var("NEENEE_DATA_DIR");
             }
@@ -711,14 +766,16 @@ mod tests {
     #[test]
     fn resolve_cli_override_beats_env() {
         env_locked!({
+            let env_data = absolute_test_root("env-loses");
+            let cli_data = absolute_test_root("cli-wins");
             unsafe {
-                std::env::set_var("NEENEE_DATA_DIR", "/tmp/env-loses");
+                std::env::set_var("NEENEE_DATA_DIR", env_data);
             }
             let dirs = Dirs::resolve(&PathsOverride {
-                data_dir: Some(PathBuf::from("/tmp/cli-wins")),
+                data_dir: Some(cli_data.clone()),
                 ..Default::default()
             });
-            assert_eq!(dirs.data_dir, PathBuf::from("/tmp/cli-wins/neenee"));
+            assert_eq!(dirs.data_dir, cli_data.join("neenee"));
             unsafe {
                 std::env::remove_var("NEENEE_DATA_DIR");
             }
@@ -752,18 +809,19 @@ mod tests {
     #[test]
     fn runtime_dir_only_when_xdg_runtime_dir_set() {
         env_locked!({
+            let runtime = absolute_test_root("runtime");
             unsafe {
                 std::env::remove_var("XDG_RUNTIME_DIR");
             }
             let dirs = Dirs::resolve(&PathsOverride::default());
             assert!(dirs.runtime_dir.is_none());
             unsafe {
-                std::env::set_var("XDG_RUNTIME_DIR", "/run/user/12345");
+                std::env::set_var("XDG_RUNTIME_DIR", &runtime);
             }
             let dirs = Dirs::resolve(&PathsOverride::default());
             assert_eq!(
                 dirs.runtime_dir.as_deref(),
-                Some(std::path::Path::new("/run/user/12345/neenee"))
+                Some(runtime.join("neenee").as_path())
             );
             unsafe {
                 std::env::remove_var("XDG_RUNTIME_DIR");
@@ -776,6 +834,8 @@ mod tests {
     #[test]
     fn neenee_home_redirects_every_category_and_the_instance_dir() {
         env_locked!({
+            let runtime = absolute_test_root("runtime-priority");
+            let home = absolute_test_root("home");
             for var in [
                 "NEENEE_HOME",
                 "NEENEE_CONFIG_DIR",
@@ -788,26 +848,27 @@ mod tests {
                 }
             }
             unsafe {
-                std::env::set_var("XDG_RUNTIME_DIR", "/run/user/12345");
+                std::env::set_var("XDG_RUNTIME_DIR", &runtime);
             }
             let dirs = Dirs::resolve(&PathsOverride::default());
             assert_eq!(
                 dirs.instance_dir(),
-                PathBuf::from("/run/user/12345/neenee"),
+                runtime.join("neenee"),
                 "without NEENEE_HOME the XDG runtime dir still wins"
             );
 
             unsafe {
-                std::env::set_var("NEENEE_HOME", "/tmp/nn-home");
+                std::env::set_var("NEENEE_HOME", &home);
             }
             let dirs = Dirs::resolve(&PathsOverride::default());
-            assert_eq!(dirs.config_dir, PathBuf::from("/tmp/nn-home/neenee/config"));
-            assert_eq!(dirs.data_dir, PathBuf::from("/tmp/nn-home/neenee/data"));
-            assert_eq!(dirs.state_dir, PathBuf::from("/tmp/nn-home/neenee/state"));
-            assert_eq!(dirs.cache_dir, PathBuf::from("/tmp/nn-home/neenee/cache"));
+            let app_home = home.join("neenee");
+            assert_eq!(dirs.config_dir, app_home.join("config"));
+            assert_eq!(dirs.data_dir, app_home.join("data"));
+            assert_eq!(dirs.state_dir, app_home.join("state"));
+            assert_eq!(dirs.cache_dir, app_home.join("cache"));
             assert_eq!(
                 dirs.instance_dir(),
-                PathBuf::from("/tmp/nn-home/neenee/instance"),
+                app_home.join("instance"),
                 "the instance dir must follow the sandbox root, not the host XDG runtime"
             );
 
@@ -822,17 +883,20 @@ mod tests {
     #[test]
     fn home_flag_beats_the_neenee_home_env() {
         env_locked!({
+            let env_home = absolute_test_root("env-home");
+            let cli_home = absolute_test_root("cli-home");
+            let runtime = absolute_test_root("runtime-loses");
             unsafe {
-                std::env::set_var("NEENEE_HOME", "/tmp/nn-env-home");
-                std::env::set_var("XDG_RUNTIME_DIR", "/run/user/12345");
+                std::env::set_var("NEENEE_HOME", env_home);
+                std::env::set_var("XDG_RUNTIME_DIR", runtime);
             }
             let dirs = Dirs::resolve(&PathsOverride {
-                home: Some(PathBuf::from("/tmp/nn-cli-home")),
+                home: Some(cli_home.clone()),
                 ..Default::default()
             });
             assert_eq!(
                 dirs.instance_dir(),
-                PathBuf::from("/tmp/nn-cli-home/neenee/instance"),
+                cli_home.join("neenee").join("instance"),
                 "the --home flag is the same selector as NEENEE_HOME, and wins"
             );
             for var in ["NEENEE_HOME", "XDG_RUNTIME_DIR"] {
@@ -846,25 +910,28 @@ mod tests {
     #[test]
     fn neenee_home_leaves_headroom_for_per_category_overrides() {
         env_locked!({
+            let home = absolute_test_root("root-home");
+            let data = absolute_test_root("explicit-data");
+            let runtime = absolute_test_root("ignored-runtime");
             unsafe {
-                std::env::set_var("NEENEE_HOME", "/tmp/nn-home");
-                std::env::set_var("NEENEE_DATA_DIR", "/tmp/nn-explicit-data");
-                std::env::set_var("XDG_RUNTIME_DIR", "/run/user/12345");
+                std::env::set_var("NEENEE_HOME", &home);
+                std::env::set_var("NEENEE_DATA_DIR", &data);
+                std::env::set_var("XDG_RUNTIME_DIR", runtime);
             }
             let dirs = Dirs::resolve(&PathsOverride::default());
             assert_eq!(
                 dirs.data_dir,
-                PathBuf::from("/tmp/nn-explicit-data/neenee"),
+                data.join("neenee"),
                 "a per-category env var is more specific than the instance root"
             );
             assert_eq!(
                 dirs.instance_dir(),
-                PathBuf::from("/tmp/nn-home/neenee/instance"),
+                home.join("neenee").join("instance"),
                 "the daemon runtime files follow the root"
             );
             assert_eq!(
                 dirs.config_dir,
-                PathBuf::from("/tmp/nn-home/neenee/config"),
+                home.join("neenee").join("config"),
                 "categories without an explicit override keep following the root"
             );
             for var in ["NEENEE_HOME", "NEENEE_DATA_DIR", "XDG_RUNTIME_DIR"] {
@@ -899,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn instance_dir_falls_back_to_data_dir_without_a_runtime_location() {
+    fn instance_dir_uses_the_native_fallback_without_a_runtime_location() {
         env_locked!({
             for var in ["XDG_RUNTIME_DIR", "NEENEE_HOME"] {
                 unsafe {
@@ -907,6 +974,9 @@ mod tests {
                 }
             }
             let dirs = Dirs::resolve(&PathsOverride::default());
+            #[cfg(windows)]
+            assert_eq!(dirs.instance_dir(), dirs.state_dir.join("instance"));
+            #[cfg(not(windows))]
             assert_eq!(dirs.instance_dir(), dirs.data_dir);
         });
     }

@@ -9,12 +9,12 @@ license.workspace = true
 neenee-contracts = { path = "../neenee-contracts" }
 neenee-llm-client = { path = "../neenee-llm-client" }
 neenee-persistence = { path = "../neenee-persistence" }
+neenee-platform = { path = "../neenee-platform" }
 neenee-providers = { path = "../neenee-providers" }
 neenee-skills = { path = "../neenee-skills" }
 neenee-tool-derive = { path = "../neenee-tool-derive" }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-util = { workspace = true }
-libc = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }

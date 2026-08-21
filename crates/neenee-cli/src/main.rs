@@ -474,6 +474,9 @@ async fn stop_daemon() -> Result<(), String> {
                 if client::is_process_alive(pid) {
                     client::DaemonInfo {
                         pid,
+                        process_birth_token: neenee_platform::process::process_identity(pid)
+                            .ok()
+                            .map(|identity| identity.birth_token),
                         port: neenee_runtime::startup::env_default_port(),
                         token: None,
                         project_root: String::new(),
@@ -482,6 +485,8 @@ async fn stop_daemon() -> Result<(), String> {
                         uds_path: Some(neenee_runtime::serve_discovery::default_uds_path()),
                         #[cfg(not(unix))]
                         uds_path: None,
+                        local_endpoint: neenee_runtime::serve_discovery::default_local_endpoint()
+                            .ok(),
                         version: None,
                         grace_secs: None,
                     }
@@ -673,8 +678,10 @@ async fn run_daemon_foreground(flags: DaemonStart) -> Result<(), Box<dyn std::er
             local_auth: !flags.no_local_auth
                 && neenee_persistence::config::Config::load().daemon.local_auth,
             port_fallback: flags.port.is_none(),
-            #[cfg(unix)]
-            uds_path: Some(neenee_runtime::serve_discovery::default_uds_path()),
+            local_endpoint: Some(
+                neenee_runtime::serve_discovery::default_local_endpoint()
+                    .map_err(std::io::Error::other)?,
+            ),
         },
         std::sync::Arc::new(neenee_runtime::shutdown::ShutdownGate::new()),
         lifecycle,

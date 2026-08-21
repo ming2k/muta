@@ -1,4 +1,4 @@
-# Persistence and the XDG layout
+# Platform-native persistence categories
 
 neenee writes a lot to disk: conversations, file blobs, embeddings,
 telemetry, advisory locks, cached skills. The question "where does this
@@ -12,14 +12,14 @@ see [ADR-0014](../adr/0014-xdg-persistence-architecture.md). For the shape of a
 recoverable coding-agent session inside the data category, see
 [Session persistence](agent-design/session-persistence.md).
 
-## Why XDG
+## Why categories are platform-neutral
 
 The [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/)
-splits user-level files into categories that have **different operational
-lifetimes**. That split is what makes backup, snapshot, and cleanup
-tractable. neenee adopts it wholesale rather than inventing its own
-`~/.neenee/` bucket — and rather than each subsystem inventing its own
-answer to "where do I put this".
+provides a strong semantic split for user-level files with **different
+operational lifetimes**. neenee adopts those meanings without treating Linux
+paths as a universal filesystem convention. Linux uses XDG locations, macOS
+uses Application Support and Caches, and Windows uses Roaming and Local App
+Data. Explicit `XDG_*` variables remain portable overrides.
 
 The historical alternative — one monolithic `~/.neenee/` directory — had
 three problems in practice:
@@ -39,7 +39,7 @@ matching XDG category.
 
 ### Config — files the user edits by hand
 
-`$XDG_CONFIG_HOME/neenee/` (default `~/.config/neenee/`).
+On Linux, `$XDG_CONFIG_HOME/neenee/` (default `~/.config/neenee/`).
 
 `config.toml` is the hand-edited configuration, and `credentials.toml`
 (0600) is its secret half: API keys split out so the config file can be
@@ -62,7 +62,7 @@ See [ADR-0115](../adr/0115-credential-placement-config-vs-state.md).
 
 ### Data — persistent, program-generated, must survive restart
 
-`$XDG_DATA_HOME/neenee/` (default `~/.local/share/neenee/`).
+On Linux, `$XDG_DATA_HOME/neenee/` (default `~/.local/share/neenee/`).
 
 Conversations, content-addressed blobs, per-project
 embedding indices, cached permission approvals, and user-authored skills
@@ -77,7 +77,7 @@ projects astronomically unlikely.
 
 ### State — persistent, program-generated, rebuildable
 
-`$XDG_STATE_HOME/neenee/` (default `~/.local/state/neenee/`).
+On Linux, `$XDG_STATE_HOME/neenee/` (default `~/.local/state/neenee/`).
 
 Slash-command history, per-model usage telemetry that orders the provider
 picker by recency, advisory lock files when no runtime directory is
@@ -97,18 +97,20 @@ login — the categories describe ownership and churn, not backup-worthiness
 
 ### Cache — derived, deletable, repopulated on demand
 
-`$XDG_CACHE_HOME/neenee/` (default `~/.cache/neenee/`).
+On Linux, `$XDG_CACHE_HOME/neenee/` (default `~/.cache/neenee/`).
 
 The remote-skill cache. Safe to delete at any time; the next startup
 that needs a remote skill fetches it again. Treat as ephemeral.
 
-### Runtime (Linux only) — ephemeral per login
+### Runtime — ephemeral per daemon
 
 `$XDG_RUNTIME_DIR/neenee/` when the variable is set.
 
-Cross-process advisory locks. neenee honours this only when the
-environment provides it; on platforms without `XDG_RUNTIME_DIR`, locks
-fall back to state. Never assume runtime exists.
+On Linux, `$XDG_RUNTIME_DIR` holds ephemeral discovery and lock files when it
+is available. macOS uses its application-data fallback; Windows keeps the
+records in machine-local state rather than the roaming profile. Local control
+traffic follows native access boundaries: Unix uses a domain socket, while
+Windows uses a per-user Named Pipe.
 
 ## What is *not* under XDG
 
@@ -140,8 +142,8 @@ From highest to lowest:
    installed neenee (ADR-0121). The env form of `--home`; sits below the
    per-category vars so a sandbox can still carve one category out.
 4. **Standard XDG env var.** `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
-   `XDG_STATE_HOME`, `XDG_CACHE_HOME`. Affects every compliant
-   application; ideal for shared setups.
+   `XDG_STATE_HOME`, `XDG_CACHE_HOME`. Native on Linux and accepted as an
+   explicit portable override elsewhere.
 5. **Native per-OS default.** On macOS, `~/Library/Application
    Support/neenee`; on Windows, `%APPDATA%\neenee`. Provided by the
    platform's convention rather than the spec.

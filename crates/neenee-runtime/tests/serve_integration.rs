@@ -937,30 +937,49 @@ async fn control_create_observe_kill_roundtrip() {
     let _ = probe;
 }
 
-/// ADR-0096: the same control plane is served over the Unix domain socket —
-/// no bearer token (filesystem permissions are the auth boundary).
-#[cfg(unix)]
+/// ADR-0096/0130: the same control plane is served over native local IPC —
+/// UDS on Unix and a per-user named pipe on Windows. No bearer token is
+/// needed because the OS endpoint permissions are the authentication boundary.
 #[tokio::test]
-async fn uds_serves_same_protocol_without_token() {
+async fn native_local_ipc_serves_same_protocol_without_token() {
     let tmp = tempfile::tempdir().unwrap();
-    let uds = tmp.path().join("daemon.sock");
+    let socket_path = tmp.path().join("daemon.sock");
+    let endpoint = neenee_platform::ipc::endpoint_for_instance(
+        socket_path.clone(),
+        &format!("serve-integration-{}", std::process::id()),
+    )
+    .unwrap();
     let registry = Arc::new(SessionRegistry::prehost_only());
     let mut handle = serve::start_server(
         serve::ServeOptions {
-            uds_path: Some(uds.clone()),
+            local_endpoint: Some(endpoint.clone()),
             ..serve::ServeOptions::default()
         },
         registry,
     );
-    let bound = handle.startup.uds_ready.take().unwrap().await.unwrap();
-    assert_eq!(bound.as_deref(), Some(uds.as_path()));
+    let bound = handle
+        .startup
+        .local_ready
+        .take()
+        .unwrap()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bound, Some(endpoint.clone()));
     // Socket file is 0600.
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(&uds).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "socket must be 0600, got {mode:o}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&socket_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "socket must be 0600, got {mode:o}");
+    }
 
-    // Full handshake over UDS: monitor one-shot.
-    let stream = tokio::net::UnixStream::connect(&uds).await.unwrap();
+    // Full handshake over the native endpoint: monitor one-shot.
+    let stream = neenee_platform::ipc::connect(&endpoint).await.unwrap();
     let request = "ws://localhost/".into_client_request().unwrap();
     let (mut ws, _) = tokio_tungstenite::client_async(request, stream)
         .await
@@ -985,7 +1004,7 @@ async fn uds_serves_same_protocol_without_token() {
         Wire::Monitor {
             event: MonitorEvent::Snapshot(_),
         } => {}
-        other => panic!("expected Snapshot over UDS, got {other:?}"),
+        other => panic!("expected Snapshot over native local IPC, got {other:?}"),
     }
 
     // Cancel cleans up the socket file — deterministically: the removal runs
@@ -1001,7 +1020,36 @@ async fn uds_serves_same_protocol_without_token() {
         hung.is_empty(),
         "accept tasks must stop on cancel: {hung:?}"
     );
-    assert!(!uds.exists(), "socket file removed on shutdown");
+    let probe = neenee_platform::ipc::probe(&endpoint);
+    assert!(
+        !probe.exists,
+        "local endpoint removed on shutdown: {endpoint}"
+    );
+}
+
+#[tokio::test]
+async fn native_local_ipc_bind_failure_is_reported() {
+    let tmp = tempfile::tempdir().unwrap();
+    let endpoint = neenee_platform::ipc::endpoint_for_instance(
+        tmp.path().join("occupied.sock"),
+        &format!("occupied-{}", std::process::id()),
+    )
+    .unwrap();
+    let _occupied = neenee_platform::ipc::LocalListener::bind(&endpoint).unwrap();
+    let registry = Arc::new(SessionRegistry::prehost_only());
+    let mut handle = serve::start_server(
+        serve::ServeOptions {
+            local_endpoint: Some(endpoint),
+            ..serve::ServeOptions::default()
+        },
+        registry,
+    );
+    let result = handle.startup.local_ready.take().unwrap().await.unwrap();
+    assert!(
+        result.is_err(),
+        "an occupied native endpoint must fail startup"
+    );
+    handle.cancel.cancel();
 }
 
 // ── Idle-empty session reaper ─────────────────────────────────────────────
@@ -1378,11 +1426,13 @@ async fn version_skew_is_refused_with_both_versions() {
 fn global_record_carries_the_daemon_version() {
     let record = neenee_runtime::serve_discovery::Discovery {
         pid: 1,
+        process_birth_token: None,
         port: 2,
         token: None,
         project_root: String::new(),
         started_at: 3,
         uds_path: None,
+        local_endpoint: None,
         version: Some(serve::daemon_version().to_string()),
         grace_secs: None,
     };

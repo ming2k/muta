@@ -9,60 +9,32 @@
 //! such that a power loss after `rename` leaves neither the old nor the new
 //! file reachable.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// Owner-only mode (`rw-------`) applied to every file we write and `rwx------`
-/// to its parent directory on Unix. Config and session files hold secrets (API
-/// keys) and private conversation content, so they must never be group- or
-/// world-readable regardless of the caller's umask.
-#[cfg(unix)]
-const FILE_MODE: u32 = 0o600;
-#[cfg(unix)]
-const DIR_MODE: u32 = 0o700;
-
+/// Owner-only protection applied to every file we write and its leaf parent:
+/// Unix uses `0600`/`0700`; Windows uses protected current-user DACLs. Config
+/// and session files hold secrets (API keys) and private conversation content,
+/// so inherited or ambient permissions must never weaken this boundary.
 /// Create the leaf parent directory of `path` (and any missing ancestors),
-/// then best-effort tighten the leaf to owner-only on Unix.
+/// then tighten the leaf to the platform's owner-only policy.
 fn create_parent_dir(path: &Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            // Best-effort: an already-existing dir keeps its mode; we only
-            // tighten, never loosen, and a failure here is non-fatal.
-            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(DIR_MODE));
-        }
-    }
-    Ok(())
+    neenee_platform::secure_file::create_private_parent(path)
 }
 
 /// Create `path` for writing with owner-only permissions from the moment it
 /// exists, so there is never a window where the file is group/world-readable.
 fn create_private_file(path: &Path) -> std::io::Result<File> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(FILE_MODE)
-            .open(path)
-    }
-    #[cfg(not(unix))]
-    {
-        File::create(path)
-    }
+    neenee_platform::secure_file::create_private_file(path)
 }
 
 /// Write `bytes` atomically: serialise to `<path>.tmp`, `fsync`, `rename` over
 /// `path`, then best-effort `fsync` of `path`'s parent directory.
 ///
-/// On Unix the temp file is created `rw-------` and its parent directory
-/// tightened to `rwx------`, so secrets (API keys, conversation history) never
-/// land on disk group- or world-readable.
+/// The temp file and leaf parent are owner-only from creation (`0600`/`0700`
+/// on Unix, protected current-user DACLs on Windows), so secrets never pass
+/// through a broadly readable state.
 ///
 /// Returns the original [`std::io::Error`] on any failure. The temporary file
 /// is best-effort cleaned up on failure (its presence is not itself corrupting —
@@ -75,7 +47,7 @@ pub fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&temporary, path)?;
+        neenee_platform::secure_file::atomic_replace(&temporary, path)?;
         if let Some(parent) = path.parent()
             && let Ok(dir) = File::open(parent)
         {
@@ -117,15 +89,11 @@ pub fn atomic_write_json<T: serde::Serialize + ?Sized>(
 /// opened once and never renamed, so its file-description lock reliably
 /// serialises every holder for the lock's lifetime.
 ///
-/// On non-Unix platforms this is a structural no-op (the companion file is
-/// created for symmetry, but no mutual exclusion is enforced). The state it
-/// guards is rebuildable cosmetic telemetry, so the residual race is
-/// acceptable there and is documented in ADR-0018.
+/// The companion is locked with `flock(2)` on Unix and `LockFileEx` on
+/// Windows. There is no successful no-op fallback: callers either hold real
+/// cross-process exclusion or receive an error.
 pub struct FileLock {
-    #[cfg(unix)]
-    _file: File,
-    #[cfg(not(unix))]
-    _file: (),
+    _lock: crate::lock::ProcessLock,
 }
 
 impl FileLock {
@@ -137,31 +105,12 @@ impl FileLock {
         if let Some(parent) = lock_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            let file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&lock_path)?;
-            // Blocking exclusive lock. We intentionally do not pass `LOCK_NB`:
-            // RMW sections are short, so waiting for the prior holder is both
-            // correct (no lost update) and cheap.
-            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-            if rc < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(Self { _file: file })
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .open(&lock_path)?;
-            Ok(Self { _file: () })
-        }
+        let lock = crate::lock::ProcessLock::acquire_with_timeout(
+            &lock_path,
+            std::time::Duration::from_secs(30),
+        )
+        .map_err(std::io::Error::other)?;
+        Ok(Self { _lock: lock })
     }
 }
 

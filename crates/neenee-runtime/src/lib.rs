@@ -32,9 +32,9 @@
 //!   `neenee serve` or detached auto-spawn.
 //! - Clients — the `neenee` TUI (attach mode), `neenee status`, the
 //!   dashboard — talk to the daemon over the [`serve`] WebSocket control
-//!   plane: a Unix domain socket by default (0600, so filesystem
-//!   permissions are the auth boundary), plus TCP with a bearer token when
-//!   started `--public`. The client side of that control plane lives here
+//!   plane: owner-only native IPC by default (a Unix domain socket or Windows
+//!   Named Pipe), plus TCP with a bearer token when started `--public`. The
+//!   client side of that control plane lives here
 //!   too, as [`client`] (ADR-0098): client and server speak the same
 //!   [`serve::Wire`] protocol from one crate, so the two cannot drift.
 //! - [`serve_discovery`] publishes the global `daemon.json` record clients

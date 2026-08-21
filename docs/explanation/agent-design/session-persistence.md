@@ -8,7 +8,7 @@ the model window, and which loop-level obligations were still active.
 
 This page explains that durable model. For the request-scoped view sent to a
 provider, see [Model context](model-context.md). For the storage location model,
-see [Persistence and the XDG layout](../persistence.md).
+see [Platform-native persistence categories](../persistence.md).
 
 ## Durable Scene
 

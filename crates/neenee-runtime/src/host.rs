@@ -1,7 +1,7 @@
 //! The session daemon runtime (ADR-0096): one process that owns every
 //! session across every project for the user and serves them over the
-//! control plane (Unix domain socket by default, TCP + bearer token with
-//! `--public`) so TUI/CLI/web clients can drive, observe, and manage them.
+//! control plane (owner-only native local IPC by default, TCP + bearer token
+//! with `--public`) so TUI/CLI/web clients can drive, observe, and manage them.
 //!
 //! Vocabulary (ADR-0094/0096): the *role* is the **daemon**; `neenee serve`
 //! runs it in the foreground, `neenee serve --detach` in the background.
@@ -19,7 +19,7 @@
 //!    concurrently with per-hook deadlines.
 //! 3. Every phase checks `gate.forced()` (a second signal skips the rest)
 //!    and the remaining budget; the force path aborts stragglers, runs the
-//!    RAII cleanup (discovery lease, UDS guard), and exits anyway.
+//!    RAII cleanup (discovery lease, local-listener guard), and exits anyway.
 //!
 //! The exit code is part of the contract: 0 for any completed graceful
 //! shutdown (signals included — a supervisor's `stop` succeeding is the
@@ -48,10 +48,8 @@ pub struct HostOptions {
     /// (ADR-0105): on for the CLI default port, off for an explicit `--port`
     /// (a stated bind must fail loudly, not silently move).
     pub port_fallback: bool,
-    /// Serve the control plane over a Unix domain socket at this path
-    /// (ADR-0096). `None` disables the UDS listener (unix-only).
-    #[cfg(unix)]
-    pub uds_path: Option<std::path::PathBuf>,
+    /// Serve the control plane over the native per-user local IPC transport.
+    pub local_endpoint: Option<neenee_platform::ipc::LocalEndpoint>,
 }
 
 pub struct HostIdentity {
@@ -261,8 +259,7 @@ async fn run_inner(
             token: opts.token,
             local_auth: opts.local_auth,
             port_fallback: opts.port_fallback,
-            #[cfg(unix)]
-            uds_path: opts.uds_path.clone(),
+            local_endpoint: opts.local_endpoint.clone(),
         },
         Arc::clone(&registry),
     );
@@ -273,7 +270,7 @@ async fn run_inner(
     // Destructure the startup receivers into locals: awaiting through the
     // struct would partially move `handle`, which the drain phases still
     // need (conns / tasks / cancel).
-    let StartupParts { port_rx, uds_rx } = handle.startup.take();
+    let StartupParts { port_rx, local_rx } = handle.startup.take();
     let port = match port_rx.await {
         Ok(Ok(port)) => port,
         Ok(Err(error)) => {
@@ -289,21 +286,46 @@ async fn run_inner(
             );
         }
     };
-    #[cfg(unix)]
-    let bound_uds = uds_rx.await.ok().flatten();
-    #[cfg(not(unix))]
-    let _ = uds_rx;
+    let bound_local = match local_rx.await {
+        Ok(Ok(endpoint)) => endpoint,
+        Ok(Err(error)) => {
+            handle.cancel.cancel();
+            return RunOutcome::StartupFailed(format!("native local IPC bind failed: {error}"));
+        }
+        Err(_) => {
+            handle.cancel.cancel();
+            return RunOutcome::StartupFailed(
+                "the native local IPC listener task exited before binding".to_string(),
+            );
+        }
+    };
 
-    // Discovery record (ADR-0096/0100): written only after the port is
-    // confirmed bound, carrying the daemon's version for skew detection.
+    let process_identity = match neenee_platform::process::process_identity(std::process::id()) {
+        Ok(identity) => identity,
+        Err(error) => {
+            handle.cancel.cancel();
+            return RunOutcome::StartupFailed(format!(
+                "could not establish daemon process identity: {error}"
+            ));
+        }
+    };
+
+    // Discovery record (ADR-0096/0100): written only after both configured
+    // transports are confirmed bound, carrying the daemon's version for skew
+    // detection.
     // The lease removes it on *every* exit path (Drop), including panics.
     let record = discovery::Discovery {
         pid: std::process::id(),
+        process_birth_token: Some(process_identity.birth_token),
         port,
         token: handle.token.clone(),
         project_root: String::new(), // daemon is project-agnostic now
         started_at,
-        uds_path: bound_uds.clone(),
+        uds_path: match &bound_local {
+            Some(neenee_platform::ipc::LocalEndpoint::UnixSocket(path)) => Some(path.clone()),
+            _ => None,
+        },
+        local_endpoint: bound_local.clone(),
         version: Some(crate::serve::daemon_version().to_string()),
         // Publish the drain budget so `neenee daemon stop` waits *this*
         // daemon's grace before escalating (ADR-0116): an early SIGTERM
@@ -311,15 +333,19 @@ async fn run_inner(
         // the stop requested.
         grace_secs: Some(lifecycle.shutdown_grace.as_secs()),
     };
+    let discovery_path = match discovery::write_global(&record) {
+        Ok(path) => path,
+        Err(error) => {
+            handle.cancel.cancel();
+            return RunOutcome::StartupFailed(format!(
+                "could not publish daemon discovery record: {error}"
+            ));
+        }
+    };
     let mut discovery_lease = discovery::DiscoveryLease::new(
-        match discovery::write_global(&record) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                tracing::warn!(%e, "neenee serve: could not write discovery file");
-                None
-            }
-        },
+        Some(discovery_path),
         record.pid,
+        record.process_birth_token,
     );
 
     // Foreground banner: where the daemon listens and how to reach it, on
@@ -329,8 +355,8 @@ async fn run_inner(
     } else {
         "127.0.0.1"
     };
-    if let Some(uds) = &bound_uds {
-        eprintln!("neenee-server: control plane on unix://{}", uds.display());
+    if let Some(endpoint) = &bound_local {
+        eprintln!("neenee-server: local control plane on {endpoint}");
     }
     eprintln!("neenee-server: serving sessions on ws://{bind}:{port}");
     if opts.expose != crate::serve::ServeExpose::Public {

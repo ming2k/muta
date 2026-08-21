@@ -51,6 +51,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # and `transparent` (the generated type already equals the inner type because
 # ts-rs renders single-field newtypes as that field's type).
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
+windows-sys = "0.61"
 
 # TUI stack. crossterm is the low-level terminal I/O layer (raw mode, input,
 # alt screen, escape-code emission); the shared `crossterm` feature set is

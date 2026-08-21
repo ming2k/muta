@@ -28,13 +28,21 @@
 
 ## Quick Start
 
-**Install in one line** (macOS & Linux) — downloads a prebuilt binary into `~/.local/bin`:
+**Install in one line** on macOS or Linux — downloads and SHA-256 verifies a prebuilt binary into `~/.local/bin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ming2k/neenee/main/install.sh | bash
 ```
 
 > Pin a version with `NEENEE_VERSION=0.22.1`, or install into a custom dir with `INSTALL_DIR=/usr/local/bin`.
+
+On Windows (PowerShell), install the verified release build for the current user:
+
+```powershell
+irm https://raw.githubusercontent.com/ming2k/neenee/main/install.ps1 | iex
+```
+
+The Windows installer supports x86-64, verifies the release SHA-256, installs under `%LOCALAPPDATA%\Programs\neenee\bin`, and adds that directory to the user `PATH`. Override it with `NEENEE_INSTALL_DIR`.
 
 **Or build from source**:
 
@@ -84,9 +92,9 @@ dashboard over it: Esc quits, `a` on a card attaches into that session. Like
 least one session.
 
 The daemon speaks one read/write control-plane protocol (create, prompt,
-interrupt, approve, kill, plus the monitor stream) over a Unix socket by
-default and over TCP+token when exposed — which is what a web control panel
-consumes directly. See
+interrupt, approve, kill, plus the monitor stream) over a Unix socket on
+macOS/Linux or a current-user-only Windows Named Pipe, and over TCP+token when
+exposed — which is what a web control panel consumes directly. See
 [How to track sessions with a session daemon](docs/how-to/track-sessions-with-a-session-daemon.md)
 and [ADR-0096](docs/adr/0096-unified-session-daemon.md).
 

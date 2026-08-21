@@ -45,6 +45,9 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-latest
             archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            archive: zip
     steps:
       - uses: actions/checkout@v4
       # The release binary embeds the web panel (ADR-0105): build the bundle
@@ -56,6 +59,14 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - name: Tag matches Cargo and web versions
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          cargo_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+          web_version="$(node -p "require('./apps/web/package.json').version")"
+          test "$tag_version" = "$cargo_version"
+          test "$tag_version" = "$web_version"
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
         working-directory: apps/web
@@ -83,23 +94,43 @@ jobs:
           sudo apt-get install -y musl-tools
       - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }} --bin neenee
-      - name: Package
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
         id: package
+        shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
           dirname="neenee-${version}-${{ matrix.target }}"
           mkdir "$dirname"
           cp target/${{ matrix.target }}/release/neenee "$dirname/"
           cp README.md LICENSE "$dirname/"
-          if [ "${{ matrix.archive }}" = "tar.gz" ]; then
-            tar -czf "$dirname.tar.gz" "$dirname"
-            echo "asset=$dirname.tar.gz" >> $GITHUB_OUTPUT
+          tar -czf "$dirname.tar.gz" "$dirname"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$dirname.tar.gz" > "$dirname.tar.gz.sha256"
+          else
+            shasum -a 256 "$dirname.tar.gz" > "$dirname.tar.gz.sha256"
           fi
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $version = "${env:GITHUB_REF_NAME}" -replace '^v', ''
+          $dirname = "neenee-$version-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $dirname | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/neenee.exe" "$dirname/"
+          Copy-Item README.md, LICENSE "$dirname/"
+          Compress-Archive -Path $dirname -DestinationPath "$dirname.zip"
+          $hash = (Get-FileHash "$dirname.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $dirname.zip" | Set-Content -NoNewline "$dirname.zip.sha256"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: neenee-*.tar.gz
+          path: |
+            neenee-*.tar.gz
+            neenee-*.tar.gz.sha256
+            neenee-*.zip
+            neenee-*.zip.sha256
           if-no-files-found: error
 
   publish:
@@ -118,4 +149,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: assets/*.tar.gz
+          files: assets/*

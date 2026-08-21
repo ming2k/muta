@@ -13,6 +13,7 @@ path = "src/main.rs"
 neenee-agent = { path = "../neenee-agent" }
 neenee-contracts = { path = "../neenee-contracts" }
 neenee-persistence = { path = "../neenee-persistence" }
+neenee-platform = { path = "../neenee-platform" }
 neenee-runtime = { path = "../neenee-runtime" }
 neenee-skills = { path = "../neenee-skills" }
 neenee-providers = { path = "../neenee-providers" }

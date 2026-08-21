@@ -346,12 +346,9 @@ pub struct ServeOptions {
     /// of failing startup. Used by the production daemon, whose CLI default
     /// port is fixed (9800); tests keep the strict default.
     pub port_fallback: bool,
-    /// `Some(path)` additionally serves the same protocol over a Unix domain
-    /// socket (ADR-0096). UDS connections are exempt from the bearer token —
-    /// the socket's filesystem permissions are the auth boundary (0600 in a
-    /// 0700 runtime dir). Unix-only; ignored elsewhere.
-    #[cfg(unix)]
-    pub uds_path: Option<std::path::PathBuf>,
+    /// Native local control endpoint. Local IPC is exempt from the bearer
+    /// token because its Unix permissions / Windows DACL are the auth boundary.
+    pub local_endpoint: Option<neenee_platform::ipc::LocalEndpoint>,
 }
 impl Default for ServeOptions {
     fn default() -> Self {
@@ -361,8 +358,7 @@ impl Default for ServeOptions {
             token: None,
             local_auth: false,
             port_fallback: false,
-            #[cfg(unix)]
-            uds_path: None,
+            local_endpoint: None,
         }
     }
 }
@@ -374,19 +370,20 @@ impl Default for ServeOptions {
 pub struct Startup {
     /// TCP bind result: the bound port, or why the listener could not bind.
     pub port: Option<tokio::sync::oneshot::Receiver<Result<u16, std::io::Error>>>,
-    /// UDS bind result: the bound path when enabled and successful.
-    /// Unix-only.
-    #[cfg(unix)]
-    pub uds_ready: Option<tokio::sync::oneshot::Receiver<Option<std::path::PathBuf>>>,
+    /// Native local-IPC bind result when enabled.
+    pub local_ready: Option<
+        tokio::sync::oneshot::Receiver<
+            Result<Option<neenee_platform::ipc::LocalEndpoint>, std::io::Error>,
+        >,
+    >,
 }
 
 /// The destructured [`Startup`] receivers (`Startup::take`).
 pub struct StartupParts {
     pub port_rx: tokio::sync::oneshot::Receiver<Result<u16, std::io::Error>>,
-    #[cfg(unix)]
-    pub uds_rx: tokio::sync::oneshot::Receiver<Option<std::path::PathBuf>>,
-    #[cfg(not(unix))]
-    pub uds_rx: std::marker::PhantomData<()>,
+    pub local_rx: tokio::sync::oneshot::Receiver<
+        Result<Option<neenee_platform::ipc::LocalEndpoint>, std::io::Error>,
+    >,
 }
 
 impl Startup {
@@ -397,13 +394,12 @@ impl Startup {
             port_rx: self.port.take().unwrap_or_else(|| {
                 tokio::sync::oneshot::channel::<Result<u16, std::io::Error>>().1
             }),
-            #[cfg(unix)]
-            uds_rx: self
-                .uds_ready
-                .take()
-                .unwrap_or_else(|| tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>().1),
-            #[cfg(not(unix))]
-            uds_rx: std::marker::PhantomData,
+            local_rx: self.local_ready.take().unwrap_or_else(|| {
+                tokio::sync::oneshot::channel::<
+                    Result<Option<neenee_platform::ipc::LocalEndpoint>, std::io::Error>,
+                >()
+                .1
+            }),
         }
     }
 }
@@ -417,7 +413,7 @@ pub struct ServeHandle {
     /// drain phase (ADR-0101).
     pub conns: Arc<ConnTable>,
     /// Supervised accept tasks; `host::run` joins them during shutdown to
-    /// *confirm* the loops exited (and to clean up the UDS socket file
+    /// *confirm* the loops exited (and to clean up native local-listener state
     /// deterministically, instead of racing the process end).
     pub tasks: Arc<crate::shutdown::TaskBook>,
     pub token: Option<String>,
@@ -502,55 +498,48 @@ pub fn start_server(
         tasks.track("tcp-accept", handle);
     }
 
-    #[cfg(unix)]
-    let uds_rx = {
-        let (uds_tx, uds_rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
-        if let Some(path) = opts.uds_path.clone() {
+    let local_rx = {
+        let (local_tx, local_rx) = tokio::sync::oneshot::channel::<
+            Result<Option<neenee_platform::ipc::LocalEndpoint>, std::io::Error>,
+        >();
+        if let Some(endpoint) = opts.local_endpoint.clone() {
             let cc = cancel.clone();
             let registry = registry.clone();
             let conns = conns.clone();
             let tasks = tasks.clone();
             let gate = gate.clone();
             let handle = tokio::spawn(async move {
-                let listener = match bind_uds(&path).await {
+                let mut listener = match neenee_platform::ipc::LocalListener::bind(&endpoint) {
                     Ok(l) => {
-                        let _ = uds_tx.send(Some(path.clone()));
+                        let _ = local_tx.send(Ok(Some(endpoint.clone())));
                         l
                     }
                     Err(e) => {
-                        tracing::error!(path=%path.display(),error=%e,"neenee serve: uds bind failed");
-                        let _ = uds_tx.send(None);
+                        tracing::error!(endpoint=?endpoint,error=%e,"neenee serve: local IPC bind failed");
+                        let _ = local_tx.send(Err(e));
                         return;
                     }
                 };
-                tracing::info!(path=%path.display(),"neenee serve: uds listener started");
+                tracing::info!(endpoint=?endpoint,"neenee serve: local IPC listener started");
                 let mut backoff = std::time::Duration::from_millis(5);
                 loop {
-                    tokio::select! {_=cc.cancelled()=>{tracing::info!("neenee serve: uds cancelled");break;}
-                    ac=listener.accept()=>{let(stream,_peer)=match ac{Ok(c)=>c,Err(e)=>{tracing::warn!(error=%e,backoff_ms=backoff.as_millis() as u64,"neenee serve: uds accept failed");tokio::time::sleep(backoff).await;backoff=(backoff*2).min(ACCEPT_BACKOFF_CAP);continue;}};
+                    tokio::select! {_=cc.cancelled()=>{tracing::info!("neenee serve: local IPC cancelled");break;}
+                    ac=listener.accept()=>{let stream=match ac{Ok(c)=>c,Err(e)=>{tracing::warn!(error=%e,backoff_ms=backoff.as_millis() as u64,"neenee serve: local IPC accept failed");tokio::time::sleep(backoff).await;backoff=(backoff*2).min(ACCEPT_BACKOFF_CAP);continue;}};
                     backoff=std::time::Duration::from_millis(5);
-                    // UDS is the local control channel: the socket's 0600
-                    // permissions are the auth boundary, so no bearer token.
-                    spawn_connection(stream, registry.clone(), None, ServeExpose::Local, conns.clone(), gate.clone(), cc.clone(), format!("uds:{}", path.display()));}}
+                    spawn_connection(stream, registry.clone(), None, ServeExpose::Local, conns.clone(), gate.clone(), cc.clone(), format!("local:{endpoint:?}"));}}
                 }
-                // Deterministic socket-file cleanup: this runs *inside* the
-                // supervised task, and `host::run` joins the task before
-                // exiting, so the file is gone before the process is — no
-                // more racing the runtime drop.
-                let _ = std::fs::remove_file(&path);
             });
-            tasks.track("uds-accept", handle);
+            tasks.track("local-ipc-accept", handle);
         } else {
-            let _ = uds_tx.send(None);
+            let _ = local_tx.send(Ok(None));
         }
-        uds_rx
+        local_rx
     };
 
     ServeHandle {
         startup: Startup {
             port: Some(actual_port_rx),
-            #[cfg(unix)]
-            uds_ready: Some(uds_rx),
+            local_ready: Some(local_rx),
         },
         cancel,
         conns,
@@ -768,26 +757,6 @@ async fn run_control<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         .map_err(|e| format!("send control reply: {e}"))?;
     let _ = ws_sink.close().await;
     Ok(())
-}
-
-#[cfg(unix)]
-/// Bind a Unix domain socket, removing any stale socket file first and
-/// tightening permissions to 0600 inside a 0700 runtime dir (ADR-0096).
-async fn bind_uds(path: &std::path::Path) -> std::io::Result<tokio::net::UnixListener> {
-    use std::os::unix::fs::PermissionsExt;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
-    }
-    if let Ok(meta) = std::fs::symlink_metadata(path) {
-        use std::os::unix::fs::FileTypeExt as _;
-        if meta.file_type().is_socket() {
-            std::fs::remove_file(path)?;
-        }
-    }
-    let listener = tokio::net::UnixListener::bind(path)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    Ok(listener)
 }
 
 /// Generate the bearer token a `--public` listener requires. Two UUIDv4s —

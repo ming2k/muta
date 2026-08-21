@@ -105,6 +105,18 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 info "Downloading $url"
 fetch_to "$url" "${tmpdir}/${tarball}"
+fetch_to "${url}.sha256" "${tmpdir}/${tarball}.sha256"
+
+info "Verifying SHA-256 checksum…"
+expected="$(awk '{print $1}' "${tmpdir}/${tarball}.sha256")"
+if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "${tmpdir}/${tarball}" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "${tmpdir}/${tarball}" | awk '{print $1}')"
+else
+    abort "Neither sha256sum nor shasum is installed; refusing an unverified install."
+fi
+[[ "$actual" == "$expected" ]] || abort "SHA-256 checksum mismatch; download was not installed."
 
 info "Extracting…"
 tar -xzf "${tmpdir}/${tarball}" -C "$tmpdir"

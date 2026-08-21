@@ -33,6 +33,10 @@ use neenee_persistence::paths;
 pub struct Discovery {
     /// The serving process's id (staleness probe for readers).
     pub pid: u32,
+    /// OS process creation token paired with `pid`, preventing a stale record
+    /// from targeting an unrelated process after PID reuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_birth_token: Option<u64>,
     /// The bound TCP port the WebSocket listener serves.
     pub port: u16,
     /// The bearer token clients must present, when auth is active
@@ -49,6 +53,10 @@ pub struct Discovery {
     /// `None` for legacy records and when UDS is disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uds_path: Option<PathBuf>,
+    /// Native local control endpoint. `uds_path` above is retained only for
+    /// reading discovery records written before v0.30.2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_endpoint: Option<neenee_platform::ipc::LocalEndpoint>,
     /// The daemon build's `CARGO_PKG_VERSION` (ADR-0100 rule 4): a client
     /// that reads a record whose version differs from its own refuses with
     /// an actionable both-versions message instead of speaking a wire
@@ -67,9 +75,19 @@ pub struct Discovery {
     pub grace_secs: Option<u64>,
 }
 
+impl Discovery {
+    pub fn effective_local_endpoint(&self) -> Option<neenee_platform::ipc::LocalEndpoint> {
+        self.local_endpoint.clone().or_else(|| {
+            self.uds_path
+                .clone()
+                .map(neenee_platform::ipc::LocalEndpoint::UnixSocket)
+        })
+    }
+}
+
 /// The global discovery path for the unified daemon (ADR-0096): one record
 /// per user, in the instance dir (ADR-0121: `--home`/`NEENEE_HOME`, else
-/// `$XDG_RUNTIME_DIR`, else the data dir).
+/// `$XDG_RUNTIME_DIR`, else the native data/state fallback).
 pub fn global_discovery_path() -> PathBuf {
     paths::get().instance_dir().join("daemon.json")
 }
@@ -85,6 +103,14 @@ pub fn instance_dir() -> PathBuf {
 #[cfg(unix)]
 pub fn default_uds_path() -> PathBuf {
     paths::get().instance_dir().join("daemon.sock")
+}
+
+/// Native local endpoint for the unified per-user daemon.
+pub fn default_local_endpoint() -> Result<neenee_platform::ipc::LocalEndpoint, String> {
+    let instance_dir = paths::get().instance_dir();
+    let instance_key = format!("daemon-{}", paths::project_bucket_name(&instance_dir));
+    neenee_platform::ipc::endpoint_for_instance(instance_dir.join("daemon.sock"), &instance_key)
+        .map_err(|error| format!("could not resolve local daemon endpoint: {error}"))
 }
 
 /// The daemon's single-instance lock path (ADR-0101): a companion
@@ -107,19 +133,24 @@ pub fn global_lock_path() -> PathBuf {
 pub struct DiscoveryLease {
     path: Option<PathBuf>,
     pid: u32,
+    process_birth_token: Option<u64>,
 }
 
 impl DiscoveryLease {
     /// Wrap an already-written record. `None` (write failed) still yields a
     /// guard — a no-op one — so callers need no branching.
-    pub fn new(path: Option<PathBuf>, pid: u32) -> Self {
-        Self { path, pid }
+    pub fn new(path: Option<PathBuf>, pid: u32, process_birth_token: Option<u64>) -> Self {
+        Self {
+            path,
+            pid,
+            process_birth_token,
+        }
     }
 
     /// Remove the record now (the explicit early step of a graceful drain).
     pub fn release(&mut self) {
         if let Some(path) = self.path.take() {
-            remove_if_matching_pid(&path, self.pid);
+            remove_if_matching_process(&path, self.pid, self.process_birth_token);
         }
     }
 }
@@ -142,17 +173,19 @@ mod lease_tests {
             &path,
             &Discovery {
                 pid: 1,
+                process_birth_token: None,
                 port: 2,
                 token: None,
                 project_root: String::new(),
                 started_at: 3,
                 uds_path: None,
+                local_endpoint: None,
                 version: None,
                 grace_secs: None,
             },
         )
         .unwrap();
-        let mut lease = DiscoveryLease::new(Some(path.clone()), 1);
+        let mut lease = DiscoveryLease::new(Some(path.clone()), 1, None);
         lease.release(); // explicit early removal
         assert!(!path.exists());
         drop(lease); // Drop's own removal must tolerate the missing file
@@ -166,17 +199,19 @@ mod lease_tests {
             &path,
             &Discovery {
                 pid: 42,
+                process_birth_token: None,
                 port: 2,
                 token: None,
                 project_root: String::new(),
                 started_at: 3,
                 uds_path: None,
+                local_endpoint: None,
                 version: None,
                 grace_secs: None,
             },
         )
         .unwrap();
-        drop(DiscoveryLease::new(Some(path.clone()), 42));
+        drop(DiscoveryLease::new(Some(path.clone()), 42, None));
         assert!(!path.exists(), "Drop must remove the record");
     }
 
@@ -188,18 +223,20 @@ mod lease_tests {
             &path,
             &Discovery {
                 pid: 99,
+                process_birth_token: None,
                 port: 2,
                 token: None,
                 project_root: String::new(),
                 started_at: 3,
                 uds_path: None,
+                local_endpoint: None,
                 version: None,
                 grace_secs: None,
             },
         )
         .unwrap();
         // Lease from older daemon PID 42 dropped while path contains PID 99
-        drop(DiscoveryLease::new(Some(path.clone()), 42));
+        drop(DiscoveryLease::new(Some(path.clone()), 42, None));
         assert!(path.exists(), "Drop must NOT remove newer daemon's record");
     }
 }
@@ -236,12 +273,18 @@ pub fn remove(path: &Path) {
     }
 }
 
-/// Remove `path` only if the discovery record inside belongs to `expected_pid`.
-/// Prevents an older daemon from unlinking a newer daemon's discovery file.
-pub fn remove_if_matching_pid(path: &Path, expected_pid: u32) {
+/// Remove `path` only if the record matches both the expected PID and, when
+/// known, its process creation token. This remains safe across PID reuse.
+pub fn remove_if_matching_process(
+    path: &Path,
+    expected_pid: u32,
+    expected_birth_token: Option<u64>,
+) {
     if let Ok(bytes) = std::fs::read(path)
         && let Ok(record) = serde_json::from_slice::<Discovery>(&bytes)
-        && record.pid != expected_pid
+        && (record.pid != expected_pid
+            || expected_birth_token
+                .is_some_and(|expected| record.process_birth_token != Some(expected)))
     {
         return;
     }
@@ -260,11 +303,13 @@ mod tests {
     fn sample_record() -> Discovery {
         Discovery {
             pid: 4242,
+            process_birth_token: None,
             port: 39871,
             token: Some("deadbeef".to_string()),
             project_root: "/home/me/proj".to_string(),
             started_at: 1_755_000_000,
             uds_path: None,
+            local_endpoint: None,
             version: Some("0.30.1".to_string()),
             grace_secs: None,
         }
