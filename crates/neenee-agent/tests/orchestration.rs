@@ -36,6 +36,45 @@ struct ToolThenRetryProvider {
 struct AlwaysRetryableProvider;
 struct RetryReadTool(Arc<AtomicUsize>);
 
+/// Serialize the provider-visible history while excluding local diagnostic
+/// metadata that is regenerated for every request projection.
+///
+/// These tests verify checkpoint semantics. A projected system message's
+/// wall-clock timestamp is intentionally not part of that protocol contract
+/// and may advance while an instrumented/slow platform executes the round.
+fn provider_history_snapshot(messages: &[Message]) -> String {
+    let mut messages =
+        serde_json::to_value(messages).expect("messages should serialize to a JSON value");
+    for message in messages
+        .as_array_mut()
+        .expect("serialized messages should be an array")
+    {
+        message
+            .as_object_mut()
+            .expect("serialized message should be an object")
+            .remove("timestamp");
+    }
+    serde_json::to_string(&messages).expect("messages should serialize")
+}
+
+#[test]
+fn provider_history_snapshot_ignores_only_diagnostic_timestamps() {
+    let original = Message::new(Role::System, "stable prompt");
+    let mut later_projection = original.clone();
+    later_projection.timestamp = original.timestamp.map(|timestamp| timestamp + 60);
+    assert_eq!(
+        provider_history_snapshot(std::slice::from_ref(&original)),
+        provider_history_snapshot(std::slice::from_ref(&later_projection))
+    );
+
+    later_projection.content = "changed prompt".to_string();
+    assert_ne!(
+        provider_history_snapshot(std::slice::from_ref(&original)),
+        provider_history_snapshot(std::slice::from_ref(&later_projection)),
+        "semantic provider history must remain part of the checkpoint assertion"
+    );
+}
+
 /// Minimal provider whose `chat` returns a canned reply — used by the
 /// proxy-provider test to verify it does not block the async runtime.
 struct MockProvider;
@@ -178,21 +217,10 @@ impl Provider for ToolThenRetryProvider {
         request: neenee_contracts::ModelRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>, String>
     {
-        let mut messages = serde_json::to_value(&request.messages)
-            .expect("messages should serialize to a JSON value");
-        for message in messages
-            .as_array_mut()
-            .expect("serialized messages should be an array")
-        {
-            message
-                .as_object_mut()
-                .expect("serialized message should be an object")
-                .remove("timestamp");
-        }
         self.requests
             .lock()
             .expect("request log lock poisoned")
-            .push(serde_json::to_string(&messages).expect("messages should serialize"));
+            .push(provider_history_snapshot(&request.messages));
         let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
         match attempt {
             0 | 2 => Ok(Box::pin(stream::iter(vec![Ok(
@@ -671,7 +699,7 @@ impl Provider for FailThenSucceedProvider {
         self.requests
             .lock()
             .expect("request log lock poisoned")
-            .push(serde_json::to_string(&request.messages).expect("messages should serialize"));
+            .push(provider_history_snapshot(&request.messages));
         if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
             // Terminal: `parse_retryable_error` finds no envelope, so the
             // harness surfaces it and (with ADR-0128) arms the resume point.
