@@ -35,8 +35,10 @@ product here.
   sessions, per-project multi-instance concurrency (ADR-0018, ADR-0096).
 - **`session_driver`** — `SessionDriver` owns one session's request loop and
   routes `AgentRequest`s to handlers.
-- **Handlers** — chat, permission, provider, session, slash (the 23 built-in
-  commands).
+- **Handlers** — chat, permission, provider, session, slash (the built-in
+  commands; the registry is `BuiltinCmd::SPECS` in `startup.rs`, and the
+  `commands_reference_table_matches_builtin_registry` test pins it against
+  `docs/reference/commands.md` so the doc cannot drift again).
 - **`slash_handler`** — a `SlashCommandHandler` trait + `SlashCommandRegistry`
   so embeddings register Rust slash commands without forking this crate
   (ADR-0054).

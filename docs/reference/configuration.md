@@ -35,7 +35,7 @@ files. Performance limits are not part of context-capacity safety policy.
 | `compaction.target_utilization` | `0.25` | After a full compaction, compress the model window down to this fraction |
 | `compaction.prune_utilization` | `0.65` | Trigger cheap tool-result pruning at this fraction (below `utilization`) |
 | `compaction.fallback_window_tokens` | `32000` | Assumed window (tokens) when the model's context window is unknown |
-| `compaction_preserve_rounds` | `6` | Number of recent complete user rounds kept verbatim after a full compaction. The former key `compaction_preserve_turns` is accepted when loading old files |
+| `compaction_preserve_rounds` | `6` | Number of recent complete user rounds kept verbatim after a full compaction. The former key `compaction_preserve_turns` is **not** aliased (ADR-0120): it parses as an unknown key, is ignored, and is dropped on the next save — run `neenee config check` to find stale spellings |
 | `compaction_summarize` | `true` | Use the active model for an anchored structured summary; `false` uses the deterministic excerpt fallback |
 | `compaction_prune` | `true` | Enable cheap tool-result pruning (pre-round and mid-round) |
 | `compaction_prune_protect_tokens` | `6000` | Most recent tool results (tokens) protected from pruning |
@@ -72,8 +72,8 @@ The optional `[principal]` table.
 | `principal.hard_stop_turns` | `0` | Hard-stop a round after this many ReAct turns. `0` = uncapped (the only execution cap; compaction is the backstop) |
 | `principal.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for a `bash` command it emits. Off by default: the bash schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the bash schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for autopilot/automatic flows where no human is reachable |
 | `principal.skip_interactive_input` | `false` | Whether an interactive `bash` command (matched by the interactive classifier: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) **never** pops the inline input panel. Off by default: a command needing input prompts you with an input panel (command + masked/plain field). On: the panel is skipped and the command runs with stdin closed — it reads EOF immediately and fails fast with a non-interactive remedy hint, exactly as under autopilot mode. For users who find the prompt disruptive and would rather retry the command themselves. Note: this only governs the interactive-input path; it does not turn the principal on autopilot, so ordinary tool confirmations still apply |
-| `principal.nudge.enabled` | `false` | Advanced doom-loop guard. When enabled, blocks a watched tool signature before its first repeat executes in the same round. Forced off for envoys |
-| `principal.nudge.window` | `8` | Number of recent watched tool signatures retained for repeat detection |
+| `principal.doom_guard.enabled` | `true` | Doom-loop guard (ADR-0113 §5): blocks a watched tool signature before its first repeat executes in the same round. On by default — a model making progress never trips it, and the cheapest token-burning loop (`sleep N; make` variants) is exactly what a default-off guard never catches. Forced off for envoys. The historical `nudge` key still loads (serde alias) |
+| `principal.doom_guard.window` | `16` | Number of recent watched tool signatures retained for repeat detection |
 
 ```toml
 [principal]
@@ -225,7 +225,7 @@ the instances that serve the model.
 ## TUI presentation
 
 The optional `[tui]` table. Appearance and layout values can also be changed
-interactively with `/config`.
+interactively with `/settings` (alias `/config`).
 
 | Key | Default | Meaning |
 |-----|---------|---------|
@@ -361,5 +361,20 @@ configured here.
 | Table | Configures | Reference |
 |-------|------------|-----------|
 | `[skills]` | Skill sources, extra paths, disabled skills | [Skills](tools/skills.md) |
-| `[websearch]` | Web-search backend, proxy, timeout | [Web tool](tools/web.md) |
+| `[websearch]` | Web-search backend, proxy, timeout (API keys live in `credentials.toml [websearch]`, not here) | [Web tool](tools/web.md) |
 | `[mcp.<server>]` | MCP servers (one table per server) | [MCP](tools/mcp.md) |
+
+## Daemon
+
+The `[daemon]` table configures the user-level session daemon that owns every
+session across every project (ADR-0096). It is read at daemon startup.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `daemon.shutdown_grace_secs` | `10` | How long a `neenee daemon stop` waits for hosted sessions to settle before forcing shutdown |
+| `daemon.idle_exit_minutes` | `5` | A daemon with no hosted sessions exits after this idle period (armed `/schedule` jobs keep it alive — ADR-0125) |
+| `daemon.local_auth` | `true` | Require the bearer token on the Unix-socket control plane. Turn off only for locked-down single-user sockets |
+| `daemon.rehost_armed_schedules` | `true` | At daemon boot, rehost every persisted session that still has armed `/schedule` jobs, so scheduled prompts keep firing across daemon restarts (ADR-0125); `false` = cold start |
+
+See [CLI reference](cli.md) for the `daemon` verbs and
+[server API](server-api.md) for the wire protocol.

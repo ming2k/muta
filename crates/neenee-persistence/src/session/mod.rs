@@ -181,6 +181,13 @@ struct SessionData {
     /// valid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     round_interrupts: Vec<neenee_contracts::RoundInterrupt>,
+    /// The durable `/retry` resume point (C12): the stopped round's
+    /// history watermark, committed-turn count, and paused accumulator.
+    /// `None` on a fresh session and after the parked round completes.
+    /// `#[serde(default, skip_serializing_if = "Option::is_none")]` keeps
+    /// legacy canonical JSON byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retry_pending: Option<neenee_contracts::RetryPoint>,
 }
 
 impl Default for SessionData {
@@ -209,6 +216,7 @@ impl Default for SessionData {
             request_usage_records: Vec::new(),
             commands: Vec::new(),
             round_interrupts: Vec::new(),
+            retry_pending: None,
         }
     }
 }
@@ -552,6 +560,12 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::RoundInterruptsCleared {} => {
                 data.round_interrupts.clear();
             }
+            SessionEvent::RetryPendingRecorded { point } => {
+                data.retry_pending = Some(point.clone());
+            }
+            SessionEvent::RetryPendingCleared {} => {
+                data.retry_pending = None;
+            }
             SessionEvent::Reset { id } => {
                 let project_root = data.project_root.clone();
                 let schema_version = data.schema_version;
@@ -690,6 +704,15 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             timestamp: data.updated_at,
             event: SessionEvent::RoundInterruptRecorded {
                 record: record.clone(),
+            },
+        });
+    }
+    if let Some(point) = &data.retry_pending {
+        events.push(crate::events::EventEnvelope {
+            seq: events.len() as u64,
+            timestamp: data.updated_at,
+            event: SessionEvent::RetryPendingRecorded {
+                point: point.clone(),
             },
         });
     }
@@ -1151,6 +1174,70 @@ impl SessionStore {
         self.state.lock().await.data.request_usage_records.clone()
     }
 
+    /// The durable `/retry` resume point (C12): `Some` while a stopped round
+    /// is parked for `/retry`, `None` once it completed or was retired. Pure
+    /// projection state — never part of the model-visible transcript.
+    pub async fn retry_pending(&self) -> Option<neenee_contracts::RetryPoint> {
+        self.state.lock().await.data.retry_pending.clone()
+    }
+
+    /// Arm the `/retry` resume point (C12). Snapshot semantics: the single
+    /// slot is replaced (arming for a newer round retires an older point).
+    /// Called when a round stops before completing with committed content —
+    /// a terminal error after the provider retry budget was exhausted, or an
+    /// interrupt past the phase-1 unsend window.
+    pub async fn arm_retry_pending(
+        &self,
+        point: neenee_contracts::RetryPoint,
+    ) -> Result<(), String> {
+        let (path, data, should_persist) = {
+            let mut state = self.state.lock().await;
+            state.data.retry_pending = Some(point.clone());
+            state.data.updated_at = unix_timestamp();
+            let empty_unpersisted = Self::should_skip_persist(&state);
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state
+                    .event_log
+                    .append(SessionEvent::RetryPendingRecorded { point })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
+        };
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Clear the `/retry` resume point (C12). Called when the parked round
+    /// completes — naturally or via `/retry` — and by every path that moves
+    /// the session past it (a newer round being admitted, `/new`). A no-op
+    /// when nothing is armed, so callers can invoke it unconditionally.
+    pub async fn clear_retry_pending(&self) -> Result<(), String> {
+        let (path, data, should_persist) = {
+            let mut state = self.state.lock().await;
+            if state.data.retry_pending.is_none() {
+                return Ok(());
+            }
+            state.data.retry_pending = None;
+            state.data.updated_at = unix_timestamp();
+            let empty_unpersisted = Self::should_skip_persist(&state);
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state
+                    .event_log
+                    .append(SessionEvent::RetryPendingCleared {})?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
+        };
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Replace the session's request ledger. Callers pass records already
     /// scoped to the active session; the store validates that boundary before
     /// appending the snapshot event.
@@ -1377,7 +1464,7 @@ impl SessionStore {
     }
 
     /// Incrementally persist new messages appended since the last durable
-    /// write, without rewriting the full snapshot (ADR-0035).
+    /// write, without rewriting the full snapshot (ADR-0048).
     ///
     /// The caller passes the *current full* round history. This method diffs it
     /// against the messages already durable in `data.model_window` and appends only
@@ -4407,6 +4494,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retry_pending_round_trips_through_persistence() {
+        // C12: the `/retry` resume point must survive a session close +
+        // reopen — it is the durable "this round stopped, finish it" state,
+        // and a re-hosted session offers `/retry` off it.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-retry-point-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        // Materialize the session with dialogue first (the point on a
+        // never-persisted empty session stays in memory, like commands).
+        store
+            .replace_messages(vec![Message::new(neenee_contracts::Role::User, "hello")])
+            .await
+            .unwrap();
+
+        assert!(store.retry_pending().await.is_none(), "fresh: no point");
+        let point = neenee_contracts::RetryPoint {
+            round: 3,
+            turns_committed: 2,
+            history_watermark: 5,
+            paused_ms: 1_200,
+            at_ms: 1_700_000_000_000,
+        };
+        store.arm_retry_pending(point.clone()).await.unwrap();
+        assert_eq!(store.retry_pending().await, Some(point.clone()));
+
+        // Reopen: the log is authoritative, so the point must reload intact —
+        // including the turn ordinal and history watermark a resume replays.
+        let loaded = SessionStore::for_path(path.clone());
+        assert_eq!(
+            loaded.retry_pending().await,
+            Some(point),
+            "resume point survives reload"
+        );
+
+        // Clearing removes it and also round-trips (a completed round never
+        // re-offers /retry after another reload).
+        loaded.clear_retry_pending().await.unwrap();
+        let cleared = SessionStore::for_path(path.clone());
+        assert!(
+            cleared.retry_pending().await.is_none(),
+            "cleared point stays cleared after reload"
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn legacy_snapshot_without_retry_pending_loads() {
+        // C12: a pre-v12 snapshot (no `retry_pending` key) loads with `None`
+        // — `#[serde(default)]`, no migration needed. A legacy session simply
+        // has no `/retry` affordance until a round stops under the new code.
+        let directory = std::env::temp_dir().join(format!(
+            "neenee-retry-point-legacy-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("session.json");
+        let legacy = serde_json::json!({
+            "id": "legacy-retry",
+            "parent_id": null,
+            "created_at": 0u64,
+            "project_root": ".",
+            "model_window": [],
+            "archived_transcript": [],
+            "todos": { "items": [] },
+            "scheduled_jobs": [],
+            "schema_version": 11u32,
+        });
+        fs::write(&path, serde_json::to_string(&legacy).unwrap()).unwrap();
+        fs::write(
+            path.with_extension("jsonl"),
+            "{\"seq\":0,\"timestamp\":1,\"type\":\"started\",\"id\":\"legacy-retry\",\"parent_id\":null,\"created_at\":0,\"project_root\":\".\",\"schema_version\":11}\n",
+        )
+        .unwrap();
+
+        let store = SessionStore::for_path(path.clone());
+        assert!(store.retry_pending().await.is_none());
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
     async fn legacy_echo_messages_fold_into_ledger_on_v10_migration() {
         // ADR-0091 schema v10: a pre-v10 session whose message stream carries
         // ADR-0050 `CommandEcho` messages (slash + shell) must fold each into
@@ -5040,7 +5210,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_turn_persists_delta_and_survives_reload() {
-        // The mid-round, turn-boundary save point (ADR-0035): `append_turn`
+        // The mid-round, turn-boundary save point (ADR-0048): `append_turn`
         // writes only the
         // new tail as a `MessagesAppended` event, and a fresh `SessionStore`
         // at the same path must replay it to recover the full history. This

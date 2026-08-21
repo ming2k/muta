@@ -291,6 +291,7 @@ pub async fn run_tui(
         loop_status: LoopStatus::Idle,
         round_counter: initial_round_count,
         autopilot: false,
+        retry_pending: false,
     }));
     let harness_clone = harness.clone();
     // Unified task list, mirrored from `AgentResponse::TodosUpdated`. Empty
@@ -1450,12 +1451,17 @@ pub async fn run_tui(
                             // activity surface on idle. Recorded for every
                             // session (asides included) so a background
                             // aside's finish is visible the moment its view
-                            // is (re)focused.
+                            // is (re)focused. `can_retry` mirrors the
+                            // session's durable `/retry` resume point
+                            // (ADR-0128): offered exactly while a stopped
+                            // round is parked, never for one that completed.
                             {
                                 let round_counter = snapshot.round_counter;
+                                let retry_pending = snapshot.retry_pending;
                                 chrome_updater.edit(|c| {
                                     c.round_count = round_counter;
                                     c.responding = running;
+                                    c.can_retry = retry_pending && !running;
                                     if running {
                                         c.current_turn = 0;
                                         if c.round_started_at.is_none() {
@@ -1904,6 +1910,7 @@ pub async fn run_tui(
         path_scan_wake: None,
         session_context: None,
         loop_status: LoopStatus::Idle,
+        harness_retry_pending: false,
         activity_status: String::new(),
         provider_retry: None,
         autopilot: false,

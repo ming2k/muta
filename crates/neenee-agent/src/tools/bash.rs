@@ -4,7 +4,9 @@ use serde_json::json;
 use tokio::process::Command;
 use tokio::time::Duration;
 
-use crate::tools::helpers::{WorkspaceBase, json_string, workspace_base};
+use crate::tools::helpers::{
+    WorkspaceBase, env_from_root, execution_environment, json_string, workspace_base,
+};
 
 /// Execute a bash command.
 ///
@@ -13,6 +15,7 @@ use crate::tools::helpers::{WorkspaceBase, json_string, workspace_base};
 /// differ whenever the daemon was first spawned from another project.
 pub struct BashTool {
     pub(crate) root: WorkspaceBase,
+    pub(crate) env: Option<std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>>,
 }
 
 impl BashTool {
@@ -21,7 +24,16 @@ impl BashTool {
     /// factory-based toolset assembly but must still run in the session's
     /// project (not the daemon's process cwd, ADR-0096).
     pub fn new(root: Option<std::path::PathBuf>) -> Self {
-        Self { root }
+        Self { root, env: None }
+    }
+
+    /// Build a bash tool backed by a custom execution environment.
+    pub fn with_env(env: std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>) -> Self {
+        let root = Some(env.workspace_root().to_path_buf());
+        Self {
+            root,
+            env: Some(env),
+        }
     }
 }
 
@@ -170,9 +182,8 @@ impl Tool for BashTool {
                 .stdin(stdin_stdio)
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
-            if let Some(root) = &self.root {
-                invocation.current_dir(root);
-            }
+            let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
+            invocation.current_dir(env.workspace_root());
             invocation.spawn()
         }
         .map_err(|e| format!("Failed to execute: {}", e))?;
@@ -381,6 +392,7 @@ impl Tool for BashTool {
 
 neenee_contracts::register_tool!(BashFactory => |ctx| BashTool {
     root: workspace_base(ctx),
+    env: Some(execution_environment(ctx)),
 });
 
 /// Keep the first `head` and last `head` bytes of `s` (UTF-8-safe, without
@@ -408,7 +420,7 @@ mod tests {
     /// A healthy command captures stdout and exits cleanly with `Exited`.
     #[tokio::test]
     async fn bash_captures_stdout_and_exits() {
-        let tool = BashTool { root: None };
+        let tool = BashTool::new(None);
         let out = tool
             .call_structured(r#"{"command":"printf hello"}"#)
             .await
@@ -437,7 +449,7 @@ mod tests {
     /// immediately.
     #[tokio::test]
     async fn bash_closed_stdin_means_eof_not_hang() {
-        let tool = BashTool { root: None };
+        let tool = BashTool::new(None);
         // `read line` under `sh -c` with stdin=/dev/null returns non-zero
         // immediately (EOF) rather than blocking.
         let out = tokio::time::timeout(
@@ -460,7 +472,7 @@ mod tests {
     /// them back. This is the L3.5 seam (human/model input injection).
     #[tokio::test]
     async fn bash_prefilled_stdin_feeds_the_child() {
-        let tool = BashTool { root: None };
+        let tool = BashTool::new(None);
         let mut on_stream = |_: neenee_contracts::ToolStream| ();
         let out = tool
             .call_structured_with_events(
@@ -490,7 +502,7 @@ mod tests {
     /// over the alternate screen.
     #[tokio::test]
     async fn bash_child_runs_in_its_own_process_group() {
-        let tool = BashTool { root: None };
+        let tool = BashTool::new(None);
         // `ps` reports PID and PGID. Under `.process_group(0)` they are equal.
         let out = tool
             .call_structured(r#"{"command":"ps -o pid=,pgid= -p $$ || echo \"ps=$$\""}"#)
@@ -516,7 +528,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn bash_timeout_kills_grandchildren() {
-        let tool = BashTool { root: None };
+        let tool = BashTool::new(None);
         // Marker file the grandchild touches when (if) it survives the tool
         // call; checked after the timeout returns.
         let marker = std::env::temp_dir().join(format!(
@@ -567,7 +579,7 @@ mod tests {
     /// `truncated` hint is set so text consumers render the truncation note.
     #[tokio::test]
     async fn bash_caps_huge_output_in_memory() {
-        let tool = BashTool { root: None };
+        let tool = BashTool::new(None);
         // ~800k chars: an order of magnitude above the 64k-char collection
         // threshold (SHELL_MAX_OUTPUT_CHARS × 8).
         let out = tool
@@ -603,7 +615,7 @@ mod tests {
     /// as width 0 and scramble the disclosure band.
     #[tokio::test]
     async fn bash_captures_expanded_tabs() {
-        let tool = BashTool { root: None };
+        let tool = BashTool::new(None);
         let out = tool
             .call_structured(r#"{"command":"printf 'a\\tb\\n'"}"#)
             .await
@@ -627,9 +639,7 @@ mod tests {
     async fn bash_runs_in_the_session_workspace_root() {
         let marker = std::env::temp_dir().join(format!("neenee-bash-root-{}", std::process::id()));
         std::fs::create_dir_all(&marker).expect("mkdir");
-        let tool = BashTool {
-            root: Some(marker.clone()),
-        };
+        let tool = BashTool::new(Some(marker.clone()));
         let out = tool
             .call_structured(r#"{"command":"pwd"}"#)
             .await

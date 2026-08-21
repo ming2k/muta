@@ -104,7 +104,7 @@ before the round runs.
 
 | Term | Definition |
 |------|------------|
-| **`@file:` mention** | Implicit file-content injection: `@file:src/main.rs` (or `@files:…`) reads that file and appends its contents as a hidden user message, so the model sees the source without an explicit `read_file` call. Sandboxed to the workspace root (symlink-hardened: absolute paths and `..` are rejected), capped at 50 KB per file and 10 files per round. Rejections surface as a hidden error note so the model learns why and can recover. |
+| **`@file:` mention** | Implicit file-content injection: `@file:src/main.rs` (or `@files:…`) reads that file and appends its contents as a hidden user message, so the model sees the source without an explicit `read_text` call. Sandboxed to the workspace root (symlink-hardened: absolute paths and `..` are rejected), capped at 50 KB per file and 10 files per round. Rejections surface as a hidden error note so the model learns why and can recover. |
 | **`@skill:` mention** | Disambiguated skill mention: `@skill:name` / `@skills:name` (plural mirrors `@files:`) load the named skill as a hidden user message, alongside the bare `@name` and `skill://…` forms. See [Skills](#skills) |
 | **`@principal:` mention** | Runtime role switch: `@principal:architect` (code / architect / reviewer / security) switches the active principal role for the round — same effect as `/principal <role>`. [Slash commands](commands.md#principal) |
 | **`@path` mention** | TUI completion trigger only: typing `@` opens path completion; the `@` is dropped on accept. Not an injection form. [Input box](tui/input-box.md) |

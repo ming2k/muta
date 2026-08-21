@@ -1,11 +1,11 @@
 # How to configure TUI appearance
 
-Use the `/config` Settings overlay to select a built-in color scheme or create
+Use the `/settings` overlay to select a built-in color scheme or create
 a custom palette without restarting `neenee`.
 
 ## Apply a preset
 
-1. Type `/config` and press `Enter`.
+1. Type `/settings` and press `Enter` (`/config` is a hidden alias).
 2. Select **Appearance** and press `Enter`.
 3. Select `Zen`, `Midnight`, `Nord`, `Catppuccin`, or `Paper`.
 4. Press `Enter` or `Space`.
@@ -14,7 +14,7 @@ The new scheme applies immediately and is saved to `config.toml`.
 
 ## Create a custom palette
 
-1. Open `/config` → **Appearance**.
+1. Open `/settings` → **Appearance**.
 2. Select **Custom** and press `Enter`.
 3. Use `Tab`, `Shift+Tab`, `↑`, or `↓` to move between semantic colors.
 4. Press `Ctrl+U` to clear the current field, then enter a `#RRGGBB` value.

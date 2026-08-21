@@ -81,7 +81,7 @@ There are two paths from identifying a skill to placing its body in context:
 1. **Explicit — `use_skill`.** The model calls the `use_skill` tool with a
    skill name. The tool looks up the skill, returns its body as a tool result,
    and also lists the auxiliary files in the skill directory. `use_skill` is an
-   ordinary read-only tool, architecturally identical to `read_file` or `bash`;
+   ordinary read-only tool, architecturally identical to `read_text` or `bash`;
    its only specialty is that its result happens to be a skill body. This works
    even for disabled skills, so the model can load one and explain why it did
    nothing.

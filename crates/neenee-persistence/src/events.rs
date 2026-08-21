@@ -36,7 +36,7 @@ pub enum SessionEvent {
     /// window. Emitted at ReAct-turn boundaries mid-round so a crash after a
     /// side-effecting tool call still leaves the transcript in sync with the
     /// filesystem. Replayed by appending to `data.messages`; a `MessagesReplaced`
-    /// later in the log supersedes it (snapshot semantics). See ADR-0035.
+    /// later in the log supersedes it (snapshot semantics). See ADR-0048.
     MessagesAppended { messages: Vec<Message> },
     /// A model-context projection (tool-result pruning or summarizing compaction)
     /// archived originals and replaced the model-visible window.
@@ -112,6 +112,16 @@ pub enum SessionEvent {
     /// round either completed on retry or the user resumed and moved on.
     /// Snapshot semantics: the list becomes empty.
     RoundInterruptsCleared {},
+    /// The durable `/retry` resume point (C12) — the exact history watermark,
+    /// turn ordinal, and paused accumulator of a round that stopped before
+    /// completing, recorded so a later `/retry` can resume *that* round
+    /// instead of minting a new one. Snapshot semantics: the single optional
+    /// slot is replaced.
+    RetryPendingRecorded { point: neenee_contracts::RetryPoint },
+    /// The `/retry` resume point was cleared (C12) — the stopped round
+    /// completed (naturally or via retry), or the session moved on and the
+    /// point went stale. Snapshot semantics: the slot becomes `None`.
+    RetryPendingCleared {},
 }
 
 /// Wrapper around a [`SessionEvent`] that adds metadata for ordering and
@@ -506,7 +516,7 @@ mod tests {
 
     #[test]
     fn messages_appended_round_trips_and_replays_after_replace() {
-        // The incremental event (ADR-0035) must serialize under its snake_case
+        // The incremental event (ADR-0048) must serialize under its snake_case
         // tag and round-trip through the log. A `MessagesReplaced` seeds the
         // window, then a `MessagesAppended` extends it — the exact interleave
         // `append_turn` produces at a turn boundary inside a real round.

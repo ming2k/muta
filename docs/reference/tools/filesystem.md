@@ -1,10 +1,10 @@
 # Filesystem tools
 
-Read and mutate files and directory listings. `read_file` / `read_image` /
+Read and mutate files and directory listings. `read_text` / `read_image` /
 `grep` / `glob` / `list_dir` are `Read`; `write_file` / `edit_file` are
 `Write`. Source: `crates/neenee-agent/src/tools/`.
 
-## `read_file`
+## `read_text`
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
@@ -20,7 +20,7 @@ Read and mutate files and directory listings. `read_file` / `read_image` /
 
 Reads an image file (PNG, JPEG, GIF, WebP) and delivers it inline so a
 vision-capable model can see it. Large images are auto-resized to a sensible
-resolution before sending. For plain-text files use `read_file` instead.
+resolution before sending. For plain-text files use `read_text` instead.
 
 The image is returned as a structured `ToolOutput::Image` and delivered to the
 model out-of-band: the tool result message carries a short text placeholder,

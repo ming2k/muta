@@ -44,7 +44,7 @@ cd neenee
 cargo run --release
 ```
 
-On first launch, press `Ctrl+M` to pick a model and enter your API key. Then just start typing.
+On first launch, type `/models` to pick a model and enter your API key (`Ctrl+M` works too, where the Kitty keyboard protocol is active). Then just start typing.
 
 The first `neenee` spawns the session daemon (a one-time cold start; every later launch attaches instantly). See [Daemon mode](#daemon-mode-and-multi-session-tracking) below.
 
@@ -94,13 +94,21 @@ and [ADR-0096](docs/adr/0096-unified-session-daemon.md).
 
 | Key | Action |
 |-----|--------|
+| `F1` | Help (all keybindings) |
+| `F5` | `/btw` asides list |
+| `Ctrl+Q` | Open the round queue |
+| `Ctrl+P` | Block / resume the round queue |
+| `Ctrl+O` | Insert input into the running round |
+| `Ctrl+M` | Open the model picker (Kitty keyboard protocol; `/models` always works) |
+| `Ctrl+R` | Input history search |
+| `Ctrl+T` | Open todos |
 | `Enter` | Send message |
 | `Tab` | Commit the highlighted slash-command / `@path` completion (re-opens a menu `Esc` dismissed) |
-| `Ctrl+M` | Open the model picker |
-| `Ctrl+T` | Open todos |
 | `Ctrl+B` | Move the caret back one character (readline backward-char) |
 | `Ctrl+C` | Copy → interrupt → close modal → clear → quit |
 | `Ctrl+V` | Paste from clipboard |
+
+The full, authoritative list lives in the TUI itself: press `F1` for Help.
 
 ## Useful Commands
 

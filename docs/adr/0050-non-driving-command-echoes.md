@@ -241,7 +241,8 @@ faithfulness gap **out of scope** for this ADR.
 
 - ADR-0017 / ADR-0022 — the `origin`/`#[serde(default)]` zero-migration
   provenance contract this extends.
-- ADR-0035 — mid-turn save point (`append_turn`), preserved unchanged.
+- ADR-0048 — mid-turn save point (`append_turn`), preserved unchanged.
+  (Earlier revisions wrongly cited ADR-0035, an unrelated superseded ADR.)
 - ADR-0040 — `model_window` / `archived_transcript` / context-projection
   vocabulary.
 - ADR-0048 — `mutate_messages` atomic primitive and session-as-single-source;

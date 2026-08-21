@@ -95,7 +95,7 @@ transformations happen at wrap time:
    (including `-`, `.`, `/`) with `_`. This is required because the name
    becomes a provider function name, and providers reject names with slashes
    or spaces. Sanitized collisions (`read-file` and `read.file` both becoming
-   `read_file`) are disambiguated deterministically.
+   `read_text`) are disambiguated deterministically.
 2. **Schema.** The server's `inputSchema` is used verbatim, falling back to
    `{"type":"object"}` when absent so the OpenAI function definition stays
    valid.

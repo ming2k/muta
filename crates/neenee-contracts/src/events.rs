@@ -754,6 +754,45 @@ impl RoundInterruptReason {
     }
 }
 
+/// The durable `/retry` resume point: everything a later round needs to
+/// *continue* a stopped round as itself — same round number, contiguous turn
+/// ordinals — rather than minting a fresh round.
+///
+/// `/retry`'s whole contract is "finish the round that did not finish": the
+/// round counter must not advance, the turn sequence must stay unbroken, and
+/// the model-visible history must be exactly the committed checkpoint the
+/// stopped round left behind. A `RetryPoint` is the harness's capture of that
+/// checkpoint at the moment the round stopped (terminal error after retries
+/// were exhausted, or an interrupt that left committed content).
+///
+/// This is **projection state, not a conversation message**: like
+/// [`RoundInterrupt`] it never enters `model_window`, never reaches the
+/// model, and costs zero context tokens. It rides in the session store until
+/// the parked round completes (then it is cleared) or the session moves on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct RetryPoint {
+    /// 1-based round the point refers to. `/retry` may only fire while this
+    /// still equals the session's current round counter — any newer round
+    /// (or a `/new`) retires the point.
+    pub round: u64,
+    /// How many complete ReAct turns the stopped round committed. The resume
+    /// continues numbering turns from here (`round.turn_index` starts at this
+    /// value) so the transcript's `round N · turn M` sequence stays unbroken.
+    pub turns_committed: usize,
+    /// `model_window` length at the stopped round's last durable checkpoint.
+    /// The resume seeds its working history from the window and re-checkpoints
+    /// from this watermark so no partially streamed content leaks back in.
+    pub history_watermark: usize,
+    /// Human-decision pause time (permission prompts / `ask_user`) the
+    /// stopped round had already accumulated, in milliseconds. Seeded back
+    /// into the resume so a later tokens/sec stays honest across the stop.
+    pub paused_ms: u64,
+    /// Unix-epoch milliseconds at which the point was recorded. Lets a
+    /// resumed session show *when* the round stalled.
+    pub at_ms: u64,
+}
+
 /// A compact per-round accounting handed to frontends when a user round
 /// completes naturally. The "active" generation time is
 /// `duration_ms.saturating_sub(paused_ms)`; dividing `output_tokens` by it
@@ -1064,6 +1103,14 @@ pub struct HarnessSnapshot {
     /// (`--autopilot` / `/autopilot on`). The TUI mirrors this into a
     /// visible badge so the elevated state is never silent.
     pub autopilot: bool,
+    /// Whether a stopped round is parked for `/retry`: the previous round
+    /// ended before completing (terminal provider error or an interrupt that
+    /// left committed content) and its durable resume point is still armed.
+    /// A round that completed naturally leaves this `false` forever — `/retry`
+    /// is a no-op for it. Frontends use this to offer the `/retry` affordance
+    /// instead of scanning the transcript for error notices.
+    #[serde(default)]
+    pub retry_pending: bool,
 }
 
 /// A row in the sessions picker: enough to identify, describe and order a past

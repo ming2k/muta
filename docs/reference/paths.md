@@ -38,6 +38,7 @@ User-edited configuration. Lossy; back it up.
 | `config.toml` | User-edited configuration — **behavior only** (`default_provider` / `default_model`, `[principal]`, `[permissions]`, `[bash_policy]`, `[tui]`, `[input_history]`, `[tool_variants]`, `[[hooks]]`, `[skills]`, `[websearch]`, `[mcp.<server>]`, ...). Provider *instances* live in the state store (`providers.toml`), secrets in `credentials.toml` | Yes |
 | `credentials.toml` | Token-auth secrets, split out of `config.toml` (written `rw-------`), keyed by **provider instance**: `[providers.<id>] api_key`. OAuth logins do not live here — see the note below. A credential belongs to the instance; every route it serves resolves it. | Yes |
 | `logo.txt` | Optional user-supplied ASCII logo; when present its lines replace the built-in wordmark on the welcome screen | Rebuildable |
+| `themes/<id>.toml` | Standalone theme files; one file per custom theme, loaded by the Settings overlay | User-authored |
 
 Default location: `~/.config/neenee/`.
 
@@ -68,11 +69,11 @@ Persistent, program-generated, must survive restart. Back it up.
 
 | Path | Purpose | Lossy? |
 |------|---------|--------|
-| `blobs/<2-char-prefix>/<hash>` | Content-addressed blob store for large payloads | Yes |
+| `blobs/<2-char-prefix>/<hash>` | Content-addressed blob store for large payloads. Unreferenced blobs are reclaimed by the daemon's daily mark-sweep GC (sessions across all project buckets are the roots) | Yes |
 | `projects/<16-hex-bucket>/` | Per-project bucket: sessions, current pointer, metadata | Yes |
 | `projects/<bucket>/sessions/` | Durable per-session files: `sessions/<id>.json` (snapshot) plus `sessions/<id>.jsonl` (event log). Each live instance pins its own file, so concurrent instances never share a mutable one | Yes |
-| `projects/<bucket>/network/` | Per-project `/debug trace` capture directory (mirrors the `sessions/` layout) | Rebuildable |
-| `projects/<bucket>/debug/` | Per-project `/debug preview` capture directory (one owner-only JSON per invocation) | Rebuildable |
+| `projects/<bucket>/network/` | Per-project `/debug trace` capture directory; bounded retention (newest 50 captures kept — each is a full context, so they grow fast) | Rebuildable |
+| `projects/<bucket>/debug/` | Per-project `/debug preview` capture directory (one owner-only JSON per invocation, same bounded retention) | Rebuildable |
 | `projects/<bucket>/embeddings.json` | Per-project lightweight embedding index | Rebuildable (re-indexed) |
 | `projects/<bucket>/neenee.lock` | Per-project advisory lock | Rebuildable |
 | `projects/<bucket>/permissions.json` | Per-project cached "always allow" permission rules | Rebuildable (re-prompts) |
@@ -94,12 +95,12 @@ re-prompts; no conversation is lost.
 |------|---------|--------|
 | `history.json` | Slash-command input history | Rebuildable |
 | `providers.toml` | **Provider instances** — the program-managed "who I connect to" records: id/name, `template_id`, `auth`, optional `api_key_env`, and a pure-custom instance's declared transport/endpoint/models. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each instance's template + the discovery cache, never persisted | No (user-managed connections) |
+| `route_settings.json` | The user's per-(instance, model) reasoning overrides — set from the model `e` editor. State, not cache: deleting it loses user configuration no endpoint can re-derive (migrated out of `models_discovery.json`) | No |
 | `trusted_projects.json` | The per-project trust grant set (which projects' `.neenee/config.toml` external tools are loaded) | Rebuildable (re-trust) |
 | `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |
-| `model_usage.json` | Per-model token usage telemetry | Rebuildable |
 | `auth.toml` | OAuth token sets per provider id (`[tokens.<provider>]`, 0600) — access/refresh/expiry for SuperGrok, ChatGPT, Copilot, and Google Antigravity logins. Rebuildable only by re-logging in (the refresh tokens are the durable secret; losing the file means re-auth, so back it up if rotating logins is costly) | Re-auth on loss |
 | `neenee.lock` | Cross-process advisory lock when no runtime directory is available | Rebuildable |
-| `log/` | Structured rolling-log appender output (reserved) | Rebuildable |
+| `log/` | Structured rolling-log appender output, daily rotation with bounded retention (`NEENEE_LOG_RETENTION`, default 14 files) | Rebuildable |
 
 Default location: `~/.local/state/neenee/`.
 
@@ -110,7 +111,7 @@ Derived, deletable, repopulated on demand. Safe to delete.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `skills/remote/` | Cached remote skill repositories (fetched from `[skills] urls`) | Safe to delete |
-| `models_discovery.json` | Per-route facts derived from live `GET /models`: the discovered model list, fitted capability metadata, and the user's per-(instance, model) reasoning overrides (`route_settings`) | Rebuildable (re-discovered); `route_settings` is user-set and recreated by the model `e` editor |
+| `models_discovery.json` | Per-route facts derived from live `GET /models`: the discovered model list and fitted capability metadata. All derived — wiping the file costs one re-discovery | Rebuildable |
 
 Default location: `~/.cache/neenee/`.
 

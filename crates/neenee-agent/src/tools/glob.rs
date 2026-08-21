@@ -2,17 +2,34 @@ use async_trait::async_trait;
 use neenee_contracts::Tool;
 use serde_json::json;
 
+use crate::tools::helpers::{
+    WorkspaceBase, env_from_root, execution_environment, should_skip_path, workspace_base,
+};
+
 /// Fast file pattern matching using globs.
 ///
 /// Relative patterns and bases resolve against the session's workspace root
 /// (captured at factory time), not the daemon process's cwd (ADR-0096).
 pub struct GlobTool {
-    pub(crate) root: crate::tools::helpers::WorkspaceBase,
+    pub(crate) root: WorkspaceBase,
+    pub(crate) env: Option<std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>>,
+}
+
+impl GlobTool {
+    pub fn new(root: WorkspaceBase) -> Self {
+        Self { root, env: None }
+    }
+
+    pub fn with_env(env: std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>) -> Self {
+        let root = Some(env.workspace_root().to_path_buf());
+        Self {
+            root,
+            env: Some(env),
+        }
+    }
 }
 
 const GLOB_MAX_RESULTS: usize = 200;
-
-use crate::tools::helpers::{should_skip_path, workspace_base};
 
 #[async_trait]
 impl Tool for GlobTool {
@@ -38,6 +55,7 @@ impl Tool for GlobTool {
         let pattern = args["pattern"].as_str().ok_or("Missing 'pattern'")?;
         let base = args["path"].as_str().unwrap_or(".");
 
+        let _env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
         // Resolve the base against the session's workspace root so a default
         // `.` (or any relative base) scans the session's project, never the
         // daemon's coincidental process cwd. `join` passes absolute bases
@@ -100,4 +118,5 @@ impl Tool for GlobTool {
 }
 neenee_contracts::register_tool!(GlobFactory => |ctx| GlobTool {
     root: workspace_base(ctx),
+    env: Some(execution_environment(ctx)),
 });

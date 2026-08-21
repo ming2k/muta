@@ -7,6 +7,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Doom-guard defaults were documented backwards in three places.** The
+  guard has been **on by default** (`window: 16`) since ADR-0113 §5, but the
+  `DoomGuardConfig` module docs, the `PrincipalConfig.nudge` field rustdoc,
+  and `configuration.md` all still said "default disabled / opt in". The
+  canonical TOML key is now `[principal.doom_guard]`; the historical `nudge`
+  spelling still loads (serde alias — an explicit `enabled = false` under
+  the old key survives, since silently dropping it would flip the user's
+  opt-out back to blocking) and saves write the new key.
+- **`read_file` → `read_text` across the docs.** The tool was renamed long
+  ago (its own description says `read_text`); ~15 doc pages still taught the
+  dead name.
+- **Removed the phantom `search_history` tool from the docs** — deleted in
+  0.24.0 but still fully documented (parameter table and a source file that
+  no longer exists).
+- `docs/reference/commands.md` documented the **hidden alias** `/config`
+  and omitted the canonical `/settings` and `/retry`; the trigger-word
+  table listed 3 of 8 rows. `paths.md` listed `model_usage.json` as a live
+  State file while also listing it as removed, and never documented
+  `themes/`. `cli.md` omitted `-p/-i/-y/-j`. The README key table omitted
+  the queue family. A new test (`commands_reference_table_matches_builtin_registry`)
+  pins the command table to `BuiltinCmd::ALL` so the markdown can no longer
+  drift silently.
+- Wrong ADR citations: the mid-turn save point was attributed to ADR-0035
+  (an unrelated, superseded ADR) in five code comments and two ADR
+  reference lists; it is specified by ADR-0048.
+
+### Changed
+
+- **Bounded log retention.** `tracing_appender::rolling::daily` rotates but
+  never deletes — the state log directory grew forever. Replaced with an
+  in-house daily-rolling writer that keeps the newest files only
+  (`NEENEE_LOG_RETENTION`, default 14).
+- **`route_settings` moved out of the cache.** The user's per-(instance,
+  model) reasoning overrides lived in `$XDG_CACHE_HOME/models_discovery.json`
+  — a cache is derived and deletable, user settings are not. They now live
+  in `$XDG_STATE_HOME/neenee/route_settings.json`, with a one-shot,
+  idempotent migration that folds the old cache map in and clears it there.
+- **Web-search API keys moved out of `config.toml`.** The six `[websearch]`
+  keys are secrets; `config.toml` is behavior-only and shareable. They now
+  persist in `credentials.toml [websearch]` (merged at load; a one-shot
+  migration moves keys found in a pre-split `config.toml`, where an explicit
+  credentials entry wins). Serialization of `WebSearchConfig` no longer
+  emits them, so a saved config is safe to share by construction.
+- **`/search` is honest lexical ranking.** The embedding-index machinery
+  (persisted vectors from a hash-based `MockEmbeddingProvider`, dedup set,
+  union-merge save, full-file rewrite per search) was real cost with no
+  semantics. `/search` now ranks the live transcript and command ledger
+  with deterministic lexical scoring — no index file, nothing persisted —
+  until a real embedding provider is wired in. Deleting a session now also
+  prunes its entries from the project embedding index (they previously
+  survived forever via the union-only merge).
+- **Blob garbage collection.** The content-addressed blob store had no
+  reclamation path: deleting, forking, or compacting sessions orphaned blobs
+  forever. `BlobStore::collect_garbage` marks every `content_blob`
+  reference reachable from all project buckets' snapshots (a conservative
+  textual scan — no schema coupling) and sweeps the rest. The daemon's idle
+  reaper runs it at most once a day on the blocking pool, alongside usage
+  day-file retention (400 days).
+- **Bounded `/debug trace` capture retention** (newest 50 per directory):
+  each capture is the full request context of one round-trip, so an armed
+  trace on a long session previously grew the data dir faster than every
+  other path combined.
+- **Per-persist costs no longer grow with session age.** `EventLog::high_seq`
+  — called on every snapshot persist to stamp the `applied_seq` watermark —
+  re-read and re-parsed the whole event log each time; it is now cached and
+  maintained by `append`/`rewrite` (O(1) after the first call). The
+  request-ledger diff in `set_request_usage_records` was quadratic
+  (`any`-inside-`any` plus a `find` per record); it is now computed through
+  a key→record index. `upsert_record` in the usage store binary-searches
+  the key-sorted day file instead of scanning it.
+
+### Added
+
+- **`neenee config check`** validates `config.toml` against the schema:
+  hard syntax/type errors that made a load silently fall back to defaults,
+  unknown keys (a typo silently meant "default"), and known dead legacy
+  spellings with what replaced them. The unknown-keys-ignored policy stays
+  — this restores the signal it traded away.
+- **`--config-dir` / `--data-dir` / `--state-dir` / `--cache-dir`** CLI
+  flags, wiring the per-category tier ADR-0014 §3 specified but never
+  shipped. Each is the CLI form of its `NEENEE_*_DIR` env var and wins over
+  `--home` for its own category; the pre-parser restates them as env vars
+  for child processes, exactly like `--home`.
+
+### Removed
+
+- Dead code the docs had already disowned: the pre-ADR-0096 per-project
+  `serve/<bucket>.json` write path (the docs called it "harmless litter"
+  while code and tests kept it alive), the unused `Dirs::project_lock_file`
+  and `Dirs::project_migration_lock` (their consumers were removed by
+  ADR-0116), and stale crate docs referencing `neenee-core`, a per-project
+  single-instance flock, and a `neenee-trading-store` sibling.
+
+### Changed (tests)
+
+- The tokenizer corpus tests **fail on a missing corpus file** instead of
+  silently skipping (`let Ok(..) = read else { continue }` had been hiding
+  wrong paths *and* stale pinned counts for the entire life of the test —
+  both were wrong and it stayed green).
+- The untrusted-hardening test asserted the regex **source text** contained
+  substrings; a real match test now lives where `regex` is (the agent
+  crate), covering 14 injection payloads plus benign-command non-matches.
+- The `/schedule` split-spec test helper propagated errors instead of
+  defaulting to empty strings, which turned every parse regression into a
+  vacuous green.
+- The relative-XDG-var test pins which documented fallback actually ran
+  (it previously accepted both outcomes with an `||`).
+
 ### Changed
 
 - **The queue family moved off the F-row to the Ctrl row (ADR-0126).**

@@ -516,8 +516,35 @@ async fn start_resolved_turn(
     session: Arc<SessionStore>,
     lifecycle: Arc<RoundLifecycle>,
     session_id: String,
-    input: RoundInput,
+    mut input: RoundInput,
 ) {
+    // `/retry` target validation (ADR-0128). The slash handler pre-checks
+    // against the *primary* session, but the round may resolve onto the
+    // active aside — so the authoritative check happens here, against the
+    // session that will actually run it. The viewed session's parked point
+    // is the only one that may be resumed; a mismatch (empty aside, or a
+    // point left over from a different session) degrades the resume into a
+    // refusal instead of silently minting a fresh round on the wrong target.
+    if input.is_retry() {
+        let pending = session.retry_pending().await;
+        let round_counter = session.round_counter().await;
+        let valid = pending
+            .as_ref()
+            .is_some_and(|point| point.round == round_counter);
+        if !valid {
+            let _ = tx.send(round_response(
+                &session_id,
+                RoundEvent::Error(
+                    "Nothing to retry — the last round already completed.".to_string(),
+                ),
+            ));
+            send_harness_state(tx, &session_id, &agent, LoopStatus::Idle);
+            return;
+        }
+        // Re-bind the checkpoint to the resolved session's own point: the
+        // handler read the primary's, which may differ from an aside target.
+        input = RoundInput::resume(pending.expect("validated above"));
+    }
     let projection =
         ContextProjectionSettings::from_config(config, active_context_window(principal));
     let retry_max_attempts = config.provider_retry_max_attempts;

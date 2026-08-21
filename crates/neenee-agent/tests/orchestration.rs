@@ -315,7 +315,7 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
             display_prompt: None,
             sent_at_ms: None,
             images: Vec::new(),
-            is_retry: false,
+            driver: neenee_agent::orchestration::RoundDriver::Fresh,
         },
     )
     .await
@@ -422,7 +422,7 @@ async fn partial_tool_stream_is_not_executed_before_provider_retry() {
             display_prompt: None,
             sent_at_ms: None,
             images: Vec::new(),
-            is_retry: false,
+            driver: neenee_agent::orchestration::RoundDriver::Fresh,
         },
     )
     .await
@@ -496,7 +496,7 @@ async fn turn_resumes_provider_request_after_completed_tool_activity() {
             display_prompt: None,
             sent_at_ms: None,
             images: Vec::new(),
-            is_retry: false,
+            driver: neenee_agent::orchestration::RoundDriver::Fresh,
         },
     )
     .await
@@ -565,7 +565,7 @@ async fn turn_exhaustion_message_explains_retry_budget() {
             display_prompt: None,
             sent_at_ms: None,
             images: Vec::new(),
-            is_retry: false,
+            driver: neenee_agent::orchestration::RoundDriver::Fresh,
         },
     )
     .await
@@ -627,4 +627,172 @@ fn apply_jitter_never_exceeds_base() {
 #[test]
 fn apply_jitter_passes_zero_through_unchanged() {
     assert_eq!(apply_jitter_ms(0, |_| 1_000), 0);
+}
+
+/// A provider that fails *terminally* (a non-retryable error) on the first
+/// round and succeeds on the second — the exact shape a `/retry` resumes
+/// from. `requests` records the message-history shape of every provider
+/// request so the test can assert the resume re-sent exactly the committed
+/// checkpoint (no duplicate user message, no half-streamed assistant text).
+struct FailThenSucceedProvider {
+    attempts: AtomicUsize,
+    requests: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl Provider for FailThenSucceedProvider {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
+        Err("non-streaming path should not be used".to_string())
+    }
+
+    async fn stream_chat(
+        &self,
+        _request: neenee_contracts::ModelRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        Ok(Box::pin(stream::empty()))
+    }
+
+    async fn stream_chat_events(
+        &self,
+        request: neenee_contracts::ModelRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<ProviderStreamEvent, String>>, String>
+    {
+        self.requests
+            .lock()
+            .expect("request log lock poisoned")
+            .push(serde_json::to_string(&request.messages).expect("messages should serialize"));
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            // Terminal: `parse_retryable_error` finds no envelope, so the
+            // harness surfaces it and (with ADR-0128) arms the resume point.
+            Ok(Box::pin(stream::iter(vec![Err(
+                "terminal: model refused the request".to_string(),
+            )])))
+        } else {
+            Ok(Box::pin(stream::iter(vec![Ok(
+                ProviderStreamEvent::TextDelta("recovered".to_string()),
+            )])))
+        }
+    }
+}
+
+/// The round-level `/retry` contract (ADR-0128): a round whose provider
+/// fails terminally parks a durable resume point, and resuming through it
+/// *continues the same round* — the round counter never advances, no second
+/// user message is appended, and the turn sequence numbers onward instead of
+/// restarting. Meanwhile a round that completed naturally leaves no point,
+/// so a second `/retry` has nothing to resume.
+#[tokio::test]
+async fn retry_resumes_stopped_round_without_breaking_turn_sequence() {
+    let directory =
+        std::env::temp_dir().join(format!("neenee-retry-resume-{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&directory);
+    let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let agent = Arc::new(Agent::new(
+        Arc::new(FailThenSucceedProvider {
+            attempts: AtomicUsize::new(0),
+            requests: requests.clone(),
+        }),
+        Vec::new(),
+        neenee_agent::AgentIdentity::default(),
+    ));
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let session_id = session.id().await;
+    let context = |tx| RoundContext {
+        agent: Arc::clone(&agent),
+        tx,
+        token: CancellationToken::new(),
+        session_id: session_id.clone(),
+        session: Arc::clone(&session),
+        projection: ContextProjectionSettings {
+            budget: neenee_contracts::CompactionPolicy::default().resolve(100_000),
+            preserve_rounds: 6,
+            summarize: false,
+            prune: false,
+            prune_protect_tokens: 0,
+        },
+        retry_max_attempts: 3,
+        retry_base_ms: 1,
+        retry_max_ms: 10,
+        emit_round_completed: false,
+    };
+
+    // 1. The fresh round fails terminally.
+    let error = execute_round(
+        context(tx.clone()),
+        RoundInput {
+            prompt: "work".to_string(),
+            hidden: false,
+            display_prompt: None,
+            sent_at_ms: None,
+            images: Vec::new(),
+            driver: neenee_agent::orchestration::RoundDriver::Fresh,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("terminal"), "{error}");
+
+    // The failed round parked its resume point: same round, committed
+    // history watermark, zero committed turns (nothing streamed through).
+    let point = session
+        .retry_pending()
+        .await
+        .expect("failed round must arm a retry point");
+    assert_eq!(point.round, 1, "the parked point names round 1");
+    assert_eq!(point.turns_committed, 0);
+    assert_eq!(point.history_watermark, 1, "user message only");
+    assert_eq!(session.round_counter().await, 1);
+
+    // 2. `/retry` resumes and completes the *same* round.
+    let round_before = session.round_counter().await;
+    execute_round(
+        context(tx),
+        RoundInput::resume(neenee_contracts::RetryPoint {
+            round: point.round,
+            turns_committed: point.turns_committed,
+            history_watermark: point.history_watermark,
+            paused_ms: point.paused_ms,
+            at_ms: point.at_ms,
+        }),
+    )
+    .await
+    .unwrap();
+
+    // Round counter never advanced: the resume completed round 1, it did
+    // not mint round 2. This is the headline invariant of /retry.
+    assert_eq!(
+        session.round_counter().await,
+        round_before,
+        "retry must not advance the round counter"
+    );
+    // The window holds user + assistant — exactly one user message (no
+    // duplicate from the resume re-sending it as a fresh prompt).
+    let window = session.model_window().await;
+    let user_count = window
+        .iter()
+        .filter(|message| message.role == Role::User)
+        .count();
+    assert_eq!(user_count, 1, "resume must not append a second user message");
+    assert!(
+        window.iter().any(|message| message.content == "recovered"),
+        "the resumed round's answer is committed"
+    );
+    // Both provider requests carried the same one-message history: the
+    // resume re-sent the committed checkpoint verbatim.
+    let logged = requests.lock().expect("request log lock poisoned").clone();
+    assert_eq!(logged.len(), 2);
+    assert_eq!(
+        logged[0], logged[1],
+        "resume re-sends the committed checkpoint, not a mutated history"
+    );
+
+    // 3. Completion retired the point: a subsequent `/retry` has nothing
+    //    to resume (the completed-round rule).
+    assert!(
+        session.retry_pending().await.is_none(),
+        "a naturally completed round leaves no retry point"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
 }

@@ -1641,6 +1641,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         path_scan_wake: None,
         session_context: None,
         loop_status: LoopStatus::Idle,
+        harness_retry_pending: false,
         activity_status: String::new(),
         provider_retry: None,
         autopilot: false,
@@ -5223,6 +5224,7 @@ fn exiting_an_aside_restores_the_primary_chrome_exactly() {
             round_count: 1,
             current_turn: 1,
             round_started_at: Some(std::time::Instant::now()),
+            can_retry: false,
         },
     );
     // Re-entering (focus jump) must swap the aside's own chrome in.
@@ -5257,6 +5259,7 @@ fn reentering_a_running_aside_shows_its_own_chrome() {
             round_count: 2,
             current_turn: 1,
             round_started_at: Some(std::time::Instant::now()),
+            can_retry: false,
         },
     );
     app.enter_side_view("side-2".to_string());

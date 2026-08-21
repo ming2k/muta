@@ -15,7 +15,7 @@ a threshold:
 
 | Tier | Envoy admission | Permission broker | Examples |
 |------|-----------|-------------------|----------|
-| `Read` | Admitted by every profile | Bypassed | `read_file`, `grep`, `glob` |
+| `Read` | Admitted by every profile | Bypassed | `read_text`, `grep`, `glob` |
 | `Execute` | Admitted only above a `Read` ceiling | Prompted unless a cached `Always` rule matches | `bash` |
 | `Write` (default) | Admitted only by a `Write` ceiling or a `write_paths` grant, then scoped by `WriteScope` | Prompted unless a cached `Always` rule matches | `write_file`, `edit_file` |
 

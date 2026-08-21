@@ -4,7 +4,9 @@ use serde_json::json;
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
-use crate::tools::helpers::{WorkspaceBase, workspace_base};
+use crate::tools::helpers::{
+    WorkspaceBase, env_from_root, execution_environment, workspace_base,
+};
 
 /// Maximum wall-clock time for a single `rg` invocation. A slow or wedged
 /// ripgrep (huge tree, catastrophic-backtracking pattern) is released rather
@@ -28,6 +30,21 @@ const GREP_MAX_BYTES: usize = 32 * 1024;
 /// root (captured at factory time), not the daemon process's cwd (ADR-0096).
 pub struct GrepTool {
     pub(crate) root: WorkspaceBase,
+    pub(crate) env: Option<std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>>,
+}
+
+impl GrepTool {
+    pub fn new(root: WorkspaceBase) -> Self {
+        Self { root, env: None }
+    }
+
+    pub fn with_env(env: std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>) -> Self {
+        let root = Some(env.workspace_root().to_path_buf());
+        Self {
+            root,
+            env: Some(env),
+        }
+    }
 }
 
 #[async_trait]
@@ -62,12 +79,13 @@ impl Tool for GrepTool {
         // can read the file when it needs surroundings. Clamp to a sane ceiling.
         let context = args["context"].as_u64().unwrap_or(0).min(10);
 
+        let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
         // Search the session's workspace root, not the daemon process's cwd
         // (ADR-0096): a default `.` must scan the invoking session's project.
         // `join` passes an absolute search path through unchanged.
         let search_root = match &self.root {
             Some(root) => root.join(path),
-            None => std::path::PathBuf::from(path),
+            None => env.workspace_root().join(path),
         };
 
         let mut cmd = Command::new("rg");
@@ -134,6 +152,7 @@ impl Tool for GrepTool {
 }
 neenee_contracts::register_tool!(GrepFactory => |ctx| GrepTool {
     root: workspace_base(ctx),
+    env: Some(execution_environment(ctx)),
 });
 
 /// Bound ripgrep's stdout to [`GREP_MAX_LINES`] / [`GREP_MAX_BYTES`], whichever

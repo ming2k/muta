@@ -81,7 +81,7 @@ session.
 |--------------|-------|
 | Queued (a chat round admitted, not yet running) | `queued` |
 | Waiting for provider | `waiting for model` |
-| `read_file` / `list_dir` / `use_skill` | `exploring` |
+| `read_text` / `list_dir` / `use_skill` | `exploring` |
 | `grep` | `searching codebase` |
 | `write_file` / `edit_file` | `making edits` |
 | `bash` | `running command` |

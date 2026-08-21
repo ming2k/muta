@@ -3,7 +3,8 @@ use neenee_contracts::Tool;
 use serde_json::json;
 
 use crate::tools::helpers::{
-    WorkspaceBase, json_string, resolve_workspace_path, save_file_atomic, workspace_base,
+    WorkspaceBase, env_from_root, execution_environment, json_string, resolve_workspace_path,
+    workspace_base,
 };
 
 /// Apply an edit to a file (safer than write_file — requires old_string match).
@@ -14,6 +15,21 @@ use crate::tools::helpers::{
 /// project, and an edit is exactly where that divergence does damage.
 pub struct EditFileTool {
     pub(crate) root: WorkspaceBase,
+    pub(crate) env: Option<std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>>,
+}
+
+impl EditFileTool {
+    pub fn new(root: WorkspaceBase) -> Self {
+        Self { root, env: None }
+    }
+
+    pub fn with_env(env: std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>) -> Self {
+        let root = Some(env.workspace_root().to_path_buf());
+        Self {
+            root,
+            env: Some(env),
+        }
+    }
 }
 
 /// Number of unchanged context lines to include above and below the edit in the
@@ -196,12 +212,13 @@ impl Tool for EditFileTool {
         let path = args["path"].as_str().ok_or("Missing 'path'")?;
         let old_str = args["old_string"].as_str().ok_or("Missing 'old_string'")?;
         let new_str = args["new_string"].as_str().ok_or("Missing 'new_string'")?;
-        // Filesystem access goes through the workspace-resolved path; the
-        // model-facing `path` text (errors, diff framing) stays what the
-        // model sent.
+        let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
         let resolved = resolve_workspace_path(&self.root, path);
 
-        let content = std::fs::read_to_string(&resolved)
+        let content = env
+            .fs()
+            .read_to_string(&resolved)
+            .await
             .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
 
         // Exact match first; fall back to a CRLF-normalized comparison so an
@@ -227,7 +244,9 @@ impl Tool for EditFileTool {
 
         // Atomically commit the new content (temp file + fsync + rename) so an
         // interrupted edit never corrupts the file in place.
-        save_file_atomic(&resolved, edit.new_content.as_bytes())
+        env.fs()
+            .write(&resolved, edit.new_content.as_bytes())
+            .await
             .map_err(|e| format!("Failed to write '{}': {}", path, e))?;
         Ok(neenee_contracts::ToolOutput::Patch {
             path: path.to_string(),
@@ -240,6 +259,7 @@ impl Tool for EditFileTool {
 }
 neenee_contracts::register_tool!(EditFileFactory => |ctx| EditFileTool {
     root: workspace_base(ctx),
+    env: Some(execution_environment(ctx)),
 });
 
 #[cfg(test)]

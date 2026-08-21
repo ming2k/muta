@@ -240,7 +240,16 @@ round_counter: number,
  * (`--autopilot` / `/autopilot on`). The TUI mirrors this into a
  * visible badge so the elevated state is never silent.
  */
-autopilot: boolean, };
+autopilot: boolean, 
+/**
+ * Whether a stopped round is parked for `/retry`: the previous round
+ * ended before completing (terminal provider error or an interrupt that
+ * left committed content) and its durable resume point is still armed.
+ * A round that completed naturally leaves this `false` forever — `/retry`
+ * is a no-op for it. Frontends use this to offer the `/retry` affordance
+ * instead of scanning the transcript for error notices.
+ */
+retry_pending: boolean, };
 
 /**
  * Which lifecycle point a hook fires on — the routing key only. The payload
@@ -718,6 +727,54 @@ default_id: string, rows: Array<ProviderPickerRow>, };
  * makes admission/cancellation races deterministic.
  */
 export type QueuedUserInput = { id: string, text: string, display_text?: string, images?: Array<ImagePart>, sent_at_ms?: number, };
+
+/**
+ * The durable `/retry` resume point: everything a later round needs to
+ * *continue* a stopped round as itself — same round number, contiguous turn
+ * ordinals — rather than minting a fresh round.
+ *
+ * `/retry`'s whole contract is "finish the round that did not finish": the
+ * round counter must not advance, the turn sequence must stay unbroken, and
+ * the model-visible history must be exactly the committed checkpoint the
+ * stopped round left behind. A `RetryPoint` is the harness's capture of that
+ * checkpoint at the moment the round stopped (terminal error after retries
+ * were exhausted, or an interrupt that left committed content).
+ *
+ * This is **projection state, not a conversation message**: like
+ * [`RoundInterrupt`] it never enters `model_window`, never reaches the
+ * model, and costs zero context tokens. It rides in the session store until
+ * the parked round completes (then it is cleared) or the session moves on.
+ */
+export type RetryPoint = { 
+/**
+ * 1-based round the point refers to. `/retry` may only fire while this
+ * still equals the session's current round counter — any newer round
+ * (or a `/new`) retires the point.
+ */
+round: number, 
+/**
+ * How many complete ReAct turns the stopped round committed. The resume
+ * continues numbering turns from here (`round.turn_index` starts at this
+ * value) so the transcript's `round N · turn M` sequence stays unbroken.
+ */
+turns_committed: number, 
+/**
+ * `model_window` length at the stopped round's last durable checkpoint.
+ * The resume seeds its working history from the window and re-checkpoints
+ * from this watermark so no partially streamed content leaks back in.
+ */
+history_watermark: number, 
+/**
+ * Human-decision pause time (permission prompts / `ask_user`) the
+ * stopped round had already accumulated, in milliseconds. Seeded back
+ * into the resume so a later tokens/sec stays honest across the stop.
+ */
+paused_ms: number, 
+/**
+ * Unix-epoch milliseconds at which the point was recorded. Lets a
+ * resumed session show *when* the round stalled.
+ */
+at_ms: number, };
 
 /**
  * The diagnostic's judgement for a dimension (ledger-compatibility type for

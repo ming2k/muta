@@ -59,7 +59,7 @@ OpenAI:
 { "role": "assistant", "content": null,
   "tool_calls": [
     { "id": "call_1", "type": "function",
-      "function": { "name": "read_file", "arguments": "{\"path\":\"a.txt\"}" } }
+      "function": { "name": "read_text", "arguments": "{\"path\":\"a.txt\"}" } }
   ] }
 // you reply — one role:"tool" message per call
 { "role": "tool", "tool_call_id": "call_1", "content": "…file contents…" }
@@ -71,7 +71,7 @@ Anthropic:
 // model returns
 { "role": "assistant",
   "content": [
-    { "type": "tool_use", "id": "toolu_1", "name": "read_file",
+    { "type": "tool_use", "id": "toolu_1", "name": "read_text",
       "input": { "path": "a.txt" } }
   ] }
 // you reply — tool_result block on a role:"user" message

@@ -71,7 +71,7 @@ vocabulary; the dispatch tools bind them by reference.
 
 | Profile | Bound by | Ceiling | Write grant | Gets |
 |---------|----------|---------|-------------|------|
-| `EXPLORE` | `envoy` tool | `Read` | none | Pure read tools (`read_file`, `grep`, `glob`, `list_dir`, …) |
+| `EXPLORE` | `envoy` tool | `Read` | none | Pure read tools (`read_text`, `grep`, `glob`, `list_dir`, …) |
 | `CODE` | `envoy_code` tool | `Write` | none | Read tools + `bash`, `edit_file`, `write_file`, `todo*` — a full coding surface; runs on autopilot, so the delegation *is* the authorization |
 | `TITLE` | harness title generation | `Read` | none | No tools — a single `provider.chat()` call |
 | `INTERACTIVE` | (reserved, no dispatch tool yet) | `Read` | none | Pure read tools, with `ask_user` forwarded up |

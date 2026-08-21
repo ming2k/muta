@@ -430,6 +430,7 @@ impl UiRuntime {
                 loop_status: LoopStatus::Idle,
                 round_counter: 0,
                 autopilot: false,
+                retry_pending: false,
             })),
             activity_status: Arc::new(Mutex::new(String::new())),
             provider_retry: Arc::new(Mutex::new(None)),
@@ -1128,6 +1129,7 @@ async fn sync_runtime_state(
     app.current_model = runtime.current_model.lock().await.clone();
     let harness = runtime.harness.lock().await.clone();
     app.loop_status = harness.loop_status;
+    app.harness_retry_pending = harness.retry_pending;
     app.autopilot = harness.autopilot;
     app.activity_status = runtime.activity_status.lock().await.clone();
     app.provider_retry = runtime.provider_retry.lock().await.clone();

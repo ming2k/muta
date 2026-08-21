@@ -113,7 +113,7 @@ impl ScopedToolDisable {
     }
 }
 
-/// Mid-turn save-point closure installed by orchestration (ADR-0035).
+/// Mid-turn save-point closure installed by orchestration (ADR-0048).
 ///
 /// Invoked at each ReAct-turn boundary with the current full round history.
 /// The implementation diffs against its own durable baseline and appends only
@@ -309,7 +309,7 @@ pub struct Agent {
     /// identity changes at most once per user command, reads once per request.
     pub(crate) identity: std::sync::RwLock<AgentIdentity>,
     /// Optional mid-round save point invoked at every ReAct-turn boundary
-    /// (ADR-0035). The embedding (orchestration) installs a closure that
+    /// (ADR-0048). The embedding (orchestration) installs a closure that
     /// durably appends the round's new messages to the session log so a crash
     /// after a side-effecting tool call leaves the transcript in sync with the
     /// filesystem instead of rewinding to the previous turn. `None` for
@@ -515,6 +515,16 @@ pub(crate) struct StreamingRoundState {
     started_at: std::time::Instant,
     pending_request: Option<neenee_contracts::ModelRequest>,
     user_input_generation: Option<u64>,
+}
+
+impl StreamingRoundState {
+    /// How many complete ReAct turns this round has committed — the ordinal
+    /// the *next* turn would take (0-based `turn_index`). `/retry` captures
+    /// this into a [`neenee_contracts::RetryPoint`] so the resumed round
+    /// keeps numbering turns contiguously instead of restarting at 0.
+    pub(crate) fn committed_turns(&self) -> usize {
+        self.turn_index
+    }
 }
 
 struct UserInputRound {
@@ -1316,7 +1326,7 @@ impl Agent {
     }
 
     /// Install the mid-round save point fired at every ReAct-turn boundary
-    /// (ADR-0035). The closure receives the current full round history and
+    /// (ADR-0048). The closure receives the current full round history and
     /// should durably append only the new tail (see
     /// `SessionStore::append_turn`). Called once by orchestration after the
     /// agent is built and the session is open; envoys and the review
@@ -1509,6 +1519,15 @@ impl Agent {
     /// `TODO_STALE_TURN_THRESHOLD`).
     pub fn round_count(&self) -> u64 {
         *self.round_counter.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Human-decision pause time accumulated by the current round, in
+    /// milliseconds. Captured into a `/retry` resume point when a round
+    /// stops, and seeded back on resume, so tokens/sec stays honest across
+    /// the stop.
+    pub fn round_paused_ms(&self) -> u64 {
+        self.round_paused_ms
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Advance the round counter. Called once per `execute_round`. The TUI
@@ -2289,6 +2308,47 @@ impl Agent {
         }
     }
 
+    /// Resume a previously stopped round as *the same round* — the `/retry`
+    /// path (ADR-0128). Unlike [`Self::begin_streaming_round`] this does not
+    /// restart the round from scratch: it re-seeds the ReAct state from the
+    /// durable [`RetryPoint`] captured when the round stopped, so the resumed
+    /// execution
+    ///
+    /// - keeps numbering turns from `turns_committed` (the transcript's
+    ///   `round N · turn M` sequence stays unbroken — turn M+1 follows the
+    ///   committed M, never a duplicate),
+    /// - re-arms the pause accumulator from `paused_ms` so a later
+    ///   tokens/sec stays honest across the stop, and
+    /// - never re-runs turn-start hooks or side-effecting tools for turns
+    ///   that already completed: `pending_request` stays `None`, so the first
+    ///   request is assembled fresh from the checkpointed history.
+    ///
+    /// The inbox receiver is taken here exactly as in `begin_streaming_round`
+    /// — between rounds it is returned to the agent (`RoundState::Drop` puts
+    /// it back), so a mid-resume steering insert still has a drain target.
+    pub(crate) fn resume_streaming_round(
+        &self,
+        point: &neenee_contracts::RetryPoint,
+    ) -> StreamingRoundState {
+        self.round_paused_ms
+            .store(point.paused_ms, std::sync::atomic::Ordering::Relaxed);
+        StreamingRoundState {
+            state: RoundState {
+                guards: RoundState::guards_default(self.doom_guard_config()),
+                ..RoundState::default()
+            },
+            turn_index: point.turns_committed,
+            inbox_rx: self
+                .inbox_rx
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take(),
+            started_at: std::time::Instant::now(),
+            pending_request: None,
+            user_input_generation: self.user_input_generation(),
+        }
+    }
+
     /// Run or resume a streaming round from its last provider-request boundary.
     ///
     /// A [`HarnessError::Retryable`] leaves `round` reusable. If the failed
@@ -2609,7 +2669,7 @@ impl Agent {
                     return Err(self.hard_stop_error());
                 }
                 self.project_context_if_needed(messages, cancel).await?;
-                // Mid-round save point (ADR-0035): persist this turn's new
+                // Mid-round save point (ADR-0048): persist this turn's new
                 // messages (the assistant response + all tool results) before
                 // any further work, so a crash leaves the transcript in sync
                 // with filesystem side effects.

@@ -2,7 +2,7 @@
 //! `run_app_loop`'s `if needs_draw` stage (it was a ~1000-line closure).
 
 use crate::completion::{CompletionKind, completion_anchor_x, resolved_slash_command_len};
-use crate::model::document::{MessageKind, TranscriptMessage};
+use crate::model::document::TranscriptMessage;
 use crate::model::layout::LayoutMap;
 use crate::view;
 use crate::{App, Modal, ProviderDeleteChoice, Recess};
@@ -314,12 +314,12 @@ pub(super) fn render_frame(
         let model_available = active_provider_row
             .is_none_or(|row| row.models.iter().any(|m| m == &app.current_model));
         let busy = app.running_sessions.contains(viewed_session_id);
-        let can_retry = !busy
-            && view_messages
-                .iter()
-                .rev()
-                .find(|m| !matches!(m.kind, MessageKind::CommandResult { .. }))
-                .is_some_and(|m| m.is_error_notice());
+        // `/retry` affordance (ADR-0128): offered exactly while the viewed
+        // session has a stopped round parked for retry — mirrored from the
+        // session-scoped harness snapshot into `SessionChrome`, never
+        // re-derived by scanning the transcript (an error notice can follow
+        // a completed round, and a compaction can drop the notice entirely).
+        let can_retry = !busy && viewed_chrome.can_retry;
         app.hint_context_rect = view::draw_hint_bar(
             f,
             hint_rect,

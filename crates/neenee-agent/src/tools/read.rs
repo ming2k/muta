@@ -3,7 +3,9 @@ use neenee_contracts::Tool;
 use neenee_tool_derive::ToolSchema;
 use serde_json::json;
 
-use crate::tools::helpers::{WorkspaceBase, resolve_workspace_path, workspace_base};
+use crate::tools::helpers::{
+    WorkspaceBase, env_from_root, execution_environment, resolve_workspace_path, workspace_base,
+};
 
 /// Typed parameters for [`ReadTextTool`]. Deriving `ToolSchema` generates the
 /// JSON Schema the model sees, eliminating hand-written-schema drift: the
@@ -29,6 +31,21 @@ struct ReadArgs {
 /// project.
 pub struct ReadTextTool {
     pub(crate) root: WorkspaceBase,
+    pub(crate) env: Option<std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>>,
+}
+
+impl ReadTextTool {
+    pub fn new(root: WorkspaceBase) -> Self {
+        Self { root, env: None }
+    }
+
+    pub fn with_env(env: std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>) -> Self {
+        let root = Some(env.workspace_root().to_path_buf());
+        Self {
+            root,
+            env: Some(env),
+        }
+    }
 }
 
 #[async_trait]
@@ -65,6 +82,7 @@ impl Tool for ReadTextTool {
         // Filesystem access goes through the workspace-resolved path; the
         // model-facing `path` text (errors, framing, display) stays exactly
         // what the model sent.
+        let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
         let resolved = resolve_workspace_path(&self.root, path);
 
         // Reject directories with an explicit, actionable message instead of
@@ -72,7 +90,7 @@ impl Tool for ReadTextTool {
         // error cannot infer it should switch to `list_dir`, and may re-read
         // the same directory in a loop. This mirrors the empty/EOF guidance
         // pattern: a clear reason breaks the loop.
-        if resolved.is_dir() {
+        if env.fs().is_dir(&resolved).await {
             return Err(format!(
                 "'{}' is a directory, not a file. Use the `list_dir` tool to see its contents.",
                 path
@@ -93,21 +111,17 @@ impl Tool for ReadTextTool {
         if is_binary_extension(path) {
             return Err(format!("Cannot read binary file: {}", path));
         }
-        {
-            use std::io::Read;
-            let mut head = [0u8; 4096];
-            let mut file = std::fs::File::open(&resolved)
-                .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
-            let n = file
-                .read(&mut head)
-                .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
-            if is_binary_content(&head[..n]) {
-                return Err(format!("Cannot read binary file: {}", path));
-            }
-        }
 
-        let bytes =
-            std::fs::read(&resolved).map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+        let bytes = env
+            .fs()
+            .read(&resolved)
+            .await
+            .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
+
+        let sniff_len = bytes.len().min(4096);
+        if is_binary_content(&bytes[..sniff_len]) {
+            return Err(format!("Cannot read binary file: {}", path));
+        }
 
         let content =
             String::from_utf8(bytes).map_err(|_| format!("File '{}' is not valid UTF-8", path))?;
@@ -237,6 +251,7 @@ impl Tool for ReadTextTool {
 }
 neenee_contracts::register_tool!(ReadTextFactory => |ctx| ReadTextTool {
     root: workspace_base(ctx),
+    env: Some(execution_environment(ctx)),
 });
 
 /// The terse `read_text` variant: same capability name and identical behaviour
@@ -253,6 +268,7 @@ neenee_contracts::register_tool!(ReadTextFactory => |ctx| ReadTextTool {
 /// workspace root so both variants resolve paths identically.
 pub struct ReadTextTerseTool {
     pub(crate) root: WorkspaceBase,
+    pub(crate) env: Option<std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>>,
 }
 
 #[async_trait]
@@ -282,6 +298,7 @@ impl Tool for ReadTextTerseTool {
     async fn call(&self, arguments: &str) -> Result<String, String> {
         ReadTextTool {
             root: self.root.clone(),
+            env: self.env.clone(),
         }
         .call(arguments)
         .await
@@ -292,6 +309,7 @@ impl Tool for ReadTextTerseTool {
     ) -> Result<neenee_contracts::ToolOutput, String> {
         ReadTextTool {
             root: self.root.clone(),
+            env: self.env.clone(),
         }
         .call_structured(arguments)
         .await
@@ -299,6 +317,7 @@ impl Tool for ReadTextTerseTool {
 }
 neenee_contracts::register_tool!(ReadTextTerseFactory => |ctx| ReadTextTerseTool {
     root: workspace_base(ctx),
+    env: Some(execution_environment(ctx)),
 });
 
 /// Extensions that are always treated as binary and never read as text.

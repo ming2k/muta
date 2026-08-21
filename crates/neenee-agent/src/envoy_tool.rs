@@ -1436,7 +1436,7 @@ mod tests {
 
         let toolset = neenee_contracts::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
-            std::sync::Arc::new(crate::tools::BashTool { root: None }),
+            std::sync::Arc::new(crate::tools::BashTool::new(None)),
             std::sync::Arc::new(crate::tools::AskUserTool),
             std::sync::Arc::new(StubWriteTool),
             std::sync::Arc::new(envoy_tool),
@@ -1469,9 +1469,9 @@ mod tests {
 
         let toolset = neenee_contracts::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
-            std::sync::Arc::new(crate::tools::BashTool { root: None }),
-            std::sync::Arc::new(crate::tools::WriteFileTool { root: None }),
-            std::sync::Arc::new(crate::tools::EditFileTool { root: None }),
+            std::sync::Arc::new(crate::tools::BashTool::new(None)),
+            std::sync::Arc::new(crate::tools::WriteFileTool::new(None)),
+            std::sync::Arc::new(crate::tools::EditFileTool::new(None)),
             std::sync::Arc::new(crate::tools::AskUserTool),
             envoy_code_arc.clone() as std::sync::Arc<dyn Tool>,
         ]);

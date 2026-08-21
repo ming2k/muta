@@ -197,7 +197,17 @@ impl SessionDriver {
                 source: neenee_contracts::ContextTokenSource::Projection,
             }),
         ));
-        send_harness_state(&resp_tx, &initial_session_id, &agent, LoopStatus::Idle);
+        // Session-scoped idle snapshot (ADR-0128): publishes the `/retry`
+        // affordance from the durable resume point so a session whose round
+        // stopped before a detach/reattach offers `/retry` from frame one.
+        neenee_agent::orchestration::send_harness_state_for_session(
+            &resp_tx,
+            &initial_session_id,
+            &agent,
+            &session,
+            LoopStatus::Idle,
+        )
+        .await;
         let _ = resp_tx.send(AgentResponse::ProviderKeys(provider_key_status(&config)));
         // Record that the default provider + model were activated on startup, so
         // the picker's recency ordering reflects "last used = now" for both

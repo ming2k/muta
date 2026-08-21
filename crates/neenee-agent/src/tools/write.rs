@@ -3,7 +3,8 @@ use neenee_contracts::Tool;
 use serde_json::json;
 
 use crate::tools::helpers::{
-    WorkspaceBase, json_string, resolve_workspace_path, save_file_atomic, workspace_base,
+    WorkspaceBase, env_from_root, execution_environment, json_string, resolve_workspace_path,
+    workspace_base,
 };
 
 /// Write content to a file (overwrites).
@@ -14,6 +15,21 @@ use crate::tools::helpers::{
 /// project, and a write is exactly where that divergence does damage.
 pub struct WriteFileTool {
     pub(crate) root: WorkspaceBase,
+    pub(crate) env: Option<std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>>,
+}
+
+impl WriteFileTool {
+    pub fn new(root: WorkspaceBase) -> Self {
+        Self { root, env: None }
+    }
+
+    pub fn with_env(env: std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>) -> Self {
+        let root = Some(env.workspace_root().to_path_buf());
+        Self {
+            root,
+            env: Some(env),
+        }
+    }
 }
 
 #[async_trait]
@@ -57,13 +73,16 @@ impl Tool for WriteFileTool {
         let path = args["path"].as_str().ok_or("Missing 'path'")?;
         let content = args["content"].as_str().ok_or("Missing 'content'")?;
 
+        let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
+        let resolved = resolve_workspace_path(&self.root, path);
+
         // Write atomically (temp file + fsync + rename) so an interrupted write
         // never leaves a half-written, corrupt file in place of the original.
-        save_file_atomic(
-            &resolve_workspace_path(&self.root, path),
-            content.as_bytes(),
-        )
-        .map_err(|e| format!("Failed to write '{}': {}", path, e))?;
+        env.fs()
+            .write(&resolved, content.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write '{}': {}", path, e))?;
+
         Ok(neenee_contracts::ToolOutput::Patch {
             path: path.to_string(),
             op: neenee_contracts::PatchOp::Create,
@@ -75,4 +94,5 @@ impl Tool for WriteFileTool {
 }
 neenee_contracts::register_tool!(WriteFileFactory => |ctx| WriteFileTool {
     root: workspace_base(ctx),
+    env: Some(execution_environment(ctx)),
 });

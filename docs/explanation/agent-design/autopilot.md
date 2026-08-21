@@ -54,7 +54,7 @@ tool with real ScopeTarget (Path/Command)
 Two things follow from where this check sits:
 
 - **Reads never consult it.** A tool whose `ScopeTarget` is `Unspecified`
-  (`read_file`, `grep`, `glob`, …) bypasses the broker regardless of the flag —
+  (`read_text`, `grep`, `glob`, …) bypasses the broker regardless of the flag —
   a read is not a side effect the user must approve. So autopilot changes
   nothing for the read-heavy exploration phases of a round; it only removes the
   pauses before *actions*.

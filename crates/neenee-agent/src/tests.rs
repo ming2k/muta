@@ -499,7 +499,7 @@ async fn streaming_tool_deltas_are_reassembled_and_executed() {
 
 #[tokio::test]
 async fn turn_persist_fires_at_each_react_turn_boundary() {
-    // ADR-0035: the mid-round save point must fire once per completed
+    // ADR-0048: the mid-round save point must fire once per completed
     // tool-carrying turn, carrying the full history including that turn's
     // tool results. `StreamingToolProvider` produces two turns (turn 0 = tool
     // call, turn 1 = terminal text), so exactly one continuing-turn boundary is crossed and the

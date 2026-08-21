@@ -968,6 +968,35 @@ where
         .send(WsMessage::Text(todos_frame.into()))
         .await
         .map_err(|e| format!("send todos restore: {e}"))?;
+    // Attach-time `/retry` affordance (ADR-0128): a session re-hosted after
+    // its round stopped (daemon restart, lazy resume) carries the durable
+    // resume point in its store, but the attaching client never saw the
+    // idle `HarnessState` that would have published it. Push one now so the
+    // hint bar offers `/retry` from the very first frame — exactly as if the
+    // client had been attached when the round stopped.
+    {
+        let snapshot = neenee_contracts::HarnessSnapshot {
+            loop_status: neenee_contracts::LoopStatus::Idle,
+            round_counter: bound.session.round_counter().await,
+            // The agent handle does not ride on `BoundSession`; autopilot is
+            // republished by the session's own `AutopilotChanged` events (and
+            // the attach-sync buffer replays the latest one), so a neutral
+            // `false` here cannot mask an elevated session for long.
+            autopilot: false,
+            retry_pending: bound.session.retry_pending().await.is_some(),
+        };
+        let frame = serde_json::to_string(&Wire::Response {
+            response: AgentResponse::Round {
+                session_id: bound.session.id().await,
+                event: neenee_contracts::RoundEvent::HarnessState(snapshot),
+            },
+        })
+        .map_err(|e| format!("serialize retry-pending restore: {e}"))?;
+        ws_sink
+            .send(WsMessage::Text(frame.into()))
+            .await
+            .map_err(|e| format!("send retry-pending restore: {e}"))?;
+    }
     let req_tx = bound.req_tx.clone();
     let mut rx = bound.events.subscribe();
     // Replay the buffered attach-sync events (ADR-0096) so a client that

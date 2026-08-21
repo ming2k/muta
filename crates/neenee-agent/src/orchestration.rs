@@ -527,7 +527,13 @@ impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
 }
 
 /// Emit the current harness snapshot (mode, round counter, loop
-/// status, autopilot) to the UI.
+/// status, autopilot, retry affordance) to the UI.
+///
+/// `retry_pending` mirrors the session's durable `/retry` resume point when
+/// the harness is idle (the only state in which `/retry` is answerable). For
+/// a *running* snapshot the affordance is definitionally off — the parked
+/// round is executing — so the flag is forced `false` regardless of what a
+/// racing store read says, keeping the contract "running ⇒ no retry hint".
 pub fn send_harness_state(
     tx: &mpsc::UnboundedSender<AgentResponse>,
     session_id: &str,
@@ -547,6 +553,38 @@ pub fn send_harness_state(
             loop_status,
             round_counter,
             autopilot: agent.get_autopilot(),
+            retry_pending: false,
+        }),
+    ));
+}
+
+/// [`send_harness_state`] with the session in hand, so an idle snapshot can
+/// carry the authoritative `/retry` affordance (`retry_pending`) straight
+/// from the durable resume point. Called on the round-task tail and the
+/// session-switch reconciles — the two sites that know both the agent and
+/// the store it is currently bound to.
+pub async fn send_harness_state_for_session(
+    tx: &mpsc::UnboundedSender<AgentResponse>,
+    session_id: &str,
+    agent: &Agent,
+    session: &SessionStore,
+    loop_status: LoopStatus,
+) {
+    // Running snapshots are emitted after lifecycle admission but
+    // immediately before `execute_round` performs the counter bump. Project
+    // that admitted round here so frontends receive the authoritative display
+    // value without locally guessing from transcript length.
+    let round_counter = agent
+        .round_count()
+        .saturating_add(u64::from(!loop_status.is_idle()));
+    let retry_pending = loop_status.is_idle() && session.retry_pending().await.is_some();
+    let _ = tx.send(round_response(
+        session_id,
+        RoundEvent::HarnessState(HarnessSnapshot {
+            loop_status,
+            round_counter,
+            autopilot: agent.get_autopilot(),
+            retry_pending,
         }),
     ));
 }
@@ -570,6 +608,22 @@ pub struct RoundContext {
     pub emit_round_completed: bool,
 }
 
+/// Which kind of round `execute_round` is about to run — a fresh round, or
+/// the `/retry` resume of a stopped one. See ADR-0128.
+#[derive(Clone, Debug)]
+pub enum RoundDriver {
+    /// A normal round: a new prompt is admitted, the round counter bumps, and
+    /// turn numbering starts at 0.
+    Fresh,
+    /// `/retry`: the round that stopped before completing continues *as
+    /// itself*. The counter must not bump, turns number onward from the
+    /// committed count, and the history is re-seeded from the checkpoint.
+    Resume {
+        /// The durable resume point captured when the round stopped.
+        point: neenee_contracts::RetryPoint,
+    },
+}
+
 pub struct RoundInput {
     pub prompt: String,
     pub hidden: bool,
@@ -578,8 +632,44 @@ pub struct RoundInput {
     pub sent_at_ms: Option<u64>,
     /// Inline images pasted into the prompt, attached to the user message.
     pub images: Vec<ImagePart>,
-    /// Whether this round is a retry of the previous failed turn/request without adding new user messages.
-    pub is_retry: bool,
+    /// Which round this input drives: a fresh prompt or a `/retry` resume of
+    /// the stopped round. Replaces the old boolean: a resume carries its
+    /// checkpoint, which is what makes the round "complete itself" instead of
+    /// starting over.
+    pub driver: RoundDriver,
+}
+
+impl RoundInput {
+    /// Shorthand for the common fresh-prompt construction sites.
+    pub fn fresh(prompt: String) -> Self {
+        Self {
+            prompt,
+            hidden: false,
+            display_prompt: None,
+            sent_at_ms: None,
+            images: Vec::new(),
+            driver: RoundDriver::Fresh,
+        }
+    }
+
+    /// Shorthand for the `/retry` resume construction site.
+    pub fn resume(point: neenee_contracts::RetryPoint) -> Self {
+        Self {
+            prompt: String::new(),
+            hidden: false,
+            display_prompt: None,
+            sent_at_ms: None,
+            images: Vec::new(),
+            driver: RoundDriver::Resume { point },
+        }
+    }
+
+    /// Whether this input bypasses the UserPromptSubmit hook gate. A resume
+    /// re-sends the already-admitted request; the gate already ran when the
+    /// stopped round was admitted.
+    pub fn is_retry(&self) -> bool {
+        matches!(self.driver, RoundDriver::Resume { .. })
+    }
 }
 
 #[derive(Clone)]
@@ -734,12 +824,19 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
             ));
         }
         if context.lifecycle.finish(generation).await {
-            send_harness_state(
+            // Idle snapshot with the session in hand: this is the exact
+            // moment a just-failed round's `/retry` point (armed inside
+            // `execute_round`'s error path, above) becomes visible to the
+            // frontends, and equally the moment a just-completed round's
+            // stale point stops being offered.
+            send_harness_state_for_session(
                 &context.tx,
                 &context.session_id,
                 &context.agent,
+                &session_for_tail,
                 LoopStatus::Idle,
-            );
+            )
+            .await;
         }
     });
 }
@@ -801,7 +898,7 @@ pub async fn execute_round(
 
     // UserPromptSubmit hooks (ADR-0025): a hook may deny the prompt or prepend
     // context. Hidden control prompts and retries bypass the gate.
-    if !input.hidden && !input.is_retry {
+    if !input.hidden && !input.is_retry() {
         match agent.fire_user_prompt_submit(&input.prompt).await {
             crate::hooks::UserPromptVerdict::Deny(reason) => {
                 let _ = tx.send(round_response(
@@ -820,19 +917,47 @@ pub async fn execute_round(
     // The prompt is now admitted. Bump exactly once before request assembly so
     // hooks, token accounting, todos, and emitted positions share one round
     // number. A prompt rejected by UserPromptSubmit never opens a round.
-    agent.bump_round();
-    let admitted_round = agent.round_count();
+    // A `/retry` resume is the exception: it continues the round that already
+    // bumped (its number is frozen in the resume point), so the counter stays
+    // put — the transcript keeps one contiguous `round N` band.
+    let resumed_point = match input.driver {
+        RoundDriver::Resume { point } => Some(point),
+        RoundDriver::Fresh => None,
+    };
+    if resumed_point.is_none() {
+        agent.bump_round();
+        // A freshly admitted round supersedes whatever was parked: the user
+        // moved on (new prompt, `/compact` follow-up, scheduled job), so any
+        // older `/retry` point is stale by construction and must stop being
+        // offered (ADR-0128).
+        if let Err(error) = session.clear_retry_pending().await {
+            tracing::warn!(%error, "could not clear stale retry point on fresh round");
+        }
+    }
+    let admitted_round = resumed_point
+        .as_ref()
+        .map(|point| point.round)
+        .unwrap_or_else(|| agent.round_count());
 
     let admitted_session_id = session.id().await;
     // Build `round_history` — the round's working scratch — from the session's
-    // authoritative `model_window` plus the new user message (ADR-0048).
-    // When `is_retry` is true, the existing `model_window` is used as-is without
-    // pushing an extra user message.
+    // authoritative `model_window` plus the new user message (ADR-0048). A
+    // `/retry` resume instead re-seeds from the stopped round's checkpoint
+    // watermark (see the branch below) and never pushes a user message.
     let unsent_prompt = input.prompt.clone();
     let unsent_images = input.images.clone();
 
-    let mut round_history = if input.is_retry {
-        session.model_window().await
+    let mut round_history = if let Some(point) = resumed_point.as_ref() {
+        // `/retry` (ADR-0128): re-seed the round's history from the durable
+        // checkpoint the stopped round left behind. The window may have moved
+        // since (a compaction, a `/btw` aside sharing the store — none apply
+        // to a parked round, but the clamp keeps the invariant anyway), so
+        // the watermark is a *cap*: never re-send content the stopped round
+        // never committed (a partially streamed response was already
+        // discarded with `StreamDiscard` before the point was armed).
+        let window = session.model_window().await;
+        let watermark = point.history_watermark.min(window.len());
+        window[..watermark].to_vec()
     } else {
         let mut th = session.model_window().await;
         th.push(if input.hidden {
@@ -860,7 +985,7 @@ pub async fn execute_round(
     // the transcript from round N while leaving the session counter at N-1.
     session.set_round_counter(admitted_round).await?;
 
-    // Install the mid-round save point (ADR-0035) so every ReAct-turn boundary
+    // Install the mid-round save point (ADR-0048) so every ReAct-turn boundary
     // durably appends its new messages to the session log. This is the fix for
     // the resume-after-crash gap: without it, a round that ran side-effecting
     // tools and then crashed rewinds the transcript to the previous round,
@@ -942,7 +1067,18 @@ pub async fn execute_round(
     // are already durably checkpointed above; retaining this state means a
     // retry resumes the pending provider request with the same history, guard
     // registry, hooks, and accounting instead of replaying side effects.
-    let mut streaming_round = agent.begin_streaming_round();
+    //
+    // A `/retry` resume (ADR-0128) re-seeds the state from the durable point
+    // instead of starting at turn 0: the stopped round's committed turns stay
+    // committed, so the resumed execution numbers its next turn M+1 and the
+    // transcript's `round N · turn M` sequence is never broken. `attempt`
+    // still restarts at 0 for the resume itself — the provider retry budget
+    // is per user-visible attempt to complete the round, and the user asking
+    // to retry is exactly a new budget.
+    let mut streaming_round = match resumed_point.as_ref() {
+        Some(point) => agent.resume_streaming_round(point),
+        None => agent.begin_streaming_round(),
+    };
     let result = loop {
         attempt += 1;
         let activity_for_run = tool_activity.clone();
@@ -1103,6 +1239,11 @@ pub async fn execute_round(
             session.replace_messages(round_history).await?;
             agent.restore_round_count(previous_round);
             session.set_round_counter(previous_round).await?;
+            // The round was unwound to its pre-send state — nothing of it
+            // remains, so there is nothing for `/retry` to resume (ADR-0128).
+            if let Err(error) = session.clear_retry_pending().await {
+                tracing::warn!(%error, "could not clear retry point after unsend");
+            }
             persist_request_usage(&agent, &session, &session_id).await?;
             send_context_projection(&tx, &session_id, &agent, &session.model_window().await);
             let _ = tx.send(round_response(
@@ -1129,7 +1270,39 @@ pub async fn execute_round(
     // or response commit instead of leaving the meter anchored to a request
     // shape that is no longer AI-visible.
     send_context_projection(&tx, &session_id, &agent, &session.model_window().await);
-    let outcome = result?;
+    // The round reached its terminal path with the full history committed.
+    // Whatever stopped earlier no longer applies: a `/retry` resume that gets
+    // here *completed* the round, so the parked point is retired (ADR-0128).
+    // The phase-1 unsend already returned above; this is the natural-
+    // completion branch. Best-effort — a persist failure must not fail the
+    // round that already succeeded.
+    if let Err(error) = session.clear_retry_pending().await {
+        tracing::warn!(%error, "could not clear retry point after round completion");
+    }
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            // The round failed terminally with committed history — this is
+            // exactly the "/retry me" state (ADR-0128). Park the resume point
+            // so the user's `/retry` continues *this* round: same number,
+            // turns onward from what was committed, history at the watermark
+            // the failed round durably left behind. Arming is unconditional
+            // here (it overwrites any stale point for an older round), and
+            // best-effort — a persist failure surfaces through the error
+            // path below, not by failing the bookkeeping.
+            let point = neenee_contracts::RetryPoint {
+                round: admitted_round,
+                turns_committed: streaming_round.committed_turns(),
+                history_watermark: session.model_window().await.len(),
+                paused_ms: agent.round_paused_ms(),
+                at_ms: unix_epoch_ms(),
+            };
+            if let Err(persist_error) = session.arm_retry_pending(point).await {
+                tracing::warn!(%persist_error, "could not arm retry point");
+            }
+            return Err(error);
+        }
+    };
 
     let visible = outcome.message.content.trim().to_string();
     if !visible.is_empty() && !streamed_text.load(Ordering::SeqCst) {

@@ -700,4 +700,65 @@ mod tests {
             assert_eq!(found.summary, spec.summary);
         }
     }
+
+    /// The docs-sync gate (the markdown drift this replaces could only be
+    /// caught by a human): `docs/reference/commands.md`'s built-in command
+    /// table must list exactly `BuiltinCmd::ALL` — no phantom commands, no
+    /// undocumented ones. Hidden aliases (`/config` → `/settings`) are
+    /// explicitly *not* advertised, so the doc must not list them either.
+    #[test]
+    fn commands_reference_table_matches_builtin_registry() {
+        let Ok(doc) = std::fs::read_to_string("../../docs/reference/commands.md") else {
+            // The doc lives at the workspace root; running from another
+            // cwd (e.g. an installed crate) skips rather than fails.
+            eprintln!("commands.md not reachable from this cwd; skipping");
+            return;
+        };
+        // Only the *main* built-in command table is the advertised surface:
+        // the block of table rows between "## Built-in commands" and the
+        // next "##"/"###" heading. Later tables (trigger-word suggestions,
+        // per-command detail tables) are deliberately out of scope.
+        let mut in_table = false;
+        let mut documented: Vec<String> = Vec::new();
+        for line in doc.lines() {
+            if line.starts_with("## ") {
+                in_table = line.trim() == "## Built-in commands";
+                continue;
+            }
+            if line.starts_with("###") {
+                in_table = false;
+                continue;
+            }
+            if !in_table || !line.starts_with('|') {
+                continue;
+            }
+            let Some(start) = line.find('`') else { continue };
+            let rest = &line[start + 1..];
+            let Some(end) = rest.find('`') else { continue };
+            let cell = &rest[..end];
+            if let Some(name) = cell.split_whitespace().next() {
+                if name.starts_with('/') && !name.contains('\\') {
+                    documented.push(name.to_string());
+                }
+            }
+        }
+        let advertised: Vec<String> = BuiltinCmd::ALL
+            .iter()
+            .map(|(name, _)| format!("/{}", name.trim_start_matches('/')))
+            .collect();
+        for cmd in &advertised {
+            assert!(
+                documented.contains(cmd),
+                "`{cmd}` is registered (appears in completion and /help) but missing \
+                 from docs/reference/commands.md's table"
+            );
+        }
+        for cmd in &documented {
+            assert!(
+                advertised.contains(cmd),
+                "`{cmd}` is documented but not in BuiltinCmd::ALL — a phantom \
+                 entry (renamed, removed, or a hidden alias leaked into the doc)"
+            );
+        }
+    }
 }

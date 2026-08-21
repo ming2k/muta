@@ -44,7 +44,7 @@ cd neenee
 cargo run --release
 ```
 
-首次启动后按 `Ctrl+M` 选择模型并填入 API Key，然后直接开始对话。
+首次启动后输入 `/models` 选择模型并填入 API Key（在 Kitty 键盘协议生效的终端里 `Ctrl+M` 也可以），然后直接开始对话。
 
 第一次运行 `neenee` 会自动拉起会话 daemon（一次性冷启动，之后每次启动即连）。见下文 [Daemon 模式](#daemon-模式与多任务跟踪)。
 
@@ -74,13 +74,21 @@ daemon 默认通过 Unix socket 提供一条可读写的控制平面协议（创
 
 | 按键 | 功能 |
 |------|------|
+| `F1` | 帮助（完整按键列表） |
+| `F5` | `/btw` 侧线会话列表 |
+| `Ctrl+Q` | 打开回合队列 |
+| `Ctrl+P` | 阻塞 / 恢复回合队列 |
+| `Ctrl+O` | 向运行中的回合插入输入 |
+| `Ctrl+M` | 打开模型选择器（需 Kitty 键盘协议；`/models` 始终可用） |
+| `Ctrl+R` | 输入历史搜索 |
+| `Ctrl+T` | 打开待办 |
 | `Enter` | 发送消息 |
 | `Tab` | 确认斜杠命令 / `@path` 补全的高亮项（Esc 关闭后可重新唤出） |
-| `Ctrl+M` | 打开模型选择器 |
-| `Ctrl+T` | 打开待办 |
 | `Ctrl+B` | 光标向左移动一个字符（readline backward-char） |
 | `Ctrl+C` | 复制 → 中断 → 关闭弹窗 → 清空 → 退出 |
 | `Ctrl+V` | 粘贴剪贴板内容 |
+
+完整权威列表在 TUI 内按 `F1` 查看。
 
 ## 常用命令
 

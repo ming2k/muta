@@ -86,7 +86,12 @@ pub use usage_stats::{
     aggregate_usage_records, day_key_from_epoch_ms,
 };
 pub mod doom_guard_config;
+pub mod execution;
 pub mod secret;
+pub use execution::{
+    DirEntry, ExecutionEnvironment, FsError, FsMetadata, FsProvider, ProcessOutput, ProcessRunner,
+    ToolMiddleware,
+};
 pub mod session_title;
 pub mod skills_config;
 pub mod tool_registry;
@@ -105,10 +110,10 @@ pub use events::{
     ContextTokenSnapshot, ContextTokenSource, EnvoyEvent, HarnessSnapshot, InputReply,
     InputRequest, LoopStatus, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity, NoticeSource,
     NoticeSurface, ParentStatus, PermissionDecision, PermissionRequest, PermissionRuleInfo,
-    ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, QueuedUserInput, RoundEvent,
-    RoundInterrupt, RoundInterruptReason, RoundSummary, SessionContextSnapshot, SessionDetail,
-    SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, ToolInfo, UserQuestion,
-    UserQuestionOption, UserQuestionReply, UserQuestionRequest,
+    ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, QueuedUserInput, RetryPoint,
+    RoundEvent, RoundInterrupt, RoundInterruptReason, RoundSummary, SessionContextSnapshot,
+    SessionDetail, SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, ToolInfo,
+    UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
 };
 pub mod monitor;
 pub use hooks::{

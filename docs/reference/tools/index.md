@@ -21,7 +21,7 @@ assembled explicitly because it captures a snapshot of the other tools.
 | Tool | Access | Permission scope | Reference page |
 |------|--------|------------------|----------------|
 | `bash` | `Execute` | `command` argument | [bash](bash.md) |
-| `read_file` | `Read` | `*` | [filesystem](filesystem.md) |
+| `read_text` | `Read` | `*` | [filesystem](filesystem.md) |
 | `read_image` | `Read` | `*` | [filesystem](filesystem.md) |
 | `write_file` | `Write` | `path` argument | [filesystem](filesystem.md) |
 | `edit_file` | `Write` | `path` argument | [filesystem](filesystem.md) |
@@ -35,7 +35,6 @@ assembled explicitly because it captures a snapshot of the other tools.
 | `websearch` | `Read` | `*` | [web](web.md) |
 | `envoy` | `Read` (spawns envoy) | `*` | [envoy](envoy.md) |
 | `envoy_code` | `Read` (spawns envoy) | `*` | [envoy](envoy.md) |
-| `search_history` | `Read` | `*` | [skills](skills.md) |
 | `use_skill` | `Read` | `*` | [skills](skills.md) |
 | `list_skills` | `Read` | `*` | [skills](skills.md) |
 | `mcp__<server>__<tool>` | `Read` if server `read_only = true`, else `Write` | `*` | [mcp](mcp.md) |

@@ -19,7 +19,7 @@ Project and user-defined commands are covered under
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/autopilot [on\|off]` | Toggle autopilot mode (agent runs without human intervention) |
 | `/principal <code\|architect\|reviewer\|security>` | Switch the principal role — changes persona and capability scope |
-| `/search <query>` | Semantic search over the project's session history |
+| `/search <query>` | Lexical search over the current session's transcript and command ledger |
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
 | `/fork` | Fork the current conversation into a child session |
 | `/dashboard` | Open the session dashboard — a full-screen live view over every daemon session (console + sessions dock), with preview / attach / interrupt / prompt / create (ADR-0096; layout per ADR-0097). `/host` is a hidden alias |
@@ -33,7 +33,8 @@ Project and user-defined commands are covered under
 | `/skills [list\|reload]` | List or reload available skills |
 | `/skill <name>` | Load a skill by name |
 | `/tools` | Toggle individual session tools on or off |
-| `/config` | Open user configuration; `/config reload` re-reads config.toml and applies it live |
+| `/settings` | Open the Settings overlay (theme, appearance, layout, MCP). `/settings reload` re-reads config.toml and applies it live. `/config` is a hidden alias |
+| `/retry` | Retry the last failed request |
 | `/export` | Export the current conversation to the clipboard as Markdown |
 | `/debug trace [on\|off]` | Toggle per-project provider round-trip tracing for debugging |
 | `/debug preview` | Dry-run the next request body to a file (no provider call) |
@@ -41,7 +42,7 @@ Project and user-defined commands are covered under
 | `/exit` | Exit the program |
 
 Several interactive management commands, including `/models`, `/connections`,
-`/permissions`, `/tools`, `/mcp`, `/skills`, and `/config`, are handled in the
+`/permissions`, `/tools`, `/mcp`, `/skills`, and `/settings`, are handled in the
 TUI. Commands that mutate agent or session state are dispatched to the
 backend.
 
@@ -57,6 +58,11 @@ rewrites the input to it:
 | `/clear` | `/new` | Clearing the transcript in place was removed; a fresh session keeps the old one on disk |
 | `/reset` | `/new` | Same fresh-session semantics |
 | `/continue` | `/sessions` | Picks a session up where it left off |
+| `preferences` | `/settings` | Settings holds every user preference |
+| `options` | `/settings` | Same surface, natural spelling |
+| `theme` | `/settings` | Appearance lives in the Settings overlay |
+| `themes` | `/settings` | Same |
+| `appearance` | `/settings` | Same |
 
 The mapping is presentation-only and lives in one table
 (`TRIGGER_WORD_SUGGESTIONS` in `neenee-runtime/src/startup.rs`); adding a
@@ -143,12 +149,16 @@ off (the harness applies it and replies with a fresh snapshot), and `Esc`
 closes. `/tools` is handled entirely in the TUI and is never forwarded to the
 backend.
 
-### `/config`
+### `/settings`
 
 | Form | Effect |
 |------|--------|
-| `/config` | Open the Settings overlay |
-| `/config reload` | Re-read `config.toml` and apply changes live |
+| `/settings` | Open the Settings overlay |
+| `/settings reload` | Re-read `config.toml` and apply changes live |
+
+`/config` is a hidden alias for `/settings`: it parses and dispatches
+identically but is not advertised in completion or `/help`, so new users are
+steered to the canonical spelling.
 
 The Settings overlay exposes Appearance and Layout. Appearance offers the
 `zen`, `midnight`, `nord`, `catppuccin`, and `paper` presets. The Custom option
@@ -218,10 +228,12 @@ it never appears in the list or `/sessions`
 
 | Form | Effect |
 |------|--------|
-| `/search <query>` | Semantic search over the project's session history |
+| `/search <query>` | Lexical search over the current session's transcript and command ledger |
 
-Returns the most relevant past messages for the query (see the
-`search_history` tool). Useful for recalling earlier decisions.
+Ranks the session's messages and command results against the query terms
+(deterministic lexical scoring — no index file, nothing persisted). Useful for
+recalling earlier decisions inside one long session; cross-session recall is
+`/sessions` + `/export`.
 
 ### `/skills`
 

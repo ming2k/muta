@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use neenee_contracts::Tool;
 use serde_json::json;
 
-use crate::tools::helpers::{WorkspaceBase, should_skip_path, workspace_base};
+use crate::tools::helpers::{
+    WorkspaceBase, env_from_root, execution_environment, should_skip_path, workspace_base,
+};
 
 /// List directory contents.
 ///
@@ -11,6 +13,21 @@ use crate::tools::helpers::{WorkspaceBase, should_skip_path, workspace_base};
 /// (ADR-0096).
 pub struct ListDirTool {
     pub(crate) root: WorkspaceBase,
+    pub(crate) env: Option<std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>>,
+}
+
+impl ListDirTool {
+    pub fn new(root: WorkspaceBase) -> Self {
+        Self { root, env: None }
+    }
+
+    pub fn with_env(env: std::sync::Arc<dyn neenee_contracts::ExecutionEnvironment>) -> Self {
+        let root = Some(env.workspace_root().to_path_buf());
+        Self {
+            root,
+            env: Some(env),
+        }
+    }
 }
 
 #[async_trait]
@@ -41,6 +58,7 @@ impl Tool for ListDirTool {
         let recursive = args["recursive"].as_bool().unwrap_or(false);
         let max_results = args["max_results"].as_u64().unwrap_or(100) as usize;
 
+        let env = self.env.clone().unwrap_or_else(|| env_from_root(&self.root));
         // Resolve the listed directory against the session's workspace root
         // so a default `.` lists the session's project, never the daemon's
         // coincidental process cwd. `join` passes absolute paths through.
@@ -57,7 +75,6 @@ impl Tool for ListDirTool {
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
         let mut results = Vec::new();
-        let _base = std::path::Path::new(&path);
 
         if let Some(glob_pat) = pattern {
             let full_pattern = if recursive {
@@ -103,19 +120,17 @@ impl Tool for ListDirTool {
                 results.push(display.to_string_lossy().to_string());
             }
         } else {
-            let entries = std::fs::read_dir(&path)
+            let entries = env
+                .fs()
+                .list_dir(&resolved)
+                .await
                 .map_err(|e| format!("Failed to read dir '{}': {}", path, e))?;
-            for entry in entries.filter_map(|e| e.ok()) {
+            for entry in entries {
                 if results.len() >= max_results {
                     break;
                 }
-                let name = entry.file_name().to_string_lossy().to_string();
-                let is_dir = entry.metadata().map(|m| m.is_dir()).unwrap_or(false);
-                // Unix-style `ls -p` convention: directories get a trailing
-                // slash so they're visually distinct from files at a glance,
-                // without relying on emoji that may not render everywhere.
-                let suffix = if is_dir { "/" } else { "" };
-                results.push(format!("{}{}", name, suffix));
+                let suffix = if entry.is_dir { "/" } else { "" };
+                results.push(format!("{}{}", entry.name, suffix));
             }
         }
 
@@ -138,4 +153,5 @@ impl Tool for ListDirTool {
 }
 neenee_contracts::register_tool!(ListDirFactory => |ctx| ListDirTool {
     root: workspace_base(ctx),
+    env: Some(execution_environment(ctx)),
 });

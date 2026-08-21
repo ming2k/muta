@@ -67,7 +67,7 @@ Transfer-Encoding: chunked
 data: {"choices":[{"delta":{"role":"assistant"}}]}
 data: {"choices":[{"delta":{"content":"Let me"}}]}
 data: {"choices":[{"delta":{"content":" read"}}]}
-data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"path\":"}}]}}]}
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_text","arguments":"{\"path\":"}}]}}]}
 data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"src/lib.rs\"}"}}]}}]}
 data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
 data: [DONE]
@@ -199,8 +199,8 @@ messages: [
 tools: [<all schemas>]
 ```
 
-Response carries `tool_calls: [read_file("src/parser.rs")]`,
-`finish_reason: "tool_calls"`. neenee executes `read_file` locally and
+Response carries `tool_calls: [read_text("src/parser.rs")]`,
+`finish_reason: "tool_calls"`. neenee executes `read_text` locally and
 appends the result.
 
 **Request 2** — same endpoint, expanded history.
@@ -210,7 +210,7 @@ messages: [
   {role: system,    content: "<harness system prompt>"},
   {role: user,      content: "Fix the bug in parser.rs and explain it"},
   {role: assistant, content: "I'll read the file first.",
-                    tool_calls: [{id: "call_1", function: {name: "read_file", arguments: "{\"path\":\"src/parser.rs\"}"}}]},
+                    tool_calls: [{id: "call_1", function: {name: "read_text", arguments: "{\"path\":\"src/parser.rs\"}"}}]},
   {role: tool,      tool_call_id: "call_1", content: "<file contents>"}
 ],
 tools: [<all schemas>]   ← same set, re-sent verbatim
@@ -270,7 +270,7 @@ carries a `tool_calls` field. Instead the model is instructed to emit the
 call as ordinary assistant text:
 
 ```text
-{"tool": "read_file", "arguments": {"path": "src/parser.rs"}}
+{"tool": "read_text", "arguments": {"path": "src/parser.rs"}}
 ```
 
 After the stream completes, neenee extracts the JSON from the assistant

@@ -732,7 +732,17 @@ mod tests {
                 std::env::set_var("XDG_CACHE_HOME", "relative/path");
             }
             let dirs = Dirs::resolve(&PathsOverride::default());
-            assert!(dirs.cache_dir.is_absolute() || dirs.cache_dir.starts_with("."));
+            // The documented precedence (ADR-0014 §3): a relative XDG var is
+            // ignored and resolution falls through to the native base dir
+            // (`directories`) — an absolute path under the real cache root.
+            // The disjunction this replaces (`absolute || starts_with(".")`)
+            // accepted both outcomes and pinned neither.
+            assert!(dirs.cache_dir.is_absolute());
+            assert!(
+                !dirs.cache_dir.ends_with("relative/path"),
+                "relative XDG value must be ignored, got {}",
+                dirs.cache_dir.display()
+            );
             unsafe {
                 std::env::remove_var("XDG_CACHE_HOME");
             }

@@ -65,15 +65,17 @@ pub use neenee_contracts::*;
 // the Agent struct expects at the crate root have to be listed here by name.
 // Keep this list in sync with `neenee_contracts`'s lib.rs re-exports.
 pub use neenee_contracts::{
-    AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, EXPLORE, EnvoyEvent, EnvoyProfile,
-    HarnessError, HarnessSnapshot, ImagePart, InputReply, InputRequest, McpConnectionStatus,
-    McpServerConfig, Message, ModelRequest, PatchOp, PermissionDecision, PermissionRequest,
-    Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot, ProviderStreamEvent,
-    PruneOutcome, RetryableError, Role, SessionOverview, ShellTermination, SkillsConfig,
-    StdinPolicy, TITLE, TokenUsage, Tool, ToolCall, ToolOutput, ToolPolicy, ToolResult, ToolStream,
-    Transport, UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
-    WebSearchConfig, estimate_bytes, estimate_tokens, is_context_overflow, parse_retryable_error,
-    prune_tool_results, public_error_message, retryable_error, truncate_utf8,
+    AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, DirEntry, EXPLORE, EnvoyEvent,
+    EnvoyProfile, ExecutionEnvironment, FsError, FsMetadata, FsProvider, HarnessError,
+    HarnessSnapshot, ImagePart, InjectionKind, InjectionOrigin, InputReply, InputRequest,
+    McpConnectionStatus, McpServerConfig, Message, ModelRequest, PatchOp, PermissionDecision,
+    PermissionRequest, ProcessOutput, ProcessRunner, Provider, ProviderEntry, ProviderPickerRow,
+    ProviderPickerSnapshot, ProviderStreamEvent, PruneOutcome, RetryableError, Role,
+    SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, TITLE, TodoId, TodoItem,
+    TodoList, TodoStatus, TokenUsage, Tool, ToolCall, ToolMiddleware, ToolOutput, ToolPolicy,
+    ToolResult, ToolStream, Transport, UserQuestion, UserQuestionOption, UserQuestionReply,
+    UserQuestionRequest, WebSearchConfig, estimate_bytes, estimate_tokens, is_context_overflow,
+    parse_retryable_error, prune_tool_results, public_error_message, retryable_error, truncate_utf8,
 };
 
 // Same ambient std/tokio prelude the Agent struct used to inherit from
@@ -138,6 +140,7 @@ mod tool_call;
 mod tool_integration;
 mod tool_manager;
 mod tool_scheduler;
+pub mod execution;
 pub mod tools;
 
 pub use context_projection::ContextProjectionGate;

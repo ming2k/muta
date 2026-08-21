@@ -26,6 +26,30 @@ pub(crate) fn workspace_base(ctx: &neenee_contracts::tool_registry::ToolContext)
     ctx.workspace_root().map(Path::to_path_buf)
 }
 
+/// Capture or synthesize an [`ExecutionEnvironment`](neenee_contracts::execution::ExecutionEnvironment)
+/// from the tool build context.
+pub(crate) fn execution_environment(
+    ctx: &neenee_contracts::tool_registry::ToolContext,
+) -> std::sync::Arc<dyn neenee_contracts::execution::ExecutionEnvironment> {
+    if let Some(env) = ctx.get::<std::sync::Arc<dyn neenee_contracts::execution::ExecutionEnvironment>>() {
+        return env.clone();
+    }
+    let root = ctx
+        .workspace_root()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    std::sync::Arc::new(crate::execution::LocalExecutionEnvironment::new(root))
+}
+
+/// Synthesize an [`ExecutionEnvironment`](neenee_contracts::execution::ExecutionEnvironment)
+/// from an optional workspace root base.
+pub(crate) fn env_from_root(
+    root: &WorkspaceBase,
+) -> std::sync::Arc<dyn neenee_contracts::execution::ExecutionEnvironment> {
+    let base = root.clone().unwrap_or_else(|| PathBuf::from("."));
+    std::sync::Arc::new(crate::execution::LocalExecutionEnvironment::new(base))
+}
+
 /// Resolve a user-supplied path argument against the tool's workspace base.
 ///
 /// Absolute paths pass through unchanged (`Path::join` semantics); a relative
@@ -98,6 +122,7 @@ pub(crate) fn json_string(arguments: &str, key: &str) -> String {
 /// is on the same filesystem (POSIX requires same-filesystem for atomic
 /// `rename(2)`). The temp file is best-effort removed on failure; leaving it
 /// behind is harmless since the next successful write overwrites it.
+#[allow(dead_code)]
 pub(crate) fn save_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

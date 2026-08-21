@@ -57,7 +57,7 @@ pub async fn chat(
             display_prompt: None,
             sent_at_ms,
             images,
-            is_retry: false,
+            driver: neenee_agent::orchestration::RoundDriver::Fresh,
         },
     )
     .await;
@@ -136,7 +136,7 @@ pub async fn chat_to_session(
             display_prompt: input.display_text.clone(),
             sent_at_ms: input.sent_at_ms,
             images: input.images.clone(),
-            is_retry: false,
+            driver: neenee_agent::orchestration::RoundDriver::Fresh,
         },
     )
     .await;

@@ -375,6 +375,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         builder.provide(skills_registry.clone());
         builder.provide(embedding_store.clone());
         builder.provide(session.clone());
+        let execution_env: Arc<dyn neenee_contracts::ExecutionEnvironment> = Arc::new(
+            neenee_agent::execution::LocalExecutionEnvironment::new(project_root.clone()),
+        );
+        builder.provide(execution_env);
         // The session's workspace root: every workspace-relative tool
         // operation (bash cwd, relative path resolution, search bases)
         // anchors here instead of the daemon process's cwd. Under the

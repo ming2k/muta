@@ -20,7 +20,7 @@ neenee [OPTIONS] [COMMAND]
 | `attach [id]` | Attach the TUI to a hosted session — the TUI picker opens when no id is given |
 | `run <prompt>` | Headless non-interactive execution with the prompt |
 | `auth <list\|show\|set>` | Manage model provider authentication & API keys |
-| `config <path\|list\|get\|set>` | Inspect or mutate `config.toml` |
+| `config <path\|list\|get\|set\|check>` | Inspect or mutate `config.toml`; `check` validates it (syntax errors, typo'd keys, dead legacy spellings) |
 | `mcp ls` | List configured MCP servers (the bare `neenee mcp` teaches the subcommand) |
 | `skill ls` | List discovered skills (the bare `neenee skill` teaches the subcommand) |
 | `session rm <id>` | Terminate a hosted session by id — listing is `daemon status`, the daemon's view of what it hosts |
@@ -43,8 +43,12 @@ debug builds and is listed only there; the component playground is
 | `--home <dir>` | Run as a fully separate instance rooted at `<dir>/neenee/` — config, data, daemon files, and (with `NEENEE_PORT`) the port; the CLI form of `NEENEE_HOME` (ADR-0121) |
 | `--remote <addr>` | Run headless against an explicitly named daemon (`host:port` or `ws://host:port`) instead of the local instance — no discovery, no spawn |
 | `--token <token>` | The bearer token `--remote` requires (every network-exposed daemon demands one; see `panel url` on the host) |
+| `-p`, `--prompt`, `--print <text>` | Run `<text>` as a headless one-shot (non-interactive) |
+| `-i`, `--interactive` | Force the interactive TUI even when a `-p` prompt is given |
+| `-y`, `--yolo` | Alias for `--autopilot`: run without confirmations or questions |
 | `--autopilot` | Run without confirmations or questions this session |
-| `--json` | Machine-readable JSON output for status or headless run |
+| `-j`, `--json` | Machine-readable JSON output for status or headless run |
+| `--config-dir <dir>` / `--data-dir <dir>` / `--state-dir <dir>` / `--cache-dir <dir>` | Per-category XDG overrides (ADR-0014 §3): the CLI form of each `NEENEE_*_DIR` env var; a category flag wins over `--home` for its own category |
 | `-h`, `--help` | Print help (`neenee help <command>` for a command's help) |
 | `-V`, `--version` | Print the version and exit |
 

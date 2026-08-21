@@ -1014,7 +1014,7 @@ pub async fn dispatch(
                         display_prompt: None,
                         sent_at_ms: None,
                         images: Vec::new(),
-                        is_retry: false,
+                        driver: neenee_agent::orchestration::RoundDriver::Fresh,
                     },
                 )
                 .await;
@@ -1806,14 +1806,41 @@ pub async fn dispatch(
                 .await;
                 return;
             }
-            let current = session.model_window().await;
-            if current.is_empty() {
+            // `/retry` exists to let a stopped round finish itself
+            // (ADR-0128): it resumes the parked round with the same number
+            // and an unbroken turn sequence. It is deliberately a no-op for
+            // a round that completed naturally — re-sending a finished
+            // round's history would mint a new round and duplicate the
+            // assistant's answer, so without an armed resume point there is
+            // simply nothing to do.
+            let Some(point) = session.retry_pending().await else {
                 record_command(
                     session,
                     resp_tx,
                     name,
                     args,
-                    CommandResult::Text("No previous turn to retry.".to_string()),
+                    CommandResult::Text(
+                        "Nothing to retry — the last round already completed.".to_string(),
+                    ),
+                )
+                .await;
+                return;
+            };
+            // A newer round (or `/new`) retires the point; a stale point for
+            // an older round must never resurrect a round the session has
+            // moved past.
+            if point.round != session.round_counter().await {
+                if let Err(error) = session.clear_retry_pending().await {
+                    tracing::warn!(%error, "could not clear stale retry point");
+                }
+                record_command(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    CommandResult::Text(
+                        "Nothing to retry — the last round already completed.".to_string(),
+                    ),
                 )
                 .await;
                 return;
@@ -1829,14 +1856,7 @@ pub async fn dispatch(
                 lifecycle,
                 resp_tx,
                 config,
-                RoundInput {
-                    prompt: String::new(),
-                    hidden: false,
-                    display_prompt: None,
-                    sent_at_ms: None,
-                    images: Vec::new(),
-                    is_retry: true,
-                },
+                RoundInput::resume(point),
             )
             .await;
         }
@@ -1964,7 +1984,7 @@ pub async fn dispatch(
                     display_prompt: Some(cmd),
                     sent_at_ms: None,
                     images: Vec::new(),
-                    is_retry: false,
+                    driver: neenee_agent::orchestration::RoundDriver::Fresh,
                 },
             )
             .await;
@@ -2287,12 +2307,13 @@ mod schedule_spec_tests {
     }
 
     #[test]
-    fn garbage_input_is_none_not_empty_strings() {
-        // Pin the other direction too: unparseable input is surfaced as a
-        // `None` by `split_schedule_spec` itself (the command handler turns
-        // that into a usage notice), never as empty strings.
-        assert!(split_schedule_spec("definitely not a schedule").is_none());
-        assert!(split_schedule_spec("10m").is_none(), "spec without a prompt");
+    fn missing_prompt_is_none_not_empty_strings() {
+        // A spec with no prompt must be `None` (surfaced as a usage notice),
+        // never `(spec, "")` — an empty prompt would create a scheduled job
+        // that fires with nothing to send.
+        assert!(split_schedule_spec("10m").is_none());
+        assert!(split_schedule_spec("14:00").is_none());
+        assert!(split_schedule_spec("").is_none());
     }
 }
 

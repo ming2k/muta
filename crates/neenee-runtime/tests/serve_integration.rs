@@ -191,6 +191,23 @@ async fn test_select_then_attach_round_trip() {
         other => panic!("expected TodosUpdated sync, got {other:?}"),
     }
 
+    // Followed by the attach-time HarnessState sync (ADR-0128).
+    let state_msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    match serde_json::from_str::<Wire>(state_msg.to_text().unwrap_or("")).unwrap() {
+        Wire::Response {
+            response:
+                AgentResponse::Round {
+                    event: RoundEvent::HarnessState(_),
+                    ..
+                },
+        } => {}
+        other => panic!("expected HarnessState sync, got {other:?}"),
+    }
+
     ws.send(WsMessage::Text(
         serde_json::json!({"type":"Request","Chat":{"text":"hi","images":[]}})
             .to_string()

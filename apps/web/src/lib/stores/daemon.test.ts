@@ -599,7 +599,7 @@ describe("DaemonStore wire protocol", () => {
       expect(store.activity).toBe("waiting for model");
 
       roundEvent(session, {
-        HarnessState: { loop_status: "idle", round_counter: 2, autopilot: true },
+        HarnessState: { loop_status: "idle", round_counter: 2, autopilot: true, retry_pending: false },
       });
       expect(store.roundCounter).toBe(2);
       expect(store.autopilot).toBe(true);

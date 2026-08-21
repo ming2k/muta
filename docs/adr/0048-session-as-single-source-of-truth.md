@@ -239,7 +239,8 @@ governance.
 - ADR-0017 — backward-compat contract for session fields (`#[serde(default)]`).
 - ADR-0032 — fold pursuit into the session store (the prior precedent for
   moving runtime state into `SessionData`).
-- ADR-0035 — mid-turn save point (`append_turn`), preserved by this ADR.
+- ADR-0035 — (citation corrected: unrelated; `append_turn`'s mid-turn save point is
+  specified *here*, in this ADR, not by 0035).
 - ADR-0039 — unified prompt registry; the prompt is already a function of
   scattered state assembled at one choke point — this ADR converges the *data*
   that feeds it.

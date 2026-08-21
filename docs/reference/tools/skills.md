@@ -22,17 +22,6 @@ into the conversation.
 enabled state. Useful for seeing what the agent can load before calling
 `use_skill`.
 
-## `search_history`
-
-| Parameter | Type | Required | Default | Notes |
-|-----------|------|----------|---------|-------|
-| `query` | string | yes | — | Natural-language query |
-| `limit` | integer | no | `5` | Maximum results |
-
-`SearchHistoryTool` (`crates/neenee-persistence/src/search_tool.rs`) runs a semantic
-search over the current project's session history and returns the most relevant
-past messages.
-
 ## Skill format
 
 A skill is a Markdown file with YAML frontmatter, conventionally named

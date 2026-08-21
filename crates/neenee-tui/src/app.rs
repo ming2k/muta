@@ -221,6 +221,12 @@ pub struct SessionChrome {
     pub current_turn: u64,
     /// When this session's current round started (elapsed-timer segment).
     pub round_started_at: Option<std::time::Instant>,
+    /// Whether this session has a stopped round parked for `/retry`
+    /// (ADR-0128). Mirrored from the session-scoped harness snapshot — the
+    /// authoritative durable resume point, not a transcript scan — so the
+    /// hint bar only offers `/retry` for a round that actually stopped
+    /// before completing.
+    pub can_retry: bool,
 }
 
 /// Whether [`App::adopt_as_draft`] may clobber a composer that currently
@@ -539,6 +545,12 @@ pub struct App {
     /// round-trip completes. Refreshed each frame from the response listener.
     pub session_context: Option<neenee_contracts::SessionContextSnapshot>,
     pub loop_status: LoopStatus,
+    /// Whether the primary session has a stopped round parked for `/retry`
+    /// (ADR-0128). Mirrored from the session-scoped harness snapshot — the
+    /// durable resume point — and consumed by [`Self::viewed_chrome`] to
+    /// build the primary's retry affordance. Asides read their own
+    /// `SessionChrome::can_retry`.
+    pub harness_retry_pending: bool,
     pub activity_status: String,
     pub provider_retry: Option<ProviderRetryState>,
     /// Whether write-tool permission prompts are bypassed this session
@@ -2245,6 +2257,7 @@ impl App {
             round_count: self.round_count,
             current_turn: self.current_turn,
             round_started_at: self.round_started_at,
+            can_retry: self.loop_status.is_idle() && self.harness_retry_pending,
         }
     }
 
@@ -2304,6 +2317,7 @@ impl App {
                 round_count: self.round_count,
                 current_turn: self.current_turn,
                 round_started_at: self.round_started_at,
+                can_retry: self.loop_status.is_idle() && self.harness_retry_pending,
             });
         }
         if let Some(chrome) = self.session_chrome.get(&side_id).cloned() {

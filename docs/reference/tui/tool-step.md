@@ -1,6 +1,6 @@
 # Tool step
 
-An [expandable step](expandable-step.md) for a tool call (`read_file`, `bash`,
+An [expandable step](expandable-step.md) for a tool call (`read_text`, `bash`,
 `edit_file`, …). It renders flat on the app background — no band, no section
 labels — like a [thinking step](thinking-step.md). The header alone summarizes
 the call (tool + key arguments + duration); expanding reveals the tool-specific
@@ -53,7 +53,7 @@ session.
 | `list_dir`, `glob` | `draw_listing_content` | One entry per row, no gutter, on `code_bg`. Directories (entries ending in `/`) in `info`, files in `code_fg`. |
 | `grep` | `draw_grep_content` | Matches grouped under a bold `heading_fg` file-path header; each match shown as `{lineno}  {content}` with the line-number column aligned and dimmed. |
 | `edit_file`, `write_file` | `draw_diff_content` | A real `similar`-based unified diff: line-number gutter, `+`/`-` sign column, and intra-line word highlight on the changed spans, on `code_bg`. |
-| `read_file`, others | `draw_code_content` | Code block with line-number gutter on `code_bg` (the fallback for unrecognized tools). |
+| `read_text`, others | `draw_code_content` | Code block with line-number gutter on `code_bg` (the fallback for unrecognized tools). |
 
 Unknown / MCP tools (`arg_layout = KeyValue`) print their arguments as plain
 `key: value` rows on `app_bg` before the result block, since the header only
