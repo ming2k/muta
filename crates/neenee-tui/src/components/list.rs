@@ -50,6 +50,13 @@ pub(crate) struct SelectableListPage<'a> {
     pub extra_footer_hints: &'a [FooterHintWithBand],
     /// When true, the body is replaced by the full keymap page (in-modal `?`).
     pub keymap_open: bool,
+    /// Selection context for the in-modal `?` keymap sub-page, which is a
+    /// selectable document (copyable key labels). The main list body stays a
+    /// plain `ScrollBody` — its rows are keyboard targets.
+    pub select_doc: Option<(
+        &'a crate::model::selection::SelectionState,
+        &'a mut crate::model::layout::LayoutMap,
+    )>,
 }
 
 pub(crate) fn draw_selectable_list_page(
@@ -86,6 +93,7 @@ pub(crate) fn draw_selectable_list_page(
             // when the footer has collapsed. Empty-list pages have no keymap
             // wiring, so suppress it there.
             show_more: page.has_items,
+            select_doc: page.select_doc,
         },
         theme,
     )

@@ -750,6 +750,40 @@ fn provider_retry_state_formats_summary_and_timing() {
     assert_eq!(running_summary, "retry 3/15 · running · 1.2s");
 }
 
+#[test]
+fn activity_modal_renders_provider_retry_failure() {
+    let now = std::time::Instant::now();
+    let retry = ProviderRetryState {
+        attempt: 3,
+        max_attempts: 30,
+        retry_at: now + std::time::Duration::from_millis(4_000),
+        failure: "HTTP 429: rate limit exceeded".to_string(),
+    };
+    let mut grid = neenee_tui_engine::Grid::new(80, 24);
+    let mut frame = neenee_tui_engine::Frame::new(&mut grid);
+    let mut scroll = 0;
+    let theme = Theme::default();
+    let rect = crate::overlays::draw_activity_modal(
+        &mut frame,
+        crate::overlays::ActivityModalView {
+            active_tab: crate::modal::ActivityTab::Activity,
+            todos: None,
+            user_prompt: Some("Fix issue in parser"),
+            round_count: 1,
+            current_turn: 1,
+            current_model: "claude-sonnet",
+            round_started_at: Some(now),
+            activity: "waiting to retry",
+            provider_retry: Some(&retry),
+        },
+        &mut scroll,
+        &theme,
+        &crate::model::selection::SelectionState::None,
+        &mut crate::model::layout::LayoutMap::new(),
+    );
+    assert!(rect.width > 0 && rect.height > 0);
+}
+
 /// Build a small conversation with two sibling envoy tasks, each with a
 /// couple of child messages, for focus-navigation tests.
 fn conversation_with_envoys() -> Vec<TranscriptMessage> {
@@ -1931,7 +1965,10 @@ fn antigravity_template_prefills_url_and_seeds_relay_models() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_custom_provider_editor(antigravity_template());
     assert_eq!(app.custom_protocol_wire, "google");
-    assert_eq!(app.custom_base_url, "https://cloudcode-pa.googleapis.com");
+    assert_eq!(
+        app.custom_base_url,
+        "https://daily-cloudcode-pa.googleapis.com"
+    );
     assert_eq!(
         app.custom_models,
         neenee_providers::ANTIGRAVITY_OAUTH_MODELS
@@ -2071,7 +2108,8 @@ fn picker_connections_count_matches_provider_rows_no_add_row() {
         protocol: String::new(),
         base_url: String::new(),
         key_ready: true,
-        template_id: String::new(),
+        preset_id: String::new(),
+        client_identity: Default::default(),
         last_used_ms: None,
         auth: Default::default(),
     };
@@ -2103,7 +2141,8 @@ fn delete_provider_stages_overlay_without_deleting() {
         protocol: String::new(),
         base_url: String::new(),
         key_ready: true,
-        template_id: String::new(),
+        preset_id: String::new(),
+        client_identity: Default::default(),
         last_used_ms: None,
         auth: Default::default(),
     };
@@ -2145,7 +2184,8 @@ fn delete_provider_ignores_builtin() {
         protocol: String::new(),
         base_url: String::new(),
         key_ready: true,
-        template_id: String::new(),
+        preset_id: String::new(),
+        client_identity: Default::default(),
         last_used_ms: None,
         auth: Default::default(),
     };

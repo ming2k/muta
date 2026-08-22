@@ -3,18 +3,18 @@
 //! TUI's Connections/Models modals.
 
 use super::derive::derive_entries;
-use super::{Stores, effective_default_provider_id};
+use super::{Stores, effective_default_connection_id};
 use neenee_contracts::catalog::{Channel, ProviderEntry, Transport};
 use neenee_contracts::{
     Effort, ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, ThinkingMode,
 };
 use neenee_persistence::config::Config;
-use neenee_persistence::provider_usage::ProviderUsage;
+use neenee_persistence::connection_usage::ConnectionUsage;
 
 pub(super) fn active_model_id_for_entry(
     config: &Config,
     entry: &ProviderEntry,
-    usage: &ProviderUsage,
+    usage: &ConnectionUsage,
 ) -> Option<String> {
     config
         .default_model
@@ -30,15 +30,15 @@ pub(super) fn active_model_id_for_entry(
         .or_else(|| entry.default_channel().map(|channel| channel.model.clone()))
 }
 
-pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPickerSnapshot {
+pub fn build_picker_state(config: &Config, usage: &ConnectionUsage) -> ProviderPickerSnapshot {
     let stores = Stores::load();
     let entries = derive_entries(
-        &stores.instances,
+        &stores.connections,
         &stores.cache,
         &stores.routes,
         &stores.creds,
     );
-    let default_id = effective_default_provider_id(config, &stores);
+    let default_id = effective_default_connection_id(config, &stores);
     let rows = entries
         .iter()
         .map(|entry| {
@@ -59,14 +59,15 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
                     info
                 })
                 .collect();
-            // The template that birthed this instance drives the
-            // Connections list's provider-type label (distinct from the
-            // user-given instance name).
-            let template_id = stores
-                .instances
-                .get(&entry.id)
-                .and_then(|p| p.template_id.clone())
+            let connection = stores.connections.get(&entry.id);
+            let preset_id = connection
+                .and_then(|p| p.preset_id.clone())
                 .unwrap_or_default();
+            let client_identity = connection
+                .map(|p| p.client_identity.clone())
+                .unwrap_or_default();
+            let auth = connection.map(|p| p.auth).unwrap_or_default();
+            let recency = usage.recency_of(&entry.id);
             ProviderPickerRow {
                 id: entry.id.clone(),
                 name: entry.name.clone(),
@@ -77,13 +78,10 @@ pub fn build_picker_state(config: &Config, usage: &ProviderUsage) -> ProviderPic
                 protocol,
                 base_url,
                 key_ready: entry.key_ready(),
-                template_id,
-                last_used_ms: usage.last_used_ms(&entry.id),
-                auth: stores
-                    .instances
-                    .get(&entry.id)
-                    .map(|p| p.auth)
-                    .unwrap_or_default(),
+                preset_id,
+                client_identity,
+                last_used_ms: if recency == 0 { None } else { Some(recency) },
+                auth,
             }
         })
         .collect();

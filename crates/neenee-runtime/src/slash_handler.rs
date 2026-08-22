@@ -33,7 +33,7 @@ use crate::commands::CustomCommand;
 use neenee_agent::{Agent, RoundLifecycle};
 use neenee_contracts::{AgentRequest, AgentResponse, Provider, Tool};
 use neenee_persistence::{
-    config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
+    config::Config, connection_usage::ConnectionUsage, embedding, session::SessionStore,
 };
 use neenee_skills::SkillRegistry;
 
@@ -71,7 +71,7 @@ pub struct SlashContext<'a> {
     pub side: &'a Arc<AsyncRwLock<SideRegistry>>,
     pub base_tools: &'a Arc<Vec<Arc<dyn Tool>>>,
     pub provider_holder: &'a Arc<RwLock<Arc<dyn Provider>>>,
-    pub provider_usage: &'a mut ProviderUsage,
+    pub provider_usage: &'a mut ConnectionUsage,
     pub skills_registry: &'a Arc<SkillRegistry>,
     pub commands: &'a HashMap<String, CustomCommand>,
     pub embedding_store: &'a Arc<AsyncRwLock<embedding::EmbeddingStore>>,

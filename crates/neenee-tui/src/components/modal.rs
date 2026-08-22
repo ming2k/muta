@@ -16,6 +16,11 @@ use super::scroll::ScrollBody;
 
 #[derive(Clone, Copy)]
 pub(crate) enum ModalPageSize {
+    /// Fixed-geometry page shell. No current caller (Help, the last fixed-
+    /// geometry `ModalPage` user, renders its selectable body through the
+    /// `modal_frame` ceremony directly); kept as the shell's complete
+    /// geometry vocabulary.
+    #[allow(dead_code)]
     Fixed(FixedModalSpec),
     Content(ContentModalSpec),
 }
@@ -73,6 +78,17 @@ pub(crate) struct ModalPage<'a> {
     /// When true, a collapsed footer appends `? help` (list modals that wire
     /// in-modal keymap expand). Help / pure info pages leave this false.
     pub show_more: bool,
+    /// Selection context for the body / keymap page as a selectable
+    /// document. `Some((&selection, &mut layout_map))` routes the keymap
+    /// page's rows through `render_selectable_body` (drag-select + copy);
+    /// `None` keeps the plain `ScrollBody` (control surfaces — pickers,
+    /// editors). The main body always uses `ScrollBody`; documents migrate
+    /// by calling `render_selectable_body` directly instead of through the
+    /// page shell.
+    pub select_doc: Option<(
+        &'a crate::model::selection::SelectionState,
+        &'a mut crate::model::layout::LayoutMap,
+    )>,
 }
 
 pub(crate) fn modal_body_width(frame: &Frame, geometry: ContentModalSpec) -> usize {
@@ -124,15 +140,35 @@ pub(crate) fn draw_modal_page(frame: &mut Frame, page: ModalPage<'_>, theme: &Th
             }
             ModalHeader::Parts(parts) => modal_header_parts(frame, f.header, parts, theme),
         }
+        // The keymap sub-page is a selectable document: keycap labels and
+        // descriptions register as MODAL_DOC rows so they can be copied like
+        // any other help text.
         let lines = keymap_body_lines(page.footer_hints, page.extra_footer_hints, theme);
-        ScrollBody {
-            lines,
-            scroll: page.body.scroll,
-            follow: None,
-            edge_margin: page.body.edge_margin,
-            wrap: false,
+        if let Some((selection, layout_map)) = page.select_doc {
+            let rows: Vec<crate::components::selectable_body::SelectableRow> = lines
+                .into_iter()
+                .map(crate::components::selectable_body::SelectableRow::from_line)
+                .collect();
+            crate::components::selectable_body::render_selectable_body(
+                frame,
+                f.body,
+                &rows,
+                page.body.scroll,
+                None,
+                theme,
+                selection,
+                layout_map,
+            );
+        } else {
+            ScrollBody {
+                lines,
+                scroll: page.body.scroll,
+                follow: None,
+                edge_margin: page.body.edge_margin,
+                wrap: false,
+            }
+            .render(frame, f.body, theme);
         }
-        .render(frame, f.body, theme);
         if let Some(footer) = f.footer {
             // No recursive `? help` while already on the keymap page.
             render_modal_footer(frame, footer, &keymap_page_footer_hints(), theme);

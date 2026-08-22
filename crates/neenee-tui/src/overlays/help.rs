@@ -17,9 +17,12 @@ use neenee_tui_engine::{
 };
 
 use crate::components::keycap::keycap_style;
-use crate::components::modal::{ModalHeader, ModalPage, ModalPageSize, draw_modal_page};
-use crate::components::scroll::ScrollBody;
-use crate::primitives::{FixedModalSpec, FooterHint};
+use crate::components::selectable_body::{SelectableRow, render_selectable_body};
+use crate::model::layout::LayoutMap;
+use crate::model::selection::SelectionState;
+use crate::primitives::{
+    FixedModalSpec, FooterHint, modal_area, modal_frame, modal_header, render_modal_footer,
+};
 use crate::view::Theme;
 
 /// One row in the Help modal's "Views & tools" section, projected from the
@@ -36,12 +39,16 @@ pub struct HelpBinding {
 
 /// Draw the Help modal. `bindings` is the registry projection for the global
 /// shortcuts section; everything else is static fallback prose (see the module
-/// docs for why those keys are not registry-resolvable).
+/// docs for why those keys are not registry-resolvable). The body is a
+/// selectable document: keycap labels and descriptions can be dragged over
+/// and copied like transcript text.
 pub fn draw_help_modal(
     frame: &mut Frame,
     scroll: &mut usize,
     bindings: &[HelpBinding],
     theme: &Theme,
+    selection: &SelectionState,
+    layout_map: &mut LayoutMap,
 ) -> neenee_tui_engine::Rect {
     let key = |k: &str| Span::styled(format!("{:<10}", k), keycap_style(theme));
     let desc = |d: &str| Span::styled(d.to_string(), Style::default().fg(theme.muted()));
@@ -113,27 +120,30 @@ pub fn draw_help_modal(
         Line::from(desc("Drag to select; copy with Ctrl+C or Ctrl+Shift+C.")),
     ]);
 
-    draw_modal_page(
-        frame,
-        ModalPage {
-            size: ModalPageSize::Fixed(FixedModalSpec::HELP),
-            header: ModalHeader::title("Help"),
-            body: ScrollBody {
-                lines: body,
-                scroll,
-                follow: None,
-                edge_margin: 0,
-                wrap: true,
-            },
-            footer_hints: &[
+    // Selectable document body: renders through `render_selectable_body` so
+    // every visual row registers a MODAL_DOC region (drag-select + copy).
+    // The panel shell (geometry, header, footer) is the same `modal_frame`
+    // ceremony other hand-rolled modals use; the document replaces the
+    // engine-wrapped `ScrollBody` the `ModalPage` path would have drawn.
+    let rows: Vec<SelectableRow> = body.into_iter().map(SelectableRow::from_line).collect();
+
+    let area = modal_area(frame, FixedModalSpec::HELP);
+    let f = modal_frame(frame, area, theme.panel(), true, true);
+
+    modal_header(frame, f.header, "Help", theme);
+    render_selectable_body(
+        frame, f.body, &rows, scroll, None, theme, selection, layout_map,
+    );
+    if let Some(footer) = f.footer {
+        render_modal_footer(
+            frame,
+            footer,
+            &[
                 FooterHint::navigation("↑↓", "scroll"),
                 FooterHint::always("Esc", "close"),
             ],
-            extra_footer_hints: &[],
-            keymap_open: false,
-            // Help is already a keybindings surface — no recursive `? help`.
-            show_more: false,
-        },
-        theme,
-    )
+            theme,
+        );
+    }
+    area
 }

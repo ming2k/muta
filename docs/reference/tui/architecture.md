@@ -63,7 +63,7 @@ The view modules live flat under `crates/neenee-tui/src/`, grouped by concern:
 | Module | Responsibility |
 |--------|----------------|
 | `view.rs` | The transcript-area renderer: `draw_transcript`, `TranscriptView`, `HeightCache`; re-exports the drawing surface (chrome, composer, overlays, theme, …) the shell consumes. |
-| `components/` | Reusable composed components: modal pages, selectable lists, scroll bodies, footer hints, toasts, notices, option rows, and one-line metadata strips (`MetaStrip`). |
+| `components/` | Reusable composed components: modal pages, selectable lists, scroll bodies, selectable document bodies (`selectable_body`), footer hints, toasts, notices, option rows, and one-line metadata strips (`MetaStrip`). |
 | `overlays/` | One renderer per modal (provider, session, help, activity, config, permission, …). |
 | `tools/` | Per-tool-step renderers (bash, edit, read, grep, web, ask_user, diff, …). |
 | `disclosure/` | Expandable-step disclosure: state machine, sticky-pin tracking, step renderers. |
@@ -149,9 +149,13 @@ nothing about higher ones:
 - **`theme` / `design`** — the only places colors and fixed measurements are
   defined; every component reads tokens from here instead of hard-coding.
 - **`components/`** — composed, reusable view pieces: modal pages, selectable
-  lists, scroll bodies, width-aware modal footers, toasts, transcript notices,
-  and question option rows. These are still pure render helpers; event
-  handling and action logic stay in the app shell.
+  lists, scroll bodies, the selectable document body
+  (`selectable_body::render_selectable_body` — the single copy-by-default
+  path modal documentary text goes through; it wraps in the application
+  layer and registers every visual row as a `MODAL_DOC` selection region),
+  width-aware modal footers, toasts, transcript notices, and question option
+  rows. These are still pure render helpers; event handling and action logic
+  stay in the app shell.
 - **`disclosure/`** — the collapsible-step state machine (`Disclosure`,
   `Interaction`) and shared header rendering, reused by every `tools/*` renderer.
 - **`layout/`** — transcript arrangement strategy (`turn_band`)

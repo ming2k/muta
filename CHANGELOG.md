@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Selectable text in documentary modals — converged on one component.**
+  All modal documentary bodies now render through
+  `components/selectable_body.rs`, the single selectable-document path:
+  Help (`?`), Usage Statistics (`/usage`), the Context Usage round drill-in,
+  the Activity modal (both tabs, including todo items), the Sessions `i`
+  info sub-view, the History `Tab` full-text preview, the permission sheet's
+  body (tool description + arguments JSON), the OAuth pending sheet, and
+  every in-modal `?` keymap sub-page. Drag across rows to highlight,
+  `Ctrl+Shift+C` (or `Cmd+C`) to copy — the same interaction as the
+  transcript. A press on modal text no longer dead-ends; it arms a drag.
+  Outside-click dismiss, buttons, and all click affordances keep their
+  previous behaviour. Decoration (indents, todo status glyphs) paints as row
+  prefixes that stay out of copied text. Picker-style modal *lists* (Models,
+  Connections, Tools, …) stay deliberately non-draggable — their rows are
+  keyboard targets; the content-vs-control split is documented in the TUI
+  reference. The OAuth sheet's previous hand-rolled region registration was
+  retired in the process: it recorded one region per logical row while
+  wrapping happened inside the engine, so wrapped continuation lines and
+  scrolled views misaligned — regions are now anchored per visual row after
+  application-layer wrapping, which also removed the now-unused
+  `indented_wrapped_lines` pre-wrap helper.
+
+### Fixed
+
+- **`/retry` after a crash.** A session whose host process died mid-round
+  (SIGKILL, panic, power loss) previously answered `/retry` with "Nothing to
+  retry — the last round already completed": the resume point was armed only
+  on stops the round path could observe, and the startup crash-residue check
+  filtered for a status (`Abandoned`) that is never present in the session
+  store on first reload — `TokenSourceLedger::restore_session` flips
+  in-flight records only in its in-memory map. The driver now treats a
+  still-`InFlight` usage record in the store as the crash signal, records the
+  `Terminated` round interrupt, and arms a `/retry` resume point (round from
+  the record, committed turns recovered from the transcript, history
+  watermark from the durable window) before the idle harness snapshot is
+  published — so a re-hosted session offers `/retry` from frame one. This
+  covers graceful daemon kills and a crash during a `/retry` resume too (the
+  resumed round keeps its number); only a round the session has already
+  moved past is left un-resurrected.
+
 ## [0.30.3] - 2026-08-21
 
 ### Fixed

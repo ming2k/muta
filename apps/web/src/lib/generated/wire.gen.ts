@@ -43,14 +43,13 @@ parent_call_id: string | null, } } | { "InputReply": { request_id: string, text:
  */
 auth: ChannelAuth, 
 /**
- * The stable template id this instance is created from, when it came
- * from a template. `None` for a pure-custom provider. When set to a
- * known template, the catalog re-seeds this instance's channels from
- * the template's current model list at startup, so a template edit
- * propagates to the instance. See
- * `neenee_agent::catalog::reconcile_provider_models`.
+ * The stable preset id this connection is created from.
  */
-template_id: string | null, } } | { "ConnectProvider": { id: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ChannelAuth, } } | { "EditProvider": { id: string, name: string, protocol: string, base_url: string, api_key: SecretString, } } | { "RemoveProviderModel": { provider_id: string, model: string, } } | { "EditProviderModel": { provider_id: string, model: string, effort: string | null, thinking: boolean | null, } } | { "EditModelReasoning": { model: string, effort: string | null, thinking: boolean | null, } } | { "DeleteProvider": { id: string, } } | { "ToggleFavorite": { id: string, } } | { "SetDefaultModel": { id: string, } } | { "RefreshProviderModels": { user_initiated: boolean, } } | { "DeleteSession": { id: string, } } | { "RenameSession": { id: string, title: string | null, } } | { "QuerySessionDetail": { id: string, } } | { "QueryTokenUsage": { session_id: string, } } | { "QueryUsageStats": { 
+template_id: string | null, 
+/**
+ * Client identity (impersonation/headers). Defaults to Native when unset.
+ */
+client_identity: ClientIdentity | null, } } | { "ConnectProvider": { id: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ChannelAuth, } } | { "EditProvider": { id: string, name: string, protocol: string, base_url: string, api_key: SecretString, client_identity: ClientIdentity | null, } } | { "RemoveProviderModel": { provider_id: string, model: string, } } | { "EditProviderModel": { provider_id: string, model: string, effort: string | null, thinking: boolean | null, } } | { "EditModelReasoning": { model: string, effort: string | null, thinking: boolean | null, } } | { "DeleteProvider": { id: string, } } | { "ToggleFavorite": { id: string, } } | { "SetDefaultModel": { id: string, } } | { "RefreshProviderModels": { user_initiated: boolean, } } | { "DeleteSession": { id: string, } } | { "RenameSession": { id: string, title: string | null, } } | { "QuerySessionDetail": { id: string, } } | { "QueryTokenUsage": { session_id: string, } } | { "QueryUsageStats": { 
 /**
  * How many recent events to include in the event-log tail.
  */
@@ -60,6 +59,11 @@ event_cap: number, } } | "QuerySessionContext" | { "RevokePermission": { tool: s
  * How a user-defined channel authenticates.
  */
 export type ChannelAuth = "ApiKey" | "XaiOAuth" | "ChatGptOAuth" | "CopilotOAuth" | "AntigravityOAuth";
+
+/**
+ * First-class client identity presets and custom identity for connection impersonation.
+ */
+export type ClientIdentity = "Native" | "OpenCode" | "ClaudeCode" | "Codex" | "Cline" | "Cursor" | "KiloCode" | "RooCode" | "Windsurf" | "Aider" | "ZCode" | "Copilot" | "Antigravity" | { "Custom": { user_agent: string, extra_headers: Array<[string, string]>, } };
 
 /**
  * User-editable semantic colors for a custom frontend palette.
@@ -649,58 +653,49 @@ favorite: boolean, };
  */
 export type ProviderPickerRow = { id: string, 
 /**
- * Display name (e.g. `"OpenAI"`, `"Anthropic"`, or a custom provider's name).
+ * Display name (e.g. `"OpenAI"`, `"Anthropic"`, or a custom connection's name).
  */
 name: string, 
 /**
- * Wire id of the currently-active model on this provider.
+ * Wire id of the currently-active model on this connection.
  */
 model: string, 
 /**
- * Every model id this provider serves, in catalog order. A single-model
- * provider lists exactly one; multi-model providers list all of them.
+ * Every model id this connection serves, in catalog order.
  */
 models: Array<string>, 
 /**
- * Per-model/channel settings in the same order as `models`. Newer TUIs use
- * this to render and edit model-specific controls such as Anthropic
- * effort/thinking. `models` stays as the simple compatibility list.
+ * Per-model/channel settings in the same order as `models`.
  */
 model_info: Array<ProviderModelInfo>, 
 /**
- * `true` for built-in presets, `false` for user-defined providers. The TUI
- * only offers add/remove-model (and full meta editing) on user-defined
- * providers.
+ * `true` for built-in presets, `false` for user-defined connections.
  */
 builtin: boolean, 
 /**
  * Wire protocol id of the default channel (`"openai"` | `"anthropic"` |
- * `"google"`), used to pre-fill the edit form for a user-defined provider.
- * Empty for built-ins (their `e` editor only changes the API key).
+ * `"google"`), used to pre-fill the edit form.
  */
 protocol: string, 
 /**
- * Base URL of the default channel, used to pre-fill the edit form. Empty
- * for built-ins and keyless/native transports.
+ * Base URL of the default channel, used to pre-fill the edit form.
  */
 base_url: string, key_ready: boolean, 
 /**
- * The add-provider template that birthed this instance (`"openai"`,
- * `"anthropic"`, `"openai-sub2api"`, …), when known. Surfaced to the TUI
- * so the **Connections** list can show the provider *type* beside the
- * instance name — distinct from the user-given instance name. Empty for
- * instances with no recorded template (legacy configs).
+ * The add-connection preset that birthed this instance (`"openai"`,
+ * `"anthropic"`, `"deepseek"`, …), when known.
  */
-template_id: string, 
+preset_id: string, 
 /**
- * Unix epoch milliseconds of the last activation. `None` if the provider
- * has never been activated, which the picker sorts as "oldest".
+ * Client identity configured for this connection.
+ */
+client_identity: ClientIdentity, 
+/**
+ * Unix epoch milliseconds of the last activation. `None` if never activated.
  */
 last_used_ms: number | null, 
 /**
- * How the default channel authenticates. Surfaced so the TUI can route an
- * OAuth provider with no stored token to the connect flow rather than the
- * API-key editor.
+ * How the default channel authenticates.
  */
 auth: ChannelAuth, };
 
@@ -713,8 +708,8 @@ auth: ChannelAuth, };
  */
 export type ProviderPickerSnapshot = { 
 /**
- * Canonical id of the active/default provider. Matches
- * `config.default_provider`.
+ * Canonical id of the active/default connection. Matches
+ * `config.default_connection`.
  */
 default_id: string, rows: Array<ProviderPickerRow>, };
 

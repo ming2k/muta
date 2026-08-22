@@ -49,6 +49,8 @@ pub(super) fn render_frame(
             app.session_info_detail,
             app.session_detail.as_ref(),
             &mut app.session_info_scroll,
+            &app.selection,
+            &mut layout_map,
         );
 
         app.layout_map = layout_map;
@@ -370,6 +372,8 @@ pub(super) fn render_frame(
                     app.permission_scroll,
                     permission_rect,
                     &app.theme,
+                    &app.selection,
+                    &mut layout_map,
                 );
                 app.permission_max_scroll = max_scroll;
                 app.permission_scroll = app.permission_scroll.min(app.permission_max_scroll);
@@ -601,6 +605,7 @@ pub(super) fn render_frame(
                 app.model_search,
                 app.modal_keymap_open,
                 &app.theme,
+                &app.selection,
             ))
         }
         Modal::Models => {
@@ -619,6 +624,7 @@ pub(super) fn render_frame(
                 app.model_search,
                 app.modal_keymap_open,
                 &app.theme,
+                &app.selection,
             ))
         }
         Modal::HistorySearch => {
@@ -643,6 +649,8 @@ pub(super) fn render_frame(
                 input_rect,
                 activity_height,
                 &app.theme,
+                &app.selection,
+                &mut layout_map,
             )
         }
         Modal::Permission => None,
@@ -696,9 +704,9 @@ pub(super) fn render_frame(
             let effort = app
                 .editor_model_settings_only
                 .then_some(app.editor_effort.as_str());
-            // The model's advertised ladder drives the segmented
-            // flat layout; an unresolved model passes an empty
-            // slice so the selector degrades to the carousel.
+            // The model's advertised ladder lays out the slider's rungs; an
+            // unresolved model passes an empty slice so the block shows the
+            // bare value row + caption instead.
             let effort_levels: Vec<String> = if app.editor_model_settings_only {
                 neenee_contracts::resolve_model(&app.editor_model)
                     .effort_levels
@@ -751,7 +759,7 @@ pub(super) fn render_frame(
                 &mut app.oauth_scroll,
                 Some(&mut app.modal_hit_map),
                 &app.selection,
-                Some(&mut app.layout_map),
+                &mut app.layout_map,
             ))
         }
         Modal::CustomProvider => {
@@ -816,6 +824,8 @@ pub(super) fn render_frame(
                 &mut app.help_scroll,
                 &bindings,
                 &app.theme,
+                &app.selection,
+                &mut layout_map,
             ))
         }
         Modal::Sessions => Some(view::draw_sessions_modal(
@@ -832,6 +842,8 @@ pub(super) fn render_frame(
             app.session_info_detail,
             app.session_detail.as_ref(),
             &mut app.session_info_scroll,
+            &app.selection,
+            &mut layout_map,
         )),
         Modal::Host => {
             // The session dashboard is a first-class, full-screen
@@ -889,6 +901,8 @@ pub(super) fn render_frame(
                 loading,
                 &mut app.token_report_scroll,
                 &app.theme,
+                &app.selection,
+                &mut layout_map,
             ))
         }
         Modal::UsageStats => {
@@ -904,6 +918,8 @@ pub(super) fn render_frame(
                 loading,
                 &mut app.usage_stats_scroll,
                 &app.theme,
+                &app.selection,
+                &mut layout_map,
             ))
         }
         Modal::Tools => Some(view::draw_tools_modal(
@@ -988,9 +1004,12 @@ pub(super) fn render_frame(
                     current_model: app.current_model.as_str(),
                     round_started_at: viewed_chrome.round_started_at,
                     activity: &status,
+                    provider_retry: app.provider_retry.as_ref(),
                 },
                 &mut app.activity_scroll,
                 &app.theme,
+                &app.selection,
+                &mut layout_map,
             ))
         }
         Modal::Queue => Some(view::draw_queue_modal(
@@ -1024,6 +1043,8 @@ pub(super) fn render_frame(
             app.btw_modal_follow,
             app.modal_keymap_open,
             &app.theme,
+            &app.selection,
+            &mut layout_map,
         )),
         Modal::None => None,
     };

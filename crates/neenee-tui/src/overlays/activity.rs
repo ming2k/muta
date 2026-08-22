@@ -8,13 +8,12 @@ use neenee_tui_engine::{
 };
 
 use super::common::todo_status_glyph_color;
-use crate::components::modal::modal_body_width;
+use crate::components::selectable_body::{RowSegment, SelectableRow, render_selectable_body};
 use crate::design::{MODAL_BODY_LEADING_INDENT, MODAL_TITLE_META_GAP};
 use crate::primitives::{
     ContentModalSpec, FooterHint, content_modal_area, keyvocab, modal_chrome_rows, modal_frame,
-    render_body, render_modal_footer,
+    render_modal_footer,
 };
-use crate::text_layout::{indented_wrapped_lines, wrap_text};
 use crate::view::Theme;
 
 /// Inputs for [`draw_activity_modal`]. Carries everything the old always-pinned
@@ -41,6 +40,8 @@ pub struct ActivityModalView<'a> {
     pub round_started_at: Option<std::time::Instant>,
 
     pub activity: &'a str,
+    /// Ongoing provider retry state, if any.
+    pub provider_retry: Option<&'a crate::app::ProviderRetryState>,
 }
 
 /// The Activity modal: a scrollable overview of a single section (Activity or
@@ -52,6 +53,8 @@ pub fn draw_activity_modal(
     view: ActivityModalView<'_>,
     scroll: &mut usize,
     theme: &Theme,
+    selection: &crate::model::selection::SelectionState,
+    layout_map: &mut crate::model::layout::LayoutMap,
 ) -> neenee_tui_engine::Rect {
     let ActivityModalView {
         active_tab,
@@ -62,13 +65,32 @@ pub fn draw_activity_modal(
         current_model,
         round_started_at,
         activity,
+        provider_retry,
     } = view;
 
     let geometry = ContentModalSpec::ACTIVITY;
-    let body_width = modal_body_width(frame, geometry);
     let muted = theme.muted();
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    // The body is a selectable document (`render_selectable_body`): every
+    // visual row registers a MODAL_DOC region so the round overview and the
+    // todo list are drag-selectable and copyable like transcript text.
+    // Decoration (the leading indent, todo status glyphs) is declared as row
+    // prefixes, which paint but stay out of copied text; the component wraps
+    // in the application layer, replacing the old pre-wrapped
+    // `indented_wrapped_lines` emission.
+    let indent = || RowSegment::styled(" ".repeat(MODAL_BODY_LEADING_INDENT), Style::default());
+    let heading = |text: &str| {
+        SelectableRow::styled(
+            text,
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(Modifier::BOLD),
+        )
+    };
+    let body_row =
+        |text: &str, style: Style| SelectableRow::styled(text, style).with_prefix(indent());
+
+    let mut rows: Vec<SelectableRow> = Vec::new();
 
     match active_tab {
         crate::modal::ActivityTab::Activity => {
@@ -77,50 +99,33 @@ pub fn draw_activity_modal(
             // ── Prompt (current round's user message) ──
             if let Some(prompt) = user_prompt.filter(|p| !p.is_empty()) {
                 if have_section {
-                    lines.push(Line::from(""));
+                    rows.push(SelectableRow::empty());
                 }
                 have_section = true;
-                lines.push(Line::from(vec![Span::styled(
-                    "Prompt",
-                    Style::default()
-                        .fg(theme.brand())
-                        .add_modifier(Modifier::BOLD),
-                )]));
-                // Container primitive: pre-wrap at `body_width - indent` and
-                // emit one indented `Line` per visual row. This is the fix for
-                // the bug where only the first logical line of a multi-line
-                // prompt was indented — every row (explicit `\n` *and*
-                // width-induced continuation) now inherits the block indent,
-                // because the indent is a geometry property of the block, not
-                // a span painted on a single logical line. `render_body` runs
-                // with wrapping disabled below.
-                lines.extend(indented_wrapped_lines(
-                    prompt,
-                    MODAL_BODY_LEADING_INDENT,
-                    body_width,
-                    Style::default().fg(theme.fg()),
-                ));
+                rows.push(heading("Prompt"));
+                // The component wraps the whole prompt (explicit `\n` and
+                // width-induced continuation alike) with the indent as a row
+                // prefix, so every visual row of the block inherits the
+                // indent — the geometry-property fix the pre-wrap container
+                // primitive was introduced for, now expressed declaratively.
+                for line in prompt.split('\n') {
+                    rows.push(body_row(line, Style::default().fg(theme.fg())));
+                }
             }
 
             // ── Status (always shown) ──
             if have_section {
-                lines.push(Line::from(""));
+                rows.push(SelectableRow::empty());
             }
             let idle = activity.is_empty() || activity == "idle";
-            lines.push(Line::from(vec![Span::styled(
-                "Status",
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            )]));
+            rows.push(heading("Status"));
 
             if round_count > 0 {
-                // Build the structured detail as one string so the container
-                // helper can pre-wrap it as a unit — a long model name or
-                // locale-dependent elapsed string would otherwise overflow the
-                // body's right edge (render_body no longer soft-wraps here).
-                // `round › turn` is a container → member breadcrumb (R1 would
-                // wrongly join two different levels with `·`); model and
+                // Build the structured detail as one row so the component
+                // wraps it as a unit — a long model name or locale-dependent
+                // elapsed string would otherwise overflow the body's right
+                // edge. `round › turn` is a container → member breadcrumb (R1
+                // would wrongly join two different levels with `·`); model and
                 // elapsed are properties of the round (JOIN_MODIFY).
                 let mut detail = format!("round {}", round_count);
                 if current_turn >= 1 {
@@ -135,88 +140,80 @@ pub fn draw_activity_modal(
                     detail.push_str(crate::design::JOIN_MODIFY);
                     detail.push_str(&crate::chrome::format_elapsed(started.elapsed()));
                 }
-                lines.extend(indented_wrapped_lines(
-                    &detail,
-                    MODAL_BODY_LEADING_INDENT,
-                    body_width,
-                    Style::default().fg(muted),
-                ));
+                rows.push(body_row(&detail, Style::default().fg(muted)));
             }
 
             let status_style = if idle {
                 Style::default().fg(muted)
+            } else if provider_retry.is_some() {
+                Style::default()
+                    .fg(theme.warn())
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
                     .fg(theme.brand())
                     .add_modifier(Modifier::ITALIC)
             };
-            let status_label = if idle {
+            let status_label = if let Some(retry) = provider_retry {
+                format!(
+                    "waiting to retry ({})",
+                    retry.summary(std::time::Instant::now())
+                )
+            } else if idle {
                 "idle".to_string()
             } else {
                 activity.to_string()
             };
-            lines.extend(indented_wrapped_lines(
-                &status_label,
-                MODAL_BODY_LEADING_INDENT,
-                body_width,
-                status_style,
-            ));
+            rows.push(body_row(&status_label, status_style));
+
+            if let Some(retry) = provider_retry.filter(|r| !r.failure.is_empty()) {
+                rows.push(SelectableRow::empty());
+                rows.push(SelectableRow::styled(
+                    "Last failure",
+                    Style::default()
+                        .fg(theme.warn())
+                        .add_modifier(Modifier::BOLD),
+                ));
+                for line in retry.failure.split('\n') {
+                    rows.push(body_row(line, Style::default().fg(theme.fg())));
+                }
+            }
         }
         crate::modal::ActivityTab::Todos => {
             if let Some(list) = todos.filter(|l| !l.items.is_empty()) {
-                // Hanging indent: the status glyph leads the first visual row;
-                // continuation rows align under the content, not the glyph.
-                // The content column is `indent + glyph(1) + space(1)`, and the
-                // content is pre-wrapped at `body_width - content_column` so a
-                // long task description wraps cleanly instead of spilling past
-                // the body's right edge.
+                // Hanging indent via row prefixes: the status glyph + gutter
+                // leads the first visual row, continuation rows align under
+                // the content column. Both are decoration (excluded from
+                // copy); the component owns the wrapping, so a long task
+                // description wraps cleanly instead of spilling past the
+                // body's right edge.
                 let glyph_col = MODAL_BODY_LEADING_INDENT + 1;
                 let content_col = glyph_col + 1;
-                let content_wrap_w = body_width.saturating_sub(content_col).max(1);
                 for item in &list.items {
                     let glyph_color = todo_status_glyph_color(item.status, theme, muted);
                     let glyph = item.status.glyph();
-                    let wrapped = wrap_text(&item.content, content_wrap_w);
-                    // wrap_text yields nothing only for empty input; render an
-                    // empty todo as a glyph + blank content row regardless.
-                    if wrapped.is_empty() {
-                        let row = Line::from(vec![
-                            Span::styled(" ".repeat(MODAL_BODY_LEADING_INDENT), Style::default()),
-                            Span::styled(glyph, Style::default().fg(glyph_color)),
-                            Span::styled(" ", Style::default()),
-                        ]);
-                        lines.push(row);
-                        continue;
-                    }
-                    for (i, wl) in wrapped.iter().enumerate() {
-                        if i == 0 {
-                            lines.push(Line::from(vec![
-                                Span::styled(
-                                    " ".repeat(MODAL_BODY_LEADING_INDENT),
-                                    Style::default(),
-                                ),
-                                Span::styled(glyph, Style::default().fg(glyph_color)),
-                                Span::styled(" ", Style::default()),
-                                Span::styled(wl.text.clone(), Style::default().fg(theme.fg())),
-                            ]));
-                        } else {
-                            lines.push(Line::from(vec![
-                                Span::styled(" ".repeat(content_col), Style::default()),
-                                Span::styled(wl.text.clone(), Style::default().fg(theme.fg())),
-                            ]));
-                        }
-                    }
+                    rows.push(
+                        SelectableRow::styled(&item.content, Style::default().fg(theme.fg()))
+                            .with_prefix(RowSegment::styled(
+                                format!("{}{} ", " ".repeat(glyph_col), glyph),
+                                Style::default().fg(glyph_color),
+                            ))
+                            .with_hang_prefix(RowSegment::styled(
+                                " ".repeat(content_col),
+                                Style::default(),
+                            )),
+                    );
                 }
             } else {
-                lines.push(Line::from(Span::styled(
+                rows.push(SelectableRow::styled(
                     "No todos.",
                     Style::default().fg(muted),
-                )));
+                ));
             }
         }
     }
 
-    let desired = lines.len() as u16 + modal_chrome_rows(geometry.modal_spec());
+    let desired = rows.len() as u16 + modal_chrome_rows(geometry.modal_spec());
     let area = content_modal_area(frame, geometry, desired);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
@@ -244,12 +241,13 @@ pub fn draw_activity_modal(
         frame.render_widget(Paragraph::new(Line::from(header_spans)), h);
     }
 
-    // Wrapping is disabled: every wrappable block above was pre-wrapped by the
-    // `indented_wrapped_lines` / `wrap_text` container primitives, which emit
-    // one already-indented `Line` per visual row. A second wrap pass here
-    // would mangle the pre-sized budgets and re-introduce the continuation-
-    // row indent bug (the whole reason the pre-wrap path exists).
-    render_body(frame, f.body, lines, scroll, None, 0, false, theme);
+    // Selectable document body: the component wraps each row (declaration
+    // moved from pre-wrapped `Line` emission to `SelectableRow` prefixes
+    // above), scrolls, highlights the selection, and registers one region
+    // per visual row.
+    render_selectable_body(
+        frame, f.body, &rows, scroll, None, theme, selection, layout_map,
+    );
 
     if let Some(footer) = f.footer {
         render_modal_footer(

@@ -21,10 +21,13 @@ use neenee_tui_engine::{
 };
 
 use super::common::placeholder;
+use crate::components::selectable_body::{SelectableRow, render_selectable_body};
 use crate::design::MODAL_INNER_H_PADDING;
+use crate::model::layout::LayoutMap;
+use crate::model::selection::SelectionState;
 use crate::primitives::{
     ContentModalSpec, FooterHint, HeaderPart, content_modal_area, content_modal_probe, keyvocab,
-    modal_chrome_rows, modal_frame, modal_header_parts, render_body, render_modal_footer,
+    modal_chrome_rows, modal_frame, modal_header_parts, render_modal_footer,
 };
 use crate::view::Theme;
 
@@ -33,12 +36,16 @@ const CHART_DAYS: usize = 14;
 
 /// Draw the overlay. `loading` marks the `QueryUsageStats` round-trip in
 /// flight. Returns the painted panel rectangle (for outside-click dismiss).
+/// The body is a selectable document: every visual row registers a
+/// `MODAL_DOC` region, so the numbers can be drag-selected and copied.
 pub fn draw_usage_stats_modal(
     frame: &mut Frame,
     report: &UsageStatsReport,
     loading: bool,
     scroll: &mut usize,
     theme: &Theme,
+    selection: &SelectionState,
+    layout_map: &mut LayoutMap,
 ) -> neenee_tui_engine::Rect {
     let geometry = ContentModalSpec::USAGE_STATS;
     let probe = content_modal_probe(frame, geometry);
@@ -69,7 +76,10 @@ pub fn draw_usage_stats_modal(
     let modal = modal_frame(frame, area, theme.panel(), true, true);
 
     modal_header_parts(frame, modal.header, &header, theme);
-    render_body(frame, modal.body, body, scroll, None, 0, false, theme);
+    let rows: Vec<SelectableRow> = body.into_iter().map(SelectableRow::from_line).collect();
+    render_selectable_body(
+        frame, modal.body, &rows, scroll, None, theme, selection, layout_map,
+    );
     if let Some(footer_area) = modal.footer {
         render_modal_footer(frame, footer_area, &footer, theme);
     }

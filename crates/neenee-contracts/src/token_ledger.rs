@@ -104,6 +104,12 @@ pub struct RequestUsageRecord {
     /// persisted before this field existed (they deserialize to the default).
     #[serde(default)]
     pub generation_ms: u64,
+    /// Epoch timestamp in milliseconds when this attempt was dispatched.
+    #[serde(default)]
+    pub started_at_ms: u64,
+    /// Detailed failure reason / error payload if this attempt failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl RequestUsageRecord {
@@ -362,6 +368,7 @@ impl TokenSourceLedger {
                 status: RequestUsageStatus::InFlight,
                 source: RequestUsageSource::Unknown,
                 projected_prompt_tokens: projected_prompt_tokens.max(0),
+                started_at_ms: now_epoch_ms(),
                 ..Default::default()
             },
         );
@@ -382,6 +389,26 @@ impl TokenSourceLedger {
         estimated_completion_tokens: i64,
         generation_ms: u64,
     ) {
+        self.settle_request_with_error(
+            key,
+            status,
+            usage,
+            estimated_completion_tokens,
+            generation_ms,
+            None,
+        );
+    }
+
+    /// Terminally settle one attempt with optional failure error payload.
+    pub fn settle_request_with_error(
+        &self,
+        key: &RequestUsageKey,
+        status: RequestUsageStatus,
+        usage: Option<crate::TokenUsage>,
+        estimated_completion_tokens: i64,
+        generation_ms: u64,
+        error: Option<String>,
+    ) {
         if !status.is_terminal() {
             return;
         }
@@ -394,6 +421,9 @@ impl TokenSourceLedger {
         }
         record.status = status;
         record.generation_ms = generation_ms;
+        if error.is_some() {
+            record.error = error;
+        }
         if let Some(usage) = usage {
             record.source = RequestUsageSource::Reported;
             record.prompt_tokens = usage.prompt_tokens.max(0);
@@ -763,6 +793,31 @@ mod tests {
         // idempotency fence keeps a replayed settle from overwriting it.
         assert_eq!(report.rows[0].requests[1].generation_ms, 2_000);
         assert_eq!(report.rows[0].requests[0].generation_ms, 0);
+    }
+
+    #[test]
+    fn attempt_records_timestamp_and_error() {
+        let ledger = TokenSourceLedger::new();
+        let key = ledger.begin_request("s1", "p1", "m1", 1, 1, 500);
+        assert!(ledger.records_for_session("s1")[0].started_at_ms > 0);
+
+        ledger.settle_request_with_error(
+            &key,
+            RequestUsageStatus::Failed,
+            None,
+            0,
+            120,
+            Some("429 Too Many Requests: Rate limit exceeded".to_string()),
+        );
+
+        let records = ledger.records_for_session("s1");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, RequestUsageStatus::Failed);
+        assert_eq!(records[0].generation_ms, 120);
+        assert_eq!(
+            records[0].error.as_deref(),
+            Some("429 Too Many Requests: Rate limit exceeded")
+        );
     }
 
     #[test]

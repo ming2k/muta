@@ -35,20 +35,20 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                 Config::config_file_path().display()
             );
             println!(
-                "default_provider: {}",
-                if config.default_provider.is_empty() {
+                "default_connection: {}",
+                if config.default_connection.is_empty() {
                     "(none)"
                 } else {
-                    &config.default_provider
+                    &config.default_connection
                 }
             );
             println!(
-                "default_model:    {}",
+                "default_model:      {}",
                 config.default_model.as_deref().unwrap_or("(none)")
             );
-            println!("retry_max_attempts: {}", config.provider_retry_max_attempts);
-            println!("retry_base_ms:      {}ms", config.provider_retry_base_ms);
-            println!("retry_max_ms:       {}ms", config.provider_retry_max_ms);
+            println!("retry_max_attempts:  {}", config.connection_retry_max_attempts);
+            println!("retry_base_ms:       {}ms", config.connection_retry_base_ms);
+            println!("retry_max_ms:        {}ms", config.connection_retry_max_ms);
             println!(
                 "compaction_preserve_rounds: {}",
                 config.compaction_preserve_rounds
@@ -60,20 +60,28 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
             println!("compaction_prune:           {}", config.compaction_prune);
             println!("mcp_servers_count:          {}", config.mcp.len());
             println!(
-                "instances_count:            {}",
-                neenee_persistence::instances::Instances::load()
-                    .providers
+                "connections_count:          {}",
+                neenee_persistence::connections::Connections::load()
+                    .connections
                     .len()
             );
         }
         ConfigAction::Get(key) => {
             let config = Config::load();
             match key.as_str() {
-                "default_provider" => println!("{}", config.default_provider),
+                "default_connection" | "default_provider" => {
+                    println!("{}", config.default_connection)
+                }
                 "default_model" => println!("{}", config.default_model.as_deref().unwrap_or("")),
-                "provider_retry_max_attempts" => println!("{}", config.provider_retry_max_attempts),
-                "provider_retry_base_ms" => println!("{}", config.provider_retry_base_ms),
-                "provider_retry_max_ms" => println!("{}", config.provider_retry_max_ms),
+                "connection_retry_max_attempts" | "provider_retry_max_attempts" => {
+                    println!("{}", config.connection_retry_max_attempts)
+                }
+                "connection_retry_base_ms" | "provider_retry_base_ms" => {
+                    println!("{}", config.connection_retry_base_ms)
+                }
+                "connection_retry_max_ms" | "provider_retry_max_ms" => {
+                    println!("{}", config.connection_retry_max_ms)
+                }
                 "compaction_preserve_rounds" => println!("{}", config.compaction_preserve_rounds),
                 "compaction_summarize" => println!("{}", config.compaction_summarize),
                 "compaction_prune" => println!("{}", config.compaction_prune),
@@ -85,24 +93,24 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
         ConfigAction::Set { key, value } => {
             let mut config = Config::load();
             match key.as_str() {
-                "default_provider" => {
-                    config.default_provider = value.clone();
+                "default_connection" | "default_provider" => {
+                    config.default_connection = value.clone();
                 }
                 "default_model" => {
                     config.default_model = Some(value.clone());
                 }
-                "provider_retry_max_attempts" => {
-                    config.provider_retry_max_attempts = value
+                "connection_retry_max_attempts" | "provider_retry_max_attempts" => {
+                    config.connection_retry_max_attempts = value
                         .parse()
                         .map_err(|_| "invalid integer for retry_max_attempts")?;
                 }
-                "provider_retry_base_ms" => {
-                    config.provider_retry_base_ms = value
+                "connection_retry_base_ms" | "provider_retry_base_ms" => {
+                    config.connection_retry_base_ms = value
                         .parse()
                         .map_err(|_| "invalid integer for retry_base_ms")?;
                 }
-                "provider_retry_max_ms" => {
-                    config.provider_retry_max_ms = value
+                "connection_retry_max_ms" | "provider_retry_max_ms" => {
+                    config.connection_retry_max_ms = value
                         .parse()
                         .map_err(|_| "invalid integer for retry_max_ms")?;
                 }

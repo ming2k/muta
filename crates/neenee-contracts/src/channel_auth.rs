@@ -51,6 +51,26 @@ impl ChannelAuth {
         )
     }
 
+    /// Whether this variant is Google Antigravity OAuth.
+    pub fn is_antigravity(self) -> bool {
+        matches!(self, ChannelAuth::AntigravityOAuth)
+    }
+
+    /// Whether this variant is ChatGPT OAuth.
+    pub fn is_chatgpt(self) -> bool {
+        matches!(self, ChannelAuth::ChatGptOAuth)
+    }
+
+    /// Whether this variant is GitHub Copilot OAuth.
+    pub fn is_copilot(self) -> bool {
+        matches!(self, ChannelAuth::CopilotOAuth)
+    }
+
+    /// Whether this variant is xAI OAuth.
+    pub fn is_xai(self) -> bool {
+        matches!(self, ChannelAuth::XaiOAuth)
+    }
+
     /// The `auth.toml` provider-id key for this OAuth variant, or `None` for
     /// API-key channels. Used to load/refresh the shared token set.
     pub fn oauth_provider_id(self) -> Option<&'static str> {

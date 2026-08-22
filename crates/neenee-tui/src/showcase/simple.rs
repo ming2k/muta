@@ -47,7 +47,8 @@ pub fn provider() -> io::Result<()> {
             protocol: String::new(),
             base_url: String::new(),
             key_ready: key,
-            template_id: template_id.to_string(),
+            preset_id: template_id.to_string(),
+            client_identity: Default::default(),
             last_used_ms: fav.then_some(1_700_000_000_000),
             auth: Default::default(),
         }
@@ -119,6 +120,7 @@ pub fn provider() -> io::Result<()> {
                     s.search,
                     false,
                     &theme,
+                    &crate::model::selection::SelectionState::None,
                 );
             });
         },
@@ -202,7 +204,8 @@ pub fn models() -> io::Result<()> {
         protocol: String::new(),
         base_url: String::new(),
         key_ready: true,
-        template_id: template_id.to_string(),
+        preset_id: template_id.to_string(),
+        client_identity: Default::default(),
         last_used_ms: None,
         auth: Default::default(),
     };
@@ -259,6 +262,7 @@ pub fn models() -> io::Result<()> {
                     s.search,
                     false,
                     &theme,
+                    &crate::model::selection::SelectionState::None,
                 );
             });
         },
@@ -442,6 +446,8 @@ pub fn history() -> io::Result<()> {
                 );
                 f.render_widget(Paragraph::new(Line::from(vec![glyph, qspan])), input_rect);
                 let mut scroll = 0;
+                let selection = crate::model::selection::SelectionState::None;
+                let mut layout_map = crate::model::layout::LayoutMap::new();
                 let _ = draw_history_panel(
                     f,
                     &s.history,
@@ -454,6 +460,8 @@ pub fn history() -> io::Result<()> {
                     input_rect,
                     0,
                     &theme,
+                    &selection,
+                    &mut layout_map,
                 );
             });
         },
@@ -553,6 +561,8 @@ pub fn sessions() -> io::Result<()> {
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
                 let mut scroll = 0;
                 let mut info_scroll = 0;
+                let selection = crate::model::selection::SelectionState::None;
+                let mut layout_map = crate::model::layout::LayoutMap::new();
                 draw_sessions_modal(
                     f,
                     &s.sessions,
@@ -566,6 +576,8 @@ pub fn sessions() -> io::Result<()> {
                     false,
                     None,
                     &mut info_scroll,
+                    &selection,
+                    &mut layout_map,
                 );
             });
         },
@@ -657,9 +669,12 @@ pub fn activity() -> io::Result<()> {
                         current_model: "claude-sonnet-4-5",
                         round_started_at: Some(s.started),
                         activity: "running envoy · exploring the codebase",
+                        provider_retry: None,
                     },
                     &mut scroll,
                     &theme,
+                    &crate::model::selection::SelectionState::None,
+                    &mut crate::model::layout::LayoutMap::new(),
                 );
                 s.scroll.set(scroll);
             });
@@ -711,7 +726,16 @@ pub fn help() -> io::Result<()> {
                     // The showcase demo has no keybinding registry; pass an
                     // empty projection so only the static fallback rows render.
                     let bindings: &[crate::view::HelpBinding] = &[];
-                    draw_help_modal(f, &mut scroll, bindings, &theme);
+                    let selection = crate::model::selection::SelectionState::None;
+                    let mut layout_map = crate::model::layout::LayoutMap::new();
+                    draw_help_modal(
+                        f,
+                        &mut scroll,
+                        bindings,
+                        &theme,
+                        &selection,
+                        &mut layout_map,
+                    );
                 },
             );
         },

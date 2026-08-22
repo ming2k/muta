@@ -27,6 +27,8 @@ pub mod cache;
 pub mod config;
 pub mod config_check;
 pub mod embedding;
+pub mod connection_usage;
+pub mod connections;
 pub mod events;
 pub mod fsutil;
 pub mod instances;

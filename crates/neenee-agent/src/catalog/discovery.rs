@@ -1,57 +1,50 @@
 //! Live model discovery and the fitted-model overlay.
 //!
-//! Discovery fetches each discovery-capable template instance's `GET /models`
+//! Discovery fetches each discovery-capable preset connection's `GET /models`
 //! list live, intersects it against the client registry (or, for trusted
-//! fitting templates, materializes every advertised id), and records the
-//! result in the per-instance discovery cache. Routes are *derived* from that
-//! cache at catalog-build time — nothing here mutates config or the instance
+//! fitting presets, materializes every advertised id), and records the
+//! result in the per-connection discovery cache. Routes are *derived* from that
+//! cache at catalog-build time — nothing here mutates config or the connection
 //! store. On an error or empty result the last valid subset is retained, so a
-//! broken endpoint never regresses a working instance.
+//! broken endpoint never regresses a working connection.
 
 use super::Stores;
 use super::derive::{resolve_credential, route_models};
 use neenee_contracts::{ChannelAuth, WireFormat};
 use neenee_persistence::config::{DiscoveryCache, FittedModelInfo};
+use neenee_persistence::connections::Connections;
 use neenee_providers::{
-    DiscoveryProtocol, ModelDiscoveryRequest, ProviderTemplateSpec, provider_template_spec,
+    DiscoveryProtocol, ModelDiscoveryRequest, ProviderPresetSpec, provider_preset_spec,
     route_for_model,
 };
 use std::collections::HashSet;
 
 /// The result of a live model-discovery pass ([`discover_provider_models`]).
-///
-/// Discovery is best-effort across every template-sourced instance: one
-/// provider failing to fetch never aborts the others. This struct carries both
-/// signals back so the caller can persist only when something changed *and*
-/// surface a per-provider failure to the user instead of letting a silently
-/// stale seed list read as "the account just has these models".
 #[derive(Debug, Default)]
 pub struct DiscoveryOutcome {
-    /// Whether any instance changed its cached model list or fitted metadata.
+    /// Whether any connection changed its cached model list or fitted metadata.
     pub changed: bool,
-    /// Per-provider fetch failures: `(instance_id, error_message)`. Empty when
-    /// every discovered instance succeeded.
+    /// Per-connection fetch failures: `(connection_id, error_message)`.
     pub failures: Vec<(String, String)>,
 }
 
-/// Fetch every discovery-capable instance's live model list and update the
-/// discovery cache. Called at startup (best-effort, non-blocking) and by the
-/// TUI's refresh action.
+/// Fetch every discovery-capable connection's live model list and update the
+/// discovery cache.
 pub async fn discover_provider_models() -> DiscoveryOutcome {
     let mut stores = Stores::load();
     let mut changed = false;
     let mut failures: Vec<(String, String)> = Vec::new();
 
-    for instance in &stores.instances.providers {
-        let Some(tid) = instance.template_id.as_deref() else {
+    for connection in &stores.connections.connections {
+        let Some(pid) = connection.preset_id.as_deref() else {
             continue;
         };
-        let Some(spec) = provider_template_spec(tid) else {
+        let Some(spec) = provider_preset_spec(pid) else {
             continue;
         };
         if !spec.discovery
-            || instance.auth == ChannelAuth::AntigravityOAuth
-            || instance
+            || connection.auth == ChannelAuth::AntigravityOAuth
+            || connection
                 .base_url
                 .as_deref()
                 .is_some_and(|u| u.contains("cloudcode-pa.googleapis.com"))
@@ -59,30 +52,33 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
             continue;
         }
 
-        // The discovery request mirrors what a chat request would send: the
-        // route's endpoint/key/user-agent. Build it from the first derived
-        // route of the instance.
-        let first_model = route_models(instance, &stores.cache)
+        let first_model = route_models(connection, &stores.cache)
             .into_iter()
             .next()
             .unwrap_or_default();
-        let Some((protocol, template_base, tpl_ua)) = route_for_model(tid, &first_model) else {
+        let Some((protocol, template_base, tpl_ua)) = route_for_model(pid, &first_model) else {
             continue;
         };
-        let base_url = instance
+        let base_url = connection
             .base_url
             .clone()
             .filter(|u| !u.trim().is_empty())
             .unwrap_or_else(|| template_base.to_string());
-        let user_agent = instance
+        let user_agent = connection
             .user_agent
             .clone()
-            .or_else(|| tpl_ua.map(str::to_string));
+            .or_else(|| {
+                if connection.client_identity != neenee_contracts::ClientIdentity::Native {
+                    Some(connection.client_identity.user_agent().to_string())
+                } else {
+                    tpl_ua.map(str::to_string)
+                }
+            });
 
         let discovery_req = ModelDiscoveryRequest {
             protocol: DiscoveryProtocol::from_template_protocol(protocol),
             base_url: &base_url,
-            api_key: &resolve_credential(instance, &stores.creds),
+            api_key: &resolve_credential(connection, &stores.creds),
             user_agent: user_agent.as_deref(),
             extra_headers: &[],
         };
@@ -90,21 +86,16 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
         match neenee_providers::list_models(discovery_req).await {
             Ok(models) => {
                 let supported: Vec<String> = if spec.fitting {
-                    // Trusted endpoint: every advertised id is kept, and ids the
-                    // static registry does not know have their advertised
-                    // capability metadata fitted (registry-known ids keep the
-                    // vetted entry, so a provider can never downgrade a known
-                    // model).
                     let fitted: std::collections::BTreeMap<String, FittedModelInfo> = models
                         .iter()
                         .filter(|model| neenee_contracts::model::model_by_id(&model.id).is_none())
                         .map(|model| (model.id.clone(), fitted_model_info(model)))
                         .collect();
-                    if stores.cache.fitted_models.get(&instance.id) != Some(&fitted) {
+                    if stores.cache.fitted_models.get(&connection.id) != Some(&fitted) {
                         stores
                             .cache
                             .fitted_models
-                            .insert(instance.id.clone(), fitted);
+                            .insert(connection.id.clone(), fitted);
                         changed = true;
                     }
                     models
@@ -113,9 +104,6 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
                         .map(|model| model.id.clone())
                         .collect()
                 } else {
-                    // Only expose models both advertised and known to the
-                    // client for this wire protocol. Preserve registry order so
-                    // provider response ordering cannot churn the picker.
                     let ids: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
                     supported_model_intersection(&supported_models_for_template(spec), &ids)
                         .into_iter()
@@ -124,14 +112,12 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
                 };
                 if supported.is_empty() {
                     tracing::warn!(
-                        instance_id = %instance.id,
+                        connection_id = %connection.id,
                         discovered_count = models.len(),
                         "live model discovery had no supported intersection; keeping previous models"
                     );
                     continue;
                 }
-                // Persist the per-route remote metadata (Kimi/Copilot advertise
-                // endpoint + capability fields) for the derived routes.
                 let remote_metadata: std::collections::BTreeMap<String, _> = models
                     .iter()
                     .filter(|model| model.picker_enabled != Some(false))
@@ -140,43 +126,38 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
                 let prev_remote = stores
                     .cache
                     .remote_metadata
-                    .get(&instance.id)
+                    .get(&connection.id)
                     .cloned()
                     .unwrap_or_default();
                 if prev_remote != remote_metadata {
                     stores
                         .cache
                         .remote_metadata
-                        .insert(instance.id.clone(), remote_metadata);
+                        .insert(connection.id.clone(), remote_metadata);
                     changed = true;
                 }
-                if stores.cache.provider_models.get(&instance.id) != Some(&supported) {
+                if stores.cache.connection_models.get(&connection.id) != Some(&supported) {
                     stores
                         .cache
-                        .provider_models
-                        .insert(instance.id.clone(), supported);
+                        .connection_models
+                        .insert(connection.id.clone(), supported);
                     changed = true;
                 }
                 if changed {
                     tracing::info!(
-                        instance_id = %instance.id,
+                        connection_id = %connection.id,
                         discovered_count = models.len(),
-                        "live model discovery updated instance"
+                        "live model discovery updated connection"
                     );
                 }
             }
             Err(error) => {
-                // The previous valid subset (or initial snapshot) remains in
-                // place; a failed fetch never regresses the provider. Report it
-                // back so the caller can surface the cause to the user rather
-                // than letting a silently-stale list read as "login worked, the
-                // account just has one model".
                 tracing::warn!(
-                    instance_id = %instance.id,
+                    connection_id = %connection.id,
                     error = %error,
                     "live model discovery failed; keeping previous models"
                 );
-                failures.push((instance.id.clone(), error.to_string()));
+                failures.push((connection.id.clone(), error.to_string()));
             }
         }
     }
@@ -189,24 +170,23 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
 }
 
 /// Rebuild the fitted-model overlay (`neenee_contracts::model`) from the
-/// discovery cache. Called at startup after discovery so model resolution sees
-/// platform-fitted ids.
+/// discovery cache.
 pub fn sync_fitted_model_registry() {
     let cache = DiscoveryCache::load();
-    let instances = neenee_persistence::instances::Instances::load();
-    let fitted: Vec<neenee_contracts::model::FittedModel> = instances
-        .providers
+    let connections = Connections::load();
+    let fitted: Vec<neenee_contracts::model::FittedModel> = connections
+        .connections
         .iter()
-        .flat_map(|instance| {
-            let spec = instance
-                .template_id
+        .flat_map(|connection| {
+            let spec = connection
+                .preset_id
                 .as_deref()
-                .and_then(provider_template_spec);
-            let fitted_map = cache.fitted_models.get(&instance.id);
+                .and_then(provider_preset_spec);
+            let fitted_map = cache.fitted_models.get(&connection.id);
             fitted_map.map(|map| {
                 let (format, family) = match spec {
                     Some(spec) => (wire_format_for_protocol(spec.protocol), spec.id.to_string()),
-                    None => (WireFormat::OpenAi, instance.id.clone()),
+                    None => (WireFormat::OpenAi, connection.id.clone()),
                 };
                 map.iter()
                     .map(move |(id, info)| neenee_contracts::model::FittedModel {
@@ -241,8 +221,8 @@ pub fn sync_fitted_model_registry() {
     neenee_contracts::model::register_fitted_models(fitted);
 }
 
-/// The model ids a template serves over its protocol's wire format.
-fn supported_models_for_template(spec: &ProviderTemplateSpec) -> Vec<&'static str> {
+/// The model ids a preset serves over its protocol's wire format.
+fn supported_models_for_template(spec: &ProviderPresetSpec) -> Vec<&'static str> {
     spec.baselines
         .iter()
         .filter(|model| {
@@ -252,7 +232,7 @@ fn supported_models_for_template(spec: &ProviderTemplateSpec) -> Vec<&'static st
                     | ("openai-responses", WireFormat::OpenAi)
                     | ("anthropic", WireFormat::AnthropicCompat)
                     | ("google", WireFormat::Google)
-                    | ("gemini", WireFormat::Google) // legacy label
+                    | ("gemini", WireFormat::Google)
             )
         })
         .map(|model| model.id)

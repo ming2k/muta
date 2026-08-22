@@ -215,14 +215,14 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "antigravity-oauth",
         label: "Google Antigravity",
-        description: "Gemini 3.x / Antigravity models via Google subscription",
+        description: "Gemini 3.x / Claude / GPT models via Google One AI Premium (Antigravity)",
         protocol: "google",
         models: neenee_providers::ANTIGRAVITY_OAUTH_MODELS,
         needs_url: false,
-        url_hint: "https://cloudcode-pa.googleapis.com",
+        url_hint: "https://daily-cloudcode-pa.googleapis.com",
         needs_model: false,
-        default_url: Some("https://cloudcode-pa.googleapis.com"),
-        user_agent: Some("antigravity/1.23.2 windows/amd64"),
+        default_url: Some("https://daily-cloudcode-pa.googleapis.com"),
+        user_agent: Some(neenee_contracts::client_identity::ANTIGRAVITY_USER_AGENT),
         auth: neenee_contracts::ChannelAuth::AntigravityOAuth,
     },
     ProviderTemplate {
@@ -420,10 +420,12 @@ pub struct RankedProvider {
     /// `true` for built-in presets, `false` for user-defined providers. Drives
     /// the built-in/custom grouping and whether `e` opens the full meta editor.
     pub builtin: bool,
-    /// The add-provider template that birthed this instance (`"openai"`, …),
+    /// The add-connection preset that birthed this instance (`"openai"`, …),
     /// when known. Surfaced so the Connections list can show the provider
-    /// *type* beside the instance name. Empty for legacy instances.
-    pub template_id: String,
+    /// *type* beside the instance name.
+    pub preset_id: String,
+    /// Client identity configured for this connection.
+    pub client_identity: neenee_contracts::ClientIdentity,
     /// The rendered label — the provider's display name (the instance name).
     pub label: String,
     /// The fuzzy match against `label`, or `None` in browse mode (empty query).
@@ -487,7 +489,8 @@ pub fn providers_filtered_from(
             model: prow.model.clone(),
             models: prow.models.clone(),
             builtin: prow.builtin,
-            template_id: prow.template_id.clone(),
+            preset_id: prow.preset_id.clone(),
+            client_identity: prow.client_identity.clone(),
             label,
             m,
         });
@@ -599,7 +602,8 @@ mod tests {
             protocol: String::new(),
             base_url: String::new(),
             key_ready: true,
-            template_id: String::new(),
+            preset_id: String::new(),
+            client_identity: Default::default(),
             last_used_ms: None,
             auth: Default::default(),
         }
@@ -789,7 +793,7 @@ mod tests {
         assert_eq!(tmpl.models, neenee_providers::ANTIGRAVITY_OAUTH_MODELS);
         assert_eq!(
             tmpl.default_url,
-            Some("https://cloudcode-pa.googleapis.com")
+            Some("https://daily-cloudcode-pa.googleapis.com")
         );
         assert!(!tmpl.needs_url, "OAuth template hides Base URL field");
         assert!(

@@ -641,45 +641,6 @@ pub(crate) struct WrappedLine {
     pub end_byte: usize,
 }
 
-/// Pre-wrap `text` and emit one indented [`Line`] per visual row — the
-/// "container" primitive for modal body blocks.
-///
-/// Unlike pushing a single `Line` with a leading-indent span and letting
-/// `Paragraph::wrap` soft-wrap it, the indent is a geometry property of the
-/// *block*: every visual row — whether it descends from an explicit `\n` or
-/// from a width-induced soft wrap — gets the same leading indent, so wrapped
-/// continuation rows line up with the first instead of snapping to the left
-/// edge. Callers must render the returned lines with wrapping **disabled**
-/// (`render_body(..., wrap=false)`); the text is already broken, and a second
-/// wrap pass would mangle the pre-sized widths.
-///
-/// `body_width` is the full body rectangle width in display columns; the
-/// helper subtracts `indent_cols` internally to size the wrap budget, so the
-/// content never overruns the body's right edge.
-pub(crate) fn indented_wrapped_lines(
-    text: &str,
-    indent_cols: usize,
-    body_width: usize,
-    style: Style,
-) -> Vec<Line<'static>> {
-    let wrap_width = body_width.saturating_sub(indent_cols).max(1);
-    let indent: String = " ".repeat(indent_cols);
-    let wrapped = wrap_text(text, wrap_width);
-    // An empty input yields no wrapped rows; a truly empty block should be the
-    // caller's responsibility to omit, but guard against a lone-row collapse
-    // for an input that is all whitespace (wrap_text returns at least one row
-    // for non-empty input).
-    wrapped
-        .into_iter()
-        .map(|wl| {
-            Line::from(vec![
-                Span::styled(indent.clone(), Style::default()),
-                Span::styled(wl.text, style),
-            ])
-        })
-        .collect()
-}
-
 /// Wrap text into lines that fit within `max_width` display columns.
 /// Returns each line along with the byte range it covers in the original text.
 pub(crate) fn wrap_text(text: &str, max_width: usize) -> Vec<WrappedLine> {

@@ -10,6 +10,7 @@ neenee-contracts = { path = "../neenee-contracts" }
 async-trait = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 httpdate = { workspace = true }
 tracing = { workspace = true }

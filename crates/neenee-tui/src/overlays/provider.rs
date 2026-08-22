@@ -7,9 +7,9 @@ use neenee_tui_engine::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::model::layout::{BlockRegion, LayoutMap, MODAL_DOC_MSG_IDX};
-use crate::model::selection::{SelectionState, floor_grapheme_boundary, inclusive_grapheme_end};
-use crate::text_layout::block_selection_range;
+use crate::components::selectable_body::{SelectableRow, render_selectable_body};
+use crate::model::layout::LayoutMap;
+use crate::model::selection::SelectionState;
 
 use super::common::{caret_column, field_viewport, truncate_ellipsis};
 use crate::components::options::{ChoiceTone, choice_style, push_wrapped_styled};
@@ -47,7 +47,7 @@ use crate::view::Theme;
 #[allow(clippy::too_many_arguments)]
 pub fn draw_connections_modal(
     frame: &mut Frame,
-    _layout_map: &mut LayoutMap,
+    layout_map: &mut LayoutMap,
     providers: &[RankedProvider],
     current_provider: &str,
     modal_index: usize,
@@ -58,6 +58,7 @@ pub fn draw_connections_modal(
     search: bool,
     keymap_open: bool,
     theme: &Theme,
+    selection: &SelectionState,
 ) -> neenee_tui_engine::Rect {
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
@@ -102,15 +103,14 @@ pub fn draw_connections_modal(
             theme,
         );
         let body = keymap_body_lines(hints, extra, theme);
-        render_body(
-            frame,
-            f.body,
-            body,
-            scroll,
-            None,
-            SCROLL_EDGE_MARGIN,
-            false,
-            theme,
+        // Selectable document: the keymap sub-page registers as MODAL_DOC
+        // rows so key labels and descriptions are copyable.
+        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
+            .into_iter()
+            .map(crate::components::selectable_body::SelectableRow::from_line)
+            .collect();
+        crate::components::selectable_body::render_selectable_body(
+            frame, f.body, &rows, scroll, None, theme, selection, layout_map,
         );
         if let Some(fo) = f.footer {
             render_modal_footer(frame, fo, &keymap_page_footer_hints(), theme);
@@ -203,7 +203,7 @@ pub fn draw_connections_modal(
 #[allow(clippy::too_many_arguments)]
 pub fn draw_models_modal(
     frame: &mut Frame,
-    _layout_map: &mut LayoutMap,
+    layout_map: &mut LayoutMap,
     models: &[RankedModel],
     current_provider: &str,
     current_model: &str,
@@ -215,6 +215,7 @@ pub fn draw_models_modal(
     search: bool,
     keymap_open: bool,
     theme: &Theme,
+    selection: &SelectionState,
 ) -> neenee_tui_engine::Rect {
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme.panel(), true, true);
@@ -259,15 +260,14 @@ pub fn draw_models_modal(
             theme,
         );
         let body = keymap_body_lines(hints, extra, theme);
-        render_body(
-            frame,
-            f.body,
-            body,
-            scroll,
-            None,
-            SCROLL_EDGE_MARGIN,
-            false,
-            theme,
+        // Selectable document: the keymap sub-page registers as MODAL_DOC
+        // rows so key labels and descriptions are copyable.
+        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
+            .into_iter()
+            .map(crate::components::selectable_body::SelectableRow::from_line)
+            .collect();
+        crate::components::selectable_body::render_selectable_body(
+            frame, f.body, &rows, scroll, None, theme, selection, layout_map,
         );
         if let Some(fo) = f.footer {
             render_modal_footer(frame, fo, &keymap_page_footer_hints(), theme);
@@ -426,7 +426,7 @@ fn provider_list_body(
         // Column 2 (midpoint): the provider TYPE label, anchored at the
         // horizontal center so the two columns spread across the width. Omitted
         // for legacy instances with no recorded template.
-        if let Some(label) = crate::providers::provider_type_label(&rp.template_id) {
+        if let Some(label) = crate::providers::provider_type_label(&rp.preset_id) {
             row = row.group(RowGroup::midpoint().text(label, style.dim, 0));
         }
 
@@ -599,9 +599,6 @@ fn match_set(m: Option<&crate::fuzzy::FuzzyMatch>) -> std::collections::HashSet<
 
 // ── Effort selector (Faster⇄Smarter node slider) ────────────────────────────
 
-/// The leading label column shared by the editor's rows (`" {:<8}"`).
-const EFFORT_LABEL_W: usize = 9;
-
 /// The words flanking the slider's track — the two ends of the scale, so the
 /// speed/depth trade-off reads before any tier name does.
 const EFFORT_SCALE_ENDS: (&str, &str) = ("Faster", "Smarter");
@@ -613,8 +610,9 @@ const TRACK_RIGHT: char = '┤';
 const TRACK_NODE: char = '┼';
 const TRACK_MARKER: char = '●';
 
-/// Minimum gap between two neighbouring tier labels under the track — tighter
-/// than this and the selector degrades to the carousel instead of overlapping.
+/// Minimum gap between two neighbouring tier labels under the track —
+/// tighter than this and the layout thins interior labels out rather than
+/// overlapping.
 const EFFORT_LABEL_MIN_GAP: usize = 2;
 
 /// Resolve a wire effort string to its typed tier, for the caption text. An
@@ -651,51 +649,102 @@ fn slider_node_columns(n: usize, track_w: usize) -> Vec<usize> {
         .collect()
 }
 
-/// Left edge of every tier label under a track of `track_w` cells: each label
-/// is centered on its node, clamped into the track. `None` when two neighbours
-/// would sit closer than [`EFFORT_LABEL_MIN_GAP`] — the caller falls back to
-/// the carousel.
-fn slider_label_positions(levels: &[String], track_w: usize) -> Option<Vec<usize>> {
+/// Left edge of every tier label under a track of `track_w` cells. A wide
+/// body labels every rung verbatim — each centered on its node, clamped into
+/// the track. Where neighbours would sit closer than [`EFFORT_LABEL_MIN_GAP`]
+/// the layout **thins** rather than overlapping or switching shape: the two
+/// ends anchor the scale, the selected rung always names the value, and an
+/// interior rung keeps its label only while it fits (its node stays on the
+/// track either way). `None` when there is nothing to lay out (unknown
+/// ladder) — the caller shows the bare value row.
+fn slider_label_layout(
+    levels: &[String],
+    current: &str,
+    track_w: usize,
+) -> Option<Vec<Option<usize>>> {
     let n = levels.len();
     if n == 0 || track_w == 0 {
         return None;
     }
-    let widths: Vec<usize> = levels.iter().map(|l| l.as_str().width()).collect();
-    if widths.iter().any(|&w| w > track_w) {
-        return None;
-    }
     let columns = slider_node_columns(n, track_w);
-    let mut positions = Vec::with_capacity(n);
+    let sel_idx = levels.iter().position(|l| l == current);
+    let width = |i: usize| levels[i].as_str().width();
+
+    // Wide form: every rung labeled verbatim, none overlapping.
+    let mut positions: Vec<Option<usize>> = Vec::with_capacity(n);
     let mut prev_end: Option<usize> = None;
-    for (i, &w) in widths.iter().enumerate() {
-        let start = columns[i].saturating_sub(w / 2).min(track_w - w);
+    for (i, &col) in columns.iter().enumerate() {
+        let w = width(i);
+        if w > track_w {
+            break; // cramped — fall through to the thinned form below
+        }
+        let start = col.saturating_sub(w / 2).min(track_w - w);
         if let Some(end) = prev_end
             && start < end + EFFORT_LABEL_MIN_GAP
         {
-            return None;
+            break; // cramped — fall through to the thinned form below
         }
         prev_end = Some(start + w);
-        positions.push(start);
+        positions.push(Some(start));
+    }
+    if positions.len() == n {
+        return Some(positions);
+    }
+
+    // Thinned form: ends + selected always labeled; interior rungs only
+    // while they fit. A rung with no label still shows its node.
+    positions = Vec::with_capacity(n);
+    prev_end = None;
+    for (i, &col) in columns.iter().enumerate() {
+        let w = width(i);
+        let must = i == 0 || i + 1 == n || Some(i) == sel_idx;
+        if w > track_w {
+            positions.push(None); // a label wider than the track cannot render
+            continue;
+        }
+        // The last rung sits flush against the right endpoint.
+        let desired = if i + 1 == n {
+            track_w - w
+        } else {
+            col.saturating_sub(w / 2).min(track_w - w)
+        };
+        let start = match prev_end {
+            Some(end) if desired < end + EFFORT_LABEL_MIN_GAP => {
+                if !must {
+                    positions.push(None); // thin this rung out
+                    continue;
+                }
+                let pushed = end + 1; // squeeze to a single-space gap
+                if pushed + w > track_w {
+                    positions.push(None); // not even a squeeze fits
+                    continue;
+                }
+                pushed
+            }
+            _ => desired,
+        };
+        prev_end = Some(start + w);
+        positions.push(Some(start));
     }
     Some(positions)
 }
 
-/// True when the slider (track + tier labels) fits the body width. The
-/// decision depends only on the ladder, never on the selection — the marker
-/// swaps a node glyph in place — so the block can never flip between the
-/// slider and carousel forms as the user cycles. An unknown ladder (empty
-/// `levels`) always degrades to the carousel.
-fn effort_block_slider(body_width: usize, levels: &[String]) -> bool {
-    slider_label_positions(levels, slider_track_width(body_width)).is_some()
+/// The number of rows the effort block occupies. The selector is always the
+/// slider — four rows: the `Effort` label, the track, the tier labels, and
+/// the caption. An unknown ladder collapses to two rows: the bare value row
+/// plus the caption.
+pub(crate) fn effort_block_rows(levels: &[String]) -> u16 {
+    if levels.is_empty() { 2 } else { 4 }
 }
 
-/// Build the slider line(s) for the effort selector. The wide form is four
-/// rows: the `Effort` label on its own row, a `Faster ⇄ Smarter` track whose
-/// per-tier nodes (T endpoints, cross rungs) carry the marker on the selected
-/// one, every tier labeled under its node, and the caption. The narrow /
-/// unknown-ladder form is the compact `< current >` carousel with position
-/// pips, captioned beneath. `focused` highlights the selected tier in the
-/// brand tone (and, for `max`, the ignition accent).
+/// Build the effort block's line(s). The form is always the `Faster ⇄ Smarter`
+/// node slider — the `Effort` label on its own row, a track whose per-tier
+/// nodes (T endpoints, cross rungs) carry the marker on the selected one, the
+/// tier labels under their nodes (a cramped interior rung's label thins out;
+/// ends and the selected rung always stay), and the caption. An unknown
+/// ladder (empty `levels`) shows the bare `Effort` value row plus the caption
+/// — never a second selector shape. `focused` highlights the selected tier in
+/// the brand tone (and, for `max`, the ignition accent).
 fn effort_block_lines(
     current: &str,
     levels: &[String],
@@ -704,24 +753,15 @@ fn effort_block_lines(
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let label = format!(" {:<8}", "Effort");
-    let label_row = || {
-        Line::from(Span::styled(
-            label.clone(),
-            Style::default()
-                .fg(theme.brand())
-                .add_modifier(Modifier::BOLD),
-        ))
-    };
-    // The caption always gets its own row; zero width hides it entirely. The
-    // slider form hangs it off the body's left edge (the label owns its own
-    // row, so there is no label column to clear); the carousel keeps it
-    // indented past the label column.
+    // The caption always gets its own row; zero width hides it entirely. It
+    // hangs off the body's left edge — the label owns its own row, so there
+    // is no label column to clear.
     let caption = truncate_ellipsis(effort_caption(current), body_width);
-    let caption_row = |indent: usize| {
-        Line::from(vec![
-            Span::raw(" ".repeat(indent)),
-            Span::styled(caption.to_string(), Style::default().fg(theme.muted())),
-        ])
+    let caption_row = || {
+        Line::from(Span::styled(
+            caption.to_string(),
+            Style::default().fg(theme.muted()),
+        ))
     };
     // The selected tier reads in the brand tone while focused; `max` always
     // takes the warning tone so the top rung reads as the ignition tier it is
@@ -734,49 +774,32 @@ fn effort_block_lines(
         theme.fg()
     };
 
-    let positions = slider_label_positions(levels, slider_track_width(body_width));
-    let Some(positions) = positions else {
-        // Compact carousel fallback: unknown ladder, or too narrow for the
-        // slider. `< current >` with a position pip per rung so the depth
-        // direction still reads.
-        let value_style = Style::default()
-            .fg(selected_fg)
-            .add_modifier(Modifier::BOLD);
-        let chev_style = Style::default().fg(theme.muted());
-        let mut spans = vec![
+    // Unknown ladder: the slider cannot lay out, so the block degrades to
+    // the `Effort` row plus the caption — never to a second selector shape.
+    let Some(positions) = slider_label_layout(levels, current, slider_track_width(body_width))
+    else {
+        let mut lines = vec![Line::from(vec![
             Span::styled(
                 label,
                 Style::default()
                     .fg(theme.brand())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" ".to_string()),
-            Span::styled("< ".to_string(), chev_style),
-            Span::styled(current.to_string(), value_style),
-            Span::styled(" >".to_string(), chev_style),
-        ];
-        if !levels.is_empty() {
-            let cur_idx = levels.iter().position(|l| l == current);
-            let pips: String = levels
-                .iter()
-                .enumerate()
-                .map(|(i, _)| if Some(i) == cur_idx { '●' } else { '○' })
-                .collect::<Vec<char>>()
-                .into_iter()
-                .collect();
-            spans.push(Span::raw("  ".to_string()));
-            spans.push(Span::styled(pips, Style::default().fg(theme.muted())));
-        }
-        let mut lines = vec![Line::from(spans)];
-        if !caption.is_empty() {
-            lines.push(caption_row(EFFORT_LABEL_W));
-        }
+            Span::styled(
+                current.to_string(),
+                Style::default()
+                    .fg(selected_fg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])];
+        lines.push(caption_row());
         return lines;
     };
 
     // The slider: a `Faster ├─┼─●─┼─┤ Smarter` track row — T endpoints, one
     // cross node per adjustable rung, the marker replacing the selected node —
-    // with every tier labeled under its node and the caption row beneath.
+    // with the tier labels under their nodes (a cramped interior rung's label
+    // thins out; its node stays) and the caption row beneath.
     let (lo, hi) = EFFORT_SCALE_ENDS;
     let track_w = slider_track_width(body_width);
     let columns = slider_node_columns(levels.len(), track_w);
@@ -810,22 +833,31 @@ fn effort_block_lines(
     let mut label_spans = vec![Span::raw(" ".repeat(lo.width() + 1))];
     let mut x = 0;
     for (i, level) in levels.iter().enumerate() {
-        label_spans.push(Span::raw(" ".repeat(positions[i] - x)));
-        let style = if i == sel_idx {
-            Style::default()
-                .fg(selected_fg)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            track_style
-        };
-        x = positions[i] + level.as_str().width();
-        label_spans.push(Span::styled(level.clone(), style));
+        if let Some(start) = positions[i] {
+            label_spans.push(Span::raw(" ".repeat(start.saturating_sub(x))));
+            let style = if i == sel_idx {
+                Style::default()
+                    .fg(selected_fg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                track_style
+            };
+            x = start + level.as_str().width();
+            label_spans.push(Span::styled(level.clone(), style));
+        }
     }
 
-    let mut lines = vec![label_row(), track_row, Line::from(label_spans)];
-    if !caption.is_empty() {
-        lines.push(caption_row(0));
-    }
+    let mut lines = vec![
+        Line::from(Span::styled(
+            label,
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(Modifier::BOLD),
+        )),
+        track_row,
+        Line::from(label_spans),
+    ];
+    lines.push(caption_row());
     lines
 }
 
@@ -849,9 +881,8 @@ pub fn draw_model_editor(
     // laid out along the slider. `None` effort hides the whole block.
     effort: Option<&str>,
     // The model's advertised effort ladder (wire strings, ascending). Drives
-    // the slider layout; may be empty when the caller could not
-    // resolve the model, in which case the selector degrades to the compact
-    // carousel form.
+    // the slider layout; may be empty when the caller could not resolve the
+    // model, in which case the block shows the bare value row + caption.
     effort_levels: &[String],
     // `thinking`: when `Some`, render an extended-thinking on/off row showing
     // a checkbox; toggled with Space by the caller.
@@ -863,19 +894,16 @@ pub fn draw_model_editor(
 
     // Content-driven height: the editor's row count is width-independent, so
     // size the panel to exactly fit the rows rather than reserving a fixed 30%
-    // slab that left most of the panel empty. The effort block occupies four
-    // rows when the slider fits (label + track + tier labels + caption) and
-    // two when it must wrap (carousel row + caption row), so we probe the body
-    // width before counting. We add the modal chrome and let
-    // `content_modal_area` clamp the total to a sane viewport fraction.
-    // The probe area shares the final width, so subtract the symmetric inner
-    // padding `modal_frame` applies to recover the exact body width.
+    // slab that left most of the panel empty. The effort block is always the
+    // slider — four rows (label + track + tier labels + caption) with a known
+    // ladder, two (value row + caption) without — so the count needs no width
+    // probe. We add the modal chrome and let `content_modal_area` clamp the
+    // total to a sane viewport fraction.
     let body_width = content_modal_probe(frame, geometry)
         .width
         .saturating_sub(2 * crate::design::MODAL_INNER_H_PADDING) as usize;
     let effort_rows = match effort {
-        Some(_) if effort_block_slider(body_width, effort_levels) => 4,
-        Some(_) => 2, // wrapped: carousel row + caption row
+        Some(_) => effort_block_rows(effort_levels),
         None => 0,
     };
     let body_rows = show_key as u16 + effort_rows + thinking.is_some() as u16;
@@ -927,11 +955,10 @@ pub fn draw_model_editor(
         api_key_off = key_off;
     }
 
-    // Effort block (optional): the Faster⇄Smarter slider when the body is wide
-    // enough, otherwise the compact carousel. Either way the current tier's
-    // caption closes the block on its own row beneath. The value is cycled
-    // with ←/→ or jumped to with a digit (not typed), so the live text is the
-    // current selection.
+    // Effort block (optional): the Faster⇄Smarter node slider — always this
+    // one shape, at every width. The current tier's caption closes the block
+    // on its own row beneath. The value is cycled with ←/→ or jumped to with
+    // a digit (not typed), so the live text is the current selection.
     if let Some(effort) = effort {
         for line in effort_block_lines(effort, effort_levels, body_width, focused_field == 1, theme)
         {
@@ -1066,7 +1093,7 @@ pub fn draw_oauth_pending(
     scroll: &mut usize,
     hit_map: Option<&mut crate::model::layout::ModalHitMap>,
     selection: &SelectionState,
-    mut layout_map: Option<&mut LayoutMap>,
+    layout_map: &mut LayoutMap,
 ) -> neenee_tui_engine::Rect {
     let geometry = ContentModalSpec::OAUTH_PENDING;
     let probe = content_modal_probe(frame, geometry);
@@ -1150,59 +1177,18 @@ pub fn draw_oauth_pending(
         modal_header_parts(frame, Some(h), &parts, theme);
     }
 
-    let mut body: Vec<Line> = Vec::with_capacity(raw_lines.len());
-    for (i, (text, style)) in raw_lines.iter().enumerate() {
-        let line_rendered = if let Some((s_byte, maybe_e_byte)) =
-            block_selection_range(selection, MODAL_DOC_MSG_IDX, i)
-        {
-            let s = floor_grapheme_boundary(text, s_byte).min(text.len());
-            let e = maybe_e_byte
-                .map(|b| inclusive_grapheme_end(text, b))
-                .unwrap_or(text.len())
-                .min(text.len());
-            if s < e {
-                let mut spans = Vec::new();
-                if s > 0 {
-                    spans.push(Span::styled(text[..s].to_string(), *style));
-                }
-                let sel_style = style.bg(theme.selected()).fg(theme.fg());
-                spans.push(Span::styled(text[s..e].to_string(), sel_style));
-                if e < text.len() {
-                    spans.push(Span::styled(text[e..].to_string(), *style));
-                }
-                Line::from(spans)
-            } else {
-                Line::from(Span::styled(text.clone(), *style))
-            }
-        } else {
-            Line::from(Span::styled(text.clone(), *style))
-        };
-        body.push(line_rendered);
-
-        if let Some(ref mut lm) = layout_map {
-            let row_y = f.body.y + i as u16;
-            lm.push(BlockRegion {
-                message_idx: MODAL_DOC_MSG_IDX,
-                block_idx: i,
-                start_byte: 0,
-                end_byte: text.len(),
-                text: text.clone(),
-                prefix_cols: 0,
-                rect: Rect::new(f.body.x, row_y, f.body.width, 1),
-                hidden_ranges: Vec::new(),
-            });
-        }
-    }
-
-    render_body(
-        frame,
-        f.body,
-        body,
-        scroll,
-        None,
-        SCROLL_EDGE_MARGIN,
-        true,
-        theme,
+    // Selectable document body via the shared component: application-layer
+    // wrapping, one MODAL_DOC region per *visual* row (the hand-rolled loop
+    // this replaces registered one region per logical row with a 1-row rect,
+    // which misaligned with the engine's internal wrap on continuation lines
+    // and after scroll), and selection splitting identical to the
+    // transcript's.
+    let rows: Vec<SelectableRow> = raw_lines
+        .into_iter()
+        .map(|(text, style)| SelectableRow::styled(text, style))
+        .collect();
+    render_selectable_body(
+        frame, f.body, &rows, scroll, None, theme, selection, layout_map,
     );
 
     if let Some(fo) = f.footer {
@@ -1688,6 +1674,38 @@ mod tests {
     }
 
     #[test]
+    fn effort_slider_renders_at_every_supported_width() {
+        // The selector is the slider at EVERY width, so it must lay out from
+        // the minimum terminal (40 cols, per MIN_TERMINAL_COLS) upward, for
+        // every ladder shape and every selection, without panicking — the
+        // label thinning guarantees no overlap, not just no crash.
+        let ladders: Vec<Vec<&str>> = vec![
+            vec!["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+            vec!["low", "medium", "high", "xhigh", "max"],
+            vec!["low", "medium", "high"],
+            vec!["low", "high", "max"],
+            vec!["medium"],
+        ];
+        for cols in 40u16..121 {
+            for ladder in &ladders {
+                for tier in ladder {
+                    let lv: Vec<String> = ladder.iter().map(|s| s.to_string()).collect();
+                    let text = render_settings_editor(cols, 24, Some(tier), &lv, None);
+                    // The slider's shape markers are present at every width.
+                    assert!(
+                        text.contains('●'),
+                        "marker at {cols} cols ({tier}): {text:?}"
+                    );
+                    assert!(
+                        !text.contains("< "),
+                        "no carousel chevrons at {cols} cols: {text:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn effort_selector_renders_as_a_node_slider_when_wide() {
         // Wide enough: the `Effort` label owns its row, then a
         // `Faster ⇄ Smarter` track with a node per tier — T endpoints, cross
@@ -1761,20 +1779,63 @@ mod tests {
     }
 
     #[test]
-    fn effort_selector_wraps_to_carousel_when_narrow() {
-        // Too narrow for the slider: the compact `< current >` carousel shows,
-        // with one position pip per rung and the current rung solid so the
-        // depth direction still reads.
+    fn effort_selector_stays_a_slider_when_narrow() {
+        // One shape at every width: too narrow for verbatim tier labels and
+        // the block still renders the `Faster ⇄ Smarter` slider — cramped
+        // interior labels thin out (ends + selected stay) instead of swapping
+        // to a carousel. Absolutely no `<`/`>` chevrons anywhere.
         let full = levels(&["low", "medium", "high", "xhigh", "max"]);
         let text = render_settings_editor(56, 24, Some("high"), &full, None);
-        let effort_row = text
-            .lines()
-            .find(|l| l.contains("Effort"))
-            .expect("effort row");
-        assert!(effort_row.contains("< high >"), "carousel: {effort_row:?}");
+        let rows: Vec<&str> = text.lines().collect();
+        let track_row = rows
+            .iter()
+            .find(|l| l.contains("Faster"))
+            .expect("track row at narrow width");
+        assert!(track_row.contains("Smarter"), "scale end: {track_row:?}");
+        assert!(track_row.contains('●'), "marker: {track_row:?}");
+        // The carousel affordance is gone at every width.
+        for row in &rows {
+            assert!(!row.contains("< "), "no carousel chevrons: {row:?}");
+        }
+        // The labels row still exists (ends are always labeled).
+        let labels_row = rows
+            .iter()
+            .find(|l| l.contains("low"))
+            .expect("labels row at narrow width");
         assert!(
-            effort_row.contains("○○●○○"),
-            "position pips, current solid: {effort_row:?}"
+            labels_row.contains("max"),
+            "far end labeled: {labels_row:?}"
+        );
+        // The selected rung keeps its label even when the layout thins.
+        assert!(
+            labels_row.contains("high"),
+            "selected rung labeled: {labels_row:?}"
+        );
+        // Every rung keeps its node on the track: 5 tiers = 2 T endpoints +
+        // 2 interior crosses + the marker.
+        let nodes = track_row
+            .chars()
+            .filter(|&c| matches!(c, '├' | '┤' | '┼' | '●'))
+            .count();
+        assert_eq!(nodes, 5, "a node per rung: {track_row:?}");
+    }
+
+    #[test]
+    fn effort_selector_lays_out_the_full_openai_ladder() {
+        // The 7-rung OpenAI ladder (`none`…`max`) fits a standard body with
+        // every tier labeled verbatim — no squeezing needed where it counts.
+        let openai = levels(&["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+        let text = render_settings_editor(120, 24, Some("medium"), &openai, None);
+        let labels_row = text
+            .lines()
+            .find(|l| l.contains("minimal"))
+            .expect("labels row");
+        for tier in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+            assert!(labels_row.contains(tier), "missing tier: {labels_row:?}");
+        }
+        assert!(
+            !labels_row.contains('≤') && !labels_row.contains('≥'),
+            "wide body labels verbatim: {labels_row:?}"
         );
     }
 
@@ -1782,7 +1843,7 @@ mod tests {
     fn effort_caption_shows_in_both_forms() {
         // The current tier's caption closes the block on its own row —
         // truncated to the available width rather than dropped or wrapped
-        // awkwardly.
+        // awkwardly — at every width, and for an unknown ladder too.
         let full = levels(&["low", "medium", "high", "xhigh", "max"]);
         let wide = render_settings_editor(120, 24, Some("high"), &full, None);
         assert!(
@@ -1792,7 +1853,12 @@ mod tests {
         let narrow = render_settings_editor(56, 24, Some("high"), &full, None);
         assert!(
             narrow.contains("deep reasoning"),
-            "carousel caption present: {narrow:?}"
+            "narrow slider caption present: {narrow:?}"
+        );
+        let unknown = render_settings_editor(120, 24, Some("high"), &[], None);
+        assert!(
+            unknown.contains("deep reasoning"),
+            "unknown-ladder caption present: {unknown:?}"
         );
     }
 
@@ -1859,22 +1925,18 @@ mod tests {
     }
 
     #[test]
-    fn effort_block_slider_fit_depends_only_on_the_ladder() {
-        // The slider decision is selection-independent by construction (the
-        // marker swaps a node glyph in place), so it cannot flip as the user
-        // cycles. A 3-tier ladder fits a modest body; a 6-tier ladder needs
-        // more room; an unknown ladder can never lay out.
+    fn effort_block_row_count_depends_only_on_the_ladder() {
+        // The selector is the slider at every width, so the block's row count
+        // is width-independent by construction — four rows for a known ladder
+        // (label + track + tier labels + caption), two for an unknown one
+        // (value row + caption). Nothing can flip between two shapes as the
+        // user cycles or resizes.
         let common = levels(&["low", "medium", "high"]);
-        assert!(effort_block_slider(32, &common), "3-tier fits 32");
-        assert!(
-            !effort_block_slider(30, &common),
-            "3-tier node labels collide at 30"
-        );
+        assert_eq!(effort_block_rows(&common), 4, "3-tier → slider rows");
         let openai = levels(&["none", "minimal", "low", "medium", "high", "xhigh"]);
-        assert!(effort_block_slider(59, &openai), "6-tier fits 59");
-        assert!(!effort_block_slider(55, &openai), "6-tier overflows 55");
-        // An unknown ladder can never lay out.
-        assert!(!effort_block_slider(80, &[]), "empty ladder → carousel");
+        assert_eq!(effort_block_rows(&openai), 4, "6-tier → slider rows");
+        // An unknown ladder collapses to the value row + caption.
+        assert_eq!(effort_block_rows(&[]), 2, "empty ladder → value + caption");
     }
 
     #[test]

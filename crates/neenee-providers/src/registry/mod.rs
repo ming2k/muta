@@ -188,6 +188,12 @@ pub fn provider_template_spec(id: &str) -> Option<&'static ProviderTemplateSpec>
     PROVIDER_TEMPLATE_SPECS.iter().find(|spec| spec.id == id)
 }
 
+pub type ProviderPresetSpec = ProviderTemplateSpec;
+pub const PROVIDER_PRESET_SPECS: &[ProviderPresetSpec] = PROVIDER_TEMPLATE_SPECS;
+pub fn provider_preset_spec(id: &str) -> Option<&'static ProviderPresetSpec> {
+    provider_template_spec(id)
+}
+
 /// Resolve the transport endpoint for **one model** of a template — the route
 /// the catalog materializes at runtime (routes are derived, never persisted).
 ///

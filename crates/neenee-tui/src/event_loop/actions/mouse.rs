@@ -74,87 +74,113 @@ pub(super) async fn handle_selection_start(
         app.focused_target = None;
         app.drag.cancel();
     } else if app.active_modal == Modal::Permission
+        && let Some(cursor) = app
+            .layout_map
+            .cursor_at(x, y)
+            .filter(|c| c.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX)
+    {
+        // The sheet's body is a selectable document (tool arguments,
+        // description): a press on the text arms a drag-select so the
+        // payload can be copied while deciding. Buttons above stay
+        // keyboard-driven; presses on the sheet's chrome are inert as before.
+        app.drag.begin_range(&mut app.selection, cursor);
+    } else if app.active_modal == Modal::Permission
         && app.modal_hit_map.permission_sheet_contains(x, y)
     {
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
     } else if app.active_modal.dismissable_by_outside_click() {
-        // Click-to-dismiss: while a dismissable overlay modal is
-        // open, the full-screen backdrop owns the click — a press
-        // outside the panel closes the modal (mirroring Esc), and a
-        // press inside is a no-op (these info modals have no click
-        // targets yet). Either way the click is consumed so it does
-        // not also fall through to the transcript behind the
-        // backdrop. Modals that hold precious input and need their
-        // own restore path (Provider / ModelEditor) report no rect
-        // and are skipped here, so a stray click never discards an
-        // API key. HistorySearch *is* dismissable: its filter is
-        // ephemeral and the draft is parked, so an outside click
-        // restores the draft (mirroring Esc / CloseModal).
-        //
-        // The close decision mirrors the `CloseModal` arm
-        // exactly, *including the deepest-level-first ordering*:
-        // an outside click while inside a drill-in sub-view (e.g.
-        // Sessions › Info) backs out to the parent view, not out
-        // to chat / quit — so the hierarchy is consistent between
-        // Esc and outside-click.
-        let inside = app
-            .modal_rect
-            .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height);
-        if !inside && app.click_outside_dismiss {
-            // Dismiss when `[tui] click_outside_dismiss` is on
-            // (default on): a click outside the panel closes
-            // a dismissable overlay like Esc. The dismissable
-            // set excludes modals holding precious in-progress
-            // input (they report no rect and are skipped above),
-            // so a stray click never discards an API key. When
-            // the flag is off the click is still consumed (this
-            // whole branch owns it) so it does not fall through
-            // to the transcript behind the backdrop.
+        // Selectable modal documents (the `render_selectable_body` family
+        // register their rows under `MODAL_DOC_MSG_IDX`): a press that lands
+        // on registered text arms a drag-select instead of being a dead
+        // click, so modal content is copyable exactly like transcript text.
+        // Checked *before* the dismiss logic so a press inside the panel on
+        // text never closes the modal; presses on chrome/blank areas keep
+        // the previous behaviour.
+        if let Some(cursor) = app
+            .layout_map
+            .cursor_at(x, y)
+            .filter(|c| c.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX)
+        {
+            app.drag.begin_range(&mut app.selection, cursor);
+        } else {
+            // Click-to-dismiss: while a dismissable overlay modal is
+            // open, the full-screen backdrop owns the click — a press
+            // outside the panel closes the modal (mirroring Esc), and a
+            // press inside is a no-op (these info modals have no click
+            // targets yet). Either way the click is consumed so it does
+            // not also fall through to the transcript behind the
+            // backdrop. Modals that hold precious input and need their
+            // own restore path (Provider / ModelEditor) report no rect
+            // and are skipped here, so a stray click never discards an
+            // API key. HistorySearch *is* dismissable: its filter is
+            // ephemeral and the draft is parked, so an outside click
+            // restores the draft (mirroring Esc / CloseModal).
             //
             // The close decision mirrors the `CloseModal` arm
-            // exactly, including the deepest-level-first
-            // ordering: an outside click while inside a drill-in
-            // sub-view (e.g. Sessions › Info) backs out to the
-            // parent view, not out to chat / quit — so the
-            // hierarchy is consistent between Esc and outside-
-            // click.
-            if app.active_modal == Modal::Sessions && app.session_info_detail {
-                // Outside-click from the info sub-view → back to
-                // the sessions list (mirrors Esc).
-                app.session_info_detail = false;
-                app.session_detail = None;
-                app.session_info_scroll = 0;
-            } else if app.active_modal == Modal::TokenReport && app.token_report_detail {
-                // Outside-click from the turn breakdown → back to
-                // the round list (mirrors Esc).
-                app.token_report_detail = false;
-                app.token_report_scroll = 0;
-            } else {
-                if app.active_modal == Modal::HistorySearch {
-                    app.restore_history_draft();
+            // exactly, *including the deepest-level-first ordering*:
+            // an outside click while inside a drill-in sub-view (e.g.
+            // Sessions › Info) backs out to the parent view, not out
+            // to chat / quit — so the hierarchy is consistent between
+            // Esc and outside-click.
+            let inside = app
+                .modal_rect
+                .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height);
+            if !inside && app.click_outside_dismiss {
+                // Dismiss when `[tui] click_outside_dismiss` is on
+                // (default on): a click outside the panel closes
+                // a dismissable overlay like Esc. The dismissable
+                // set excludes modals holding precious in-progress
+                // input (they report no rect and are skipped above),
+                // so a stray click never discards an API key. When
+                // the flag is off the click is still consumed (this
+                // whole branch owns it) so it does not fall through
+                // to the transcript behind the backdrop.
+                //
+                // The close decision mirrors the `CloseModal` arm
+                // exactly, including the deepest-level-first
+                // ordering: an outside click while inside a drill-in
+                // sub-view (e.g. Sessions › Info) backs out to the
+                // parent view, not out to chat / quit — so the
+                // hierarchy is consistent between Esc and outside-
+                // click.
+                if app.active_modal == Modal::Sessions && app.session_info_detail {
+                    // Outside-click from the info sub-view → back to
+                    // the sessions list (mirrors Esc).
+                    app.session_info_detail = false;
+                    app.session_detail = None;
+                    app.session_info_scroll = 0;
+                } else if app.active_modal == Modal::TokenReport && app.token_report_detail {
+                    // Outside-click from the turn breakdown → back to
+                    // the round list (mirrors Esc).
+                    app.token_report_detail = false;
+                    app.token_report_scroll = 0;
+                } else {
+                    if app.active_modal == Modal::HistorySearch {
+                        app.restore_history_draft();
+                    }
+                    // The queue modal auto-blocked on open; an
+                    // outside-click closes it like Esc, so resume
+                    // auto-drain to match.
+                    if app.active_modal == Modal::Queue {
+                        app.resume_queue(viewed_session_id);
+                    }
+                    // `neenee resume` (no id): the startup picker has
+                    // no conversation behind it, so a click-outside
+                    // (mirroring Esc) quits instead of landing in an
+                    // empty chat.
+                    if app.startup_overlay == crate::StartupOverlay::SessionsPicker {
+                        tracing::info!(reason = "startup_picker_cancelled", "app exiting");
+                        app.should_quit.store(true, Ordering::SeqCst);
+                    }
+                    app.active_modal = Modal::None;
                 }
-                // The queue modal auto-blocked on open; an
-                // outside-click closes it like Esc, so resume
-                // auto-drain to match.
-                if app.active_modal == Modal::Queue {
-                    app.resume_queue(viewed_session_id);
-                }
-                // `neenee resume` (no id): the startup picker has
-                // no conversation behind it, so a click-outside
-                // (mirroring Esc) quits instead of landing in an
-                // empty chat.
-                if app.startup_overlay == crate::StartupOverlay::SessionsPicker {
-                    tracing::info!(reason = "startup_picker_cancelled", "app exiting");
-                    app.should_quit.store(true, Ordering::SeqCst);
-                }
-                app.active_modal = Modal::None;
             }
+            app.selection = SelectionState::None;
+            app.focused_target = None;
+            app.drag.cancel();
         }
-        app.selection = SelectionState::None;
-        app.focused_target = None;
-        app.drag.cancel();
     } else if app.active_modal == Modal::None
         && app.todos_rect.is_some_and(|r| {
             // Todo bar: open the Activity modal on the Todos

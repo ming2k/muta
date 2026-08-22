@@ -36,6 +36,7 @@ pub struct BtwModalView<'a> {
 /// Draw the asides list modal. Rows show `run`/`open` badges, the title, and
 /// a relative last-activity label; selection uses the shared list row
 /// highlight.
+#[allow(clippy::too_many_arguments)] // showcase parity with other modal renderers
 pub fn draw_btw_modal(
     frame: &mut Frame,
     view: BtwModalView<'_>,
@@ -44,6 +45,8 @@ pub fn draw_btw_modal(
     follow_selection: bool,
     keymap_open: bool,
     theme: &Theme,
+    selection: &crate::model::selection::SelectionState,
+    layout_map: &mut crate::model::layout::LayoutMap,
 ) -> neenee_tui_engine::Rect {
     let body_width = crate::components::modal::modal_body_width(frame, ContentModalSpec::BTW);
 
@@ -144,6 +147,8 @@ pub fn draw_btw_modal(
             // Sessions / Queue deletes.
             extra_footer_hints: &[FooterHint::with_band("D", "close aside", 70)],
             keymap_open,
+            // The in-modal `?` keymap sub-page is a selectable document.
+            select_doc: Some((selection, layout_map)),
         },
         theme,
     )

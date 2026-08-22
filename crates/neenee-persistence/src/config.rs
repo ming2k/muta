@@ -525,11 +525,12 @@ impl RouteSettings {
 /// is a `BTreeMap` for stable, diff-friendly serialisation. Unknown tables
 /// (e.g. the pre-refactor `[builtins.<id>]` / `[user.<id>]` sections) are
 /// tolerated and ignored so a not-yet-migrated file keeps loading.
+/// Credentials split out of `config.toml` into their own `credentials.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Credentials {
-    /// API keys keyed by provider instance id.
-    #[serde(default)]
-    pub providers: BTreeMap<String, SecretString>,
+    /// API keys keyed by connection id.
+    #[serde(default, alias = "providers")]
+    pub connections: BTreeMap<String, SecretString>,
     /// The web-tool API keys (`[websearch]`): search backends + the Jina
     /// reader. Kept here — not in `config.toml`'s `[websearch]` — so
     /// `config.toml` stays behavior-only and shareable. Merged into
@@ -608,9 +609,7 @@ impl Credentials {
     }
 
     /// Read `credentials.toml`, returning an empty (not erroring) value when
-    /// the file is missing or unparseable. A missing secrets file is a normal
-    /// first-run condition; a corrupt one must never block startup, so it is
-    /// best-effort and only logs a warning.
+    /// the file is missing or unparseable.
     pub fn load() -> Self {
         let path = Self::path();
         let Ok(content) = fs::read_to_string(&path) else {
@@ -630,72 +629,53 @@ impl Credentials {
     }
 
     /// Persist atomically with owner-only permissions (0600) via
-    /// [`crate::fsutil::atomic_write_bytes`]. An empty `Credentials` writes an
-    /// empty file (still valid TOML). Errors propagate to the caller.
+    /// [`crate::fsutil::atomic_write_bytes`].
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let bytes = toml::to_string_pretty(self)?.into_bytes();
         fsutil::atomic_write_bytes(&Self::path(), &bytes)?;
         Ok(())
     }
 
-    /// The credential for `instance_id`, if set and non-empty.
-    pub fn api_key(&self, instance_id: &str) -> Option<&SecretString> {
-        self.providers
-            .get(instance_id)
+    /// The credential for `connection_id`, if set and non-empty.
+    pub fn api_key(&self, connection_id: &str) -> Option<&SecretString> {
+        self.connections
+            .get(connection_id)
             .filter(|k| !k.expose_secret().trim().is_empty())
     }
 
-    /// Set (or clear) the credential for `instance_id`.
-    pub fn set_api_key(&mut self, instance_id: &str, key: Option<SecretString>) {
+    /// Set (or clear) the credential for `connection_id`.
+    pub fn set_api_key(&mut self, connection_id: &str, key: Option<SecretString>) {
         match key {
             Some(key) if !key.expose_secret().trim().is_empty() => {
-                self.providers.insert(instance_id.to_string(), key);
+                self.connections.insert(connection_id.to_string(), key);
             }
             _ => {
-                self.providers.remove(instance_id);
+                self.connections.remove(connection_id);
             }
         }
     }
 
-    /// Remove the credential for `instance_id`, if any.
-    pub fn remove_api_key(&mut self, instance_id: &str) {
-        self.providers.remove(instance_id);
+    /// Remove the credential for `connection_id`, if any.
+    pub fn remove_api_key(&mut self, connection_id: &str) {
+        self.connections.remove(connection_id);
     }
 }
 
 /// Discovered model lists and fitted capabilities, cached under
 /// `$XDG_CACHE_HOME/neenee/models_discovery.json`.
-///
-/// Everything here is keyed by **provider instance** then model id — the
-/// per-route facts the catalog needs to derive channels at runtime. Both
-/// fields are rebuildable by live discovery, which is exactly why this is a
-/// cache: wiping the file costs one re-discovery, never user data. The
-/// user's per-route *reasoning choices* deliberately do **not** live here —
-/// they are state, in
-/// [`crate::route_settings::RouteSettingsStore`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DiscoveryCache {
-    /// Cached discovered model lists, keyed by provider instance id:
-    /// instance_id -> model ids (in discovery order).
-    #[serde(default)]
-    pub provider_models: BTreeMap<String, Vec<String>>,
-    /// Fitted capability metadata, keyed by instance id then model id.
+    /// Cached discovered model lists, keyed by connection id:
+    /// connection_id -> model ids (in discovery order).
+    #[serde(default, alias = "provider_models")]
+    pub connection_models: BTreeMap<String, Vec<String>>,
+    /// Fitted capability metadata, keyed by connection id then model id.
     #[serde(default)]
     pub fitted_models: BTreeMap<String, BTreeMap<String, FittedModelInfo>>,
-    /// Trusted per-(instance, model) capability metadata advertised by the
-    /// provider's live `GET /models` (endpoint, thinking, effort tiers …),
-    /// mirror of `DiscoveredModel::remote_metadata`. Keyed instance id then
-    /// model id; re-derived by every successful live discovery.
+    /// Trusted per-(connection, model) capability metadata advertised by the
+    /// connection's live `GET /models` (endpoint, thinking, effort tiers …).
     #[serde(default)]
     pub remote_metadata: BTreeMap<String, BTreeMap<String, RemoteModelMetadata>>,
-    // NOTE: the user's per-route reasoning overrides used to live here as
-    // `route_settings`. They moved to
-    // `$XDG_STATE_HOME/neenee/route_settings.json`
-    // (`crate::route_settings::RouteSettingsStore`) — a cache is derived and
-    // deletable, user settings are not. The field is intentionally *absent*
-    // (not aliased): `RouteSettingsStore::load` performs the one-shot fold,
-    // and an unknown `route_settings` key in an old cache file is ignored by
-    // serde like any other unknown key.
 }
 
 impl DiscoveryCache {
@@ -719,22 +699,21 @@ impl DiscoveryCache {
         Ok(())
     }
 
-    /// Remove the per-instance records for `instance_id` (used on instance
-    /// deletion).
-    pub fn remove_instance(&mut self, instance_id: &str) {
-        self.provider_models.remove(instance_id);
-        self.fitted_models.remove(instance_id);
-        self.remote_metadata.remove(instance_id);
+    /// Remove the per-connection records for `connection_id` (used on connection deletion).
+    pub fn remove_connection(&mut self, connection_id: &str) {
+        self.connection_models.remove(connection_id);
+        self.fitted_models.remove(connection_id);
+        self.remote_metadata.remove(connection_id);
     }
 
-    /// The trusted per-(instance, model) metadata, if set.
+    /// The trusted per-(connection, model) metadata, if set.
     pub fn remote_metadata_for(
         &self,
-        instance_id: &str,
+        connection_id: &str,
         model_id: &str,
     ) -> Option<&RemoteModelMetadata> {
         self.remote_metadata
-            .get(instance_id)
+            .get(connection_id)
             .and_then(|models| models.get(model_id))
     }
 }
@@ -742,7 +721,8 @@ impl DiscoveryCache {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Config {
-    pub default_provider: String,
+    #[serde(alias = "default_provider")]
+    pub default_connection: String,
     pub mcp: HashMap<String, McpServerConfig>,
     /// Context-compaction thresholds expressed as fractions of the active
     /// model's context window, plus a fallback window for unknown models. See
@@ -761,22 +741,25 @@ pub struct Config {
     pub compaction_prune: bool,
     /// Token budget of the most recent tool results protected from pruning.
     pub compaction_prune_protect_tokens: usize,
-    /// Maximum number of attempts for a single model request when the provider returns a
+    /// Maximum number of attempts for a single model request when the connection returns a
     /// transient error (HTTP 408/429/5xx, connection, timeout). The initial try
     /// counts as the first attempt, so this is the *total* attempts, not extra
     /// retries. Clamped to `[1, 60]` at the call site.
-    pub provider_retry_max_attempts: usize,
+    #[serde(alias = "provider_retry_max_attempts")]
+    pub connection_retry_max_attempts: usize,
     /// Base delay (ms) for the bounded exponential backoff between retries:
-    /// `base_ms * 2^(attempt-1)`, capped by `provider_retry_max_ms`.
-    pub provider_retry_base_ms: u64,
+    /// `base_ms * 2^(attempt-1)`, capped by `connection_retry_max_ms`.
+    #[serde(alias = "provider_retry_base_ms")]
+    pub connection_retry_base_ms: u64,
     /// Hard cap (ms) on a single backoff delay, including the exponential growth.
     /// A server-supplied `Retry-After`/`retry-after-ms` header still wins but is
     /// itself capped at this value.
-    pub provider_retry_max_ms: u64,
-    /// The model id to use within the active provider. For single-model
-    /// providers this mirrors the provider's pinned model; for multi-model
-    /// providers (opencode-go) it selects which of the provider's models is
-    /// active. `None` falls back to the provider's default model.
+    #[serde(alias = "provider_retry_max_ms")]
+    pub connection_retry_max_ms: u64,
+    /// The model id to use within the active connection. For single-model
+    /// connections this mirrors the connection's pinned model; for multi-model
+    /// connections (opencode-go) it selects which of the connection's models is
+    /// active. `None` falls back to the connection's default model.
     #[serde(default)]
     pub default_model: Option<String>,
     /// Favorite model ids for quick access in the Models picker (ADR-0046
@@ -951,16 +934,16 @@ pub struct HookSpec {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_provider: String::new(),
+            default_connection: String::new(),
             mcp: HashMap::new(),
             compaction: CompactionPolicy::default(),
             compaction_preserve_rounds: 6,
             compaction_summarize: true,
             compaction_prune: true,
             compaction_prune_protect_tokens: 6_000,
-            provider_retry_max_attempts: 30,
-            provider_retry_base_ms: 1_000,
-            provider_retry_max_ms: 10_000,
+            connection_retry_max_attempts: 30,
+            connection_retry_base_ms: 1_000,
+            connection_retry_max_ms: 10_000,
             default_model: None,
             favorites: Vec::new(),
             skills: SkillsConfig::default(),
@@ -1144,18 +1127,15 @@ impl Config {
     /// preferences) so they never leak the in-memory selection — which may
     /// carry a resumed session's provider pin — into `config.toml`. The
     /// `/models` switch itself calls [`Config::save`]: updating the global
-    /// default is its whole point.
-    ///
-    /// The lock + disk read makes this cross-process safe: another `neenee`
-    /// writing its own selection concurrently is not clobbered, and this
-    /// process's latest non-selection fields still land on disk.
-    pub fn save_preserving_provider_selection(&self) -> Result<(), Box<dyn std::error::Error>> {
+    /// Persist config while leaving the on-disk `default_connection` /
+    /// `default_model` selection untouched.
+    pub fn save_preserving_connection_selection(&self) -> Result<(), Box<dyn std::error::Error>> {
         Self::save_inner(self, true)
     }
 
     fn save_inner(
         &self,
-        preserve_provider_selection: bool,
+        preserve_connection_selection: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Serialise against other `neenee` instances so concurrent config
         // writes do not lost-update each other (ADR-0018 pattern). The lock is
@@ -1167,29 +1147,27 @@ impl Config {
 
         // The effective selection to write back. When preserving, re-read the
         // on-disk value under the lock so another process's write survives.
-        let (default_provider, default_model) = if preserve_provider_selection {
+        let (default_connection, default_model) = if preserve_connection_selection {
             let on_disk: Config = fs::read_to_string(&config_path)
                 .ok()
                 .and_then(|content| toml::from_str(&content).ok())
                 .unwrap_or_default();
-            let provider = if on_disk.default_provider.is_empty() {
+            let connection = if on_disk.default_connection.is_empty() {
                 // On-disk default is gone (or never set): keep this writer's
                 // selection so the file never silently loses it.
-                self.default_provider.clone()
+                self.default_connection.clone()
             } else {
-                on_disk.default_provider
+                on_disk.default_connection
             };
-            (provider, on_disk.default_model)
+            (connection, on_disk.default_model)
         } else {
-            (self.default_provider.clone(), self.default_model.clone())
+            (self.default_connection.clone(), self.default_model.clone())
         };
 
         // ── config.toml = behavior only ─────────────────────────────────────
-        // Secrets live in `credentials.toml`, provider instances in
-        // `providers.toml`; neither is touched here. `default_provider` /
-        // `default_model` only *reference* instance ids.
+        // Secrets live in `credentials.toml`, connections in `connections.toml`.
         let mut out = self.clone();
-        out.default_provider = default_provider;
+        out.default_connection = default_connection;
         out.default_model = default_model;
         let bytes = toml::to_string_pretty(&out)?.into_bytes();
         fsutil::atomic_write_bytes(&config_path, &bytes)?;
@@ -1599,7 +1577,7 @@ deepseek = "new-key"
     fn discovery_cache_and_remote_round_trip() {
         let (tmp, _guard, _override_guard) = sandbox_config_dir();
         let mut cache = DiscoveryCache::default();
-        cache.provider_models.insert(
+        cache.connection_models.insert(
             "deepseek".to_string(),
             vec!["deepseek-v4-flash".to_string()],
         );
@@ -1625,10 +1603,10 @@ deepseek = "new-key"
         );
         assert!(reloaded.remote_metadata_for("deepseek", "nope").is_none());
 
-        reloaded.remove_instance("deepseek");
-        assert!(reloaded.provider_models.is_empty());
+        reloaded.remove_connection("deepseek");
+        assert!(reloaded.connection_models.is_empty());
         reloaded.save().unwrap();
-        assert!(DiscoveryCache::load().provider_models.is_empty());
+        assert!(DiscoveryCache::load().connection_models.is_empty());
 
         paths::set_test_default(None);
         std::fs::remove_dir_all(&tmp).ok();
@@ -1637,12 +1615,9 @@ deepseek = "new-key"
     #[test]
     fn config_save_is_behavior_only_and_tolerates_legacy_provider_tables() {
         let (tmp, _guard, _override_guard) = sandbox_config_dir();
-        // A pre-refactor config.toml still carrying `[[providers]]` and legacy
-        // key fields loads fine (unknown keys are ignored) and re-saves as
-        // behavior-only — the legacy tables are not re-emitted.
         std::fs::write(
             tmp.join("config.toml"),
-            r#"default_provider = "deepseek"
+            r#"default_connection = "deepseek"
 deepseek_api_key = "legacy-key"
 [[providers]]
 id = "deepseek"
@@ -1651,12 +1626,12 @@ name = "DeepSeek"
         )
         .unwrap();
         let loaded = Config::load();
-        assert_eq!(loaded.default_provider, "deepseek");
+        assert_eq!(loaded.default_connection, "deepseek");
         let mut cfg = loaded;
-        cfg.default_provider = "zai".to_string();
+        cfg.default_connection = "zai".to_string();
         cfg.save().unwrap();
         let on_disk = std::fs::read_to_string(tmp.join("config.toml")).unwrap();
-        assert!(on_disk.contains("default_provider = \"zai\""));
+        assert!(on_disk.contains("default_connection = \"zai\""));
         assert!(
             !on_disk.contains("[[providers]]"),
             "legacy provider tables must not be re-emitted"

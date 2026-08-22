@@ -18,7 +18,7 @@ use neenee_agent::{Agent, EnvoyRegistry, RoundLifecycle};
 use neenee_contracts::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use neenee_mcp::McpRuntime;
 use neenee_persistence::{
-    config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
+    config::Config, connection_usage::ConnectionUsage, embedding, session::SessionStore,
     trusted_projects::TrustGate,
 };
 use neenee_skills::SkillRegistry;
@@ -54,7 +54,7 @@ pub struct SessionDriver {
     /// Live config; mutated by provider/favorite/default switches and saved.
     pub config: Config,
     /// Per-model usage telemetry; mutated by activations and switches.
-    pub provider_usage: ProviderUsage,
+    pub provider_usage: ConnectionUsage,
     /// The shared provider holder backing the `ProxyProvider`
     /// (`provider_for_task` in the old code).
     pub provider_holder: Arc<RwLock<Arc<dyn Provider>>>,
@@ -156,34 +156,49 @@ impl SessionDriver {
         let initial_session_id = session.id().await;
         token_ledger.restore_session(&initial_session_id, session.request_usage_records().await);
         token_ledger.set_active_session(initial_session_id.clone());
-        // Crash-residue interrupt record (C11): a persisted request still
-        // `InFlight` when the session loads was on the wire when the host
-        // process died — `restore_session` just flipped it to `Abandoned`.
-        // The round it belonged to never reached any terminal path, so
-        // synthesize the `Terminated` record here; without it, a hard kill
-        // (SIGKILL, panic, power loss) leaves the resumed transcript with an
-        // unexplained dangling round. Round identity comes from the record's
-        // own `RequestUsageKey.round`. Best-effort: a persistence failure
-        // must not block startup.
+        // Crash-residue recovery (ADR-0128). The round path arms the durable
+        // `/retry` resume point only on stops it can observe — a terminal
+        // error after the provider retry budget, an interrupt past the
+        // phase-1 unsend window. A process that dies with a round on the
+        // wire (SIGKILL, panic, power loss) runs none of those paths, so
+        // the point is never armed and a resumed session answers `/retry`
+        // with "Nothing to retry" even though its last round visibly died
+        // mid-flight.
+        //
+        // The reliable residue marker is a request-usage record that is
+        // still `InFlight` in the *session store*. Every live settlement
+        // path writes a terminal status back before the round ends, and
+        // `TokenSourceLedger::restore_session` (called just above) flips
+        // the copies it loads to `Abandoned` — but only in the ledger's
+        // in-memory map, never in the store. So the store's own `InFlight`
+        // means "nobody ever settled this request", and reading it here —
+        // before any new round can rewrite the ledger — is exactly the
+        // crash signal. (The old comment claimed `restore_session` had
+        // already flipped the store copy; it had not, which is why the
+        // previous `Abandoned` filter never fired on the first reload and
+        // could only ever fire on stale records from an *earlier* round
+        // after a resume-then-crash-again sequence — the opposite of the
+        // intent.)
         {
-            let abandoned = session.request_usage_records().await;
-            let mut synthesized: Vec<neenee_contracts::RoundInterrupt> = Vec::new();
-            for record in &abandoned {
-                if record.status == neenee_contracts::RequestUsageStatus::Abandoned
-                    && !synthesized
-                        .iter()
-                        .any(|r| r.round == Some(record.key.round))
-                {
-                    synthesized.push(neenee_contracts::RoundInterrupt {
-                        reason: neenee_contracts::RoundInterruptReason::Terminated,
-                        at_ms: crate::registry::unix_epoch_ms(),
-                        round: Some(record.key.round),
-                    });
-                }
-            }
-            for record in synthesized {
+            let residue = recover_crashed_round(
+                &session,
+                session.request_usage_records().await,
+                crate::registry::unix_epoch_ms(),
+            )
+            .await;
+            for record in residue.interrupts {
                 if let Err(error) = session.record_round_interrupt(record).await {
                     tracing::warn!(?error, "could not record crash-residue interrupt");
+                }
+            }
+            if let Some(point) = residue.retry_point {
+                tracing::info!(
+                    session = %initial_session_id,
+                    round = point.round,
+                    "armed crash-resume /retry point for the terminated round"
+                );
+                if let Err(error) = session.arm_retry_pending(point).await {
+                    tracing::warn!(%error, "could not arm crash-resume retry point");
                 }
             }
         }
@@ -372,6 +387,7 @@ impl SessionDriver {
                     models,
                     auth,
                     template_id,
+                    client_identity,
                 } => {
                     crate::handlers_provider::add(
                         &mut config,
@@ -388,6 +404,7 @@ impl SessionDriver {
                         models,
                         auth,
                         template_id,
+                        client_identity,
                     )
                     .await;
                 }
@@ -412,6 +429,7 @@ impl SessionDriver {
                     protocol,
                     base_url,
                     api_key,
+                    client_identity,
                 } => {
                     crate::handlers_provider::edit(
                         &mut config,
@@ -424,6 +442,7 @@ impl SessionDriver {
                         protocol,
                         base_url,
                         api_key,
+                        client_identity,
                     )
                     .await;
                 }
@@ -698,7 +717,7 @@ impl SessionDriver {
                     // provider/model selection rather than leaking the
                     // in-memory (possibly session-pinned) one into config.toml.
                     config.tui.transcript_layout = layout.clone();
-                    if let Err(error) = config.save_preserving_provider_selection() {
+                    if let Err(error) = config.save_preserving_connection_selection() {
                         let _ = resp_tx.send(AgentResponse::Error(format!(
                             "Could not save transcript layout: {error}"
                         )));
@@ -713,7 +732,7 @@ impl SessionDriver {
                     // layout handler above).
                     config.tui.color_scheme = name.clone();
                     config.tui.custom_color_scheme = custom.clone();
-                    if let Err(error) = config.save_preserving_provider_selection() {
+                    if let Err(error) = config.save_preserving_connection_selection() {
                         let _ = resp_tx.send(AgentResponse::Error(format!(
                             "Could not save color scheme: {error}"
                         )));
@@ -826,10 +845,122 @@ async fn needs_activity_reconcile(req: &AgentRequest, lifecycle: &RoundLifecycle
     !round_owned_request(req) && !lifecycle.is_running().await
 }
 
+/// The durable residue of one round the host process abandoned mid-flight.
+#[derive(Debug, Default)]
+struct CrashResidue {
+    /// `Terminated` interrupt records to append (C11), one per distinct
+    /// in-flight round, so the resumed transcript explains its dangling
+    /// round instead of leaving it unexplained.
+    interrupts: Vec<neenee_contracts::RoundInterrupt>,
+    /// A `/retry` resume point for the highest in-flight round, so a session
+    /// re-hosted after a crash offers `/retry` instead of answering
+    /// "Nothing to retry" (ADR-0128).
+    retry_point: Option<neenee_contracts::RetryPoint>,
+}
+
+/// Decide, from durable state alone, what a hard process death left dangling
+/// (ADR-0128 + C11).
+///
+/// The crash signal is a request-usage record still `InFlight` **in the
+/// session store**: every live settlement path (`RequestAccountingGuard`'s
+/// Drop on completion/interrupt/failure) rewrites a terminal status through
+/// `set_request_usage_records` before the round ends, and a graceful daemon
+/// kill records a `Terminated` interrupt instead. A store-side `InFlight`
+/// record therefore means the process vanished with the request on the wire.
+///
+/// Guards:
+/// - Only the *highest* in-flight round is considered. The handler and
+///   `start_resolved_turn` reject a point whose `round` no longer equals the
+///   session's counter, so a lower one could never fire anyway.
+/// - The point names only the *principal* actor's round. Envoy (`task`)
+///   agents bill their own requests under `envoy:<call-id>` against the same
+///   session; a child's key must not decide the principal's resume point.
+/// - `turns_committed` is recovered from the transcript itself: the round's
+///   committed turns are the assistant messages after its opening prompt
+///   (the last visible, non-echo user message — the transcript carries no
+///   round delimiters), because the in-flight turn was never committed.
+/// - No point unless the round is the session's *current* one — the counter
+///   below the record means the session moved past it (nothing to resurrect),
+///   above it means the counter's durable write never landed.
+///
+/// A pre-existing terminal interrupt for the round does **not** suppress the
+/// point. The two are orthogonal: the record explains the transcript, the
+/// point offers recovery — and every stop a *graceful* path can observe
+/// (interrupt, failure, completion) settles the usage record to a terminal
+/// status, leaving store-side `InFlight` exclusively to process death. A
+/// graceful kill therefore leaves the same residue as a crash, and its round
+/// is just as resumable; suppressing on the interrupt would also break a
+/// crash during a `/retry` resume, which reuses the same round number.
+///
+/// Performs only read access on the store; the caller applies the
+/// interrupts / resume point through the store's normal durable setters.
+async fn recover_crashed_round(
+    session: &Arc<SessionStore>,
+    records: Vec<neenee_contracts::RequestUsageRecord>,
+    now_ms: u64,
+) -> CrashResidue {
+    use neenee_contracts::{RequestUsageStatus, Role};
+    let mut residue = CrashResidue::default();
+    let Some(latest) = records
+        .iter()
+        .filter(|record| record.status == RequestUsageStatus::InFlight)
+        .max_by_key(|record| record.key.round)
+    else {
+        return residue;
+    };
+    let round = latest.key.round;
+    residue.interrupts.push(neenee_contracts::RoundInterrupt {
+        reason: neenee_contracts::RoundInterruptReason::Terminated,
+        at_ms: now_ms,
+        round: Some(round),
+    });
+    // Counter guard: the point may only name the session's *current* round —
+    // the handler (and `start_resolved_turn`) reject anything else, and a
+    // round below the counter means the session already moved past it (a
+    // resume-then-more-work history), while a round above it means the
+    // counter's durable write never landed.
+    let round_counter = session.round_counter().await;
+    if round != round_counter {
+        return residue;
+    }
+    let window = session.model_window().await;
+    // Committed ReAct turns of the crashed round. The transcript carries no
+    // round delimiters, so the round's opener is approximated as the last
+    // visible, non-echo user message: every turn this round committed follows
+    // its opening prompt, and the in-flight one was never committed (its
+    // partial stream died with the process). A hidden round input opens its
+    // round the same way, while a command echo (`/cmd`, `!cmd`) is
+    // non-driving and must not be taken for an opener. Mid-round
+    // `InsertUserInput` admissions make this an undercount (the ordinal
+    // resumes lower than reality) — cosmetic: the number only labels the
+    // transcript band and usage keys, history itself is seeded from the exact
+    // `history_watermark`.
+    let opener = window
+        .iter()
+        .rposition(|message| {
+            matches!(message.role, Role::User) && !message.hidden && !message.is_command_echo()
+        })
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let turns_committed = window[opener..]
+        .iter()
+        .filter(|message| matches!(message.role, Role::Assistant))
+        .count();
+    residue.retry_point = Some(neenee_contracts::RetryPoint {
+        round,
+        turns_committed,
+        history_watermark: window.len(),
+        paused_ms: 0,
+        at_ms: now_ms,
+    });
+    residue
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use neenee_agent::RoundLifecycle;
+    use neenee_contracts::{Message, RequestUsageStatus, Role};
     use std::sync::Arc;
 
     fn image() -> neenee_contracts::ImagePart {
@@ -992,5 +1123,233 @@ mod tests {
             needs_activity_reconcile(&autopilot, &lifecycle).await,
             "idle again → reconcile re-arms"
         );
+    }
+
+    fn usage_record(
+        session_id: &str,
+        actor: &str,
+        round: u64,
+        turn: u32,
+        status: neenee_contracts::RequestUsageStatus,
+    ) -> neenee_contracts::RequestUsageRecord {
+        neenee_contracts::RequestUsageRecord {
+            key: neenee_contracts::RequestUsageKey {
+                session_id: session_id.to_string(),
+                actor_id: actor.to_string(),
+                round,
+                turn,
+                attempt: 1,
+            },
+            provider: "relay".to_string(),
+            model: "m".to_string(),
+            status,
+            ..Default::default()
+        }
+    }
+
+    fn residue_store(directory: &std::path::Path) -> Arc<SessionStore> {
+        std::fs::create_dir_all(directory).expect("create test directory");
+        Arc::new(SessionStore::for_path(directory.join("session.json")))
+    }
+
+    #[tokio::test]
+    async fn crash_residue_arms_retry_point_for_the_in_flight_round() {
+        // The scenario from the wild: the process died mid-round, so no
+        // graceful path armed `/retry` and the resumed session answered
+        // "Nothing to retry". Recovery must arm it from the durable
+        // `InFlight` usage record.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-crash-retry-{}", uuid::Uuid::new_v4()));
+        let store = residue_store(&directory);
+        let session_id = store.id().await;
+        // Round 2 in flight (turn 2 = the second ReAct turn, the one that
+        // died), one committed assistant turn from turn 1, a settled round 1.
+        // The transcript carries no round delimiters: the crashed round's
+        // opener is the *last* visible user message, so round 1's assistant
+        // reply must not be counted into round 2.
+        store
+            .set_request_usage_records(vec![
+                usage_record(
+                    &session_id,
+                    "principal",
+                    1,
+                    1,
+                    RequestUsageStatus::Completed,
+                ),
+                usage_record(
+                    &session_id,
+                    "principal",
+                    2,
+                    1,
+                    RequestUsageStatus::Completed,
+                ),
+                usage_record(&session_id, "principal", 2, 2, RequestUsageStatus::InFlight),
+                usage_record(&session_id, "envoy:c1", 2, 5, RequestUsageStatus::InFlight),
+            ])
+            .await
+            .unwrap();
+        store
+            .replace_messages(vec![
+                Message::new(Role::User, "round 1 prompt"),
+                Message::new(Role::Assistant, "round 1 answer"),
+                Message::new(Role::User, "round 2 prompt"),
+                Message::new(Role::Assistant, "round 2 turn 1"),
+                Message::new(Role::Tool, "ok"),
+            ])
+            .await
+            .unwrap();
+        store.set_round_counter(2).await.unwrap();
+
+        let residue = recover_crashed_round(
+            &store,
+            store.request_usage_records().await,
+            1_700_000_000_000,
+        )
+        .await;
+
+        // Interrupt for the dangling round, so the transcript explains it.
+        assert_eq!(residue.interrupts.len(), 1);
+        assert_eq!(residue.interrupts[0].round, Some(2));
+        assert_eq!(
+            residue.interrupts[0].reason,
+            neenee_contracts::RoundInterruptReason::Terminated
+        );
+        // The point names the highest in-flight round (not the envoy's key),
+        // counts only committed principal turns, and watermarks the durable
+        // window.
+        let point = residue
+            .retry_point
+            .expect("crash residue arms a retry point");
+        assert_eq!(point.round, 2);
+        assert_eq!(point.turns_committed, 1, "one committed ReAct turn");
+        assert_eq!(point.history_watermark, 5);
+        assert_eq!(point.at_ms, 1_700_000_000_000);
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn crash_residue_ignores_settled_sessions_and_lower_in_flight_rounds() {
+        let directory =
+            std::env::temp_dir().join(format!("neenee-crash-settled-{}", uuid::Uuid::new_v4()));
+        let store = residue_store(&directory);
+        // Nothing in flight → no residue at all.
+        let empty = recover_crashed_round(&store, Vec::new(), 1).await;
+        assert!(empty.interrupts.is_empty() && empty.retry_point.is_none());
+
+        let session_id = store.id().await;
+        store
+            .set_request_usage_records(vec![
+                usage_record(
+                    &session_id,
+                    "principal",
+                    1,
+                    1,
+                    RequestUsageStatus::Completed,
+                ),
+                // Round 2 still in flight — but round 3 has since completed,
+                // so 2 is history: the counter guard must retire it.
+                usage_record(&session_id, "principal", 2, 1, RequestUsageStatus::InFlight),
+                usage_record(
+                    &session_id,
+                    "principal",
+                    3,
+                    1,
+                    RequestUsageStatus::Completed,
+                ),
+            ])
+            .await
+            .unwrap();
+        store.set_round_counter(3).await.unwrap();
+        let superseded =
+            recover_crashed_round(&store, store.request_usage_records().await, 1).await;
+        assert!(superseded.retry_point.is_none(), "superseded round retired");
+        // The dangling-round interrupt is still recorded for the transcript.
+        assert_eq!(superseded.interrupts.len(), 1);
+        assert_eq!(superseded.interrupts[0].round, Some(2));
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn crash_residue_arms_even_over_an_existing_terminated_interrupt() {
+        // Two scenarios land here. (a) A graceful daemon kill: the registry
+        // records `Terminated` but the round is exactly as resumable as a
+        // crash's — suppressing the point would resurrect the bug for every
+        // `neenee stop`. (b) A crash *during* a `/retry` resume: the resumed
+        // round keeps its number, so the earlier run's `Terminated` record is
+        // already present when the second crash is recovered. The interrupt
+        // explains the transcript; the point offers recovery — independent.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-crash-graceful-{}", uuid::Uuid::new_v4()));
+        let store = residue_store(&directory);
+        let session_id = store.id().await;
+        store
+            .set_request_usage_records(vec![usage_record(
+                &session_id,
+                "principal",
+                1,
+                1,
+                RequestUsageStatus::InFlight,
+            )])
+            .await
+            .unwrap();
+        store
+            .record_round_interrupt(neenee_contracts::RoundInterrupt {
+                reason: neenee_contracts::RoundInterruptReason::Terminated,
+                at_ms: 1,
+                round: Some(1),
+            })
+            .await
+            .unwrap();
+        store.set_round_counter(1).await.unwrap();
+        let residue = recover_crashed_round(&store, store.request_usage_records().await, 2).await;
+        // The record already exists — `record_round_interrupt` dedupes on
+        // (reason, round) — but the resume point is armed regardless.
+        assert_eq!(residue.interrupts.len(), 1);
+        assert!(
+            residue.retry_point.is_some(),
+            "an existing interrupt must not suppress the resume point"
+        );
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn crash_residue_counts_turns_from_the_rounds_opening_user_message() {
+        // A crash on the round's very first request: the user message is
+        // durable, nothing streamed through yet → zero committed turns. A
+        // prior round's assistant reply must not be counted into it.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-crash-first-{}", uuid::Uuid::new_v4()));
+        let store = residue_store(&directory);
+        let session_id = store.id().await;
+        store
+            .set_request_usage_records(vec![usage_record(
+                &session_id,
+                "principal",
+                2,
+                1,
+                RequestUsageStatus::InFlight,
+            )])
+            .await
+            .unwrap();
+        store
+            .replace_messages(vec![
+                Message::new(Role::User, "round 1"),
+                Message::new(Role::Assistant, "answer 1"),
+                Message::new(Role::User, "round 2"),
+            ])
+            .await
+            .unwrap();
+        store.set_round_counter(2).await.unwrap();
+        let residue = recover_crashed_round(&store, store.request_usage_records().await, 1).await;
+        let point = residue
+            .retry_point
+            .expect("first-request crash arms a point");
+        assert_eq!(point.turns_committed, 0, "nothing streamed through");
+        assert_eq!(point.history_watermark, 3);
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

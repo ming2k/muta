@@ -75,6 +75,8 @@ pub fn draw_history_panel(
     input_rect: Rect,
     activity_height: u16,
     theme: &Theme,
+    selection: &crate::model::selection::SelectionState,
+    layout_map: &mut crate::model::layout::LayoutMap,
 ) -> Option<Rect> {
     // Compute the panel footprint: it grows upward from the top edge of the
     // composer. The activity bar sits flush above the composer, so reserve
@@ -153,23 +155,30 @@ pub fn draw_history_panel(
             FooterHint::always(keyvocab::ESC, "close"),
         ];
         let body = keymap_body_lines(&hints, &[], theme);
-        render_body(
-            frame,
-            body_rect,
-            body,
-            scroll,
-            None,
-            SCROLL_EDGE_MARGIN,
-            false,
-            theme,
+        // Selectable document: the keymap sub-page registers as MODAL_DOC
+        // rows so key labels and descriptions are copyable.
+        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
+            .into_iter()
+            .map(crate::components::selectable_body::SelectableRow::from_line)
+            .collect();
+        crate::components::selectable_body::render_selectable_body(
+            frame, body_rect, &rows, scroll, None, theme, selection, layout_map,
         );
         render_modal_footer_with_more(frame, footer_rect, &hints, &[], theme);
         return Some(area);
     }
 
     if preview {
+        // Selectable document: the full text of the focused history entry is
+        // exactly what a user would want to copy (e.g. to re-use elsewhere).
         let body = preview_body(history, ranked, modal_index, theme);
-        render_body(frame, body_rect, body, scroll, None, 0, true, theme);
+        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
+            .into_iter()
+            .map(crate::components::selectable_body::SelectableRow::from_line)
+            .collect();
+        crate::components::selectable_body::render_selectable_body(
+            frame, body_rect, &rows, scroll, None, theme, selection, layout_map,
+        );
     } else {
         let body = list_body(
             history,

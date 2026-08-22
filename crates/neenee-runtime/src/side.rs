@@ -544,9 +544,9 @@ async fn start_resolved_turn(
     }
     let projection =
         ContextProjectionSettings::from_config(config, active_context_window(principal));
-    let retry_max_attempts = config.provider_retry_max_attempts;
-    let retry_base_ms = config.provider_retry_base_ms;
-    let retry_max_ms = config.provider_retry_max_ms;
+    let retry_max_attempts = config.connection_retry_max_attempts;
+    let retry_base_ms = config.connection_retry_base_ms;
+    let retry_max_ms = config.connection_retry_max_ms;
 
     start_interactive_round(
         InteractiveRoundContext {

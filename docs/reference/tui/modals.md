@@ -228,6 +228,12 @@ times; `Enter` resumes the selected session.
 The `●` badge marks the currently active session. Overview text is
 truncated with `…` when it would collide with the meta column.
 
+The `i` info sub-view (session id, title, timestamps, message count, full
+last prompt) is a selectable document — drag to select, `Ctrl+Shift+C` to
+copy (see [Selecting modal text](#selecting-modal-text)). Useful for
+copying a session id straight out of the read-out. The list itself stays a
+picker (keyboard-driven, not selectable text).
+
 ## Asides modal
 
 The live `/btw` asides list (ADR-0103 §5), opened by `F5` or `/btw list`.
@@ -341,7 +347,7 @@ them, so the live status surface stays visible even while browsing history.
 |-----|--------|
 | `/` (browse) | Enter search mode (borrow the composer line as the query) |
 | `↑` / `↓` | Move selection |
-| `Tab` | Toggle a full-text **preview** of the selected entry |
+| `Tab` | Toggle a full-text **preview** of the selected entry (selectable text: drag + `Ctrl+Shift+C` copies the prompt) |
 | `Enter` | Insert the focused entry into the composer (browse or search) |
 | `Ctrl+X` | **Clear the entire history** — arms a confirmation (`y` wipes, any other key cancels) |
 | `Esc` (search) | Leave search → back to browse |
@@ -509,6 +515,11 @@ Sections: **General**, **Line editing**, **Transcript focus**, **Views &
 tools**, **Modes**. Closes with a one-line note: `Drag to select · Ctrl+C or
 Ctrl+Shift+C to copy.`
 
+The body is a selectable document: dragging over the keycap rows and
+descriptions selects them, and `Ctrl+Shift+C` copies — the same interaction
+as transcript text (see [Selecting modal
+text](#selecting-modal-text)).
+
 ## Activity modal
 
 Tabbed overview of the current round, opened by clicking the activity bar.
@@ -551,6 +562,55 @@ One scrolling body with three sections:
 
 Interrupted, failed, and abandoned attempts are included and marked, so the
 daily totals are honest about what was actually requested.
+
+The body is a selectable document: any run of rows (a KV pair, a table row,
+a chart label) can be dragged over and copied with `Ctrl+Shift+C` (see
+[Selecting modal text](#selecting-modal-text)).
+
+## Selecting modal text
+
+Documentary modal bodies render through `components/selectable_body.rs` and
+register every visual row as a selection region under the modal-document
+sentinel. Migrated surfaces:
+
+| Surface | What becomes copyable |
+|---------|----------------------|
+| Help (`?`) | The whole cheat sheet — keycap labels and descriptions |
+| Usage Statistics (`/usage`) | Summary KV, daily/model tables, event log |
+| Context Usage (`/usage` → round drill-in) | The round's KV read-out, turns table, legend |
+| Activity modal (Activity / Todos) | Prompt, status detail, last failure, todo items |
+| Sessions `i` info sub-view | Session id, title, timestamps, full last prompt |
+| History `Tab` preview | The full prompt text of the focused entry |
+| Permission sheet body | Tool description and the arguments JSON |
+| OAuth pending sheet | Instructions, URL, verification code |
+| In-modal `?` keymap sub-pages | Key labels and descriptions (every modal that has one) |
+
+The consequence for the user:
+
+- Dragging across rows inside the panel selects the text (highlight follows
+  the pointer; wrapped lines select per visual row).
+- `Ctrl+Shift+C` copies the selection, exactly like on the transcript.
+- A press on the text never dismisses the modal or triggers a button;
+  outside-click dismiss and all click affordances keep working unchanged
+  (a press on chrome or blank areas still behaves as before).
+
+Picker-style modal bodies (Models, Connections, Tools, MCP, Sessions list,
+Asides, Queue, Skills) are deliberately *not* draggable: their rows are
+interactive targets (Enter / Space / `e` shortcuts), and drag-select there
+would fight the click affordances. The distinction is content-vs-control,
+not text-vs-text. (Their `?` keymap sub-pages *are* selectable — a sub-page
+is documentation even when its parent is a picker.) Two adjacencies worth
+naming: the Skills modal's *expanded* detail block is documentary but lives
+inside the picker's row stream — making just those rows selectable would
+split one scroll surface across two interaction models, so it stays
+non-draggable (the description is re-readable in `/skills` output); and the
+Question modal is a pure decision surface (options + free-text field), so
+its body is control, not document.
+
+Declarations (indents, todo status glyphs) are painted as row prefixes that
+stay out of copied text, and regions are anchored per *visual* row after
+application-layer wrapping, so wrapped continuation lines and scrolled
+views select and copy the visible text.
 
 ## Toasts
 

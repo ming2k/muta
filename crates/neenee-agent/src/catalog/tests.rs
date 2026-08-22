@@ -16,7 +16,7 @@ use neenee_contracts::{Effort, RemoteModelEndpoint, ThinkingMode};
 use neenee_persistence::config::{
     Config, Credentials, DiscoveryCache, FittedModelInfo, UserTransport,
 };
-use neenee_persistence::instances::{Instances, ProviderInstance};
+use neenee_persistence::connections::{Connection, Connections};
 use neenee_persistence::route_settings::RouteSettingsStore;
 use neenee_providers::{DEEPSEEK_BUILTIN_MODELS, route_for_model};
 
@@ -67,11 +67,11 @@ fn sandboxed_paths() -> PathsSandbox {
     }
 }
 
-fn instance(id: &str, template_id: Option<&str>) -> ProviderInstance {
-    ProviderInstance {
+fn instance(id: &str, preset_id: Option<&str>) -> Connection {
+    Connection {
         id: id.to_string(),
         name: Some(id.to_string()),
-        template_id: template_id.map(str::to_string),
+        preset_id: preset_id.map(str::to_string),
         ..Default::default()
     }
 }
@@ -91,7 +91,7 @@ fn template_instance_derives_models_from_the_template() {
 #[test]
 fn discovered_model_list_prefers_the_cache() {
     let mut cache = DiscoveryCache::default();
-    cache.provider_models.insert(
+    cache.connection_models.insert(
         "deepseek".to_string(),
         vec!["deepseek-v4-flash".to_string()],
     );
@@ -110,8 +110,8 @@ fn custom_instance_serves_its_declared_models() {
         vec!["a", "b"]
     );
     let entry = derive_entries(
-        &Instances {
-            providers: vec![custom],
+        &Connections {
+            connections: vec![custom],
         },
         &DiscoveryCache::default(),
         &RouteSettingsStore::default(),
@@ -297,9 +297,9 @@ fn copilot_route_uses_remote_endpoint_metadata() {
         );
         m
     });
-    let copilot = ProviderInstance {
+    let copilot = Connection {
         id: "copilot".to_string(),
-        template_id: Some("copilot-oauth".to_string()),
+        preset_id: Some("copilot-oauth".to_string()),
         auth: neenee_contracts::ChannelAuth::CopilotOAuth,
         ..Default::default()
     };
@@ -324,18 +324,18 @@ fn copilot_route_uses_remote_endpoint_metadata() {
 #[test]
 fn build_picker_state_reflects_instances() {
     let _sandbox = sandboxed_paths();
-    let instances = Instances {
-        providers: vec![instance("deepseek", Some("deepseek"))],
+    let instances = Connections {
+        connections: vec![instance("deepseek", Some("deepseek"))],
     };
     instances.save().unwrap();
     let config = Config {
-        default_provider: "deepseek".to_string(),
+        default_connection: "deepseek".to_string(),
         default_model: Some("deepseek-v4-flash".to_string()),
         ..Default::default()
     };
     let snapshot = build_picker_state(
         &config,
-        &neenee_persistence::provider_usage::ProviderUsage::default(),
+        &neenee_persistence::connection_usage::ConnectionUsage::default(),
     );
     assert_eq!(snapshot.default_id, "deepseek");
     let row = snapshot
@@ -344,7 +344,7 @@ fn build_picker_state_reflects_instances() {
         .find(|r| r.id == "deepseek")
         .expect("deepseek row");
     assert_eq!(row.name, "deepseek");
-    assert_eq!(row.template_id, "deepseek");
+    assert_eq!(row.preset_id, "deepseek");
     assert!(row.models.contains(&"deepseek-v4-flash".to_string()));
 }
 
@@ -386,10 +386,10 @@ async fn live_discovery_writes_the_per_instance_cache() {
         .await;
 
     // An instance pointed at the mock; its base_url override feeds discovery.
-    let instances = Instances {
-        providers: vec![ProviderInstance {
+    let instances = Connections {
+        connections: vec![Connection {
             id: "deepseek".to_string(),
-            template_id: Some("deepseek".to_string()),
+            preset_id: Some("deepseek".to_string()),
             base_url: Some(format!("{}/v1/responses", server.url())),
             ..Default::default()
         }],
@@ -405,11 +405,11 @@ async fn live_discovery_writes_the_per_instance_cache() {
 
     let cache = DiscoveryCache::load();
     assert_eq!(
-        cache.provider_models.get("deepseek").map(|m| m.len()),
+        cache.connection_models.get("deepseek").map(|m| m.len()),
         Some(2),
         "the discovered list lands in the cache"
     );
-    assert!(cache.provider_models["deepseek"].contains(&"deepseek-v4-flash".to_string()));
+    assert!(cache.connection_models["deepseek"].contains(&"deepseek-v4-flash".to_string()));
 }
 
 #[tokio::test]
@@ -423,10 +423,10 @@ async fn discovery_failure_keeps_the_previous_subset_and_reports() {
         .create_async()
         .await;
 
-    let instances = Instances {
-        providers: vec![ProviderInstance {
+    let instances = Connections {
+        connections: vec![Connection {
             id: "deepseek".to_string(),
-            template_id: Some("deepseek".to_string()),
+            preset_id: Some("deepseek".to_string()),
             base_url: Some(format!("{}/v1/responses", server.url())),
             ..Default::default()
         }],
@@ -439,14 +439,14 @@ async fn discovery_failure_keeps_the_previous_subset_and_reports() {
     assert_eq!(outcome.failures[0].0, "deepseek");
     // The previous subset is untouched (there was none → snapshot still wins).
     let cache = DiscoveryCache::load();
-    assert!(cache.provider_models.is_empty());
+    assert!(cache.connection_models.is_empty());
 }
 
 #[test]
 fn sync_fitted_model_registry_overlays_fitted_ids() {
     let _sandbox = sandboxed_paths();
-    let instances = Instances {
-        providers: vec![instance("kimi", Some("kimi-code"))],
+    let instances = Connections {
+        connections: vec![instance("kimi", Some("kimi-code"))],
     };
     instances.save().unwrap();
     let mut cache = DiscoveryCache::default();
@@ -516,12 +516,12 @@ api_key = "sk-legacy"
     // Idempotent: the store now exists, a second call is a no-op.
     assert!(!migrate_legacy_state());
 
-    let instances = Instances::load();
-    assert_eq!(instances.providers.len(), 1);
-    let deepseek = &instances.providers[0];
+    let instances = Connections::load();
+    assert_eq!(instances.connections.len(), 1);
+    let deepseek = &instances.connections[0];
     assert_eq!(deepseek.id, "deepseek");
-    assert_eq!(deepseek.template_id.as_deref(), Some("deepseek"));
-    // Template instances do not duplicate their derived model set.
+    assert_eq!(deepseek.preset_id.as_deref(), Some("deepseek"));
+    // Preset connections do not duplicate their derived model set.
     assert!(
         deepseek.models.is_empty(),
         "routes are derived, not persisted"
@@ -570,8 +570,8 @@ fn transport_for_protocol_maps_wire_labels() {
 #[test]
 fn catalog_builds_from_the_state_store_only() {
     let _sandbox = sandboxed_paths();
-    let instances = Instances {
-        providers: vec![instance("deepseek", Some("deepseek"))],
+    let instances = Connections {
+        connections: vec![instance("deepseek", Some("deepseek"))],
     };
     instances.save().unwrap();
     let entries = build_catalog();

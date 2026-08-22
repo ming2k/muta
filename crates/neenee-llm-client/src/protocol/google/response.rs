@@ -248,6 +248,47 @@ fn part_is_thought(part: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether an upstream error rejects the `thinkingConfig` we stamped — i.e.
+/// the request asked for `includeThoughts` / a `thinkingLevel` and the endpoint
+/// answered that it does not accept that field **for this model**. This is the
+/// "chain withheld" family of upstream behavior: a model served through a
+/// legacy or filtered route may reason internally while refusing to disclose
+/// the chain, and Google's error surfaces that as an `INVALID_ARGUMENT` naming
+/// `thinkingConfig` (or one of its keys) / `include_thoughts` / `thought`.
+///
+/// Deliberately narrow: a bare 400 without a thinking-related token is some
+/// other contract violation and must keep failing loudly. The match is
+/// case-insensitive because relays re-case Google's field names freely, and it
+/// accepts both the camelCase (`thinkingConfig`) and snake_case
+/// (`thinking_config`) spellings for the same reason.
+pub fn rejects_thinking_config(error: &str) -> bool {
+    let haystack = error.to_ascii_lowercase();
+    let names_thinking = [
+        "thinkingconfig",
+        "thinking_config",
+        "include_thoughts",
+        "includethoughts",
+        "thinkinglevel",
+        "thinking_level",
+        "thinkingbudget",
+        "thinking_budget",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle));
+    if !names_thinking {
+        return false;
+    }
+    [
+        "invalid_argument",
+        "invalid argument",
+        "http 400",
+        "unknown name",
+        "unsupported",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle))
+}
+
 /// Augment a transport-layer error with model-specific guidance. For native
 /// Google, a `404 NOT_FOUND` almost always means the upstream does not serve
 /// this model id — not a transient fault. `429 RESOURCE_EXHAUSTED` explains
@@ -731,5 +772,41 @@ mod tests {
         assert_eq!(parse_google_duration("0.5s"), Some(500));
         assert_eq!(parse_google_duration("30"), Some(30_000));
         assert_eq!(parse_google_duration("nonsense"), None);
+    }
+
+    #[test]
+    fn rejects_thinking_config_matches_google_invalid_argument() {
+        use super::rejects_thinking_config;
+        // The canonical Google shape: INVALID_ARGUMENT naming the field.
+        assert!(rejects_thinking_config(
+            "Google HTTP 400: {\"error\":{\"code\":400,\"status\":\"INVALID_ARGUMENT\",\
+             \"message\":\"Invalid JSON payload received. Unknown name \\\"thinkingConfig\\\" \
+             at 'generation_config': Cannot find field.\"}}"
+        ));
+        // Relay re-casings and the snake_case spelling both match.
+        assert!(rejects_thinking_config(
+            "Google HTTP 400: unknown name include_thoughts"
+        ));
+        assert!(rejects_thinking_config(
+            "Google HTTP 400: thinking_level is not supported on this model"
+        ));
+    }
+
+    #[test]
+    fn rejects_thinking_config_ignores_other_400s() {
+        use super::rejects_thinking_config;
+        // A 400 that does not name the thinking surface is some other
+        // contract violation — it must keep failing loudly.
+        assert!(!rejects_thinking_config(
+            "Google HTTP 400: {\"error\":{\"status\":\"INVALID_ARGUMENT\",\
+             \"message\":\"Request payload size exceeds the limit.\"}}"
+        ));
+        // A thinking-related message without an invalid-argument signal
+        // (e.g. quoted inside unrelated prose) does not downgrade either.
+        assert!(!rejects_thinking_config("thinkingConfig is great"));
+        // Retryable exhaustion naming nothing about thinking stays itself.
+        assert!(!rejects_thinking_config(
+            "Google HTTP 429: RESOURCE_EXHAUSTED thinking about quota"
+        ));
     }
 }

@@ -166,12 +166,12 @@ impl Dirs {
         self.state_dir.join("auth.toml")
     }
 
-    /// Provider instances (`$XDG_STATE_HOME/neenee/providers.toml`). The
+    /// Connections (`$XDG_STATE_HOME/neenee/connections.toml`). The
     /// program-managed "who I connect to" records — deliberately NOT in the
     /// user-edited `config.toml`, which holds behavior only. See
-    /// [`crate::instances`].
-    pub fn providers_file(&self) -> PathBuf {
-        self.state_dir.join("providers.toml")
+    /// [`crate::connections`].
+    pub fn connections_file(&self) -> PathBuf {
+        self.state_dir.join("connections.toml")
     }
 
     /// `$XDG_STATE_HOME/neenee/route_settings.json` — the user's per-route
@@ -238,12 +238,12 @@ impl Dirs {
     }
 
     /// Per-model usage telemetry (`last_used`, use count) driving recency
-    /// ordering in the provider picker (ADR-0002). Rebuildable: loss affects sort
+    /// ordering in the connection picker. Rebuildable: loss affects sort
     /// order only, never configuration. Sits next to [`Self::history_file`]
     /// under `$XDG_STATE_HOME` since it is the same kind of program-generated
     /// signal.
-    pub fn provider_usage_file(&self) -> PathBuf {
-        self.state_dir.join("provider_usage.json")
+    pub fn connection_usage_file(&self) -> PathBuf {
+        self.state_dir.join("connection_usage.json")
     }
 
     /// User-granted trust set for project-scope external tools (ADR-0085 §5).

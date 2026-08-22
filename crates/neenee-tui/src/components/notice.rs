@@ -275,6 +275,20 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
     }
 
     #[test]
+    fn parses_retry_exhausted_json_error() {
+        let raw = r#"Exhausted 30 retry attempts · Google HTTP 429 Too Many Requests: {"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED"}}"#;
+        let parsed = parse_notice_content(raw);
+        assert_eq!(
+            parsed.header,
+            "Exhausted 30 retry attempts · Google HTTP 429 Too Many Requests"
+        );
+        assert!(parsed.detail.is_some());
+        let detail = parsed.detail.unwrap();
+        assert!(detail.contains("\"code\": 429"));
+        assert!(detail.contains("\"status\": \"RESOURCE_EXHAUSTED\""));
+    }
+
+    #[test]
     fn parses_plain_http_error_without_json() {
         let raw = "OpenAI HTTP 503 Service Unavailable";
         let parsed = parse_notice_content(raw);

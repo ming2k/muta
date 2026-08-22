@@ -144,6 +144,29 @@ impl OAuthConfig {
         format!("http://{}:{}{}", self.redirect_host, port, self.oauth_path)
     }
 
+    /// Whether this OAuth config speaks the Google Antigravity protocol.
+    pub fn is_antigravity(&self) -> bool {
+        self.provider_id == "google-antigravity"
+            || self.provider_id == "antigravity"
+            || self.client_id == GOOGLE_ANTIGRAVITY_CLIENT_ID
+            || self.token_url.contains("oauth2.googleapis.com")
+    }
+
+    /// Whether this OAuth config speaks the ChatGPT protocol.
+    pub fn is_chatgpt(&self) -> bool {
+        self.provider_id == "chatgpt" || self.token_url.contains("auth0.openai.com")
+    }
+
+    /// Whether this OAuth config speaks the GitHub Copilot protocol.
+    pub fn is_copilot(&self) -> bool {
+        self.provider_id == "copilot" || self.token_url.contains("github.com/login/oauth")
+    }
+
+    /// Whether this OAuth config speaks the xAI protocol.
+    pub fn is_xai(&self) -> bool {
+        self.provider_id == "xai" || self.token_url.contains("auth.x.ai")
+    }
+
     /// Helper to clone and override client_id.
     pub fn with_client_id(mut self, client_id: impl Into<Cow<'static, str>>) -> Self {
         self.client_id = client_id.into();
@@ -418,7 +441,7 @@ pub fn google_antigravity_preset() -> OAuthConfig {
         extra_token_params: Vec::new(),
         extra_refresh_params: Vec::new(),
         extra_headers: Vec::new(),
-        user_agent: Some(Cow::Borrowed("antigravity/1.23.2 windows/amd64")),
+        user_agent: Some(Cow::Borrowed(neenee_contracts::client_identity::ANTIGRAVITY_USER_AGENT)),
         oauth_host: Cow::Borrowed("127.0.0.1"),
         oauth_port: 51121,
         port_mode: PortMode::PreferredOrDynamic(51121),
@@ -664,7 +687,7 @@ mod tests {
         assert_eq!(cfg.port_mode, PortMode::PreferredOrDynamic(51121));
         assert_eq!(
             cfg.user_agent.as_deref(),
-            Some("antigravity/1.23.2 windows/amd64")
+            Some(neenee_contracts::client_identity::ANTIGRAVITY_USER_AGENT)
         );
 
         // Test client customization / emulation

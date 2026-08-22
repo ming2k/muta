@@ -11,15 +11,14 @@ use neenee_agent::Agent;
 use neenee_agent::catalog;
 use neenee_agent::orchestration::round_response;
 use neenee_contracts::{
-    AgentNotice, AgentResponse, CommandRecord, CommandResult, Provider, RoundEvent, SecretString,
+    AgentNotice, AgentResponse, ClientIdentity, CommandRecord, CommandResult, Provider, RoundEvent,
+    SecretString,
 };
 use neenee_persistence::config::{Config, Credentials, DiscoveryCache, UserTransport};
-use neenee_persistence::instances::{Instances, ProviderInstance};
+use neenee_persistence::connection_usage::ConnectionUsage;
+use neenee_persistence::connections::{Connection, Connections};
 use neenee_persistence::route_settings::RouteSettingsStore;
-use neenee_persistence::{
-    provider_usage::ProviderUsage,
-    session::{ProviderSelection, SessionStore},
-};
+use neenee_persistence::session::{ProviderSelection, SessionStore};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 
@@ -44,17 +43,17 @@ pub async fn switch(
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     session: &SessionStore,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     provider_type: String,
     model: String,
     api_key: Option<SecretString>,
     base_url: Option<String>,
 ) {
-    let mut instances = Instances::load();
-    // A key entered in the TUI is the instance's credential; an environment
+    let mut connections = Connections::load();
+    // A key entered in the TUI is the connection's credential; an environment
     // variable (`api_key_env`) still wins at catalog resolution time.
     if let Some(key) = api_key
-        && instances.get(&provider_type).is_some()
+        && connections.get(&provider_type).is_some()
     {
         let mut creds = Credentials::load();
         creds.set_api_key(&provider_type, Some(key));
@@ -64,10 +63,10 @@ pub async fn switch(
     }
     if let Some(url) = base_url
         && !url.trim().is_empty()
-        && let Some(instance) = instances.get_mut(&provider_type)
+        && let Some(connection) = connections.get_mut(&provider_type)
     {
-        instance.base_url = Some(url.trim().to_string());
-        if instances.save().is_err() {
+        connection.base_url = Some(url.trim().to_string());
+        if connections.save().is_err() {
             tracing::warn!("switch: could not persist base-url override");
         }
     }
@@ -77,7 +76,7 @@ pub async fn switch(
     // the session pin (written further below) records this session's own
     // choice for exact restore on resume. The active model always lives in the
     // shared `default_model` — every instance is multi-model capable.
-    config.default_provider = provider_type.clone();
+    config.default_connection = provider_type.clone();
     config.default_model = Some(model.clone());
     if let Err(error) = config.save() {
         tracing::warn!(?error, "could not persist provider selection");
@@ -108,9 +107,9 @@ pub async fn switch(
     .await;
 }
 
-/// `AgentRequest::AddProvider` — create a provider instance (from a template
+/// `AgentRequest::AddProvider` — create a connection (from a preset
 /// or as a pure-custom declaration), persist it to the state store, set its
-/// credential, then activate it. For OAuth templates the TUI runs
+/// credential, then activate it. For OAuth presets the TUI runs
 /// [`authorize`] first, then calls this with `auth` set.
 #[allow(clippy::too_many_arguments)]
 pub async fn add(
@@ -119,7 +118,7 @@ pub async fn add(
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     session: &SessionStore,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     name: String,
     protocol: String,
     base_url: String,
@@ -128,12 +127,13 @@ pub async fn add(
     models: Vec<String>,
     auth: neenee_contracts::ChannelAuth,
     template_id: Option<String>,
+    client_identity: Option<ClientIdentity>,
 ) {
-    let mut instances = Instances::load();
-    let id = instances.unique_id(&name);
+    let mut connections = Connections::load();
+    let id = connections.unique_id(&name);
     let transport = transport_for_protocol(&protocol);
     let trimmed_key = api_key.expose_secret().trim();
-    // Pasted API key on an OAuth template → ordinary ApiKey auth.
+    // Pasted API key on an OAuth preset → ordinary ApiKey auth.
     let auth = match (auth, !trimmed_key.is_empty()) {
         (a, true) if a.is_oauth() => neenee_contracts::ChannelAuth::ApiKey,
         (other, _) => other,
@@ -142,57 +142,60 @@ pub async fn add(
         let trimmed = base_url.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     };
-    // Stamp the template id so the catalog derives this instance's routes from
-    // the template. Only a known id is recorded; an unknown / blank value
-    // keeps the instance pure-custom (its declared models are honored).
-    let resolved_template_id =
-        template_id.filter(|tid| neenee_providers::provider_template_spec(tid).is_some());
-    // Sanitized declared model ids. Template instances derive their model set
-    // and leave `models` empty; a template that must still seed its list
+    // Stamp the preset id so the catalog derives this connection's routes from
+    // the preset. Only a known id is recorded; an unknown / blank value
+    // keeps the connection pure-custom (its declared models are honored).
+    let resolved_preset_id =
+        template_id.filter(|pid| neenee_providers::provider_preset_spec(pid).is_some());
+    // Sanitized declared model ids. Preset connections derive their model set
+    // and leave `models` empty; a preset that must still seed its list
     // (custom-openai) declares it here.
     let declared_models: Vec<String> = models
         .iter()
         .map(|m| neenee_contracts::sanitize_model_id(m))
         .filter(|m| !m.is_empty())
         .collect();
-    let is_template = resolved_template_id.is_some();
-    // A pure-custom provider must declare at least one model; a template
-    // instance with a template that seeds none is a no-op.
-    if !is_template && declared_models.is_empty() {
+    let is_preset = resolved_preset_id.is_some();
+    // A pure-custom provider must declare at least one model; a preset
+    // connection with a preset that seeds none is a no-op.
+    if !is_preset && declared_models.is_empty() {
         return;
     }
     let active_model = declared_models
         .first()
         .cloned()
         .or_else(|| {
-            resolved_template_id
+            resolved_preset_id
                 .as_deref()
-                .and_then(neenee_providers::provider_template_spec)
+                .and_then(neenee_providers::provider_preset_spec)
                 .and_then(|spec| spec.models.first())
                 .map(|m| (*m).to_string())
         })
         .unwrap_or_default();
 
-    let instance = ProviderInstance {
+    let client_identity = client_identity.unwrap_or_default();
+
+    let connection = Connection {
         id: id.clone(),
         name: (!name.trim().is_empty()).then(|| name.trim().to_string()),
-        template_id: resolved_template_id,
+        preset_id: resolved_preset_id,
         auth,
         api_key_env: None,
-        transport: if is_template { None } else { Some(transport) },
+        client_identity,
+        transport: if is_preset { None } else { Some(transport) },
         base_url,
-        user_agent: if is_template { None } else { user_agent },
-        models: if is_template {
+        user_agent: if is_preset { None } else { user_agent },
+        models: if is_preset {
             Vec::new()
         } else {
             declared_models
         },
     };
-    instances.providers.push(instance);
-    if instances.save().is_err() {
-        tracing::warn!("add: could not persist instance");
+    connections.connections.push(connection);
+    if connections.save().is_err() {
+        tracing::warn!("add: could not persist connection");
     }
-    // The instance's credential, if the user supplied one.
+    // The connection's credential, if the user supplied one.
     if auth == neenee_contracts::ChannelAuth::ApiKey && !trimmed_key.is_empty() {
         let mut creds = Credentials::load();
         creds.set_api_key(&id, Some(SecretString::from(trimmed_key)));
@@ -201,7 +204,7 @@ pub async fn add(
         }
     }
 
-    config.default_provider = id.clone();
+    config.default_connection = id.clone();
     config.default_model = Some(active_model.clone());
     if let Err(error) = config.save() {
         tracing::warn!(?error, "add: could not persist selection");
@@ -248,44 +251,45 @@ pub async fn add(
     .await;
 }
 
-/// `AgentRequest::EditProvider` — update an instance's display name, endpoint
-/// override (API-key instances), and credential in place. OAuth instances'
-/// endpoint/bearer are owned by the auth flow and are never overwritten. An
-/// empty `api_key` leaves the existing key untouched. Persists, then
-/// re-activates so the live provider picks up the new endpoint/key.
+/// `AgentRequest::EditProvider` — update a connection's display name, endpoint
+/// override, credential, and client identity in place.
 #[allow(clippy::too_many_arguments)]
 pub async fn edit(
     config: &mut Config,
     agent: &Agent,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     id: String,
     name: String,
     protocol: String,
     base_url: String,
     api_key: SecretString,
+    client_identity: Option<ClientIdentity>,
 ) {
-    let mut instances = Instances::load();
+    let mut connections = Connections::load();
     let transport = transport_for_protocol(&protocol);
     let trimmed_url = base_url.trim();
     let trimmed_key = api_key.expose_secret().trim();
     let trimmed_name = name.trim();
-    let Some(instance) = instances.get_mut(&id) else {
+    let Some(instance) = connections.get_mut(&id) else {
         return;
     };
     if !trimmed_name.is_empty() {
         instance.name = Some(trimmed_name.to_string());
     }
-    // OAuth instances' endpoint and bearer are resolved by the auth flow; the
+    if let Some(ci) = client_identity {
+        instance.client_identity = ci;
+    }
+    // OAuth connections' endpoint and bearer are resolved by the auth flow; the
     // editor hides Base URL/Token for OAuth, but the server guards too so a
     // malformed/empty payload can't wipe them.
     if !instance.auth.is_oauth() {
         if !trimmed_url.is_empty() {
             instance.base_url = Some(trimmed_url.to_string());
         }
-        // A pure-custom instance also adopts the edited transport.
-        if instance.template_id.is_none() {
+        // A pure-custom connection also adopts the edited transport.
+        if instance.preset_id.is_none() {
             instance.transport = Some(transport);
         }
         // An empty key keeps whatever the instance already had.
@@ -297,13 +301,13 @@ pub async fn edit(
             }
         }
     }
-    if instances.save().is_err() {
-        tracing::warn!("edit: could not persist instance");
+    if connections.save().is_err() {
+        tracing::warn!("edit: could not persist connection");
     }
     // Only rebuild the live provider when editing the active one (so a new
     // endpoint/key takes effect); editing an inactive provider just refreshes
     // the persisted state + the picker snapshot without switching.
-    if config.default_provider == id {
+    if config.default_connection == id {
         let model = catalog::resolved_model_name_with_usage(config, &id, provider_usage)
             .unwrap_or_default();
         activate(
@@ -327,26 +331,26 @@ pub async fn edit(
 }
 
 /// `AgentRequest::RemoveProviderModel` — drop a declared model from a
-/// pure-custom instance, persist, and push a fresh picker snapshot. The last
-/// remaining model is kept (an instance must serve at least one model). If the
-/// removed model was the active `default_model`, it is cleared so the instance
+/// pure-custom connection, persist, and push a fresh picker snapshot. The last
+/// remaining model is kept (a connection must serve at least one model). If the
+/// removed model was the active `default_model`, it is cleared so the connection
 /// falls back to its first route.
 pub async fn remove_model(
     config: &mut Config,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &ProviderUsage,
+    provider_usage: &ConnectionUsage,
     provider_id: String,
     model: String,
 ) {
-    let mut instances = Instances::load();
-    if let Some(instance) = instances.get_mut(&provider_id)
-        && instance.template_id.is_none()
-        && instance.models.len() > 1
-        && let Some(pos) = instance.models.iter().position(|m| *m == model)
+    let mut connections = Connections::load();
+    if let Some(connection) = connections.get_mut(&provider_id)
+        && connection.preset_id.is_none()
+        && connection.models.len() > 1
+        && let Some(pos) = connection.models.iter().position(|m| *m == model)
     {
-        instance.models.remove(pos);
-        if instances.save().is_err() {
-            tracing::warn!("remove_model: could not persist instance");
+        connection.models.remove(pos);
+        if connections.save().is_err() {
+            tracing::warn!("remove_model: could not persist connection");
         }
     }
     if config.default_model.as_deref() == Some(model.as_str()) {
@@ -355,8 +359,8 @@ pub async fn remove_model(
     // Favorite is model-level (ADR-0046): a removed model's star is pruned so
     // the picker never references a model that is no longer served.
     config.favorites.retain(|fav| *fav != model);
-    if let Err(error) = config.save_preserving_provider_selection() {
-        tracing::warn!(?error, "could not persist removed provider model");
+    if let Err(error) = config.save_preserving_connection_selection() {
+        tracing::warn!(?error, "could not persist removed connection model");
     }
     let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
         config,
@@ -364,8 +368,8 @@ pub async fn remove_model(
     )));
 }
 
-/// `AgentRequest::EditProviderModel` — update the per-(instance, model)
-/// reasoning overrides in the discovery cache. Instance metadata (name /
+/// `AgentRequest::EditProviderModel` — update the per-(connection, model)
+/// reasoning overrides in the discovery cache. Connection metadata (name /
 /// endpoint / credential) is untouched.
 #[allow(clippy::too_many_arguments)]
 pub async fn edit_model(
@@ -373,7 +377,7 @@ pub async fn edit_model(
     agent: &Agent,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     provider_id: String,
     model: String,
     effort: Option<String>,
@@ -389,11 +393,11 @@ pub async fn edit_model(
     // Resolve the route's transport to decide which knobs apply (Anthropic
     // honors thinking; OpenAI/Responses carry effort only; Google ignores both).
     let stores = catalog::Stores::load();
-    let Some(instance) = stores.instances.get(&provider_id) else {
+    let Some(connection) = stores.connections.get(&provider_id) else {
         return;
     };
     let transport = catalog::derive_channel(
-        instance,
+        connection,
         &model,
         &stores.cache,
         &stores.routes,
@@ -425,7 +429,7 @@ pub async fn edit_model(
     let active_model =
         catalog::resolved_model_name_with_usage(config, &provider_id, provider_usage)
             .unwrap_or_default();
-    if config.default_provider == provider_id && active_model == model {
+    if config.default_connection == provider_id && active_model == model {
         activate(
             config,
             agent,
@@ -445,10 +449,10 @@ pub async fn edit_model(
     }
 }
 
-/// `AgentRequest::EditModelReasoning` — update the per-(instance, model)
-/// reasoning overrides for the currently active instance. Serves the model
-/// `e` editor for any model; the setting is scoped to the instance that
-/// actually serves it (a model id can be served by more than one instance).
+/// `AgentRequest::EditModelReasoning` — update the per-(connection, model)
+/// reasoning overrides for the currently active connection. Serves the model
+/// `e` editor for any model; the setting is scoped to the connection that
+/// actually serves it (a model id can be served by more than one connection).
 /// If the edited model is the active one, the live provider is re-activated
 /// so the new settings take effect at once.
 #[allow(clippy::too_many_arguments)]
@@ -457,7 +461,7 @@ pub async fn edit_model_reasoning(
     agent: &Agent,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     model: String,
     effort: Option<String>,
     thinking: Option<bool>,
@@ -469,7 +473,7 @@ pub async fn edit_model_reasoning(
             .filter(|s| neenee_contracts::effort::Effort::parse(s).is_some())
     });
 
-    let provider_id = config.default_provider.clone();
+    let provider_id = config.default_connection.clone();
     let mut routes = RouteSettingsStore::load();
     let entry = routes.settings_for_mut(&provider_id, &model);
     entry.effort = valid_effort;
@@ -502,10 +506,10 @@ pub async fn edit_model_reasoning(
     }
 }
 
-/// `AgentRequest::DeleteProvider` — remove a provider instance entirely: drop
-/// it from the instance store, its credential, its discovery-cache records,
+/// `AgentRequest::DeleteProvider` — remove a connection entirely: drop
+/// it from the connection store, its credential, its discovery-cache records,
 /// and its OAuth tokens, and prune its model ids from favorites. When the
-/// deleted instance was the active one, fall back to the effective default and
+/// deleted connection was the active one, fall back to the effective default and
 /// re-activate so the live provider never points at a removed entry.
 #[allow(clippy::too_many_arguments)]
 pub async fn delete(
@@ -513,23 +517,23 @@ pub async fn delete(
     agent: &Agent,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     id: String,
 ) {
-    let mut instances = Instances::load();
-    let Some(deleted) = instances.remove(&id) else {
+    let mut connections = Connections::load();
+    let Some(deleted) = connections.remove(&id) else {
         return;
     };
-    // Prune the deleted instance's model ids from favorites (model-level) so
+    // Prune the deleted connection's model ids from favorites (model-level) so
     // the picker never references a model that is no longer served.
     let deleted_models = catalog::route_models(&deleted, &DiscoveryCache::load());
     config
         .favorites
         .retain(|fav| !deleted_models.iter().any(|m| m == fav));
-    if instances.save().is_err() {
-        tracing::warn!("delete: could not persist instance store");
+    if connections.save().is_err() {
+        tracing::warn!("delete: could not persist connection store");
     }
-    // Clean up the credential and any OAuth tokens stored for this instance.
+    // Clean up the credential and any OAuth tokens stored for this connection.
     let mut creds = Credentials::load();
     creds.remove_api_key(&id);
     if creds.save().is_err() {
@@ -540,36 +544,29 @@ pub async fn delete(
         let _ = auth_store.save();
     }
     let mut cache = DiscoveryCache::load();
-    cache.remove_instance(&id);
+    cache.remove_connection(&id);
     if cache.save().is_err() {
         tracing::warn!("delete: could not persist discovery cache");
     }
-    // The deleted instance's route settings go with it (state, not cache).
+    // The deleted connection's route settings go with it (state, not cache).
     let mut routes = RouteSettingsStore::load();
-    routes.retain_instance_except(&id);
+    routes.retain_connection_except(&id);
     if routes.save().is_err() {
         tracing::warn!("delete: could not persist route settings");
     }
 
-    let was_active = config.default_provider == id;
+    let was_active = config.default_connection == id;
     if was_active {
-        config.default_provider = catalog::effective_default_provider_id(
-            config,
-            &catalog::Stores {
-                instances: Instances::load(),
-                cache: DiscoveryCache::load(),
-                routes: RouteSettingsStore::load(),
-                creds: Credentials::load(),
-            },
-        );
+        config.default_connection =
+            catalog::effective_default_connection_id(config, &catalog::Stores::load());
         config.default_model = None;
     }
-    if let Err(error) = config.save_preserving_provider_selection() {
-        tracing::warn!(?error, "could not persist deleted provider");
+    if let Err(error) = config.save_preserving_connection_selection() {
+        tracing::warn!(?error, "could not persist deleted connection");
     }
 
     if was_active {
-        let fallback = config.default_provider.clone();
+        let fallback = config.default_connection.clone();
         let model = catalog::resolved_model_name_with_usage(config, &fallback, provider_usage)
             .unwrap_or_default();
         activate(
@@ -584,7 +581,7 @@ pub async fn delete(
         )
         .await;
     } else {
-        // Deleting an inactive provider: refresh the picker + key snapshots
+        // Deleting an inactive connection: refresh the picker + key snapshots
         // without switching the live provider.
         let _ = resp_tx.send(AgentResponse::ProviderKeys(provider_key_status(config)));
         let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
@@ -607,7 +604,7 @@ pub async fn reapply_session_selection(
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     session: &SessionStore,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
 ) {
     // Overlay the session pin onto a throwaway clone so catalog resolution
     // picks the session's provider/model, not the global default.
@@ -615,14 +612,14 @@ pub async fn reapply_session_selection(
     let selection = session.provider_selection().await;
     let (provider_id, model_id): (String, Option<String>) = match &selection {
         Some(sel) => {
-            effective.default_provider = sel.provider.clone();
+            effective.default_connection = sel.provider.clone();
             if let Some(model) = &sel.model {
                 effective.default_model = Some(model.clone());
             }
             (sel.provider.clone(), sel.model.clone())
         }
         None => (
-            catalog::default_provider_id(config).to_string(),
+            catalog::default_connection_id(config).to_string(),
             config.default_model.clone(),
         ),
     };
@@ -643,8 +640,8 @@ pub async fn reapply_session_selection(
     .await;
 }
 
-/// `AgentRequest::AuthorizeOAuth` — run an OAuth login before a provider
-/// instance exists ("+ Add provider → xAI OAuth / ChatGPT OAuth"). `auth`
+/// `AgentRequest::AuthorizeOAuth` — run an OAuth login before a connection
+/// exists ("+ Add connection → xAI OAuth / ChatGPT OAuth"). `auth`
 /// selects which provider's flow to run; tokens persist under that provider's
 /// `auth.toml` key.
 pub async fn authorize(
@@ -672,24 +669,24 @@ pub async fn authorize(
     }
 }
 
-/// `AgentRequest::ConnectProvider` — re-auth an existing OAuth provider, then
+/// `AgentRequest::ConnectProvider` — re-auth an existing OAuth connection, then
 /// activate it.
 ///
-/// After a successful login, runs live model discovery so the provider's
+/// After a successful login, runs live model discovery so the connection's
 /// model list reflects the account's real entitlements immediately (rather
 /// than waiting for the next launch). Discovery failures are non-fatal: the
-/// provider keeps its previous model subset.
+/// connection keeps its previous model subset.
 pub async fn connect(
     config: &mut Config,
     agent: &Agent,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     provider_id: String,
     method: neenee_contracts::LoginMethod,
 ) {
-    let instances = Instances::load();
-    let auth_mode = instances
+    let connections = Connections::load();
+    let auth_mode = connections
         .get(&provider_id)
         .map(|p| p.auth)
         .unwrap_or_default();
@@ -899,17 +896,21 @@ async fn run_oauth(
     // Capture the ChatGPT account id from the id_token/access_token so the
     // Responses transport can send the `ChatGPT-Account-Id` header. xAI tokens
     // carry no such claim, so this is `None` for them.
-    let mut account_id = tokens
-        .id_token
-        .as_ref()
-        .map(SecretString::expose_secret)
-        .or(Some(tokens.access_token.expose_secret()))
-        .and_then(neenee_providers::oauth::chatgpt_account_id);
+    let mut account_id = if cfg.is_chatgpt() {
+        tokens
+            .id_token
+            .as_ref()
+            .map(SecretString::expose_secret)
+            .or(Some(tokens.access_token.expose_secret()))
+            .and_then(neenee_providers::oauth::chatgpt_account_id)
+    } else {
+        None
+    };
 
     let mut project_id = None;
     let mut user_email = None;
 
-    if cfg.provider_id == "google-antigravity" || cfg.provider_id == "antigravity" {
+    if cfg.is_antigravity() {
         if let Ok(project) = neenee_providers::oauth::resolve_antigravity_project(
             oauth.client(),
             tokens.access_token.expose_secret(),
@@ -960,12 +961,12 @@ async fn run_oauth(
 async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str) {
     use neenee_providers::oauth::{AuthStore, OAuth};
 
-    let instances = Instances::load();
-    let Some(instance) = instances.get(provider_id) else {
+    let connections = Connections::load();
+    let Some(instance) = connections.get(provider_id) else {
         return;
     };
     let auth = instance.auth;
-    let template_id = instance.template_id.as_deref();
+    let preset_id = instance.preset_id.as_deref();
 
     let Some(mut cfg) = auth
         .oauth_provider_id()
@@ -977,7 +978,7 @@ async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str) {
 
     let store = AuthStore::load();
     let Some(stored) = store
-        .get_for_provider(provider_id, template_id, auth)
+        .get_for_provider(provider_id, preset_id, auth)
         .cloned()
     else {
         return;
@@ -1001,13 +1002,7 @@ async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str) {
     }
 }
 
-/// Record a provider switch's acknowledgment in the durable command ledger —
-/// the ADR-0091 twin of the ADR-0088 toast. The live confirmation stays a
-/// transient toast (emitted by `activate`); the ledger keeps a durable `Ack`
-/// so resume/export/audit can show the switch happened, without polluting the
-/// message stream. Recorded under the `"models"` command word (the picker the
-/// user actually invoked to switch); best-effort, a failed persist logs but
-/// does not abort the switch.
+/// Record a provider switch's acknowledgment in the durable command ledger.
 async fn record_provider_ack(session: &SessionStore, provider: &str, model: &str, ack: String) {
     let record = CommandRecord::new("models", format!("{provider} {model}"))
         .with_result(CommandResult::Ack { title: ack });
@@ -1017,16 +1012,8 @@ async fn record_provider_ack(session: &SessionStore, provider: &str, model: &str
 }
 
 /// Shared tail of [`switch`] and [`add`]: rebuild the active provider through the
-/// catalog (so api-key / endpoint / user-agent resolution matches startup), swap
-/// it into the shared holder, re-seed mid-turn relief, and push the key + picker
-/// snapshots. `config` must already be persisted with the chosen pointers.
-///
-/// `session` is `Some` only for a genuine user-initiated switch ([`switch`]);
-/// those call sites additionally surface a toast acknowledgment and record the
-/// switch in the durable command ledger (ADR-0088/0091). The many *rebuild*
-/// callers (edit/delete/reasoning/reapply, …) pass `None` — re-activating the
-/// same provider is not a user-visible "switch", so it stays silent and
-/// unrecorded, exactly as before.
+/// catalog, swap it into the shared holder, re-seed mid-turn relief, and push
+/// the key + picker snapshots.
 #[allow(clippy::too_many_arguments)]
 async fn activate(
     config: &Config,
@@ -1034,23 +1021,13 @@ async fn activate(
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     session: Option<&SessionStore>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     provider_type: String,
     model: String,
 ) {
     refresh_oauth_if_needed(config, &provider_type).await;
 
-    // The live session id flows into prompt-cache control (ADR-0067): when the
-    // selected model's family is Moonshot / Kimi, it becomes the provider's
-    // `prompt_cache_key` so the server-side cache namespaces per session. The
-    // agent already carries the thread id (set at session start), so we resolve
-    // it here instead of threading a new parameter through every dispatch arm.
     let session_id = agent.thread_id();
-    // For multi-model providers the explicit model selects the channel (and thus
-    // the per-model transport); build_provider_for_model reads `default_model` as
-    // a fallback. Returns `None` when the provider id is unknown or has no
-    // resolvable channel — refuse the switch with a user-facing error instead
-    // of silently installing a non-functional placeholder.
     let Some(new_p) = catalog::build_provider_for_model(
         config,
         &provider_type,
@@ -1064,7 +1041,7 @@ async fn activate(
             "activate refused: catalog could not resolve a real provider/channel",
         );
         let _ = resp_tx.send(AgentResponse::Error(format!(
-            "No provider configured for '{provider_type}'. \
+            "No connection configured for '{provider_type}'. \
              Add one with /connections before sending a message."
         )));
         // Re-push the picker so the UI reflects that nothing switched.
@@ -1078,37 +1055,20 @@ async fn activate(
         .write()
         .unwrap_or_else(|error| error.into_inner()) = new_p;
 
-    // The new model may have a different context window; re-seed
-    // the mid-turn prune threshold so relief tracks it.
     reseed_prune_threshold(agent, config);
-    // Tool-description overrides are keyed by model id, so they must
-    // re-track the live model too.
     reseed_tool_variants(agent, config);
 
     let _ = resp_tx.send(AgentResponse::ProviderKeys(provider_key_status(config)));
-    // Record the switch as an activation so the picker's recency
-    // ordering tracks it. Both the provider and the exact model are bumped:
-    // provider recency drives stage-1 order, model recency drives stage-2
-    // order, and pinning the model under this provider makes a re-open land
-    // on it. Best-effort: telemetry is rebuildable.
     provider_usage.record(&provider_type);
     provider_usage.record_model(&provider_type, &model);
     if let Err(error) = provider_usage.save() {
         tracing::warn!(?error, "could not persist model usage telemetry");
     }
-    let ack = format!("Provider switched to {provider_type} ({model})");
+    let ack = format!("Connection switched to {provider_type} ({model})");
     let _ = resp_tx.send(AgentResponse::ProviderSwitched {
         provider: provider_type.clone(),
         model: model.clone(),
     });
-    // A user-initiated switch is a command acknowledgment, not model output
-    // (ADR-0088): surface it as a transient toast, never appended to the
-    // transcript. Emitting it wrapped in `RoundEvent::Notice` (rather than as
-    // a top-level `AgentResponse::Notice`) routes the toast over the session's
-    // broadcast tap so every attached client sees it, and matches the TUI's
-    // toast drain. The ledger keeps the durable `Ack` for audit (ADR-0091).
-    // `ProviderSwitched` above already refreshed the hint bar, which is the
-    // long-lived "still in effect" indicator after the toast fades.
     if let Some(session) = session {
         let session_id = session.id().await;
         let _ = resp_tx.send(round_response(
@@ -1123,14 +1083,11 @@ async fn activate(
     )));
 }
 
-/// `AgentRequest::ToggleFavorite` — flip the model id in the favorites list,
-/// persist, and push a fresh picker snapshot so the ★ flips at once. Favorite
-/// is model-level (ADR-0046), so `id` is a model wire id; the flag surfaces on
-/// every flat Models row that serves that model.
+/// `AgentRequest::ToggleFavorite` — flip the model id in the favorites list.
 pub async fn toggle_favorite(
     config: &mut Config,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &ProviderUsage,
+    provider_usage: &ConnectionUsage,
     id: String,
 ) {
     if let Some(pos) = config.favorites.iter().position(|fav| *fav == id) {
@@ -1138,7 +1095,7 @@ pub async fn toggle_favorite(
     } else {
         config.favorites.push(id.clone());
     }
-    if let Err(error) = config.save_preserving_provider_selection() {
+    if let Err(error) = config.save_preserving_connection_selection() {
         tracing::warn!(?error, "could not persist favorites");
     }
     let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
@@ -1147,87 +1104,64 @@ pub async fn toggle_favorite(
     )));
 }
 
-/// `AgentRequest::SetDefaultModel` — make `id` the default AND activate it,
-/// reusing the catalog so resolution rules stay shared. No new key/model
-/// comes from the TUI — the provider's existing resolved config is used as-is.
+/// `AgentRequest::SetDefaultModel` — make `id` the default AND activate it.
 pub async fn set_default_model(
     config: &mut Config,
     agent: &Agent,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     id: String,
 ) {
-    config.default_provider = id.clone();
+    let stores = catalog::Stores::load();
+    let entries = catalog::derive_entries(
+        &stores.connections,
+        &stores.cache,
+        &stores.routes,
+        &stores.creds,
+    );
+    let current_provider_id = config.default_connection.clone();
+    let current_offers = entries
+        .iter()
+        .find(|e| e.id == current_provider_id)
+        .is_some_and(|e| e.offers_model(&id));
+    let provider_id = if current_offers {
+        current_provider_id
+    } else {
+        let Some(first_match) = entries.iter().find(|e| e.offers_model(&id)) else {
+            tracing::warn!(model = %id, "set_default_model: model is not served by any connection");
+            return;
+        };
+        first_match.id.clone()
+    };
+
+    config.default_connection = provider_id.clone();
+    config.default_model = Some(id.clone());
     if let Err(error) = config.save() {
         tracing::warn!(?error, "could not persist default model");
     }
-    // Same refusal contract as `activate`: when the catalog cannot resolve a
-    // real provider/channel, surface an error and leave the live holder alone
-    // rather than silently falling back to a placeholder.
-    let Some(new_p) = catalog::build_provider_for_model(
+
+    activate(
         config,
-        &id,
-        config.default_model.as_deref(),
-        agent.thread_id().as_deref(),
-    ) else {
-        tracing::warn!(
-            provider_id = %id,
-            "set_default_model refused: catalog could not resolve a real provider/channel",
-        );
-        let _ = resp_tx.send(AgentResponse::Error(format!(
-            "No provider configured for '{id}'. \
-             Add one with /connections before sending a message."
-        )));
-        let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
-            config,
-            provider_usage,
-        )));
-        return;
-    };
-    *provider_for_task
-        .write()
-        .unwrap_or_else(|error| error.into_inner()) = new_p;
-    // Re-seed mid-turn relief for the newly activated model's
-    // context window.
-    reseed_prune_threshold(agent, config);
-    // Tool-description overrides track the live model id.
-    reseed_tool_variants(agent, config);
-    // `resolved_model_name_with_usage` returns `None` only when the entry has
-    // no resolvable model — but `build_provider_for_model` above already
-    // succeeded, so the entry has at least its default-channel model. Fall
-    // back to the empty string defensively; the wire model is what the holder
-    // actually carries.
-    let model_name =
-        catalog::resolved_model_name_with_usage(config, &id, provider_usage).unwrap_or_default();
-    provider_usage.record(&id);
-    if !model_name.is_empty() {
-        provider_usage.record_model(&id, &model_name);
-    }
-    if let Err(error) = provider_usage.save() {
-        tracing::warn!(?error, "could not persist model usage telemetry");
-    }
-    let _ = resp_tx.send(AgentResponse::ProviderSwitched {
-        provider: id.clone(),
-        model: model_name.clone(),
-    });
-    let _ = resp_tx.send(AgentResponse::ProviderKeys(provider_key_status(config)));
-    let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
-        config,
+        agent,
+        provider_for_task,
+        None,
+        resp_tx,
         provider_usage,
-    )));
+        provider_id,
+        id,
+    )
+    .await;
 }
 
 /// `AgentRequest::RefreshProviderModels` — run live model discovery for all
-/// discovery-enabled instances from upstream (e.g. `GET /models`), update the
-/// discovery cache, sync the fitted-model registry, push an updated picker
-/// snapshot and provider keys, and emit a toast notice when user-initiated.
+/// discovery-enabled connections from upstream.
 pub async fn refresh_models(
     config: &mut Config,
     _agent: &Agent,
     _provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     session: Option<&SessionStore>,
     user_initiated: bool,
 ) {
@@ -1287,19 +1221,13 @@ mod tests {
 
     #[tokio::test]
     async fn record_provider_ack_appends_durable_ack_to_command_ledger() {
-        // ADR-0091: a genuine provider switch keeps a durable `Ack` in the
-        // command ledger (the toast is its ephemeral live surface). The record
-        // rides under the `models` command word with the selection as args.
         let tmp = tempfile::tempdir().unwrap();
-        // `for_path` keeps every artifact inside the tempdir; the
-        // `record_provider_ack` mutation would otherwise persist a real
-        // session file into the XDG project bucket.
         let session = SessionStore::for_path(tmp.path().join("session.json"));
         record_provider_ack(
             &session,
             "111xianyu",
             "k3",
-            "Provider switched to 111xianyu (k3)".to_string(),
+            "Connection switched to 111xianyu (k3)".to_string(),
         )
         .await;
 
@@ -1311,7 +1239,7 @@ mod tests {
         assert_eq!(record.status, neenee_contracts::CommandStatus::Success);
         match &record.result {
             Some(neenee_contracts::CommandResult::Ack { title }) => {
-                assert_eq!(title, "Provider switched to 111xianyu (k3)");
+                assert_eq!(title, "Connection switched to 111xianyu (k3)");
             }
             other => panic!("expected a durable Ack result, got {other:?}"),
         }
@@ -1333,15 +1261,15 @@ mod tests {
     }
 
     #[test]
-    fn instance_unique_id_slugifies_and_disambiguates() {
-        let mut instances = Instances::default();
-        instances.providers.push(ProviderInstance {
+    fn connection_unique_id_slugifies_and_disambiguates() {
+        let mut connections = Connections::default();
+        connections.connections.push(Connection {
             id: "my-relay".to_string(),
             ..Default::default()
         });
-        assert_eq!(instances.unique_id("My Relay"), "my-relay-2");
-        assert_eq!(instances.unique_id("  Acme  AI  "), "acme-ai");
-        assert_eq!(instances.unique_id("***"), "custom");
-        assert_eq!(instances.unique_id(""), "custom");
+        assert_eq!(connections.unique_id("My Relay"), "my-relay-2");
+        assert_eq!(connections.unique_id("  Acme  AI  "), "acme-ai");
+        assert_eq!(connections.unique_id("***"), "custom");
+        assert_eq!(connections.unique_id(""), "custom");
     }
 }

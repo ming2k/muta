@@ -14,13 +14,21 @@ use neenee_contracts::SecretString;
 pub const ACCESS_TOKEN_REFRESH_SKEW_MS: i64 = 120_000;
 
 /// Standard Antigravity User-Agent matching official Google Cloud Code / Antigravity CLI.
-pub const ANTIGRAVITY_USER_AGENT: &str = "antigravity/1.23.2 windows/amd64";
+pub const ANTIGRAVITY_USER_AGENT: &str = neenee_contracts::client_identity::ANTIGRAVITY_USER_AGENT;
+/// Antigravity Google API client header.
+pub const ANTIGRAVITY_API_CLIENT_HEADER: &str = "gl-go/1.23.2 gdcl/0.1";
 /// Endpoint for Antigravity loadCodeAssist account metadata.
 pub const ANTIGRAVITY_LOAD_CODE_ASSIST_URL: &str =
-    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 /// Endpoint for Antigravity onboardUser account initialization.
 pub const ANTIGRAVITY_ONBOARD_USER_URL: &str =
-    "https://cloudcode-pa.googleapis.com/v1internal:onboardUser";
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser";
+/// Endpoint for Antigravity user quota summary inspection.
+pub const ANTIGRAVITY_RETRIEVE_QUOTA_SUMMARY_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
+/// Endpoint for Antigravity available models discovery.
+pub const ANTIGRAVITY_FETCH_AVAILABLE_MODELS_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 /// Google UserInfo endpoint.
 pub const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v3/userinfo";
 
@@ -399,7 +407,9 @@ pub async fn resolve_antigravity_project(
         "metadata": {
             "ideType": "ANTIGRAVITY",
             "ideVersion": "1.23.2",
-            "ideName": "antigravity"
+            "ideName": "antigravity",
+            "platform": "LINUX_AMD64",
+            "pluginType": "GEMINI"
         }
     });
 
@@ -407,6 +417,7 @@ pub async fn resolve_antigravity_project(
         .post(ANTIGRAVITY_LOAD_CODE_ASSIST_URL)
         .header("Authorization", format!("Bearer {access_token}"))
         .header("User-Agent", ANTIGRAVITY_USER_AGENT)
+        .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)
         .header("Content-Type", "application/json")
         .json(&load_body)
         .send()
@@ -417,6 +428,7 @@ pub async fn resolve_antigravity_project(
         && let Ok(val) = resp.json::<serde_json::Value>().await
     {
         if let Some(p) = extract_cloudaicompanion_project(&val) {
+            tracing::info!(project = %p, "resolved existing Antigravity cloudaicompanionProject");
             return Ok(p);
         }
 
@@ -432,13 +444,23 @@ pub async fn resolve_antigravity_project(
                     .and_then(|c| c.get("id").or(Some(c)))
                     .and_then(|id| id.as_str())
             })
+            .or_else(|| {
+                val.get("allowedTiers")
+                    .or_else(|| val.get("allowed_tiers"))
+                    .and_then(|a| a.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|t| t.get("id").or(Some(t)))
+                    .and_then(|id| id.as_str())
+            })
             .unwrap_or("g1-pro-tier");
 
         let onboard_body = serde_json::json!({
             "tierId": tier_id,
             "metadata": {
                 "ideType": "ANTIGRAVITY",
-                "platform": "PLATFORM_UNSPECIFIED",
+                "ideVersion": "1.23.2",
+                "ideName": "antigravity",
+                "platform": "LINUX_AMD64",
                 "pluginType": "GEMINI"
             }
         });
@@ -447,17 +469,36 @@ pub async fn resolve_antigravity_project(
             .post(ANTIGRAVITY_ONBOARD_USER_URL)
             .header("Authorization", format!("Bearer {access_token}"))
             .header("User-Agent", ANTIGRAVITY_USER_AGENT)
+            .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)
             .header("Content-Type", "application/json")
             .json(&onboard_body)
             .send()
             .await
             .map_err(|e| crate::oauth::AuthError::Transport(format!("onboardUser failed: {e}")))?;
 
-        if onboard_resp.status().is_success()
-            && let Ok(onboard_val) = onboard_resp.json::<serde_json::Value>().await
-        {
-            let search_target = onboard_val.get("response").unwrap_or(&onboard_val);
-            if let Some(p) = extract_cloudaicompanion_project(search_target) {
+        if onboard_resp.status().is_success() {
+            if let Ok(onboard_val) = onboard_resp.json::<serde_json::Value>().await
+                && let Some(p) = extract_cloudaicompanion_project(&onboard_val)
+            {
+                tracing::info!(project = %p, tier = %tier_id, "onboarded Antigravity cloudaicompanionProject");
+                return Ok(p);
+            }
+
+            // If onboardUser completed, retry loadCodeAssist to read the freshly provisioned project
+            if let Ok(second_resp) = client
+                .post(ANTIGRAVITY_LOAD_CODE_ASSIST_URL)
+                .header("Authorization", format!("Bearer {access_token}"))
+                .header("User-Agent", ANTIGRAVITY_USER_AGENT)
+                .header("x-goog-api-client", ANTIGRAVITY_API_CLIENT_HEADER)
+                .header("Content-Type", "application/json")
+                .json(&load_body)
+                .send()
+                .await
+                && second_resp.status().is_success()
+                && let Ok(second_val) = second_resp.json::<serde_json::Value>().await
+                && let Some(p) = extract_cloudaicompanion_project(&second_val)
+            {
+                tracing::info!(project = %p, "resolved newly onboarded Antigravity cloudaicompanionProject");
                 return Ok(p);
             }
         }
@@ -466,22 +507,79 @@ pub async fn resolve_antigravity_project(
     Ok(String::new())
 }
 
-fn extract_cloudaicompanion_project(val: &serde_json::Value) -> Option<String> {
-    let project = val
+/// Extract the Antigravity `cloudaicompanionProject` ID / name from any Google CodeAssist JSON response.
+pub fn extract_cloudaicompanion_project(val: &serde_json::Value) -> Option<String> {
+    let target = val.get("response").unwrap_or(val);
+    let project = target
         .get("cloudaicompanionProject")
-        .or_else(|| val.get("cloudaicompanion_project"))
-        .or_else(|| val.get("project"))?;
+        .or_else(|| target.get("cloudaicompanion_project"))
+        .or_else(|| target.get("project"))
+        .or_else(|| target.get("duetProject"))
+        .or_else(|| target.get("duet_project"))
+        .or(if target.is_object() && (target.get("id").is_some() || target.get("projectNumber").is_some() || target.get("name").is_some()) {
+            Some(target)
+        } else {
+            None
+        })?;
 
     if let Some(p) = project.as_str().filter(|p| !p.trim().is_empty()) {
-        return Some(p.trim().to_string());
+        let trimmed = p.trim();
+        return Some(if trimmed.starts_with("projects/") {
+            trimmed.to_string()
+        } else if trimmed.chars().all(|c| c.is_ascii_digit()) {
+            format!("projects/{trimmed}")
+        } else {
+            trimmed.to_string()
+        });
     }
+
+    if let Some(name) = project
+        .get("name")
+        .and_then(|n| n.as_str())
+        .filter(|n| !n.trim().is_empty())
+    {
+        let trimmed = name.trim();
+        return Some(if trimmed.starts_with("projects/") {
+            trimmed.to_string()
+        } else if trimmed.chars().all(|c| c.is_ascii_digit()) {
+            format!("projects/{trimmed}")
+        } else {
+            trimmed.to_string()
+        });
+    }
+
     if let Some(id) = project
         .get("id")
         .and_then(|i| i.as_str())
         .filter(|id| !id.trim().is_empty())
     {
-        return Some(id.trim().to_string());
+        let trimmed = id.trim();
+        return Some(if trimmed.starts_with("projects/") {
+            trimmed.to_string()
+        } else if trimmed.chars().all(|c| c.is_ascii_digit()) {
+            format!("projects/{trimmed}")
+        } else {
+            trimmed.to_string()
+        });
     }
+
+    if let Some(num) = project
+        .get("projectNumber")
+        .or_else(|| project.get("project_number"))
+        .and_then(|n| n.as_str())
+        .filter(|n| !n.trim().is_empty())
+    {
+        return Some(format!("projects/{}", num.trim()));
+    }
+
+    if let Some(num) = project
+        .get("projectNumber")
+        .or_else(|| project.get("project_number"))
+        .and_then(|n| n.as_i64())
+    {
+        return Some(format!("projects/{num}"));
+    }
+
     if let Some(num) = project.as_i64() {
         return Some(format!("projects/{num}"));
     }

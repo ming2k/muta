@@ -76,7 +76,7 @@ pub fn check_config_file(path: Option<PathBuf>) -> Vec<ConfigFinding> {
 /// test asserts every section the schema serializes appears here.
 pub fn schema_key_tree() -> BTreeMap<String, BTreeMap<String, String>> {
     let mut root = BTreeMap::new();
-    root.insert("default_provider".to_string(), BTreeMap::new());
+    root.insert("default_connection".to_string(), BTreeMap::new());
     root.insert("default_model".to_string(), BTreeMap::new());
     root.insert("mcp".to_string(), BTreeMap::new());
     root.insert("compaction".to_string(), BTreeMap::new());
@@ -87,9 +87,9 @@ pub fn schema_key_tree() -> BTreeMap<String, BTreeMap<String, String>> {
         "compaction_prune_protect_tokens".to_string(),
         BTreeMap::new(),
     );
-    root.insert("provider_retry_max_attempts".to_string(), BTreeMap::new());
-    root.insert("provider_retry_base_ms".to_string(), BTreeMap::new());
-    root.insert("provider_retry_max_ms".to_string(), BTreeMap::new());
+    root.insert("connection_retry_max_attempts".to_string(), BTreeMap::new());
+    root.insert("connection_retry_base_ms".to_string(), BTreeMap::new());
+    root.insert("connection_retry_max_ms".to_string(), BTreeMap::new());
     root.insert("favorites".to_string(), BTreeMap::new());
     root.insert("skills".to_string(), BTreeMap::new());
     root.insert("permissions".to_string(), BTreeMap::new());
@@ -107,7 +107,7 @@ pub fn schema_key_tree() -> BTreeMap<String, BTreeMap<String, String>> {
 /// Top-level schema keys (flat view of the section tree), exposed for the
 /// tests and any future `neenee config` completions.
 pub const CONFIG_KEYS: &[&str] = &[
-    "default_provider",
+    "default_connection",
     "default_model",
     "mcp",
     "compaction",
@@ -115,9 +115,9 @@ pub const CONFIG_KEYS: &[&str] = &[
     "compaction_summarize",
     "compaction_prune",
     "compaction_prune_protect_tokens",
-    "provider_retry_max_attempts",
-    "provider_retry_base_ms",
-    "provider_retry_max_ms",
+    "connection_retry_max_attempts",
+    "connection_retry_base_ms",
+    "connection_retry_max_ms",
     "favorites",
     "skills",
     "permissions",
@@ -136,6 +136,22 @@ pub const CONFIG_KEYS: &[&str] = &[
 /// dead and what replaced it.
 const LEGACY_KEYS: &[(&str, &str)] = &[
     (
+        "default_provider",
+        "renamed to `default_connection`",
+    ),
+    (
+        "provider_retry_max_attempts",
+        "renamed to `connection_retry_max_attempts`",
+    ),
+    (
+        "provider_retry_base_ms",
+        "renamed to `connection_retry_base_ms`",
+    ),
+    (
+        "provider_retry_max_ms",
+        "renamed to `connection_retry_max_ms`",
+    ),
+    (
         "compaction_preserve_turns",
         "renamed to `compaction_preserve_rounds` (ADR-0047); the old key is \
          ignored and dropped on next save (ADR-0120)",
@@ -150,16 +166,16 @@ const LEGACY_KEYS: &[(&str, &str)] = &[
     ),
     (
         "providers",
-        "moved to `providers.toml` (ADR-0123); run neenee once to migrate",
+        "moved to `connections.toml`",
     ),
     (
         "model_reasoning",
-        "moved into the model `e` editor's route settings (ADR-0123)",
+        "moved into the model `e` editor's route settings",
     ),
     ("agent.review", "removed with the session-review subsystem"),
     (
         "builtins",
-        "credentials layout replaced by `credentials.toml [providers.<id>]`",
+        "credentials layout replaced by `credentials.toml [connections.<id>]`",
     ),
     (
         "websearch.exa_api_key",
@@ -276,7 +292,7 @@ mod tests {
 
     #[test]
     fn clean_file_produces_no_findings() {
-        let (path, _dir) = write_config("default_provider = \"anthropic\"\n");
+        let (path, _dir) = write_config("default_connection = \"anthropic\"\n");
         assert!(check_config_file(Some(path)).is_empty());
     }
 

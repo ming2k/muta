@@ -250,18 +250,22 @@ impl OAuth {
             .unwrap_or_else(|| stored.refresh.clone());
         let expires_ms = now + (refreshed.expires_in.unwrap_or(3600) as i64) * 1000;
 
-        let mut account_id = refreshed
-            .id_token
-            .as_ref()
-            .map(SecretString::expose_secret)
-            .or(Some(refreshed.access_token.expose_secret()))
-            .and_then(chatgpt_account_id)
-            .or(stored.account_id.clone());
+        let mut account_id = if self.config.is_chatgpt() {
+            refreshed
+                .id_token
+                .as_ref()
+                .map(SecretString::expose_secret)
+                .or(Some(refreshed.access_token.expose_secret()))
+                .and_then(chatgpt_account_id)
+                .or(stored.account_id.clone())
+        } else {
+            stored.account_id.clone()
+        };
 
         let mut project_id = stored.project_id.clone();
         let mut user_email = stored.user_email.clone();
 
-        if self.config.provider_id == "google-antigravity" {
+        if self.config.is_antigravity() {
             if (project_id.is_none() || account_id.is_none())
                 && let Ok(project) = resolve_antigravity_project(
                     &self.client,

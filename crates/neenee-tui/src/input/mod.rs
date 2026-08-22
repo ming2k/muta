@@ -1059,6 +1059,10 @@ pub fn process_event(
                         // the press lands outside the panel (and consumes it
                         // either way so it never reaches the transcript
                         // behind the backdrop). Entry modals keep swallowing.
+                        // Modals whose body is a selectable document (the
+                        // `render_selectable_body` family) arm a drag when the
+                        // press lands on registered text, so their content is
+                        // copyable the same way the transcript is.
                         InputAction::SelectionStart { x, y }
                     } else {
                         InputAction::None
@@ -1073,6 +1077,12 @@ pub fn process_event(
                                 | super::Modal::OauthPending
                         )
                     {
+                        InputAction::SelectionUpdate { x, y }
+                    } else if drag.active {
+                        // A drag armed inside a selectable modal document
+                        // (SelectionStart resolved to a MODAL_DOC region)
+                        // keeps updating while the button is held, even under
+                        // modals that otherwise swallow mouse events.
                         InputAction::SelectionUpdate { x, y }
                     } else {
                         InputAction::None
@@ -1110,8 +1120,7 @@ pub fn process_event(
                     } else {
                         InputAction::None
                     }
-                }
-                // Mouse motion (reported because `EnableMouseCapture` requests
+                } // Mouse motion (reported because `EnableMouseCapture` requests
                 // mode 1003 "all motion"). Forwarded on the main view and
                 // during a permission prompt so hover affordances keep working
                 // on the still-interactive transcript; blocked behind other

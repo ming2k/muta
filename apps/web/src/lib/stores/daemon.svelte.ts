@@ -347,6 +347,15 @@ export class DaemonStore {
 
   private monitorWs: WebSocket | null = null;
   private sessionWs: WebSocket | null = null;
+  /**
+   * Whether the in-flight stream turn has already committed its Assistant
+   * feed component. One ReAct turn emits at most one `StreamEnd` (text) and
+   * one batch of `ToolCall`s; Gemini-style turns often stream reasoning plus
+   * function calls with **no** text, so no `StreamEnd` ever arrives — without
+   * this flag the buffered thinking would be silently wiped by the next
+   * turn's `StreamStart` and never land in the transcript.
+   */
+  private turnCommitted = false;
   private monitorGeneration = 0;
   private sessionGeneration = 0;
   private reconnectDelay = RECONNECT_BASE_MS;

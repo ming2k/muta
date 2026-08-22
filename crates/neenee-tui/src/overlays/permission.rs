@@ -336,6 +336,8 @@ pub fn draw_permission_sheet(
     scroll: usize,
     input_rect: Rect,
     theme: &Theme,
+    selection: &crate::model::selection::SelectionState,
+    layout_map: &mut crate::model::layout::LayoutMap,
 ) -> usize {
     let area_bottom = input_rect.y + input_rect.height;
 
@@ -414,11 +416,9 @@ pub fn draw_permission_sheet(
                 .fg(theme.info())
                 .add_modifier(Modifier::BOLD),
         )));
-        body_lines.extend(
-            arguments
-                .lines()
-                .map(|line| Line::from(line).style(Style::default().fg(theme.code_text()))),
-        );
+        body_lines.extend(arguments.lines().map(|line| {
+            Line::from(Span::raw(line.to_string())).style(Style::default().fg(theme.code_text()))
+        }));
     }
 
     let fixed = PERMISSION_TOP_PADDING + PERMISSION_BODY_FOOTER_GAP + PERMISSION_FOOTER_HEIGHT;
@@ -466,11 +466,24 @@ pub fn draw_permission_sheet(
         content_w,
         body_h,
     );
-    frame.render_widget(
-        Paragraph::new(body_lines)
-            .scroll(body_scroll.min(u16::MAX as usize) as u16, 0)
-            .wrap(neenee_tui_engine::Wrap { trim: false }),
+    // Selectable document: the tool-call arguments JSON (and the description
+    // above it) is exactly what a user wants to copy while deciding. The
+    // body's line-level scroll (`body_scroll` counts wrapped visual rows,
+    // same accounting `resolve_scroll` uses) is passed straight through.
+    let rows: Vec<crate::components::selectable_body::SelectableRow> = body_lines
+        .into_iter()
+        .map(crate::components::selectable_body::SelectableRow::from_line)
+        .collect();
+    let mut body_scroll_usize = body_scroll;
+    crate::components::selectable_body::render_selectable_body(
+        frame,
         body_area,
+        &rows,
+        &mut body_scroll_usize,
+        None,
+        theme,
+        selection,
+        layout_map,
     );
 
     let footer_y = area
@@ -744,6 +757,8 @@ mod tests {
                 0,
                 rect,
                 &Theme::default(),
+                &crate::model::selection::SelectionState::None,
+                &mut crate::model::layout::LayoutMap::new(),
             );
         });
 

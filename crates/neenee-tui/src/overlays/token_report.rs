@@ -18,6 +18,7 @@ use neenee_tui_engine::{
 use unicode_width::UnicodeWidthStr;
 
 use super::common::placeholder;
+use crate::components::selectable_body::{SelectableRow, render_selectable_body};
 use crate::design::MODAL_INNER_H_PADDING;
 use crate::primitives::{
     ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, breadcrumb_parts,
@@ -59,6 +60,8 @@ pub fn draw_token_report_modal(
     loading: bool,
     scroll: &mut usize,
     theme: &Theme,
+    selection: &crate::model::selection::SelectionState,
+    layout_map: &mut crate::model::layout::LayoutMap,
 ) -> neenee_tui_engine::Rect {
     let geometry = ContentModalSpec::TOKEN_REPORT;
     let probe = content_modal_probe(frame, geometry);
@@ -146,25 +149,36 @@ pub fn draw_token_report_modal(
         )
     };
 
+    // The drill-in sub-view is a selectable document (KV read-out, turn
+    // table, provenance legend — the numbers a user copies out of this
+    // modal). The round list stays a picker: its rows are ↑/↓ + Enter
+    // targets, and selection there would fight the click affordances.
     let desired = body.len() as u16 + modal_chrome_rows(geometry.modal_spec());
     let area = content_modal_area(frame, geometry, desired);
     let modal = modal_frame(frame, area, theme.panel(), true, true);
 
     modal_header_parts(frame, modal.header, &header, theme);
-    render_body(
-        frame,
-        modal.body,
-        body,
-        scroll,
-        follow,
-        if follow.is_some() {
-            SCROLL_EDGE_MARGIN
-        } else {
-            0
-        },
-        false,
-        theme,
-    );
+    if drill {
+        let rows: Vec<SelectableRow> = body.into_iter().map(SelectableRow::from_line).collect();
+        render_selectable_body(
+            frame, modal.body, &rows, scroll, follow, theme, selection, layout_map,
+        );
+    } else {
+        render_body(
+            frame,
+            modal.body,
+            body,
+            scroll,
+            follow,
+            if follow.is_some() {
+                SCROLL_EDGE_MARGIN
+            } else {
+                0
+            },
+            false,
+            theme,
+        );
+    }
 
     if let Some(footer_area) = modal.footer {
         render_modal_footer(frame, footer_area, &footer, theme);
@@ -675,6 +689,15 @@ impl AttemptColumns {
             spans.push(Span::styled(format!("{text:>ATTEMPT_COLUMN_W$}"), style));
         }
         body.push(Line::from(spans));
+        if let Some(err) = rec.error.as_deref().filter(|e| !e.is_empty()) {
+            body.push(Line::from(vec![
+                Span::styled("  ↳ ".to_string(), Style::default().fg(theme.err())),
+                Span::styled(
+                    truncate_str(err, body_width.saturating_sub(4)),
+                    Style::default().fg(theme.muted()),
+                ),
+            ]));
+        }
     }
 }
 

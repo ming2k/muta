@@ -34,7 +34,7 @@ use neenee_contracts::{
 };
 use neenee_mcp::McpRuntime;
 use neenee_persistence::{
-    config::Config, embedding, provider_usage::ProviderUsage, session::SessionStore,
+    config::Config, connection_usage::ConnectionUsage, embedding, session::SessionStore,
     trusted_projects::TrustGate,
 };
 use neenee_skills::{ListSkillsTool, SkillRegistry, UseSkillTool};
@@ -127,7 +127,7 @@ async fn start_fresh_session(
     lifecycle: &Arc<RoundLifecycle>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     name: &str,
     args: &str,
 ) {
@@ -461,7 +461,7 @@ pub async fn dispatch(
     side: &Arc<AsyncRwLock<SideRegistry>>,
     base_tools_for_side: &Arc<Vec<Arc<dyn Tool>>>,
     provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    provider_usage: &mut ProviderUsage,
+    provider_usage: &mut ConnectionUsage,
     skills_registry: Arc<SkillRegistry>,
     skills_registry_for_commands: &Arc<SkillRegistry>,
     commands_for_task: &HashMap<String, CustomCommand>,

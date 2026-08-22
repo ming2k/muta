@@ -59,6 +59,8 @@ pub fn draw_sessions_modal(
     session_info_detail: bool,
     session_detail: Option<&neenee_contracts::SessionDetail>,
     session_info_scroll: &mut usize,
+    selection: &crate::model::selection::SelectionState,
+    layout_map: &mut crate::model::layout::LayoutMap,
 ) -> neenee_tui_engine::Rect {
     let area = modal_area(frame, FixedModalSpec::SESSIONS);
     let f = modal_frame(frame, area, theme.panel(), true, true);
@@ -86,15 +88,14 @@ pub fn draw_sessions_modal(
             theme,
         );
         let body = keymap_body_lines(&list_footer_hints, &list_extra, theme);
-        render_body(
-            frame,
-            f.body,
-            body,
-            scroll,
-            None,
-            SCROLL_EDGE_MARGIN,
-            false,
-            theme,
+        // Selectable document: the keymap sub-page registers as MODAL_DOC
+        // rows so key labels and descriptions are copyable.
+        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
+            .into_iter()
+            .map(crate::components::selectable_body::SelectableRow::from_line)
+            .collect();
+        crate::components::selectable_body::render_selectable_body(
+            frame, f.body, &rows, scroll, None, theme, selection, layout_map,
         );
         if let Some(fo) = f.footer {
             render_modal_footer(frame, fo, &keymap_page_footer_hints(), theme);
@@ -129,15 +130,22 @@ pub fn draw_sessions_modal(
             }
             Some(detail) => detail_body(detail, theme),
         };
-        render_body(
+        // Selectable document: the detail read-out (session id, title,
+        // timestamps, last prompt) is exactly the text a user would want to
+        // copy out of this sub-view.
+        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
+            .into_iter()
+            .map(crate::components::selectable_body::SelectableRow::from_line)
+            .collect();
+        crate::components::selectable_body::render_selectable_body(
             frame,
             f.body,
-            body,
+            &rows,
             session_info_scroll,
             None,
-            SCROLL_EDGE_MARGIN,
-            false,
             theme,
+            selection,
+            layout_map,
         );
         if let Some(fo) = f.footer {
             render_modal_footer(frame, fo, &detail_footer, theme);

@@ -54,6 +54,8 @@ pub mod tool_validation;
 pub mod capability;
 pub mod catalog;
 pub mod channel_auth;
+pub mod client_identity;
+pub use client_identity::ClientIdentity;
 pub mod effort;
 pub use effort::{
     EFFORT_CLAUDE_FULL, EFFORT_CLAUDE_NO_XHIGH, EFFORT_COMMON, EFFORT_OPENAI_GPT, Effort,
@@ -107,13 +109,14 @@ pub use dynamic::{DynamicCatalog, DynamicToolSink};
 pub use envoy::{CODE, EXPLORE, EnvoyProfile, INTERACTIVE, QUANT, TITLE, ToolPolicy};
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,
-    ContextTokenSnapshot, ContextTokenSource, EnvoyEvent, HarnessSnapshot, InputReply,
-    InputRequest, LoopStatus, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, ParentStatus, PermissionDecision, PermissionRequest, PermissionRuleInfo,
-    ProviderModelInfo, ProviderPickerRow, ProviderPickerSnapshot, QueuedUserInput, RetryPoint,
-    RoundEvent, RoundInterrupt, RoundInterruptReason, RoundSummary, SessionContextSnapshot,
-    SessionDetail, SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, ToolInfo,
-    UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest,
+    ConnectionPickerRow, ConnectionPickerSnapshot, ContextTokenSnapshot, ContextTokenSource,
+    EnvoyEvent, HarnessSnapshot, InputReply, InputRequest, LoopStatus, McpServerInfo, ModelInfo,
+    NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface, ParentStatus, PermissionDecision,
+    PermissionRequest, PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow,
+    ProviderPickerSnapshot, QueuedUserInput, RetryPoint, RoundEvent, RoundInterrupt,
+    RoundInterruptReason, RoundSummary, SessionContextSnapshot, SessionDetail, SessionForkKind,
+    SessionOverview, SessionSnapshot, SkillInfo, ToolInfo, UserQuestion, UserQuestionOption,
+    UserQuestionReply, UserQuestionRequest,
 };
 pub mod monitor;
 pub use hooks::{

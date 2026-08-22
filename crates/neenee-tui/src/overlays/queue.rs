@@ -145,6 +145,7 @@ pub fn draw_queue_modal(
             // Sessions.
             extra_footer_hints: &[FooterHint::with_band("D", "delete", 70)],
             keymap_open: false,
+            select_doc: None,
         },
         theme,
     )

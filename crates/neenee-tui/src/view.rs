@@ -1007,6 +1007,7 @@ mod tests {
                 false,
                 false,
                 &theme,
+                &crate::model::selection::SelectionState::None,
             );
             draw_models_modal(
                 f,
@@ -1022,6 +1023,7 @@ mod tests {
                 false,
                 false,
                 &theme,
+                &crate::model::selection::SelectionState::None,
             );
             let history_roster: Vec<neenee_contracts::HistoryEntry> =
                 [neenee_contracts::HistoryEntry::new(
@@ -1034,6 +1036,8 @@ mod tests {
                 .collect();
             let ranked: Vec<(usize, crate::fuzzy::FuzzyMatch)> = crate::fuzzy::rank(&["a"], "");
             let input_rect = neenee_tui_engine::Rect::new(0, 20, 80, 3);
+            let selection = crate::model::selection::SelectionState::None;
+            let mut layout_map = crate::model::layout::LayoutMap::new();
             let _ = draw_history_panel(
                 f,
                 &history_roster,
@@ -1046,6 +1050,8 @@ mod tests {
                 input_rect,
                 0,
                 &theme,
+                &selection,
+                &mut layout_map,
             );
             draw_model_editor(f, "OpenAI", "", 0, true, 0, None, &[], None, &theme);
             // Provider-template chooser.
@@ -1082,8 +1088,19 @@ mod tests {
             {
                 let mut scroll = 0;
                 let bindings: &[HelpBinding] = &[];
-                draw_help_modal(f, &mut scroll, bindings, &theme);
+                let selection = crate::model::selection::SelectionState::None;
+                let mut layout_map = crate::model::layout::LayoutMap::new();
+                draw_help_modal(
+                    f,
+                    &mut scroll,
+                    bindings,
+                    &theme,
+                    &selection,
+                    &mut layout_map,
+                );
             }
+            let selection = crate::model::selection::SelectionState::None;
+            let mut layout_map = crate::model::layout::LayoutMap::new();
             draw_sessions_modal(
                 f,
                 &[
@@ -1118,6 +1135,8 @@ mod tests {
                 false,
                 None,
                 &mut 0,
+                &selection,
+                &mut layout_map,
             );
             let question_request = UserQuestionRequest {
                 id: "q1".to_string(),
@@ -1165,8 +1184,19 @@ mod tests {
             };
             let rect = neenee_tui_engine::Rect::new(0, 0, 60, 3);
             let mut hit_map = crate::model::layout::ModalHitMap::new();
-            let _ =
-                draw_permission_sheet(f, &mut hit_map, &request, 0, false, false, 0, rect, &theme);
+            let _ = draw_permission_sheet(
+                f,
+                &mut hit_map,
+                &request,
+                0,
+                false,
+                false,
+                0,
+                rect,
+                &theme,
+                &crate::model::selection::SelectionState::None,
+                &mut crate::model::layout::LayoutMap::new(),
+            );
         });
     }
 
@@ -3767,6 +3797,9 @@ mod tests {
     /// only need to prove the renderer consumes each state without exploding.
     #[test]
     fn history_panel_renders_every_query_state() {
+        let selection = crate::model::selection::SelectionState::None;
+        let mut layout_map = crate::model::layout::LayoutMap::new();
+
         let theme = Theme::default();
         let history: Vec<neenee_contracts::HistoryEntry> = [
             "git status",
@@ -3806,8 +3839,22 @@ mod tests {
                 expected_matches
             );
             terminal.draw(|f| {
+                let selection = crate::model::selection::SelectionState::None;
+                let mut layout_map = crate::model::layout::LayoutMap::new();
                 let _ = draw_history_panel(
-                    f, &history, &ranked, 0, &mut 0, true, false, false, input_rect, 0, &theme,
+                    f,
+                    &history,
+                    &ranked,
+                    0,
+                    &mut 0,
+                    true,
+                    false,
+                    false,
+                    input_rect,
+                    0,
+                    &theme,
+                    &selection,
+                    &mut layout_map,
                 );
             });
         }
@@ -3819,7 +3866,19 @@ mod tests {
         let ranked: Vec<(usize, crate::fuzzy::FuzzyMatch)> = crate::fuzzy::rank::<&str>(&[], "");
         terminal.draw(|f| {
             let _ = draw_history_panel(
-                f, &empty, &ranked, 0, &mut 0, true, false, false, input_rect, 0, &theme,
+                f,
+                &empty,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                false,
+                input_rect,
+                0,
+                &theme,
+                &selection,
+                &mut layout_map,
             );
         });
     }
@@ -3830,6 +3889,9 @@ mod tests {
     /// real buffer without panicking.
     #[test]
     fn history_panel_folds_multiline_and_previews_full_text() {
+        let selection = crate::model::selection::SelectionState::None;
+        let mut layout_map = crate::model::layout::LayoutMap::new();
+
         let theme = Theme::default();
         let history: Vec<neenee_contracts::HistoryEntry> =
             ["first line\nsecond line\nthird line", "single line"]
@@ -3853,7 +3915,19 @@ mod tests {
         // List mode: the multi-line entry must render as one row.
         terminal.draw(|f| {
             let _ = draw_history_panel(
-                f, &history, &ranked, 0, &mut 0, true, false, false, input_rect, 0, &theme,
+                f,
+                &history,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                false,
+                input_rect,
+                0,
+                &theme,
+                &selection,
+                &mut layout_map,
             );
         });
         let buf = terminal.buffer();
@@ -3863,7 +3937,19 @@ mod tests {
         // Preview mode: the full multi-line text renders without panic.
         terminal.draw(|f| {
             let _ = draw_history_panel(
-                f, &history, &ranked, 0, &mut 0, true, true, false, input_rect, 0, &theme,
+                f,
+                &history,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                true,
+                false,
+                input_rect,
+                0,
+                &theme,
+                &selection,
+                &mut layout_map,
             );
         });
     }
@@ -3874,6 +3960,9 @@ mod tests {
     /// footer), not the old 6-row floor.
     #[test]
     fn history_panel_collapses_to_actual_row_count() {
+        let selection = crate::model::selection::SelectionState::None;
+        let mut layout_map = crate::model::layout::LayoutMap::new();
+
         let theme = Theme::default();
         let history: Vec<neenee_contracts::HistoryEntry> = ["one", "two"]
             .into_iter()
@@ -3896,7 +3985,19 @@ mod tests {
         let mut panel: Option<neenee_tui_engine::Rect> = None;
         terminal.draw(|f| {
             panel = draw_history_panel(
-                f, &history, &ranked, 0, &mut 0, true, false, false, input_rect, 0, &theme,
+                f,
+                &history,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                false,
+                input_rect,
+                0,
+                &theme,
+                &selection,
+                &mut layout_map,
             )
         });
         let panel = panel.expect("panel should render with ample room above");
@@ -3917,6 +4018,9 @@ mod tests {
     /// be brand-colored.
     #[test]
     fn history_panel_uses_composer_padding_not_brand_column() {
+        let selection = crate::model::selection::SelectionState::None;
+        let mut layout_map = crate::model::layout::LayoutMap::new();
+
         let theme = Theme::default();
         let history: Vec<neenee_contracts::HistoryEntry> = ["one", "two", "three"]
             .into_iter()
@@ -3937,7 +4041,19 @@ mod tests {
         let mut panel: Option<neenee_tui_engine::Rect> = None;
         terminal.draw(|f| {
             panel = draw_history_panel(
-                f, &history, &ranked, 0, &mut 0, true, false, false, input_rect, 0, &theme,
+                f,
+                &history,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                false,
+                input_rect,
+                0,
+                &theme,
+                &selection,
+                &mut layout_map,
             )
         });
         let panel = panel.expect("panel should render");
@@ -4008,8 +4124,22 @@ mod tests {
         let mut terminal = neenee_tui_engine::TestTerminal::new(80, 17);
         let mut panel: Option<neenee_tui_engine::Rect> = None;
         terminal.draw(|f| {
+            let selection = crate::model::selection::SelectionState::None;
+            let mut layout_map = crate::model::layout::LayoutMap::new();
             panel = draw_history_panel(
-                f, &history, &ranked, 0, &mut 0, true, false, false, input_rect, 1, &theme,
+                f,
+                &history,
+                &ranked,
+                0,
+                &mut 0,
+                true,
+                false,
+                false,
+                input_rect,
+                1,
+                &theme,
+                &selection,
+                &mut layout_map,
             )
         });
         let panel = panel.expect("panel should render");

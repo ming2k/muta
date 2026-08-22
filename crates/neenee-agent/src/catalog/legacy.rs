@@ -1,50 +1,51 @@
-//! One-shot migration from the pre-refactor persistence layout to the new one.
-//!
-//! Before the channels refactor, provider instances (with embedded per-model
-//! channels) lived in `config.toml` `[[providers]]`, credentials split between
-//! `[builtins.<id>]` / `[user.<id>]` in `credentials.toml`, per-model reasoning
-//! in `[model_reasoning]`, and fitted/remote metadata on the instance itself.
-//! This module reads that legacy layout *raw* (independent of the new `Config`
-//! struct, which no longer has those fields) and produces the new stores:
-//!
-//! - provider instances → `providers.toml` (see `neenee_persistence::instances`)
-//! - keys → `credentials.toml` `[providers.<id>]`
-//! - per-(instance, model) reasoning + remote metadata → `models_discovery.json`
-//!
-//! It lives in the catalog layer (not `neenee-persistence`) because it needs
-//! the template registry to separate template-derived facts from user
-//! overrides — `neenee-providers` depends on `neenee-persistence`, so the
-//! reverse dependency is impossible. It is a *one-way converter*, not a
-//! maintained dual-path: it runs once, idempotently.
+//! One-shot migration from legacy persistence layouts to connections.toml.
 
 use std::collections::BTreeMap;
 
-use neenee_contracts::{ChannelAuth, RemoteModelMetadata, SecretString};
+use neenee_contracts::{ChannelAuth, ClientIdentity, RemoteModelMetadata, SecretString};
 use neenee_persistence::config::{Credentials, DiscoveryCache, UserTransport};
-use neenee_persistence::instances::{Instances, ProviderInstance};
+use neenee_persistence::connections::{Connection, Connections};
 use neenee_persistence::route_settings::RouteSettingsStore;
-use neenee_providers::provider_template_spec;
+use neenee_providers::provider_preset_spec;
 use serde::Deserialize;
 
-/// Run the one-shot migration if (a) no instance store exists yet and (b)
+/// Run the one-shot migration if (a) no connections store exists yet and (b)
 /// legacy provider data is present. Returns `true` when it migrated something.
-/// Idempotent: after a successful write the instance store exists, so a second
-/// call is a no-op.
 pub fn migrate_legacy_state() -> bool {
-    let instances_path = neenee_persistence::paths::get().providers_file();
-    if instances_path.exists()
-        && !neenee_persistence::instances::Instances::load()
-            .providers
-            .is_empty()
-    {
+    let connections_path = neenee_persistence::paths::get().connections_file();
+    if connections_path.exists() && !Connections::load().connections.is_empty() {
         return false;
     }
+
+    // Check if providers.toml exists from previous schema
+    let old_providers_path = neenee_persistence::paths::get().state_dir.join("providers.toml");
+    if old_providers_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&old_providers_path) {
+            #[derive(Deserialize)]
+            struct OldProvidersFile {
+                #[serde(default)]
+                providers: Vec<Connection>,
+            }
+            if let Ok(old_file) = toml::from_str::<OldProvidersFile>(&content) {
+                if !old_file.providers.is_empty() {
+                    let connections = Connections {
+                        connections: old_file.providers,
+                    };
+                    if connections.save().is_ok() {
+                        tracing::info!("migrated providers.toml to connections.toml");
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
     let Some(legacy_config) = LegacyConfig::read().filter(|c| !c.providers.is_empty()) else {
         return false;
     };
     let legacy_creds = LegacyCredentials::read().unwrap_or_default();
 
-    let mut instances = Instances::default();
+    let mut connections = Connections::default();
     let mut creds = Credentials::default();
     let mut cache = DiscoveryCache::load();
     let mut routes = RouteSettingsStore::load();
@@ -53,29 +54,27 @@ pub fn migrate_legacy_state() -> bool {
         let Some(first) = legacy.channels.first() else {
             continue;
         };
-        let template_id = legacy
+        let preset_id = legacy
             .template_id
             .as_deref()
-            .filter(|tid| provider_template_spec(tid).is_some());
-        let is_template = template_id.is_some();
+            .filter(|tid| provider_preset_spec(tid).is_some());
+        let is_preset = preset_id.is_some();
 
-        instances.providers.push(ProviderInstance {
+        connections.connections.push(Connection {
             id: legacy.id.clone(),
             name: legacy.name.clone(),
-            template_id: template_id.map(str::to_string),
+            preset_id: preset_id.map(str::to_string),
             auth: first.auth,
             api_key_env: first.api_key_env.clone(),
-            // A template instance's transport/endpoint are derived from the
-            // template; only persist a base_url / user_agent / transport that
-            // differs from the template default (a deliberate user override).
-            transport: if is_template {
+            client_identity: ClientIdentity::Native,
+            transport: if is_preset {
                 None
             } else {
                 Some(first.transport)
             },
-            base_url: override_base_url(legacy, first, template_id),
-            user_agent: override_user_agent(first, template_id),
-            models: if is_template {
+            base_url: override_base_url(legacy, first, preset_id),
+            user_agent: override_user_agent(first, preset_id),
+            models: if is_preset {
                 Vec::new()
             } else {
                 legacy
@@ -86,8 +85,6 @@ pub fn migrate_legacy_state() -> bool {
             },
         });
 
-        // Credential: first non-empty channel key, else the legacy top-level
-        // field for the matching built-in id, else the legacy credentials file.
         if let Some(key) = first.api_key.clone() {
             creds.set_api_key(&legacy.id, Some(key));
         } else if let Some(key) = legacy_config.builtin_api_key(&legacy.id) {
@@ -96,7 +93,6 @@ pub fn migrate_legacy_state() -> bool {
             creds.set_api_key(&legacy.id, Some(key.clone()));
         }
 
-        // Per-route reasoning + remote metadata.
         for channel in &legacy.channels {
             let Some(model) = channel.model.as_deref() else {
                 continue;
@@ -116,47 +112,43 @@ pub fn migrate_legacy_state() -> bool {
         }
     }
 
-    // Legacy per-model reasoning keyed by model id (built-in Anthropic models)
-    // applies to every instance that serves the model.
     for (model, settings) in &legacy_config.model_reasoning {
         if settings.effort.is_none() && settings.thinking.is_none() {
             continue;
         }
-        for instance in &instances.providers {
-            let serves = if instance.is_template() {
-                instance
-                    .template_id
+        for connection in &connections.connections {
+            let serves = if connection.is_preset() {
+                connection
+                    .preset_id
                     .as_deref()
-                    .and_then(provider_template_spec)
+                    .and_then(provider_preset_spec)
                     .is_some_and(|spec| spec.models.contains(&model.as_str()))
             } else {
-                instance.models.contains(model)
+                connection.models.contains(model)
             };
             if serves {
-                let entry = routes.settings_for_mut(&instance.id, model);
+                let entry = routes.settings_for_mut(&connection.id, model);
                 entry.effort = settings.effort.clone();
                 entry.thinking = settings.thinking;
             }
         }
     }
 
-    // Built-in base URLs (google / anthropic) that the user overrode become
-    // instance-level overrides on the matching instance.
     if let Some(url) = &legacy_config.google_base_url
-        && let Some(instance) = instances.providers.iter_mut().find(|p| p.id == "google")
+        && let Some(connection) = connections.connections.iter_mut().find(|p| p.id == "google")
     {
-        instance.base_url = Some(url.clone());
+        connection.base_url = Some(url.clone());
     }
     if let Some(url) = &legacy_config.anthropic_base_url
-        && let Some(instance) = instances.providers.iter_mut().find(|p| p.id == "anthropic")
+        && let Some(connection) = connections.connections.iter_mut().find(|p| p.id == "anthropic")
     {
-        instance.base_url = Some(url.clone());
+        connection.base_url = Some(url.clone());
     }
 
-    if instances.providers.is_empty() {
+    if connections.connections.is_empty() {
         return false;
     }
-    if instances.save().is_err()
+    if connections.save().is_err()
         || creds.save().is_err()
         || cache.save().is_err()
         || routes.save().is_err()
@@ -164,45 +156,38 @@ pub fn migrate_legacy_state() -> bool {
         return false;
     }
     tracing::info!(
-        instances = instances.providers.len(),
-        "migrated legacy provider instances to the state store"
+        connections = connections.connections.len(),
+        "migrated legacy connections to the state store"
     );
     true
 }
 
-/// The instance-level `base_url` override: `Some` when the first channel's
-/// endpoint differs from the template default (a deliberate user override),
-/// `None` when it matches the derivation. Custom instances always carry their
-/// declared endpoint.
 fn override_base_url(
     legacy: &LegacyProvider,
     first: &LegacyChannel,
-    template_id: Option<&str>,
+    preset_id: Option<&str>,
 ) -> Option<String> {
     let url = first.base_url.clone().filter(|u| !u.trim().is_empty())?;
-    if let Some(tid) = template_id {
-        let template_default =
-            neenee_providers::route_for_model(tid, legacy.models.first()?).map(|(_, base, _)| base);
-        if template_default == Some(url.as_str()) {
+    if let Some(pid) = preset_id {
+        let preset_default =
+            neenee_providers::route_for_model(pid, legacy.models.first()?).map(|(_, base, _)| base);
+        if preset_default == Some(url.as_str()) {
             return None;
         }
     }
     Some(url)
 }
 
-/// The instance-level `user_agent` override, mirroring [`override_base_url`].
-fn override_user_agent(first: &LegacyChannel, template_id: Option<&str>) -> Option<String> {
+fn override_user_agent(first: &LegacyChannel, preset_id: Option<&str>) -> Option<String> {
     let ua = first.user_agent.clone().filter(|u| !u.trim().is_empty())?;
-    if let Some(tid) = template_id
-        && let Some(spec) = provider_template_spec(tid)
+    if let Some(pid) = preset_id
+        && let Some(spec) = provider_preset_spec(pid)
         && spec.user_agent == Some(ua.as_str())
     {
         return None;
     }
     Some(ua)
 }
-
-// ── Legacy schema (raw reads, independent of the new `Config`) ─────────────
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "snake_case", default)]
@@ -227,7 +212,6 @@ impl LegacyConfig {
         toml::from_str(&content).ok()
     }
 
-    /// The legacy top-level key field for a built-in instance id, if any.
     fn builtin_api_key(&self, id: &str) -> Option<&SecretString> {
         match id {
             "openai" => self.openai_api_key.as_ref(),

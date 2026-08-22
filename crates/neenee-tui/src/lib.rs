@@ -1568,13 +1568,29 @@ pub async fn run_tui(
                             }
                         }
                         RoundEvent::Error(e) => {
-                            *provider_retry_clone.lock().await = None;
+                            let last_retry = provider_retry_clone.lock().await.take();
                             let mut msgs = buf.write().await;
                             // A terminal round error may still carry the raw
                             // retryable-envelope encoding (e.g. a 429 that
                             // exhausted its retry budget): strip it so the
                             // user sees the message, never the wire framing.
-                            let message = neenee_contracts::public_error_message(&e);
+                            let raw_msg = neenee_contracts::public_error_message(&e);
+                            let message = if let Some(retry) = last_retry
+                                && retry.attempt > 1
+                            {
+                                if raw_msg.starts_with("Failed after")
+                                    || raw_msg.starts_with("Exhausted")
+                                {
+                                    raw_msg
+                                } else {
+                                    format!(
+                                        "Exhausted {} retry attempts · {}",
+                                        retry.attempt, raw_msg
+                                    )
+                                }
+                            } else {
+                                raw_msg
+                            };
                             push_local_notice(&mut msgs, NoticeSeverity::Error, message);
                             if !routes_to_side {
                                 ir_clone.store(false, Ordering::SeqCst);

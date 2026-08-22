@@ -53,9 +53,9 @@ fn read_legacy_cache_route_settings() -> BTreeMap<String, BTreeMap<String, Route
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct RouteSettingsFile {
-    /// `instance_id -> model_id -> settings`, mirroring the historical
-    /// in-cache layout so the migration is a direct move.
-    providers: BTreeMap<String, BTreeMap<String, RouteSettings>>,
+    /// `connection_id -> model_id -> settings`
+    #[serde(alias = "providers")]
+    connections: BTreeMap<String, BTreeMap<String, RouteSettings>>,
     /// `true` once the one-shot fold out of the discovery cache has run.
     /// Distinguishes "not yet migrated" from "migrated and empty".
     migrated_from_cache: bool,
@@ -71,8 +71,7 @@ pub struct RouteSettingsStore {
 impl RouteSettingsStore {
     /// Load the store, running the one-shot migration from the discovery
     /// cache when it has not happened yet. Missing or unparseable file → an
-    /// empty store (state is rebuildable in the sense that losing it degrades
-    /// gracefully; a corrupt file must not block startup).
+    /// empty store.
     pub fn load() -> Self {
         let mut store = Self::read_file();
         if !store.file.migrated_from_cache {
@@ -96,21 +95,13 @@ impl RouteSettingsStore {
         Self { file }
     }
 
-    /// One-shot, idempotent fold of the pre-split layout: move
-    /// `models_discovery.json`'s historical `route_settings` map into this
-    /// store, clear it there, and persist both sides. Failure is non-fatal —
-    /// the next load retries (the marker is only written on success).
+    /// One-shot fold of the pre-split layout.
     fn migrate_from_cache(&mut self) {
-        // The field no longer exists on `DiscoveryCache` (that is the point
-        // of the split), so the legacy map is read raw from the cache file;
-        // an absent/old-format file simply holds no settings to move.
         let legacy = read_legacy_cache_route_settings();
         if !legacy.is_empty() {
-            for (instance, models) in legacy {
-                let target = self.file.providers.entry(instance).or_default();
+            for (conn, models) in legacy {
+                let target = self.file.connections.entry(conn).or_default();
                 for (model, settings) in models {
-                    // First occurrence wins; the state file is the newer
-                    // authority if both somehow hold the same route.
                     target.entry(model).or_insert(settings);
                 }
             }
@@ -119,9 +110,6 @@ impl RouteSettingsStore {
         if let Err(e) = self.save() {
             tracing::warn!("could not persist route settings migration: {e}");
         }
-        // Rewrite the cache without the legacy key so a later load (or a
-        // downgrade-then-upgrade) does not see it again. Loading-and-saving
-        // the typed struct drops the unknown key by construction.
         let cache = crate::config::DiscoveryCache::load();
         if let Err(e) = cache.save() {
             tracing::warn!("could not clear route settings from discovery cache: {e}");
@@ -135,43 +123,42 @@ impl RouteSettingsStore {
     }
 
     /// The reasoning override for one route, if set.
-    pub fn settings_for(&self, instance_id: &str, model_id: &str) -> Option<&RouteSettings> {
+    pub fn settings_for(&self, connection_id: &str, model_id: &str) -> Option<&RouteSettings> {
         self.file
-            .providers
-            .get(instance_id)
+            .connections
+            .get(connection_id)
             .and_then(|models| models.get(model_id))
     }
 
     /// Borrow a route's settings mutably, inserting a default entry when
     /// absent, so a caller can set one field without rebuilding the store.
-    pub fn settings_for_mut(&mut self, instance_id: &str, model_id: &str) -> &mut RouteSettings {
+    pub fn settings_for_mut(&mut self, connection_id: &str, model_id: &str) -> &mut RouteSettings {
         self.file
-            .providers
-            .entry(instance_id.to_string())
+            .connections
+            .entry(connection_id.to_string())
             .or_default()
             .entry(model_id.to_string())
             .or_default()
     }
 
     /// Remove one route's entry (the `e` editor's "back to default" path).
-    pub fn remove(&mut self, instance_id: &str, model_id: &str) {
-        if let Some(models) = self.file.providers.get_mut(instance_id) {
+    pub fn remove(&mut self, connection_id: &str, model_id: &str) {
+        if let Some(models) = self.file.connections.get_mut(connection_id) {
             models.remove(model_id);
             if models.is_empty() {
-                self.file.providers.remove(instance_id);
+                self.file.connections.remove(connection_id);
             }
         }
     }
 
-    /// Whether any route carries a setting — used by the migration tests and
-    /// callers deciding whether a save is worth its fsync.
+    /// Whether any route carries a setting.
     pub fn is_empty(&self) -> bool {
-        self.file.providers.iter().all(|(_, m)| m.is_empty())
+        self.file.connections.iter().all(|(_, m)| m.is_empty())
     }
 
-    /// Drop every route setting for `instance_id` (instance deletion).
-    pub fn retain_instance_except(&mut self, instance_id: &str) {
-        self.file.providers.remove(instance_id);
+    /// Drop every route setting for `connection_id` (connection deletion).
+    pub fn retain_connection_except(&mut self, connection_id: &str) {
+        self.file.connections.remove(connection_id);
     }
 }
 
@@ -274,7 +261,7 @@ mod tests {
         );
         let cache_after = crate::config::DiscoveryCache::load();
         assert!(
-            cache_after.provider_models.is_empty(),
+            cache_after.connection_models.is_empty(),
             "the cache file must have been rewritten without the legacy key"
         );
         let raw = std::fs::read_to_string(crate::paths::get().discovery_cache_file()).unwrap();

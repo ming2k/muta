@@ -129,6 +129,8 @@ pub fn run() -> io::Result<()> {
                     s.scroll.get(),
                     rect,
                     &theme,
+                    &crate::model::selection::SelectionState::None,
+                    &mut crate::model::layout::LayoutMap::new(),
                 );
                 s.scroll.set(clamped);
             });

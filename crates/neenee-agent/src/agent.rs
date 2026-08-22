@@ -575,6 +575,7 @@ struct RequestAccountingGuard {
     /// boundaries; a per-delta sum would over-count merges that span them).
     output_counter: neenee_contracts::tokenizer::StreamingCounter,
     observed_usage: Option<TokenUsage>,
+    error: Option<String>,
     settled: bool,
     /// Started when the provider request was dispatched, stopped once a valid
     /// assistant response is available (before any tool dispatch). The
@@ -613,10 +614,15 @@ impl RequestAccountingGuard {
             observed_completion_tokens: 0,
             output_counter: neenee_contracts::tokenizer::StreamingCounter::new(),
             observed_usage: None,
+            error: None,
             settled: false,
             started_at: Some(std::time::Instant::now()),
             generation_ms: 0,
         }
+    }
+
+    fn record_error(&mut self, err: impl Into<String>) {
+        self.error = Some(err.into());
     }
 
     fn observe_output(&mut self, text: &str) {
@@ -648,16 +654,28 @@ impl RequestAccountingGuard {
         usage: Option<TokenUsage>,
         estimated_completion_tokens: i64,
     ) {
+        self.settle_with_error(status, usage, estimated_completion_tokens, self.error.clone());
+    }
+
+    fn settle_with_error(
+        &mut self,
+        status: neenee_contracts::RequestUsageStatus,
+        usage: Option<TokenUsage>,
+        estimated_completion_tokens: i64,
+        error: Option<String>,
+    ) {
         if self.settled {
             return;
         }
+        self.seal_generation();
         if let (Some(ledger), Some(key)) = (&self.ledger, &self.key) {
-            ledger.settle_request(
+            ledger.settle_request_with_error(
                 key,
                 status,
                 usage,
                 estimated_completion_tokens,
                 self.generation_ms,
+                error,
             );
         }
         self.settled = true;
@@ -669,12 +687,18 @@ impl Drop for RequestAccountingGuard {
         if self.settled {
             return;
         }
+        self.seal_generation();
         let status = if self.cancel.is_cancelled() {
             neenee_contracts::RequestUsageStatus::Interrupted
         } else {
             neenee_contracts::RequestUsageStatus::Failed
         };
-        self.settle(status, self.observed_usage, self.observed_completion_tokens);
+        self.settle_with_error(
+            status,
+            self.observed_usage,
+            self.observed_completion_tokens,
+            self.error.clone(),
+        );
     }
 }
 
@@ -2455,17 +2479,23 @@ impl Agent {
                     self.provider.stream_chat_events(request.clone()),
                 ) => match result {
                     Ok(Ok(stream)) => stream,
-                    Ok(Err(error)) => return Err(HarnessError::from(error)),
+                    Ok(Err(error)) => {
+                        let err_msg = error.to_string();
+                        request_accounting.record_error(&err_msg);
+                        return Err(HarnessError::from(error));
+                    }
                     Err(_elapsed) => {
                         tracing::warn!(
                             timeout_secs = STREAM_IDLE_TIMEOUT.as_secs(),
                             "stream request timed out before any response"
                         );
+                        let err_msg = format!(
+                            "Provider did not start streaming within {} seconds.",
+                            STREAM_IDLE_TIMEOUT.as_secs()
+                        );
+                        request_accounting.record_error(&err_msg);
                         return Err(HarnessError::Retryable {
-                            message: format!(
-                                "Provider did not start streaming within {} seconds.",
-                                STREAM_IDLE_TIMEOUT.as_secs()
-                            ),
+                            message: err_msg,
                             retry_after_ms: None,
                         });
                     }
@@ -2503,12 +2533,14 @@ impl Agent {
                                     idle_timeout_secs = STREAM_IDLE_TIMEOUT.as_secs(),
                                     "stream stalled: no data received within idle timeout"
                                 );
+                                let err_msg = format!(
+                                    "Provider stream stalled — no data received \
+                                     for {} seconds.",
+                                    STREAM_IDLE_TIMEOUT.as_secs()
+                                );
+                                request_accounting.record_error(&err_msg);
                                 return Err(HarnessError::Retryable {
-                                    message: format!(
-                                        "Provider stream stalled — no data received \
-                                         for {} seconds.",
-                                        STREAM_IDLE_TIMEOUT.as_secs()
-                                    ),
+                                    message: err_msg,
                                     retry_after_ms: None,
                                 });
                             }
@@ -2578,10 +2610,10 @@ impl Agent {
             // that carried only an index) are still dropped below.
             for call in &calls {
                 if call.name.is_empty() && (!call.id.is_empty() || !call.arguments.is_empty()) {
+                    let err_msg = "Provider stream ended mid-tool-call; the response was likely truncated.".to_string();
+                    request_accounting.record_error(&err_msg);
                     return Err(HarnessError::Retryable {
-                        message: "Provider stream ended mid-tool-call; the response \
-                                  was likely truncated."
-                            .to_string(),
+                        message: err_msg,
                         retry_after_ms: None,
                     });
                 }
@@ -2604,12 +2636,14 @@ impl Agent {
                 if !call.arguments.is_empty()
                     && serde_json::from_str::<serde_json::Value>(&call.arguments).is_err()
                 {
+                    let err_msg = format!(
+                        "Provider stream ended with truncated arguments for tool \
+                         call `{}`; the response was likely cut off.",
+                        call.name
+                    );
+                    request_accounting.record_error(&err_msg);
                     return Err(HarnessError::Retryable {
-                        message: format!(
-                            "Provider stream ended with truncated arguments for tool \
-                             call `{}`; the response was likely cut off.",
-                            call.name
-                        ),
+                        message: err_msg,
                         retry_after_ms: None,
                     });
                 }

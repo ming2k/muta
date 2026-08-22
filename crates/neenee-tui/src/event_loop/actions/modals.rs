@@ -38,6 +38,7 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
                     protocol,
                     base_url,
                     api_key,
+                    client_identity: None,
                 });
                 app.input = std::mem::take(&mut app.stashed_input);
                 app.set_cursor_end();
@@ -73,6 +74,7 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
                     models,
                     auth: app.custom_auth,
                     template_id: app.custom_template_id.take(),
+                    client_identity: None,
                 });
                 app.input = std::mem::take(&mut app.stashed_input);
                 app.set_cursor_end();

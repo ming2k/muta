@@ -29,7 +29,7 @@ use neenee_contracts::{
 use neenee_mcp::{McpCatalog, McpRuntime};
 use neenee_persistence::{
     config::{Config, InputHistoryConfig, TuiConfig},
-    embedding, paths, provider_usage,
+    connection_usage, embedding, paths,
     session::SessionStore,
     trusted_projects::TrustGate,
 };
@@ -289,7 +289,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // so one session's choice never bleeds into another. Done after the session
     // is loaded (and, for resume, after `resume` swapped in its data).
     if let Some(selection) = session.provider_selection().await {
-        config.default_provider = selection.provider;
+        config.default_connection = selection.provider;
         if let Some(model) = selection.model {
             config.default_model = Some(model);
         }
@@ -411,11 +411,11 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Envoys resolve relative write-grants against the session's project
     // root, not the daemon process's cwd (ADR-0096).
     envoy_tool.set_workspace_root(Some(project_root.clone()));
-    // Envoys inherit the session's provider retry configuration.
+    // Envoys inherit the session's connection retry configuration.
     envoy_tool.bind_retry_policy(
-        config.provider_retry_max_attempts,
-        config.provider_retry_base_ms,
-        config.provider_retry_max_ms,
+        config.connection_retry_max_attempts,
+        config.connection_retry_base_ms,
+        config.connection_retry_max_ms,
     );
     // Full-duplex (ADR-0029): capture the envoy tool's envoy registry so the
     // request loop can route a user's permission / ask_user reply down into the
@@ -607,7 +607,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // `spawn_blocking` closure is self-contained. They are awaited later where
     // their results feed the harness / frontend.
     let input_history_handle = tokio::task::spawn_blocking(Config::load_history);
-    let provider_usage_handle = tokio::task::spawn_blocking(provider_usage::ProviderUsage::load);
+    let provider_usage_handle =
+        tokio::task::spawn_blocking(connection_usage::ConnectionUsage::load);
 
     // `neenee resume` (no id) opens the sessions picker at startup instead of
     // loading any session: no transcript, todos, or SessionStart hooks should

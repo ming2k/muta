@@ -1,15 +1,6 @@
-//! Materializes the runtime `Catalog` from the instance store, the template
+//! Materializes the runtime `Catalog` from the connection store, the preset
 //! registry, and the discovery cache — never from `config.toml`, which holds
 //! behavior only.
-//!
-//! Provider instances are persisted in `providers.toml` (see
-//! `neenee_persistence::instances`); their routes (one channel per model) are
-//! **derived** here at startup and on every switch from the instance's
-//! template plus the per-route facts in `models_discovery.json`. Every
-//! [`neenee_contracts::catalog::Channel`] produced here carries fully resolved
-//! credentials and model id, so provider construction
-//! (`build_provider_for_channel` in `neenee-providers`) never touches the
-//! environment, config, or stores again.
 
 mod derive;
 mod discovery;
@@ -24,16 +15,17 @@ pub use picker::build_picker_state;
 
 use neenee_contracts::catalog::ProviderEntry;
 use neenee_persistence::config::{Config, Credentials, DiscoveryCache};
-use neenee_persistence::instances::Instances;
+use neenee_persistence::connection_usage::ConnectionUsage;
+use neenee_persistence::connections::Connections;
 use neenee_persistence::route_settings::RouteSettingsStore;
 
 #[cfg(test)]
 mod tests;
 
-/// The three stores the catalog derives from, loaded together so a caller
-/// that builds an entry and then mutates the stores stays consistent.
+/// The stores the catalog derives from.
 pub struct Stores {
-    pub instances: Instances,
+    pub connections: Connections,
+    pub instances: Connections,
     pub cache: DiscoveryCache,
     pub routes: RouteSettingsStore,
     pub creds: Credentials,
@@ -41,8 +33,10 @@ pub struct Stores {
 
 impl Stores {
     pub fn load() -> Self {
+        let connections = Connections::load();
         Self {
-            instances: Instances::load(),
+            instances: connections.clone(),
+            connections,
             cache: DiscoveryCache::load(),
             routes: RouteSettingsStore::load(),
             creds: Credentials::load(),
@@ -50,24 +44,31 @@ impl Stores {
     }
 }
 
-pub fn default_provider_id(config: &Config) -> &str {
-    &config.default_provider
+pub fn default_connection_id(config: &Config) -> &str {
+    &config.default_connection
 }
 
-/// The effective default provider id: `config.default_provider` when it names
-/// a live instance, else the first instance, else empty.
-pub fn effective_default_provider_id(config: &Config, stores: &Stores) -> String {
+pub fn default_provider_id(config: &Config) -> &str {
+    default_connection_id(config)
+}
+
+/// The effective default connection id.
+pub fn effective_default_connection_id(config: &Config, stores: &Stores) -> String {
     stores
-        .instances
-        .effective_default(&config.default_provider)
+        .connections
+        .effective_default(&config.default_connection)
         .map(|p| p.id.clone())
         .unwrap_or_default()
+}
+
+pub fn effective_default_provider_id(config: &Config, stores: &Stores) -> String {
+    effective_default_connection_id(config, stores)
 }
 
 pub fn build_catalog() -> Vec<ProviderEntry> {
     let stores = Stores::load();
     derive_entries(
-        &stores.instances,
+        &stores.connections,
         &stores.cache,
         &stores.routes,
         &stores.creds,
@@ -83,19 +84,19 @@ pub fn build_provider_for(
 
 pub fn build_provider_for_model(
     config: &Config,
-    provider_id: &str,
+    connection_id: &str,
     model_id: Option<&str>,
     session_id: Option<&str>,
 ) -> Option<std::sync::Arc<dyn neenee_contracts::Provider>> {
     let stores = Stores::load();
     let entry = derive_entries(
-        &stores.instances,
+        &stores.connections,
         &stores.cache,
         &stores.routes,
         &stores.creds,
     )
     .into_iter()
-    .find(|e| e.id == provider_id)?;
+    .find(|e| e.id == connection_id)?;
     let wanted = model_id.or(config.default_model.as_deref());
     let channel = wanted
         .and_then(|m| entry.channel_for_model(m))
@@ -105,17 +106,13 @@ pub fn build_provider_for_model(
 }
 
 pub fn resolved_model_name(config: &Config, id: &str) -> Option<String> {
-    resolved_model_name_inner(
-        config,
-        id,
-        &neenee_persistence::provider_usage::ProviderUsage::default(),
-    )
+    resolved_model_name_inner(config, id, &ConnectionUsage::default())
 }
 
 pub fn resolved_model_name_with_usage(
     config: &Config,
     id: &str,
-    usage: &neenee_persistence::provider_usage::ProviderUsage,
+    usage: &ConnectionUsage,
 ) -> Option<String> {
     resolved_model_name_inner(config, id, usage)
 }
@@ -123,7 +120,7 @@ pub fn resolved_model_name_with_usage(
 fn resolved_model_name_inner(
     config: &Config,
     id: &str,
-    usage: &neenee_persistence::provider_usage::ProviderUsage,
+    usage: &ConnectionUsage,
 ) -> Option<String> {
     build_catalog()
         .iter()
@@ -131,10 +128,14 @@ fn resolved_model_name_inner(
         .and_then(|entry| active_model_id_for_entry(config, entry, usage))
 }
 
-pub fn models_for_provider(_config: &Config, provider_id: &str) -> Vec<String> {
+pub fn models_for_connection(_config: &Config, connection_id: &str) -> Vec<String> {
     build_catalog()
         .iter()
-        .find(|e| e.id == provider_id)
+        .find(|e| e.id == connection_id)
         .map(|entry| entry.channels.iter().map(|c| c.model.clone()).collect())
         .unwrap_or_default()
+}
+
+pub fn models_for_provider(config: &Config, provider_id: &str) -> Vec<String> {
+    models_for_connection(config, provider_id)
 }

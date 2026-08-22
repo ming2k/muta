@@ -111,13 +111,12 @@ pub enum AgentRequest {
         /// historical behavior; `XaiOAuth` marks SuperGrok channels whose live
         /// access token is resolved from `auth.toml`.
         auth: crate::ChannelAuth,
-        /// The stable template id this instance is created from, when it came
-        /// from a template. `None` for a pure-custom provider. When set to a
-        /// known template, the catalog re-seeds this instance's channels from
-        /// the template's current model list at startup, so a template edit
-        /// propagates to the instance. See
-        /// `neenee_agent::catalog::reconcile_provider_models`.
+        /// The stable preset id this connection is created from.
+        #[serde(default, alias = "preset_id")]
         template_id: Option<String>,
+        /// Client identity (impersonation/headers). Defaults to Native when unset.
+        #[serde(default)]
+        client_identity: Option<crate::ClientIdentity>,
     },
     /// Connect (authenticate) an OAuth provider — currently xAI SuperGrok. Runs
     /// the browser-loopback or device-code flow, persists tokens to `auth.toml`,
@@ -126,28 +125,21 @@ pub enum AgentRequest {
         id: String,
         method: crate::LoginMethod,
     },
-    /// Run an OAuth login **before** a provider instance exists ("+ Add
-    /// provider → xAI OAuth / ChatGPT OAuth"). `auth` selects which OAuth
-    /// provider to authenticate against. Persists tokens and streams
-    /// [`AgentResponse::ConnectStatus`]; the TUI then prompts for instance name.
+    /// Run an OAuth login **before** a connection instance exists.
     AuthorizeOAuth {
         method: crate::LoginMethod,
         auth: crate::ChannelAuth,
     },
-    /// Edit a user-defined provider's metadata in place (display name, protocol,
-    /// base URL, API key) without touching its model list — every channel keeps
-    /// its model id, so a multi-model custom provider is not collapsed. An empty
-    /// `api_key` leaves the existing key untouched. Built-in providers are not
-    /// editable this way (their `e` editor only sets the API key).
-    ///
-    /// Per ADR-0046, this no longer carries reasoning knobs — effort/thinking
-    /// are per-model (`EditProviderModel`), not provider-wide.
+    /// Edit a user-defined connection's metadata in place (display name, protocol,
+    /// base URL, API key, client identity) without touching its model list.
     EditProvider {
         id: String,
         name: String,
         protocol: String,
         base_url: String,
         api_key: crate::SecretString,
+        #[serde(default)]
+        client_identity: Option<crate::ClientIdentity>,
     },
     /// Remove a model (channel) from a user-defined provider, persist, and push a
     /// fresh picker snapshot. The last remaining model is kept (a provider must
@@ -1182,46 +1174,38 @@ pub struct SessionDetail {
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ProviderPickerRow {
     pub id: String,
-    /// Display name (e.g. `"OpenAI"`, `"Anthropic"`, or a custom provider's name).
+    /// Display name (e.g. `"OpenAI"`, `"Anthropic"`, or a custom connection's name).
     pub name: String,
-    /// Wire id of the currently-active model on this provider.
+    /// Wire id of the currently-active model on this connection.
     pub model: String,
-    /// Every model id this provider serves, in catalog order. A single-model
-    /// provider lists exactly one; multi-model providers list all of them.
+    /// Every model id this connection serves, in catalog order.
     pub models: Vec<String>,
-    /// Per-model/channel settings in the same order as `models`. Newer TUIs use
-    /// this to render and edit model-specific controls such as Anthropic
-    /// effort/thinking. `models` stays as the simple compatibility list.
+    /// Per-model/channel settings in the same order as `models`.
     #[serde(default)]
     pub model_info: Vec<ProviderModelInfo>,
-    /// `true` for built-in presets, `false` for user-defined providers. The TUI
-    /// only offers add/remove-model (and full meta editing) on user-defined
-    /// providers.
+    /// `true` for built-in presets, `false` for user-defined connections.
     pub builtin: bool,
     /// Wire protocol id of the default channel (`"openai"` | `"anthropic"` |
-    /// `"google"`), used to pre-fill the edit form for a user-defined provider.
-    /// Empty for built-ins (their `e` editor only changes the API key).
+    /// `"google"`), used to pre-fill the edit form.
     pub protocol: String,
-    /// Base URL of the default channel, used to pre-fill the edit form. Empty
-    /// for built-ins and keyless/native transports.
+    /// Base URL of the default channel, used to pre-fill the edit form.
     pub base_url: String,
     pub key_ready: bool,
-    /// The add-provider template that birthed this instance (`"openai"`,
-    /// `"anthropic"`, `"openai-sub2api"`, …), when known. Surfaced to the TUI
-    /// so the **Connections** list can show the provider *type* beside the
-    /// instance name — distinct from the user-given instance name. Empty for
-    /// instances with no recorded template (legacy configs).
+    /// The add-connection preset that birthed this instance (`"openai"`,
+    /// `"anthropic"`, `"deepseek"`, …), when known.
+    #[serde(default, alias = "template_id")]
+    pub preset_id: String,
+    /// Client identity configured for this connection.
     #[serde(default)]
-    pub template_id: String,
-    /// Unix epoch milliseconds of the last activation. `None` if the provider
-    /// has never been activated, which the picker sorts as "oldest".
+    pub client_identity: crate::ClientIdentity,
+    /// Unix epoch milliseconds of the last activation. `None` if never activated.
     pub last_used_ms: Option<u64>,
-    /// How the default channel authenticates. Surfaced so the TUI can route an
-    /// OAuth provider with no stored token to the connect flow rather than the
-    /// API-key editor.
+    /// How the default channel authenticates.
     #[serde(default)]
     pub auth: crate::ChannelAuth,
 }
+
+pub type ConnectionPickerRow = ProviderPickerRow;
 
 /// Progress / outcome of an OAuth connect flow (xAI SuperGrok).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1278,11 +1262,13 @@ pub struct ProviderModelInfo {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ProviderPickerSnapshot {
-    /// Canonical id of the active/default provider. Matches
-    /// `config.default_provider`.
+    /// Canonical id of the active/default connection. Matches
+    /// `config.default_connection`.
     pub default_id: String,
     pub rows: Vec<ProviderPickerRow>,
 }
+
+pub type ConnectionPickerSnapshot = ProviderPickerSnapshot;
 
 /// Complete state snapshot of a live or persisted session for client hydration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
