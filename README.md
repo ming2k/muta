@@ -34,7 +34,7 @@
 curl -fsSL https://raw.githubusercontent.com/ming2k/neenee/main/install.sh | bash
 ```
 
-> Pin this release with `NEENEE_VERSION=0.30.3`, or install into a custom dir with `INSTALL_DIR=/usr/local/bin`.
+> Pin this release with `NEENEE_VERSION=0.30.4`, or install into a custom dir with `INSTALL_DIR=/usr/local/bin`.
 
 On Windows (PowerShell), install the verified release build for the current user:
 

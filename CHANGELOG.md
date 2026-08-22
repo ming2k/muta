@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.4] - 2026-08-22
+
 ### Added
 
 - **Selectable text in documentary modals — converged on one component.**
@@ -4266,7 +4268,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.30.3...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.30.4...HEAD
+[0.30.4]: https://github.com/ming2k/neenee/releases/tag/v0.30.4
 [0.30.3]: https://github.com/ming2k/neenee/releases/tag/v0.30.3
 [0.30.2]: https://github.com/ming2k/neenee/releases/tag/v0.30.2
 [0.30.1]: https://github.com/ming2k/neenee/releases/tag/v0.30.1
