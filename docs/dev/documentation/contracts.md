@@ -39,7 +39,7 @@ as contracts:
 | `docs/adr/index.md` | ADRs are registered there | Create the index before writing ADRs, or disable ADR workflow |
 | `docs/adr/template.md` | New ADRs start from the template | Create a template before requiring ADRs |
 | `docs/reference/glossary.md` | New canonical terms update it | Keep terminology local to the relevant doc |
-| `docs/reference/api.md` | Public API changes update it | Use the project's equivalent reference surface (`docs/reference/server-api.md` + `docs/reference/server.asyncapi.yaml` for the daemon wire protocol) |
+| `docs/reference/api.md` | Public API changes update it | Use the project's equivalent reference surface |
 | `docs/tutorials/01-getting-started.md` | Setup changes update it with the README | Update the closest getting-started tutorial instead |
 
 Do not silently assume an optional contract exists. Either add it, link to
