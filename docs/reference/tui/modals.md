@@ -10,8 +10,9 @@ expressed in one of three ways:
   live surface — transcript, activity bar, input box, hint line — is darkened
   in place so it stays visible for context while the centered panel reads as
   the focal layer. The brightness is the `modal_dim_factor` theme field.
-- **Takeover** (the sessions picker only): the footer collapses to zero height
-  and the surface is fully occluded — a clean slate for a context switch.
+- **Takeover** (the sessions picker, the session dashboard, and the Settings
+  view): the footer collapses to zero height and the surface is fully
+  occluded — a clean slate for a context switch.
 - **None** ([question modal](#question-modal); the
   [permission sheet](#permission-sheet) is inline): floats on the fully-live
   surface with no dimming.
@@ -80,6 +81,26 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
 - Permission sheet: `Esc` rejects; `Ctrl+C` closes and rejects.
 - Model editor: `Ctrl+C` restores the stashed composer input and exits the
   configuration flow.
+- Session dashboard (a full-screen takeover, not a centered modal): `Esc`
+  leaves the screen — quitting the whole TUI when `neenee dashboard` opened
+  it at startup, or closing it back to the conversation when `/dashboard`
+  opened it mid-session. `Ctrl+C` follows the app-wide double-press quit
+  (arm, then exit) instead of closing; with text staged in the dashboard's
+  inline `p` / `n` prompt the chain is clear → arm → quit.
+
+**Retained views (ADR-0133).** The browse overlays — Help, Activity/Todos,
+Tools, MCP, Skills, Permissions, Usage stats, Context report, `/btw` asides, and the
+Settings view — are *retained surfaces*: dismissing one (Esc, outside click, Ctrl+C)
+saves its scroll, selection, and follow state to a per-view registry, and
+reopening restores exactly where the user was. The old reset-on-open ritual
+is gone; data-refresh queries run on a view's first open only. **`Ctrl+L`**
+opens the global view quick switcher over any surface (it is itself a
+transient chooser, not a retained view): open views first in MRU order,
+then every other view as discovery. `Enter` switches — hiding the origin
+with its state saved — and `Esc` cancels back untouched, restoring the
+origin's cursor from the registry. Switching sessions forgets retained
+state (it belongs to the conversation); the picker→editor chains and the
+full-screen takeovers keep their existing lifecycles for now.
 
 **Click-outside-to-dismiss.** Read-only / info modals — Help, Tool-step
 detail, Tools, Sessions, Permissions, Activity, History, and the two pickers
@@ -92,20 +113,41 @@ source of truth is `Modal::dismissable_by_outside_click()`.
 ## Models modal
 
 Flat (provider, model) picker — the daily-driver switch surface. Every model
-served by every configured connection appears as its own row, ranked by a
-**two-tier order**: the currently-active pair first, favorites next, everything
-else last; within each tier rows sort ASCII by the model id (provider label as
-the tiebreaker). Rows are **id-first**: the wire model id is the label (upstream
-discovery only guarantees the id, so the list never mixes curated display names
-with raw ids). Borrows the composer input as a fuzzy filter over the model id
-(a query that matches only the provider name keeps its rows, unhighlighted).
+served by every configured connection appears as its own row, grouped into
+**three labeled sections**:
+
+1. **FAVORITES** — ★-marked models (favorite is model-level, ADR-0046),
+   ASCII by model id;
+2. **RECENT** — models with activation history, most recently used first
+   (ASCII id as the tiebreaker);
+3. **ALL MODELS** — every remaining pair, ASCII by the model id (provider
+   label as the tiebreaker).
+
+Each non-empty section is announced by a dim uppercase label row the
+selection cursor skips over — ↑/↓ walks only model rows. An empty section
+renders no label at all. Precedence is favorite > recent > rest: a favorite is
+pinned user intent and always wins over the emergent recency signal. The
+currently-active pair is **not** pinned to the top of the list; it keeps its
+natural section position and is identified by its `●` glyph (the modal also
+opens with the cursor on it).
+
+Rows are **id-first**: the wire model id is the label (upstream discovery only
+guarantees the id, so the list never mixes curated display names with raw
+ids). Borrows the composer input as a fuzzy filter over the model id (a query
+that matches only the provider name keeps its rows, unhighlighted); the
+filtered results keep the same three-section grouping.
 
 ```text
 ╭───────────────────────────────────────────────╮
 │ Models  ❯ opus                                │  ← header (real caret here)
 │                                               │
+│ FAVORITES                                     │  ← dim label (not selectable)
 │  ●  claude-opus-4-8   · anthropic  ◆ think on │  ← selected → brand bg
+│                                               │
+│ RECENT                                        │
 │  ●  gpt-4o           · openai                 │
+│                                               │
+│ ALL MODELS                                    │
 │  ●  gemini-3-pro     · google                 │
 │  …                                            │
 │                                               │

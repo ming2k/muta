@@ -7,6 +7,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Wire-protocol window negotiation (ADR-0134).** Client/daemon
+  compatibility is now governed by a wire protocol number, not the
+  product version. A client that sends `Select{protocol}` (the CLI, TUI,
+  and web panel all do) is served anywhere in the daemon's window
+  `[MIN_PROTOCOL_VERSION, PROTOCOL_VERSION]` — *whatever its product
+  build* — so additive wire changes stop breaking version-pinned clients;
+  outside the window it is refused before any session work with
+  `Error{code:"protocol_mismatch"}` and a directional fix. Clients that
+  predate the field keep ADR-0100 rule 4's exact version equality, and
+  local pairs keep the `/proc/<pid>/exe` image check for dev-loop drift.
+  The wire envelope moved to `neenee-contracts::wire` (single serde source
+  of truth next to the payload types), the discovery record mirrors the
+  daemon's `protocol` for pre-handshake refusal, the web panel's
+  `AttachAction`/`ControlRequest`/`SessionOverview` mirrors are now
+  ts-rs-generated (fixing a real drift: the hand-written `AttachAction`
+  lacked the `picker` variant), and `scripts/check-wire-compat.sh` (CI)
+  fails a wire-surface change without a `PROTOCOL_VERSION` bump unless
+  the PR is labeled `wire-compatible` — the bump decision is now a
+  reviewable assertion, not memory.
+
+- **Views are retained surfaces with a global quick switcher (ADR-0133,
+  phase 1–2).** Browse overlays — Help, Activity/Todos, Tools, MCP, Skills,
+  Permissions, Usage stats, Context report, `/btw` asides, Settings — no
+  longer reset
+  when you leave them: hiding a view (Esc, outside click, Ctrl+C) saves its
+  scroll, selection, and follow state to a per-view registry, and reopening
+  returns you exactly where you were, the same "leave and come back, nothing
+  lost" contract daemon sessions already have. **`Ctrl+L`** opens a global
+  view switcher over every surface (usable even while another modal is up):
+  open views first in most-recently-used order, then every other view as
+  discovery; `Enter` switches, `Esc` cancels back untouched. Data-refresh
+  side effects (the usage-stats query, session-context snapshots) now run on
+  a view's *first* open only instead of on every reopen. Switching sessions
+  forgets retained view state — it belongs to the conversation, not the
+  terminal. The picker→editor chains (Models/Connections and friends) and
+  the full-screen surfaces (Sessions, dashboard, Settings) keep their
+  existing lifecycles and migrate in later phases.
+
+### Fixed
+
+- **The double-Esc interrupt confirmation no longer flashes and
+  vanishes.** Two defects made the armed window unreliable. First, the
+  window was a 20-iteration loop counter, but the event loop wakes on
+  every keystroke, mouse move, stream delta, and dirty-notify — far more
+  often than its 100ms animation heartbeat — so the intended ~2s window
+  could burn through in a few hundred milliseconds, and the "Esc again
+  interrupts" toast disappeared before a second press could land. Second,
+  the keep-alive check read the runtime's global `is_responding` flag,
+  which tracks only the *primary* session: inside a `/btw` aside view
+  (where Esc arms from the aside's own running round) the armed window
+  was zeroed on the very next frame whenever the primary sat idle — the
+  "first press did nothing" symptom. The window is now wall-clock
+  (`App::ESC_ARM_WINDOW`, 2s, matching the Ctrl+C quit window that
+  already made this exact migration) and view-scoped: it lapses on the
+  deadline or when the *viewed* session's round ends, whichever comes
+  first. Arming is also dropped when switching views or leaving an
+  aside, so one session's confirmation can never fire another session's
+  interrupt, and a lapsed window re-arms instead of firing a stale
+  confirmation.
+
+### Added
+
+- **Dashboard console is a command surface (ADR-0097 §2–§3, first
+  slice).** The `/dashboard` upper region — previously an orchestrator
+  placeholder — is now a cockpit log with a command grammar. Typing on
+  the dashboard opens the composer directly (any printable key seeds it;
+  `p` opens it empty, `n` opens it in create mode). The line speaks the
+  ADR-0097 address syntax: `@3 refactor the retry loop` sends to session
+  `#3`, `@2 @3 text` fans the same prompt out to several sessions, and
+  bare text keeps the classic "prompt the selection" role (or creates,
+  when the line was opened with `n`). Slash verbs manage sessions from
+  the same line:
+  `/interrupt` (`/stop`), `/suspend` (`/park`), `/kill` (`/x`, also the
+  two-press `k` dock key), `/new [text]`, `/help` — each accepting an
+  optional `@N` to act without moving the dock selection. Every dispatch
+  (verbs and the `i`/`s`/`k` keys alike) writes a receipt line into the
+  console — `› [#3] prompt …`, `✓ #3 queued`, `✗ #3 … is not hosted` —
+  so the log answers "what did I ask the fleet to do" without a
+  re-attach. New dock keys: `k` kills the selection (press `k` again to
+  confirm; any other key or a selection move cancels), `s` suspends it.
+- **`suspend_session` control verb.** The control plane gains a
+  memory-reclamation verb that parks a hosted session in memory without
+  ending it: the driver is torn down, `SessionEnd` hooks do not fire,
+  and the next attach rebuilds the session from its durable transcript
+  via lazy resume (the same path the idle reaper uses, now available on
+  demand). Refused — with an actionable error — while a client is
+  attached, a round is active, or the session has no persisted content.
+  The web panel's session rows gain interrupt (⏹) and suspend (⏸)
+  actions alongside rename / end / delete.
+
+### Fixed
+
+- **`neenee dashboard` no longer leaks into the carrier conversation on
+  Ctrl+C.** The startup dashboard is the app while it is open: leaving it
+  must exit the whole TUI. `Esc` already quit, but `Ctrl+C` hit the generic
+  modal-close arm, dismissed the dashboard, and dropped the user into the
+  carrier session's chat — a conversation they never asked for. The
+  dashboard now owns Ctrl+C with the same double-press contract as the
+  conversation view: the first press arms a 2s quit window (the "press
+  Ctrl+C again to exit" toast), the second exits the entire TUI. With text
+  staged in the dashboard's inline prompt (`p` / `n`), the chain is three
+  presses like the composer (clear, arm, quit). The in-session `/dashboard`
+  gets the same gesture; its second press declares the session end exactly
+  as the conversation's double Ctrl+C does (ADR-0112), while the startup
+  screen's quit stays detach-flavoured so the carrier session survives.
+
+### Changed
+
+- **Autopilot posture is now session-persisted (ADR-0132).** The
+  unattended/attended flag moved from a process-local in-memory bool to
+  session-scoped persisted state (`SessionEvent::AutopilotSet`), following
+  the ADR-0048 Phase 2 pattern. A daemon that dies mid-unattended-task —
+  crash, kill, upgrade, reboot — now reopens the session **unattended** when
+  it is re-hosted (attach, lazy-resume, or boot rehost), instead of silently
+  de-escalating to attended and parking the next side-effecting tool on a
+  permission modal nobody is watching. Every write path persists
+  (`/autopilot on|off`, the `--autopilot`/`-y`/`--yolo` startup flag —
+  which previously never wrote the store or the command ledger, closing the
+  widest recovery gap — and `/principal <role>` switches); every restore
+  path restores, and the WS attach snapshot now publishes the real posture
+  in its first frame instead of a hardcoded `false`. `/reset` starts the
+  new session attended (the old session's posture is not inherited), a
+  posture toggle alone never materialises an otherwise-empty session file,
+  and de-escalations are as durable as escalations (`/autopilot off`
+  persists; the last write wins across restarts). Sessions created before
+  this change are recovered from the command ledger (last
+  `Autopilot ON`/`OFF` ack) with a loud "Autopilot restored" notice naming
+  the recovery source.
+
+### Changed
+
+- **Models picker list is now three labeled sections.** The `/models` /
+  `Ctrl+M` modal — one row per (provider, model) pair across every connection
+  — now groups its rows into **Favorites**, **Recent**, and **All models**,
+  each announced by a dim uppercase label row (`FAVORITES` / `RECENT` /
+  `ALL MODELS`) that the ↑/↓ cursor skips; an empty section renders no label.
+  Ordering inside the sections: Favorites and All models sort ASCII by the
+  model id (provider label as the tiebreaker); Recent sorts most-recently-used
+  first. Precedence is favorite > recent > rest — a star is pinned user intent
+  and beats the emergent recency signal. The currently-active pair is no
+  longer pinned to the top of the list: it keeps its natural section position
+  and is identified by its `●` glyph (the modal still opens with the cursor on
+  it). To feed the Recent section, per-model usage recency
+  (`ProviderModelInfo.last_used_ms`) is now surfaced in the picker snapshot —
+  the signal was already tracked per model in the usage store, it just never
+  reached the UI. Fuzzy search keeps the same grouping over the filtered rows.
+
 ## [0.30.4] - 2026-08-22
 
 ### Added

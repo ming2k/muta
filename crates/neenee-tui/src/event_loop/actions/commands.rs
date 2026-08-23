@@ -359,7 +359,7 @@ pub(crate) async fn handle_send_slash(
 
 /// Loop stage (input dispatch): the `CtrlC` arm of the action match (copy
 /// selection, close overlay, clear input, armed double-press quit).
-pub(super) fn handle_ctrl_c(
+pub(crate) fn handle_ctrl_c(
     app: &mut App,
     copy_tx: &mpsc::UnboundedSender<Result<clipboard::CopyOutcome, String>>,
     copy_pending: &Arc<AtomicUsize>,
@@ -407,8 +407,59 @@ pub(super) fn handle_ctrl_c(
                 std::time::Duration::from_millis(2000),
             );
         }
+    } else if app.active_modal == Modal::Host {
+        // The session dashboard owns Ctrl+C: it is a first-class
+        // screen, not a transient modal, so Ctrl+C never closes
+        // it into the conversation behind it. The gesture is the
+        // app-wide double-press — first press arms a 2s quit
+        // window (the "press Ctrl+C again to exit" toast), the
+        // second exits the whole TUI.
+        if app.host_prompting && !app.input.is_empty() {
+            // Same two-press shape as the composer: with text in
+            // the dashboard's inline prompt, the first Ctrl+C
+            // clears it (and arms), the second quits.
+            app.input.clear();
+            app.set_cursor(0);
+            show_local_toast(
+                app,
+                "input cleared — Ctrl+C again to exit",
+                false,
+                std::time::Duration::from_millis(2000),
+            );
+            app.arm_ctrl_c(Some(
+                std::time::Instant::now() + std::time::Duration::from_secs(2),
+            ));
+        } else if app.ctrl_c_armed() {
+            tracing::info!(reason = "dashboard_ctrl_c_double_press", "app exiting");
+            if app.startup_overlay == crate::StartupOverlay::Dashboard {
+                // `neenee dashboard` opened this screen over a
+                // carrier session the user never asked to
+                // converse with: quit the detach-flavoured way
+                // (should_quit, mirroring the Esc path) so the
+                // carrier stays hosted — never a client-declared
+                // EndSession aimed at someone else's session.
+                app.should_quit.store(true, Ordering::SeqCst);
+            } else {
+                // `/dashboard` opened in-session: the same
+                // client-declared session end as the
+                // conversation's double Ctrl+C (ADR-0112).
+                let _ = app.tx.send(AgentRequest::EndSession);
+                return ActionFlow::Exit;
+            }
+        } else {
+            // Arm the real 2s window in which a second Ctrl+C
+            // quits (the toast renders over the dashboard).
+            app.arm_ctrl_c(Some(
+                std::time::Instant::now() + std::time::Duration::from_secs(2),
+            ));
+        }
     } else if app.active_modal != Modal::None && app.active_modal != Modal::Permission {
-        app.active_modal = Modal::None;
+        // Ctrl+C over a surface is the same dismiss as Esc (ADR-0133):
+        // retained browse views hide with state saved, the quick switcher
+        // cancels to its origin, everything else falls to plain close.
+        if !app.dismiss_surface() {
+            app.active_modal = Modal::None;
+        }
     } else if app.in_side_view {
         // `/btw` aside view: Ctrl+C detaches back to the primary
         // transcript (ADR-0103 §2) — the aside keeps running, so
@@ -461,4 +512,23 @@ pub(super) fn handle_ctrl_c(
         ));
     }
     ActionFlow::Handled
+}
+
+/// Loop stage (input dispatch): the shared `Interrupt` / `InterruptSide` arm
+/// of the action match. Both views run the same press-twice contract — the
+/// first Esc arms a wall-clock [`App::ESC_ARM_WINDOW`] confirmation window
+/// (the "Esc again interrupts" toast), a second press inside it interrupts.
+/// `side` routes the request at the viewed aside (`InterruptSide`), which is
+/// only meaningful while the aside view is actually open.
+pub(crate) fn handle_esc_interrupt(app: &mut App, side: bool) {
+    if !app.esc_press() {
+        return;
+    }
+    if side {
+        if let Some(side_id) = app.side_session_id.clone() {
+            let _ = app.tx.send(AgentRequest::InterruptSide { side_id });
+        }
+    } else {
+        let _ = app.tx.send(AgentRequest::Interrupt);
+    }
 }

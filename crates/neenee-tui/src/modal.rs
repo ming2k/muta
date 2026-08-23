@@ -12,15 +12,18 @@ pub enum Modal {
     None,
     /// Flat model picker (`Ctrl+M` / `/models`) — the daily-driver switch
     /// surface. One selectable row per (provider, model) pair across the whole
-    /// snapshot (`App::models_flat_filtered`); Enter activates the highlighted
-    /// pair, `e` opens the pair's per-model settings editor (ADR-0046), and `d`
-    /// removes the highlighted model when its provider is user-defined. It
-    /// mirrors the input-history modal's two-mode design: it opens in **browse**
-    /// mode (composer line not borrowed, typing inert) and `/` drops into a
-    /// **search** sub-layer that borrows the line as a live fuzzy query
-    /// (`App::model_search` distinguishes the two). Esc in search returns to
-    /// browse; Esc in browse (or an outside click) closes and restores the
-    /// draft.
+    /// snapshot (`App::models_flat_filtered`), grouped into three labeled
+    /// sections — **Favorites** (★-marked, ASCII order), **Recent** (usage
+    /// history, most-recent-first), **All models** (ASCII order) — with dim
+    /// section-label rows the selection cursor skips. Enter activates the
+    /// highlighted pair, `e` opens the pair's per-model settings editor
+    /// (ADR-0046), and `d` removes the highlighted model when its provider is
+    /// user-defined. It mirrors the input-history modal's two-mode design: it
+    /// opens in **browse** mode (composer line not borrowed, typing inert) and
+    /// `/` drops into a **search** sub-layer that borrows the line as a live
+    /// fuzzy query (`App::model_search` distinguishes the two). Esc in search
+    /// returns to browse; Esc in browse (or an outside click) closes and
+    /// restores the draft.
     Models,
     /// Provider-instance management (`/connections`): the ranked provider list
     /// (`App::providers_filtered`, favorites → last-used → name) with a trailing
@@ -155,6 +158,13 @@ pub enum Modal {
     /// `Esc` cancels (→ empty reply → command runs with closed stdin and fails
     /// fast with a non-interactive remedy hint).
     InputInjection,
+    /// Global view quick switcher (ADR-0133, `Ctrl+L`): a centered picker
+    /// over every browse surface — open views first in MRU order, then the
+    /// rest as discovery. `Enter` switches (hides the current view, focus
+    /// moves, retained scroll/index restored); `Esc` closes with nothing
+    /// changed. Not itself a retained view: it is a transient chooser over
+    /// them, so it stays out of the [`crate::views::ViewRegistry`].
+    ViewSwitcher,
 }
 
 /// How the live surface recedes while a modal owns the foreground.
@@ -196,8 +206,7 @@ impl Modal {
             // Context switch: the surfaces that fully own the screen.
             // Sessions is a context-switch picker; Host is the session
             // dashboard; Config is the full-screen Settings View.
-            Modal::Sessions | Modal::Host | Modal::Config => Recess::Takeover,
-            // Everything else recedes the surface for focus while keeping it
+            Modal::Sessions | Modal::Host | Modal::Config => Recess::Takeover, // Everything else recedes the surface for focus while keeping it
             // visible (transcript, chrome, and all).
             _ => Recess::Dim,
         }
@@ -235,6 +244,7 @@ impl Modal {
                 | Modal::TokenReport
                 | Modal::UsageStats
                 | Modal::Btw
+                | Modal::ViewSwitcher
         )
     }
 
@@ -262,7 +272,7 @@ impl Modal {
 /// independently by clicking the corresponding segment on the activity bar,
 /// so there is no tab strip or Left/Right cycling — the variant simply
 /// controls which content the modal body renders.
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ActivityTab {
     Activity,
     Todos,

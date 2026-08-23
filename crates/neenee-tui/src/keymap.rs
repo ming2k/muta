@@ -164,6 +164,7 @@ fn chord_token(code: KeyCode) -> &'static str {
             'h' => "h",
             'j' => "j",
             'k' => "k",
+            'l' => "l",
             'm' => "m",
             'o' => "o",
             'p' => "p",
@@ -218,6 +219,7 @@ fn display_token(code: KeyCode) -> &'static str {
             'h' => "H",
             'j' => "J",
             'k' => "K",
+            'l' => "L",
             'm' => "M",
             'o' => "O",
             'p' => "P",
@@ -305,6 +307,7 @@ fn chord_str(prefix: &'static str, core: &'static str) -> &'static str {
         ("ctrl+", "h") => "ctrl+h",
         ("ctrl+", "j") => "ctrl+j",
         ("ctrl+", "k") => "ctrl+k",
+        ("ctrl+", "l") => "ctrl+l",
         ("ctrl+", "m") => "ctrl+m",
         ("ctrl+", "o") => "ctrl+o",
         ("ctrl+", "p") => "ctrl+p",
@@ -347,6 +350,7 @@ fn display_str(prefix: &'static str, core: &'static str) -> &'static str {
         ("Ctrl+", "H") => "Ctrl+H",
         ("Ctrl+", "J") => "Ctrl+J",
         ("Ctrl+", "K") => "Ctrl+K",
+        ("Ctrl+", "L") => "Ctrl+L",
         ("Ctrl+", "M") => "Ctrl+M",
         ("Ctrl+", "O") => "Ctrl+O",
         ("Ctrl+", "P") => "Ctrl+P",
@@ -531,6 +535,8 @@ pub enum Action {
     /// Open the `/btw` asides list modal (ADR-0103 §5): live background
     /// asides, jump back in, or close one outright.
     OpenBtwList,
+    /// Open the global view quick switcher (ADR-0133, `Ctrl+L`).
+    OpenViewSwitcher,
     /// Toggle the user block on the viewed session's outbox. While blocked, no
     /// queued message auto-drains (not even after the round completes).
     ToggleQueueBlock,
@@ -645,6 +651,26 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             action: Action::OpenHistory,
             description: "search history",
         },
+        // Ctrl+L opens the global view quick switcher (ADR-0133). `Gate::Always`
+        // — the whole point of a switcher is that it works *over* whatever
+        // surface is up (matching tmux's window switcher, the direct prior
+        // art), so it must not be NoModal-gated like the open-* bindings. A
+        // Ctrl chord rather than the F-row for the same portability reasons
+        // the queue family recorded (ADR-0126): Ctrl bytes are distinct in
+        // raw mode, survive tmux/screen, and sit one row from Enter. Ctrl+L
+        // is free — not in the readline family the composer uses
+        // (Ctrl+A/E/W/U/K, Alt+B/F/D) and unclaimed by any global binding
+        // (Ctrl+G was rejected for colliding with readline's abort;
+        // Ctrl+Tab/Ctrl+Space are terminal/IME territory).
+        Binding {
+            key: Key {
+                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('l'),
+            },
+            gate: Gate::Always,
+            action: Action::OpenViewSwitcher,
+            description: "switch view",
+        },
         // `?` / `f1` / `ctrl+h` all open help, but they are context-sensitive (`?`
         // only fires on an empty prompt) and `ctrl+h` needs the Kitty protocol —
         // so they stay hand-routed in the input handler and are *documented* in
@@ -734,6 +760,7 @@ impl Registry {
                 Action::OpenTodos => InputAction::OpenTodos,
                 Action::OpenQueue => InputAction::OpenQueue,
                 Action::OpenBtwList => InputAction::OpenBtwList,
+                Action::OpenViewSwitcher => InputAction::ViewSwitcherToggle,
                 Action::ToggleQueueBlock => InputAction::QueueToggleBlock,
                 Action::InsertIntoRound => InputAction::InsertIntoRound,
                 Action::CopyOrClear => InputAction::CtrlC,

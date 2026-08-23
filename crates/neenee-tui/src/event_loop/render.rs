@@ -860,11 +860,11 @@ pub(super) fn render_frame(
                 &mut app.host_scroll,
                 app.host_modal_follow,
                 &mut app.host_detail_scroll,
+                &app.host_console_log,
                 app.host_prompting,
                 app.host_prompt_new,
                 &app.input,
                 &app.theme,
-                spinner_phase,
                 viewed_session_id,
             );
             // Stash the list-body height so the page-scroll step
@@ -1046,6 +1046,25 @@ pub(super) fn render_frame(
             &app.selection,
             &mut layout_map,
         )),
+        // Global view quick switcher (ADR-0133, Ctrl+L): open views first
+        // in MRU order, then the rest as discovery. Renders from the view
+        // registry; Enter switches via `ViewSwitchActivate`.
+        Modal::ViewSwitcher => {
+            let rows = app.views.switcher_rows();
+            let open_ids = app.views.order().to_vec();
+            Some(view::draw_view_switcher(
+                f,
+                &rows,
+                app.modal_index,
+                &open_ids,
+                app.view_switcher_return,
+                &mut app.session_scroll,
+                app.session_modal_follow,
+                &app.theme,
+                &app.selection,
+                &mut layout_map,
+            ))
+        }
         Modal::None => None,
     };
 
@@ -1104,7 +1123,7 @@ pub(super) fn render_frame(
         // takes over for the remainder of the quit window.
         view::draw_armed_toast(f, "press Ctrl+C again to exit", &app.theme);
     }
-    if app.esc_armed_ticks > 0 {
+    if app.esc_armed() {
         view::draw_armed_toast(f, "Esc again interrupts", &app.theme);
     }
 

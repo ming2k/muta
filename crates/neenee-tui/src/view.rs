@@ -39,6 +39,7 @@ pub(crate) use crate::footer_stack::{
 pub(crate) use crate::layout;
 #[cfg(test)]
 use crate::markdown_table::{build_table_render, shrink_column_widths};
+pub(crate) use crate::overlays::draw_view_switcher;
 pub use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
 #[allow(unused_imports)]
 pub use crate::overlays::{

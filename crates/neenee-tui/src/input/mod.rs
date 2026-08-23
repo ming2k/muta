@@ -205,6 +205,7 @@ fn scrolls_own_body(modal: super::Modal) -> bool {
             | super::Modal::Connections
             | super::Modal::Models
             | super::Modal::Question
+            | super::Modal::ViewSwitcher
     )
 }
 
@@ -406,12 +407,25 @@ pub enum InputAction {
     /// Dashboard `i`: interrupt the selected session's current round
     /// (control-plane verb, ADR-0096).
     HostInterruptSelected,
+    /// Dashboard `k`: kill (tear down) the selected session — a two-press
+    /// confirm, since a session's running work dies with it. The receipt
+    /// lands in the console log.
+    HostKillSelected,
+    /// Dashboard `s`: suspend the selected session (park it in memory; the
+    /// next attach rebuilds it via lazy resume). Refused while a client is
+    /// attached or a round is active.
+    HostSuspendSelected,
     /// Dashboard `p`: open the inline prompt to send a task to the selected
     /// session. While open, Enter submits the prompt text.
     HostPromptOpen,
     /// Dashboard `n`: open the inline new-session prompt (create + optional
     /// opening task). While open, Enter creates the session.
     HostNewSession,
+    /// Dashboard printable key with no prompt open: open the inline prompt
+    /// seeded with the typed char — the console is a command surface, so
+    /// typing `@3 …` starts the composer directly instead of requiring a
+    /// `p` first.
+    HostPromptSeed(char),
     /// Dashboard inline-prompt submit (Enter while `p`/`n` is open).
     HostPromptSubmit,
     /// Drill into the selected turn's model-round usage. Bound to `Enter`.
@@ -653,6 +667,15 @@ pub enum InputAction {
     ExitSideView,
     /// Open the `/btw` asides list modal (ADR-0103 §5). Mapped from F5.
     OpenBtwList,
+    /// Open the global view quick switcher (ADR-0133, `Ctrl+L`). A transient
+    /// chooser over every browse surface: open views first in MRU order,
+    /// then the rest as discovery. Esc closes it with nothing changed.
+    ViewSwitcherToggle,
+    /// Switch to the view highlighted in the quick switcher (ADR-0133,
+    /// Enter). Hides the current browse view (state retained in the
+    /// `ViewRegistry`) and focuses the target with its retained
+    /// scroll/index restored.
+    ViewSwitchActivate,
     /// Jump into the aside highlighted in the asides modal (ADR-0103 §5).
     BtwFocusSelected,
     /// Close + discard the aside highlighted in the asides modal
@@ -1279,6 +1302,10 @@ pub fn process_event(
                     } else if context.active_modal == super::Modal::Config {
                         InputAction::ConfigBack
                     } else if context.active_modal != super::Modal::None {
+                        // For every other surface — the retained browse views
+                        // and the quick switcher included (ADR-0133) — Esc is
+                        // the shared dismiss verb; the dispatcher decides
+                        // hide (state saved) vs cancel-to-origin there.
                         InputAction::CloseModal
                     } else if context.in_side_view {
                         // `/btw` aside view (ADR-0103 §2): Esc interrupts the
@@ -1438,6 +1465,10 @@ pub fn process_event(
                         super::Modal::Permissions => InputAction::CloseModal,
                         super::Modal::Queue => InputAction::RecallQueuedSelected,
                         super::Modal::Btw => InputAction::BtwFocusSelected,
+                        // Quick switcher: Enter switches to the highlighted
+                        // view (ADR-0133). Btw's Enter is a *jump*, the
+                        // switcher's is a *switch* — both close the panel.
+                        super::Modal::ViewSwitcher => InputAction::ViewSwitchActivate,
                         super::Modal::Config => InputAction::ConfigActivate,
                         super::Modal::Activity => InputAction::CloseModal,
                         super::Modal::TokenReport => InputAction::TokenReportActivate,
@@ -1933,6 +1964,25 @@ pub fn process_event(
                         // are actions, never literal input).
                         #[allow(clippy::needless_return)]
                         return InputAction::HostInterruptSelected;
+                    } else if context.active_modal == super::Modal::Host
+                        && c == 'k'
+                        && !context.host_prompting
+                    {
+                        // Dashboard dock: kill the selection. Two-press
+                        // confirm — the first press arms, the second fires.
+                        // Inert while the inline prompt is open (`k` is then
+                        // literal text; `/kill` is the prompt's spelling).
+                        #[allow(clippy::needless_return)]
+                        return InputAction::HostKillSelected;
+                    } else if context.active_modal == super::Modal::Host
+                        && c == 's'
+                        && !context.host_prompting
+                    {
+                        // Dashboard dock: suspend the selection (park it in
+                        // memory; the next attach resumes it). Same
+                        // prompt-open exclusion as `k`.
+                        #[allow(clippy::needless_return)]
+                        return InputAction::HostSuspendSelected;
                     } else if context.active_modal == super::Modal::Host && c == 'p' {
                         // Dashboard: open the inline prompt-to-session field.
                         #[allow(clippy::needless_return)]
@@ -1941,6 +1991,16 @@ pub fn process_event(
                         // Dashboard: open the inline new-session field.
                         #[allow(clippy::needless_return)]
                         return InputAction::HostNewSession;
+                    } else if context.active_modal == super::Modal::Host && !context.host_prompting
+                    {
+                        // Dashboard: any other printable key opens the console
+                        // composer seeded with that char — the surface is a
+                        // command line, so typing `@3 …` or `/help` begins
+                        // directly without a `p` first. (`p`/`n` seeds
+                        // nothing: they are the explicit openers above, and
+                        // their role defaults differ.)
+                        #[allow(clippy::needless_return)]
+                        return InputAction::HostPromptSeed(c);
                     } else if context.active_modal == super::Modal::Queue && c == 'D' {
                         // Queue modal: `Shift+D` deletes the highlighted item
                         // outright (the queue is auto-blocked on open, so a
@@ -2247,6 +2307,7 @@ pub fn process_event(
                         super::Modal::Queue | super::Modal::Btw => {
                             InputAction::SessionSelect { forward: false }
                         }
+                        super::Modal::ViewSwitcher => InputAction::ModalUp,
                         super::Modal::Permissions => InputAction::ModalUp,
                         super::Modal::Config => InputAction::ModalUp,
                         super::Modal::ProviderTemplate => {
@@ -2328,6 +2389,7 @@ pub fn process_event(
                         super::Modal::Queue | super::Modal::Btw => {
                             InputAction::SessionSelect { forward: true }
                         }
+                        super::Modal::ViewSwitcher => InputAction::ModalDown,
                         super::Modal::Permissions => InputAction::ModalDown,
                         super::Modal::Config => InputAction::ModalDown,
                         super::Modal::ProviderTemplate => {

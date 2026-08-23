@@ -33,11 +33,15 @@ pub mod toast;
 pub mod token_report;
 pub mod tools;
 pub mod usage_stats;
+pub mod view_switcher;
 
 // Re-export the public API so `paint::overlays::draw_*` callers are unchanged.
 pub use activity::{ActivityModalView, draw_activity_modal};
 pub use config::{ConfigFocus, ConfigViewProps, draw_config_view};
-pub use dashboard::{DashboardFocus, creation_order, draw_dashboard, draw_session_preview};
+pub use dashboard::{
+    ConsoleCommand, ConsoleLine, ConsoleVerb, DashboardFocus, creation_order, draw_dashboard,
+    draw_session_preview, parse_console_command,
+};
 // `DashboardRects` is used by the event loop via `draw_dashboard`'s return; it
 // is part of the module's public API surface.
 #[allow(unused_imports)]
@@ -62,3 +66,6 @@ pub use toast::{draw_armed_toast, draw_copy_toast, draw_notice_toast};
 pub use token_report::{ContextUsageView, draw_token_report_modal, token_report_round_count};
 pub use tools::draw_tools_modal;
 pub use usage_stats::draw_usage_stats_modal;
+// The view quick switcher (ADR-0133) is consumed crate-internally by the
+// render dispatch (`event_loop::render`), so it stays crate-visible.
+pub(crate) use view_switcher::draw_view_switcher;

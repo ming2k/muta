@@ -40,6 +40,8 @@ use tokio::sync::Mutex;
 mod actions;
 mod render;
 
+#[cfg(test)]
+pub(crate) use actions::handle_esc_interrupt;
 /// Test-only bridge: the behavior-lock tests in `crate::tests` drive the
 /// insert staging directly (ADR-0126). The production path dispatches it
 /// inside `actions::process`; this re-export never leaves the test profile.
@@ -47,6 +49,16 @@ mod render;
 pub(crate) use actions::handle_insert_into_round;
 #[cfg(test)]
 pub(crate) use actions::handle_send_slash;
+/// Same bridge for the dashboard console dispatcher: the tests in
+/// `crate::tests` drive the grammar/kill-confirm logic directly, without
+/// the terminal or clipboard plumbing of the full dispatch path.
+#[cfg(test)]
+pub(crate) use actions::host_test_shims;
+/// Same bridge for the dashboard-exit behavior locks: the tests drive the
+/// CtrlC / CloseModal arms directly (they are plain functions, but only the
+/// event loop can reach them otherwise).
+#[cfg(test)]
+pub(crate) use actions::{handle_close_modal, handle_ctrl_c};
 
 /// Shared runtime state crossing the response-listener / event-loop boundary.
 /// Each field is the single source of truth for one piece of live harness
@@ -316,6 +328,12 @@ pub(super) struct UiRuntime {
     /// `/btw list`, consumed by the loop. Kept separate from the rows so a
     /// refresh of the list (registry mutation) never re-pops the modal.
     pub open_btw: Arc<AtomicBool>,
+    /// Console receipts from the dashboard's dispatched control verbs
+    /// (ADR-0097 §3): spawned one-shot control tasks push the daemon's
+    /// answer here; the loop drains it into [`App::host_console_log`]
+    /// each frame. A queue (not a slot) so concurrent fan-out dispatches
+    /// (`@2 @3 …`) each land their receipt.
+    pub host_console_signal: Arc<Mutex<VecDeque<crate::overlays::ConsoleLine>>>,
     /// Which session the frontend is currently viewing (primary id, or the
     /// focused aside's id), written by the loop's sync stage each frame and
     /// read by the listener to scope on-demand query replies
@@ -449,6 +467,7 @@ impl UiRuntime {
             btw_list: Arc::new(Mutex::new(Vec::new())),
             session_chrome: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             open_btw: Arc::new(AtomicBool::new(false)),
+            host_console_signal: Arc::new(Mutex::new(VecDeque::new())),
             viewed_session_id: Arc::new(Mutex::new(None)),
             live_session_id: Arc::new(Mutex::new(String::new())),
             key_status: Arc::new(Mutex::new(HashMap::new())),
@@ -1256,6 +1275,15 @@ async fn sync_runtime_state(
             *host_sessions_rev_seen = rev;
         }
     }
+    // Drain the dashboard console's receipts (ADR-0097 §3): spawned control
+    // tasks push the daemon's answers here; each lands in the cockpit log
+    // and wakes a redraw (the drain itself only needs to move the lines).
+    {
+        let mut queue = runtime.host_console_signal.lock().await;
+        while let Some(line) = queue.pop_front() {
+            app.host_console_log.push(line);
+        }
+    }
     if runtime.open_host.swap(false, Ordering::SeqCst) && app.active_modal != Modal::Permission {
         let opening = app.active_modal != Modal::Host;
         app.active_modal = Modal::Host;
@@ -1270,6 +1298,12 @@ async fn sync_runtime_state(
             app.host_preview = None;
             app.host_preview_scroll = 0;
             app.host_prompting = false;
+            // The console's cockpit log lives for the dashboard's open
+            // lifetime: a fresh open starts a fresh log (it is a session at
+            // the controls, not history).
+            app.host_console_log.clear();
+            app.host_kill_confirm = None;
+            app.host_kill_confirm_id = None;
             app.modal_keymap_open = false;
         }
     }
@@ -1278,14 +1312,12 @@ async fn sync_runtime_state(
     // `QueryBtwList`, so a stale-armed flag simply opens with the last known
     // rows — the harness refresh lands in place without re-popping).
     if runtime.open_btw.swap(false, Ordering::SeqCst) && app.active_modal != Modal::Permission {
-        let opening = app.active_modal != Modal::Btw;
-        app.active_modal = Modal::Btw;
-        if opening {
-            app.modal_index = 0;
-            app.btw_scroll = 0;
-            app.btw_modal_follow = true;
-            app.modal_keymap_open = false;
-        }
+        // A retained view (ADR-0133): first open initialises (and the
+        // F5/`/btw list` action that armed this signal already sent
+        // `QueryBtwList`, so rows land via the listener); a reopen — e.g.
+        // F5 while the list is up — keeps the retained selection/scroll and
+        // the harness push refreshes the rows in place.
+        app.open_view(crate::views::ViewId::Btw);
     }
     // Mirror the on-demand session detail (info sub-view) when the
     // listener has a fresh one. Replacing `None` with `None` is a
@@ -1384,16 +1416,13 @@ async fn tick_toast_timers(app: &mut App, runtime: &UiRuntime) {
             std::time::Duration::from_millis(600),
         );
     }
-    // The Esc armed toast only makes sense while a task is running; once
-    // the turn finishes there is nothing left to interrupt, so let it
-    // expire immediately rather than mislead the user.
-    if app.esc_armed_ticks > 0 {
-        if runtime.is_responding.load(Ordering::SeqCst) {
-            app.esc_armed_ticks -= 1;
-        } else {
-            app.esc_armed_ticks = 0;
-        }
-    }
+    // The Esc armed toast only makes sense while the viewed session's round
+    // is still running; once it finishes there is nothing left to interrupt,
+    // so let it expire immediately rather than mislead. View-scoped via
+    // `App::tick_esc_arm` (never the runtime's primary-only
+    // `is_responding` flag): an aside view armed from its own running round
+    // must survive the primary being idle, and vice versa.
+    app.tick_esc_arm();
 }
 
 /// Extract the transcript suffix's user rows as `(text, is_chat_prompt,
@@ -1975,7 +2004,7 @@ pub(super) async fn run_app_loop(
             || app.copy_toast_until.is_some()
             || app.notice_toast_until.is_some()
             || app.ctrl_c_armed()
-            || app.esc_armed_ticks > 0
+            || app.esc_armed()
             || !app.pending_images.is_empty()
             || app.effort_ignition_epoch.is_some()
             || empty_state_showing

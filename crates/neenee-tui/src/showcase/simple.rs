@@ -198,6 +198,13 @@ pub fn models() -> io::Result<()> {
                 effort: None,
                 thinking: None,
                 favorite: *m == "claude-sonnet-4-6",
+                // Spread recency across the seeded models so the RECENT
+                // section renders with a meaningful order in the showcase.
+                last_used_ms: match *m {
+                    "gpt-4o" => Some(1_700_000_000_000),
+                    "claude-opus-4-8" => Some(1_699_000_000_000),
+                    _ => None,
+                },
             })
             .collect(),
         builtin: true,

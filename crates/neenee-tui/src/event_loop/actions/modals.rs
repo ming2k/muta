@@ -255,7 +255,7 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
 
 /// Loop stage (input dispatch): the `CloseModal` arm (Esc / generic close
 /// routing per open surface).
-pub(super) fn handle_close_modal(app: &mut App, viewed_session_id: &str) {
+pub(crate) fn handle_close_modal(app: &mut App, viewed_session_id: &str) {
     // Sub-page back-out is checked FIRST (deepest level wins),
     // so Esc from a drill-in always returns to its parent view
     // before any close/quit logic runs — otherwise pressing Esc
@@ -307,6 +307,15 @@ pub(super) fn handle_close_modal(app: &mut App, viewed_session_id: &str) {
         tracing::info!(reason = "startup_dashboard_cancelled", "app exiting");
         app.should_quit.store(true, Ordering::SeqCst);
     } else {
+        // Retained browse views hide instead of closing (ADR-0133), and the
+        // quick switcher cancels back to its origin surface — both via the
+        // shared dismiss verb. State saved / origin restored, surface
+        // dismissed; the next open restores exactly where the user was.
+        // Handled before the modal-specific close logic below, which is for
+        // surfaces that have not migrated (or are not views).
+        if app.dismiss_surface() {
+            return;
+        }
         // Most modals close straight to chat. The model editor
         // and the custom-provider editor instead step back to
         // the picker they were opened from, so a key entry is
@@ -433,6 +442,9 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
         }
         Modal::Host => {
             if app.host_focus == crate::overlays::DashboardFocus::List {
+                // Moving the dock selection cancels an armed kill confirm:
+                // the target of the confirm is the session, not the key.
+                super::super::actions::host::cancel_kill_confirm(app);
                 let count = app.host_sessions.len();
                 app.modal_index = if count == 0 {
                     0
@@ -539,6 +551,7 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
         | Modal::Mcp
         | Modal::Skills
         | Modal::Activity
+        | Modal::ViewSwitcher
         | Modal::None => {}
     }
 }
@@ -572,6 +585,8 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
         }
         Modal::Host => {
             if app.host_focus == crate::overlays::DashboardFocus::List {
+                // Same as ModalUp: a selection move cancels the confirm.
+                super::super::actions::host::cancel_kill_confirm(app);
                 let count = app.host_sessions.len().max(1);
                 app.modal_index = (app.modal_index + 1) % count;
                 app.host_modal_follow = true;
@@ -664,6 +679,7 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
         | Modal::Mcp
         | Modal::Skills
         | Modal::Activity
+        | Modal::ViewSwitcher
         | Modal::None => {}
     }
 }

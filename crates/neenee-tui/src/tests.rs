@@ -1613,6 +1613,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
     }
     let cwd = tmp.path().to_path_buf();
     let app = App {
+        views: crate::views::ViewRegistry::new(),
+        view_switcher_return: Modal::None,
         input: String::new(),
         messages: Vec::new(),
         messages_version: 0,
@@ -1719,6 +1721,9 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         host_preview_scroll: 0,
         host_prompting: false,
         host_prompt_new: false,
+        host_console_log: Vec::new(),
+        host_kill_confirm: None,
+        host_kill_confirm_id: None,
         switch_to_target: None,
         startup_overlay: crate::StartupOverlay::None,
         permission_confirm_always: false,
@@ -1772,7 +1777,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         notice_toast_message: String::new(),
         notice_toast_severity: NoticeSeverity::Info,
         ctrl_c_armed_until: None,
-        esc_armed_ticks: 0,
+        esc_armed_until: None,
         spinner_epoch: std::time::Instant::now(),
         carousel_epoch: std::time::Instant::now(),
         effort_ignition_epoch: None,
@@ -4750,6 +4755,292 @@ fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
     assert_ne!(app.active_modal, Modal::None, "quit path wins over close");
 }
 
+/// `neenee dashboard` opens the session dashboard (`Modal::Host`) over a
+/// carrier session at startup. The user asked for a dashboard, not a
+/// conversation, so leaving the screen must quit the whole TUI — the
+/// dashboard is the app while it is open. These tests lock the three exits:
+///
+/// 1. Esc quits immediately (existing behavior, mirrored here for the
+///    dashboard arm of `handle_close_modal`).
+/// 2. Ctrl+C follows the app-wide double-press contract: first press arms
+///    the 2s quit window WITHOUT closing the dashboard, second press quits.
+///    Regression: Ctrl+C used to hit the generic modal-close arm and drop
+///    the user into the carrier conversation.
+/// 3. Ctrl+C never lands in the conversation even after the arm expires —
+///    pressing again re-arms rather than closing.
+#[test]
+fn esc_at_startup_dashboard_quits_instead_of_dropping_to_carrier_chat() {
+    use std::sync::atomic::Ordering;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.startup_overlay = crate::StartupOverlay::Dashboard;
+    app.active_modal = Modal::Host;
+    assert!(!app.should_quit.load(Ordering::SeqCst));
+
+    // Esc from the dashboard itself (no preview/prompt sub-layer open).
+    super::event_loop::handle_close_modal(&mut app, "carrier");
+    assert!(
+        app.should_quit.load(Ordering::SeqCst),
+        "Esc from the startup dashboard quits the TUI"
+    );
+    assert_eq!(
+        app.active_modal,
+        Modal::Host,
+        "quit path never demotes the dashboard to a conversation"
+    );
+}
+
+#[test]
+fn ctrl_c_at_startup_dashboard_arms_then_quits_never_opens_chat() {
+    use std::sync::atomic::Ordering;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.startup_overlay = crate::StartupOverlay::Dashboard;
+    app.active_modal = Modal::Host;
+    let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
+    let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    // First Ctrl+C: arms the quit window, dashboard stays open.
+    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    assert!(app.ctrl_c_armed(), "first Ctrl+C arms the quit window");
+    assert_eq!(app.active_modal, Modal::Host, "dashboard stays open");
+    assert!(!app.should_quit.load(Ordering::SeqCst));
+
+    // Second Ctrl+C inside the window: quit, not a drop into the chat.
+    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    assert!(
+        app.should_quit.load(Ordering::SeqCst),
+        "double Ctrl+C exits the whole TUI"
+    );
+    assert_eq!(
+        app.active_modal,
+        Modal::Host,
+        "the exit never demotes the dashboard to the conversation"
+    );
+}
+
+#[test]
+fn ctrl_c_at_startup_dashboard_after_window_expires_rearms_not_opens_chat() {
+    use std::sync::atomic::Ordering;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.startup_overlay = crate::StartupOverlay::Dashboard;
+    app.active_modal = Modal::Host;
+    let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
+    let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    // First press arms; simulate the window lapsing (wall-clock deadline).
+    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    app.arm_ctrl_c(Some(std::time::Instant::now()));
+
+    // A press after the deadline re-arms instead of closing the dashboard.
+    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    assert!(app.ctrl_c_armed(), "the lapsed window re-arms");
+    assert_eq!(app.active_modal, Modal::Host);
+    assert!(!app.should_quit.load(Ordering::SeqCst));
+}
+
+/// The in-session dashboard (`/dashboard` typed in a conversation) keeps the
+/// same double-Ctrl+C UX, but its second press is the client-declared
+/// session end (ADR-0112) — `EndSession` to the agent, then loop exit — not
+/// the detach-flavoured `should_quit` of the startup screen.
+#[test]
+fn ctrl_c_at_in_session_dashboard_double_press_ends_session() {
+    use std::sync::atomic::Ordering;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.tx = tx;
+    app.startup_overlay = crate::StartupOverlay::None;
+    app.active_modal = Modal::Host;
+    let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
+    let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    // Arm, then quit. The loop-exit flow is asserted indirectly: the arm is
+    // consumed and `EndSession` was sent (the Exit arm is the only path that
+    // sends it), while `should_quit` stays clear — the startup flavour never
+    // runs in-session.
+    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    assert!(
+        matches!(rx.try_recv(), Ok(AgentRequest::EndSession)),
+        "double Ctrl+C declares the session end like the conversation path"
+    );
+    assert!(!app.should_quit.load(Ordering::SeqCst));
+}
+
+/// The dashboard's inline prompt (`p` / `n`) borrows the composer buffer.
+/// Ctrl+C with text staged there clears it first — the same two-press
+/// shape as the conversation composer — and only then arms toward quit.
+#[test]
+fn ctrl_c_at_dashboard_inline_prompt_clears_text_before_arming() {
+    use std::sync::atomic::Ordering;
+
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.startup_overlay = crate::StartupOverlay::Dashboard;
+    app.active_modal = Modal::Host;
+    app.host_prompting = true;
+    app.host_prompt_new = true;
+    app.input = "refactor the parser".to_string();
+    app.cursor_position = app.input.chars().count();
+    let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
+    let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    assert!(app.input.is_empty(), "the staged task text is cleared");
+    assert!(app.ctrl_c_armed(), "clearing arms the quit window");
+    assert_eq!(app.active_modal, Modal::Host, "the dashboard stays open");
+    assert!(app.host_prompting, "the prompt itself stays mounted");
+
+    // Second press (input now empty) quits.
+    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    assert!(app.should_quit.load(Ordering::SeqCst));
+    assert_eq!(app.active_modal, Modal::Host);
+}
+
+/// The double-Esc interrupt confirmation is a real wall-clock window, not a
+/// frame counter. Regression: `esc_armed_ticks` decremented once per loop
+/// iteration, but the loop wakes on every keystroke, mouse move, and stream
+/// delta — far more often than its 100ms animation heartbeat — so the
+/// intended ~2s window burned through in a few hundred milliseconds and the
+/// "Esc again interrupts" toast vanished before a second press could land.
+#[test]
+fn esc_interrupt_window_is_wall_clock_not_frame_counted() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+
+    // First press arms; the window must still be open well past the 20
+    // iterations the old tick counter allowed at any wake rate.
+    assert!(!app.esc_press(), "the first Esc only arms");
+    assert!(app.esc_armed());
+    // The viewed session's round is running, so the per-frame keep-alive
+    // holds the window open regardless of how often the loop wakes.
+    app.running_sessions.insert(app.current_session_id.clone());
+    for _ in 0..100 {
+        app.tick_esc_arm();
+    }
+    assert!(
+        app.esc_armed(),
+        "100 loop iterations (any wake rate) must not lapse a 2s window"
+    );
+
+    // The window is genuinely 2s, not "until the round ends".
+    app.arm_esc(Some(std::time::Instant::now()));
+    app.tick_esc_arm();
+    assert!(!app.esc_armed(), "a lapsed deadline disarms");
+
+    // A press after the lapse re-arms instead of firing a stale interrupt.
+    assert!(!app.esc_press(), "the post-lapse press re-arms");
+    assert!(app.esc_armed());
+}
+
+/// The armed Esc window's keep-alive must follow the *viewed* session's
+/// running round — the same `running_sessions` predicate the keymap uses to
+/// map Esc to an interrupt — never the runtime's global `is_responding`
+/// flag. That flag is primary-only: an aside view armed from its own
+/// running round was disarmed on the very next frame because the primary
+/// sat idle, which read as "the first press did nothing / the toast
+/// flashed and disappeared".
+#[test]
+fn esc_interrupt_window_survives_idle_primary_while_aside_runs() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+
+    // Simulate the aside view: the viewed session runs, the primary
+    // (global `is_responding`) does not.
+    app.side_session_id = Some("aside-1".to_string());
+    app.in_side_view = true;
+    app.current_session_id = "aside-1".to_string();
+    app.running_sessions.insert("aside-1".to_string());
+
+    assert!(!app.esc_press(), "the first Esc inside the aside arms");
+    assert!(app.esc_armed());
+
+    // Repeated frame ticks must keep the window open: the viewed aside is
+    // still running even though the primary-only global flag is false.
+    for _ in 0..50 {
+        app.tick_esc_arm();
+    }
+    assert!(
+        app.esc_armed(),
+        "the window must survive while the viewed aside's round runs"
+    );
+
+    // The moment the viewed session's round ends, the toast must go: there
+    // is nothing left to interrupt.
+    app.running_sessions.remove("aside-1");
+    app.tick_esc_arm();
+    assert!(
+        !app.esc_armed(),
+        "the window expires once the viewed session has nothing to interrupt"
+    );
+}
+
+/// The second Esc inside the window fires the interrupt and disarms; the
+/// request targets the viewed session (main view → `Interrupt`, aside view
+/// → `InterruptSide`), and a third press re-arms rather than re-firing.
+#[test]
+fn esc_interrupt_fires_on_second_press_and_rearms_after() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.tx = tx;
+    app.running_sessions.insert(app.current_session_id.clone());
+
+    // Main view: arm, then fire. Driven through the real dispatch arm so
+    // the wire request (not just the state flip) is asserted.
+    super::event_loop::handle_esc_interrupt(&mut app, false);
+    assert!(app.esc_armed(), "the first Esc arms the window");
+    super::event_loop::handle_esc_interrupt(&mut app, false);
+    assert!(matches!(rx.try_recv(), Ok(AgentRequest::Interrupt)));
+    assert!(!app.esc_armed(), "firing consumes the arm");
+
+    // The next press starts a fresh confirmation instead of firing again.
+    assert!(!app.esc_press());
+    assert!(app.esc_armed());
+    assert!(
+        rx.try_recv().is_err(),
+        "a third press must not send another interrupt"
+    );
+
+    // Aside view: the fire targets the *aside* (`InterruptSide`), and only
+    // while the aside view is actually open.
+    app.side_session_id = Some("aside-1".to_string());
+    app.in_side_view = true;
+    super::event_loop::handle_esc_interrupt(&mut app, true); // arm
+    super::event_loop::handle_esc_interrupt(&mut app, true); // fire
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AgentRequest::InterruptSide { .. })
+    ));
+}
+
+/// Leaving the aside view (Ctrl+C detach, `SideViewSignal::Closed`) must
+/// drop any armed Esc confirmation: it targets the aside's round, and a
+/// carried arm could fire the *primary's* interrupt on the next Esc.
+#[test]
+fn leaving_side_view_drops_the_armed_esc_confirmation() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.side_session_id = Some("aside-1".to_string());
+    app.in_side_view = true;
+    app.current_session_id = "aside-1".to_string();
+    app.running_sessions.insert("aside-1".to_string());
+
+    assert!(!app.esc_press(), "the first Esc inside the aside arms");
+    assert!(app.esc_armed());
+
+    // Detach: exit_side_view itself runs inside on_viewed_session_changed,
+    // which owns the disarm.
+    app.exit_side_view();
+    assert!(
+        !app.esc_armed(),
+        "detaching drops the aside's armed confirmation"
+    );
+
+    // And re-entering a view always starts unarmed.
+    app.enter_side_view("aside-1".to_string());
+    assert!(!app.esc_armed());
+    assert!(!app.esc_press());
+    assert!(app.esc_armed(), "a fresh arm works inside the view");
+}
+
 /// The disclosure-toggle scroll settle: expanding a step must latch
 /// `scroll_settle_pending` so the event loop stages its next frame (measure
 /// the new height) before painting the toggle's target scroll offset. That
@@ -5329,5 +5620,302 @@ fn reentering_a_running_aside_shows_its_own_chrome() {
     assert!(
         chrome.round_started_at.is_some(),
         "the aside's elapsed timer is its own"
+    );
+}
+
+// ── dashboard console dispatch (ADR-0097 §2–§3) ─────────────────────────────
+
+/// A `MonitoredSession` row for the console tests: two sessions with
+/// distinct `created_at` so `#1` / `#2` are stable creation-order handles.
+fn console_host_rows(app: &mut App) {
+    let row = |id: &str, created: u64| neenee_contracts::MonitoredSession {
+        id: id.to_string(),
+        overview: String::new(),
+        created_at: created,
+        updated_at: created,
+        message_count: 1,
+        hosting: neenee_contracts::SessionHosting::Hosted,
+        status: neenee_contracts::SessionStatus::Idle,
+        round: 1,
+        turn: None,
+        output_tokens: 0,
+        elapsed_ms: 0,
+        current_tool: None,
+        activity: None,
+        context_tokens: None,
+        note: None,
+        project_root: "/tmp/proj".to_string(),
+        wip: None,
+        parent_id: None,
+        fork_kind: neenee_contracts::SessionForkKind::Trunk,
+    };
+    app.host_sessions = vec![row("aaa", 100), row("bbb", 200)];
+    app.active_modal = Modal::Host;
+    // Selection on the first creation-order entry = `#1`.
+    app.modal_index = 0;
+}
+
+/// The receipt queue records what the spawned control tasks would send —
+/// the local half (dispatch lines, notices) is what these tests pin; the
+/// daemon round-trip is covered by the runtime integration tests.
+async fn console_dispatch(app: &mut App, line: &str, create_when_bare: bool) {
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+    crate::event_loop::host_test_shims::dispatch(app, &runtime, line, create_when_bare).await;
+}
+
+#[tokio::test]
+async fn console_bare_text_prompts_the_selection() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    console_host_rows(&mut app);
+    console_dispatch(&mut app, "fix the flaky test", false).await;
+    match &app.host_console_log[..] {
+        [
+            crate::overlays::ConsoleLine::Dispatch {
+                targets, action, ..
+            },
+        ] => {
+            assert_eq!(targets, &[1], "bare text routes to the selection (#1)");
+            assert_eq!(*action, "prompt");
+        }
+        other => panic!("expected one dispatch line, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn console_bare_text_from_n_creates_instead() {
+    // The `n`-opened prompt's default role is create: an explicit address
+    // overrides it, but plain text must not silently prompt another
+    // session.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    console_host_rows(&mut app);
+    console_dispatch(&mut app, "refactor the retry loop", true).await;
+    match &app.host_console_log[..] {
+        [
+            crate::overlays::ConsoleLine::Dispatch {
+                targets, action, ..
+            },
+        ] => {
+            assert!(targets.is_empty(), "create targets nobody");
+            assert_eq!(*action, "new session");
+        }
+        other => panic!("expected one dispatch line, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn console_unknown_address_is_a_notice_not_a_dispatch() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    console_host_rows(&mut app);
+    console_dispatch(&mut app, "@9 do the thing", false).await;
+    match &app.host_console_log[..] {
+        [crate::overlays::ConsoleLine::Notice(text)] => {
+            assert!(text.contains("#9"), "notice names the address: {text}");
+        }
+        other => panic!("expected one notice, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn console_verb_without_selection_is_a_notice() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    console_host_rows(&mut app);
+    app.host_sessions.clear();
+    console_dispatch(&mut app, "/interrupt", false).await;
+    match &app.host_console_log[..] {
+        [crate::overlays::ConsoleLine::Notice(text)] => {
+            assert!(text.contains("no session"), "notice explains: {text}");
+        }
+        other => panic!("expected one notice, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn console_help_lists_the_grammar() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    console_host_rows(&mut app);
+    console_dispatch(&mut app, "/help", false).await;
+    let text: Vec<String> = app
+        .host_console_log
+        .iter()
+        .filter_map(|l| match l {
+            crate::overlays::ConsoleLine::Notice(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect();
+    let joined = text.join("\n");
+    for verb in ["/interrupt", "/suspend", "/kill", "/new", "@3 text"] {
+        assert!(joined.contains(verb), "help must mention {verb}: {joined}");
+    }
+}
+
+#[tokio::test]
+async fn console_kill_key_arms_then_confirms() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    console_host_rows(&mut app);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+    crate::event_loop::host_test_shims::kill(&mut app, &runtime);
+    // First press: armed, with a notice naming the target.
+    assert!(app.host_kill_confirm.is_some(), "first k arms");
+    assert!(matches!(
+        app.host_console_log.last(),
+        Some(crate::overlays::ConsoleLine::Notice(t)) if t.contains("#1")
+    ));
+    // Second press: confirmed — the arm clears and a kill dispatch logs.
+    crate::event_loop::host_test_shims::kill(&mut app, &runtime);
+    assert!(app.host_kill_confirm.is_none(), "second k fires");
+    assert!(matches!(
+        app.host_console_log.last(),
+        Some(crate::overlays::ConsoleLine::Dispatch { action, .. }) if *action == "kill"
+    ));
+}
+
+#[tokio::test]
+async fn console_kill_arm_cancels_on_selection_move() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    console_host_rows(&mut app);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+    crate::event_loop::host_test_shims::kill(&mut app, &runtime);
+    assert!(app.host_kill_confirm.is_some());
+    // Moving the dock selection (the ModalUp path) cancels the arm.
+    crate::event_loop::host_test_shims::kill_cancel(&mut app);
+    assert!(app.host_kill_confirm.is_none());
+    // A `k` after the cancel arms afresh rather than firing.
+    crate::event_loop::host_test_shims::kill(&mut app, &runtime);
+    assert!(app.host_kill_confirm.is_some(), "re-arm, not fire");
+    assert_eq!(app.host_console_log.len(), 2, "no kill dispatched yet");
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0133: retained, buffer-like view state.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn browse_view_reopen_restores_scroll_and_selection() {
+    // The core ADR-0133 contract: hiding a browse view (Esc) and reopening
+    // it returns to the exact scroll/index the user left. Before the
+    // refactor every open reset them to 0.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    assert!(app.open_view(crate::views::ViewId::Help));
+    assert_eq!(app.active_modal, Modal::Help);
+    assert_eq!(app.modal_index, 0);
+
+    // The user scrolls and selects, then hides (Esc → dismiss_surface).
+    app.help_scroll = 42;
+    app.modal_index = 3;
+    assert!(app.dismiss_surface());
+    assert_eq!(app.active_modal, Modal::None);
+
+    // Reopen: first-open returned false and the retained state is back.
+    assert!(!app.open_view(crate::views::ViewId::Help));
+    assert_eq!(app.modal_index, 3, "selection retained across hide");
+    assert_eq!(app.help_scroll, 42, "scroll retained across hide");
+}
+
+#[test]
+fn browse_view_state_is_per_view() {
+    // Two views keep independent retained state — the buffer analogy: each
+    // buffer remembers its own cursor.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_view(crate::views::ViewId::Permissions);
+    app.modal_index = 2;
+    app.permissions_scroll = 7;
+    assert!(app.dismiss_surface());
+
+    app.open_view(crate::views::ViewId::UsageStats);
+    app.modal_index = 1;
+    app.usage_stats_scroll = 9;
+    assert!(app.dismiss_surface());
+
+    app.open_view(crate::views::ViewId::Permissions);
+    assert_eq!((app.modal_index, app.permissions_scroll), (2, 7));
+    app.open_view(crate::views::ViewId::UsageStats);
+    assert_eq!((app.modal_index, app.usage_stats_scroll), (1, 9));
+}
+
+#[test]
+fn todos_and_activity_are_separate_places() {
+    // Two view ids share the Activity modal but keep their own tab —
+    // switching between them lands on the section the id names.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_view(crate::views::ViewId::Todos);
+    assert_eq!(app.active_modal, Modal::Activity);
+    assert_eq!(app.activity_tab, ActivityTab::Todos);
+    assert!(app.dismiss_surface());
+
+    app.open_view(crate::views::ViewId::Activity);
+    assert_eq!(app.activity_tab, ActivityTab::Activity);
+}
+
+#[test]
+fn view_state_is_forgotten_on_session_change() {
+    // `close_all` fires on viewed-session change: retained state belongs to
+    // the conversation, not the terminal (ADR-0133 close verb).
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_view(crate::views::ViewId::Help);
+    app.help_scroll = 5;
+    app.modal_index = 1;
+    app.on_viewed_session_changed();
+    assert!(app.open_view(crate::views::ViewId::Help), "state forgotten");
+    assert_eq!(app.help_scroll, 0);
+    assert_eq!(app.modal_index, 0);
+}
+
+#[test]
+fn view_switcher_restore_roundtrip() {
+    // The Ctrl+L switcher's verbs: open over a browse view, Esc cancels
+    // back to it (state intact); Enter on another view hides the origin
+    // and focuses the target with its own retained state.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_view(crate::views::ViewId::Help);
+    app.modal_index = 4;
+
+    // Open the switcher over Help the way `ViewSwitcherToggle` does: park
+    // the origin's live cursor first, then borrow the selection slot.
+    app.view_switcher_return = app.active_modal;
+    if let Ok(origin) = crate::views::ViewId::try_from(app.active_modal) {
+        app.save_view_state(origin);
+    }
+    app.active_modal = Modal::ViewSwitcher;
+    app.modal_index = 0;
+
+    // Esc (the shared dismiss verb) cancels back to Help — and restores
+    // Help's own cursor from the registry (the switcher's row cursor must
+    // not leak into the restored surface).
+    assert!(app.dismiss_surface());
+    assert_eq!(app.active_modal, Modal::Help);
+    assert_eq!(
+        app.modal_index, 4,
+        "Help's selection restored, not the switcher's row cursor"
+    );
+
+    // Help's retained state survived the switcher round-trip.
+    app.open_view(crate::views::ViewId::Activity);
+    assert!(!app.open_view(crate::views::ViewId::Help));
+    assert_eq!(app.modal_index, 4, "retained selection intact");
+}
+
+#[test]
+fn config_view_reopen_keeps_pane_and_category() {
+    // Settings is a retained view too (ADR-0133 phase 2): the open ritual
+    // (pane reset + current-scheme positioning) runs once; a reopen keeps
+    // the category/pane the user left. Esc's three-step back (editor →
+    // detail → categories → hide) ends in the shared dismiss verb.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    assert!(app.open_view(crate::views::ViewId::Config));
+    assert_eq!(app.active_modal, Modal::Config);
+
+    // The user walks into a category and the Detail pane, then hides.
+    app.config_category = 2;
+    app.config_focus = crate::overlays::ConfigFocus::Detail;
+    assert!(app.dismiss_surface());
+    assert_eq!(app.active_modal, Modal::None);
+
+    // Reopen: not a first open, and the pane/category survived.
+    assert!(!app.open_view(crate::views::ViewId::Config));
+    assert_eq!(app.config_category, 2, "category retained across hide");
+    assert_eq!(
+        app.config_focus,
+        crate::overlays::ConfigFocus::Detail,
+        "pane retained across hide"
     );
 }

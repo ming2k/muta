@@ -12,7 +12,7 @@ use crate::model::document::{NoticeSeverity, TranscriptMessage};
 use crate::model::layout::{InteractiveTarget, SemanticCursor};
 use crate::model::selection::{CellDragInfo, SelectionState, floor_grapheme_boundary};
 use crate::step_interaction::StepKind;
-use crate::{ActivityTab, App, CaretOwner, Modal, ProviderDeleteChoice, SelectionEdge};
+use crate::{App, CaretOwner, Modal, ProviderDeleteChoice, SelectionEdge};
 
 use super::super::{UiRuntime, handle_permission_submit, resolve_focused_mut};
 
@@ -157,16 +157,22 @@ pub(super) async fn handle_selection_start(
                     app.token_report_detail = false;
                     app.token_report_scroll = 0;
                 } else {
-                    if app.active_modal == Modal::HistorySearch {
-                        app.restore_history_draft();
+                    // Retained browse views hide with state saved; the
+                    // quick switcher cancels to its origin (ADR-0133).
+                    // Mirrors the Esc path exactly.
+                    if !app.dismiss_surface() {
+                        if app.active_modal == Modal::HistorySearch {
+                            app.restore_history_draft();
+                        }
+                        // The queue modal auto-blocked on open; an
+                        // outside-click closes it like Esc, so resume
+                        // auto-drain to match.
+                        if app.active_modal == Modal::Queue {
+                            app.resume_queue(viewed_session_id);
+                        }
+                        app.active_modal = Modal::None;
                     }
-                    // The queue modal auto-blocked on open; an
-                    // outside-click closes it like Esc, so resume
-                    // auto-drain to match.
-                    if app.active_modal == Modal::Queue {
-                        app.resume_queue(viewed_session_id);
-                    }
-                    // `neenee resume` (no id): the startup picker has
+                    // `neene resume` (no id): the startup picker has
                     // no conversation behind it, so a click-outside
                     // (mirroring Esc) quits instead of landing in an
                     // empty chat.
@@ -174,7 +180,6 @@ pub(super) async fn handle_selection_start(
                         tracing::info!(reason = "startup_picker_cancelled", "app exiting");
                         app.should_quit.store(true, Ordering::SeqCst);
                     }
-                    app.active_modal = Modal::None;
                 }
             }
             app.selection = SelectionState::None;
@@ -194,10 +199,9 @@ pub(super) async fn handle_selection_start(
         // sheet, whose expanded body grows up over this row.
         // Gate on `Modal::None` so a click never stacks an
         // Activity modal on top of an in-progress decision.
-        app.active_modal = Modal::Activity;
-        app.activity_tab = ActivityTab::Todos;
-        app.modal_index = 0;
-        app.activity_scroll = 0;
+        // A retained view (ADR-0133): reopen restores the scroll the user
+        // left; only the first open initialises.
+        app.open_view(crate::views::ViewId::Todos);
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
@@ -206,10 +210,9 @@ pub(super) async fn handle_selection_start(
             .activity_rect
             .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
     {
-        app.active_modal = Modal::Activity;
-        app.activity_tab = ActivityTab::Activity;
-        app.modal_index = 0;
-        app.activity_scroll = 0;
+        // A retained view (ADR-0133): reopen restores the scroll the user
+        // left; only the first open initialises.
+        app.open_view(crate::views::ViewId::Activity);
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
@@ -243,12 +246,13 @@ pub(super) async fn handle_selection_start(
         // local ledger (token accounting lives server-side),
         // so fetch the report from the harness on demand and
         // render a loading placeholder until the reply lands.
-        app.active_modal = Modal::TokenReport;
-        app.modal_index = 0;
-        app.token_report_scroll = 0;
-        app.token_report_detail = false;
-        if app.token_ledger.is_none() {
-            app.token_report = None;
+        // A retained view (ADR-0133): reopen restores the scroll/selection
+        // (including the drill-in state, which persists on App); only the
+        // first open initialises. The attach-mode report fetch stays tied to
+        // the ledger being absent — it is a data-lifecycle concern, not an
+        // open ritual, so it runs whenever the report is missing.
+        app.open_view(crate::views::ViewId::TokenReport);
+        if app.token_ledger.is_none() && app.token_report.is_none() {
             let _ = app.tx.send(AgentRequest::QueryTokenUsage {
                 session_id: viewed_session_id.to_string(),
             });

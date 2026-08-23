@@ -84,6 +84,7 @@ pub(crate) use view::*;
 pub(crate) mod fuzzy;
 pub(crate) mod modal;
 pub(crate) mod providers;
+pub(crate) mod views;
 
 #[cfg(test)]
 mod snapshot_tests;
@@ -451,6 +452,9 @@ pub async fn run_tui(
     let notice_toast_signal_clone = notice_toast_signal.clone();
     let outbox_signals = Arc::new(Mutex::new(VecDeque::<event_loop::OutboxSignal>::new()));
     let outbox_signals_clone = outbox_signals.clone();
+    // Dashboard console receipts (ADR-0097 §3): one-shot control tasks push
+    // here, the loop drains into `App::host_console_log`.
+    let host_console_signal = Arc::new(Mutex::new(VecDeque::<crate::overlays::ConsoleLine>::new()));
 
     // Spawn the daemon monitor client (ADR-0096): maintains the live session
     // snapshot the `/host` control panel renders. Best-effort — no daemon is
@@ -1845,6 +1849,8 @@ pub async fn run_tui(
     let messages_for_loop = messages.clone();
 
     let mut app = App {
+        views: crate::views::ViewRegistry::new(),
+        view_switcher_return: Modal::None,
         input: String::new(),
         messages: Vec::new(),
         messages_version: 0,
@@ -1955,6 +1961,9 @@ pub async fn run_tui(
         host_preview_scroll: 0,
         host_prompting: false,
         host_prompt_new: false,
+        host_console_log: Vec::new(),
+        host_kill_confirm: None,
+        host_kill_confirm_id: None,
         switch_to_target: None,
         startup_overlay,
         permission_confirm_always: false,
@@ -2021,7 +2030,7 @@ pub async fn run_tui(
         notice_toast_message: String::new(),
         notice_toast_severity: NoticeSeverity::Info,
         ctrl_c_armed_until: None,
-        esc_armed_ticks: 0,
+        esc_armed_until: None,
         spinner_epoch: std::time::Instant::now(),
         carousel_epoch: std::time::Instant::now(),
         effort_ignition_epoch: None,
@@ -2100,6 +2109,7 @@ pub async fn run_tui(
             btw_list,
             session_chrome,
             open_btw,
+            host_console_signal,
             viewed_session_id,
             live_session_id,
             key_status,

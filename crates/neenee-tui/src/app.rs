@@ -424,6 +424,17 @@ pub struct App {
     pub input_scroll: usize,
     pub active_modal: Modal,
     pub modal_index: usize,
+    /// Retained view states + the MRU order that backs the Ctrl+L quick
+    /// switcher (ADR-0133). Browse surfaces open through
+    /// [`Self::open_view`], which initialises state exactly once per view
+    /// and restores it on every later open — hide/close/switch instead of
+    /// the old reset-on-every-open ritual.
+    pub(crate) views: crate::views::ViewRegistry,
+    /// The surface the quick switcher (`Modal::ViewSwitcher`) was opened
+    /// over. Rendering marks that surface's row with a `here` badge, and
+    /// Esc restores it untouched (the switcher is a transient chooser, not
+    /// a view — ADR-0133).
+    pub view_switcher_return: Modal,
     /// Last-known screen rect of the composer. Refreshed every draw and reused
     /// between frames by the input-driven immediate cursor flush so the IME
     /// composition window is re-anchored in the *same* iteration a keystroke is
@@ -654,6 +665,19 @@ pub struct App {
     /// What the open dashboard prompt does on submit: `true` = create a new
     /// session (from `n`), `false` = prompt the selected session (from `p`).
     pub host_prompt_new: bool,
+    /// The dashboard console's receipt transcript (ADR-0097 §3): one entry
+    /// per dispatched directive plus the daemon's answer. Lives for the
+    /// dashboard's open lifetime (cleared on open) — it is a cockpit log,
+    /// not history.
+    pub host_console_log: Vec<crate::overlays::ConsoleLine>,
+    /// Whether the dashboard's kill confirmation is armed: `k` on a dock
+    /// selection asks first (`k` again confirms within the window, anything
+    /// else cancels). Killing is irreversible, so it stays a two-surface
+    /// gesture like the queue's `Shift+D`.
+    pub host_kill_confirm: Option<String>,
+    /// Id the armed kill confirmation refers to (kept separately so a dock
+    /// selection move between presses can be compared against it).
+    pub host_kill_confirm_id: Option<String>,
     /// `/host` Enter on a hosted session: the id to switch to, read by the
     /// caller after the TUI exits to re-attach (ADR-0096).
     pub switch_to_target: Option<String>,
@@ -879,8 +903,14 @@ pub struct App {
     /// previously this was a per-tick counter, which stretched the intended
     /// ~2s window to ~20s whenever the loop idled at its 1s heartbeat.
     pub ctrl_c_armed_until: Option<std::time::Instant>,
-    /// Ticks remaining in which a second Esc interrupts the running task.
-    pub esc_armed_ticks: u8,
+    /// Deadline until which a second Esc interrupts the running task.
+    /// Wall-clock based for the same reason as `ctrl_c_armed_until`: the
+    /// loop wakes far more often than its 100ms animation heartbeat (every
+    /// keystroke, mouse move, stream delta, and dirty-notify), so the old
+    /// 20-tick counter burned the intended ~2s window in a few hundred
+    /// milliseconds — the "Esc again interrupts" toast flashed and vanished
+    /// before a second press could land.
+    pub esc_armed_until: Option<std::time::Instant>,
     /// Epoch the breathing indicator is timed against. The spinner phase is
     /// derived from wall-clock elapsed time since this instant rather than a
     /// per-frame counter, so the breathing cadence stays constant regardless of
@@ -1088,6 +1118,61 @@ impl App {
     /// entirely when called with `None`.
     pub fn arm_ctrl_c(&mut self, until: Option<std::time::Instant>) {
         self.ctrl_c_armed_until = until;
+    }
+
+    /// How long the first Esc's confirmation window stays open. Matches the
+    /// Ctrl+C quit window so both double-press confirmations feel the same.
+    pub const ESC_ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// Whether the Esc interrupt window is currently armed (a second Esc
+    /// before the deadline interrupts the viewed session's running round).
+    /// Wall-clock based; an elapsed deadline reads as disarmed.
+    pub fn esc_armed(&self) -> bool {
+        self.esc_armed_until
+            .is_some_and(|until| std::time::Instant::now() < until)
+    }
+
+    /// Arm the Esc interrupt window until the given deadline, or disarm it
+    /// entirely when called with `None`.
+    pub fn arm_esc(&mut self, until: Option<std::time::Instant>) {
+        self.esc_armed_until = until;
+    }
+
+    /// Register one Esc press in the interrupt-confirmation flow: the first
+    /// press arms the window (returns `false`), a second press inside it
+    /// fires (returns `true` and disarms), and a press after the window has
+    /// lapsed starts a fresh window instead of firing a stale confirmation.
+    pub fn esc_press(&mut self) -> bool {
+        if self.esc_armed() {
+            self.esc_armed_until = None;
+            true
+        } else {
+            self.esc_armed_until = Some(std::time::Instant::now() + Self::ESC_ARM_WINDOW);
+            false
+        }
+    }
+
+    /// Per-frame bookkeeping for the Esc interrupt window: lapse it once
+    /// the wall-clock deadline passes, or immediately when the *viewed*
+    /// session no longer has a running round — there is nothing left to
+    /// interrupt, so keeping the toast up would mislead. Scoped to the
+    /// viewed session (the same `running_sessions` predicate the keymap
+    /// uses to map Esc to an interrupt), never the runtime's global
+    /// primary-only `is_responding` flag: an aside view armed from its own
+    /// running round must survive the primary being idle.
+    pub fn tick_esc_arm(&mut self) {
+        if let Some(until) = self.esc_armed_until
+            && std::time::Instant::now() >= until
+        {
+            self.esc_armed_until = None;
+        }
+        if self.esc_armed()
+            && !self
+                .running_sessions
+                .contains(self.current_session_id.as_str())
+        {
+            self.esc_armed_until = None;
+        }
     }
 
     pub fn byte_cursor(&self) -> usize {
@@ -1399,6 +1484,12 @@ impl App {
             // caret-owning text editors have no body scroll. None => the
             // Scroll* action falls through to the transcript fallback.
             Modal::None | Modal::Permission | Modal::ModelEditor | Modal::InputInjection => None,
+            // The quick switcher scrolls its own list through the shared
+            // session slot, like the other compact list modals.
+            Modal::ViewSwitcher => Some((
+                &mut self.session_scroll,
+                Some(&mut self.session_modal_follow),
+            )),
         }
     }
 
@@ -1904,6 +1995,15 @@ impl App {
     pub fn on_viewed_session_changed(&mut self) {
         self.history_index = None;
         self.clear_history_draft();
+        // Retained view state (ADR-0133) belongs to the conversation being
+        // left — a scroll position into Tools/Skills rows or a report page
+        // is context about *that* session's data. Forgetting it here is the
+        // `close` verb applied wholesale.
+        self.views.close_all();
+        // An armed Esc confirmation targets the conversation being left;
+        // carrying it across the boundary could fire session A's interrupt
+        // against session B. Disarm so the next Esc starts fresh.
+        self.esc_armed_until = None;
         // The queue pointer is scoped like the history cursor: its target
         // belongs to the conversation being left, so a carried pointer would
         // dangle into the new session's outbox. Dissolve without restoring
@@ -1925,6 +2025,157 @@ impl App {
         self.session_history_backfill_cursor = 0;
     }
 
+    /// Focus a browse view under the buffer-like lifecycle (ADR-0133):
+    /// the view's state is initialised exactly once (first open) and every
+    /// later open is a pure focus move that restores the retained
+    /// scroll/index/follow. Returns whether this was the *first* open, so
+    /// the caller runs its data-side open effects (a fresh
+    /// `QueryUsageStats`, a session-context query, …) exactly once per view
+    /// lifetime instead of on every reopen — retention is about *where the
+    /// user was standing*, never about serving stale data.
+    pub(crate) fn open_view(&mut self, id: crate::views::ViewId) -> bool {
+        // Park the current view's live state before moving focus — unless
+        // the target *is* the current view (a re-focus): saving then
+        // restoring through the same id would clobber a just-forgotten
+        // state (session change) with stale live values.
+        if let Ok(current) = crate::views::ViewId::try_from(self.active_modal)
+            && current != id
+        {
+            self.save_view_state(current);
+        }
+        let first = self.views.open(id).is_none();
+        let state = self.views.states(&id).cloned().unwrap_or_default();
+        self.modal_index = state.index;
+        self.apply_view_scroll(id, state.scroll);
+        self.views.set_follow(id, state.follow);
+        self.modal_keymap_open = false;
+        self.active_modal = id.modal();
+        if id == crate::views::ViewId::Todos {
+            self.activity_tab = crate::modal::ActivityTab::Todos;
+        } else if id == crate::views::ViewId::Activity {
+            self.activity_tab = crate::modal::ActivityTab::Activity;
+        }
+        first
+    }
+
+    /// Snapshot the *current* field values of a browse view into the
+    /// registry — the "save on losing focus" half of the contract. The
+    /// inverse of the restore in [`Self::open_view`].
+    pub(crate) fn save_view_state(&mut self, id: crate::views::ViewId) {
+        let scroll = self.view_scroll(id);
+        let follow = self.view_follow(id);
+        self.views.save(
+            id,
+            crate::views::ViewState {
+                index: self.modal_index,
+                scroll,
+                follow,
+            },
+        );
+    }
+
+    /// The `hide` verb (ADR-0133): the active browse view loses focus with
+    /// its state retained. Returns `true` when the active surface *was* a
+    /// browse view (so callers skip their modal-specific close logic).
+    pub(crate) fn hide_active_view(&mut self) -> bool {
+        match crate::views::ViewId::try_from(self.active_modal) {
+            Ok(id) => {
+                self.save_view_state(id);
+                self.views.hide(id);
+                self.active_modal = Modal::None;
+                self.modal_keymap_open = false;
+                true
+            }
+            Err(()) => false,
+        }
+    }
+
+    /// The dispatcher-facing dismiss verb (ADR-0133): what Esc /
+    /// outside-click / Ctrl+C do to whatever surface is up. The quick
+    /// switcher cancels back to the surface it was opened over (it is a
+    /// transient chooser, never a view) — and restores that surface's
+    /// cursor/scroll from the registry, because the switcher borrowed
+    /// `modal_index` and the shared session-scroll slot while it was up.
+    /// A retained browse view hides with its state saved.
+    /// Returns `true` when either applied, so legacy close paths can skip
+    /// their own handling.
+    pub(crate) fn dismiss_surface(&mut self) -> bool {
+        if self.active_modal == Modal::ViewSwitcher {
+            let ret = self.view_switcher_return;
+            self.view_switcher_return = Modal::None;
+            // Drop the switcher before restoring: open_view must not see
+            // ViewSwitcher as a view to park (it is not one), and a
+            // same-view re-focus must not clobber the registry entry.
+            self.active_modal = Modal::None;
+            self.modal_keymap_open = false;
+            if let Ok(id) = crate::views::ViewId::try_from(ret) {
+                self.open_view(id);
+            } else {
+                self.active_modal = ret;
+                self.modal_index = 0;
+            }
+            return true;
+        }
+        self.hide_active_view()
+    }
+
+    /// The per-view body-scroll slot, mirroring [`Self::modal_scroll_field`]
+    /// for the retained views. Tools/Mcp/Skills share `session_scroll`
+    /// exactly as `modal_scroll_field` already routes them.
+    ///
+    /// Config is excluded: its cursor lives in `config_category` /
+    /// `config_detail_index` / `config_focus` (not `modal_index`) and its
+    /// body scrolls in two pane-specific slots. Its open/close paths never
+    /// reset those fields today, so retention there is already the default —
+    /// `open_view`'s save/restore of `ViewState` is a no-op for it.
+    fn view_scroll(&self, id: crate::views::ViewId) -> usize {
+        match id {
+            crate::views::ViewId::Help => self.help_scroll,
+            crate::views::ViewId::Activity | crate::views::ViewId::Todos => self.activity_scroll,
+            crate::views::ViewId::Tools
+            | crate::views::ViewId::Mcp
+            | crate::views::ViewId::Skills => self.session_scroll,
+            crate::views::ViewId::Permissions => self.permissions_scroll,
+            crate::views::ViewId::UsageStats => self.usage_stats_scroll,
+            crate::views::ViewId::TokenReport => self.token_report_scroll,
+            crate::views::ViewId::Btw => self.btw_scroll,
+            // Config: no single slot (see doc above); the saved state is not
+            // used for it.
+            crate::views::ViewId::Config => 0,
+        }
+    }
+
+    fn apply_view_scroll(&mut self, id: crate::views::ViewId, scroll: usize) {
+        match id {
+            crate::views::ViewId::Help => self.help_scroll = scroll,
+            crate::views::ViewId::Activity | crate::views::ViewId::Todos => {
+                self.activity_scroll = scroll;
+            }
+            crate::views::ViewId::Tools
+            | crate::views::ViewId::Mcp
+            | crate::views::ViewId::Skills => {
+                self.session_scroll = scroll;
+            }
+            crate::views::ViewId::Permissions => self.permissions_scroll = scroll,
+            crate::views::ViewId::UsageStats => self.usage_stats_scroll = scroll,
+            crate::views::ViewId::TokenReport => self.token_report_scroll = scroll,
+            crate::views::ViewId::Btw => self.btw_scroll = scroll,
+            // Config: no single slot; retention is field-native (see
+            // `view_scroll`).
+            crate::views::ViewId::Config => {}
+        }
+    }
+
+    fn view_follow(&self, id: crate::views::ViewId) -> bool {
+        match id {
+            crate::views::ViewId::Tools
+            | crate::views::ViewId::Mcp
+            | crate::views::ViewId::Skills => self.session_modal_follow,
+            crate::views::ViewId::Btw => self.btw_modal_follow,
+            // These surfaces don't track a follow flag (plain scroll bodies).
+            _ => true,
+        }
+    }
     /// Splice the `idx`-th live completion's label into [`App::input`] over
     /// its `[replace_start, replace_end)` byte range, landing the cursor
     /// just past the inserted text. Shared by `Tab` cycling and `Enter`
@@ -2298,6 +2549,11 @@ impl App {
         self.side_session_id = Some(side_id.clone());
         self.in_side_view = true;
         self.parent_status = ParentStatus::Idle;
+        // An armed Esc confirmation is view-scoped: entering the aside must
+        // not inherit the primary's arm (a second Esc here would otherwise
+        // fire the *aside's* interrupt off a confirmation aimed at the
+        // primary's round).
+        self.esc_armed_until = None;
         // View-scoped chrome (the aside-view activity-bar fix): snapshot the
         // primary's live chrome, then swap the displayed chrome to the
         // aside's own `SessionChrome` entry. A primary round still streaming
@@ -2356,6 +2612,11 @@ impl App {
         }
         self.in_side_view = false;
         self.side_session_id = None;
+        // Dropping any armed Esc confirmation is part of leaving: the arm
+        // targeted the aside's round, and a carried arm would fire the
+        // *primary's* interrupt on the next Esc. Covers the Ctrl+C detach
+        // and the `SideViewSignal::Closed` backstop alike.
+        self.esc_armed_until = None;
         self.reset_view_state();
     }
 

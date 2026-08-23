@@ -14,12 +14,11 @@ use neenee_contracts::{AgentRequest, PermissionDecision, PermissionRequest};
 use crate::clipboard;
 use crate::clipboard_ops;
 use crate::input;
-use crate::model::document::NoticeSeverity;
 use crate::model::layout::InteractiveTargetKind;
 use crate::model::selection::SelectionState;
 use crate::view;
 use crate::view::Theme;
-use crate::{ActivityTab, App, Modal};
+use crate::{App, Modal};
 
 use super::{
     UiRuntime, activate_picked_model, extract_selection_text, handle_permission_submit,
@@ -27,18 +26,25 @@ use super::{
 };
 
 mod commands;
+mod host;
 mod modals;
 mod mouse;
 
 #[cfg(test)]
 pub(crate) use mouse::handle_selection_end_for_test;
 
+pub(crate) use commands::handle_esc_interrupt;
 pub(super) use commands::split_command_word;
+
+#[cfg(test)]
+pub(crate) use commands::handle_ctrl_c;
 
 #[cfg(test)]
 pub(crate) use commands::handle_insert_into_round;
 #[cfg(test)]
 pub(crate) use commands::handle_send_slash;
+#[cfg(test)]
+pub(crate) use modals::handle_close_modal;
 
 /// How the event loop proceeds after a dispatched action. Arms that ended in
 /// `continue` (skip to the next drained input event) or `return Ok(())` (exit
@@ -70,6 +76,19 @@ pub(super) async fn dispatch_action(
     paste_tx: &mpsc::UnboundedSender<clipboard::ClipboardRead>,
     sgr_guard: &mut input::SgrLeakGuard,
 ) -> ActionFlow {
+    // While the dashboard's kill confirm is armed, only the confirming `k`
+    // (or the confirm-cancelling paths inside the dashboard arms) keeps it
+    // alive: any other action — navigation, prompt, focus toggle, Esc —
+    // disarms it. The armed state lives exactly one keystroke.
+    if app.host_kill_confirm.is_some()
+        && app.active_modal == Modal::Host
+        && !matches!(
+            action,
+            input::InputAction::HostKillSelected | input::InputAction::None
+        )
+    {
+        host::cancel_kill_confirm(app);
+    }
     match action {
         input::InputAction::None => {}
         input::InputAction::TerminalResized => {
@@ -394,14 +413,11 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::Interrupt => {
             // Mirror Ctrl+C's quit pattern: the first Esc only arms a
-            // ~2s window (and shows a toast); the second Esc within
-            // that window actually interrupts the running task.
-            if app.esc_armed_ticks > 0 {
-                app.esc_armed_ticks = 0;
-                let _ = app.tx.send(AgentRequest::Interrupt);
-            } else {
-                app.esc_armed_ticks = 20;
-            }
+            // wall-clock 2s window (and shows a toast); the second Esc
+            // within that window actually interrupts the running task. A
+            // press after the window lapsed starts a fresh window rather
+            // than firing a stale confirmation.
+            handle_esc_interrupt(app, false);
         }
         input::InputAction::OpenModels => {
             // Stash whatever the user was composing so Esc restores it
@@ -571,71 +587,56 @@ pub(super) async fn dispatch_action(
             app.history_clear_confirm = false;
         }
         input::InputAction::OpenHelp => {
-            app.active_modal = Modal::Help;
-            app.modal_keymap_open = false;
-            app.modal_index = 0;
-            app.help_scroll = 0;
+            // Help is a retained view (ADR-0133): first open initialises,
+            // every later open restores the retained scroll — no reset.
+            app.open_view(crate::views::ViewId::Help);
         }
         input::InputAction::OpenPermissions => {
             // The permissions manager modal. Reached via the
             // `/permissions` slash command (intercepted locally, never
-            // sent to the backend). Kick off a snapshot request so the
-            // rule list populates; `/permissions clear` still goes to
-            // the backend via SendSlash.
-            app.active_modal = Modal::Permissions;
-            app.modal_keymap_open = false;
-            app.modal_index = 0;
-            app.permissions_scroll = 0;
-            let _ = app.tx.send(AgentRequest::QuerySessionContext);
+            // sent to the backend). A retained view (ADR-0133): the
+            // session-context query runs on first open only; a reopen
+            // restores the retained scroll/selection. `/permissions clear`
+            // still goes to the backend via SendSlash.
+            if app.open_view(crate::views::ViewId::Permissions) {
+                let _ = app.tx.send(AgentRequest::QuerySessionContext);
+            }
         }
         input::InputAction::OpenTools => {
             // The tools manager modal. Reached via `/tools`
-            // (intercepted locally). It shares the session-context
-            // snapshot, so (re)kick a query so the list is fresh.
-            app.active_modal = Modal::Tools;
-            app.modal_keymap_open = false;
-            app.modal_index = 0;
-            app.session_scroll = 0;
-            app.session_modal_follow = true;
-            let _ = app.tx.send(AgentRequest::QuerySessionContext);
+            // (intercepted locally). A retained view (ADR-0133): the
+            // session-context query runs on first open only.
+            if app.open_view(crate::views::ViewId::Tools) {
+                let _ = app.tx.send(AgentRequest::QuerySessionContext);
+            }
         }
         input::InputAction::OpenUsage => {
             // The usage-statistics overlay (`/usage`, ADR-0122). Reached via
-            // the local `/usage` interception. The data is the durable
-            // cross-session store, so (re)kick a `QueryUsageStats` round-trip
-            // each time it opens and the numbers are always fresh; until the
-            // reply lands the overlay renders a loading placeholder.
-            app.active_modal = Modal::UsageStats;
-            app.modal_keymap_open = false;
-            app.usage_stats = None;
-            app.usage_stats_scroll = 0;
-            let _ = app
-                .tx
-                .send(AgentRequest::QueryUsageStats { event_cap: 200 });
+            // the local `/usage` interception. A retained view (ADR-0133):
+            // the `QueryUsageStats` round-trip runs on first open; until the
+            // reply lands the overlay renders a loading placeholder, and a
+            // reopen restores the retained scroll over the loaded report.
+            if app.open_view(crate::views::ViewId::UsageStats) {
+                app.usage_stats = None;
+                let _ = app
+                    .tx
+                    .send(AgentRequest::QueryUsageStats { event_cap: 200 });
+            }
         }
         input::InputAction::OpenMcp => {
             // The MCP manager modal. Reached via `/mcp` (intercepted
-            // locally). Shares the session-context snapshot, so kick a
-            // fresh query and let the modal populate from its `mcp` pane.
-            app.active_modal = Modal::Mcp;
-            app.modal_keymap_open = false;
-            app.modal_index = 0;
-            app.session_scroll = 0;
-            app.session_modal_follow = true;
-            let _ = app.tx.send(AgentRequest::QuerySessionContext);
+            // locally). A retained view (ADR-0133): the session-context
+            // query runs on first open only.
+            if app.open_view(crate::views::ViewId::Mcp) {
+                let _ = app.tx.send(AgentRequest::QuerySessionContext);
+            }
         }
         input::InputAction::OpenSkills => {
             // The skills modal. Reached via `/skills` (intercepted
-            // locally). Shares the session-context snapshot, so kick a
-            // fresh query and let the modal populate from its `skills`
-            // pane. Detail expansions start collapsed.
-            app.active_modal = Modal::Skills;
-            app.modal_keymap_open = false;
-            app.modal_index = 0;
-            app.session_scroll = 0;
-            app.session_modal_follow = true;
-            app.skills_expanded = None;
-            let _ = app.tx.send(AgentRequest::QuerySessionContext);
+            // locally). A retained view (ADR-0133): the session-context
+            // query runs on first open only; detail expansions
+            // (`skills_expanded`) live on App and persist across hides.
+            app.open_view(crate::views::ViewId::Skills);
         }
         input::InputAction::SkillsToggleDetail => {
             // Toggle the detail block of the selected skill row. Re-pressing
@@ -656,15 +657,20 @@ pub(super) async fn dispatch_action(
             let _ = app.tx.send(AgentRequest::QuerySessionContext);
         }
         input::InputAction::OpenConfig => {
-            // Full-screen Settings View (`/config`): dual-pane configuration center.
-            app.active_modal = Modal::Config;
-            app.modal_keymap_open = false;
-            app.config_focus = crate::overlays::ConfigFocus::Categories;
-            app.config_category = 0;
-            app.config_detail_index = Theme::color_scheme_index(&app.color_scheme);
-            app.config_custom_editing = false;
-            app.config_scroll = 0;
-            app.config_detail_scroll = 0;
+            // Full-screen Settings View (`/config`): dual-pane configuration
+            // center. A retained view (ADR-0133): the open ritual (pane
+            // reset, current-scheme positioning) runs on first open only;
+            // a reopen keeps the category/pane the user left. Closing in the
+            // custom-colour editor still discards its transactional preview
+            // (see `dismiss_surface`'s Config guard below).
+            if app.open_view(crate::views::ViewId::Config) {
+                app.config_focus = crate::overlays::ConfigFocus::Categories;
+                app.config_category = 0;
+                app.config_detail_index = Theme::color_scheme_index(&app.color_scheme);
+                app.config_custom_editing = false;
+                app.config_scroll = 0;
+                app.config_detail_scroll = 0;
+            }
         }
         input::InputAction::ConfigFocusToggle => {
             if app.active_modal == Modal::Config {
@@ -768,7 +774,12 @@ pub(super) async fn dispatch_action(
                 } else if app.config_focus == crate::overlays::ConfigFocus::Detail {
                     app.config_focus = crate::overlays::ConfigFocus::Categories;
                 } else {
-                    app.active_modal = Modal::None;
+                    // Leaving the Settings view (its innermost back step):
+                    // the shared dismiss verb (ADR-0133) — hide with the
+                    // pane/category state retained for the next open. The
+                    // custom-colour transaction (if any) was already
+                    // discarded by the first branch on the way out.
+                    app.dismiss_surface();
                 }
             }
         }
@@ -937,32 +948,18 @@ pub(super) async fn dispatch_action(
             };
         }
         input::InputAction::HostInterruptSelected => {
-            let idx = app
-                .modal_index
-                .min(app.host_sessions.len().saturating_sub(1));
-            // Creation-order selection, mirroring the dock (see
-            // HostSwitchSelected).
-            let order = crate::overlays::creation_order(&app.host_sessions);
-            if let Some(row) = order.get(idx).map(|&i| &app.host_sessions[i]) {
-                let id = row.id.clone();
-                tokio::spawn(async move {
-                    let project_root =
-                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                    let Some(info) = neenee_runtime::client::discover(&project_root) else {
-                        return;
-                    };
-                    let req = neenee_runtime::serve::ControlRequest::Interrupt {
-                        session_id: id.clone(),
-                    };
-                    if let Err(e) = neenee_runtime::client::control(&info, req).await {
-                        tracing::warn!(%e, session=%id, "dashboard interrupt failed");
-                    }
-                });
-                app.notice_toast_message = "interrupt sent".to_string();
-                app.notice_toast_severity = NoticeSeverity::Info;
-                app.notice_toast_until =
-                    Some(std::time::Instant::now() + std::time::Duration::from_millis(1600));
-            }
+            // `i` on the dock: interrupt the selection. Routed through the
+            // console dispatcher so the dispatch line + receipt land in the
+            // cockpit log alongside `/interrupt`.
+            host::dispatch_console_command(app, runtime, "/interrupt", false).await;
+        }
+        input::InputAction::HostKillSelected => {
+            // `k` on the dock: two-press confirm, then the kill verb.
+            host::kill_selected(app, runtime);
+        }
+        input::InputAction::HostSuspendSelected => {
+            // `s` on the dock: suspend the selection (park in memory).
+            host::suspend_selected(app, runtime);
         }
         input::InputAction::HostPromptOpen => {
             // `p`: prompt the selected session. The composer buffer
@@ -979,54 +976,35 @@ pub(super) async fn dispatch_action(
             app.input.clear();
             app.set_cursor(0);
         }
+        input::InputAction::HostPromptSeed(c) => {
+            // A printable key on the dashboard opens the console composer
+            // with that key as the first character — typing is opening.
+            // The seeded role is "prompt the selection" (the `p` default):
+            // an explicit `@N`/`/verb` in the line routes itself anyway.
+            app.host_prompting = true;
+            app.host_prompt_new = false;
+            app.input.clear();
+            app.input.insert(0, c);
+            app.set_cursor(1);
+        }
         input::InputAction::HostPromptSubmit => {
             let text = app.input.trim().to_string();
+            // The `n`-opened prompt's default role is "create"; an explicit
+            // address or verb in the text overrides it (`@3 …` still routes
+            // to #3, `/kill` still kills).
             let create_new = app.host_prompt_new;
             app.host_prompting = false;
             app.host_prompt_new = false;
             app.input.clear();
             app.set_cursor(0);
-            if !text.is_empty() {
-                let project_root =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let idx = app
-                    .modal_index
-                    .min(app.host_sessions.len().saturating_sub(1));
-                // Creation-order selection, mirroring the dock.
-                let order = crate::overlays::creation_order(&app.host_sessions);
-                let selected = order.get(idx).map(|&i| app.host_sessions[i].clone());
-                tokio::spawn(async move {
-                    let Some(info) = neenee_runtime::client::discover(&project_root) else {
-                        tracing::warn!("dashboard control: no daemon discovered");
-                        return;
-                    };
-                    // `n` always creates; `p` prompts the selected
-                    // session (creating is impossible without a
-                    // selection, so fall back to create).
-                    let req = if !create_new && let Some(row) = &selected {
-                        neenee_runtime::serve::ControlRequest::SendPrompt {
-                            session_id: row.id.clone(),
-                            text,
-                        }
-                    } else {
-                        neenee_runtime::serve::ControlRequest::CreateSession {
-                            project: project_root.display().to_string(),
-                            prompt: Some(text),
-                        }
-                    };
-                    if let Err(e) = neenee_runtime::client::control(&info, req).await {
-                        tracing::warn!(%e, "dashboard prompt/create failed");
-                    }
-                });
-                app.notice_toast_message = if create_new {
-                    "session created".to_string()
-                } else {
-                    "task sent".to_string()
-                };
-                app.notice_toast_severity = NoticeSeverity::Info;
-                app.notice_toast_until =
-                    Some(std::time::Instant::now() + std::time::Duration::from_millis(1600));
+            if text.is_empty() {
+                return ActionFlow::Handled;
             }
+            // The composer is a command line now (ADR-0097 §2 grammar plus
+            // slash verbs): `@3 text` addresses, `/kill`-family manages,
+            // bare text keeps the legacy role — prompt the selection, or
+            // create when the prompt was opened with `n`.
+            host::dispatch_console_command(app, runtime, &text, create_new).await;
         }
         input::InputAction::DeleteSelectedSession => {
             let idx = app
@@ -1224,14 +1202,11 @@ pub(super) async fn dispatch_action(
         input::InputAction::OpenTodos => {
             // Ctrl+T opens the Todos modal — the agent's live task
             // list surfaced on its own overlay. The list is
-            // agent-owned and read-only in the TUI; this simply opens
-            // the Activity modal pinned to the Todos section, exactly
-            // like clicking the todo bar.
-            app.active_modal = Modal::Activity;
-            app.activity_tab = ActivityTab::Todos;
-            app.modal_keymap_open = false;
-            app.modal_index = 0;
-            app.activity_scroll = 0;
+            // agent-owned and read-only in the TUI; this opens the
+            // Activity view pinned to the Todos section, exactly
+            // like clicking the todo bar. A retained view (ADR-0133):
+            // reopen restores the retained scroll.
+            app.open_view(crate::views::ViewId::Todos);
             app.selection = SelectionState::None;
             app.focused_target = None;
             app.drag.cancel();
@@ -1376,7 +1351,7 @@ pub(super) async fn dispatch_action(
             // instead of firing a leftover armed state.
             if app.in_side_view {
                 app.exit_side_view();
-                app.esc_armed_ticks = 0;
+                app.arm_esc(None);
                 let _ = app.tx.send(AgentRequest::ExitSideView);
             }
         }
@@ -1385,14 +1360,7 @@ pub(super) async fn dispatch_action(
             // aside's round with the same armed press-twice contract as the
             // main view's Esc interrupt. Never leaves the view, never closes
             // the aside.
-            if app.in_side_view && app.esc_armed_ticks > 0 {
-                app.esc_armed_ticks = 0;
-                if let Some(side_id) = app.side_session_id.clone() {
-                    let _ = app.tx.send(AgentRequest::InterruptSide { side_id });
-                }
-            } else {
-                app.esc_armed_ticks = 20;
-            }
+            handle_esc_interrupt(app, true);
         }
         input::InputAction::OpenBtwList => {
             // F5 / `/btw list` (ADR-0103 §5): ask the harness for a fresh
@@ -1401,6 +1369,79 @@ pub(super) async fn dispatch_action(
             // simply opens with the last known rows and refreshes in place.
             let _ = app.tx.send(AgentRequest::QueryBtwList);
             runtime.open_btw.store(true, Ordering::SeqCst);
+        }
+        input::InputAction::ViewSwitcherToggle => {
+            // Ctrl+L (ADR-0133): the global view quick switcher. A toggle —
+            // a second Ctrl+L while it is up cancels back to the surface it
+            // was opened over, exactly like Esc (nothing changed). The
+            // switcher is a transient chooser, never a retained view, so it
+            // does not touch the ViewRegistry on open/close; only Enter
+            // (`ViewSwitchActivate`) performs a switch.
+            if app.active_modal == Modal::ViewSwitcher {
+                app.active_modal = app.view_switcher_return;
+                app.modal_keymap_open = false;
+                app.modal_index = 0;
+            } else {
+                // Not over a request-driven sheet: those (Permission /
+                // Question / InputInjection) own the keyboard until they are
+                // answered, and their decisions must not be switchable away
+                // from. The binding is Gate::Always so it reaches this arm
+                // everywhere; the sheet check keeps the semantics honest.
+                if matches!(
+                    app.active_modal,
+                    Modal::Permission | Modal::Question | Modal::InputInjection
+                ) {
+                    return ActionFlow::Handled;
+                }
+                app.view_switcher_return = app.active_modal;
+                // Park the origin browse view's live cursor/scroll in the
+                // registry *before* the switcher borrows `modal_index` and
+                // the shared session-scroll slot (ADR-0133): the cancel path
+                // (`dismiss_surface` → `open_view`) restores from there, so
+                // the switcher's row cursor must never leak into it.
+                if let Ok(origin) = crate::views::ViewId::try_from(app.active_modal)
+                    && app.active_modal != Modal::ViewSwitcher
+                {
+                    app.save_view_state(origin);
+                }
+                app.active_modal = Modal::ViewSwitcher;
+                app.modal_keymap_open = false;
+                app.modal_index = 0;
+                // The switcher borrows the shared session scroll slot (see
+                // `modal_scroll_field`), so park whatever the previous
+                // surface had there — a browse view's saved scroll is in the
+                // registry, restored on its next open, not from this slot.
+                app.session_scroll = 0;
+                app.session_modal_follow = true;
+            }
+        }
+        input::InputAction::ViewSwitchActivate => {
+            // Quick switcher Enter (ADR-0133): switch to the highlighted
+            // view. A browse-view origin hides (state retained); a
+            // non-view origin (chat, an unmigrated surface) just loses
+            // focus to the target. First open of a view runs its data-side
+            // effects exactly as its own open action would.
+            if app.active_modal != Modal::ViewSwitcher {
+                return ActionFlow::Handled;
+            }
+            let rows = app.views.switcher_rows();
+            let Some(target) = rows.get(app.modal_index).copied() else {
+                return ActionFlow::Handled;
+            };
+            let origin = app.view_switcher_return;
+            app.view_switcher_return = Modal::None;
+            // The switcher must not leak its own selection state into the
+            // target view: reset the cursor before opening so the registry's
+            // restore (not the switcher's row index) wins.
+            app.modal_index = 0;
+            if let Ok(origin_view) = crate::views::ViewId::try_from(origin) {
+                app.save_view_state(origin_view);
+                app.views.hide(origin_view);
+            }
+            let first = app.open_view(target);
+            if first {
+                dispatch_first_open_effects(app, target, runtime);
+            }
         }
         input::InputAction::BtwFocusSelected => {
             // Asides modal Enter (ADR-0103 §5): jump back into the selected
@@ -1902,4 +1943,77 @@ pub(super) async fn dispatch_action(
         }
     }
     ActionFlow::Handled
+}
+
+/// Data-side open effects for a browse view's **first** open only
+/// (ADR-0133). Retention means a reopen must not re-run these — the view's
+/// place in the MRU is unchanged and its data refresh path is its own
+/// (e.g. Btw refreshes via the harness push; UsageStats re-queries only on
+/// first open, which the report's own freshness lifetime covers). Kept as
+/// one function so the switcher's Enter path and each surface's dedicated
+/// open action share exactly one definition of "what opening this view
+/// kicks off".
+pub(crate) fn dispatch_first_open_effects(
+    app: &mut App,
+    id: crate::views::ViewId,
+    runtime: &UiRuntime,
+) {
+    match id {
+        crate::views::ViewId::Permissions
+        | crate::views::ViewId::Tools
+        | crate::views::ViewId::Mcp
+        | crate::views::ViewId::Skills => {
+            // These surfaces read the session-context snapshot: kick one
+            // query so the list populates.
+            let _ = app.tx.send(AgentRequest::QuerySessionContext);
+        }
+        crate::views::ViewId::UsageStats => {
+            // The durable cross-session store: fetch on first open (the
+            // reply replaces the placeholder). Reopens keep the loaded
+            // report — its scroll position is the thing retention protects.
+            app.usage_stats = None;
+            let _ = app
+                .tx
+                .send(AgentRequest::QueryUsageStats { event_cap: 200 });
+        }
+        crate::views::ViewId::Btw => {
+            // Ask the harness for a fresh asides list; the rows land via the
+            // listener and refresh in place.
+            let _ = app.tx.send(AgentRequest::QueryBtwList);
+        }
+        // Pure-client surfaces — no data fetch on open.
+        crate::views::ViewId::Help
+        | crate::views::ViewId::Activity
+        | crate::views::ViewId::Todos
+        | crate::views::ViewId::TokenReport
+        | crate::views::ViewId::Config => {
+            let _ = runtime; // no runtime-side effects for these views
+        }
+    }
+}
+
+/// Test shims for the dashboard console dispatcher: the internal helpers the
+/// console tests drive directly (they need no terminal or clipboard plumbing
+/// — just `App` + `UiRuntime`).
+#[cfg(test)]
+pub(crate) mod host_test_shims {
+    use super::{UiRuntime, host};
+    use crate::App;
+
+    pub(crate) async fn dispatch(
+        app: &mut App,
+        runtime: &UiRuntime,
+        line: &str,
+        create_when_bare: bool,
+    ) {
+        host::dispatch_console_command(app, runtime, line, create_when_bare).await;
+    }
+
+    pub(crate) fn kill(app: &mut App, runtime: &UiRuntime) {
+        host::kill_selected(app, runtime);
+    }
+
+    pub(crate) fn kill_cancel(app: &mut App) {
+        host::cancel_kill_confirm(app);
+    }
 }

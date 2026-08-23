@@ -108,6 +108,7 @@ and [ADR-0096](docs/adr/0096-unified-session-daemon.md).
 | `Ctrl+P` | Block / resume the round queue |
 | `Ctrl+O` | Insert input into the running round |
 | `Ctrl+M` | Open the model picker (Kitty keyboard protocol; `/models` always works) |
+| `Ctrl+L` | Global view switcher — jump between Help / Activity / Tools / MCP / Skills / Permissions / Usage / Context / Asides, MRU-first. Views are retained: leaving one keeps its scroll and selection (ADR-0133) |
 | `Ctrl+R` | Input history search |
 | `Ctrl+T` | Open todos |
 | `Enter` | Send message |
