@@ -17,8 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build* — so additive wire changes stop breaking version-pinned clients;
   outside the window it is refused before any session work with
   `Error{code:"protocol_mismatch"}` and a directional fix. Clients that
-  predate the field keep ADR-0100 rule 4's exact version equality, and
-  local pairs keep the `/proc/<pid>/exe` image check for dev-loop drift.
+  predate the field keep ADR-0100 rule 4's exact version equality. Locally,
+  an in-window daemon is served whatever its product build — a patch bump
+  no longer interrupts a healthy daemon — while the one freshness gate
+  that survives is the dev-drift lie: same version, *different binary*
+  (`/proc/<pid>/exe` image check), the state where every version signal
+  agrees but the client is still about to test a stale locally-rebuilt
+  image.
   The wire envelope moved to `neenee-contracts::wire` (single serde source
   of truth next to the payload types), the discovery record mirrors the
   daemon's `protocol` for pre-handshake refusal, the web panel's
@@ -29,24 +34,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the PR is labeled `wire-compatible` — the bump decision is now a
   reviewable assertion, not memory.
 
-- **Views are retained surfaces with a global quick switcher (ADR-0133,
-  phase 1–2).** Browse overlays — Help, Activity/Todos, Tools, MCP, Skills,
-  Permissions, Usage stats, Context report, `/btw` asides, Settings — no
-  longer reset
-  when you leave them: hiding a view (Esc, outside click, Ctrl+C) saves its
-  scroll, selection, and follow state to a per-view registry, and reopening
-  returns you exactly where you were, the same "leave and come back, nothing
-  lost" contract daemon sessions already have. **`Ctrl+L`** opens a global
-  view switcher over every surface (usable even while another modal is up):
-  open views first in most-recently-used order, then every other view as
-  discovery; `Enter` switches, `Esc` cancels back untouched. Data-refresh
-  side effects (the usage-stats query, session-context snapshots) now run on
-  a view's *first* open only instead of on every reopen. Switching sessions
-  forgets retained view state — it belongs to the conversation, not the
-  terminal. The picker→editor chains (Models/Connections and friends) and
-  the full-screen surfaces (Sessions, dashboard, Settings) keep their
-  existing lifecycles and migrate in later phases.
-
+- **Views are retained surfaces with a global quick switcher (ADR-0133).**
+  Surfaces no longer reset when you leave them: hiding a view (Esc, outside
+  click, Ctrl+C — all one shared dismiss verb) saves its scroll, selection,
+  and follow state to a per-view registry, and reopening returns you
+  exactly where you were, the same "leave and come back, nothing lost"
+  contract daemon sessions already have. Migrated surfaces: Help,
+  Activity/Todos, Tools, MCP, Skills, Permissions, Usage stats, Context
+  report, `/btw` asides, Settings, the Models and Connections pickers,
+  input history (Ctrl+R), the Queue overview, the session dashboard, and
+  the sessions picker. Data-refresh side effects (the usage-stats query,
+  session-context snapshots) run on a view's *first* open only. Switching
+  sessions forgets retained view state — it belongs to the conversation,
+  not the terminal.
+- **Picker→editor navigation is a stack.** The model editor, the
+  provider-template chooser, the custom-provider editor, and the OAuth
+  sheet return to the surface they were opened from through one bounded
+  navigation stack (the single-slot `editor_return_to` field and the two
+  hard-coded "back to Connections" links are gone). Composer drafts parked
+  by the pickers live in per-view slots, so a draft parked for Models can
+  never be clobbered by one parked for history (the one global stash is
+  gone; only the input-injection sheet keeps its own).
+- **Queue auto-block is a view enter/exit pair.** Opening the Queue view
+  blocks the outbox for safe editing; *every* path that leaves it (Esc,
+  outside click, Ctrl+C, switcher) releases the block.
+- **Dashboard and sessions picker keep their place.** Hiding the dashboard
+  preserves the dock selection and the cockpit log; a data refresh while
+  the sessions picker is open no longer snaps the cursor back to the top.
+- **`Ctrl+L` opens the global view switcher** over every surface (usable
+  even while another modal is up): open views first in most-recently-used
+  order, then every other view as discovery; typing filters the list
+  fuzzily against names and entry points; `Enter` switches (the origin
+  hides with its state saved), `Esc` cancels back untouched.
 ### Fixed
 
 - **The double-Esc interrupt confirmation no longer flashes and

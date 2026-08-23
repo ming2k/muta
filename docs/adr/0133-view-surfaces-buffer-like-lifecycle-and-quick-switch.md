@@ -1,21 +1,41 @@
 # 0133. Views as retained, buffer-like surfaces with one shared lifecycle and a global quick switcher
 
-- **Status:** Proposed (phases 1–2 implemented; 3–5 open)
+- **Status:** Accepted
 - **Date:** 2026-08-22
 
-> **Implementation status.** Phase 1 (the `ViewRegistry`, first-open
-> initialisation, the hide/close/switch vocabulary on `App`) and phase 2
-> (the browse surfaces: Help, Activity/Todos, Tools, MCP, Skills,
-> Permissions, UsageStats, TokenReport, Btw, and the Settings view) are
-> implemented, together with the quick switcher (`Ctrl+L`) over every
-> migrated view. `views.rs` is the registry; `App::open_view` /
-> `save_view_state` / `dismiss_surface` are the verbs; the Esc,
-> outside-click, and Ctrl+C paths share `App::dismiss_surface`. Settings
-> keeps its cursor in its own fields (`config_category` /
-> `config_detail_index` / `config_focus`), so its retention is field-native
-> and the registry stores no scroll for it. Phases 3 (picker→editor chains,
-> per-view drafts), 4 (Host/Sessions sub-layers onto the stack), and the
-> editor-chain return consolidation remain open.
+> **Implementation status.** All phases are implemented.
+>
+> - Phases 1–2: the `ViewRegistry` (first-open initialisation), the
+>   hide/close/switch vocabulary (`App::open_view` / `save_view_state` /
+>   `dismiss_surface`, shared by Esc, outside-click, and Ctrl+C), and the
+>   read-only browse surfaces (Help, Activity/Todos, Tools, MCP, Skills,
+>   Permissions, UsageStats, TokenReport, Btw, Settings).
+> - Phase 3: the picker→editor chains. A bounded navigation stack
+>   (`ViewRegistry::push_nav` / `pop_nav`, cap 16) replaces
+>   `editor_return_to` and the two hard-coded "return to Connections"
+>   links; Models / Connections / HistorySearch are retained views whose
+>   composer drafts park in per-view slots (the one global `stashed_input`
+>   is gone — only the request-driven input-injection sheet keeps a global
+>   slot, renamed `injection_stashed_input`, because its queue-driven
+>   lifecycle never coexists with a picker's).
+> - Phase 4: Queue, Host, and Sessions are retained views. Queue's
+>   open-time outbox auto-block became the view's enter hook with the
+>   matching resume as the exit hook (every hide path releases it); the
+>   dashboard's dock selection and cockpit log survive hide; the sessions
+>   picker's refresh-while-open no longer needs its `opening` guard flag.
+>   The deepest-first Esc chain and its outside-click mirror collapsed into
+>   one shared `App::pop_sublayer`.
+> - Phase 5: the quick switcher filters — printable keys build a fuzzy
+>   query (own state, not the composer), matched against each view's label
+>   and hint.
+>
+> One deliberate deviation from the original text: sub-layer *positions*
+> are not retained across hide. A hide leaves the view at its root (the
+> drill-in flags are part of the hide teardown — volatile payloads like the
+> Sessions info snapshot and the dashboard's staged prompt text do not
+> survive a leave), so a reopen always lands where the view's own list is.
+> The `ViewState.sublayer` field the migration plan sketched was dropped as
+> a result; retaining those flags bought complexity without a use case.
 
 ## Context
 

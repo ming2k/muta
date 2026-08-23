@@ -88,20 +88,34 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
   (arm, then exit) instead of closing; with text staged in the dashboard's
   inline `p` / `n` prompt the chain is clear → arm → quit.
 
-**Retained views (ADR-0133).** The browse overlays — Help, Activity/Todos,
-Tools, MCP, Skills, Permissions, Usage stats, Context report, `/btw` asides, and the
-Settings view — are *retained surfaces*: dismissing one (Esc, outside click, Ctrl+C)
-saves its scroll, selection, and follow state to a per-view registry, and
-reopening restores exactly where the user was. The old reset-on-open ritual
-is gone; data-refresh queries run on a view's first open only. **`Ctrl+L`**
-opens the global view quick switcher over any surface (it is itself a
-transient chooser, not a retained view): open views first in MRU order,
-then every other view as discovery. `Enter` switches — hiding the origin
-with its state saved — and `Esc` cancels back untouched, restoring the
-origin's cursor from the registry. Switching sessions forgets retained
-state (it belongs to the conversation); the picker→editor chains and the
-full-screen takeovers keep their existing lifecycles for now.
+**Retained views (ADR-0133).** Nearly every surface is now a *retained
+view*: dismissing one (Esc, outside click, Ctrl+C — one shared dismiss
+verb) saves its scroll, selection, and follow state to a per-view registry,
+and reopening restores exactly where the user was. The old reset-on-open
+ritual is gone; data-refresh queries run on a view's first open only.
+Retained: Help, Activity/Todos, Tools, MCP, Skills, Permissions, Usage
+stats, Context report, `/btw` asides, Settings, the Models and Connections
+pickers, input history (Ctrl+R), the Queue overview, the session dashboard,
+and the sessions picker. The pickers additionally park the composer draft
+in per-view slots (a draft parked for Models is never clobbered by one
+parked for history). Switching sessions forgets retained state (it belongs
+to the conversation).
 
+**Picker→editor navigation (ADR-0133).** The model editor, the
+provider-template chooser, the custom-provider editor, and the OAuth sheet
+return through a bounded navigation stack to the surface that opened them
+— no hard-coded destinations. Queue's open-time outbox auto-block is
+paired with a release on *every* leave path. Drill-in sub-layers (the
+dashboard's preview and inline prompt, the sessions info view, the context
+report's turn breakdown) step back one level per Esc through the same
+shared pop the outside-click path uses.
+
+**`Ctrl+L` — the global view switcher.** Open over any surface (a
+transient chooser, itself never retained): open views first in MRU order,
+then every other view as discovery. Typing filters the list fuzzily against
+each view's name and entry point; `Enter` switches — hiding the origin with
+its state saved — and `Esc` cancels back untouched, restoring the origin's
+cursor from the registry.
 **Click-outside-to-dismiss.** Read-only / info modals — Help, Tool-step
 detail, Tools, Sessions, Permissions, Activity, History, and the two pickers
 (Models, Connections) — close when the user clicks outside their panel,

@@ -24,12 +24,12 @@ use std::collections::HashMap;
 /// migrated onto the buffer-like lifecycle; the mapping to the legacy
 /// [`Modal`] discriminant is total so open/close arms stay exhaustive.
 ///
-/// Not view ids (ADR-0133): the request-driven sheets (Permission, Question,
-/// InputInjection — queue-driven lifecycles), the composer-borrowing editors
-/// (Models/Connections pickers with their parked-draft contract, ModelEditor,
-/// ProviderTemplate, OauthPending, CustomProvider), and Host/Sessions
-/// (first-class full-screen surfaces with their own open rituals). They keep
-/// `Modal` semantics until their migration phase.
+/// Still not view ids (ADR-0133): the request-driven sheets (Permission,
+/// Question, InputInjection — queue-driven lifecycles) and the child editors
+/// of the picker chain (ModelEditor, ProviderTemplate, OauthPending,
+/// CustomProvider — they are *transitions* within the Models/Connections
+/// flow, not places to stand: they never appear in the switcher and their
+/// Esc pops the navigation stack rather than hiding a view).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ViewId {
     Help,
@@ -43,6 +43,26 @@ pub(crate) enum ViewId {
     TokenReport,
     Btw,
     Config,
+    /// The flat model picker (`Ctrl+M` / `/models`). Phase 3: a retained
+    /// view whose open parks the composer draft into its own per-view slot
+    /// (not the global `stashed_input`), so a draft parked for Models can
+    /// never be clobbered by one parked for Connections or History.
+    Models,
+    /// The connections manager (`/connections`). Same per-view-draft
+    /// contract as [`Self::Models`].
+    Connections,
+    /// Input-history recall (`Ctrl+R`). Same per-view-draft contract.
+    HistorySearch,
+    /// The queue overview (`Ctrl+Q` / queue-bar click). Phase 4: retained;
+    /// its enter/exit effects (auto-block / resume of the viewed session's
+    /// outbox) are view enter/exit hooks, not open-ritual resets.
+    Queue,
+    /// The session dashboard (`/dashboard`). Phase 4: retained — the dock
+    /// selection/focus survive hide; the cockpit console log lives for the
+    /// view's lifetime (first open clears it) instead of every open.
+    Host,
+    /// The sessions picker (`/sessions`). Phase 4: retained.
+    Sessions,
 }
 
 impl ViewId {
@@ -62,12 +82,19 @@ impl ViewId {
             ViewId::TokenReport => Modal::TokenReport,
             ViewId::Btw => Modal::Btw,
             ViewId::Config => Modal::Config,
+            ViewId::Models => Modal::Models,
+            ViewId::Connections => Modal::Connections,
+            ViewId::HistorySearch => Modal::HistorySearch,
+            ViewId::Queue => Modal::Queue,
+            ViewId::Host => Modal::Host,
+            ViewId::Sessions => Modal::Sessions,
         }
     }
 
     /// Every view id, in quick-switcher display order: reference surfaces
-    /// first (Help, Activity, Todos), then manager lists, then reports.
-    pub(crate) const ALL: [ViewId; 11] = [
+    /// first (Help, Activity, Todos), then manager lists, then reports,
+    /// then the pickers, then the full-screen surfaces.
+    pub(crate) const ALL: [ViewId; 17] = [
         ViewId::Help,
         ViewId::Activity,
         ViewId::Todos,
@@ -79,6 +106,12 @@ impl ViewId {
         ViewId::TokenReport,
         ViewId::Btw,
         ViewId::Config,
+        ViewId::Models,
+        ViewId::Connections,
+        ViewId::HistorySearch,
+        ViewId::Queue,
+        ViewId::Host,
+        ViewId::Sessions,
     ];
 
     /// The label shown in the quick switcher and used for fuzzy matching.
@@ -95,6 +128,12 @@ impl ViewId {
             ViewId::TokenReport => "Context report",
             ViewId::Btw => "Asides (/btw)",
             ViewId::Config => "Settings",
+            ViewId::Models => "Switch model",
+            ViewId::Connections => "Connections",
+            ViewId::HistorySearch => "History",
+            ViewId::Queue => "Queue (outbox)",
+            ViewId::Host => "Session dashboard",
+            ViewId::Sessions => "Sessions",
         }
     }
 
@@ -113,6 +152,12 @@ impl ViewId {
             ViewId::TokenReport => "context meter",
             ViewId::Btw => "F5 / /btw list",
             ViewId::Config => "/config · /settings",
+            ViewId::Models => "Ctrl+M / /models",
+            ViewId::Connections => "/connections",
+            ViewId::HistorySearch => "Ctrl+R",
+            ViewId::Queue => "Ctrl+Q / queue bar",
+            ViewId::Host => "/dashboard",
+            ViewId::Sessions => "/sessions",
         }
     }
 }
@@ -134,6 +179,12 @@ impl TryFrom<Modal> for ViewId {
             Modal::TokenReport => Ok(ViewId::TokenReport),
             Modal::Btw => Ok(ViewId::Btw),
             Modal::Config => Ok(ViewId::Config),
+            Modal::Models => Ok(ViewId::Models),
+            Modal::Connections => Ok(ViewId::Connections),
+            Modal::HistorySearch => Ok(ViewId::HistorySearch),
+            Modal::Queue => Ok(ViewId::Queue),
+            Modal::Host => Ok(ViewId::Host),
+            Modal::Sessions => Ok(ViewId::Sessions),
             _ => Err(()),
         }
     }
@@ -153,6 +204,13 @@ pub(crate) struct ViewState {
     pub(crate) scroll: usize,
     /// Whether the body scroll follows the selection.
     pub(crate) follow: bool,
+    /// The composer draft this view parked when it borrowed the input line
+    /// (ADR-0133 per-view drafts). Only the draft-owning views use it
+    /// (Models, Connections, HistorySearch): parking stores the composer's
+    /// text in the *entering* view's slot, restoring on return, so two
+    /// borrowed-line flows can never clobber each other's draft through the
+    /// old single global `stashed_input` slot.
+    pub(crate) draft: Option<String>,
 }
 
 /// A MRU-ordered registry of retained view states (ADR-0133).
@@ -168,7 +226,20 @@ pub(crate) struct ViewRegistry {
     /// Retained per-view state. Entries persist across hide (ADR-0133); an
     /// entry is removed only by an explicit `close`.
     states: HashMap<ViewId, ViewState>,
+    /// The navigation stack (ADR-0133 phase 3): the chain of surfaces the
+    /// user drilled *through*, parent first. Pushing a child editor
+    /// (ModelEditor, ProviderTemplate, CustomProvider, OauthPending) while
+    /// a picker is focused records the picker; the child's Esc pops back to
+    /// it. This replaces `editor_return_to` and the two hard-coded
+    /// "return to Connections" links. Chat (`Modal::None`) is never on the
+    /// stack — an empty stack means "back is chat".
+    nav: Vec<Modal>,
 }
+
+/// The navigation stack is bounded: a pathological chain of drills (or a
+/// bug) must not grow it without limit. Parents older than this are simply
+/// no longer reachable via Esc.
+const NAV_CAP: usize = 16;
 
 impl ViewRegistry {
     pub(crate) fn new() -> Self {
@@ -203,6 +274,9 @@ impl ViewRegistry {
     /// open. This is the Esc/outside-click verb.
     pub(crate) fn hide(&mut self, id: ViewId) {
         self.order.retain(|&v| v != id);
+        // Hiding a parent picker makes its child chain unreachable: the
+        // nav entries above chat were pushed by that picker's drills.
+        self.nav.retain(|m| *m != id.modal());
     }
 
     /// Explicit close: forget the view's state entirely. Phase-1 surfaces
@@ -220,6 +294,7 @@ impl ViewRegistry {
     pub(crate) fn close_all(&mut self) {
         self.order.clear();
         self.states.clear();
+        self.nav.clear();
     }
 
     /// Whether the view has been opened at least once (state retained).
@@ -233,6 +308,11 @@ impl ViewRegistry {
     /// The retained state of a view, if it has been opened before.
     pub(crate) fn states(&self, id: &ViewId) -> Option<&ViewState> {
         self.states.get(id)
+    }
+
+    /// Mutable access to a view's retained state, if it exists.
+    pub(crate) fn states_mut(&mut self, id: &ViewId) -> Option<&mut ViewState> {
+        self.states.get_mut(id)
     }
 
     /// Overwrite just the follow flag of a retained view (no-op for a view
@@ -260,6 +340,48 @@ impl ViewRegistry {
         }
         rows
     }
+
+    /// The switcher's visible rows for a live query (phase 5): the MRU /
+    /// discovery row set filtered by a fuzzy match of `query` against each
+    /// view's label and hint (case-insensitive subsequence). An empty query
+    /// is the unfiltered list.
+    pub(crate) fn switcher_rows_filtered(&self, query: &str) -> Vec<ViewId> {
+        let rows = self.switcher_rows();
+        if query.trim().is_empty() {
+            return rows;
+        }
+        let q = query.trim();
+        rows.into_iter()
+            .filter(|id| {
+                let label = id.label();
+                let hint = id.hint();
+                crate::fuzzy::fuzzy_match(label, q).is_some()
+                    || crate::fuzzy::fuzzy_match(hint, q).is_some()
+            })
+            .collect()
+    }
+
+    /// Push a parent onto the navigation stack (phase 3): called when a
+    /// child editor opens over a picker. Bounded by [`NAV_CAP`].
+    pub(crate) fn push_nav(&mut self, parent: Modal) {
+        self.nav.push(parent);
+        if self.nav.len() > NAV_CAP {
+            self.nav.remove(0);
+        }
+    }
+
+    /// Pop the navigation stack (phase 3): where a child editor's Esc /
+    /// submit returns to. `Modal::None` (chat) when the stack is empty.
+    pub(crate) fn pop_nav(&mut self) -> Modal {
+        self.nav.pop().unwrap_or(Modal::None)
+    }
+
+    /// Drop every pushed entry (hide of a parent picker, session switch,
+    /// surface teardown): nothing under the current surface is reachable
+    /// via Esc any more.
+    pub(crate) fn clear_nav(&mut self) {
+        self.nav.clear();
+    }
 }
 
 #[cfg(test)]
@@ -277,6 +399,7 @@ mod tests {
                 index: 3,
                 scroll: 12,
                 follow: false,
+                draft: None,
             },
         );
         let restored = reg.open(ViewId::Help).expect("state retained");
@@ -344,6 +467,8 @@ mod tests {
         assert_eq!(ViewId::Todos.modal(), Modal::Activity);
         assert_eq!(ViewId::Activity.modal(), Modal::Activity);
         assert_eq!(ViewId::try_from(Modal::Activity), Ok(ViewId::Activity));
-        assert_eq!(ViewId::try_from(Modal::Host), Err(()));
+        assert_eq!(ViewId::try_from(Modal::Host), Ok(ViewId::Host));
+        // The child editors of the picker chain are transitions, not views.
+        assert_eq!(ViewId::try_from(Modal::ModelEditor), Err(()));
     }
 }

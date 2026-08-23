@@ -373,11 +373,10 @@ pub(crate) fn handle_ctrl_c(
     ) {
         clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
     } else if app.active_modal == Modal::HistorySearch {
-        // Cancel the history modal: restore the in-progress draft
-        // the user was composing before Ctrl+R (clears the search
-        // query and sub-flags too).
-        app.restore_history_draft();
-        app.active_modal = Modal::None;
+        // Cancel the history modal via the shared dismiss verb: the
+        // per-view draft is handed back and the sub-flags cleared
+        // (ADR-0133 phase 3).
+        app.dismiss_surface();
     } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
         && app.active_modal == Modal::Sessions
     {

@@ -1050,11 +1050,12 @@ pub(super) fn render_frame(
         // in MRU order, then the rest as discovery. Renders from the view
         // registry; Enter switches via `ViewSwitchActivate`.
         Modal::ViewSwitcher => {
-            let rows = app.views.switcher_rows();
+            let rows = app.views.switcher_rows_filtered(&app.view_switcher_query);
             let open_ids = app.views.order().to_vec();
             Some(view::draw_view_switcher(
                 f,
                 &rows,
+                &app.view_switcher_query,
                 app.modal_index,
                 &open_ids,
                 app.view_switcher_return,

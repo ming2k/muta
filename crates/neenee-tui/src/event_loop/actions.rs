@@ -420,53 +420,50 @@ pub(super) async fn dispatch_action(
             handle_esc_interrupt(app, false);
         }
         input::InputAction::OpenModels => {
-            // Stash whatever the user was composing so Esc restores it
-            // unchanged. The picker opens in browse mode, so the input
-            // line stays empty until `/` enters search and borrows it as
-            // the fuzzy query (same pattern as the history modal).
-            app.stashed_input = std::mem::take(&mut app.input);
-            app.set_cursor(0);
-            app.input_scroll = 0;
-            app.active_modal = Modal::Models;
-            app.modal_keymap_open = false;
-            app.model_search = false;
-            app.model_scroll = 0;
-            app.model_modal_follow = true;
-            // Land the cursor on the live (provider, model) pair, so
-            // "open picker + Enter" re-activates the current selection.
-            let rows = app.models_flat_filtered();
-            app.modal_index = rows
-                .iter()
-                .position(|row| {
-                    row.provider_id == app.current_provider && row.model == app.current_model
-                })
-                .unwrap_or(0);
-            app.suggestion_index = None;
+            // A retained view (ADR-0133 phase 3): the composer draft parks
+            // in the *view's own* slot (open_view does it), a reopen
+            // restores the retained cursor/scroll, and only the first open
+            // runs the land-on-current-selection ritual. Esc hides with the
+            // draft handed back.
+            let first = app.open_view(crate::views::ViewId::Models);
+            if first {
+                app.model_search = false;
+                app.model_modal_follow = true;
+                // Land the cursor on the live (provider, model) pair, so
+                // "open picker + Enter" re-activates the current selection.
+                let rows = app.models_flat_filtered();
+                app.modal_index = rows
+                    .iter()
+                    .position(|row| {
+                        row.provider_id == app.current_provider && row.model == app.current_model
+                    })
+                    .unwrap_or(0);
+                app.suggestion_index = None;
+            }
         }
         input::InputAction::OpenConnections => {
-            // Same stash + browse-mode open as `OpenModels`.
-            app.stashed_input = std::mem::take(&mut app.input);
-            app.set_cursor(0);
-            app.input_scroll = 0;
-            app.active_modal = Modal::Connections;
-            app.modal_keymap_open = false;
-            app.model_search = false;
-            app.model_scroll = 0;
-            app.model_modal_follow = true;
-            // Land the cursor on the currently-active provider (falling
-            // back to the default), so "open picker + Enter"
-            // re-activates it.
-            let ranked = app.providers_filtered();
-            app.modal_index = ranked
-                .iter()
-                .position(|row| row.id == app.current_provider)
-                .or_else(|| {
-                    ranked
-                        .iter()
-                        .position(|row| row.id == app.provider_picker.default_id)
-                })
-                .unwrap_or(0);
-            app.suggestion_index = None;
+            // A retained view (ADR-0133 phase 3), same per-view-draft
+            // contract as `OpenModels`: only the first open runs the
+            // land-on-current-provider ritual.
+            let first = app.open_view(crate::views::ViewId::Connections);
+            if first {
+                app.model_search = false;
+                app.model_modal_follow = true;
+                // Land the cursor on the currently-active provider (falling
+                // back to the default), so "open picker + Enter"
+                // re-activates it.
+                let ranked = app.providers_filtered();
+                app.modal_index = ranked
+                    .iter()
+                    .position(|row| row.id == app.current_provider)
+                    .or_else(|| {
+                        ranked
+                            .iter()
+                            .position(|row| row.id == app.provider_picker.default_id)
+                    })
+                    .unwrap_or(0);
+                app.suggestion_index = None;
+            }
         }
         input::InputAction::OpenProviderTemplate => {
             // `a` in the Connections modal: open the add-provider
@@ -484,28 +481,23 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::OpenHistory => {
-            // The history panel floats above the composer, and the
-            // composer itself is the live filter field: typing narrows
-            // the list immediately (no separate browse/search mode).
-            // Stash whatever the user was composing so Esc restores it
-            // unchanged, and start with an empty query (show all, newest
-            // first) — they type to narrow.
-            app.stashed_input = std::mem::take(&mut app.input);
-            app.set_cursor(0);
-            app.input_scroll = 0;
-            app.suggestion_index = None;
-            app.active_modal = Modal::HistorySearch;
-            app.modal_keymap_open = false;
-            // The composer is permanently the filter while this panel
-            // is open, so `history_search` is latched true.
+            // A retained view (ADR-0133 phase 3): the composer draft parks
+            // in the view's own slot; a reopen restores the retained
+            // cursor/scroll. The composer is permanently the filter while
+            // this panel is open (no browse/search distinction), so the
+            // latch is re-set on every open; the first open additionally
+            // focuses the newest entry.
+            let first = app.open_view(crate::views::ViewId::HistorySearch);
             app.history_search = true;
-            app.history_clear_confirm = false;
-            // Rows are newest-first, so index 0 is the most-recent entry
-            // — focus the top so an immediate Enter re-inserts it.
-            app.modal_index = 0;
-            app.history_scroll = 0;
-            app.history_modal_follow = true;
-            app.history_preview = false;
+            if first {
+                app.history_clear_confirm = false;
+                // Rows are newest-first, so index 0 is the most-recent entry
+                // — focus the top so an immediate Enter re-inserts it.
+                app.modal_index = 0;
+                app.history_scroll = 0;
+                app.history_modal_follow = true;
+                app.history_preview = false;
+            }
         }
         input::InputAction::HistoryInsert => {
             // Enter inside the Ctrl+R panel: pull the focused entry out
@@ -533,8 +525,13 @@ pub(super) async fn dispatch_action(
                 );
             }
             // The selection replaces the in-progress draft, so the
-            // stash is dropped (not restored).
-            app.stashed_input.clear();
+            // view's parked draft is dropped (not restored) — phase 3:
+            // per-view slot, not the global stash.
+            if let Some(state) = app.views.states_mut(&crate::views::ViewId::HistorySearch) {
+                state.draft = None;
+            }
+            app.views.hide(crate::views::ViewId::HistorySearch);
+            app.history_search = false;
             app.input_scroll = 0;
             app.suggestion_index = None;
             // A programmatic input replacement — latch the dismissal so
@@ -1217,23 +1214,18 @@ pub(super) async fn dispatch_action(
             // at the front (the next item to pop). This mirrors a
             // click on the queue bar.
             //
-            // Opening the modal auto-blocks the viewed session's
-            // outbox so items can be managed safely (delete / reorder
-            // / re-edit) without one auto-draining mid-edit. Closing
-            // the modal (Esc / outside-click) resumes auto-drain —
-            // the block here is an editing safety latch, not a
-            // persistent user choice (that's `F3`). See the
-            // `CloseModal` / outside-click paths for the matching
-            // resume.
-            app.active_modal = Modal::Queue;
-            app.modal_keymap_open = false;
-            app.modal_index = 0;
-            app.queue_scroll = 0;
-            app.queue_modal_follow = true;
+            // A retained view (ADR-0133 phase 4): the cursor/scroll
+            // survive hide; the auto-block runs on EVERY entry (not just
+            // first open) because it is an editing safety latch — the
+            // matching resume is the view's exit hook (hide). A
+            // persistent user block is a different thing (`F3` /
+            // Ctrl+P), unaffected here.
+            app.open_view(crate::views::ViewId::Queue);
             app.selection = SelectionState::None;
             app.focused_target = None;
             app.drag.cancel();
             app.block_queue(viewed_session_id);
+            app.queue_exit_session = Some(viewed_session_id.to_string());
         }
         input::InputAction::FocusNextTarget => {
             // Ctrl+↓ (or ↓ while focused): advance to the next step.
@@ -1370,6 +1362,25 @@ pub(super) async fn dispatch_action(
             let _ = app.tx.send(AgentRequest::QueryBtwList);
             runtime.open_btw.store(true, Ordering::SeqCst);
         }
+        input::InputAction::ViewSwitcherFilter { ch } => {
+            // Phase 5 (ADR-0133): the filter is the switcher's own query,
+            // narrowed live; the row cursor re-anchors to the top of the
+            // filtered set.
+            if app.active_modal == Modal::ViewSwitcher {
+                app.view_switcher_query.push(ch);
+                app.modal_index = 0;
+                app.session_scroll = 0;
+                app.session_modal_follow = true;
+            }
+        }
+        input::InputAction::ViewSwitcherBackspace => {
+            if app.active_modal == Modal::ViewSwitcher {
+                app.view_switcher_query.pop();
+                app.modal_index = 0;
+                app.session_scroll = 0;
+                app.session_modal_follow = true;
+            }
+        }
         input::InputAction::ViewSwitcherToggle => {
             // Ctrl+L (ADR-0133): the global view quick switcher. A toggle —
             // a second Ctrl+L while it is up cancels back to the surface it
@@ -1407,6 +1418,7 @@ pub(super) async fn dispatch_action(
                 app.active_modal = Modal::ViewSwitcher;
                 app.modal_keymap_open = false;
                 app.modal_index = 0;
+                app.view_switcher_query.clear();
                 // The switcher borrows the shared session scroll slot (see
                 // `modal_scroll_field`), so park whatever the previous
                 // surface had there — a browse view's saved scroll is in the
@@ -1424,7 +1436,7 @@ pub(super) async fn dispatch_action(
             if app.active_modal != Modal::ViewSwitcher {
                 return ActionFlow::Handled;
             }
-            let rows = app.views.switcher_rows();
+            let rows = app.views.switcher_rows_filtered(&app.view_switcher_query);
             let Some(target) = rows.get(app.modal_index).copied() else {
                 return ActionFlow::Handled;
             };
@@ -1986,7 +1998,13 @@ pub(crate) fn dispatch_first_open_effects(
         | crate::views::ViewId::Activity
         | crate::views::ViewId::Todos
         | crate::views::ViewId::TokenReport
-        | crate::views::ViewId::Config => {
+        | crate::views::ViewId::Config
+        | crate::views::ViewId::Models
+        | crate::views::ViewId::Connections
+        | crate::views::ViewId::HistorySearch
+        | crate::views::ViewId::Queue
+        | crate::views::ViewId::Host
+        | crate::views::ViewId::Sessions => {
             let _ = runtime; // no runtime-side effects for these views
         }
     }

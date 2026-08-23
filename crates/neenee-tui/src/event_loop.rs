@@ -830,8 +830,7 @@ fn activate_picked_model(app: &mut App, id: String, model: String, key_ready: bo
             base_url: None,
         });
         arm_effort_ignition_if_max(app);
-        app.restore_model_draft();
-        app.active_modal = Modal::None;
+        app.dismiss_surface();
     } else if app.provider_row_auth(&id).is_oauth() {
         let auth = app.provider_row_auth(&id);
         let _ = app.tx.send(AgentRequest::ConnectProvider {
@@ -840,13 +839,12 @@ fn activate_picked_model(app: &mut App, id: String, model: String, key_ready: bo
                 .default_login_method()
                 .unwrap_or(neenee_contracts::LoginMethod::Device),
         });
-        app.restore_model_draft();
-        app.active_modal = Modal::None;
+        app.dismiss_surface();
     } else {
         // No key configured: open the key editor prefilled with this model so
         // the user can enter a key before activating. Esc returns to the
-        // picker the editor was opened from (`editor_return_to`).
-        app.editor_return_to = app.active_modal;
+        // picker the editor was opened from (phase 3: the nav stack).
+        app.views.push_nav(app.active_modal);
         app.editor_target = Some(id);
         app.editor_field = 0;
         app.editor_key.clear();
@@ -1249,23 +1247,12 @@ async fn sync_runtime_state(
     }
     if runtime.open_sessions.swap(false, Ordering::SeqCst) && app.active_modal != Modal::Permission
     {
-        // Only reset the selection/scroll when the modal is actually
-        // being *opened* — transitioning from some other state into the
-        // sessions picker. When the picker is already open this signal
-        // is just a data refresh (e.g. the overview the backend pushes
-        // right after a delete), and resetting the cursor there would
-        // snap the selection back to the top on every delete, fighting
-        // the optimistic local removal the delete handler already did.
-        let opening = app.active_modal != Modal::Sessions;
-        app.active_modal = Modal::Sessions;
-        if opening {
-            app.modal_index = 0;
-            // Reuse the Tools/Mcp/Skills body scroll slot so the picker is
-            // scrollable (PageUp/PageDown/Ctrl+↑↓/wheel) like the other
-            // list modals. Reset on open so a long list starts at the top.
-            app.session_scroll = 0;
-            app.session_modal_follow = true;
-        }
+        // A retained view (ADR-0133 phase 4): first open initialises; when
+        // the picker is already up this signal is just a data refresh —
+        // `open_view` is a same-view re-focus that does not reset, so the
+        // cursor never snaps back on a delete (the refresh-while-open
+        // regression this branch used to guard with an `opening` flag).
+        app.open_view(crate::views::ViewId::Sessions);
     }
     // Mirror the daemon monitor snapshot for the `/host` panel.
     {
@@ -1285,27 +1272,22 @@ async fn sync_runtime_state(
         }
     }
     if runtime.open_host.swap(false, Ordering::SeqCst) && app.active_modal != Modal::Permission {
-        let opening = app.active_modal != Modal::Host;
-        app.active_modal = Modal::Host;
-        if opening {
-            app.modal_index = 0;
-            app.host_scroll = 0;
+        // A retained view (ADR-0133 phase 4): the dock selection, focus
+        // pane, and detail scroll survive hide. First open runs the
+        // entry-state ritual once; the cockpit log now lives for the
+        // *view's* lifetime (cleared on first open, retained across
+        // hide) — it is a session at the controls, not history.
+        let first = app.open_view(crate::views::ViewId::Host);
+        if first {
             app.host_modal_follow = true;
             // Default focus is the console/input region (ADR-0097
             // §3): typing lands there; the dock is entered with Tab.
             app.host_focus = crate::overlays::DashboardFocus::Detail;
-            app.host_detail_scroll = 0;
-            app.host_preview = None;
-            app.host_preview_scroll = 0;
-            app.host_prompting = false;
-            // The console's cockpit log lives for the dashboard's open
-            // lifetime: a fresh open starts a fresh log (it is a session at
-            // the controls, not history).
             app.host_console_log.clear();
-            app.host_kill_confirm = None;
-            app.host_kill_confirm_id = None;
-            app.modal_keymap_open = false;
         }
+        // Kill-confirm is a one-keystroke armed state (never carried).
+        app.host_kill_confirm = None;
+        app.host_kill_confirm_id = None;
     }
     // `/btw` asides modal (ADR-0103 §5): F5 / `/btw list` arms `open_btw`;
     // the loop consumes it once rows have arrived (the F5 handler also sends

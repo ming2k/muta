@@ -97,7 +97,7 @@ fn file_corpus_stays_within_two_percent() {
         ("../../crates/neenee-contracts/src/pressure.rs", 11_207),
         ("../../crates/neenee-agent/src/orchestration.rs", 10_411),
         ("../../README.zh-CN.md", 2_588),
-        ("../../CHANGELOG.md", 10_755),
+        ("../../CHANGELOG.md", 10_538),
         ("../../docs/adr/0044-layered-token-accounting.md", 1_742),
         (
             "../../docs/explanation/agent-design/token-accounting.md",

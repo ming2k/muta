@@ -671,6 +671,13 @@ pub enum InputAction {
     /// chooser over every browse surface: open views first in MRU order,
     /// then the rest as discovery. Esc closes it with nothing changed.
     ViewSwitcherToggle,
+    /// Append a character to the switcher's fuzzy filter (phase 5). The
+    /// row set narrows live; ↑/↓ walk the filtered rows.
+    ViewSwitcherFilter {
+        ch: char,
+    },
+    /// Drop the last character from the switcher's filter (Backspace).
+    ViewSwitcherBackspace,
     /// Switch to the view highlighted in the quick switcher (ADR-0133,
     /// Enter). Hides the current browse view (state retained in the
     /// `ViewRegistry`) and focuses the target with its retained
@@ -1779,6 +1786,13 @@ pub fn process_event(
                     InputAction::None
                 }
                 KeyCode::Char(c) => {
+                    // The quick switcher's filter owns every printable key
+                    // while it is up (ADR-0133 phase 5) — before any other
+                    // consumer, so `?`-help and list-action keys never
+                    // steal filter characters.
+                    if context.active_modal == super::Modal::ViewSwitcher {
+                        return InputAction::ViewSwitcherFilter { ch: c };
+                    }
                     // `?` opens help from the top level when the input box is
                     // empty — mirrors the conventional help key without ever
                     // swallowing a `?` the user is typing. Like Ctrl+H it is
@@ -2082,7 +2096,11 @@ pub fn process_event(
                     }
                 }
                 KeyCode::Backspace => {
-                    if context.active_modal == super::Modal::Question {
+                    if context.active_modal == super::Modal::ViewSwitcher {
+                        // The switcher's own filter query (phase 5) — never
+                        // the composer.
+                        InputAction::ViewSwitcherBackspace
+                    } else if context.active_modal == super::Modal::Question {
                         InputAction::QuestionBackspace
                     } else if edits_input_field(&context) && *cursor_position > 0 {
                         // Alt+Backspace / Ctrl+Backspace delete the previous

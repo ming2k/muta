@@ -435,6 +435,17 @@ pub struct App {
     /// Esc restores it untouched (the switcher is a transient chooser, not
     /// a view — ADR-0133).
     pub view_switcher_return: Modal,
+    /// The quick switcher's live fuzzy query (ADR-0133 phase 5). The
+    /// switcher does not borrow the composer (it must work over surfaces
+    /// that have their own input semantics); printable keys append here,
+    /// Backspace drops one, and the row set is `switcher_rows` filtered by
+    /// `fuzzy_match` against each view's label + hint.
+    pub(crate) view_switcher_query: String,
+    /// The session whose outbox the Queue view auto-blocked on entry
+    /// (ADR-0133 phase 4). `hide_active_view` is an `&mut App` method that
+    /// cannot see the loop's `viewed_session_id`, so the block site records
+    /// the target here and the exit hook consumes it.
+    pub(crate) queue_exit_session: Option<String>,
     /// Last-known screen rect of the composer. Refreshed every draw and reused
     /// between frames by the input-driven immediate cursor flush so the IME
     /// composition window is re-anchored in the *same* iteration a keystroke is
@@ -929,8 +940,14 @@ pub struct App {
     /// composer's background wave tint, the hint bar's `M A X` label
     /// takeover, and the prompt's charge — see `crate::effort_ignition`.
     pub effort_ignition_epoch: Option<std::time::Instant>,
-    /// Input stashed while the API-key modal borrows the input line.
-    pub stashed_input: String,
+    /// The composer draft parked while the input-injection sheet
+    /// (L3.5 β) borrows the input line. Since ADR-0133 phase 3 the
+    /// picker flows (Models / Connections / History) park their drafts in
+    /// per-view slots on the `ViewRegistry`; this remaining global slot
+    /// serves the one request-driven borrowed-line surface, whose
+    /// lifecycle (queue-front arrival → reply) never coexists with a
+    /// picker's.
+    pub injection_stashed_input: String,
     /// Provider id targeted by the unified key editor (`Modal::ModelEditor`).
     pub editor_target: Option<String>,
     /// Which editor field is focused. `0` = API key (text entry); `1` = effort
@@ -945,12 +962,6 @@ pub struct App {
     /// from the Models-picker selection or the provider's current model; not
     /// user-editable).
     pub editor_model: String,
-    /// The picker modal to return to when the editor is cancelled or submits a
-    /// settings-only edit: `Modal::Models` when the editor was opened from the
-    /// flat model picker (an `e` settings edit or a no-key activation there),
-    /// `Modal::Connections` when opened from the Connections list. Set at
-    /// every `Modal::ModelEditor` open site so Esc never strands the user.
-    pub editor_return_to: Modal,
     /// When true, `Modal::ModelEditor` edits the selected provider model's
     /// channel settings only (for example OpenAI effort or Anthropic
     /// effort/thinking), not the provider API key or active provider.
@@ -2049,6 +2060,20 @@ impl App {
         self.apply_view_scroll(id, state.scroll);
         self.views.set_follow(id, state.follow);
         self.modal_keymap_open = false;
+        // Per-view drafts (ADR-0133 phase 3): a draft-owning view parks the
+        // composer text in its own slot on first open and hands it back on
+        // every later restore. Entering the view from chat always parks the
+        // live draft; entering from another view (the switcher) keeps the
+        // parked one — the composer was never touched in between.
+        if self.owns_composer_draft(id) {
+            if let Some(draft) = state.draft {
+                self.input = draft;
+                self.set_cursor_end();
+                self.input_scroll = 0;
+            } else {
+                self.park_draft_into(id);
+            }
+        }
         self.active_modal = id.modal();
         if id == crate::views::ViewId::Todos {
             self.activity_tab = crate::modal::ActivityTab::Todos;
@@ -2058,18 +2083,90 @@ impl App {
         first
     }
 
+    /// Whether this view borrows the composer line and therefore owns a
+    /// per-view draft slot (Models / Connections / HistorySearch — the
+    /// surfaces whose filter field *is* the composer).
+    fn owns_composer_draft(&self, id: crate::views::ViewId) -> bool {
+        matches!(
+            id,
+            crate::views::ViewId::Models
+                | crate::views::ViewId::Connections
+                | crate::views::ViewId::HistorySearch
+        )
+    }
+
+    /// Park the live composer draft into a view's own slot (phase 3),
+    /// clearing the borrowed line for the view's filter/entry use.
+    fn park_draft_into(&mut self, id: crate::views::ViewId) {
+        if let Some(state) = self.views.states_mut(&id) {
+            state.draft = Some(std::mem::take(&mut self.input));
+        }
+        self.set_cursor(0);
+        self.input_scroll = 0;
+        self.suggestion_index = None;
+    }
+
+    /// Hand a view's parked draft back to the composer and clear its slot
+    /// (the view is leaving the borrowed-line state for chat).
+    fn restore_draft_from(&mut self, id: crate::views::ViewId) {
+        if let Some(state) = self.views.states_mut(&id) {
+            self.input = state.draft.take().unwrap_or_default();
+        }
+        self.set_cursor_end();
+        self.input_scroll = 0;
+        self.suggestion_index = None;
+    }
+
+    /// The editor chain's "end at chat" teardown (phase 3, ADR-0133):
+    /// whatever picker the chain started from (the nav frame the opener
+    /// just popped) hides with its parked composer draft handed back — the
+    /// user resumes typing what they were typing before Ctrl+M. The stack
+    /// is cleared: nothing between chat and here is reachable via Esc.
+    pub(crate) fn restore_chat_after_editor_chain(&mut self) {
+        self.views.clear_nav();
+        if let Ok(id) = crate::views::ViewId::try_from(self.active_modal) {
+            self.save_view_state(id);
+        }
+        self.active_modal = Modal::None;
+        self.modal_keymap_open = false;
+        // The draft hand-back: if a picker view holds a parked draft (the
+        // common case — Models/Connections parked it on open), give it to
+        // the composer now. In priority order: Models, Connections,
+        // HistorySearch (at most one can hold a draft in a real chain).
+        for id in [
+            crate::views::ViewId::Models,
+            crate::views::ViewId::Connections,
+            crate::views::ViewId::HistorySearch,
+        ] {
+            if let Some(state) = self.views.states_mut(&id)
+                && state.draft.is_some()
+            {
+                self.restore_draft_from(id);
+                self.views.hide(id);
+                return;
+            }
+        }
+        self.input.clear();
+        self.set_cursor(0);
+    }
+
     /// Snapshot the *current* field values of a browse view into the
     /// registry — the "save on losing focus" half of the contract. The
     /// inverse of the restore in [`Self::open_view`].
     pub(crate) fn save_view_state(&mut self, id: crate::views::ViewId) {
         let scroll = self.view_scroll(id);
         let follow = self.view_follow(id);
+        // The parked draft is *not* re-saved here: while the view is focused
+        // the composer holds its filter/entry text, not the user's chat
+        // draft — saving would destroy the parked original.
+        let draft = self.views.states(&id).and_then(|s| s.draft.clone());
         self.views.save(
             id,
             crate::views::ViewState {
                 index: self.modal_index,
                 scroll,
                 follow,
+                draft,
             },
         );
     }
@@ -2081,12 +2178,86 @@ impl App {
         match crate::views::ViewId::try_from(self.active_modal) {
             Ok(id) => {
                 self.save_view_state(id);
+                // Hide-time teardowns that retention must NOT carry:
+                // - a draft-owning view hands its parked draft back to the
+                //   composer (chat resumes with what the user was typing);
+                // - the dashboard's inline prompt text is discarded (it is
+                //   borrowed composer state, not view state);
+                // - the sub-layer drill-ins that hold volatile payloads
+                //   (Sessions info) collapse to the root.
+                if self.owns_composer_draft(id) {
+                    self.restore_draft_from(id);
+                    if id == crate::views::ViewId::HistorySearch {
+                        self.history_search = false;
+                        self.history_preview = false;
+                        self.history_clear_confirm = false;
+                    } else {
+                        self.model_search = false;
+                    }
+                }
+                if id == crate::views::ViewId::Host {
+                    self.host_prompting = false;
+                    self.host_prompt_new = false;
+                }
+                if id == crate::views::ViewId::Sessions {
+                    self.session_info_detail = false;
+                }
+                // Queue's exit hook: the open-time auto-block was an
+                // editing safety latch; leaving the view releases it. (A
+                // persistent user block — Ctrl+P — is also released, same
+                // as the pre-phase-4 close path did: predictable and
+                // re-armable in one keystroke.) The caller supplies the
+                // viewed session id via `queue_exit_session` because hide
+                // runs from many sites.
+                if id == crate::views::ViewId::Queue
+                    && let Some(sid) = self.queue_exit_session.take()
+                {
+                    self.resume_queue(&sid);
+                }
                 self.views.hide(id);
                 self.active_modal = Modal::None;
                 self.modal_keymap_open = false;
                 true
             }
             Err(()) => false,
+        }
+    }
+
+    /// Pop the deepest sub-layer of a view (ADR-0133 phase 4): the single
+    /// "one step back" every drill-in routes through — Esc's deepest-first
+    /// chain and the outside-click mirror both call this, so the two can
+    /// never drift. Returns `true` when a sub-layer was open (the caller
+    /// stops: the view itself stays up).
+    pub(crate) fn pop_sublayer(&mut self) -> bool {
+        match self.active_modal {
+            // Preview is the deepest dashboard layer (painted over the
+            // prompting state; the original deepest-first chain popped it
+            // first — a preview open while prompting is unreachable in
+            // practice, but the order stays explicit here).
+            Modal::Host if self.host_preview.is_some() => {
+                self.host_preview = None;
+                self.host_preview_scroll = 0;
+                true
+            }
+            Modal::Host if self.host_prompting => {
+                self.host_prompting = false;
+                self.host_prompt_new = false;
+                self.input.clear();
+                self.set_cursor(0);
+                true
+            }
+            Modal::TokenReport if self.token_report_detail => {
+                self.token_report_detail = false;
+                self.token_report_scroll = 0;
+                true
+            }
+            Modal::Sessions if self.session_info_detail => {
+                self.session_info_detail = false;
+                self.session_detail = None;
+                self.session_info_scroll = 0;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -2139,6 +2310,14 @@ impl App {
             crate::views::ViewId::UsageStats => self.usage_stats_scroll,
             crate::views::ViewId::TokenReport => self.token_report_scroll,
             crate::views::ViewId::Btw => self.btw_scroll,
+            crate::views::ViewId::HistorySearch => self.history_scroll,
+            crate::views::ViewId::Models | crate::views::ViewId::Connections => self.model_scroll,
+            crate::views::ViewId::Queue => self.queue_scroll,
+            crate::views::ViewId::Host => match self.host_focus {
+                crate::overlays::DashboardFocus::List => self.host_scroll,
+                crate::overlays::DashboardFocus::Detail => self.host_detail_scroll,
+            },
+            crate::views::ViewId::Sessions => self.session_scroll,
             // Config: no single slot (see doc above); the saved state is not
             // used for it.
             crate::views::ViewId::Config => 0,
@@ -2160,6 +2339,16 @@ impl App {
             crate::views::ViewId::UsageStats => self.usage_stats_scroll = scroll,
             crate::views::ViewId::TokenReport => self.token_report_scroll = scroll,
             crate::views::ViewId::Btw => self.btw_scroll = scroll,
+            crate::views::ViewId::HistorySearch => self.history_scroll = scroll,
+            crate::views::ViewId::Models | crate::views::ViewId::Connections => {
+                self.model_scroll = scroll;
+            }
+            crate::views::ViewId::Queue => self.queue_scroll = scroll,
+            crate::views::ViewId::Host => match self.host_focus {
+                crate::overlays::DashboardFocus::List => self.host_scroll = scroll,
+                crate::overlays::DashboardFocus::Detail => self.host_detail_scroll = scroll,
+            },
+            crate::views::ViewId::Sessions => self.session_scroll = scroll,
             // Config: no single slot; retention is field-native (see
             // `view_scroll`).
             crate::views::ViewId::Config => {}
@@ -2172,6 +2361,13 @@ impl App {
             | crate::views::ViewId::Mcp
             | crate::views::ViewId::Skills => self.session_modal_follow,
             crate::views::ViewId::Btw => self.btw_modal_follow,
+            crate::views::ViewId::HistorySearch => self.history_modal_follow,
+            crate::views::ViewId::Models | crate::views::ViewId::Connections => {
+                self.model_modal_follow
+            }
+            crate::views::ViewId::Queue => self.queue_modal_follow,
+            crate::views::ViewId::Host => self.host_modal_follow,
+            crate::views::ViewId::Sessions => self.session_modal_follow,
             // These surfaces don't track a follow flag (plain scroll bodies).
             _ => true,
         }
@@ -3187,7 +3383,7 @@ impl App {
     /// paths so the two can never drift. Does **not** touch `active_modal` —
     /// the caller owns that transition.
     pub fn restore_history_draft(&mut self) {
-        self.input = std::mem::take(&mut self.stashed_input);
+        self.input = std::mem::take(&mut self.injection_stashed_input);
         self.set_cursor_end();
         self.input_scroll = 0;
         self.suggestion_index = None;
@@ -3203,7 +3399,7 @@ impl App {
     /// paths so they can never drift. Mirrors [`Self::restore_history_draft`];
     /// does **not** touch `active_modal` — the caller owns that transition.
     pub fn restore_model_draft(&mut self) {
-        self.input = std::mem::take(&mut self.stashed_input);
+        self.input = std::mem::take(&mut self.injection_stashed_input);
         self.set_cursor_end();
         self.input_scroll = 0;
         self.suggestion_index = None;
@@ -3531,7 +3727,7 @@ impl App {
     /// the input-injection modal (L3.5 β) can borrow it for free-text entry.
     /// Mirrors the stash half of the provider/history pickers.
     pub fn park_input_draft(&mut self) {
-        self.stashed_input = std::mem::take(&mut self.input);
+        self.injection_stashed_input = std::mem::take(&mut self.input);
         self.set_cursor(0);
         self.input_scroll = 0;
         self.suggestion_index = None;
@@ -3540,7 +3736,7 @@ impl App {
     /// Tear down the input-injection modal's borrowed state: hand the parked
     /// composer draft back. Does **not** touch `active_modal`.
     pub fn restore_input_draft(&mut self) {
-        self.input = std::mem::take(&mut self.stashed_input);
+        self.input = std::mem::take(&mut self.injection_stashed_input);
         self.set_cursor_end();
         self.input_scroll = 0;
         self.suggestion_index = None;

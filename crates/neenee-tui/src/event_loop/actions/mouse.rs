@@ -145,31 +145,17 @@ pub(super) async fn handle_selection_start(
                 // parent view, not out to chat / quit — so the
                 // hierarchy is consistent between Esc and outside-
                 // click.
-                if app.active_modal == Modal::Sessions && app.session_info_detail {
-                    // Outside-click from the info sub-view → back to
-                    // the sessions list (mirrors Esc).
-                    app.session_info_detail = false;
-                    app.session_detail = None;
-                    app.session_info_scroll = 0;
-                } else if app.active_modal == Modal::TokenReport && app.token_report_detail {
-                    // Outside-click from the turn breakdown → back to
-                    // the round list (mirrors Esc).
-                    app.token_report_detail = false;
-                    app.token_report_scroll = 0;
+                if app.pop_sublayer() {
+                    // A drill-in sub-layer was open: one step back to the
+                    // parent view (the exact same pop Esc performs).
                 } else {
                     // Retained browse views hide with state saved; the
                     // quick switcher cancels to its origin (ADR-0133).
                     // Mirrors the Esc path exactly.
                     if !app.dismiss_surface() {
-                        if app.active_modal == Modal::HistorySearch {
-                            app.restore_history_draft();
-                        }
-                        // The queue modal auto-blocked on open; an
-                        // outside-click closes it like Esc, so resume
-                        // auto-drain to match.
-                        if app.active_modal == Modal::Queue {
-                            app.resume_queue(viewed_session_id);
-                        }
+                        // Queue's exit hook in `hide_active_view` (via
+                        // dismiss_surface) releases its open-time
+                        // auto-block, mirroring Esc (ADR-0133 phase 4).
                         app.active_modal = Modal::None;
                     }
                     // `neene resume` (no id): the startup picker has
@@ -222,20 +208,15 @@ pub(super) async fn handle_selection_start(
             .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
     {
         // Click anywhere on the persistent queue bar → expand
-        // the full Queue modal. Selection starts at the front
-        // (the next manageable item — in-flight steers are not
-        // listed). Auto-blocks the outbox for safe editing
-        // (mirrors the F2 open path); closing the modal
-        // resumes.
-        app.active_modal = Modal::Queue;
-        app.modal_keymap_open = false;
-        app.modal_index = 0;
-        app.queue_scroll = 0;
-        app.queue_modal_follow = true;
+        // the full Queue view. Retained (ADR-0133): cursor/scroll
+        // survive hide; the auto-block runs on every entry (an editing
+        // safety latch, mirrored by the hide-time resume).
+        app.open_view(crate::views::ViewId::Queue);
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
         app.block_queue(viewed_session_id);
+        app.queue_exit_session = Some(viewed_session_id.to_string());
     } else if app.active_modal == Modal::None
         && app
             .hint_context_rect

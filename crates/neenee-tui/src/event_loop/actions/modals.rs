@@ -40,11 +40,13 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
                     api_key,
                     client_identity: None,
                 });
-                app.input = std::mem::take(&mut app.stashed_input);
-                app.set_cursor_end();
+                // Phase 3 (ADR-0133): the chain ends at chat. Pop the nav
+                // frame (the picker this editor was opened over) and hand
+                // the composer draft back from that view's per-view slot.
+                app.views.pop_nav();
+                app.restore_chat_after_editor_chain();
                 app.custom_field = 0;
                 app.custom_edit_id = None;
-                app.active_modal = Modal::None;
             }
         } else {
             // Create mode: the model list comes from the template's
@@ -76,10 +78,9 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
                     template_id: app.custom_template_id.take(),
                     client_identity: None,
                 });
-                app.input = std::mem::take(&mut app.stashed_input);
-                app.set_cursor_end();
+                app.views.pop_nav();
+                app.restore_chat_after_editor_chain();
                 app.custom_field = 0;
-                app.active_modal = Modal::None;
             }
         }
     }
@@ -96,7 +97,9 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
             && (row.effort.is_some() || row.thinking.is_some())
         {
             let is_builtin = !app.provider_is_custom(&row.provider_id);
-            app.editor_return_to = Modal::Models;
+            // Phase 3 (ADR-0133): the picker that opened this editor goes on
+            // the navigation stack; its Esc/submit pops back to it.
+            app.views.push_nav(Modal::Models);
             app.editor_target = Some(row.provider_id.clone());
             app.editor_model = row.model.clone();
             app.editor_model_settings_only = true;
@@ -139,7 +142,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
             .map(|row| (row.id.clone(), row.model.clone(), row.builtin));
         if let Some((id, model, builtin)) = target {
             if builtin {
-                app.editor_return_to = Modal::Connections;
+                app.views.push_nav(Modal::Connections);
                 app.editor_target = Some(id);
                 app.editor_field = 0;
                 app.editor_key.clear();
@@ -221,7 +224,7 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
             app.editor_thinking_available = false;
             app.model_search = false;
             app.model_modal_follow = true;
-            app.active_modal = app.editor_return_to;
+            app.active_modal = app.views.pop_nav();
             arm_effort_ignition_if_max(app);
             return ActionFlow::NextEvent;
         }
@@ -242,51 +245,31 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
             },
             base_url: None,
         });
-        // Close to chat: restore the original draft.
-        app.input = std::mem::take(&mut app.stashed_input);
-        app.set_cursor_end();
+        // Close to chat: the chain ends here (phase 3, ADR-0133). Pop the
+        // nav frame (the picker the editor was opened over) and hand the
+        // composer draft back from that view's per-view slot.
+        app.views.pop_nav();
+        app.restore_chat_after_editor_chain();
         app.editor_target = None;
         app.editor_model_settings_only = false;
         app.editor_target_is_builtin = false;
-        app.active_modal = Modal::None;
     }
     ActionFlow::Handled
 }
 
 /// Loop stage (input dispatch): the `CloseModal` arm (Esc / generic close
 /// routing per open surface).
-pub(crate) fn handle_close_modal(app: &mut App, viewed_session_id: &str) {
+pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
     // Sub-page back-out is checked FIRST (deepest level wins),
     // so Esc from a drill-in always returns to its parent view
     // before any close/quit logic runs — otherwise pressing Esc
     // in e.g. the Sessions › Info sub-view at startup would quit
     // the program instead of dropping back to the sessions list.
-    if app.active_modal == Modal::Host && app.host_preview.is_some() {
-        // Deepest dashboard layer: first Esc closes the
-        // session preview, returning to the dashboard; a
-        // second Esc closes the dashboard itself.
-        app.host_preview = None;
-        app.host_preview_scroll = 0;
-    } else if app.active_modal == Modal::Host && app.host_prompting {
-        // First Esc cancels the dashboard's inline prompt,
-        // returning to the list; a second Esc closes the
-        // dashboard. Mirrors the two-stage Esc of the other
-        // drill-in sub-layers below.
-        app.host_prompting = false;
-        app.host_prompt_new = false;
-        app.input.clear();
-        app.set_cursor(0);
-    } else if app.active_modal == Modal::TokenReport && app.token_report_detail {
-        // First Esc returns from the turn breakdown to the round list;
-        // a second Esc closes the modal.
-        app.token_report_detail = false;
-        app.token_report_scroll = 0;
-    } else if app.active_modal == Modal::Sessions && app.session_info_detail {
-        // First Esc returns from the session-info sub-view to
-        // the sessions list; a second Esc closes the modal.
-        app.session_info_detail = false;
-        app.session_detail = None;
-        app.session_info_scroll = 0;
+    // One step back through any drill-in sub-layer (ADR-0133 phase 4):
+    // the single shared pop — Esc here and the outside-click mirror below
+    // can no longer drift apart. A view with a sub-layer open stays up.
+    if app.pop_sublayer() {
+        // Sub-layer closed; the parent view keeps the surface.
     } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
         && app.active_modal == Modal::Sessions
     {
@@ -321,21 +304,10 @@ pub(crate) fn handle_close_modal(app: &mut App, viewed_session_id: &str) {
         // the picker they were opened from, so a key entry is
         // recoverable with Esc.
         let mut return_to: Option<Modal> = None;
-        if app.active_modal == Modal::HistorySearch {
-            // Closing from either browse or search: hand the parked
-            // draft back so Esc is a true cancel, and clear the
-            // search sub-layer / preview flags for the next open.
-            app.restore_history_draft();
-            app.history_clear_confirm = false;
-        } else if matches!(app.active_modal, Modal::Connections | Modal::Models) {
-            // The input box may have been borrowed as the fuzzy
-            // filter (search sub-layer); hand the parked draft back
-            // and clear the search/scroll flags so Esc cancels
-            // cleanly. (The two-stage Esc inside search is handled
-            // earlier by `ModelExitSearch`; this path is the
-            // browse-mode close.)
-            app.restore_model_draft();
-        } else if app.active_modal == Modal::ModelEditor {
+        // HistorySearch / Connections / Models no longer need branches here:
+        // `dismiss_surface` (checked above) hides them with the per-view
+        // draft handed back (ADR-0133 phase 3).
+        if app.active_modal == Modal::ModelEditor {
             // Cancel the editor: discard its fields and return to
             // the picker it was opened from in browse mode. The
             // original chat draft stays in stashed_input for when
@@ -347,7 +319,7 @@ pub(crate) fn handle_close_modal(app: &mut App, viewed_session_id: &str) {
             app.set_cursor(0);
             app.model_search = false;
             app.model_modal_follow = true;
-            return_to = Some(app.editor_return_to);
+            return_to = Some(app.views.pop_nav());
         } else if app.active_modal == Modal::CustomProvider {
             // Same as Esc: discard the editor fields and step back
             // to the Connections list; the chat draft stays parked
@@ -358,7 +330,7 @@ pub(crate) fn handle_close_modal(app: &mut App, viewed_session_id: &str) {
             app.model_search = false;
             app.model_modal_follow = true;
             app.modal_index = 0;
-            return_to = Some(Modal::Connections);
+            return_to = Some(app.views.pop_nav());
         } else if app.active_modal == Modal::Config && app.config_custom_editing {
             // Click-outside closes the settings stack. Discard
             // the transactional custom preview before leaving.
@@ -368,16 +340,9 @@ pub(crate) fn handle_close_modal(app: &mut App, viewed_session_id: &str) {
             app.input.clear();
             app.set_cursor(0);
         }
-        // The queue modal auto-blocked the outbox on open so
-        // items could be managed safely; closing it resumes
-        // normal auto-drain. (A persistent block set via `F3`
-        // at the top level is unaffected, since the modal's
-        // own open/close latch is what's being released here —
-        // but to keep this simple and predictable we always
-        // resume on close; the user can re-block with F3.)
-        if app.active_modal == Modal::Queue {
-            app.resume_queue(viewed_session_id);
-        }
+        // Queue's exit hook (the open-time auto-block release) now lives in
+        // `hide_active_view` — every hide path releases it, not just this
+        // one (ADR-0133 phase 4).
         app.modal_keymap_open = false;
         app.active_modal = return_to.unwrap_or(Modal::None);
     }

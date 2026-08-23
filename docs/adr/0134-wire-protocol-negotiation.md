@@ -13,8 +13,8 @@ Since ADR-0100 rule 4, client/daemon compatibility has been gated on
 
 1. **Discovery pre-check** — the discovery record
    (`serve_discovery.rs::Discovery::version`) carries the daemon's
-   `CARGO_PKG_VERSION`; `client::versions_compatible()` refuses a record
-   whose version differs from the client's own (plus the `/proc/<pid>/exe`
+   `CARGO_PKG_VERSION`; `client::versions_compatible()` refused a record
+   whose version differed from the client's own (plus the `/proc/<pid>/exe`
    inode check for dev-loop same-version drift).
 2. **Handshake** — the first frame's `Wire::Select::version` is compared
    for exact equality in `serve.rs` before any session work; a skew is
@@ -70,10 +70,28 @@ inconvenient restart. That asymmetry means the bump decision must be
 4. **The discovery record carries `protocol: Option<u32>`** alongside
    `version`, so a local client can refuse an out-of-window daemon in the
    pre-check (`client::incompatibility_error()` prefers the protocol
-   message) instead of waiting for the handshake. The product-version
-   equality and the `/proc/<pid>/exe` inode check remain in force for
-   **local** pairs — they catch the dev-loop same-version drift a
-   protocol number is blind to (ADR-0121's collision detection).
+   message) instead of waiting for the handshake.
+
+   For a **protocol-declaring record**, product-version equality is *no
+   longer a local gate* (a revision of the original rule-4 posture):
+   version equality on Linux was logically redundant — same inode ⇒ same
+   compile ⇒ same version; different inode ⇒ the image check itself
+   refuses — and its remaining role was to force a daemon restart on
+   every patch bump, interrupting live sessions for no wire-level
+   reason. An in-window daemon is served whatever its product build; the
+   daemon restarts on idle exit, and anyone who wants the new build
+   immediately runs `neenee stop`.
+
+   Exactly one freshness gate survives locally: the **dev-drift lie** —
+   same version, *different binary* (`daemon_image_is_current` false).
+   That is the one state where every version signal agrees and the client
+   is still about to test a stale image — a locally rebuilt binary whose
+   protocol number carries no release-process backing (no bump
+   discipline, no CI check touched it), so "1 == 1" is an unnotarized
+   self-declaration. The inode probe is the only detector for it, and
+   ADR-0121's collision detection is preserved through it. Legacy
+   records (no `protocol` field) keep ADR-0100 rule 4's exact equality
+   unchanged.
 
 5. **Bump discipline** (documented on the constants, enforced by CI):
    - *Additive* changes — new optional fields, new enum variants an older
@@ -108,8 +126,8 @@ inconvenient restart. That asymmetry means the bump decision must be
 - **Keep exact product-version equality everywhere.** Rejected: it
   refuses compatible pairs by construction, and `--remote` + the web
   panel make cross-build pairs routine rather than exceptional. It
-  remains the rule for protocol-less clients (rule 3) and, together with
-  the inode check, for local pairs (rule 4).
+  remains the rule for protocol-less clients (rule 3) and legacy records
+  (rule 4).
 
 - **Bare integer equality (`protocol == N`).** Rejected: strictly weaker
   than the window with the same bump burden, and it forces every client
@@ -157,7 +175,7 @@ inconvenient restart. That asymmetry means the bump decision must be
 - [ADR-0105](0105-one-port-two-protocols.md) — the transport both
   clients ride
 - [ADR-0121](0121-instance-isolation-for-development-and-testing.md) —
-  why local pairs keep the inode check
+  collision detection; why the local inode check survives
 - `crates/neenee-contracts/src/wire.rs` — the constants, the window
   predicate, the bump discipline
 - `scripts/check-wire-compat.sh` — the CI enforcement

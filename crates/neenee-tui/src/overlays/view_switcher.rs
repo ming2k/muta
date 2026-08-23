@@ -36,6 +36,7 @@ pub(crate) const VIEW_SWITCHER: ContentModalSpec = ContentModalSpec::BTW;
 pub(crate) fn draw_view_switcher(
     frame: &mut Frame,
     rows: &[ViewId],
+    query: &str,
     modal_index: usize,
     open_ids: &[ViewId],
     active: crate::modal::Modal,
@@ -51,6 +52,15 @@ pub(crate) fn draw_view_switcher(
         "Switch view".to_string()
     } else {
         format!("Switch view ({})", rows.len())
+    };
+    // The live filter (phase 5): shown in the header as `filter: <query>` —
+    // the switcher does not borrow the composer, so the header is its only
+    // visible query surface.
+    let filter_title = format!("{} · filter: {query}", title);
+    let header = if query.is_empty() {
+        ModalHeader::title(&title)
+    } else {
+        ModalHeader::title(&filter_title)
     };
 
     let mut body: Vec<Line> = Vec::new();
@@ -112,7 +122,7 @@ pub(crate) fn draw_view_switcher(
         frame,
         SelectableListPage {
             geometry: VIEW_SWITCHER,
-            header: ModalHeader::title(&title),
+            header,
             lines: body,
             scroll,
             selected_line,

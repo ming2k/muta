@@ -1561,24 +1561,35 @@ fn history_modal_is_click_dismissable_and_restores_draft() {
     assert!(Modal::Connections.dismissable_by_outside_click());
     assert!(!Modal::ModelEditor.dismissable_by_outside_click());
 
-    // restore_history_draft hands the parked composer draft back and clears the
-    // search/preview sub-state — the shared teardown for Esc and outside-click.
+    // Phase 3 (ADR-0133): the per-view draft contract. Parking the draft on
+    // the HistorySearch view's own slot, then dismissing the view, hands it
+    // back to the composer — the same Esc/outside-click teardown.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.stashed_input = "my draft".to_string();
+    app.open_view(crate::views::ViewId::HistorySearch);
+    // Simulate the parked draft (open_view parked the live composer, which
+    // started empty) and the live filter state.
+    if let Some(st) = app.views.states_mut(&crate::views::ViewId::HistorySearch) {
+        st.draft = Some("my draft".to_string());
+    }
     app.input = "git".to_string(); // the live fuzzy query
     app.cursor_position = 3;
     app.history_search = true;
     app.history_preview = true;
     app.modal_index = 4;
 
-    app.restore_history_draft();
+    assert!(app.dismiss_surface());
 
-    assert_eq!(app.input, "my draft", "draft restored from the stash");
+    assert_eq!(app.input, "my draft", "draft restored from the view's slot");
     assert_eq!(app.cursor_position, "my draft".chars().count());
-    assert!(app.stashed_input.is_empty());
+    assert!(
+        app.views
+            .states(&crate::views::ViewId::HistorySearch)
+            .is_none_or(|st| st.draft.is_none()),
+        "slot emptied"
+    );
     assert!(!app.history_search);
     assert!(!app.history_preview);
-    assert_eq!(app.modal_index, 0);
+    assert_eq!(app.active_modal, crate::Modal::None);
 }
 
 /// Build a minimal `App` scoped to a tempdir project so we can exercise
@@ -1615,6 +1626,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
     let app = App {
         views: crate::views::ViewRegistry::new(),
         view_switcher_return: Modal::None,
+        queue_exit_session: None,
+        view_switcher_query: String::new(),
         input: String::new(),
         messages: Vec::new(),
         messages_version: 0,
@@ -1781,7 +1794,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         spinner_epoch: std::time::Instant::now(),
         carousel_epoch: std::time::Instant::now(),
         effort_ignition_epoch: None,
-        stashed_input: String::new(),
+        injection_stashed_input: String::new(),
         editor_target: None,
         editor_field: 0,
         editor_key: String::new(),
@@ -1816,7 +1829,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         template_choice: 0,
         template_scroll: 0,
         model_search: false,
-        editor_return_to: Modal::None,
         model_scroll: 0,
         model_modal_follow: true,
         pending_provider_delete: None,
@@ -5918,4 +5930,194 @@ fn config_view_reopen_keeps_pane_and_category() {
         crate::overlays::ConfigFocus::Detail,
         "pane retained across hide"
     );
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0133 phases 3-5: navigation stack, per-view drafts, queue hook,
+// sub-layer pop, switcher filter.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn model_editor_esc_pops_back_to_its_picker() {
+    // The nav stack replaces `editor_return_to`: an editor opened from
+    // Models returns to Models; one opened from Connections returns to
+    // Connections — the same editor, two parents, no hard-coding.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    // From Models: the editor's close path is `active_modal = pop_nav()`.
+    app.open_view(crate::views::ViewId::Models);
+    app.views.push_nav(crate::Modal::Models);
+    app.active_modal = crate::Modal::ModelEditor;
+    app.active_modal = app.views.pop_nav();
+    assert_eq!(app.active_modal, crate::Modal::Models, "pops to Models");
+
+    // From Connections: the same editor, a different pushed parent.
+    app.open_view(crate::views::ViewId::Connections);
+    app.views.push_nav(crate::Modal::Connections);
+    app.active_modal = crate::Modal::ModelEditor;
+    app.active_modal = app.views.pop_nav();
+    assert_eq!(
+        app.active_modal,
+        crate::Modal::Connections,
+        "pops to Connections"
+    );
+}
+
+#[test]
+fn per_view_drafts_do_not_clobber_each_other() {
+    // The phase-3 reason per-view drafts exist: parking for Models used to
+    // overwrite a draft parked for History through the one global slot.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    // Park a draft on Models.
+    app.input = "models draft".to_string();
+    app.open_view(crate::views::ViewId::Models);
+    assert!(app.input.is_empty(), "composer borrowed");
+    // Esc hands the draft back.
+    assert!(app.dismiss_surface());
+    assert_eq!(app.input, "models draft");
+
+    // Now the same for HistorySearch — its slot is independent.
+    app.input = "history draft".to_string();
+    app.open_view(crate::views::ViewId::HistorySearch);
+    assert!(app.input.is_empty());
+    assert!(app.dismiss_surface());
+    assert_eq!(app.input, "history draft");
+}
+
+#[test]
+fn switcher_enter_hides_origin_and_restores_target_state() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    // Target retains state.
+    app.open_view(crate::views::ViewId::Help);
+    app.modal_index = 2;
+    assert!(app.dismiss_surface());
+
+    // Origin: Tools.
+    app.open_view(crate::views::ViewId::Tools);
+    app.modal_index = 1;
+
+    // Open the switcher over Tools (the Toggle arm's park + borrow).
+    app.view_switcher_return = app.active_modal;
+    if let Ok(origin) = crate::views::ViewId::try_from(app.active_modal) {
+        app.save_view_state(origin);
+    }
+    app.active_modal = crate::Modal::ViewSwitcher;
+    app.modal_index = 0;
+
+    // The switcher's rows put open views first; with only Tools open the
+    // first row is Tools itself. Pick Help (find its row).
+    let rows = app.views.switcher_rows();
+    let help_row = rows
+        .iter()
+        .position(|r| *r == crate::views::ViewId::Help)
+        .unwrap();
+    app.modal_index = help_row;
+
+    // Enter (the Activate arm's core, minus the async runtime plumbing).
+    let target = rows[help_row];
+    let origin = app.view_switcher_return;
+    app.view_switcher_return = crate::Modal::None;
+    app.modal_index = 0;
+    if let Ok(origin_view) = crate::views::ViewId::try_from(origin) {
+        app.save_view_state(origin_view);
+        app.views.hide(origin_view);
+    }
+    let first = app.open_view(target);
+    assert!(!first, "Help was opened before — not a first open");
+    assert_eq!(app.active_modal, crate::Modal::Help);
+    assert_eq!(app.modal_index, 2, "Help's retained selection restored");
+    assert!(
+        !app.views.is_open(crate::views::ViewId::Tools),
+        "origin hidden"
+    );
+}
+
+#[test]
+fn queue_view_hide_releases_the_auto_block() {
+    // Phase 4: the open-time auto-block is released by EVERY hide path
+    // (the exit hook in hide_active_view), not just the Esc arm.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_view(crate::views::ViewId::Queue);
+    app.block_queue("sess");
+    app.queue_exit_session = Some("sess".to_string());
+    assert!(app.is_queue_blocked("sess"));
+
+    assert!(app.dismiss_surface());
+    assert!(
+        !app.is_queue_blocked("sess"),
+        "exit hook resumed the outbox"
+    );
+}
+
+#[test]
+fn pop_sublayer_steps_back_one_level_at_a_time() {
+    // The shared one-step-back (phase 4): Esc's deepest-first chain and the
+    // outside-click mirror both route through here.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.active_modal = crate::Modal::TokenReport;
+    app.token_report_detail = true;
+    assert!(app.pop_sublayer());
+    assert!(!app.token_report_detail, "drill-in closed");
+    assert_eq!(app.active_modal, crate::Modal::TokenReport, "view stays up");
+    assert!(!app.pop_sublayer(), "no sub-layer left");
+
+    // Host: preview is the deepest layer (painted over the prompting
+    // state), so it pops first; prompting next; then the view itself.
+    app.active_modal = crate::Modal::Host;
+    app.host_preview = Some("transcript".to_string());
+    app.host_prompting = true;
+    assert!(app.pop_sublayer());
+    assert!(app.host_preview.is_none(), "deepest layer (preview) closed");
+    assert!(app.host_prompting, "prompting still open beneath");
+    assert!(app.pop_sublayer());
+    assert!(!app.host_prompting);
+    assert!(!app.pop_sublayer());
+}
+
+#[test]
+fn switcher_filter_narrows_rows_and_matches_labels_and_hints() {
+    // Phase 5: the switcher's own fuzzy query against label + hint.
+    let mut reg = crate::views::ViewRegistry::new();
+    reg.open(crate::views::ViewId::Help);
+    reg.open(crate::views::ViewId::Btw);
+
+    // "mcp" matches the MCP label.
+    let rows = reg.switcher_rows_filtered("mcp");
+    assert_eq!(rows, vec![crate::views::ViewId::Mcp]);
+
+    // "dash" matches the Host hint ("dashboard").
+    let rows = reg.switcher_rows_filtered("dash");
+    assert_eq!(rows, vec![crate::views::ViewId::Host]);
+
+    // A query matching nothing yields an empty list (rendered as the
+    // placeholder), never a fallback-to-all.
+    assert!(reg.switcher_rows_filtered("zzz").is_empty());
+
+    // Empty query = the full MRU list.
+    let rows = reg.switcher_rows_filtered("");
+    assert_eq!(
+        &rows[..2],
+        &[crate::views::ViewId::Btw, crate::views::ViewId::Help]
+    );
+}
+
+#[test]
+fn dashboard_reopen_keeps_selection_and_log() {
+    // Phase 4: the dashboard's dock selection and cockpit log survive hide.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    assert!(app.open_view(crate::views::ViewId::Host));
+    app.host_console_log
+        .push(crate::overlays::ConsoleLine::Receipt {
+            ok: true,
+            target: None,
+            text: "ok".to_string(),
+        });
+    app.modal_index = 3;
+    assert!(app.dismiss_surface());
+
+    assert!(
+        !app.open_view(crate::views::ViewId::Host),
+        "not a first open"
+    );
+    assert_eq!(app.modal_index, 3, "dock selection retained");
+    assert_eq!(app.host_console_log.len(), 1, "cockpit log retained");
 }

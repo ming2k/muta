@@ -218,7 +218,8 @@ impl Modal {
     /// modal and the Connections/Models pickers: their filter query is
     /// ephemeral and the real composer draft is safely parked in
     /// `stashed_input`, so an outside click closes them and restores the draft
-    /// (via `App::restore_history_draft`) — exactly like Esc. Entry modals that
+    /// (the per-view draft is handed back on dismiss, ADR-0133) — exactly like
+    /// Esc. Entry modals that
     /// hold precious in-progress input (ModelEditor, Question) and the
     /// permission sheet stay open so an accidental click never discards an API
     /// key or a pending decision.
