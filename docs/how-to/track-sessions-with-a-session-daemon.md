@@ -65,20 +65,48 @@ neenee daemon status --json       # raw monitor frames (scripts / a web panel)
 
 Inside any TUI, press **`/dashboard`** (alias `/host`): a full-screen live
 view over every daemon session. The surface has two zones (ADR-0097 §3): a
-**console** up top — the AI-interaction region carrying the selected session's
-live monitor read-out (status, round/turn, output tokens, current tool,
-blocking reason) — and a **sessions dock** along the bottom, one compact card
-per session (sequence number, workspace name, uptime, status). The keyboard
-opens on the console; **Tab** drops to the dock. On a dock selection **Enter
-opens a read-only preview** and **`a` attaches** to that session **without
-killing the one you leave**: the TUI detaches and re-attaches, so both
-sessions stay alive in the daemon. The same surface interrupts (`i`), prompts
-(`p`), and creates (`n`) sessions via the control plane.
+**console** up top — the command surface, keeping a receipt of every
+directive you dispatch (what was sent, to which `#N`, and how the daemon
+answered) plus the selected session's live monitor read-out (status,
+round/turn, output tokens, current tool, blocking reason) — and a
+**sessions dock** along the bottom, one compact card per session (sequence
+number, workspace name, uptime, status). The keyboard opens on the console;
+**Tab** drops to the dock. On a dock selection **Enter opens a read-only
+preview** and **`a` attaches** to that session **without killing the one you
+leave**: the TUI detaches and re-attaches, so both sessions stay alive in the
+daemon. The same surface interrupts (`i`), suspends (`s`), kills (`k`, press
+twice to confirm), prompts (`p`), and creates (`n`) sessions via the control
+plane.
+
+### The console's command line
+
+Type anything (or press `p` for an empty line) and the footer becomes a
+command line. It speaks the ADR-0097 address grammar plus slash verbs:
+
+| Input | Effect |
+|-------|--------|
+| `@3 refactor the retry loop` | Send the text to session `#3` as a new round |
+| `@2 @3 summarize your findings` | Fan the same prompt out to `#2` *and* `#3` |
+| `fix the flaky test` | Prompt the dock selection (the classic `p` role) |
+| `/interrupt` (or `/stop`) | Interrupt the selection's current round — same as `i` |
+| `/interrupt @3` | Interrupt `#3` without moving the selection |
+| `/suspend` (or `/park`) | Park the selection in memory: the daemon frees its RAM, and the next attach rebuilds it from disk. Refused while a client is attached or a round is active |
+| `/kill` (or `/x`) | Tear the selection down. History stays on disk |
+| `/new refactor the retry loop` | Create a session for this project and send the opening prompt |
+| `/help` | The verb table in the console |
+
+Every dispatch — including the `i` / `s` / `k` keys — writes a receipt line
+into the console (`› [#3] prompt …` / `✓ #3 queued` / `✗ #3 session … is
+not hosted on this server`), so the cockpit log answers *what did I ask the
+fleet to do* at a glance.
 
 Or open it straight from the shell with **`neenee dashboard`** — no need to
 enter a session first. It attaches to the daemon's most-recently-active
 session only as the underlying carrier and raises the dashboard over it:
-**Esc quits**, **`a`** on a card attaches into that session. Like
+**Esc quits**, **Ctrl+C pressed twice** does the same (the app-wide
+double-press), and **`a`** on a card attaches into that session. Leaving the
+screen always exits the TUI entirely — there is no conversation to fall back
+into. Like
 `neenee daemon status`, it never spawns a daemon, so it needs a running host with at
 least one session.
 
@@ -110,6 +138,7 @@ verbs the web panel and scripts use (the TUI uses attach + `/dashboard`):
 | `SendPrompt { session_id, text }` | Queue a new round on a session |
 | `Interrupt { session_id }` | Stop the current round |
 | `ResolvePermission { session_id, request_id, decision }` | Approve/reject a pending tool call |
+| `SuspendSession { session_id }` | Park a session in memory only — the daemon frees its RAM, `SessionEnd` hooks do not fire, and the next attach rebuilds it from disk (lazy resume). Refused while a client is attached or a round is active |
 | `KillSession { session_id }` | Tear a session down |
 | `Shutdown` | Stop the daemon itself — the same graceful drain as Ctrl-C/SIGTERM (what `neenee daemon stop` sends) |
 

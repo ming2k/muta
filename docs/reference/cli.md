@@ -27,7 +27,7 @@ neenee [OPTIONS] [COMMAND]
 | `daemon start [--fg] [--port <n>] [--public] [--idle-exit <min>] [--grace <secs>]` | Start the session daemon (detached by default; `--fg` stays in the foreground for supervisors) |
 | `daemon stop` | Stop the running daemon gracefully (budget-coordinated, ADR-0119) |
 | `daemon status [--watch] [--json] [--all] [--diagnostic]` | Show the daemon's sessions and endpoint health |
-| `dashboard` | Open the full-screen session dashboard |
+| `dashboard` | Open the full-screen session dashboard. Leaving it (`Esc`, or `Ctrl+C` twice) exits the TUI entirely — no conversation is left behind |
 | `panel [url\|open]` | The web panel's address for the running daemon: `url` (the default, and the bare form) prints it with its token; `open` also launches the platform browser (`$BROWSER`, else xdg-open/open) |
 | `doctor` | Verify stored session integrity |
 | `completions <bash\|zsh\|fish>` | Print a shell completion script |

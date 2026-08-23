@@ -22,7 +22,7 @@ Project and user-defined commands are covered under
 | `/search <query>` | Lexical search over the current session's transcript and command ledger |
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
 | `/fork` | Fork the current conversation into a child session |
-| `/dashboard` | Open the session dashboard — a full-screen live view over every daemon session (console + sessions dock), with preview / attach / interrupt / prompt / create (ADR-0096; layout per ADR-0097). `/host` is a hidden alias |
+| `/dashboard` | Open the session dashboard — a full-screen live view over every daemon session (console + sessions dock), with preview / attach / interrupt / suspend / kill / prompt / create, plus the console's `@N text` addressing and `/kill` `/interrupt` `/suspend` `/new` `/help` verbs (ADR-0096; layout per ADR-0097). `Esc` leaves the screen; `Ctrl+C` follows the app-wide double-press quit. `/host` is a hidden alias |
 | `/usage` | Open the usage-statistics overlay — daily token totals, per-model breakdown, and the recent request event log, aggregated over the durable store at `data/usage/` that survives session cleanup (ADR-0122) |
 | `/btw [prompt\|list]` | Open a background aside conversation — asides keep running when you leave (`Ctrl+C` detaches, `Esc` interrupts, `F5` lists) |
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
@@ -180,7 +180,12 @@ auto-approve before write/execute tools (`bash`, `write_file`,
 `edit_file`, …), the `ask_user` question tool is reclaimed (hidden from
 the model; any stale call short-circuits), interactive command stdin is
 closed instead of prompting, and the system prompt is told no human is
-reachable. Affects the live process only. For the design intent and every
+reachable. The posture is persisted on the session
+([ADR-0132](../adr/0132-session-persisted-autopilot-posture.md)): a daemon
+crash, kill, upgrade, or reboot reopens the session in the same posture, so
+an accidentally-interrupted unattended run picks up where it left off
+(pair with `/retry` to resume the stopped round). `/reset` starts the new
+session attended. For the design intent and every
 surface the flag enforces, see
 [Autopilot operation](../explanation/agent-design/autopilot.md).
 
