@@ -1107,7 +1107,8 @@ pub struct HarnessSnapshot {
 
 /// A row in the sessions picker: enough to identify, describe and order a past
 /// session without leaking the full transcript to the TUI.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct SessionOverview {
     pub id: String,
     pub overview: String,
@@ -1169,7 +1170,10 @@ pub struct SessionDetail {
 /// ids and the active one, plus the dynamic signals (key readiness, favorite,
 /// last-used) — keyed by canonical provider id. The TUI renders directly from
 /// these rows (built-in and user-defined providers share one path), so no static
-/// per-provider table is consulted. See ADR-0002.
+/// per-provider table is consulted. See ADR-0002. Recency exists at BOTH
+/// levels: the provider row's `last_used_ms` orders the Connections list, and
+/// each `model_info` entry's `last_used_ms` orders the flat Models picker's
+/// "recent" section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ProviderPickerRow {
@@ -1252,6 +1256,12 @@ pub struct ProviderModelInfo {
     /// snapshots.
     #[serde(default)]
     pub favorite: bool,
+    /// Unix epoch milliseconds of this model's last activation, or `None` if
+    /// never activated. Drives the flat Models picker's "recent" section
+    /// (recency-desc, most recently used first). `None`-defaulted so older
+    /// snapshots deserialize as "never used".
+    #[serde(default)]
+    pub last_used_ms: Option<u64>,
 }
 
 /// Full snapshot of provider-picker state: which provider is the current

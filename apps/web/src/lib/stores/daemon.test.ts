@@ -67,7 +67,7 @@ describe("DaemonStore smoke", () => {
     window.localStorage.clear();
   });
 
-  it("sends a monitor Select on connect, with the handshake version", () => {
+  it("sends a monitor Select on connect, with the handshake version and protocol", () => {
     const store = new DaemonStore();
     store.init({ wsUrl: "ws://test:1" });
     const ws = FakeWebSocket.latest();
@@ -79,9 +79,13 @@ describe("DaemonStore smoke", () => {
     expect(select.type).toBe("Select");
     expect(select.action).toEqual({ monitor: { watch: true, include_idle: true } });
     // Injected by vite define from package.json — must equal the workspace
-    // version or the daemon refuses the connection (ADR-0100).
+    // version or a pre-protocol daemon refuses the connection (ADR-0100).
     expect(typeof select.version).toBe("string");
     expect(select.version).toBe(__NEENEE_CLIENT_VERSION__);
+    // The wire protocol number (ADR-0134) is the compatibility gate; it
+    // must equal PROTOCOL_VERSION in neenee-contracts (CI checks).
+    expect(typeof select.protocol).toBe("number");
+    expect(select.protocol).toBeGreaterThan(0);
   });
 
   it("carries the token as a bearer. subprotocol (ADR-0105)", () => {

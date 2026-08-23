@@ -22,7 +22,7 @@ distinguished by the first frame the client sends after the upgrade (`Select`):
 |------|-----------|-----------|---------|
 | **Attach** | `Select{action: New \| Attach(id?)}` | bidirectional | Drive a session: send `Request`s, receive `Response`s |
 | **Monitor** | `Select{action: Monitor{watch, include_idle}}` | server → client | Observe every session the daemon knows about (ADR-0093) |
-| **Control** | `Select{action: Control(verb)}` | one round-trip | Manage sessions: create / prompt / interrupt / approve / kill (ADR-0096) |
+| **Control** | `Select{action: Control(verb)}` | one round-trip | Manage sessions: create / prompt / interrupt / approve / suspend / kill (ADR-0096) |
 
 The in-TUI `/serve` command (legacy single-session prehost) is superseded by
 the unified daemon; the protocol below is the daemon's control plane.
@@ -122,8 +122,7 @@ The server answers one of:
 ```json
 { "type": "Welcome", "session_id": "…", "round_counter": 6, "messages": [] }
 { "type": "Pick", "sessions": [ { "id": "…", "overview": "…", … } ] }
-{ "type": "Error", "message": "…", "code": "version_mismatch" }
-```
+{ "type": "Error", "message": "…", "code": "version_mismatch" }```
 
 - `Welcome` binds the connection: `messages` is the full persisted transcript
   (a replacement snapshot, not incremental), `round_counter` the authoritative
@@ -135,7 +134,9 @@ The server answers one of:
 - `Pick` means several sessions are hosted and the client must choose
   (`Attach(Some(id))` on a new connection).
 - `Error` is terminal. `code` (ADR-0105, optional) is the stable
-  machine-readable reason — currently only `"version_mismatch"` — so clients
+  machine-readable reason — `"version_mismatch"` (ADR-0100 rule 4,
+  protocol-less clients) or `"protocol_mismatch"` (ADR-0134, a declared
+  protocol number outside the daemon's window) — so clients
   can branch without string-sniffing `message`.
 
 From then on the connection carries zero or more live frames in both
@@ -237,6 +238,7 @@ The verbs (`Select{action: {control: {…}}}`):
 | `send_prompt` | `session_id`, `text` | Queue a new round |
 | `interrupt` | `session_id` | Stop the current round |
 | `resolve_permission` | `session_id`, `request_id`, `decision` (`once`/`always`/`reject`) | Answer a pending tool-permission prompt |
+| `suspend_session` | `session_id` | Park the session **in memory only**: the driver is torn down but `SessionEnd` hooks do not fire and no `Exit` is broadcast — the transcript is durable, so the next attach rebuilds it via lazy resume (monitors get `session_removed`). Refused when a client is attached, the round is active, or the session has no persisted content |
 | `kill_session` | `session_id` | Tear the session down (monitors get `session_removed`) |
 | `shutdown` | — | Stop the daemon itself (ADR-0100): the same budgeted graceful drain as SIGINT/SIGTERM — listeners close, connections drain, every session's `SessionEnd` hooks fire, the discovery record is removed, exit 0. The `ControlReply{ok:true}` is sent *before* the drain starts (it would otherwise cancel the replier). This is what `neenee daemon stop` sends. |
 
@@ -477,6 +479,15 @@ A production frontend should:
     `version` is served; a discovered record without one (`daemon.json`
     predating the field) is a mismatch for clients — stop the daemon and let
     it restart at the new version.
+12. Send `protocol` on `Select` (ADR-0134) to opt into protocol-number
+    negotiation: the daemon serves any number in its window
+    `[MIN_PROTOCOL_VERSION, PROTOCOL_VERSION]` (see
+    `crates/neenee-contracts/src/wire.rs`) *regardless of your product
+    version*, and refuses anything outside it with
+    `Error{code: "protocol_mismatch"}` before any session work. Without
+    the field, rule 11's product-version equality applies. The discovery
+    record mirrors the daemon's number as `protocol` so a local client
+    can refuse before speaking.
 
 ## Contract maintenance
 

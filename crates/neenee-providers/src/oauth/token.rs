@@ -516,11 +516,17 @@ pub fn extract_cloudaicompanion_project(val: &serde_json::Value) -> Option<Strin
         .or_else(|| target.get("project"))
         .or_else(|| target.get("duetProject"))
         .or_else(|| target.get("duet_project"))
-        .or(if target.is_object() && (target.get("id").is_some() || target.get("projectNumber").is_some() || target.get("name").is_some()) {
-            Some(target)
-        } else {
-            None
-        })?;
+        .or(
+            if target.is_object()
+                && (target.get("id").is_some()
+                    || target.get("projectNumber").is_some()
+                    || target.get("name").is_some())
+            {
+                Some(target)
+            } else {
+                None
+            },
+        )?;
 
     if let Some(p) = project.as_str().filter(|p| !p.trim().is_empty()) {
         let trimmed = p.trim();

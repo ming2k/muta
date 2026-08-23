@@ -20,7 +20,8 @@ use crate::events::SessionForkKind;
 /// Handshake action selecting a daemon-observability stream instead of a
 /// session attach (ADR-0093 §2). Sent as the first frame:
 /// `{"type":"Select","action":{"monitor":{"watch":…,"include_idle":…}}}`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct MonitorAction {
     /// Keep the connection open and stream `MonitorEvent::Diff`s after the
     /// initial snapshot (`neenee status --watch`, live control panels). When

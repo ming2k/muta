@@ -47,7 +47,7 @@ pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String>
         return Ok(());
     };
     if !client::versions_compatible(&info) {
-        return Err(client::version_mismatch(&info));
+        return Err(client::incompatibility_error(&info));
     }
     let action = MonitorAction {
         watch: opts.watch,
@@ -475,6 +475,7 @@ mod tests {
                 local_endpoint: None,
                 version: Some("0.25.1".to_string()),
                 grace_secs: Some(10),
+                protocol: None,
             }),
             discovery_valid: true,
             lock_held: true,

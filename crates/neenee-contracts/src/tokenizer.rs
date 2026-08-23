@@ -906,7 +906,7 @@ mod tests {
         let cases: &[(&str, usize)] = &[
             ("../../crates/neenee-agent/src/agent.rs", 10_478),
             ("../../crates/neenee-contracts/src/pressure.rs", 11_207),
-            ("../../README.zh-CN.md", 2_487),
+            ("../../README.zh-CN.md", 2_588),
             ("../../CHANGELOG.md", 10_755),
         ];
         let t = Tokenizer::new();

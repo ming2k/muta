@@ -148,6 +148,26 @@
                   ✎
                 </button>
                 <button
+                  class="icon-action interrupt-btn"
+                  title="Interrupt the current round"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    daemon.interruptSession(s.id);
+                  }}
+                >
+                  ⏹
+                </button>
+                <button
+                  class="icon-action suspend-btn"
+                  title="Suspend session (park in memory; attaching again resumes it)"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    daemon.suspendSession(s.id);
+                  }}
+                >
+                  ⏸
+                </button>
+                <button
                   class="icon-action end-btn"
                   title="End session (keeps history; removes it from the daemon)"
                   onclick={(e) => {
@@ -409,6 +429,11 @@
 
   .end-btn:hover {
     color: var(--accent-warning, var(--text-secondary)) !important;
+  }
+
+  .interrupt-btn:hover,
+  .suspend-btn:hover {
+    color: var(--accent-primary, var(--text-secondary)) !important;
   }
 
   .delete-btn:hover {

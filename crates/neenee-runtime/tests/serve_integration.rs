@@ -158,6 +158,7 @@ async fn test_select_then_attach_round_trip() {
         version: None,
         action: AttachAction::Attach(None),
         project: None,
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -288,6 +289,7 @@ async fn attach_receives_restored_todos_after_welcome() {
         version: None,
         action: AttachAction::Attach(None),
         project: None,
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -362,6 +364,7 @@ async fn attach_receives_buffered_provider_state_after_welcome() {
             version: None,
             action: AttachAction::Attach(None),
             project: None,
+            protocol: None,
         })
         .unwrap()
         .into(),
@@ -418,6 +421,7 @@ async fn unknown_id_is_an_error() {
         version: None,
         action: AttachAction::Attach(Some("nope".into())),
         project: None,
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -460,6 +464,7 @@ async fn select_project_scopes_auto_attach() {
         version: None,
         action: AttachAction::Attach(None),
         project: Some(project_a),
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -539,6 +544,7 @@ async fn declared_project_is_never_auto_bound_to_a_foreign_session() {
         version: None,
         action: AttachAction::Attach(None),
         project: Some(project_a),
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -584,6 +590,7 @@ async fn monitor_handshake_yields_snapshot_then_diffs() {
             include_idle: true,
         }),
         project: None,
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -719,6 +726,7 @@ async fn monitor_one_shot_closes_after_snapshot() {
             include_idle: false,
         }),
         project: None,
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -775,6 +783,7 @@ async fn attach_end_session_tears_down_and_notifies() {
             include_idle: true,
         }),
         project: None,
+        protocol: None,
     })
     .unwrap();
     monitor
@@ -805,6 +814,7 @@ async fn attach_end_session_tears_down_and_notifies() {
         version: None,
         action: AttachAction::Attach(Some(id.clone())),
         project: None,
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -891,6 +901,7 @@ async fn control_create_observe_kill_roundtrip() {
             prompt: None,
         }),
         project: None,
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -918,6 +929,7 @@ async fn control_create_observe_kill_roundtrip() {
             session_id: "nope".into(),
         }),
         project: None,
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -991,6 +1003,7 @@ async fn native_local_ipc_serves_same_protocol_without_token() {
             include_idle: true,
         }),
         project: None,
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -1292,6 +1305,7 @@ async fn shutdown_control_verb_replies_then_stops_accepting() {
         version: None,
         action: AttachAction::Control(serve::ControlRequest::Shutdown),
         project: None,
+        protocol: None,
     })
     .unwrap();
     ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -1343,6 +1357,7 @@ async fn version_skew_is_refused_with_both_versions() {
             version: version.map(str::to_string),
             action: AttachAction::Attach(Some("definitely-not-a-session".into())),
             project: None,
+            protocol: None,
         })
         .unwrap();
         ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -1418,9 +1433,237 @@ fn global_record_carries_the_daemon_version() {
         local_endpoint: None,
         version: Some(serve::daemon_version().to_string()),
         grace_secs: None,
+        protocol: None,
     };
     let json = serde_json::to_string(&record).unwrap();
     assert!(json.contains(serve::daemon_version()));
     let back: neenee_runtime::serve_discovery::Discovery = serde_json::from_str(&json).unwrap();
     assert_eq!(back.version.as_deref(), Some(serve::daemon_version()));
+}
+
+/// Protocol negotiation (ADR-0134). The protocol number is the authority
+/// when a client declares one: the daemon serves any number in
+/// [MIN_PROTOCOL_VERSION, PROTOCOL_VERSION] — *whatever the product version
+/// says* — and refuses anything outside the window with
+/// `code: protocol_mismatch` before any session work. A client that
+/// declares no number keeps the ADR-0100 product-version judgment.
+#[tokio::test]
+async fn protocol_window_governs_when_declared() {
+    use neenee_contracts::{MIN_PROTOCOL_VERSION, PROTOCOL_VERSION};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
+    let (registry, _req_rx, _tx) = prehosted(session).await;
+    let mut handle = serve::start_server(serve::ServeOptions::default(), registry);
+    let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
+
+    async fn first_frame(port: u16, version: Option<&str>, protocol: Option<u32>) -> Wire {
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+            .await
+            .unwrap();
+        let select = serde_json::to_string(&Wire::Select {
+            version: version.map(str::to_string),
+            protocol,
+            action: AttachAction::Attach(Some("definitely-not-a-session".into())),
+            project: None,
+        })
+        .unwrap();
+        ws.send(WsMessage::Text(select.into())).await.unwrap();
+        let msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        serde_json::from_str(msg.to_text().unwrap_or("")).unwrap()
+    }
+
+    // Same protocol, wildly skewed product version: SERVED. This is the
+    // whole point of the ADR — a pinned client keeps talking to a newer
+    // daemon across additive wire changes.
+    match first_frame(port, Some("0.0.1-skew"), Some(PROTOCOL_VERSION)).await {
+        Wire::Error { message, .. } => {
+            assert!(
+                !message.contains("mismatch"),
+                "same-protocol client must not be judged on its product version: {message}"
+            );
+        }
+        other => panic!("expected the normal unknown-session error, got {other:?}"),
+    }
+
+    // Too new: refused with the protocol message and the restart fix.
+    match first_frame(port, None, Some(PROTOCOL_VERSION + 1)).await {
+        Wire::Error { message, code } => {
+            assert_eq!(code.as_deref(), Some("protocol_mismatch"));
+            assert!(message.contains("neenee stop"), "names the fix: {message}");
+            assert!(
+                message.contains(&format!("protocol {}", PROTOCOL_VERSION + 1)),
+                "names the client's protocol number: {message}"
+            );
+        }
+        other => panic!("expected Error for a too-new protocol, got {other:?}"),
+    }
+
+    // Too old (only meaningful once MIN rises above 1; the guard keeps the
+    // test correct whenever that happens).
+    if MIN_PROTOCOL_VERSION > 1 {
+        match first_frame(port, None, Some(MIN_PROTOCOL_VERSION - 1)).await {
+            Wire::Error { message, code } => {
+                assert_eq!(code.as_deref(), Some("protocol_mismatch"));
+                assert!(
+                    message.contains("update your neenee client"),
+                    "names the update fix: {message}"
+                );
+            }
+            other => panic!("expected Error for a too-old protocol, got {other:?}"),
+        }
+    }
+
+    // Window edge: MIN itself is served, whatever the product version.
+    match first_frame(port, Some("0.0.1-skew"), Some(MIN_PROTOCOL_VERSION)).await {
+        Wire::Error { message, .. } => {
+            assert!(
+                !message.contains("mismatch"),
+                "MIN is inside the window: {message}"
+            );
+        }
+        other => panic!("expected the normal unknown-session error, got {other:?}"),
+    }
+}
+
+/// One control verb over a fresh connection, returning the reply.
+async fn control_roundtrip(port: u16, request: serve::ControlRequest) -> Result<bool, String> {
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    let select = serde_json::to_string(&Wire::Select {
+        version: None,
+        action: AttachAction::Control(request),
+        project: None,
+        protocol: None,
+    })
+    .unwrap();
+    ws.send(WsMessage::Text(select.into())).await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let frame: Wire = serde_json::from_str(msg.to_text().unwrap_or("")).unwrap();
+    match frame {
+        Wire::ControlReply { ok, error, .. } => {
+            if ok {
+                Ok(true)
+            } else {
+                Err(error.unwrap_or_else(|| "control verb rejected".to_string()))
+            }
+        }
+        other => panic!("expected ControlReply, got {other:?}"),
+    }
+}
+
+/// `suspend_session` (ADR-0096 control plane): an empty never-persisted
+/// session is refused (killing is the honest verb — there is no transcript
+/// to lazy-resume from), while an unknown id is the usual not-hosted error.
+#[tokio::test]
+async fn control_suspend_session_guards_and_rejects() {
+    let registry = Arc::new(SessionRegistry::prehost_only());
+    let tmp = tempfile::tempdir().unwrap();
+    // An empty session: hosted but with no persisted content.
+    let empty_id = host_with_project(&registry, tmp.path().to_path_buf()).await;
+
+    let mut handle = serve::start_server(serve::ServeOptions::default(), registry.clone());
+    let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
+    let _ = handle;
+
+    // Unknown session: the standard not-hosted error.
+    let err = control_roundtrip(
+        port,
+        serve::ControlRequest::SuspendSession {
+            session_id: "missing".into(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.contains("missing"),
+        "error should name the session: {err}"
+    );
+
+    // Empty session: refused with the "kill it instead" guidance.
+    let err = control_roundtrip(
+        port,
+        serve::ControlRequest::SuspendSession {
+            session_id: empty_id.clone(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.contains("kill"),
+        "empty-session refusal should point at kill: {err}"
+    );
+
+    // The session is still hosted (a refusal must not tear anything down).
+    assert!(hosted_ids(&registry).await.contains(&empty_id));
+}
+
+/// `suspend_session` happy path: a session with real content is parked
+/// (entry removed, monitor row gone) and the reply is ok. The lazy-resume
+/// path that rebuilds it on next attach is the same one the idle reaper
+/// exercises, so this test pins only the verb's contract.
+#[tokio::test]
+async fn control_suspend_session_parks_a_contentful_session() {
+    let registry = Arc::new(SessionRegistry::prehost_only());
+    let tmp = tempfile::tempdir().unwrap();
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
+    let id = session.id().await;
+    // Real content → the session persists, so it is suspendable.
+    session
+        .replace_messages(vec![neenee_contracts::Message::new(
+            neenee_contracts::Role::User,
+            "hello",
+        )])
+        .await
+        .unwrap();
+
+    let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
+    let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
+        idle_base(id.clone()),
+        neenee_contracts::SessionStatus::Idle,
+    )));
+    registry
+        .host(HostedSession {
+            project_root: tmp.path().to_path_buf(),
+            session,
+            req_tx,
+            events: bc_tx,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            tracker,
+            sync_buffer: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            created_at: std::time::Instant::now(),
+            last_activity: tokio::sync::Mutex::new(std::time::Instant::now()),
+            last_seen_tick: std::sync::atomic::AtomicU64::new(0),
+            activity_tick: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            agent_for_session_end: None,
+        })
+        .await;
+    assert!(hosted_ids(&registry).await.contains(&id));
+
+    let mut handle = serve::start_server(serve::ServeOptions::default(), registry.clone());
+    let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
+    let _ = handle;
+
+    assert!(
+        control_roundtrip(
+            port,
+            serve::ControlRequest::SuspendSession {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        .is_ok()
+    );
+    // Parked: gone from the hosted set (and the monitor row with it).
+    assert!(!hosted_ids(&registry).await.contains(&id));
 }

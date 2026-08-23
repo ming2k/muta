@@ -117,11 +117,7 @@ pub fn resolved_model_name_with_usage(
     resolved_model_name_inner(config, id, usage)
 }
 
-fn resolved_model_name_inner(
-    config: &Config,
-    id: &str,
-    usage: &ConnectionUsage,
-) -> Option<String> {
+fn resolved_model_name_inner(config: &Config, id: &str, usage: &ConnectionUsage) -> Option<String> {
     build_catalog()
         .iter()
         .find(|e| e.id == id)

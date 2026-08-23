@@ -426,6 +426,50 @@ impl SessionRegistry {
         Ok(())
     }
 
+    /// Control plane: park a hosted session on demand (the
+    /// `suspend_session` verb). The same in-memory teardown as the idle
+    /// reaper's [`Self::suspend_session`], but guarded for an explicit
+    /// human/panel request: a session with an attached client or an active
+    /// round (running / needs-approval / needs-input) is refused with a
+    /// message naming what to do instead — detach or interrupt first. A
+    /// never-persisted empty session is refused too: suspending it would
+    /// silently discard it (there is no transcript to lazy-resume from),
+    /// so killing is the honest verb for that case.
+    pub async fn suspend_session_control(&self, session_id: &str) -> Result<(), String> {
+        // Snapshot the probes under the lock; suspend outside it (never
+        // hold the map lock across an await). `is_empty_unpersisted` needs
+        // an await on the store, so the entry is cloned out and probed
+        // lock-free.
+        let entry = {
+            let map = self.sessions.lock().await;
+            let Some(e) = map.get(session_id) else {
+                return Err(format!(
+                    "session '{session_id}' is not hosted on this server"
+                ));
+            };
+            Arc::clone(e)
+        };
+        if entry.events.receiver_count() > 0 {
+            return Err(format!(
+                "session '{session_id}' has {} attached client(s); detach before suspending",
+                entry.events.receiver_count()
+            ));
+        }
+        let status = entry.tracker.lock().await.row().status;
+        if status.is_active() {
+            return Err(format!(
+                "session '{session_id}' is {} — interrupt it before suspending",
+                status.as_str()
+            ));
+        }
+        if entry.session.is_empty_unpersisted().await {
+            return Err(format!(
+                "session '{session_id}' has no content to keep — kill it instead"
+            ));
+        }
+        self.suspend_session(session_id).await
+    }
+
     /// Sweep for idle hosted sessions to suspend. A session is suspendable
     /// when (a) no client is attached (`receiver_count == 0`), (b) its
     /// monitor status is not active (not running / awaiting approval /
@@ -1017,6 +1061,11 @@ impl SessionRegistry {
         // Created before the assemble because the scheduler is spawned
         // during it and receives the token as a spawn parameter.
         let cancel = CancellationToken::new();
+        // `autopilot: false` here is the *startup flag* (what `--autopilot`
+        // passed on the command line), not the posture: ADR-0132 moved the
+        // persisted posture into the session store, and the assemble's
+        // resume path restores it from there — so a rehosted session reopens
+        // in the posture it died in without any rehost-specific wiring.
         let boot = bootstrap::assemble(BootstrapParams {
             identity,
             principal,

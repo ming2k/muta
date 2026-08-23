@@ -21,8 +21,8 @@ info:
       the snapshot). Rows are whole `MonitoredSession` values; upsert by `id`.
     - **Control** (`Select{action: {control: {verb, …}}}`, ADR-0096): one
       round-trip session management — create_session / send_prompt / interrupt
-      / resolve_permission / kill_session / shutdown — answered by a
-      `ControlReply`.
+      / resolve_permission / suspend_session / kill_session / shutdown —
+      answered by a `ControlReply`.
 
     Every WebSocket text frame contains exactly one JSON value. Binary frames
     are ignored. There are no sequence numbers or replay cursors: an attach
@@ -151,7 +151,7 @@ operations:
     action: send
     channel:
       $ref: '#/channels/session'
-    summary: "Issue a session-management verb (create/prompt/interrupt/approve/kill)."
+    summary: "Issue a session-management verb (create/prompt/interrupt/approve/suspend/kill)."
     messages:
       - $ref: '#/channels/session/messages/select'
   receiveControlReply:
@@ -365,11 +365,17 @@ components:
     SelectEnvelope:
       description: |
         The first frame on every connection. `action` is one of `"new"`,
-        `{ "attach": "<id>" | null }`, `{ "monitor": { watch, include_idle } }`,
+        `{ "attach": "<id>" | null }`, `"picker"`,
+        `{ "monitor": { watch, include_idle } }`,
         or `{ "control": { verb, … } }` (serde `rename_all = "snake_case"`).
-        `version` (ADR-0100 rule 4) is the client's build; the daemon
-        refuses a mismatched value with a both-versions `Error` before any
-        session work. Absent means "legacy client" and is served.
+        `protocol` (ADR-0134), when present, is the compatibility authority:
+        the daemon serves any number in its window
+        [MIN_PROTOCOL_VERSION, PROTOCOL_VERSION] regardless of build, and
+        refuses anything outside it with `Error{code: "protocol_mismatch"}`
+        before any session work. `version` is the client's product build —
+        advisory when `protocol` is present, still enforced by exact
+        equality (ADR-0100 rule 4) when it is not. Both absent means
+        "legacy client" and is served.
       type: object
       required: [type, action]
       properties:
@@ -377,6 +383,12 @@ components:
           const: Select
         action:
           description: AttachAction; see examples on the Select message.
+        protocol:
+          type: integer
+          minimum: 1
+          description: >
+            The wire protocol number this client speaks (ADR-0134), from
+            PROTOCOL_VERSION in crates/neenee-contracts/src/wire.rs.
         version:
           type: string
           description: The client's CARGO_PKG_VERSION for skew detection.

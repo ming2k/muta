@@ -73,6 +73,13 @@ pub struct Discovery {
     /// fall back to a conservative default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grace_secs: Option<u64>,
+    /// The wire protocol number this daemon speaks (ADR-0134). Lets a
+    /// local client refuse a daemon outside its window *before* the
+    /// handshake, the same way `version` above always has. `None` on
+    /// records predating the field — the client then falls back to the
+    /// product-version judgment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<u32>,
 }
 
 impl Discovery {
@@ -182,6 +189,7 @@ mod lease_tests {
                 local_endpoint: None,
                 version: None,
                 grace_secs: None,
+                protocol: None,
             },
         )
         .unwrap();
@@ -208,6 +216,7 @@ mod lease_tests {
                 local_endpoint: None,
                 version: None,
                 grace_secs: None,
+                protocol: None,
             },
         )
         .unwrap();
@@ -232,6 +241,7 @@ mod lease_tests {
                 local_endpoint: None,
                 version: None,
                 grace_secs: None,
+                protocol: None,
             },
         )
         .unwrap();
@@ -312,6 +322,7 @@ mod tests {
             local_endpoint: None,
             version: Some("0.30.2".to_string()),
             grace_secs: None,
+            protocol: None,
         }
     }
 

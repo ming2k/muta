@@ -39,7 +39,7 @@ pub async fn run_headless(
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
             let info = client::ensure_daemon(&project_root).await?;
             if !client::versions_compatible(&info) {
-                return Err(client::version_mismatch(&info).into());
+                return Err(client::incompatibility_error(&info).into());
             }
             Transport::Local(info)
         }

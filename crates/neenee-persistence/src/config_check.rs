@@ -135,10 +135,7 @@ pub const CONFIG_KEYS: &[&str] = &[
 /// Surfaced separately from unknown keys so `check` can say *why* the key is
 /// dead and what replaced it.
 const LEGACY_KEYS: &[(&str, &str)] = &[
-    (
-        "default_provider",
-        "renamed to `default_connection`",
-    ),
+    ("default_provider", "renamed to `default_connection`"),
     (
         "provider_retry_max_attempts",
         "renamed to `connection_retry_max_attempts`",
@@ -164,10 +161,7 @@ const LEGACY_KEYS: &[(&str, &str)] = &[
         "compaction.prompt_reserve_tokens",
         "removed; superseded by the pressure ladder",
     ),
-    (
-        "providers",
-        "moved to `connections.toml`",
-    ),
+    ("providers", "moved to `connections.toml`"),
     (
         "model_reasoning",
         "moved into the model `e` editor's route settings",

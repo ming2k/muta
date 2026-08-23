@@ -56,6 +56,11 @@ client_identity: ClientIdentity | null, } } | { "ConnectProvider": { id: string,
 event_cap: number, } } | "QuerySessionContext" | { "RevokePermission": { tool: string, scope: string, } } | "ClearAllPermissions" | { "ToggleTool": { name: string, enabled: boolean, } } | { "ToggleMcpServer": { name: string, enabled: boolean, } } | { "ReconnectMcpServer": { name: string, } } | { "ShellCommand": { command: string, } } | "ExitSideView" | { "FocusSide": { side_id: string, } } | { "InterruptSide": { side_id: string, } } | { "CloseSide": { side_id: string, } } | "QueryBtwList" | { "UpdateTuiLayout": string } | { "UpdateTuiColorScheme": { name: string, custom: ColorSchemeConfig, } };
 
 /**
+ * What a client wants from the daemon, declared on the `Select` frame.
+ */
+export type AttachAction = "new" | { "attach": string | null } | "picker" | { "monitor": MonitorAction } | { "control": ControlRequest };
+
+/**
  * How a user-defined channel authenticates.
  */
 export type ChannelAuth = "ApiKey" | "XaiOAuth" | "ChatGptOAuth" | "CopilotOAuth" | "AntigravityOAuth";
@@ -163,6 +168,12 @@ export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource,
  * rendered transcript size.
  */
 export type ContextTokenSource = "Api" | "Projection";
+
+/**
+ * Session-management verbs for the control plane (ADR-0096). Each maps to
+ * a registry operation; the reply is `Wire::ControlReply`.
+ */
+export type ControlRequest = { "verb": "create_session", project: string, prompt?: string, } | { "verb": "send_prompt", session_id: string, text: string, } | { "verb": "interrupt", session_id: string, } | { "verb": "resolve_permission", session_id: string, request_id: string, decision: PermissionDecision, } | { "verb": "kill_session", session_id: string, } | { "verb": "suspend_session", session_id: string, } | { "verb": "shutdown" };
 
 /**
  * Component-specific override for crate tags and package badges.
@@ -470,6 +481,25 @@ timestamp?: number,
 sent_at_ms?: number, };
 
 /**
+ * Handshake action selecting a daemon-observability stream instead of a
+ * session attach (ADR-0093 §2). Sent as the first frame:
+ * `{"type":"Select","action":{"monitor":{"watch":…,"include_idle":…}}}`.
+ */
+export type MonitorAction = { 
+/**
+ * Keep the connection open and stream `MonitorEvent::Diff`s after the
+ * initial snapshot (`neenee status --watch`, live control panels). When
+ * `false` the server sends the snapshot and closes the connection.
+ */
+watch: boolean, 
+/**
+ * Include live sessions that are simply idle (no round running and
+ * nothing blocked). Defaults to `false` so a busy dashboard stays a
+ * zero-statement surface: an all-idle daemon reports an empty list.
+ */
+include_idle: boolean, };
+
+/**
  * A stream frame about the daemon as a whole.
  */
 export type MonitorEvent = { "kind": "snapshot" } & MonitorSnapshot | { "kind": "session_added" } & MonitoredSession | { "kind": "session_updated" } & MonitoredSession | { "kind": "session_removed", session_id: string, } | { "kind": "daemon_draining" };
@@ -641,7 +671,14 @@ thinking: boolean | null,
  * served. Added late, so it defaults to `false` on deserialize for older
  * snapshots.
  */
-favorite: boolean, };
+favorite: boolean, 
+/**
+ * Unix epoch milliseconds of this model's last activation, or `None` if
+ * never activated. Drives the flat Models picker's "recent" section
+ * (recency-desc, most recently used first). `None`-defaulted so older
+ * snapshots deserialize as "never used".
+ */
+last_used_ms: number | null, };
 
 /**
  * One row of provider-picker state sent from the harness to the TUI. Carries
@@ -649,7 +686,10 @@ favorite: boolean, };
  * ids and the active one, plus the dynamic signals (key readiness, favorite,
  * last-used) — keyed by canonical provider id. The TUI renders directly from
  * these rows (built-in and user-defined providers share one path), so no static
- * per-provider table is consulted. See ADR-0002.
+ * per-provider table is consulted. See ADR-0002. Recency exists at BOTH
+ * levels: the provider row's `last_used_ms` orders the Connections list, and
+ * each `model_info` entry's `last_used_ms` orders the flat Models picker's
+ * "recent" section.
  */
 export type ProviderPickerRow = { id: string, 
 /**
@@ -922,6 +962,28 @@ export type SecretString = string;
  * deserialize.
  */
 export type SessionHosting = "hosted";
+
+/**
+ * A row in the sessions picker: enough to identify, describe and order a past
+ * session without leaking the full transcript to the TUI.
+ */
+export type SessionOverview = { id: string, overview: string, created_at: number, updated_at: number, message_count: number, active: boolean, 
+/**
+ * The session this one was forked from, when it is a branch rather
+ * than a trunk (`/fork`, `/btw` aside). `None` for a trunk session
+ * (`/new` or the very first session). Lineage is what the dashboard
+ * groups by: one trunk row per conversation, its branches nested
+ * beneath — there is always exactly one *main* line, the trunk the
+ * user is driving; branches are derived views that never replace it.
+ */
+parent_id: string | null, 
+/**
+ * How this session came to exist, so the dashboard can badge rows
+ * without string-matching ids: `fork` (an explicit `/fork` branch that
+ * *replaced* the active pointer), `aside` (a `/btw` background
+ * conversation forked off the trunk), or `trunk` (no parent).
+ */
+fork_kind: SessionForkKind, };
 
 /**
  * Display-level lifecycle status of a hosted session, derived from its

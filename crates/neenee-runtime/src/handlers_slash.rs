@@ -136,6 +136,22 @@ async fn start_fresh_session(
     agent.clear_todos();
     match session.reset().await {
         Ok(id) => {
+            // ADR-0132: `/reset` starts a *new* session. The persisted
+            // autopilot posture belongs to the old one — a fresh session
+            // must not inherit an unattended posture the user has not
+            // (re-)granted to it. The store's `reset` already minted fresh
+            // data (autopilot = false); re-align the live agent so the old
+            // session's posture does not leak across the boundary, and
+            // broadcast the (possibly de-escalated) posture so the TUI
+            // badge stops lying about the new session.
+            let fresh_posture = session.autopilot().await;
+            if agent.get_autopilot() != fresh_posture {
+                agent.set_autopilot(fresh_posture);
+                let _ = resp_tx.send(round_response(
+                    &id,
+                    RoundEvent::AutopilotChanged(fresh_posture),
+                ));
+            }
             agent.restore_round_count(session.round_counter().await);
             // C6: a fresh session has no provider pin, so the live provider
             // falls back to the global default.
@@ -237,33 +253,64 @@ async fn restore_session_runtime(
     agent.restore_disabled_tools(session.disabled_tools().await);
     agent.restore_round_count(session.round_counter().await);
 
-    // If this session previously had autopilot enabled, notify the user with a toast notice
-    // so they are aware of the prior mode without silently granting full autopilot permissions.
-    let commands = session.commands().await;
-    let was_autopilot_on = commands
-        .iter()
-        .rev()
-        .find_map(|rec| {
-            if rec.name == "autopilot"
-                && let Some(CommandResult::Ack { title }) = &rec.result
-            {
-                if title.contains("Autopilot ON") {
-                    return Some(true);
-                } else if title.contains("Autopilot OFF") {
-                    return Some(false);
+    // Restore the session-scoped autopilot posture (ADR-0132). The flag is
+    // now persisted on the session (`AutopilotSet`), so a resumed session —
+    // whether via `/sessions <id>` in-process, a fresh attach after a daemon
+    // crash, or a boot rehost — reopens in the posture it left. The restore
+    // is an alignment, not a one-way escalation: switching from an
+    // unattended session to an attended one must de-escalate too, or the
+    // attended session would silently run with the previous session's
+    // blanket permissions.
+    let mut restored_autopilot = session.autopilot().await;
+    let mut restored_from_ledger = false;
+    if !restored_autopilot {
+        // Legacy fallback (pre-ADR-0132 sessions): replay the command ledger
+        // for the last autopilot Ack. The entry is itself a durable record
+        // of an explicit human decision made for this session through the
+        // command surface, so adopting it (with a loud notice naming the
+        // recovery source) is recovery, not silent re-granting. `/autopilot
+        // off` remains one keystroke away and the notice says so. Once
+        // adopted the posture is back-filled onto the store, so the next
+        // restart takes the direct path and this heuristic retires for the
+        // session.
+        let commands = session.commands().await;
+        let was_autopilot_on = commands
+            .iter()
+            .rev()
+            .find_map(|rec| {
+                if rec.name == "autopilot"
+                    && let Some(CommandResult::Ack { title }) = &rec.result
+                {
+                    if title.contains("Autopilot ON") {
+                        return Some(true);
+                    } else if title.contains("Autopilot OFF") {
+                        return Some(false);
+                    }
                 }
-            }
-            None
-        })
-        .unwrap_or(false);
+                None
+            })
+            .unwrap_or(false);
+        if was_autopilot_on {
+            restored_autopilot = true;
+            restored_from_ledger = true;
+            let _ = session.set_autopilot(true).await;
+        }
+    }
 
-    if was_autopilot_on && !agent.get_autopilot() {
-        let notice = AgentNotice::command_ack(
-            "This session was previously running with autopilot enabled. Use `/autopilot on` to resume unattended mode.",
-        );
+    if agent.get_autopilot() != restored_autopilot {
+        agent.set_autopilot(restored_autopilot);
+        if restored_from_ledger {
+            let notice = AgentNotice::command_ack(
+                "Autopilot restored: this session was previously running unattended (recovered from the command ledger). Use `/autopilot off` to re-attend.",
+            );
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::Notice(notice),
+            ));
+        }
         let _ = resp_tx.send(round_response(
             &session.id().await,
-            RoundEvent::Notice(notice),
+            RoundEvent::AutopilotChanged(restored_autopilot),
         ));
     }
 
@@ -639,6 +686,20 @@ pub async fn dispatch(
             // A bare `/autopilot` (`None`) toggles the current state.
             let enabled = next.unwrap_or_else(|| !agent.get_autopilot());
             agent.set_autopilot(enabled);
+            // Persist the posture onto the session (ADR-0132) so a daemon
+            // restart — crash, kill, upgrade, reboot — restores it instead of
+            // silently de-escalating to attended. The user turned this on
+            // deliberately; losing it on an accidental exit is exactly the
+            // "where did my state go" failure the session store exists to
+            // prevent. A failed persist is logged, never fatal: the live flag
+            // still flipped above, so the worst case degrades to the old
+            // process-local behaviour.
+            if let Err(error) = session.set_autopilot(enabled).await {
+                tracing::warn!(
+                    error = %error,
+                    "could not persist autopilot posture; it will not survive a restart"
+                );
+            }
             // The autopilot toggle's confirmation is a command acknowledgment,
             // not model output: surface it as a transient toast rather than
             // appending a same-color line to the transcript (ADR-0088). The
@@ -697,6 +758,12 @@ pub async fn dispatch(
                 }
                 Some(role) => match agent.apply_principal_role(role) {
                     Some(resolved) => {
+                        // A principal profile carries its own autopilot
+                        // posture; the apply above already flipped the live
+                        // flag. Mirror it onto the session (ADR-0132) so the
+                        // role's posture survives a restart instead of
+                        // reverting to attended on resume.
+                        let _ = session.set_autopilot(agent.get_autopilot()).await;
                         record_command(
                             session,
                             resp_tx,

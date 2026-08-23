@@ -151,4 +151,9 @@ pub use tool_registry::{
     Capability, ToolContext, ToolContextBuilder, ToolFactory, ToolScope, ToolSelection, ToolSet,
     WorkspaceRoot, collect_toolset,
 };
+pub mod wire;
 pub use web_config::WebSearchConfig;
+pub use wire::{
+    AttachAction, ControlRequest, ERR_PROTOCOL_MISMATCH, ERR_VERSION_MISMATCH,
+    MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, Wire, protocol_accepts,
+};

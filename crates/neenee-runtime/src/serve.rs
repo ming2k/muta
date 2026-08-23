@@ -1,5 +1,8 @@
 use futures::{SinkExt, StreamExt};
-use neenee_contracts::{AgentRequest, AgentResponse, MonitorAction, MonitorEvent, SessionOverview};
+use neenee_contracts::wire::{ERR_PROTOCOL_MISMATCH, ERR_VERSION_MISMATCH};
+use neenee_contracts::{
+    AgentRequest, AgentResponse, MonitorAction, MonitorEvent, PROTOCOL_VERSION, protocol_accepts,
+};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -11,6 +14,13 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 
 use crate::shutdown::ShutdownGate;
+
+// The transport envelope and its constants live in `neenee-contracts` since
+// ADR-0134 — one serde source of truth for the whole wire surface, next to
+// the payload types. Re-exported here so every existing `serve::Wire` /
+// `serve::AttachAction` path (tests, examples, the TUI, the CLI) keeps
+// working unchanged.
+pub use neenee_contracts::wire::{AttachAction, ControlRequest, Wire};
 
 /// How long a draining daemon waits, per connection, for the client to
 /// complete the closing handshake after it is sent `Close(1001 GoingAway)`
@@ -78,143 +88,43 @@ async fn snapshot_attach_sync(
     buffer.lock().await.iter().cloned().collect()
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AttachAction {
-    New,
-    Attach(Option<String>),
-    /// Open the sessions picker over a throwaway carrier session
-    /// (ADR-0116): the daemon assembles a `Picker` start — no restore, no
-    /// hooks — and the client's TUI raises the picker modal; `/sessions
-    /// <id>` switches to the real session. The endpoint for `neenee
-    /// attach` with no id, so choosing is interactive instead of a printed
-    /// list on stderr.
-    Picker,
-    /// Observe the whole host instead of attaching to one session
-    /// (ADR-0093): the server answers with a snapshot frame and, when
-    /// `watch` is set, streams diffs until the client disconnects.
-    Monitor(MonitorAction),
-    /// Issue a session-management verb (ADR-0096): create, prompt, interrupt,
-    /// answer a permission, or kill — without attaching as a session client.
-    Control(ControlRequest),
-}
-
-/// Session-management verbs for the control plane (ADR-0096). Each maps to a
-/// registry operation; the reply is `Wire::ControlReply`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-#[serde(tag = "verb", rename_all = "snake_case")]
-pub enum ControlRequest {
-    /// Create a session for a project; optionally send an opening prompt.
-    CreateSession {
-        project: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        prompt: Option<String>,
-    },
-    /// Send a prompt to a hosted session as a new round.
-    SendPrompt { session_id: String, text: String },
-    /// Interrupt the current round of a hosted session.
-    Interrupt { session_id: String },
-    /// Answer a pending permission request on a hosted session.
-    ResolvePermission {
-        session_id: String,
-        request_id: String,
-        decision: neenee_contracts::PermissionDecision,
-    },
-    /// Tear down a hosted session.
-    KillSession { session_id: String },
-    /// Stop the daemon itself (ADR-0100): stop accepting new attaches, drain
-    /// live connections, tear every hosted session down through the same
-    /// graceful path as SIGINT/SIGTERM, and exit 0. Gives scripts, the TUI,
-    /// and the upgrade flow a clean remote stop that previously required
-    /// `kill <pid>`. There is deliberately no force flag: a second `neenee
-    /// stop` (or any signal) escalates naturally through the same gate.
-    Shutdown,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type")]
-pub enum Wire {
-    Select {
-        action: AttachAction,
-        /// The attaching client's working directory — the project scope for
-        /// `New` creation, auto-attach, and lazy resume (ADR-0096). Optional
-        /// for wire compatibility: a client predating the field sends none
-        /// and the daemon falls back to its own process cwd, its behavior
-        /// before the field existed. Ignored for Monitor / Control
-        /// actions, which the daemon serves without consulting a project
-        /// scope.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        project: Option<std::path::PathBuf>,
-        /// The client's build version (ADR-0100 rule 4). The daemon refuses
-        /// the attach with a both-versions error before any session work
-        /// when it differs from its own — the wire protocol is pre-1.0 and
-        /// evolves every release, so exact equality is deliberate. Absent on
-        /// frames from clients predating the field; the daemon tolerates
-        /// them the same way it tolerates any unknown sender: by serving
-        /// them (a same-build client always sends it; only a genuinely old
-        /// client omits it, and refusing on absence would brick
-        /// version-pinned clients against their own daemon).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        version: Option<String>,
-    },
-    Welcome {
-        session_id: String,
-        round_counter: u64,
-        messages: Vec<neenee_contracts::Message>,
-        /// The provider instance id the session is currently serving (its
-        /// own pin when set, else the config default at bind time). Drives
-        /// the TUI hint-bar's `@<instance>` suffix and the picker's active
-        /// highlight. Empty when no provider is configured.
-        #[serde(default)]
-        provider: String,
-        /// The wire model id the session is currently serving. Empty when no
-        /// model resolves.
-        #[serde(default)]
-        model: String,
-        /// Durable round-interrupt records (C11), re-projected into the
-        /// transcript on the client side. Absent on older daemons.
-        #[serde(default)]
-        round_interrupts: Vec<neenee_contracts::RoundInterrupt>,
-    },
-    Pick {
-        sessions: Vec<SessionOverview>,
-    },
-    Error {
-        message: String,
-        /// Stable machine-readable reason (ADR-0105) so a client can render
-        /// targeted guidance instead of string-sniffing. Currently defined:
-        /// `"version_mismatch"`. Absent on older daemons.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        code: Option<String>,
-    },
-    Request {
-        #[serde(flatten)]
-        request: AgentRequest,
-    },
-    Response {
-        #[serde(flatten)]
-        response: AgentResponse,
-    },
-    /// Daemon-observability stream frame (ADR-0093). Server → client only;
-    /// the first frame after a `Select{Monitor}` handshake is always
-    /// `MonitorEvent::Snapshot`, followed by diffs while `watch` holds.
-    Monitor {
-        #[serde(flatten)]
-        event: MonitorEvent,
-    },
-    /// Reply to a `Select{action: Control(..)}` verb (ADR-0096): either the
-    /// created/confirmed session id or an error message.
-    ControlReply {
-        ok: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        session_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-    },
+/// Refuse a wire-protocol-skewed attach (ADR-0134) with an actionable
+/// message naming both the protocol window and the product builds. Sent
+/// before any session work. Directional: a too-old client hears "update",
+/// a too-new client hears "restart the daemon".
+fn protocol_mismatch_error(client: u32, client_version: Option<&str>) -> String {
+    let window = format!(
+        "{}..={}",
+        neenee_contracts::MIN_PROTOCOL_VERSION,
+        PROTOCOL_VERSION
+    );
+    let builds = match client_version {
+        Some(v) => format!(" (client build {v}, daemon build {})", daemon_version()),
+        None => format!(" (daemon build {})", daemon_version()),
+    };
+    if client < neenee_contracts::MIN_PROTOCOL_VERSION {
+        format!(
+            "client/daemon wire protocol mismatch: client protocol {client} is older \
+             than the oldest this daemon serves ({window}). \
+             Please update your neenee client to build {daemon} or newer{builds}.",
+            daemon = daemon_version()
+        )
+    } else {
+        format!(
+            "client/daemon wire protocol mismatch: client protocol {client} is newer \
+             than this daemon's protocol {current}. \
+             Stop the daemon and let it restart on demand: `neenee stop`, then rerun \
+             this command (or `neenee serve --detach` to bring it up explicitly){builds}.",
+            current = PROTOCOL_VERSION
+        )
+    }
 }
 
 /// Refuse a version-skewed attach with an actionable both-versions message
-/// (ADR-0100 rule 4), with directional recommendations. Returned before any session work happens.
+/// (ADR-0100 rule 4), with directional recommendations. Returned before any
+/// session work happens. Applies only to clients that predate the protocol
+/// field (ADR-0134) — a client that declares a protocol number is judged on
+/// the window alone, its product version never enters the decision.
 fn version_mismatch_error(client: &str, daemon: &str) -> String {
     use crate::client::{VersionRelation, compare_versions};
     match compare_versions(client, daemon) {
@@ -744,6 +654,12 @@ async fn run_control<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                 Err(e) => (false, None, Some(e)),
             }
         }
+        ControlRequest::SuspendSession { session_id } => {
+            match registry.suspend_session_control(&session_id).await {
+                Ok(()) => (true, Some(session_id), None),
+                Err(e) => (false, None, Some(e)),
+            }
+        }
     };
     let reply = serde_json::to_string(&Wire::ControlReply {
         ok,
@@ -811,14 +727,15 @@ where
     .await
     .map_err(|e| format!("ws handshake: {e}"))?;
     let (mut ws_sink, mut ws_source) = ws_stream.split();
-    let (action, project, client_version) = loop {
+    let (action, project, client_version, client_protocol) = loop {
         match ws_source.next().await {
             Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
                 Ok(Wire::Select {
                     action,
                     project,
                     version,
-                }) => break (action, project, version),
+                    protocol,
+                }) => break (action, project, version, protocol),
                 Ok(_) => {
                     send_error(&mut ws_sink, "expected Select as the first frame").await?;
                     return Ok(());
@@ -833,17 +750,36 @@ where
             None => return Ok(()),
         }
     };
-    // Version negotiation (ADR-0100 rule 4): exact equality, enforced before
-    // any session work. The wire protocol is pre-1.0 and changes every
-    // release, so a skew is a real hazard, not a hypothetical. An absent
-    // version is served (see the field docs for why pinning-safe).
-    if let Some(client) = client_version
+    // Protocol negotiation (ADR-0134), enforced before any session work.
+    // The protocol number is the authority when present: the daemon serves
+    // any number in [MIN_PROTOCOL_VERSION, PROTOCOL_VERSION] regardless of
+    // the product build — this is what lets a pinned client keep talking to
+    // a newer daemon across additive wire changes. A client that sends no
+    // protocol number predates the field, so it is judged by ADR-0100
+    // rule 4's exact product-version equality instead (unknown fields are
+    // ignored by serde, so this daemon's newer frames never break it).
+    if let Some(client) = client_protocol
+        && !protocol_accepts(client)
+    {
+        send_error_with_code(
+            &mut ws_sink,
+            &protocol_mismatch_error(client, client_version.as_deref()),
+            Some(ERR_PROTOCOL_MISMATCH),
+        )
+        .await?;
+        return Ok(());
+    }
+    // Legacy product-version gate (ADR-0100 rule 4) for pre-protocol
+    // clients only. A protocol-declaring client has already been judged on
+    // the window; its product version is advisory identity, not a gate.
+    if client_protocol.is_none()
+        && let Some(client) = client_version
         && client != gate.version_of_daemon()
     {
         send_error_with_code(
             &mut ws_sink,
             &version_mismatch_error(&client, gate.version_of_daemon()),
-            Some("version_mismatch"),
+            Some(ERR_VERSION_MISMATCH),
         )
         .await?;
         return Ok(());
@@ -944,14 +880,16 @@ where
     // hint bar offers `/retry` from the very first frame — exactly as if the
     // client had been attached when the round stopped.
     {
+        // The agent handle does not ride on `BoundSession`, so read the
+        // posture straight from the session store (ADR-0132: the store is
+        // the source of truth for the persisted posture). A session that
+        // died unattended re-attaches with `autopilot: true` in this very
+        // first snapshot — the badge paints immediately instead of waiting
+        // for the next periodic `HarnessState`.
         let snapshot = neenee_contracts::HarnessSnapshot {
             loop_status: neenee_contracts::LoopStatus::Idle,
             round_counter: bound.session.round_counter().await,
-            // The agent handle does not ride on `BoundSession`; autopilot is
-            // republished by the session's own `AutopilotChanged` events (and
-            // the attach-sync buffer replays the latest one), so a neutral
-            // `false` here cannot mask an elevated session for long.
-            autopilot: false,
+            autopilot: bound.session.autopilot().await,
             retry_pending: bound.session.retry_pending().await.is_some(),
         };
         let frame = serde_json::to_string(&Wire::Response {
@@ -1571,7 +1509,7 @@ mod tests {
     fn error_frame_carries_an_optional_code() {
         let with_code = serde_json::to_string(&Wire::Error {
             message: "m".to_string(),
-            code: Some("version_mismatch".to_string()),
+            code: Some(ERR_VERSION_MISMATCH.to_string()),
         })
         .unwrap();
         assert_eq!(

@@ -56,6 +56,11 @@ pub fn build_picker_state(config: &Config, usage: &ConnectionUsage) -> ProviderP
                     // daily-driver model carries its flag into the flat
                     // Models picker wherever it is served.
                     info.favorite = config.favorites.iter().any(|fav| fav == &info.model);
+                    // Recency is model-level too (stage-2 usage telemetry):
+                    // the flat Models picker's "recent" section is ordered by
+                    // it. 0 (never activated) surfaces as `None`.
+                    let recency = usage.model_recency(&info.model);
+                    info.last_used_ms = (recency > 0).then_some(recency);
                     info
                 })
                 .collect();
@@ -122,6 +127,7 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 effort: Some((*effort).unwrap_or(Effort::High).as_str().to_string()),
                 thinking: Some(thinking_on),
                 favorite: false,
+                last_used_ms: None,
             }
         }
         Transport::OpenAi { effort, .. } => {
@@ -151,6 +157,7 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 effort: effective,
                 thinking: None,
                 favorite: false,
+                last_used_ms: None,
             }
         }
         Transport::OpenAiResponses { effort, .. } => {
@@ -174,6 +181,7 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 effort: effective,
                 thinking: None,
                 favorite: false,
+                last_used_ms: None,
             }
         }
         Transport::Google { effort, .. } => {
@@ -196,6 +204,7 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 effort: effective,
                 thinking: None,
                 favorite: false,
+                last_used_ms: None,
             }
         }
     }

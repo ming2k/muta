@@ -587,6 +587,19 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     neenee_agent::dynamic::spawn_refresh(McpCatalog::new(mcp_runtime.clone()));
     if autopilot_at_start {
         agent.set_autopilot(true);
+        // ADR-0132: persist the startup posture onto the session so a later
+        // daemon crash/restart restores it. Previously this path never wrote
+        // the store (only a live toast), so a `--autopilot` session lost its
+        // posture on every restart — and, because the command ledger was
+        // never written either, not even the legacy ledger heuristic could
+        // recover it. Best-effort: a failed persist degrades to the old
+        // process-local behaviour.
+        if let Err(error) = session.set_autopilot(true).await {
+            tracing::warn!(
+                error = %error,
+                "could not persist --autopilot startup posture"
+            );
+        }
         // Surface the `--autopilot` startup state as a transient toast rather
         // than a transcript line: it is a command acknowledgment, not model
         // output, so it should not pollute the conversation the user is about
@@ -685,9 +698,9 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Restore the session-scoped runtime state and fire SessionStart hooks.
     // Skipped entirely in Picker mode: the bootstrap session is a throwaway
     // fresh one, and the user has not chosen a session yet. The full restore
-    // (todos + disabled tools + round counter + SessionStart hooks) runs when
-    // a real session is opened from the picker — see `handlers_slash`'s
-    // `restore_session_runtime`.
+    // (todos + disabled tools + round counter + autopilot + SessionStart
+    // hooks) runs when a real session is opened from the picker — see
+    // `handlers_slash`'s `restore_session_runtime`.
     if !is_picker {
         // Restore the unified task list so resume re-shows the sticky panel with
         // the same items (and identity) the model last persisted. An empty list
@@ -701,6 +714,24 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         // the orthogonal tool mask and round counter.
         agent.restore_disabled_tools(session.disabled_tools().await);
         agent.restore_round_count(session.round_counter().await);
+
+        // Restore the session-scoped autopilot posture (ADR-0132). This is
+        // the daemon-restart recovery path: a session that died unattended
+        // reopens unattended — attach, lazy-resume, and boot rehost all flow
+        // through here. `--autopilot` ran earlier and may already have set
+        // the flag live; the store read is idempotent either way (same
+        // value, and `set_autopilot` on the store is a no-op guard), but the
+        // explicit flag above wins when both apply, matching the user's most
+        // recent explicit intent.
+        let persisted_autopilot = session.autopilot().await;
+        if persisted_autopilot && !agent.get_autopilot() {
+            agent.set_autopilot(true);
+            let restored_session_id = session.id().await;
+            tracing::info!(
+                session = %restored_session_id,
+                "restored unattended (autopilot) posture from session store"
+            );
+        }
 
         // SessionStart hooks (ADR-0025): inject setup context before the first
         // round. Resume vs fresh start is surfaced so a hook can branch.

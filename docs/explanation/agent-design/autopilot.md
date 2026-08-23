@@ -91,10 +91,19 @@ act on its own authority. This pairs the mechanical reclaim (the harness cannot
 deadlock) with the behavioral one (the model is steered away from deferring).
 See [User questions](user-questions.md) for the interactive counterpart.
 
-The flag is **live and process-local**. It is not persisted to the session, not
-carried across resuming a session (`/sessions <id>` or the picker), and not
-part of any envoy profile that reloads from
-disk. Toggling it mid-round takes effect on the very next broker check.
+The flag is **live and session-persisted** (ADR-0132). Every write path
+(`/autopilot`, `--autopilot` at startup, `/principal` role switches) mirrors
+the posture onto the session store as a `AutopilotSet` event, and every
+restore path (bootstrap resume — attach, lazy-resume, boot rehost — and
+in-process `/sessions <id>` switches) re-arms it from there, so a daemon
+crash, kill, upgrade, or reboot mid-task reopens the session in the posture
+it died in instead of silently de-escalating to attended. `/reset` starts
+the new session attended; the posture is never inherited by a fresh session.
+Sessions created before ADR-0132 are recovered from the command ledger (the
+last `Autopilot ON`/`OFF` ack) with a loud notice. Toggling it mid-round
+still takes effect on the very next broker check — persistence changes
+nothing about liveness. Envoy profiles and side conversations that force the
+flag on do so on their own agents, never on the principal's session store.
 
 ## What autopilot is not
 

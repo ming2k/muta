@@ -18,7 +18,9 @@ pub fn migrate_legacy_state() -> bool {
     }
 
     // Check if providers.toml exists from previous schema
-    let old_providers_path = neenee_persistence::paths::get().state_dir.join("providers.toml");
+    let old_providers_path = neenee_persistence::paths::get()
+        .state_dir
+        .join("providers.toml");
     if old_providers_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&old_providers_path) {
             #[derive(Deserialize)]
@@ -135,12 +137,18 @@ pub fn migrate_legacy_state() -> bool {
     }
 
     if let Some(url) = &legacy_config.google_base_url
-        && let Some(connection) = connections.connections.iter_mut().find(|p| p.id == "google")
+        && let Some(connection) = connections
+            .connections
+            .iter_mut()
+            .find(|p| p.id == "google")
     {
         connection.base_url = Some(url.clone());
     }
     if let Some(url) = &legacy_config.anthropic_base_url
-        && let Some(connection) = connections.connections.iter_mut().find(|p| p.id == "anthropic")
+        && let Some(connection) = connections
+            .connections
+            .iter_mut()
+            .find(|p| p.id == "anthropic")
     {
         connection.base_url = Some(url.clone());
     }

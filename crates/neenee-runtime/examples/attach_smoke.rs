@@ -56,6 +56,7 @@ async fn run(project_root: &std::path::Path) -> Result<(), String> {
         // No declared project: the smoke run exercises the daemon's
         // cwd-fallback scope.
         project: None,
+        protocol: None,
     })
     .map_err(|e| format!("{e}"))?;
     sink.send(WsMessage::Text(select.into()))

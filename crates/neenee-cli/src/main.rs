@@ -489,6 +489,7 @@ async fn stop_daemon() -> Result<(), String> {
                             .ok(),
                         version: None,
                         grace_secs: None,
+                        protocol: None,
                     }
                 } else {
                     eprintln!("neenee: no daemon is running.");
@@ -510,9 +511,11 @@ async fn stop_daemon() -> Result<(), String> {
 /// it never depends on the attached session — but the TUI still needs one
 /// hosted session as the underlying conversation carrier. We therefore attach
 /// to the daemon's most-recently-active hosted session and raise the
-/// dashboard over it on the first frame. Esc from that opening dashboard
-/// quits (there is no conversation the user asked for behind it); Enter on a
-/// row attaches to that session through the ordinary re-attach loop.
+/// dashboard over it on the first frame. Leaving that opening dashboard
+/// quits the whole TUI (Esc immediately; Ctrl+C via the app-wide
+/// double-press) — there is no conversation the user asked for behind it.
+/// Enter on a row attaches to that session through the ordinary re-attach
+/// loop.
 ///
 /// Observing is only meaningful against a running host, and a dashboard with
 /// no hosted sessions has nothing to manage — so, like `neenee status`
@@ -531,7 +534,7 @@ async fn run_dashboard(
             .to_string()
     })?;
     if !client::versions_compatible(&info) {
-        return Err(client::version_mismatch(&info).into());
+        return Err(client::incompatibility_error(&info).into());
     }
     // One-shot monitor snapshot to pick the carrier session: the
     // most-recently-active hosted session (ADR-0096: every row is hosted).
@@ -725,7 +728,7 @@ async fn run_attached(
     // wire protocol this client may not share. Fail loud with the fix
     // rather than mis-serializing frames mid-session.
     if !client::versions_compatible(&info) {
-        return Err(client::version_mismatch(&info).into());
+        return Err(client::incompatibility_error(&info).into());
     }
     let mut target = session_id.clone();
     // Only the very first connect may create a fresh session; the `/host`

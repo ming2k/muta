@@ -374,8 +374,13 @@ Migration / sequencing (each step independently shippable):
 2. Daemon-assigned `#N` numbering (today the numbers are client-side
    creation-order; daemon assignment makes them addressable through
    `resolve_id`) + `resolve_id` prefix/number path.
-3. Dashboard composer + `@n` routing on top of `SendPrompt` (no AI yet —
-   this is already the full "game chat" UX).
+3. ~~Dashboard composer + `@n` routing on top of `SendPrompt`~~ **first
+   slice done**: the console is a command surface — receipt transcript,
+   `@n` (and `@a @b` fan-out) routing, slash verbs (`/interrupt`,
+   `/suspend`, `/kill`, `/new`, `/help`), and dock keys (`i`, `s`, `k`).
+   Addresses still resolve client-side against the monitor snapshot, so
+   step 2 (daemon-assigned numbers + `resolve_id`) is what makes them
+   stable across clients.
 4. `[orchestrator]` role config + daemon-level orchestrator agent with the
    five control-plane tools, **plus the WIP coordination channel** (§5):
    session-side `check_wip`/`declare_wip` tools and the orchestrator's

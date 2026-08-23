@@ -55,16 +55,27 @@ export function interruptLabel(reason: RoundInterrupt["reason"]): string {
 }
 
 /**
- * Client build identifier for the ADR-0100 version handshake. The daemon
- * enforces exact equality against its own `CARGO_PKG_VERSION` before any
- * session work, so this must be the plain workspace version (e.g. "0.24.0")
- * with no client prefix. Injected at build time from `package.json` by
- * `vite.config.ts` (`__NEENEE_CLIENT_VERSION__`); CI refuses a drift between
- * the two. Empty (tests / non-vite runtimes) omits the field, which the
- * daemon tolerates.
+ * Client build identifier for the handshake. Advisory identity since
+ * ADR-0134 (the protocol number below is the compatibility gate), but still
+ * enforced against pre-protocol daemons, which judge it by exact equality
+ * against their own `CARGO_PKG_VERSION` — so this must be the plain
+ * workspace version (e.g. "0.24.0") with no client prefix. Injected at
+ * build time from `package.json` by `vite.config.ts`
+ * (`__NEENEE_CLIENT_VERSION__`); CI refuses a drift between the two. Empty
+ * (tests / non-vite runtimes) omits the field, which the daemon tolerates.
  */
 const CLIENT_VERSION: string =
   typeof __NEENEE_CLIENT_VERSION__ === "string" ? __NEENEE_CLIENT_VERSION__ : "";
+
+/**
+ * The wire protocol number this client speaks (ADR-0134). Must equal
+ * `PROTOCOL_VERSION` in `crates/neenee-contracts/src/wire.rs` — CI refuses
+ * a drift between the two (ts-rs cannot export constants, so this is the
+ * one hand-maintained mirror of that value). The daemon serves any number
+ * in its window; sending it is what opts this client into protocol-number
+ * negotiation instead of product-version equality.
+ */
+const PROTOCOL_VERSION = 1;
 
 /** Reconnect base delay for both channels; doubles per failure, capped. */
 const RECONNECT_BASE_MS = 1000;
@@ -261,9 +272,16 @@ export async function probeDaemon(wsUrl: string): Promise<DaemonProbe | null> {
 }
 
 function wireEnvelope(action: AttachAction, project: string | null): string {
-  const frame: { type: "Select"; action: AttachAction; project?: string; version?: string } = {
+  const frame: {
+    type: "Select";
+    action: AttachAction;
+    project?: string;
+    version?: string;
+    protocol?: number;
+  } = {
     type: "Select",
     action,
+    protocol: PROTOCOL_VERSION,
   };
   if (project !== null) {
     frame.project = project;
@@ -696,6 +714,58 @@ export class DaemonStore {
   // Frame dispatch
   // -------------------------------------------------------------------------
 
+  /**
+   * Issue one session-management verb over a one-shot control connection
+   * (the shared shape of `endSession` / `interruptSession` /
+   * `suspendSession`): send `Select{control}`, surface a failed reply as a
+   * toast, close. A session need not be attached to be managed.
+   */
+  private controlVerb(
+    verb: "kill_session" | "interrupt" | "suspend_session",
+    id: string,
+    failureTitle: string,
+  ) {
+    const ws = this.openSocket();
+    ws.onopen = () => {
+      ws.send(
+        wireEnvelope({ control: { verb, session_id: id } }, this.project),
+      );
+    };
+    ws.onmessage = (event) => {
+      try {
+        const frame = JSON.parse(event.data as string) as Wire;
+        if (frame.type === "ControlReply" && !frame.ok) {
+          this.pushToast("error", failureTitle, frame.error ?? "unknown error");
+        }
+      } catch (err) {
+        console.error("control frame parse error:", err, event.data);
+      }
+      this.detachSocketHandlers(ws);
+      ws.close();
+    };
+    ws.onerror = () => {
+      this.pushToast("error", failureTitle, "control connection failed");
+    };
+  }
+
+  /**
+   * Interrupt any hosted session's current round — the panel-side
+   * counterpart of the dashboard's `i` / `/interrupt`. Works on sessions
+   * the panel is not attached to (the verb rides the control plane).
+   */
+  public interruptSession(id: string) {
+    this.controlVerb("interrupt", id, "Could not interrupt session");
+  }
+
+  /**
+   * Suspend a hosted session (park it in memory; the next attach rebuilds
+   * it via lazy resume). The daemon refuses a session with an attached
+   * client or an active round — the error toast carries the reason.
+   */
+  public suspendSession(id: string) {
+    this.controlVerb("suspend_session", id, "Could not suspend session");
+  }
+
   private handleFrame(frame: Wire) {
     switch (frame.type) {
       case "Welcome":
@@ -718,7 +788,13 @@ export class DaemonStore {
         break;
       case "Error":
         this.sessionError = frame.message;
-        if (frame.code === "version_mismatch") {
+        if (frame.code === "protocol_mismatch") {
+          this.pushToast(
+            "error",
+            "Client/daemon protocol mismatch",
+            "Run `neenee stop`, then reload this panel — the daemon restarts on demand at the new build.",
+          );
+        } else if (frame.code === "version_mismatch") {
           this.pushToast(
             "error",
             "Client/daemon version mismatch",

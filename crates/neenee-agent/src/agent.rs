@@ -654,7 +654,12 @@ impl RequestAccountingGuard {
         usage: Option<TokenUsage>,
         estimated_completion_tokens: i64,
     ) {
-        self.settle_with_error(status, usage, estimated_completion_tokens, self.error.clone());
+        self.settle_with_error(
+            status,
+            usage,
+            estimated_completion_tokens,
+            self.error.clone(),
+        );
     }
 
     fn settle_with_error(
@@ -2610,7 +2615,9 @@ impl Agent {
             // that carried only an index) are still dropped below.
             for call in &calls {
                 if call.name.is_empty() && (!call.id.is_empty() || !call.arguments.is_empty()) {
-                    let err_msg = "Provider stream ended mid-tool-call; the response was likely truncated.".to_string();
+                    let err_msg =
+                        "Provider stream ended mid-tool-call; the response was likely truncated."
+                            .to_string();
                     request_accounting.record_error(&err_msg);
                     return Err(HarnessError::Retryable {
                         message: err_msg,

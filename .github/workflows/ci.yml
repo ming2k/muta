@@ -75,6 +75,14 @@ jobs:
           web_ver=$(node -p "require('./apps/web/package.json').version")
           echo "workspace: $cargo_ver, web: $web_ver"
           test "$cargo_ver" = "$web_ver"
+      # Wire-protocol bump enforcement (ADR-0134): a wire-surface change
+      # without a PROTOCOL_VERSION bump fails unless the PR is labeled
+      # `wire-compatible` (the author's assertion that the change is purely
+      # additive — a reviewer verifies it). Run before the regeneration
+      # below so the committed mirror is what gets judged.
+      - name: Wire protocol bump policy
+        working-directory: .
+        run: bash scripts/check-wire-compat.sh
       # Wire-type drift guard: the web client's protocol types
       # (apps/web/src/lib/generated/wire.gen.ts) are generated from
       # neenee-contracts by ts-rs; regenerate them and fail on any diff.

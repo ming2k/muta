@@ -8,6 +8,16 @@
 //! `rustc-env` variables to the package's own test binaries, so
 //! `cargo test -p neenee-contracts` regenerates the bindings with `number`
 //! and no caller-side setup.
+//!
+//! # Regenerate with the FULL test run, never a filtered one
+//!
+//! ts-rs 12 writes the export file per *test binary run*: the first export
+//! executed in a process overwrites the file and subsequent ones merge into
+//! it. A filtered run (`cargo test -p neenee-contracts wire::`) executes
+//! only a subset of the export tests, so its first write truncates the file
+//! to just those types. Always regenerate with the unfiltered
+//! `cargo test -p neenee-contracts` (CI does exactly this and fails on any
+//! drift, so a truncated file cannot merge).
 fn main() {
     println!("cargo::rustc-env=TS_RS_LARGE_INT=number");
 }

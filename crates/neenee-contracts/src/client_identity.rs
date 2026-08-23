@@ -87,10 +87,8 @@ pub const AIDER_CLIENT_HEADERS: &[(&str, &str)] =
 pub const ZCODE_USER_AGENT: &str = "ZCode/3.5.3";
 
 /// Client-identity headers used when impersonating Zhipu ZCode.
-pub const ZCODE_CLIENT_HEADERS: &[(&str, &str)] = &[
-    ("X-Title", "Z Code"),
-    ("X-ZCode-Agent", "glm"),
-];
+pub const ZCODE_CLIENT_HEADERS: &[(&str, &str)] =
+    &[("X-Title", "Z Code"), ("X-ZCode-Agent", "glm")];
 
 /// Client-identity headers used for GitHub Copilot Chat requests.
 pub const COPILOT_CLIENT_HEADERS: &[(&str, &str)] = &[
@@ -103,9 +101,8 @@ pub const COPILOT_CLIENT_HEADERS: &[(&str, &str)] = &[
 pub const ANTIGRAVITY_USER_AGENT: &str = "antigravity/1.23.2 linux/amd64";
 
 /// Client-identity headers used when impersonating Google Antigravity.
-pub const ANTIGRAVITY_CLIENT_HEADERS: &[(&str, &str)] = &[
-    ("x-goog-api-client", "gl-go/1.23.2 gdcl/0.1"),
-];
+pub const ANTIGRAVITY_CLIENT_HEADERS: &[(&str, &str)] =
+    &[("x-goog-api-client", "gl-go/1.23.2 gdcl/0.1")];
 
 /// First-class client identity presets and custom identity for connection impersonation.
 #[derive(Debug, Clone, PartialEq, Eq, Default, ts_rs::TS)]
@@ -367,8 +364,8 @@ impl<'de> Deserialize<'de> for ClientIdentity {
                         }
                     }
                 }
-                let user_agent = user_agent
-                    .ok_or_else(|| serde::de::Error::missing_field("user_agent"))?;
+                let user_agent =
+                    user_agent.ok_or_else(|| serde::de::Error::missing_field("user_agent"))?;
                 Ok(ClientIdentity::Custom {
                     user_agent,
                     extra_headers,

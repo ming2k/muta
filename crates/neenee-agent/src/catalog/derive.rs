@@ -127,16 +127,13 @@ pub fn derive_channel(
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "https://daily-cloudcode-pa.googleapis.com".to_string()),
-            user_agent: connection
-                .user_agent
-                .clone()
-                .unwrap_or_else(|| {
-                    if connection.client_identity != neenee_contracts::ClientIdentity::Native {
-                        connection.client_identity.user_agent().to_string()
-                    } else {
-                        neenee_contracts::client_identity::ANTIGRAVITY_USER_AGENT.to_string()
-                    }
-                }),
+            user_agent: connection.user_agent.clone().unwrap_or_else(|| {
+                if connection.client_identity != neenee_contracts::ClientIdentity::Native {
+                    connection.client_identity.user_agent().to_string()
+                } else {
+                    neenee_contracts::client_identity::ANTIGRAVITY_USER_AGENT.to_string()
+                }
+            }),
             effort,
             project_id: oauth.1,
         },
@@ -270,7 +267,11 @@ fn oauth_ids(connection: &Connection) -> (Option<String>, Option<String>) {
     }
     let store = neenee_providers::oauth::AuthStore::load();
     store
-        .get_for_provider(&connection.id, connection.preset_id.as_deref(), connection.auth)
+        .get_for_provider(
+            &connection.id,
+            connection.preset_id.as_deref(),
+            connection.auth,
+        )
         .map(|t| {
             (
                 t.account_id.clone(),
@@ -306,8 +307,11 @@ pub fn default_endpoint(transport: UserTransport) -> String {
 pub fn resolve_credential(connection: &Connection, creds: &Credentials) -> SecretString {
     if connection.auth.is_oauth() {
         let store = neenee_providers::oauth::AuthStore::load();
-        let tokens =
-            store.get_for_provider(&connection.id, connection.preset_id.as_deref(), connection.auth);
+        let tokens = store.get_for_provider(
+            &connection.id,
+            connection.preset_id.as_deref(),
+            connection.auth,
+        );
         return tokens.map(|t| t.access.clone()).unwrap_or_default();
     }
     if let Some(env) = connection.api_key_env.as_deref()

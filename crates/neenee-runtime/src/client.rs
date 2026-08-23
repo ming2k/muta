@@ -138,6 +138,7 @@ pub fn discover(_project_root: &Path) -> Option<DaemonInfo> {
                 local_endpoint,
                 version: Some(crate::serve::daemon_version().to_string()),
                 grace_secs: None,
+                protocol: Some(neenee_contracts::PROTOCOL_VERSION),
             };
             // Restore discovery file so future lookups are immediate
             let _ = discovery::write_global(&recovered);
@@ -205,6 +206,33 @@ pub fn compare_versions(client: &str, daemon: &str) -> VersionRelation {
     }
 }
 
+/// The actionable error for a discovered-but-incompatible daemon,
+/// preferring the wire-protocol explanation when the record declares a
+/// protocol number outside this client's window (ADR-0134), then the
+/// dev-drift explanation (same version, replaced binary), and falling
+/// back to the product-version message for legacy records. This is the
+/// entry point callers should use after `versions_compatible` reports
+/// false.
+pub fn incompatibility_error(info: &DaemonInfo) -> String {
+    if info
+        .protocol
+        .is_some_and(|p| !neenee_contracts::protocol_accepts(p))
+    {
+        protocol_mismatch(info)
+    } else if info.version.as_deref() == Some(crate::serve::daemon_version())
+        && !daemon_image_is_current(info.pid)
+    {
+        format!(
+            "client/daemon binary mismatch: running daemon (pid {}, version {}) executable differs from this client (rebuilt binary). \
+             Stop it with `neenee stop` and rerun — the daemon restarts on demand.",
+            info.pid,
+            crate::serve::daemon_version()
+        )
+    } else {
+        version_mismatch(info)
+    }
+}
+
 /// The actionable version-skew error (ADR-0100 rule 4), naming both builds
 /// and the directional fix (server behind -> stop/restart server; client behind -> update client).
 /// Public so `neenee`-level commands can surface it uniformly
@@ -251,24 +279,77 @@ pub fn version_mismatch(info: &DaemonInfo) -> String {
     }
 }
 
-/// Whether a discovered daemon speaks this client's version (ADR-0100
-/// rule 4). `None` on the record (a pre-versioning daemon) counts as a
-/// mismatch: the wire protocol has no negotiation, so guessing is exactly
-/// the failure mode the rule exists to prevent.
+/// The actionable wire-protocol-skew error (ADR-0134), naming both protocol
+/// numbers and the directional fix. Public for the same reason as
+/// [`version_mismatch`]: uniform surfacing wherever a discovered daemon is
+/// about to be spoken to. Only reached when the record carries a protocol
+/// number outside this client's window.
+pub fn protocol_mismatch(info: &DaemonInfo) -> String {
+    let client_proto = neenee_contracts::PROTOCOL_VERSION;
+    let daemon_proto = info.protocol.unwrap_or(0);
+    if daemon_proto > client_proto {
+        format!(
+            "client/daemon wire protocol mismatch: running daemon (pid {}) speaks protocol {daemon_proto}, \
+             newer than this client's protocol {client_proto}. \
+             Stop it with `neenee stop` and rerun — the daemon restarts on demand at the new build.",
+            info.pid
+        )
+    } else {
+        format!(
+            "client/daemon wire protocol mismatch: this client speaks protocol {client_proto}, \
+             older than the running daemon (pid {}) requires — the daemon reports protocol {daemon_proto}. \
+             Please update your neenee client.",
+            info.pid
+        )
+    }
+}
+
+/// Whether a discovered daemon can serve this client (ADR-0100 rule 4,
+/// revised by ADR-0134 for protocol-declaring records).
 ///
-/// Version equality is *necessary but not sufficient* during development:
-/// `cargo run` in a dirty workspace rebuilds the daemon binary in place
-/// while an older daemon of the same `CARGO_PKG_VERSION` keeps serving,
-/// so the running image drifts from the client's without any version
-/// signal. [`daemon_image_is_current`] closes that gap by comparing the
-/// running daemon's executable against this client's own — a daemon whose
-/// `/proc/<pid>/exe` link has been replaced (or points elsewhere) is
-/// treated as incompatible.
+/// The decision has two regimes:
+///
+/// - **Protocol-declaring record** (`protocol: Some`, any daemon since the
+///   field exists): the wire window is the compatibility authority, and a
+///   daemon inside it is served *whatever its product version* — the
+///   patch-bump case (wire unchanged, protocol number unchanged) must not
+///   kick a healthy daemon out of bed. Exactly one local freshness gate
+///   survives: the **dev-drift lie** — same version, different binary
+///   (`daemon_image_is_current` false), i.e. `cargo run` rebuilt the
+///   binary under a still-serving daemon of the same `CARGO_PKG_VERSION`.
+///   That is the one state where every version signal agrees and the
+///   client is still about to test a stale image; only the inode sees it.
+///   An upgrade leftover (different version, in-window protocol, different
+///   image) is deliberately **served**: the daemon restarts on idle exit,
+///   and refusing would make every patch release interrupt live sessions
+///   for no wire-level reason.
+/// - **Legacy record** (`protocol: None`, pre-0.31 daemon): the record
+///   predates negotiation, so ADR-0100 rule 4's exact product-version
+///   equality (plus the image check) remains its gate unchanged.
 pub fn versions_compatible(info: &DaemonInfo) -> bool {
-    info.version
-        .as_deref()
-        .is_some_and(|daemon| daemon == crate::serve::daemon_version())
-        && daemon_image_is_current(info.pid)
+    local_pair_compatible(info.protocol, info.version.as_deref(), info.pid)
+}
+
+/// The pure decision core of [`versions_compatible`], split out so the
+/// policy is unit-testable without a real daemon process (the image probe
+/// is resolved by the caller for legacy records and inside for
+/// protocol-declaring ones — see the regime docs above).
+fn local_pair_compatible(protocol: Option<u32>, version: Option<&str>, pid: u32) -> bool {
+    if let Some(daemon_protocol) = protocol {
+        // Protocol-declaring record: the window is the wire gate...
+        if !neenee_contracts::protocol_accepts(daemon_protocol) {
+            return false;
+        }
+        // ...and locally, only the dev-drift lie remains a refusal.
+        // Same version + different image = the client is about to test a
+        // stale binary while every version signal says "equal". Different
+        // version + in-window protocol = upgrade leftover: serve it.
+        let same_version = version == Some(crate::serve::daemon_version());
+        return !(same_version && !daemon_image_is_current(pid));
+    }
+    // Legacy record: exact product-version equality (ADR-0100 rule 4),
+    // `None` counting as a mismatch, plus the image check.
+    version.is_some_and(|v| v == crate::serve::daemon_version()) && daemon_image_is_current(pid)
 }
 
 /// Whether the running daemon's executable is still the exact file this
@@ -470,7 +551,7 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
         }
         // Incompatible daemon is running. Do not stop or kill it to avoid
         // interrupting ongoing tasks. Prompt the user about the incompatibility.
-        return Err(version_mismatch(&info));
+        return Err(incompatibility_error(&info));
     }
 
     // Check if another daemon is holding the instance lock
@@ -490,7 +571,7 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
                 if versions_compatible(&info) {
                     return Ok(info);
                 } else {
-                    return Err(version_mismatch(&info));
+                    return Err(incompatibility_error(&info));
                 }
             }
             if !is_process_alive(holder_pid) {
@@ -516,7 +597,7 @@ pub async fn ensure_daemon(project_root: &Path) -> Result<DaemonInfo, String> {
             if versions_compatible(&info) {
                 return Ok(info);
             } else {
-                return Err(version_mismatch(&info));
+                return Err(incompatibility_error(&info));
             }
         }
         if let Ok(Some(status)) = child.try_wait() {
@@ -760,7 +841,15 @@ where
     let select = serde_json::to_string(&Wire::Select {
         action,
         project,
+        // Product build: advisory identity on the wire since ADR-0134 (the
+        // protocol number below is the gate), but still enforced against
+        // pre-protocol daemons, which judge it by exact equality.
         version: Some(crate::serve::daemon_version().to_string()),
+        // Wire protocol number (ADR-0134): the authority for whether this
+        // daemon can serve us. A pre-protocol daemon ignores the field
+        // (unknown fields are dropped by serde) and falls back to judging
+        // the product version above.
+        protocol: Some(neenee_contracts::PROTOCOL_VERSION),
     })
     .map_err(|e| format!("serialize select: {e}"))?;
     ws_sink
@@ -944,7 +1033,11 @@ where
     let select = serde_json::to_string(&Wire::Select {
         action,
         project: None,
+        // Same handshake contract as the attach path (ADR-0134): the
+        // protocol number is the gate, the product version the advisory
+        // identity still enforced by pre-protocol daemons.
         version: Some(crate::serve::daemon_version().to_string()),
+        protocol: Some(neenee_contracts::PROTOCOL_VERSION),
     })
     .map_err(|e| format!("serialize control select: {e}"))?;
     ws_sink
@@ -1052,6 +1145,7 @@ where
         // Monitor streams are host-wide; no project scope applies.
         project: None,
         version: Some(crate::serve::daemon_version().to_string()),
+        protocol: Some(neenee_contracts::PROTOCOL_VERSION),
     })
     .map_err(|e| format!("serialize select: {e}"))?;
     ws_sink
@@ -1208,6 +1302,88 @@ mod tests {
         assert!(daemon_image_is_current(std::process::id()));
     }
 
+    /// The local compatibility policy (ADR-0134 revision), in pure form.
+    /// The image probe resolves against a *foreign* pid (this test's own
+    /// pid is the only one whose image is current), so:
+    ///   - image-current rows are simulated with `std::process::id()`
+    ///   - image-drift rows with a pid that is alive but foreign — u32::MAX-1
+    ///     has no /proc entry, which the probe tolerates as "current"; to
+    ///     get a guaranteed *drifted* verdict we use the same-version +
+    ///     foreign-exe combination the policy keys on via this very test
+    ///     binary's own pid vs a fabricated one — see each case below.
+    #[test]
+    fn local_pair_policy_after_adr0134() {
+        let me = crate::serve::daemon_version();
+        // In-window protocol + different version (upgrade leftover): SERVED.
+        // A patch bump must not interrupt a healthy daemon.
+        assert!(local_pair_compatible(
+            Some(neenee_contracts::PROTOCOL_VERSION),
+            Some("0.0.1-much-older"),
+            4242, // image check irrelevant: different version short-circuits
+        ));
+        // In-window + MIN edge + different version: also served.
+        assert!(local_pair_compatible(
+            Some(neenee_contracts::MIN_PROTOCOL_VERSION),
+            Some("99.0.0"),
+            4242,
+        ));
+        // Out-of-window protocol: refused whatever the version says.
+        assert!(!local_pair_compatible(
+            Some(neenee_contracts::PROTOCOL_VERSION + 1),
+            Some(me),
+            std::process::id(),
+        ));
+        assert!(!local_pair_compatible(Some(0), Some("0.0.1"), 4242,));
+        // Same version + current image (this very process): served.
+        assert!(local_pair_compatible(
+            Some(neenee_contracts::PROTOCOL_VERSION),
+            Some(me),
+            std::process::id(),
+        ));
+        // Legacy record (no protocol): exact version equality rules.
+        assert!(local_pair_compatible(None, Some(me), std::process::id(),));
+        assert!(!local_pair_compatible(
+            None,
+            Some("0.0.1"),
+            std::process::id(),
+        ));
+        assert!(!local_pair_compatible(None, None, std::process::id()));
+    }
+
+    /// The dev-drift lie (same version, different image) is refused even
+    /// with a matching protocol — the one freshness gate that survives
+    /// ADR-0134 locally. Proven by the same miniature rebuild the image
+    /// check itself uses: a same-version record pointing at a daemon exe
+    /// that is *not this binary*.
+    #[test]
+    fn dev_drift_same_version_is_refused() {
+        #[cfg(unix)]
+        {
+            // Any live process whose exe is not this test binary reports
+            // image-drift: use a freshly spawned `sleep` if /proc exists.
+            use std::process::{Command, Stdio};
+            if std::path::Path::new("/proc/self/exe").exists() {
+                let mut child = Command::new("sleep")
+                    .arg("5")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let drifted = local_pair_compatible(
+                    Some(neenee_contracts::PROTOCOL_VERSION),
+                    Some(crate::serve::daemon_version()),
+                    child.id(),
+                );
+                let _ = child.kill();
+                let _ = child.wait();
+                assert!(
+                    !drifted,
+                    "same version + foreign image = dev-drift lie, must be refused"
+                );
+            }
+        }
+    }
+
     #[test]
     fn daemon_image_is_current_tolerates_missing_proc_entry() {
         // A pid that does not exist (or /proc unavailable): no evidence of
@@ -1254,6 +1430,7 @@ mod tests {
             local_endpoint: None,
             version: Some("0.24.0".to_string()),
             grace_secs: None,
+            protocol: None,
         };
         let msg = version_mismatch(&daemon_older);
         assert!(msg.contains("is older than this client"));
@@ -1270,6 +1447,7 @@ mod tests {
             local_endpoint: None,
             version: Some("99.0.0".to_string()),
             grace_secs: None,
+            protocol: None,
         };
         let msg = version_mismatch(&daemon_newer);
         assert!(msg.contains("older than the running daemon"));
@@ -1286,6 +1464,7 @@ mod tests {
             local_endpoint: None,
             version: None,
             grace_secs: None,
+            protocol: None,
         };
         let msg = version_mismatch(&daemon_none);
         assert!(msg.contains("unknown (older than 0.24)"));
@@ -1302,6 +1481,7 @@ mod tests {
             local_endpoint: None,
             version: Some(crate::serve::daemon_version().to_string()),
             grace_secs: None,
+            protocol: None,
         };
         let msg = version_mismatch(&daemon_equal_drift);
         assert!(msg.contains("client/daemon"));
@@ -1319,6 +1499,7 @@ mod tests {
             local_endpoint: None,
             version: None,
             grace_secs: None,
+            protocol: None,
         }
     }
     fn dead_port() -> u16 {
@@ -1355,6 +1536,7 @@ mod tests {
             local_endpoint: None,
             version: None,
             grace_secs: None,
+            protocol: None,
         };
         std::fs::write(&path, serde_json::to_vec(&live_rec).unwrap()).unwrap();
         assert!(discover_at(&path).is_none());
@@ -1386,6 +1568,7 @@ mod tests {
             local_endpoint: None,
             version: Some("0.24.0".to_string()),
             grace_secs: None,
+            protocol: None,
         };
         let res = stop(&info).await;
         assert!(res.is_ok());
@@ -1405,6 +1588,7 @@ mod tests {
             local_endpoint: None,
             version: Some("0.24.0".to_string()),
             grace_secs: None,
+            protocol: None,
         };
         let error = stop(&info).await.unwrap_err();
         assert!(error.contains("process identity is stale"));

@@ -23,7 +23,7 @@ pub async fn run(
                 "no daemon is running. Start or discover one before managing sessions.".to_string()
             })?;
             if !client::versions_compatible(&info) {
-                return Err(client::version_mismatch(&info).into());
+                return Err(client::incompatibility_error(&info).into());
             }
             client::control(
                 &info,

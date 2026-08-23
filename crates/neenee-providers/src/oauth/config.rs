@@ -441,7 +441,9 @@ pub fn google_antigravity_preset() -> OAuthConfig {
         extra_token_params: Vec::new(),
         extra_refresh_params: Vec::new(),
         extra_headers: Vec::new(),
-        user_agent: Some(Cow::Borrowed(neenee_contracts::client_identity::ANTIGRAVITY_USER_AGENT)),
+        user_agent: Some(Cow::Borrowed(
+            neenee_contracts::client_identity::ANTIGRAVITY_USER_AGENT,
+        )),
         oauth_host: Cow::Borrowed("127.0.0.1"),
         oauth_port: 51121,
         port_mode: PortMode::PreferredOrDynamic(51121),

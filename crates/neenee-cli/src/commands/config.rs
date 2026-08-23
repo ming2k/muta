@@ -46,7 +46,10 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                 "default_model:      {}",
                 config.default_model.as_deref().unwrap_or("(none)")
             );
-            println!("retry_max_attempts:  {}", config.connection_retry_max_attempts);
+            println!(
+                "retry_max_attempts:  {}",
+                config.connection_retry_max_attempts
+            );
             println!("retry_base_ms:       {}ms", config.connection_retry_base_ms);
             println!("retry_max_ms:        {}ms", config.connection_retry_max_ms);
             println!(

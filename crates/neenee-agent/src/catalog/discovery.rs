@@ -64,16 +64,13 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
             .clone()
             .filter(|u| !u.trim().is_empty())
             .unwrap_or_else(|| template_base.to_string());
-        let user_agent = connection
-            .user_agent
-            .clone()
-            .or_else(|| {
-                if connection.client_identity != neenee_contracts::ClientIdentity::Native {
-                    Some(connection.client_identity.user_agent().to_string())
-                } else {
-                    tpl_ua.map(str::to_string)
-                }
-            });
+        let user_agent = connection.user_agent.clone().or_else(|| {
+            if connection.client_identity != neenee_contracts::ClientIdentity::Native {
+                Some(connection.client_identity.user_agent().to_string())
+            } else {
+                tpl_ua.map(str::to_string)
+            }
+        });
 
         let discovery_req = ModelDiscoveryRequest {
             protocol: DiscoveryProtocol::from_template_protocol(protocol),

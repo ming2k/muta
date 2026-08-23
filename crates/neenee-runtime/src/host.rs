@@ -327,6 +327,7 @@ async fn run_inner(
         },
         local_endpoint: bound_local.clone(),
         version: Some(crate::serve::daemon_version().to_string()),
+        protocol: Some(neenee_contracts::PROTOCOL_VERSION),
         // Publish the drain budget so `neenee daemon stop` waits *this*
         // daemon's grace before escalating (ADR-0116): an early SIGTERM
         // would force-exit the daemon and skip the very session teardown

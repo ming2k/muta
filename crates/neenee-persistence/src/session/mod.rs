@@ -188,6 +188,17 @@ struct SessionData {
     /// legacy canonical JSON byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     retry_pending: Option<neenee_contracts::RetryPoint>,
+    /// Session-scoped autopilot posture (ADR-0132): `true` means the agent
+    /// runs without human intervention (no permission prompts, no
+    /// questions). Mirrored from `Agent::get_autopilot` so an accidental
+    /// daemon exit — kill, crash, reboot — restores the session in the same
+    /// posture it died in, and the user picks up exactly where they left
+    /// off. `#[serde(default)]` so legacy snapshots load as attended (the
+    /// historical process-local default) with no migration; `false` is
+    /// skipped on serialization to keep legacy canonical JSON byte-identical
+    /// (stored checksums stay valid).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    autopilot: bool,
 }
 
 impl Default for SessionData {
@@ -217,6 +228,7 @@ impl Default for SessionData {
             commands: Vec::new(),
             round_interrupts: Vec::new(),
             retry_pending: None,
+            autopilot: false,
         }
     }
 }
@@ -243,6 +255,12 @@ impl SessionData {
     /// [`SessionStore::should_skip_persist`]) instead of re-deriving the
     /// condition inline, so the "what makes a session real" rule lives in
     /// exactly one place and cannot drift between setters.
+    /// The user-facing-emptiness rule deliberately excludes `autopilot`:
+    /// toggling autopilot on an otherwise-fresh session is a posture change
+    /// on a session that has nothing to resume yet, not substantive work —
+    /// it must not materialize an empty session file. Once the session gains
+    /// dialogue or other substantive state, the flag rides along like every
+    /// other session-scoped field.
     fn is_user_facing_empty(&self) -> bool {
         self.model_window.is_empty()
             && self.archived_transcript.is_empty()
@@ -566,6 +584,9 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::RetryPendingCleared {} => {
                 data.retry_pending = None;
             }
+            SessionEvent::AutopilotSet { enabled } => {
+                data.autopilot = *enabled;
+            }
             SessionEvent::Reset { id } => {
                 let project_root = data.project_root.clone();
                 let schema_version = data.schema_version;
@@ -687,6 +708,13 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             event: SessionEvent::RoundCounterSet {
                 counter: data.round_counter,
             },
+        });
+    }
+    if data.autopilot {
+        events.push(crate::events::EventEnvelope {
+            seq: events.len() as u64,
+            timestamp: data.updated_at,
+            event: SessionEvent::AutopilotSet { enabled: true },
         });
     }
     for record in &data.request_usage_records {
@@ -1071,6 +1099,44 @@ impl SessionStore {
                 state
                     .event_log
                     .append(SessionEvent::DisabledToolsSet { tools })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
+        };
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// The session-scoped autopilot posture (ADR-0132). `false` = attended
+    /// (default, and the historical process-local value). Restored on every
+    /// resume/rehost so an accidental daemon exit returns the user to the
+    /// exact posture they left.
+    pub async fn autopilot(&self) -> bool {
+        self.state.lock().await.data.autopilot
+    }
+
+    /// Replace the autopilot posture. Mirrors `Agent::get_autopilot` so a
+    /// daemon restart restores the session in the posture it died in. The
+    /// single write path for the flag.
+    pub async fn set_autopilot(&self, enabled: bool) -> Result<(), String> {
+        let (path, data, should_persist) = {
+            let mut state = self.state.lock().await;
+            // No-op guard: replaying the same posture must not rewrite the
+            // event log or snapshot (keeps `updated_at` honest and avoids
+            // log churn from idempotent re-arms).
+            if state.data.autopilot == enabled {
+                return Ok(());
+            }
+            state.data.autopilot = enabled;
+            state.data.updated_at = unix_timestamp();
+            let empty_unpersisted = Self::should_skip_persist(&state);
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state
+                    .event_log
+                    .append(SessionEvent::AutopilotSet { enabled })?;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };
@@ -4964,6 +5030,111 @@ mod tests {
         assert_eq!(cleared.round_counter().await, 0);
 
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn autopilot_posture_round_trips_through_disk() {
+        // ADR-0132: the autopilot posture is session-scoped persisted state.
+        // A daemon crash mid-unattended-session must reopen unattended — the
+        // store, not the process, is the authority.
+        let directory =
+            std::env::temp_dir().join(format!("neenee-autopilot-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        assert!(!store.autopilot().await, "fresh sessions start attended");
+
+        // Materialise the session first: a posture toggle alone on an empty
+        // session must not materialise a file (is_user_facing_empty excludes
+        // autopilot).
+        store.set_round_counter(1).await.unwrap();
+        store.set_autopilot(true).await.unwrap();
+        assert!(path.exists(), "materialised session persists the toggle");
+
+        let loaded = SessionStore::for_path(path.clone());
+        assert!(
+            loaded.autopilot().await,
+            "the posture survives persist + reload"
+        );
+
+        // Toggling off persists too.
+        loaded.set_autopilot(false).await.unwrap();
+        let reloaded = SessionStore::for_path(path.clone());
+        assert!(!reloaded.autopilot().await);
+
+        // A same-value write is a no-op, not an event (log stays quiet).
+        let events_before = {
+            let state = reloaded.state.lock().await;
+            state.event_log.load().map(|e| e.len()).unwrap_or(0)
+        };
+        reloaded.set_autopilot(false).await.unwrap();
+        let events_after = {
+            let state = reloaded.state.lock().await;
+            state.event_log.load().map(|e| e.len()).unwrap_or(0)
+        };
+        assert_eq!(
+            events_before, events_after,
+            "idempotent posture writes append no events"
+        );
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn autopilot_toggle_alone_does_not_materialise_empty_session() {
+        // The emptiness rule deliberately excludes autopilot: arming
+        // autopilot on a brand-new session with no dialogue must not create
+        // a session file on disk (nothing to resume yet).
+        let directory =
+            std::env::temp_dir().join(format!("neenee-autopilot-guard-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store.set_autopilot(true).await.unwrap();
+        assert!(
+            !path.exists(),
+            "a posture toggle alone must not materialise an empty session"
+        );
+        assert!(
+            store.autopilot().await,
+            "the in-memory value still holds for the live process"
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn autopilot_event_replays_from_log() {
+        // Event-sourced authority: a snapshot-less replay of the jsonl log
+        // must rebuild the posture (the snapshot is only a cache; the log
+        // wins).
+        let directory =
+            std::env::temp_dir().join(format!("neenee-autopilot-log-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("session.json");
+        let store = SessionStore::for_path(path.clone());
+        store.set_round_counter(1).await.unwrap(); // materialise
+        store.set_autopilot(true).await.unwrap();
+
+        // Drop the snapshot, keep the event log: reload must replay.
+        let _ = std::fs::remove_file(&path);
+        let replayed = SessionStore::for_path(path.clone());
+        assert!(
+            replayed.autopilot().await,
+            "the posture replays from the event log alone"
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn autopilot_false_is_omitted_from_snapshot_json() {
+        // Canonical-JSON compatibility (same policy as commands /
+        // round_interrupts / retry_pending): an attended session serialises
+        // without the key so legacy checksums stay byte-identical.
+        let json = serde_json::to_string(&SessionData::default()).unwrap();
+        assert!(!json.contains("\"autopilot\""));
+        let json_on = serde_json::to_string(&SessionData {
+            autopilot: true,
+            ..SessionData::default()
+        })
+        .unwrap();
+        assert!(json_on.contains("\"autopilot\":true"));
     }
 
     #[test]

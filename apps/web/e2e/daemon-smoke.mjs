@@ -37,7 +37,7 @@ function ok(msg) {
   console.log(`ok: ${msg}`);
 }
 
-function wsConnect(action, { token = TOKEN, version = VERSION } = {}) {
+function wsConnect(action, { token = TOKEN, version = VERSION, protocol } = {}) {
   return new Promise((resolvePromise, reject) => {
     const ws = new WebSocket(WS_URL, token ? [`bearer.${token}`] : []);
     const rejectOnce = () => reject(new Error("handshake refused"));
@@ -46,7 +46,9 @@ function wsConnect(action, { token = TOKEN, version = VERSION } = {}) {
       if (!e.wasClean) rejectOnce();
     };
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: "Select", action, version }));
+      const select = { type: "Select", action, version };
+      if (protocol !== undefined) select.protocol = protocol;
+      ws.send(JSON.stringify(select));
       resolvePromise(ws);
     };
   });
@@ -131,6 +133,34 @@ async function main() {
   );
   if (err.code !== "version_mismatch") fail(step, `expected code version_mismatch, got ${err.code}`);
   ok("version skew refused with code=version_mismatch");
+
+  // ADR-0134: the protocol number is the authority when declared. A skew
+  // product version alongside a valid protocol number is SERVED (the
+  // monitor snapshot arrives, not an Error)…
+  step = "protocol-wins-over-version";
+  const served = await wsConnect(
+    { monitor: { watch: false, include_idle: true } },
+    { version: "0.0.0-skew", protocol: 1 },
+  ).catch((e) => fail(step, e.message));
+  const protoSnapshot = await nextFrame(served, (f) => f.type === "Monitor", "snapshot").catch(
+    (e) => fail(step, e.message),
+  );
+  if (protoSnapshot.kind !== "snapshot")
+    fail(step, `expected a snapshot, got ${protoSnapshot.kind}`);
+  ok("declared protocol serves a skewed product version");
+
+  // …and an out-of-window number is refused regardless of the version.
+  step = "protocol-code";
+  const future = await wsConnect(
+    { monitor: { watch: false, include_idle: true } },
+    { protocol: 99 },
+  ).catch((e) => fail(step, e.message));
+  const perr = await nextFrame(future, (f) => f.type === "Error", "protocol-skew").catch((e) =>
+    fail(step, e.message),
+  );
+  if (perr.code !== "protocol_mismatch")
+    fail(step, `expected code protocol_mismatch, got ${perr.code}`);
+  ok("out-of-window protocol refused with code=protocol_mismatch");
 
   clearTimeout(timer);
   console.log("E2E PASS");

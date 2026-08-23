@@ -122,6 +122,14 @@ pub enum SessionEvent {
     /// completed (naturally or via retry), or the session moved on and the
     /// point went stale. Snapshot semantics: the slot becomes `None`.
     RetryPendingCleared {},
+    /// The session's autopilot posture changed (ADR-0132). Snapshot
+    /// semantics. Mirrors `Agent::get_autopilot` so a daemon restart
+    /// (crash, kill, upgrade, reboot) restores the session in the same
+    /// attended/unattended posture it died in instead of silently
+    /// de-escalating to attended. Written by the `/autopilot` handler, the
+    /// `--autopilot` startup path, and `/principal` role switches; read on
+    /// every resume/rehost.
+    AutopilotSet { enabled: bool },
 }
 
 /// Wrapper around a [`SessionEvent`] that adds metadata for ordering and
