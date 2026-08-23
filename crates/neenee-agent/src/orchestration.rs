@@ -781,13 +781,33 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         let is_current = context.lifecycle.is_current(generation);
         // Consume the reason parked by whichever stop site cancelled this
         // round (C11). Taken before the match so every interrupted arm —
-        // including the generation-suppressed one below — sees it.
-        let interrupt_reason = context.lifecycle.take_interrupt();
-        let interrupt_record = interrupt_reason.map(|reason| neenee_contracts::RoundInterrupt {
-            reason,
-            at_ms: unix_epoch_ms(),
-            round: result.as_ref().err().map(|_| context.agent.round_count()),
-        });
+        // including the generation-suppressed one below — sees it. But a
+        // parked reason alone does not mean the round *stopped*: a stop site
+        // parks unconditionally (even while idle), and a late Esc Esc can
+        // land after the round already passed its last cancellation
+        // checkpoint. Only an actually-stopped round keeps its record —
+        // a natural completion (`Ok(Completed)`) and a hook-denied prompt
+        // (`Ok(NotStarted)`) are successes, not interrupts, and must not be
+        // projected back as `▲ interrupted · <reason>` on resume.
+        let stopped = match &result {
+            Ok(RoundCompletion::Completed) | Ok(RoundCompletion::NotStarted) => false,
+            Ok(RoundCompletion::Unsent) | Err(_) => true,
+        };
+        let interrupt_record = if stopped {
+            context
+                .lifecycle
+                .take_interrupt()
+                .map(|reason| neenee_contracts::RoundInterrupt {
+                    reason,
+                    at_ms: unix_epoch_ms(),
+                    round: result.as_ref().err().map(|_| context.agent.round_count()),
+                })
+        } else {
+            // Success: drop whatever was parked so it cannot leak into a
+            // later round either (defense in depth behind `begin`'s clear).
+            context.lifecycle.take_interrupt();
+            None
+        };
         match result {
             Ok(_) => {}
             Err(HarnessError::Interrupted) if is_current => {
@@ -805,13 +825,17 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
             Err(_) => {}
         }
         if let Some(record) = interrupt_record {
-            // One record + one live event per stopped round, on *every*
-            // interrupted path: the visible `[Interrupted]` arm above, the
-            // generation-suppressed supersede arm (the silent `Err(_) => {}`
-            // above — previously no trace at all), and the phase-1 unsend
-            // (which returned `Ok(())` after emitting `UnsentInput`). The
-            // record is durable projection state; the live event lets every
-            // attached frontend render the stop with its reason immediately.
+            // One record + one live event per *stopped* round. The visible
+            // `[Interrupted]` arm above, the generation-suppressed supersede
+            // arm (the silent `Err(_) => {}` above — previously no trace at
+            // all), and the phase-1 unsend (which returns
+            // `Ok(RoundCompletion::Unsent)` after emitting `UnsentInput`).
+            // A round that completed naturally is deliberately excluded: its
+            // history committed and `RoundCompleted` already told the story
+            // — an interrupt record there would project a false
+            // "▲ interrupted" marker into the resumed transcript. The record
+            // is durable projection state; the live event lets every attached
+            // frontend render the stop with its reason immediately.
             if let Err(error) = session_for_tail
                 .record_round_interrupt(record.clone())
                 .await
@@ -867,10 +891,36 @@ fn is_phase1_unsend<T>(
     matches!(result, Err(HarnessError::Interrupted)) && !streamed_text && !tool_activity
 }
 
+/// How [`execute_round`] ended when it did **not** fail. The round task's
+/// tail needs this distinction to decide whether a parked interrupt reason
+/// describes a real stop: only [`RoundCompletion::Unsent`] is a round that
+/// actually stopped (and was rewound); [`RoundCompletion::Completed`] is a
+/// natural model convergence whose history committed, and
+/// [`RoundCompletion::NotStarted`] never opened a round at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoundCompletion {
+    /// The round reached its terminal path naturally — the model stopped
+    /// calling tools, the full history committed, and `RoundCompleted` was
+    /// emitted. A stop site may still have parked a reason in the window
+    /// after the last cancellation checkpoint (an Esc Esc that landed too
+    /// late to change the outcome); that park describes a stop that never
+    /// happened and must **not** produce an interrupt record.
+    Completed,
+    /// Phase-1 unsend: the round was interrupted before any observable
+    /// commitment and the conversation was rewound to its pre-send state
+    /// (`UnsentInput` emitted). This *is* a real stop and keeps its
+    /// interrupt record.
+    Unsent,
+    /// A `UserPromptSubmit` hook denied the prompt: no round was opened, no
+    /// model request was made. Nothing was interrupted, so no interrupt
+    /// record applies.
+    NotStarted,
+}
+
 pub async fn execute_round(
     context: RoundContext,
     mut input: RoundInput,
-) -> Result<(), HarnessError> {
+) -> Result<RoundCompletion, HarnessError> {
     let RoundContext {
         agent,
         tx,
@@ -905,7 +955,7 @@ pub async fn execute_round(
                     &session_id,
                     RoundEvent::Text(format!("Prompt blocked by hook: {reason}")),
                 ));
-                return Ok(());
+                return Ok(RoundCompletion::NotStarted);
             }
             crate::hooks::UserPromptVerdict::Prepend(context) => {
                 input.prompt = format!("{context}\n\n{}", input.prompt);
@@ -1253,7 +1303,7 @@ pub async fn execute_round(
                     images: unsent_images,
                 },
             ));
-            return Ok(());
+            return Ok(RoundCompletion::Unsent);
         }
     }
     if session.id().await != admitted_session_id {
@@ -1378,7 +1428,7 @@ pub async fn execute_round(
         // titles because nothing called the generator.
         maybe_generate_title(agent.clone(), session.clone());
     }
-    Ok(())
+    Ok(RoundCompletion::Completed)
 }
 
 /// Spawn the first-turn title generation when the session qualifies (ADR-0022

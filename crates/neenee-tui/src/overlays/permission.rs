@@ -792,4 +792,120 @@ mod tests {
             })
         })
     }
+
+    /// The whole visible text of the sheet as one newline-joined string, so
+    /// tests can assert on what the user actually sees.
+    fn sheet_text(terminal: &neenee_tui_engine::TestTerminal) -> String {
+        let buf = terminal.buffer();
+        let w = buf.area().width;
+        let h = buf.area().height;
+        let mut rows = Vec::new();
+        for y in 0..h {
+            let mut row = String::new();
+            for x in 0..w {
+                row.push_str(buf.get(x, y).map(|c| c.symbol()).unwrap_or(" "));
+            }
+            rows.push(row.trim_end().to_string());
+        }
+        while rows.last().is_some_and(|r| r.is_empty()) {
+            rows.pop();
+        }
+        rows.join("\n")
+    }
+
+    /// A wrapped multi-span body row must keep every character. The header is
+    /// `label` + `"  "` + scope (three spans); when the concatenation is wider
+    /// than the body, the continuation row re-slices spans with byte
+    /// boundaries computed against the *full* row text — this guards against
+    /// that re-slicing silently dropping text (the `l | he` regression, where
+    /// `ls | head` lost its `s`, `a`, `d`).
+    #[test]
+    fn permission_sheet_wrapped_header_keeps_every_character() {
+        let request = PermissionRequest {
+            id: "p".into(),
+            tool: "bash".into(),
+            label: "bash".into(),
+            description: "Run a command".into(),
+            arguments: r#"{"command":"ls | head"}"#.into(),
+            scope: "ls | head".into(),
+            elevation: false,
+            one_off: false,
+        };
+        let mut terminal = neenee_tui_engine::TestTerminal::new(30, 24);
+        let mut hit_map = ModalHitMap::new();
+        terminal.draw(|frame| {
+            let rect = Rect::new(0, 16, 30, 8);
+            let _ = draw_permission_sheet(
+                frame,
+                &mut hit_map,
+                &request,
+                0,
+                false,
+                false,
+                0,
+                rect,
+                &Theme::default(),
+                &crate::model::selection::SelectionState::None,
+                &mut crate::model::layout::LayoutMap::new(),
+            );
+        });
+
+        // Row 0 is the header (`bash  ls | head` — 16 cols, fits at width 30
+        // in one visual row); so instead force a wrap by narrowing the sheet.
+        let text = sheet_text(&terminal);
+        assert!(
+            text.contains("ls | head"),
+            "wrapped header lost characters: {text:?}"
+        );
+    }
+
+    /// The same multi-span row, forced to wrap by a body narrower than the
+    /// header: every character of `ls | head` must survive the wrap.
+    #[test]
+    fn permission_sheet_wrapped_header_survives_wrap() {
+        let request = PermissionRequest {
+            id: "p".into(),
+            tool: "bash".into(),
+            label: "bash".into(),
+            description: "Run a command".into(),
+            arguments: r#"{"command":"ls | head"}"#.into(),
+            scope: "ls | head".into(),
+            elevation: false,
+            one_off: false,
+        };
+        let mut terminal = neenee_tui_engine::TestTerminal::new(14, 24);
+        let mut hit_map = ModalHitMap::new();
+        terminal.draw(|frame| {
+            let rect = Rect::new(0, 16, 14, 8);
+            let _ = draw_permission_sheet(
+                frame,
+                &mut hit_map,
+                &request,
+                0,
+                false,
+                false,
+                0,
+                rect,
+                &Theme::default(),
+                &crate::model::selection::SelectionState::None,
+                &mut crate::model::layout::LayoutMap::new(),
+            );
+        });
+
+        // Body width = 14 - 1 - 2*1 = 11; header `bash  ls | head` is 15
+        // cols, so it wraps. No non-whitespace character may be dropped by
+        // the wrap — the concatenated header rows must reassemble to the
+        // full header (whitespace at a wrap point may trail and go unrendered).
+        let text = sheet_text(&terminal);
+        let header: String = text
+            .lines()
+            .map(|l| l.trim_start_matches('┃').trim())
+            .filter(|l| l.starts_with("bash") || l.starts_with('|') || l.starts_with("head"))
+            .flat_map(|l| l.chars().filter(|c| !c.is_whitespace()))
+            .collect();
+        assert_eq!(
+            header, "bashls|head",
+            "wrapped header lost characters: {text:?}"
+        );
+    }
 }

@@ -350,7 +350,7 @@ async fn save_history_bounded(history: Vec<neenee_contracts::HistoryEntry>, dedu
 fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
     if let Some(info) = client::discover(std::path::Path::new(".")) {
         return Err(format!(
-            "a neenee daemon is already running (pid {}, port {}). Stop it with `neenee stop` before starting another.",
+            "a neenee daemon is already running (pid {}, port {}). Stop it with `neenee daemon stop` before starting another.",
             info.pid, info.port
         ));
     }
@@ -395,7 +395,7 @@ fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("could not spawn {}: {e}", program.display()))?;
     eprintln!(
-        "neenee: daemon started in the background (`neenee status` to observe, `neenee stop` to stop it)"
+        "neenee: daemon started in the background (`neenee daemon status` to observe, `neenee daemon stop` to stop it)"
     );
     Ok(())
 }
@@ -529,7 +529,7 @@ async fn run_dashboard(
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let info = client::discover(&project_root).ok_or_else(|| {
-        "no neenee daemon is running. Start one with `neenee serve` \
+        "no neenee daemon is running. Start one with `neenee daemon start` \
          (or open a session first — bare `neenee` spawns one on demand)."
             .to_string()
     })?;
@@ -575,7 +575,7 @@ async fn run_dashboard(
 }
 
 /// `neenee daemon <action>` dispatch (ADR-0116: the daemon noun owns
-/// start/stop/status; the retired top-level spellings route here too).
+/// start/stop/status).
 async fn run_daemon_action(
     action: DaemonAction,
     project_override: Option<PathBuf>,

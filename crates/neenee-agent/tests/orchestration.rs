@@ -10,9 +10,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use neenee_agent::Agent;
+use neenee_agent::RoundLifecycle;
 use neenee_agent::orchestration::{
-    ContextProjectionSettings, ProxyProvider, RoundContext, RoundInput, apply_jitter_ms,
-    execute_round, retry_delay_ms,
+    ContextProjectionSettings, InteractiveRoundContext, ProxyProvider, RoundContext, RoundInput,
+    apply_jitter_ms, execute_round, retry_delay_ms, start_interactive_round,
 };
 use neenee_contracts::{
     AgentResponse, Message, Provider, ProviderStreamEvent, Role, RoundEvent, ToolContextBuilder,
@@ -838,5 +839,346 @@ async fn retry_resumes_stopped_round_without_breaking_turn_sequence() {
         "a naturally completed round leaves no retry point"
     );
 
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+// ---------------------------------------------------------------------------
+// Round-interrupt projection: only a genuinely stopped round may leave a
+// durable `RoundInterrupt` record. Two regressions are pinned here:
+//
+// 1. Stop sites park their reason unconditionally — even while idle — so a
+//    reason parked with no live round must not leak into the next round and
+//    label a naturally completed round as "interrupted · <reason>".
+// 2. An Esc Esc landing after the round passed its last cancellation
+//    checkpoint (the model already converged, the history already committed)
+//    parks a reason without changing the outcome. The completed round must
+//    not be re-labelled as an interrupt.
+// ---------------------------------------------------------------------------
+
+/// A provider whose stream never terminates until the test cancels the
+/// round token — the "model is still generating" state an Esc Esc lands in.
+struct HangingProvider;
+
+#[async_trait]
+impl Provider for HangingProvider {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
+        Err("chat is not used by the streaming path".to_string())
+    }
+    async fn stream_chat(
+        &self,
+        _request: neenee_contracts::ModelRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        Ok(Box::pin(futures::stream::pending()))
+    }
+}
+
+/// A provider that answers immediately — the "model converged" state.
+struct InstantProvider;
+
+#[async_trait]
+impl Provider for InstantProvider {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
+        Ok(Message::new(Role::Assistant, "done"))
+    }
+    async fn stream_chat(
+        &self,
+        _request: neenee_contracts::ModelRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        Ok(Box::pin(stream::iter([Ok("done".to_string())])))
+    }
+}
+
+/// A provider whose single stream item is gated: it signals `started` when
+/// the round reaches the model request, then holds the stream open until
+/// `release` fires, and finally converges ("done", no tool calls). This lets
+/// a test park an interrupt reason at a chosen instant *while the round is
+/// live* and then let the round complete anyway — the exact shape of an Esc
+/// Esc that lands too late to change the outcome.
+struct GatedProvider {
+    started: tokio::sync::mpsc::UnboundedSender<()>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl Provider for GatedProvider {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
+        Err("chat is not used by the streaming path".to_string())
+    }
+    async fn stream_chat(
+        &self,
+        _request: neenee_contracts::ModelRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        let started = self.started.clone();
+        let release = Arc::clone(&self.release);
+        Ok(Box::pin(stream::once(async move {
+            let _ = started.send(());
+            release.notified().await;
+            Ok("done".to_string())
+        })))
+    }
+}
+
+/// Shared scaffolding: build a session + agent + channel for one interactive
+/// round through `start_interactive_round` (the production entry whose tail
+/// owns the interrupt-record decision). The caller parks/releases via the
+/// returned lifecycle and channel.
+struct InteractiveRoundFixture {
+    session: Arc<SessionStore>,
+    rx: mpsc::UnboundedReceiver<AgentResponse>,
+    lifecycle: Arc<RoundLifecycle>,
+    agent: Arc<Agent>,
+    directory: std::path::PathBuf,
+}
+
+async fn interactive_round_fixture(provider: Arc<dyn Provider>) -> InteractiveRoundFixture {
+    let directory = std::env::temp_dir().join(format!("neenee-intr-{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&directory);
+    let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
+    let agent = Arc::new(Agent::new(
+        provider,
+        Vec::new(),
+        neenee_agent::AgentIdentity::default(),
+    ));
+    let lifecycle = Arc::new(RoundLifecycle::new());
+    let (tx, rx) = mpsc::unbounded_channel();
+    let session_id = session.id().await;
+    start_interactive_round(
+        InteractiveRoundContext {
+            agent: Arc::clone(&agent),
+            tx,
+            lifecycle: Arc::clone(&lifecycle),
+            session: Arc::clone(&session),
+            session_id,
+            projection: ContextProjectionSettings {
+                budget: neenee_contracts::CompactionPolicy::default().resolve(100_000),
+                preserve_rounds: 6,
+                summarize: false,
+                prune: false,
+                prune_protect_tokens: 0,
+            },
+            retry_max_attempts: 1,
+            retry_base_ms: 1,
+            retry_max_ms: 1,
+        },
+        RoundInput {
+            prompt: "hello".to_string(),
+            hidden: false,
+            display_prompt: None,
+            sent_at_ms: None,
+            images: Vec::new(),
+            driver: neenee_agent::orchestration::RoundDriver::Fresh,
+        },
+    )
+    .await;
+    InteractiveRoundFixture {
+        session,
+        rx,
+        lifecycle,
+        agent,
+        directory,
+    }
+}
+
+/// Drain the channel until a specific event kind appears (bounded wait so a
+/// broken round fails the test instead of hanging it).
+async fn next_event_where(
+    rx: &mut mpsc::UnboundedReceiver<AgentResponse>,
+    mut predicate: impl FnMut(&RoundEvent) -> bool,
+) -> Option<RoundEvent> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
+            Ok(Some(AgentResponse::Round { event, .. })) if predicate(&event) => {
+                return Some(event);
+            }
+            Ok(Some(_)) => continue,
+            Ok(None) => return None,
+            Err(_elapsed) => continue,
+        }
+    }
+    None
+}
+
+#[tokio::test]
+async fn idle_parked_interrupt_reason_does_not_label_the_next_round() {
+    // Regression 1: Esc Esc / a session switch parks a reason while idle
+    // (no live round). The next round completes naturally and must leave NO
+    // interrupt record and NO RoundInterrupted event.
+    let InteractiveRoundFixture {
+        session,
+        mut rx,
+        lifecycle,
+        agent,
+        directory,
+    } = interactive_round_fixture(Arc::new(InstantProvider)).await;
+
+    // Park as the interrupt handler does while idle, then wait for the
+    // round's natural completion.
+    lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::User);
+    let completed = next_event_where(&mut rx, |event| {
+        matches!(event, RoundEvent::RoundCompleted(_))
+    })
+    .await;
+    assert!(completed.is_some(), "round must complete");
+
+    // Give the tail (which runs after RoundCompleted) a moment, then verify
+    // no interrupt was recorded or emitted.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        session.round_interrupts().await.is_empty(),
+        "a naturally completed round must not leave an interrupt record"
+    );
+    let leaked = std::iter::from_fn(|| rx.try_recv().ok()).any(|response| {
+        matches!(
+            response,
+            AgentResponse::Round {
+                event: RoundEvent::RoundInterrupted(_),
+                ..
+            }
+        )
+    });
+    assert!(
+        !leaked,
+        "no RoundInterrupted event may follow a natural completion"
+    );
+    assert_eq!(
+        lifecycle.take_interrupt(),
+        None,
+        "the tail consumed the stale park; nothing may leak further"
+    );
+    assert_eq!(agent.round_count(), 1);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[tokio::test]
+async fn late_interrupt_while_live_then_completes_is_not_recorded() {
+    // Regression 2 (deterministic): the round is live and streaming when
+    // the Esc Esc parks its reason, but the cancellation arrives after the
+    // last checkpoint — the token is never observed before the model
+    // converges, so the round completes. The tail must not write a record
+    // for a round that succeeded.
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let provider = Arc::new(GatedProvider {
+        started: started_tx,
+        release: Arc::clone(&release),
+    });
+    let InteractiveRoundFixture {
+        session,
+        mut rx,
+        lifecycle,
+        agent,
+        directory,
+    } = interactive_round_fixture(provider).await;
+
+    // Wait until the model request is actually in flight.
+    started_rx
+        .recv()
+        .await
+        .expect("round must reach the model request");
+
+    // Esc Esc lands now — the reason is parked while the round is live...
+    lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::User);
+    // ...but this Esc Esc is modeled as arriving too late: no token
+    // cancellation is observed before convergence (we simply release the
+    // stream). This is the "server-side LLM converged and the round
+    // finished normally" completion.
+    release.notify_one();
+
+    let completed = next_event_where(&mut rx, |event| {
+        matches!(event, RoundEvent::RoundCompleted(_))
+    })
+    .await;
+    assert!(completed.is_some(), "round must still complete");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        session.round_interrupts().await.is_empty(),
+        "a round that completed despite a late parked reason must not gain an interrupt record"
+    );
+    assert_eq!(agent.round_count(), 1);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[tokio::test]
+async fn real_interrupt_of_a_live_round_still_records() {
+    // Control: a genuine mid-generation Esc Esc must keep its record — the
+    // fix must not swallow real interrupts.
+    let InteractiveRoundFixture {
+        session,
+        mut rx,
+        lifecycle,
+        directory,
+        ..
+    } = interactive_round_fixture(Arc::new(HangingProvider)).await;
+
+    // Wait until the round is actually streaming (it admitted the prompt),
+    // then cancel exactly like the interrupt handler.
+    let started = next_event_where(&mut rx, |event| {
+        matches!(event, RoundEvent::TurnStarted { .. })
+    })
+    .await;
+    assert!(started.is_some(), "round must start");
+    lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::User);
+    lifecycle.cancel_current().await;
+
+    let interrupted = next_event_where(&mut rx, |event| {
+        matches!(event, RoundEvent::RoundInterrupted(_))
+    })
+    .await;
+    assert!(
+        interrupted.is_some(),
+        "a genuinely interrupted round emits its RoundInterrupted event"
+    );
+    let records = session.round_interrupts().await;
+    assert_eq!(records.len(), 1, "exactly one durable record: {records:?}");
+    assert_eq!(
+        records[0].reason,
+        neenee_contracts::RoundInterruptReason::User
+    );
+    // The HangingProvider round produced no observable content, so the stop
+    // unwound through the phase-1 unsend path (`Ok(RoundCompletion::Unsent)`),
+    // which records no round number — the label renders as "Interrupted ·
+    // Esc Esc" without a round band. That is the pre-existing contract.
+    assert_eq!(records[0].round, None);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[tokio::test]
+async fn superseded_live_round_still_records() {
+    // Control: a supersede (new message replacing a live round) still
+    // records its reason via the generation-suppressed arm.
+    let InteractiveRoundFixture {
+        session,
+        mut rx,
+        lifecycle,
+        directory,
+        ..
+    } = interactive_round_fixture(Arc::new(HangingProvider)).await;
+
+    let started = next_event_where(&mut rx, |event| {
+        matches!(event, RoundEvent::TurnStarted { .. })
+    })
+    .await;
+    assert!(started.is_some(), "round must start");
+
+    // Mirror the replacement path: park, bump the generation, cancel.
+    lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::Superseded);
+    lifecycle.supersede();
+    lifecycle.cancel_current().await;
+
+    let interrupted = next_event_where(&mut rx, |event| {
+        matches!(event, RoundEvent::RoundInterrupted(_))
+    })
+    .await;
+    assert!(
+        interrupted.is_some(),
+        "a superseded round still records why it died"
+    );
+    let records = session.round_interrupts().await;
+    assert_eq!(records.len(), 1, "exactly one durable record: {records:?}");
+    assert_eq!(
+        records[0].reason,
+        neenee_contracts::RoundInterruptReason::Superseded
+    );
     let _ = std::fs::remove_dir_all(directory);
 }

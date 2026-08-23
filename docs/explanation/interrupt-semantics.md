@@ -253,9 +253,28 @@ cancellation, and the unwinding round task reads it back with
 `take_interrupt()` in `start_interactive_round`'s tail — one write, one
 read, no changes to `HarnessError::Interrupted` (which stays a unit
 variant). The tail then persists the record and emits the event on **every**
-interrupted path, including the generation-suppressed supersede arm that
-previously left no trace at all, and the Phase-1 unsend (which returns
-`Ok(())` after `UnsentInput`).
+genuinely-stopped path: the visible `[Interrupted]` arm, the
+generation-suppressed supersede arm that previously left no trace at all,
+and the Phase-1 unsend (which returns `Ok(RoundCompletion::Unsent)` after
+`UnsentInput`).
+
+A parked reason alone, however, does **not** make a round interrupted. Two
+guards keep the record honest:
+
+- **`RoundLifecycle::begin()` clears the slot.** Stop sites park
+  unconditionally — even when no round is live (Esc Esc on an idle session,
+  `/resume` after the round already finished) — so a reason parked while
+  idle can never leak into the next round's tail and mislabel a successful
+  round.
+- **The tail checks the outcome.** Only an actually-stopped round keeps its
+  record: `Err(_)` (the unwind arms) and the Phase-1 unsend
+  (`Ok(RoundCompletion::Unsent)`) record; a natural completion
+  (`Ok(RoundCompletion::Completed)`) and a hook-denied prompt
+  (`Ok(RoundCompletion::NotStarted)`) are successes and drop the parked
+  reason instead. This covers the late-Esc case: a stop request that lands
+  after the round passed its last cancellation checkpoint — the model
+  already converged, the history already committed — changes nothing and
+  must not fabricate an `▲ interrupted` marker over a successful round.
 
 Two termination paths cannot run *any* code, so they are covered by
 inference instead:

@@ -26,6 +26,11 @@
 //! `HarnessError::Interrupted` unwind render as "Esc Esc" versus "new
 //! message" versus "process exited" without threading a reason through every
 //! producer of the error.
+//!
+//! Parked reasons are one-round-scoped by construction: a stop site parks
+//! unconditionally (even with no round live), but [`RoundLifecycle::begin`]
+//! clears the slot, so a reason parked while idle can never leak into the
+//! next round and mislabel a successful round as interrupted.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock as AsyncRwLock;
@@ -67,9 +72,22 @@ impl RoundLifecycle {
     /// Begin a new round: bump the generation, install a fresh cancellation
     /// token, and return the superseded predecessor (if any) for the caller
     /// to cancel.
+    ///
+    /// Also clears any parked interrupt reason: the stop sites park
+    /// unconditionally — even when no round is live — so a reason parked
+    /// while idle (an Esc Esc with nothing running, a `/resume` switch on an
+    /// already-quiet session) must never leak into the *next* round's tail
+    /// and mislabel a perfectly successful round as interrupted. The caller
+    /// that replaces a live predecessor parks the superseded reason *after*
+    /// this `begin` (see `start_interactive_round`), so legitimate labels
+    /// are untouched.
     pub async fn begin(&self) -> RoundBegin {
         let token = CancellationToken::new();
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *self
+            .interrupt_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
         let previous = self.token_slot.write().await.replace(token.clone());
         RoundBegin {
             token,
@@ -218,5 +236,52 @@ mod tests {
         assert!(!lifecycle.is_running().await);
         // The generation is deliberately not bumped by cancellation.
         assert!(lifecycle.is_current(active.generation));
+    }
+
+    #[tokio::test]
+    async fn begin_clears_reason_parked_while_idle() {
+        // Stop sites park unconditionally — even with no live round. Without
+        // the clear in `begin`, that reason leaks into the next round's tail
+        // and mislabels a successful round as "interrupted · Esc Esc".
+        let lifecycle = RoundLifecycle::new();
+        lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::User);
+        assert_eq!(
+            lifecycle.take_interrupt(),
+            Some(neenee_contracts::RoundInterruptReason::User)
+        );
+
+        // Park again while idle; the next begin must discard it.
+        lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::Superseded);
+        lifecycle.begin().await;
+        assert_eq!(
+            lifecycle.take_interrupt(),
+            None,
+            "a reason parked while idle must not survive into the next round"
+        );
+    }
+
+    #[tokio::test]
+    async fn begin_preserves_reason_parked_for_the_live_round() {
+        // A stop site parks while a round IS live; the slot survives until
+        // that round's tail consumes it — begin only clears *before* the new
+        // round is admitted, and the replacement path parks after begin.
+        let lifecycle = RoundLifecycle::new();
+        let first = lifecycle.begin().await;
+        lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::User);
+        first.token.cancel();
+        // The tail of the cancelled round reads it back...
+        assert_eq!(
+            lifecycle.take_interrupt(),
+            Some(neenee_contracts::RoundInterruptReason::User)
+        );
+        // ...and a stray late park while idle is again cleared by begin.
+        lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::User);
+        let second = lifecycle.begin().await;
+        assert_eq!(
+            lifecycle.take_interrupt(),
+            None,
+            "begin admits the new round with a clean interrupt slot"
+        );
+        assert!(second.previous.is_some(), "second begin supersedes first");
     }
 }

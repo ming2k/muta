@@ -364,7 +364,7 @@ async fn run_inner(
         eprintln!("neenee-server: web panel on http://{bind}:{port}");
     }
     eprintln!(
-        "neenee: observe with `neenee status --watch`, drive with `neenee attach [id]`, stop with `neenee stop`"
+        "neenee: observe with `neenee daemon status --watch`, drive with `neenee attach [id]`, stop with `neenee daemon stop`"
     );
     if handle.token.is_some() {
         // Never print the token itself: it is a credential and stderr lands

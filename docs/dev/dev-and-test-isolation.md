@@ -57,9 +57,28 @@ under `/tmp` keeps the dev daemon and its sessions alive between runs:
 ```bash
 cargo build -p neenee-cli
 ./target/debug/neenee --home /tmp/neenee-dev daemon start
-./target/debug/neenee --home /tmp/neenee-dev status
+./target/debug/neenee --home /tmp/neenee-dev daemon status
 ./target/debug/neenee --home /tmp/neenee-dev            # TUI session
 ```
+
+`cargo run` is equally fine here (ADR-0134): it links the same stable
+`target/debug/neenee` path the auto-spawned daemon records, and the wire
+window serves clients whatever their product build. The one gate that
+survives is the **dev-drift** check — after a rebuild, a still-running
+daemon of the *same version* is refused with a binary-mismatch error
+until you stop it:
+
+```bash
+cargo run -q -p neenee-cli -- daemon start
+# …edit code, rebuild (cargo build / cargo run)…
+cargo run -q -p neenee-cli -- daemon status
+# → error: "client/daemon binary mismatch … Stop it with
+#   `neenee daemon stop` and rerun — the daemon restarts on demand."
+cargo run -q -p neenee-cli -- daemon stop   # then rerun; a fresh daemon spawns
+```
+
+`daemon stop` itself never hits the gate — it addresses the daemon by pid
+from the discovery record, so the fix it names always works.
 
 Export the variable once to drop the flag from every command:
 
@@ -106,7 +125,7 @@ the daemon-smoke e2e job starts its daemon under `NEENEE_HOME` +
 hand-assemble. The same job then runs
 [`apps/web/e2e/cli-smoke.sh`](../../apps/web/e2e/cli-smoke.sh), which pins
 the CLI's own contract against a live, isolated daemon: retired spellings
-refuse with the canonical form, the noun-verb shapes parse, `--remote`
+are unrecognized commands, the noun-verb shapes parse, `--remote`
 rejects a missing port/token, and a real `--remote` connection reaches the
 daemon (protocol-level coverage stays in `daemon-smoke.mjs`).
 

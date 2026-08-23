@@ -283,7 +283,7 @@ pub(crate) fn render_selectable_body(
             block_selection_range(selection, MODAL_DOC_MSG_IDX, logical_idx),
             wl,
         );
-        let mut line = render_row_line(&wl.text, &row.segments, selected, theme);
+        let mut line = render_row_line(&wl.text, wl.start_byte, &row.segments, selected, theme);
         if !deco_text.is_empty() {
             line.spans
                 .insert(0, Span::styled(deco_text.clone(), *deco_style));
@@ -308,8 +308,16 @@ pub(crate) fn render_selectable_body(
 /// Build one visual row's `Line`: walk segment boundaries + selection
 /// boundaries and emit one span per uniform (segment, selected) run. With no
 /// selection (or no intersection) this degenerates to one span per segment.
+///
+/// `text` is the **wrapped slice** of the row's document text and
+/// `base_offset` is that slice's byte offset within the full row — segment
+/// boundaries are therefore translated into the slice's coordinate space
+/// before slicing. (Slicing the wrapped text with full-row offsets silently
+/// drops text on continuation rows: a range that runs past the end of the
+/// slice is skipped, which is how `bash  ls | head` rendered as `l | he`.)
 fn render_row_line(
     text: &str,
+    base_offset: usize,
     segments: &[RowSegment],
     selected: Option<(usize, usize)>,
     theme: &Theme,
@@ -317,26 +325,37 @@ fn render_row_line(
     if text.is_empty() {
         return Line::from(Vec::<Span<'static>>::new());
     }
-    // Segment byte boundaries over the concatenated row text.
-    let mut points: Vec<usize> = Vec::with_capacity(segments.len() + 3);
+    // Segment byte ranges over the concatenated row text, intersected with
+    // the wrapped slice's [base_offset, base_offset + text.len()) window.
+    let slice_end = base_offset + text.len();
+    let mut points: Vec<usize> = Vec::with_capacity(segments.len() * 2 + 3);
     points.push(0);
     let mut acc = 0usize;
     for seg in segments {
+        let seg_start = acc;
         acc += seg.text.len();
-        points.push(acc);
+        let seg_end = acc;
+        // Only segments that overlap this visual row become split points.
+        let (lo, hi) = (seg_start.max(base_offset), seg_end.min(slice_end));
+        if lo < hi {
+            points.push(lo - base_offset);
+            points.push(hi - base_offset);
+        }
     }
     if let Some((lo, hi)) = selected {
         points.push(lo.min(text.len()));
         points.push(hi.min(text.len()));
     }
+    points.push(text.len());
     points.sort_unstable();
     points.dedup();
 
     let seg_style = |p: usize| -> Option<&Style> {
+        let full = p + base_offset;
         let mut acc = 0usize;
         for seg in segments {
             acc += seg.text.len();
-            if p < acc {
+            if full < acc {
                 return Some(&seg.style);
             }
         }
@@ -536,6 +555,59 @@ mod tests {
         // Click on the digits (column 7) resolves inside the value segment.
         let cursor = map.cursor_at(7, 0).expect("cursor");
         assert_eq!(cursor.byte_offset, 7);
+    }
+
+    /// A multi-segment row that soft-wraps must render every character on the
+    /// continuation row. Segment byte boundaries are computed against the
+    /// *full* row text while the painted text is the *wrapped slice*: slicing
+    /// the slice with full-row offsets skips any range that runs past the
+    /// slice's end (`hi > text.len()`), which silently dropped mid-row text —
+    /// e.g. a permission header `bash  ls | head` rendering as `l | he`.
+    #[test]
+    fn wrapped_multi_segment_row_keeps_every_segment() {
+        let theme = Theme::default();
+        let mut terminal = neenee_tui_engine::TestTerminal::new(12, 10);
+        // Two segments: label (4 cols) + separator (2) + value (9) = 15 cols,
+        // so the row wraps at the 12-col body width.
+        let rows = vec![SelectableRow::from_segments(vec![
+            RowSegment::styled("bash", neenee_tui_engine::Style::default()),
+            RowSegment::styled("  ", neenee_tui_engine::Style::default()),
+            RowSegment::styled("ls | head", neenee_tui_engine::Style::default()),
+        ])];
+        let mut scroll = 0;
+        let mut map = LayoutMap::new();
+        terminal.draw(|f| {
+            render_selectable_body(
+                f,
+                body_rect(12, 5),
+                &rows,
+                &mut scroll,
+                None,
+                &theme,
+                &SelectionState::None,
+                &mut map,
+            );
+        });
+
+        // Grid text: every non-whitespace character of the row survives.
+        let buf = terminal.buffer();
+        let mut painted = String::new();
+        for y in 0..5 {
+            for x in 0..12 {
+                painted.push_str(buf.get(x, y).map(|c| c.symbol()).unwrap_or(" "));
+            }
+        }
+        let non_ws = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        assert_eq!(
+            non_ws(&painted),
+            non_ws("bash  ls | head"),
+            "wrapped row dropped characters: {painted:?}"
+        );
+
+        // Regions: the wrapped rows tile the full document text.
+        let r1 = map.region_at(0, 0).expect("wrapped row 1");
+        let r2 = map.region_at(0, 1).expect("wrapped row 2");
+        assert_eq!(format!("{}{}", r1.text, r2.text), "bash  ls | head");
     }
 
     /// A decoration prefix (indent / rail) paints on every visual row but is

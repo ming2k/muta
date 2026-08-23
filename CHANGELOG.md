@@ -66,8 +66,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order, then every other view as discovery; typing filters the list
   fuzzily against names and entry points; `Enter` switches (the origin
   hides with its state saved), `Esc` cancels back untouched.
+### Changed
+
+- **Retired top-level CLI spellings are removed outright.** `neenee
+  serve`, `stop`, `status`, `resume`, and `exec` no longer get a
+  dedicated teaching error (ADR-0119's interim shim): a retired word is
+  an ordinary unrecognized command (exit 2), and a multi-word retired
+  phrase parses as a positional prompt like any other unknown phrase.
+  `neenee session ls` likewise loses its pointer error — it is an
+  unknown `session` subcommand like any other. The canonical forms
+  (`neenee daemon start/stop/status`, `attach`, `run`, `session rm`)
+  are unchanged. Retirement now deletes rather than teaches
+  (ADR-0135).
+
 ### Fixed
 
+- **A normally completed round is no longer mislabelled as
+  "interrupted".** Two stacked defects made the durable `RoundInterrupt`
+  projection fire on rounds the server-side LLM finished cleanly.
+  First, the stop sites park their interrupt reason *unconditionally* —
+  Esc Esc or a session switch (`/new`, `/resume`, `/sessions <id>`) parks
+  one even when no round is live — and `RoundLifecycle::begin()` never
+  cleared the slot, so the parked reason leaked into the *next* round's
+  tail. Second, the tail persisted a record whenever *any* reason was
+  parked, without consulting the round's outcome, so a natural model
+  convergence that returned `Ok(())` still wrote `RoundInterrupt` +
+  `RoundEvent::RoundInterrupted` — projecting a false
+  `▲ interrupted · Esc Esc / new message` warning into the transcript
+  (live and on resume) and folding the dashboard row to `Interrupted`.
+  `begin()` now clears the slot, and `execute_round` returns a
+  `RoundCompletion` (`Completed` / `Unsent` / `NotStarted`) so the tail
+  records only genuinely-stopped rounds: an unwind (`Err`), the
+  generation-suppressed supersede arm, or the phase-1 unsend. A late Esc
+  Esc that lands after the round passed its last cancellation checkpoint
+  (the model already converged) is dropped, not recorded. Regression
+  tests pin all four shapes: idle park → clean completion, live park →
+  completion, real interrupt, real supersede.
+
+- **Daemon lifecycle errors name the canonical CLI spellings.** Every
+  user-facing client/daemon incompatibility, lock-contention, and
+  daemon-started hint (`client.rs`, `serve.rs`, `host.rs`, CLI `main.rs`,
+  `daemon status --diagnostic`) told the operator to run `neenee stop`,
+  `neenee serve`, or `neenee status` — top-level spellings ADR-0116
+  retired with an error that teaches the canonical form. Following the
+  old advice now fails with "'neenee stop' is now 'neenee daemon stop'",
+  so the fix a message names must itself work. All messages now name
+  `neenee daemon stop` / `neenee daemon start` / `neenee daemon status`,
+  and the pinned tests assert the canonical spellings.
+- **Selectable modal bodies no longer drop text on wrapped continuation
+  rows.** `render_row_line` computed its per-segment split points against the
+  row's *full* concatenated text but sliced the *wrapped* slice with them, so
+  on any visual row past the first, a range that ran past the slice's end was
+  silently skipped (`hi > text.len()`) and mid-row text vanished. The visible
+  symptom was a permission-sheet header like `bash  ls | head` rendering with
+  characters missing (`l | he`) at narrow widths; the same defect affected
+  every selectable body that soft-wraps a multi-segment row (permission
+  sheet, help, history preview, session detail, usage stats, token report,
+  activity). Split points are now intersected with the wrapped slice's byte
+  window before slicing, and a regression test pins a wrapped
+  `bash  ls | head` header to its full text.
 - **The double-Esc interrupt confirmation no longer flashes and
   vanishes.** Two defects made the armed window unreliable. First, the
   window was a 20-iteration loop counter, but the event loop wakes on

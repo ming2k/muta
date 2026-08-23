@@ -61,8 +61,8 @@ debug builds and is listed only there; the component playground is
 - An unrecognized command close to a real one earns a `tip: a similar
   command exists: '…'` line.
 - Retired spellings (`serve`, `stop`, `status`, `resume`, `exec`) are
-  refused with an error naming the canonical form (ADR-0119), not silently
-  accepted.
+  removed outright (ADR-0135): a retired word is an unrecognized command
+  (exit 2), like any other typo — no alias and no redirect.
 - `--attach [id]` normalizes to `neenee attach [id]`.
 
 ## The daemon

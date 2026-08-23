@@ -190,21 +190,21 @@ pub(crate) fn format_diagnostics(diag: &DaemonDiagnostics) -> String {
     // High level diagnosis
     out.push_str("  Diagnosis:        ");
     if diag.discovery_valid && diag.tcp_listening {
-        out.push_str("Daemon is running and healthy. (Observe with `neenee status --watch`, drive with `neenee attach`)\n");
+        out.push_str("Daemon is running and healthy. (Observe with `neenee daemon status --watch`, drive with `neenee attach`)\n");
     } else if diag.lock_held && diag.discovery_record.is_none() {
         out.push_str(
             "Ghost daemon detected: Instance lock is held but discovery record is missing.\n",
         );
-        out.push_str("                    Run `neenee stop` or kill the locking PID, then start with `neenee serve`.\n");
+        out.push_str("                    Run `neenee daemon stop` or kill the locking PID, then start with `neenee daemon start`.\n");
     } else if !diag.lock_held && diag.discovery_record.is_some() {
         out.push_str("Stale discovery record: Process is gone but discovery record remains.\n");
         out.push_str(
-            "                    Start a new daemon with `neenee serve` or `neenee attach`.\n",
+            "                    Start a new daemon with `neenee daemon start` or `neenee attach`.\n",
         );
     } else if !diag.lock_held {
         out.push_str("No session daemon is running.\n");
         out.push_str(
-            "                    Start one with `neenee serve` (or `neenee attach` on demand).\n",
+            "                    Start one with `neenee daemon start` (or `neenee attach` on demand).\n",
         );
     } else {
         out.push_str("Daemon state is transitioning or unresponsive.\n");

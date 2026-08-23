@@ -879,10 +879,11 @@ reason: RoundInterruptReason,
  */
 at_ms: number, 
 /**
- * The 1-based round that was stopped, when known. `None` on records
- * synthesized for the round the process abandoned at exit (see
- * `SessionStore::finalize_incomplete_interrupts`), where no agent-side
- * counter was available.
+ * The 1-based round that was stopped, when known. `None` when no
+ * agent-side counter was available at the stop site — e.g. the
+ * phase-1 unsend (the round was rewound and its counter restored
+ * before the record was written) and records synthesized for a round
+ * the process abandoned at exit.
  */
 round?: number, };
 

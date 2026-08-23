@@ -1399,7 +1399,7 @@ async fn version_skew_is_refused_with_both_versions() {
                 "names the daemon build: {message}"
             );
             assert!(
-                message.contains("neenee stop"),
+                message.contains("neenee daemon stop"),
                 "names the daemon restart fix: {message}"
             );
         }
@@ -1494,7 +1494,10 @@ async fn protocol_window_governs_when_declared() {
     match first_frame(port, None, Some(PROTOCOL_VERSION + 1)).await {
         Wire::Error { message, code } => {
             assert_eq!(code.as_deref(), Some("protocol_mismatch"));
-            assert!(message.contains("neenee stop"), "names the fix: {message}");
+            assert!(
+                message.contains("neenee daemon stop"),
+                "names the fix: {message}"
+            );
             assert!(
                 message.contains(&format!("protocol {}", PROTOCOL_VERSION + 1)),
                 "names the client's protocol number: {message}"

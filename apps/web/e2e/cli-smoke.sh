@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # CLI-surface smoke (ADR-0119/0121): pins the command line's observable
-# contract — the retired spellings teach, the noun-verb shapes parse, and
-# the remote transport actually connects — against a live, isolated daemon.
+# contract — the retired spellings are gone (unrecognized commands), the
+# noun-verb shapes parse, and the remote transport actually connects —
+# against a live, isolated daemon.
 #
 # Complements apps/web/e2e/daemon-smoke.mjs (protocol-level) by exercising
 # the binary itself: parsing, errors, exit codes, and the --remote path.
@@ -54,16 +55,16 @@ expect_out() {
   fi
 }
 
-echo "== retired spellings teach the canonical form =="
+echo "== retired spellings are removed =="
 expect_status 2 "bare session errors" "$BIN" session
 expect_out   "session rm" "session teaches rm" "$BIN" session
-expect_out   "daemon status" "session ls points at daemon status" "$BIN" session ls
+expect_status 2 "session ls is an unknown subcommand" "$BIN" session ls
 expect_status 2 "bare mcp errors" "$BIN" mcp
 expect_out   "mcp ls" "mcp teaches ls" "$BIN" mcp
 expect_status 2 "bare skill errors" "$BIN" skill
 expect_out   "skill ls" "skill teaches ls" "$BIN" skill
-expect_status 2 "serve is retired" "$BIN" serve
-expect_status 2 "stop is retired" "$BIN" stop
+expect_status 2 "serve is unrecognized" "$BIN" serve
+expect_status 2 "stop is unrecognized" "$BIN" stop
 
 echo "== noun-verb shapes parse =="
 expect_status 0 "mcp ls runs" "$BIN" mcp ls

@@ -8,11 +8,11 @@
 //! four noun-verb spellings for one daemon. ADR-0116 fixes both:
 //!
 //! - **One noun per resource, one verb per action.** The daemon is managed
-//!   by `neenee daemon start|stop|status`; sessions by `neenee session ls|
-//!   rm`; `attach` always ends in a real TUI session picker, never a
-//!   printed list. The retired top-level spellings (`serve`, `stop`,
-//!   `status`, `resume`, `exec`) are refused with a pointer at the
-//!   canonical form, not silently accepted forever.
+//!   by `neenee daemon start|stop|status`; sessions by `neenee session rm`
+//!   (listing is `daemon status`); `attach` always ends in a real TUI session picker, never a
+//!   printed list. The former top-level spellings (`serve`, `stop`,
+//!   `status`, `resume`, `exec`) are removed outright: no alias, no
+//!   teaching error — an unknown word is an unrecognized command.
 //! - **The parser is a table, not a hand-rolled ladder.** One spec drives
 //!   parsing, help, error messages, and shell completions, so a flag
 //!   cannot exist in one place and not the other (the `--expose`/
@@ -590,7 +590,8 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
             "--remote" => remote = Some(flag_value("--remote", inline, &mut iter)?),
             "--token" => token = Some(flag_value("--token", inline, &mut iter)?),
             "--version" | "-V" => version = true,
-            // The flag form of attach normalizes to the subcommand.
+            // `--attach [id]` desugars to the subcommand: a flag that
+            // selects a whole mode belongs in `rest`, not a side variable.
             "--attach" => {
                 let id = match iter.peek() {
                     Some(next) if !next.starts_with('-') => iter.next().cloned(),
@@ -667,28 +668,10 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
         ))
     };
 
-    // Retired top-level spellings point at the canonical form (ADR-0116):
-    // an error that teaches, rather than two spellings forever.
-    match cmd.as_str() {
-        "serve" => {
-            return Err(
-                "'neenee serve' is now 'neenee daemon start' (add --fg to stay in \
-                 the foreground)"
-                    .into(),
-            );
-        }
-        "stop" => return Err("'neenee stop' is now 'neenee daemon stop'".into()),
-        "status" => return Err("'neenee status' is now 'neenee daemon status'".into()),
-        "resume" => {
-            return Err(
-                "'neenee resume' is now 'neenee attach' (the picker opens when no \
-                 id is given)"
-                    .into(),
-            );
-        }
-        "exec" => return Err("'neenee exec' is now 'neenee run'".into()),
-        _ => {}
-    }
+    // Retired top-level spellings (ADR-0116) carry no compatibility shim:
+    // a single retired word falls through to the unrecognized-command error
+    // below, and a multi-word one (`neenee serve --fg`) is a positional
+    // prompt like any other unknown phrase.
 
     // Positional prompt: a multi-word phrase (or any phrase alongside
     // `-p`) is a prompt, not a command. A single unknown word stays an
@@ -756,13 +739,10 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                         .into(),
                 );
             }
-            // The retired listing points at its new home, like the retired
-            // top-level spellings above.
-            if matches!(extra[0].as_str(), "ls" | "list") {
-                return Err("'neenee session ls' is now 'neenee daemon status' (the \
-                     session table is the daemon's view of what it hosts)"
-                    .into());
-            }
+            // `ls`/`list` is not a session subcommand: the session table
+            // is the daemon's view (`daemon status`), per ADR-0116's
+            // one-noun-per-resource. It falls through to the generic
+            // unknown-subcommand error below like any other unknown word.
             let sub = match resolve(&extra[0], SESSION_SUBS) {
                 Some(sub) => sub,
                 None => return unexpected(&extra[0]),
@@ -1317,12 +1297,16 @@ mod tests {
     }
 
     #[test]
-    fn retired_spellings_teach_the_canonical_form() {
-        assert!(parse_err(&["serve"]).contains("daemon start"));
-        assert!(parse_err(&["stop"]).contains("daemon stop"));
-        assert!(parse_err(&["status"]).contains("daemon status"));
-        assert!(parse_err(&["resume"]).contains("attach"));
-        assert!(parse_err(&["exec", "x"]).contains("run"));
+    fn retired_spellings_are_unrecognized_commands() {
+        // Removed outright (ADR-0116): no alias and no teaching error —
+        // each retired word is now an ordinary unrecognized command.
+        for word in ["serve", "stop", "status", "resume", "exec"] {
+            let err = parse_err(&[word]);
+            assert!(
+                err.contains(&format!("unrecognized command '{word}'")),
+                "{word}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -1405,9 +1389,11 @@ mod tests {
     }
 
     #[test]
-    fn session_ls_is_retired_with_a_pointer() {
+    fn session_ls_is_an_unknown_subcommand() {
+        // No teaching shim: `session ls` is an ordinary unknown
+        // subcommand (`daemon status` owns the listing).
         let err = parse_err(&["session", "ls"]);
-        assert!(err.contains("daemon status"), "{err}");
+        assert!(err.contains("unexpected argument 'ls'"), "{err}");
     }
 
     #[test]
@@ -1476,7 +1462,8 @@ mod tests {
             parse(&["attach", "sess-1"]).mode,
             Mode::Attach { id: Some(ref id) } if id == "sess-1"
         ));
-        // The retired flag form normalizes to the subcommand.
+        // The retired flag form desugars to the subcommand (same mode,
+        // not a compatibility alias — it is the documented flag shape).
         assert!(matches!(
             parse(&["--attach", "sess-1"]).mode,
             Mode::Attach { id: Some(ref id) } if id == "sess-1"
