@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-08-24
+
 ### Fixed
 
 - **A round that finished its answer right as the next message landed is no
@@ -4563,7 +4565,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.30.5...HEAD
+[Unreleased]: https://github.com/ming2k/neenee/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/ming2k/neenee/releases/tag/v0.31.0
 [0.30.5]: https://github.com/ming2k/neenee/releases/tag/v0.30.5
 [0.30.4]: https://github.com/ming2k/neenee/releases/tag/v0.30.4
 [0.30.3]: https://github.com/ming2k/neenee/releases/tag/v0.30.3
