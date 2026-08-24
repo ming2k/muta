@@ -261,7 +261,7 @@ mod tests {
                 include_idle: false,
             }),
             project: None,
-            version: Some("0.31.0".to_string()),
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
             protocol: Some(PROTOCOL_VERSION),
         };
         let json = serde_json::to_string(&frame).unwrap();
@@ -269,7 +269,7 @@ mod tests {
             json.contains(&format!("\"protocol\":{PROTOCOL_VERSION}")),
             "protocol number is on the wire: {json}"
         );
-        assert!(json.contains("\"version\":\"0.31.0\""));
+        assert!(json.contains(&format!("\"version\":\"{}\"", env!("CARGO_PKG_VERSION"))));
         let back: Wire = serde_json::from_str(&json).unwrap();
         match back {
             Wire::Select { protocol, .. } => assert_eq!(protocol, Some(PROTOCOL_VERSION)),

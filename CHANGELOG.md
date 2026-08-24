@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-08-24
+
 ### Changed
 
 - **The project is now Muta, with core and terminal app split at the process
@@ -4588,7 +4590,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.32.0...HEAD
+[0.32.0]: https://github.com/ming2k/muta/releases/tag/v0.32.0
 [0.31.0]: https://github.com/ming2k/neenee/releases/tag/v0.31.0
 [0.30.5]: https://github.com/ming2k/neenee/releases/tag/v0.30.5
 [0.30.4]: https://github.com/ming2k/neenee/releases/tag/v0.30.4
