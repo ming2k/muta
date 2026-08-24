@@ -108,7 +108,7 @@ loudest join in the language and must earn its place.
 
 ## Code vocabulary
 
-The ladder is a single source of truth in `crates/neenee-tui/src/design.rs`:
+The ladder is a single source of truth in `apps/tui/crates/mutx/src/design.rs`:
 
 | Constant | Rung | Value |
 |----------|------|-------|

@@ -1,6 +1,6 @@
 # Token accounting
 
-neenee measures context pressure in **tokens** because that is the unit every
+muta measures context pressure in **tokens** because that is the unit every
 model's context window is denominated in. The projected request size at each
 turn boundary drives the three context-projection layers — [pruning](context-pruning.md) →
 [compaction](context-compaction.md) → overflow recovery — and the live meter in
@@ -8,7 +8,7 @@ the TUI's hint bar. Getting that number *approximately* right is what keeps the
 agent from silently overflowing the window or, conversely, compacting far too
 early.
 
-This page is the single reference for **how neenee counts tokens**: the
+This page is the single reference for **how muta counts tokens**: the
 two-source model (upstream-reported vs. locally-estimated), the char-class
 estimator that backs the local path, the ledger that attributes every token to
 its source, and the report modal that surfaces it all to the user. For the
@@ -32,7 +32,7 @@ get in the way of "just use the provider's number":
    context pressure is roughly the *next* request's `prompt_tokens`, which is the
    size of the accumulated window.
 
-neenee resolves this with a **layered** policy: prefer the upstream number when
+muta resolves this with a **layered** policy: prefer the upstream number when
 it exists, fall back to a local estimator otherwise, and *attribute* every token
 to its source so the user can see which counts are authoritative and which are
 guesses.
@@ -79,9 +79,9 @@ makes "we already have the streamed number" short-circuit cleanly.
 
 ## The local predictor: native BPE (with a char-class fallback)
 
-When no upstream usage is available, neenee predicts locally. Since ADR-0117
+When no upstream usage is available, muta predicts locally. Since ADR-0117
 the predictor is a **native byte-level BPE tokenizer**
-(`crates/neenee-contracts/src/tokenizer.rs`) implementing OpenAI's `tiktoken`
+(`crates/muta-contracts/src/tokenizer.rs`) implementing OpenAI's `tiktoken`
 for the `cl100k_base` encoding: text is split by the cl100k pretokenizer
 regex (a hand-rolled scanner — no `regex` dependency) and each pretoken's
 bytes are merged greedily by lowest rank (`byte_pair_merge`). The 100 256-rank
@@ -90,7 +90,7 @@ vocabulary ships as a compact binary blob (`vendor/cl100k_base.packed`,
 models using that encoding family (GPT-3.5/4 and most OpenAI-compatible
 relays) and a close approximation for siblings (`o200k_base`); it is
 cross-validated against an offline tiktoken reference in
-`crates/neenee-contracts/tests/tokenizer_corpus.rs`.
+`crates/muta-contracts/tests/tokenizer_corpus.rs`.
 
 Message-level estimation (`estimate_message_tokens`) additionally charges
 chat framing overhead — 4 tokens per message, 2 per tool call — measured the
@@ -119,7 +119,7 @@ what motivated the BPE predictor.
 
 The old estimator divided the UTF-8 byte length by four. That ratio is a
 reasonable average for **English prose** — English words average about four
-characters and BPE merges them into one token. But neenee's conversations are
+characters and BPE merges them into one token. But muta's conversations are
 seldom pure English prose: they are dense with **Chinese/CJK** and **source
 code**, and for both `bytes / 4` breaks badly:
 
@@ -188,7 +188,7 @@ clamped.
 
 ## The token-source ledger
 
-To make the reported-vs-estimated distinction observable, neenee keeps one
+To make the reported-vs-estimated distinction observable, muta keeps one
 lifecycle record per concrete provider request:
 
 ```text
@@ -380,7 +380,7 @@ the `usage` object it previously discarded:
 |----------|---------------|-----------|
 | **Anthropic** (`anthropic_compat.rs`) | top-level `usage.input_tokens` / `output_tokens` | `message_delta` event's cumulative `usage` → `Usage` event |
 | **OpenAI-compat** (`openai_compat.rs`) | top-level `usage.{prompt,completion,total}_tokens` | requests `stream_options.include_usage`; terminal chunk's `usage` → `Usage` event |
-| **Gemini** (`neenee-llm-client`) | `usageMetadata.{prompt,candidates,total}TokenCount` | `usageMetadata` in stream payloads → `Usage` event |
+| **Gemini** (`muta-llm-client`) | `usageMetadata.{prompt,candidates,total}TokenCount` | `usageMetadata` in stream payloads → `Usage` event |
 
 Each adapter implements `Provider::usage_supported() -> true` and stashes the
 parsed `TokenUsage` in an internal `Mutex`, drained by `take_last_usage()`. The

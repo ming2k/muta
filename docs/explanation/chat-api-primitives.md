@@ -1,6 +1,6 @@
 # Chat API primitives
 
-neenee's agent is not an arbitrary program that happens to call a language
+muta's agent is not an arbitrary program that happens to call a language
 model. Its shape — the role split, the tool loop, the compaction backstop —
 is a direct consequence of the chat completion API contract. This page names
 the three protocol primitives that drive that shape, so the rest of the agent
@@ -15,7 +15,7 @@ For why providers differ on which primitives they implement, see
 ## Roles carry trained authority
 
 A chat request is a sequence of messages, each tagged with a role. The four
-roles — `system`, `user`, `assistant`, `tool` — are protocol, not a neenee
+roles — `system`, `user`, `assistant`, `tool` — are protocol, not a muta
 invention: every OpenAI-compatible endpoint speaks them.
 
 The model is trained (through supervised fine-tuning and RLHF) to treat each
@@ -30,7 +30,7 @@ a property of the training distribution:
   superseded by newer information.
 - `tool` is raw data returned by a tool call, taken as fact.
 
-neenee exploits this gradient to layer intent by durability:
+muta exploits this gradient to layer intent by durability:
 
 | Placed in `system` | Placed in `user` |
 |--------------------|------------------|
@@ -45,14 +45,14 @@ marked hidden, which means the model still receives it (it enters the request)
 but the terminal UI does not render it. This opens a control channel that
 drives the model as a `user` request without polluting the visible transcript
 — used for autonomous-loop iteration prompts, steering
-nudges, and skill injection. Visibility is a neenee concept; the API itself
+nudges, and skill injection. Visibility is a muta concept; the API itself
 has no notion of it.
 
 ## The API is stateless; the messages array is the only memory
 
 Every turn of the agent loop is one independent HTTP request. The provider
 remembers nothing between requests. What the model "knows" about prior turns
-is entirely a function of the messages array neenee re-sends each turn:
+is entirely a function of the messages array muta re-sends each turn:
 
 ```text
 turn 1:  [system, user]
@@ -69,7 +69,7 @@ most of the harness machinery:
 - **A tool's effect is invisible to the model unless it re-enters the array**,
   so every tool result is appended as a `tool` message before the next
   request. The model cannot "remember" running a command; it can only read the
-  result message neenee sends back.
+  result message muta sends back.
 
 The agent is therefore a stateless API plus client-managed external state —
 the messages array, the persisted session, the in-memory checklist. Nothing
@@ -77,7 +77,7 @@ else carries across a turn.
 
 ## Function calling is the ReAct loop, not an implementation detail
 
-A tool-using round is not a neenee loop grafted onto a chat API. The loop *is*
+A tool-using round is not a muta loop grafted onto a chat API. The loop *is*
 the protocol. Function calling — the `tools` array, the assistant's
 `tool_calls`, and the `tool` message that carries a `tool_call_id` back — is
 part of the OpenAI contract, and one turn of the agent loop maps onto it
@@ -92,7 +92,7 @@ client re-sends: messages + tools   ← next turn
 ```
 
 The loop ends when the model replies with no `tool_calls` — and that is also
-protocol, not policy. neenee adds guards on top (a repeated-call limit and
+protocol, not policy. muta adds guards on top (a repeated-call limit and
 an optional hard stop), but the loop's existence and termination
 condition come from the contract. See
 [ADR-0009](../adr/0009-uncapped-agentic-loop.md) for why the per-round turn
@@ -101,13 +101,13 @@ count was left uncapped to match this.
 Two protocol constraints shape the harness:
 
 - **Tool results must pair with their call.** A `tool` message with no
-  matching preceding `tool_call_id` is rejected by the endpoint, so neenee
+  matching preceding `tool_call_id` is rejected by the endpoint, so muta
   filters orphan results before sending. This pairing is also what makes
   retry unsafe once any tool has run: replaying the request would replay side
   effects. See [Request flow](request-flow.md).
 - **Native function calling is a capability, not a given.** Providers without
   it never emit `tool_calls`; the model is instructed to emit the call as
-  plain assistant text, which neenee parses back into a synthetic
+  plain assistant text, which muta parses back into a synthetic
   `tool_calls` / `tool_call_id` pair. This is the same loop over a degraded
   transport, not a different mechanism. See
   [Provider capabilities](provider-capabilities.md).
@@ -120,7 +120,7 @@ arbitrary:
 - **Compaction exists** because the API is stateless and the messages array
   is the only memory, and it is bounded.
 - **The tool loop looks the way it does** because function calling is the
-  protocol's own agent primitive; neenee wraps it, it did not invent it.
+  protocol's own agent primitive; muta wraps it, it did not invent it.
 - **The hidden control channel exists** because the `user` role drives action,
   and visibility is separable from role.
 

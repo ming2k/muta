@@ -2,7 +2,7 @@ import { defineConfig, mergeConfig } from 'vitest/config'
 import viteConfig from './vite.config.ts'
 
 // Test runner config, layered over the vite config so the svelte plugin and
-// the __NEENEE_CLIENT_VERSION__ define apply to tests exactly as to builds.
+// the __MUTA_CLIENT_VERSION__ define apply to tests exactly as to builds.
 export default mergeConfig(
   viteConfig,
   defineConfig({

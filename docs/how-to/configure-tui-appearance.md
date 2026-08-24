@@ -1,7 +1,7 @@
 # How to configure TUI appearance
 
 Use the `/settings` overlay to select a built-in color scheme or create
-a custom palette without restarting `neenee`.
+a custom palette without restarting `muta`.
 
 ## Apply a preset
 

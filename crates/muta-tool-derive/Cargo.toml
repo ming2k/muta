@@ -1,0 +1,18 @@
+[package]
+name = "muta-tool-derive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Procedural macros for the muta tool system: derive JSON Schemas for tool parameters from typed structs (eliminates hand-written schema drift)."
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+serde_json = { workspace = true }

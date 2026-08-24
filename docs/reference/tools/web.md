@@ -1,7 +1,7 @@
 # Web tools
 
 Fetch URLs and search the web. Both are `Read`. Source:
-`crates/neenee-agent/src/tools/web.rs`. Provider configuration lives in
+`crates/muta-agent/src/tools/web.rs`. Provider configuration lives in
 `config.toml` under `[websearch]`.
 
 Research is a two-stage pipeline ([ADR-0118](../../adr/0118-two-stage-web-research-search-breadth-fetch-depth.md)):

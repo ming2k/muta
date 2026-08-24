@@ -1,6 +1,6 @@
 # State and status model
 
-neenee does not have one project-wide state machine. It has several
+muta does not have one project-wide state machine. It has several
 independent protocols whose subjects, owners, persistence, and transition
 rules differ. Keeping those protocols separate prevents a display badge from
 silently becoming execution authority.

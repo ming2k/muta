@@ -1,6 +1,6 @@
 # Paths
 
-Where neenee reads and writes files. Lookup-oriented: for the conceptual
+Where muta reads and writes files. Lookup-oriented: for the conceptual
 model, see [Platform-native persistence categories](../explanation/persistence.md);
 for the durable policy, see [ADR-0014](../adr/0014-xdg-persistence-architecture.md).
 
@@ -12,9 +12,9 @@ native defaults are used when they are absent.
 
 | # | Source | Notes |
 |---|--------|-------|
-| 1 | `--home <dir>` | Instance root (ADR-0121): the CLI form of the `NEENEE_HOME` selector; wins over the env var |
-| 2 | `NEENEE_CONFIG_DIR`, `NEENEE_DATA_DIR`, `NEENEE_STATE_DIR`, `NEENEE_CACHE_DIR` | App-specific env override; more specific than the root, so one category can be carved out of a sandbox |
-| 3 | `NEENEE_HOME` | Instance root (ADR-0121): `<dir>/neenee/{config,data,state,cache}` + `<dir>/neenee/instance` for daemon runtime files. One variable isolates the entire footprint — the dev/test sandbox shape. Relative or empty values are ignored |
+| 1 | `--home <dir>` | Instance root (ADR-0121): the CLI form of the `MUTA_HOME` selector; wins over the env var |
+| 2 | `MUTA_CONFIG_DIR`, `MUTA_DATA_DIR`, `MUTA_STATE_DIR`, `MUTA_CACHE_DIR` | App-specific env override; more specific than the root, so one category can be carved out of a sandbox |
+| 3 | `MUTA_HOME` | Instance root (ADR-0121): `<dir>/muta/{config,data,state,cache}` + `<dir>/muta/instance` for daemon runtime files. One variable isolates the entire footprint — the dev/test sandbox shape. Relative or empty values are ignored |
 | 4 | `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | Standard XDG env override; relative values ignored per spec |
 | 5 | Native per-OS default | `directories` crate: XDG defaults on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` / `%LOCALAPPDATA%` on Windows |
 | 6 | `$HOME/.config`, `$HOME/.local/share`, `$HOME/.local/state`, `$HOME/.cache` | Unix-only last-resort default when native resolution is unavailable |
@@ -26,13 +26,13 @@ general) and *above* the `XDG_*` layer, so one sandbox switch wins over the
 ambient desktop environment.
 
 The daemon runtime files resolve through the same idea, terminated by
-[`instance_dir`]: `--home`/`NEENEE_HOME` (`<dir>/neenee/instance`) >
-`$XDG_RUNTIME_DIR/neenee` > the native fallback (data on Unix,
-`%LOCALAPPDATA%\neenee\state\instance` on Windows). `NEENEE_PORT` is the
+[`instance_dir`]: `--home`/`MUTA_HOME` (`<dir>/muta/instance`) >
+`$XDG_RUNTIME_DIR/muta` > the native fallback (data on Unix,
+`%LOCALAPPDATA%\muta\state\instance` on Windows). `MUTA_PORT` is the
 port-layer sibling: it overrides the well-known 9800 default (an explicit
 `--port` still wins).
 
-## Config — `$XDG_CONFIG_HOME/neenee/`
+## Config — `$XDG_CONFIG_HOME/muta/`
 
 User-edited configuration. Lossy; back it up.
 
@@ -43,11 +43,11 @@ User-edited configuration. Lossy; back it up.
 | `logo.txt` | Optional user-supplied ASCII logo; when present its lines replace the built-in wordmark on the welcome screen | Rebuildable |
 | `themes/<id>.toml` | Standalone theme files; one file per custom theme, loaded by the Settings overlay | User-authored |
 
-Default location: `~/.config/neenee/`.
+Default location: `~/.config/muta/`.
 
 OAuth token sets (`auth.toml`, 0600) are **runtime state, not user
-config** — they live under `$XDG_STATE_HOME/neenee/auth.toml` (see the
-State section below). A legacy `~/.config/neenee/auth.toml` from older
+config** — they live under `$XDG_STATE_HOME/muta/auth.toml` (see the
+State section below). A legacy `~/.config/muta/auth.toml` from older
 releases is still read as a fallback (`legacy_auth_file`) and migrated on
 first save.
 
@@ -55,8 +55,8 @@ The two credential kinds, side by side:
 
 | Kind | File | Keyed by | Contents |
 |------|------|----------|----------|
-| token (API key) | `~/.config/neenee/credentials.toml` | provider instance (`[providers.<id>]`) | `api_key` |
-| oauth (subscription login) | `~/.local/state/neenee/auth.toml` | provider instance (`[tokens.<provider>]`) | `access` / `refresh` / `expires_ms` / `account_id` |
+| token (API key) | `~/.config/muta/credentials.toml` | provider instance (`[providers.<id>]`) | `api_key` |
+| oauth (subscription login) | `~/.local/state/muta/auth.toml` | provider instance (`[tokens.<provider>]`) | `access` / `refresh` / `expires_ms` / `account_id` |
 
 The category split follows the XDG spec's own test ("important or portable
 enough to the user?") rather than the fact that both files hold secrets: a
@@ -66,7 +66,7 @@ by re-login — state. Both files are 0600 with private temp writes, so the
 placement buys no security either way. Rationale and alternatives:
 [ADR-0115](../adr/0115-credential-placement-config-vs-state.md).
 
-## Data — `$XDG_DATA_HOME/neenee/`
+## Data — `$XDG_DATA_HOME/muta/`
 
 Persistent, program-generated, must survive restart. Back it up.
 
@@ -78,18 +78,18 @@ Persistent, program-generated, must survive restart. Back it up.
 | `projects/<bucket>/network/` | Per-project `/debug trace` capture directory; bounded retention (newest 50 captures kept — each is a full context, so they grow fast) | Rebuildable |
 | `projects/<bucket>/debug/` | Per-project `/debug preview` capture directory (one owner-only JSON per invocation, same bounded retention) | Rebuildable |
 | `projects/<bucket>/embeddings.json` | Per-project lightweight embedding index | Rebuildable (re-indexed) |
-| `projects/<bucket>/neenee.lock` | Per-project advisory lock | Rebuildable |
+| `projects/<bucket>/muta.lock` | Per-project advisory lock | Rebuildable |
 | `projects/<bucket>/permissions.json` | Per-project cached "always allow" permission rules | Rebuildable (re-prompts) |
 | `usage/daily/<YYYY-MM-DD>.json` | Cross-session usage statistics (ADR-0122): one append-only file per local day of terminal request records, mirrored from the token ledger. A **sibling of `projects/`**, so session cleanup never touches it; powers the `/usage` overlay | Yes (history is unrecoverable) |
 | `skills/` | User-global skills (`SKILL.md` per skill) | Yes (user-authored) |
 | `commands/` | User-global slash commands | Yes (user-authored) |
 
-Default location: `~/.local/share/neenee/`.
+Default location: `~/.local/share/muta/`.
 
 The per-project bucket is `sha256(cwd)[..16]` — 16 hex chars (64 bits),
 ASCII-safe, not reversible to the cwd from the path alone.
 
-## State — `$XDG_STATE_HOME/neenee/`
+## State — `$XDG_STATE_HOME/muta/`
 
 Persistent, program-generated, rebuildable. Loss flattens sort order or
 re-prompts; no conversation is lost.
@@ -99,15 +99,15 @@ re-prompts; no conversation is lost.
 | `history.json` | Slash-command input history | Rebuildable |
 | `providers.toml` | **Provider instances** — the program-managed "who I connect to" records: id/name, `template_id`, `auth`, optional `api_key_env`, and a pure-custom instance's declared transport/endpoint/models. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each instance's template + the discovery cache, never persisted | No (user-managed connections) |
 | `route_settings.json` | The user's per-(instance, model) reasoning overrides — set from the model `e` editor. State, not cache: deleting it loses user configuration no endpoint can re-derive (migrated out of `models_discovery.json`) | No |
-| `trusted_projects.json` | The per-project trust grant set (which projects' `.neenee/config.toml` external tools are loaded) | Rebuildable (re-trust) |
+| `trusted_projects.json` | The per-project trust grant set (which projects' `.muta/config.toml` external tools are loaded) | Rebuildable (re-trust) |
 | `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |
 | `auth.toml` | OAuth token sets per provider id (`[tokens.<provider>]`, 0600) — access/refresh/expiry for SuperGrok, ChatGPT, Copilot, and Google Antigravity logins. Rebuildable only by re-logging in (the refresh tokens are the durable secret; losing the file means re-auth, so back it up if rotating logins is costly) | Re-auth on loss |
-| `neenee.lock` | Cross-process advisory lock when no runtime directory is available | Rebuildable |
-| `log/` | Structured rolling-log appender output, daily rotation with bounded retention (`NEENEE_LOG_RETENTION`, default 14 files) | Rebuildable |
+| `muta.lock` | Cross-process advisory lock when no runtime directory is available | Rebuildable |
+| `log/` | Structured rolling-log appender output, daily rotation with bounded retention (`MUTA_LOG_RETENTION`, default 14 files) | Rebuildable |
 
-Default location: `~/.local/state/neenee/`.
+Default location: `~/.local/state/muta/`.
 
-## Cache — `$XDG_CACHE_HOME/neenee/`
+## Cache — `$XDG_CACHE_HOME/muta/`
 
 Derived, deletable, repopulated on demand. Safe to delete.
 
@@ -116,13 +116,13 @@ Derived, deletable, repopulated on demand. Safe to delete.
 | `skills/remote/` | Cached remote skill repositories (fetched from `[skills] urls`) | Safe to delete |
 | `models_discovery.json` | Per-route facts derived from live `GET /models`: the discovered model list and fitted capability metadata. All derived — wiping the file costs one re-discovery | Rebuildable |
 
-Default location: `~/.cache/neenee/`.
+Default location: `~/.cache/muta/`.
 
 ## Runtime — the daemon instance dir
 
-Ephemeral per daemon. By default `$XDG_RUNTIME_DIR/neenee/` on Linux;
-moved wholesale to `<dir>/neenee/instance` by the instance root selector
-(`--home` / `NEENEE_HOME`, ADR-0121). Never assume the default location
+Ephemeral per daemon. By default `$XDG_RUNTIME_DIR/muta/` on Linux;
+moved wholesale to `<dir>/muta/instance` by the instance root selector
+(`--home` / `MUTA_HOME`, ADR-0121). Never assume the default location
 exists.
 
 | Path | Purpose | Lossy? |
@@ -130,11 +130,11 @@ exists.
 | `daemon.lock` | Cross-process single-instance lock (`flock` on Unix, `LockFileEx` on Windows) | Ephemeral |
 | `daemon.json` | Unified session-daemon discovery record (pid, TCP port, native local endpoint, token when exposed, daemon `version`); written on startup after the endpoints bind and removed on every shutdown path | Ephemeral |
 | `daemon.sock` | Unix only: owner-only Unix-domain control-plane socket; listener drop removes it, and the next lock-owning bind safely replaces state left by a killed daemon | Ephemeral |
-| `\\.\pipe\neenee-<user-sid>-daemon-<instance-hash>` | Windows only: instance-isolated Named Pipe with a protected DACL granting the current user and LocalSystem | Ephemeral |
+| `\\.\pipe\muta-<user-sid>-daemon-<instance-hash>` | Windows only: instance-isolated Named Pipe with a protected DACL granting the current user and LocalSystem | Ephemeral |
 | `serve/<bucket>.json` | Legacy pre-ADR-0096 per-project discovery records; ignored by current clients (harmless litter) | Ephemeral |
 
 Without an instance/runtime override, macOS and Linux fall back to the data
-directory; Windows uses `%LOCALAPPDATA%\neenee\state\instance` so ephemeral
+directory; Windows uses `%LOCALAPPDATA%\muta\state\instance` so ephemeral
 coordination never roams with the user profile.
 
 ## Project working tree (not under XDG)
@@ -143,15 +143,15 @@ Lives with the project root; travels with the repository.
 
 | Path | Purpose |
 |------|---------|
-| `.neenee/skills/<name>/SKILL.md` | Project-local skills (highest discovery priority) |
-| `.neenee/commands/<name>.md` | Project-local slash commands (highest discovery priority) |
-| `.neenee/config.toml` | Project-scope configuration (MCP servers + hooks); loaded only after the project is trusted (ADR-0085) |
+| `.muta/skills/<name>/SKILL.md` | Project-local skills (highest discovery priority) |
+| `.muta/commands/<name>.md` | Project-local slash commands (highest discovery priority) |
+| `.muta/config.toml` | Project-scope configuration (MCP servers + hooks); loaded only after the project is trusted (ADR-0085) |
 | `session.json`, `events.jsonl` | Legacy in-project session storage at the project root (transitional; superseded by `projects/<bucket>/sessions/`) |
 | `.agents/skills/`, `.claude/skills/` | External application conventions (read-only) |
 | `.agents/commands/` | External application conventions (read-only) |
 
 The project root is located by walking upward from the current directory
-looking for the first ancestor containing `.neenee`, `.git`, `Cargo.toml`,
+looking for the first ancestor containing `.muta`, `.git`, `Cargo.toml`,
 or `package.json`.
 
 ## macOS and Windows defaults
@@ -161,32 +161,32 @@ The override stack is identical; only the fallback locations differ.
 
 | Category | macOS | Windows |
 |----------|-------|---------|
-| Config | `~/Library/Application Support/neenee` | `%APPDATA%\neenee\config` |
-| Data | `~/Library/Application Support/neenee` | `%APPDATA%\neenee\data` |
-| State | `~/Library/Application Support/neenee/state` (macOS has no separate native state root) | `%LOCALAPPDATA%\neenee\state` |
-| Cache | `~/Library/Caches/neenee` | `%LOCALAPPDATA%\neenee\cache` |
+| Config | `~/Library/Application Support/muta` | `%APPDATA%\muta\config` |
+| Data | `~/Library/Application Support/muta` | `%APPDATA%\muta\data` |
+| State | `~/Library/Application Support/muta/state` (macOS has no separate native state root) | `%LOCALAPPDATA%\muta\state` |
+| Cache | `~/Library/Caches/muta` | `%LOCALAPPDATA%\muta\cache` |
 
 On Windows, daemon discovery and lock records fall back to
-`%LOCALAPPDATA%\neenee\state\instance`; they never enter the roaming profile.
+`%LOCALAPPDATA%\muta\state\instance`; they never enter the roaming profile.
 `XDG_*_HOME` env vars remain accepted as explicit cross-platform overrides.
 They do not replace these native defaults merely because the process runs on
 Windows or macOS.
 
 ## Isolated instances (development and testing)
 
-`--home <dir>` (or `NEENEE_HOME=<dir>`) gives neenee a fully separate
+`--home <dir>` (or `MUTA_HOME=<dir>`) gives both Muta command surfaces a fully separate
 footprint: config, credentials, sessions, skills, logs, the daemon's native
-endpoint/lock/discovery record, and (via `NEENEE_PORT`) the default TCP port.
+endpoint/lock/discovery record, and (via `MUTA_PORT`) the default TCP port.
 A sandboxed client spawns its on-demand daemon with the inherited
 environment, so the daemon lands in the same sandbox — the host
 installation's daemon and data are never touched.
 
 | Purpose | Command |
 |---------|---------|
-| Run one command isolated | `neenee --home /tmp/x <args>` |
-| Isolate a whole shell / CI step | `export NEENEE_HOME=/tmp/x NEENEE_PORT=9801` |
-| Run the test suites isolated | `export NEENEE_HOME=$(mktemp -d)` then `cargo test` |
-| Confirm which instance a client sees | `neenee --home /tmp/x daemon status --diagnostic` |
+| Run one terminal command isolated | `mutx --home /tmp/x <args>` |
+| Isolate a whole shell / CI step | `export MUTA_HOME=/tmp/x MUTA_PORT=9801` |
+| Run the test suites isolated | `export MUTA_HOME=$(mktemp -d)` then `cargo test` |
+| Confirm which instance a client sees | `muta --home /tmp/x daemon status --diagnostic` |
 
 See [ADR-0121](../adr/0121-instance-isolation-for-development-and-testing.md)
 for the decision record.
@@ -195,11 +195,11 @@ for the decision record.
 
 | Purpose | Command |
 |------|---------|
-| Reset caches | `rm -rf $XDG_CACHE_HOME/neenee` |
-| Reset rebuildable state | `rm -rf $XDG_STATE_HOME/neenee` |
-| Reset one project's history | `rm -rf $XDG_DATA_HOME/neenee/projects/<bucket>` |
-| Factory reset (keep config) | `rm -rf $XDG_DATA_HOME/neenee $XDG_STATE_HOME/neenee $XDG_CACHE_HOME/neenee` |
-| Full wipe (including config) | Add `rm -rf $XDG_CONFIG_HOME/neenee` to the above |
+| Reset caches | `rm -rf $XDG_CACHE_HOME/muta` |
+| Reset rebuildable state | `rm -rf $XDG_STATE_HOME/muta` |
+| Reset one project's history | `rm -rf $XDG_DATA_HOME/muta/projects/<bucket>` |
+| Factory reset (keep config) | `rm -rf $XDG_DATA_HOME/muta $XDG_STATE_HOME/muta $XDG_CACHE_HOME/muta` |
+| Full wipe (including config) | Add `rm -rf $XDG_CONFIG_HOME/muta` to the above |
 
 ## Legacy stray files
 
@@ -209,11 +209,11 @@ directories:
 
 | File | Written by | Removed by |
 |------|-----------|------------|
-| `$XDG_CONFIG_HOME/neenee/goals.db` | the pre-ADR-0082 goal scheduler (SQLite) | any release after the SQLite removal |
-| `$XDG_CONFIG_HOME/neenee/session.json` | the pre-ADR-0096 single-session layout | ADR-0096 (per-project buckets) |
-| `$XDG_STATE_HOME/neenee/model_usage.json` | the pre-ADR-0024 usage telemetry (SQLite era) | ADR-0024's supersession; `provider_usage.json` is the live file |
-| `$XDG_DATA_HOME/neenee/repeat.db` | the pre-ADR-0082 `/repeat` scheduler (SQLite) | any release after the SQLite removal |
-| `$XDG_CACHE_HOME/neenee/models-dev.json` | an older remote-models cache format | the discovery cache (`models_discovery.json`) replaced it |
+| `$XDG_CONFIG_HOME/muta/goals.db` | the pre-ADR-0082 goal scheduler (SQLite) | any release after the SQLite removal |
+| `$XDG_CONFIG_HOME/muta/session.json` | the pre-ADR-0096 single-session layout | ADR-0096 (per-project buckets) |
+| `$XDG_STATE_HOME/muta/model_usage.json` | the pre-ADR-0024 usage telemetry (SQLite era) | ADR-0024's supersession; `provider_usage.json` is the live file |
+| `$XDG_DATA_HOME/muta/repeat.db` | the pre-ADR-0082 `/repeat` scheduler (SQLite) | any release after the SQLite removal |
+| `$XDG_CACHE_HOME/muta/models-dev.json` | an older remote-models cache format | the discovery cache (`models_discovery.json`) replaced it |
 
 None of these are read by the current code; deleting them changes nothing at
 runtime. They are *not* removed automatically — a tool silently deleting

@@ -1,10 +1,10 @@
 asyncapi: 3.1.0
 info:
-  title: neenee session-host WebSocket API
+  title: muta session-host WebSocket API
   version: 0.31.0
   description: |
     Machine-readable contract for the unified session-daemon transport
-    (`neenee daemon start --fg`; ADR-0081/0089/0093/0094/0096/0119).
+    (`muta daemon start --fg`; ADR-0081/0089/0093/0094/0096/0119).
     One process owns every session across every project and serves them over a
     single WebSocket endpoint (Unix domain socket by default, TCP + bearer token
     when exposed). Client roles share the socket, distinguished by the client's
@@ -39,19 +39,20 @@ info:
     discovery record; `--no-local-auth` opts out). Loopback handshakes that
     carry a browser `Origin` are accepted only when the origin host is itself
     loopback (WebSocket is not same-origin-protected). The TCP port also
-    serves plain HTTP: `GET /` the embedded web panel, `GET /healthz` an
-    unauthenticated `{version, auth, panel}` probe. There is no TLS; front a
+    serves plain HTTP `GET`/`HEAD /healthz`, an unauthenticated
+    `{version, auth}` probe; all other HTTP paths return 404. Frontend assets
+    are independently deployed, never embedded. There is no TLS; front a
     public deployment with a TLS-terminating reverse proxy.
   license:
     name: MIT
     url: https://opensource.org/license/mit
   externalDocs:
     description: Human-readable frontend integration guide
-    url: https://github.com/ming2k/neenee/blob/main/docs/reference/server-api.md
+    url: https://github.com/ming2k/muta/blob/main/docs/reference/server-api.md
 defaultContentType: application/json
 servers:
   uds:
-    host: $XDG_RUNTIME_DIR/neenee/daemon.sock
+    host: $XDG_RUNTIME_DIR/muta/daemon.sock
     protocol: ws
     description: |
       Default (ADR-0096). The unified daemon's primary local channel is a Unix
@@ -76,11 +77,12 @@ servers:
     host: 0.0.0.0:{port}
     protocol: ws
     description: |
-      `neenee daemon start --fg --public` binds
+      `muta daemon start --fg --public` binds
       all interfaces for LAN clients (ADR-0096).
       A bearer token is mandatory: send `Authorization: Bearer <token>` on the
-      handshake, else HTTP 401. The daemon generates and prints the token on
-      startup. Front with TLS for remote use.
+      handshake, else HTTP 401. The daemon writes the token to its owner-only
+      discovery record; `muta daemon token` prints it on explicit operator
+      request. Front with TLS for remote use.
     security:
       - bearerAuth: []
     variables:
@@ -388,7 +390,7 @@ components:
           minimum: 1
           description: >
             The wire protocol number this client speaks (ADR-0134), from
-            PROTOCOL_VERSION in crates/neenee-contracts/src/wire.rs.
+            PROTOCOL_VERSION in crates/muta-contracts/src/wire.rs.
         version:
           type: string
           description: The client's CARGO_PKG_VERSION for skew detection.
@@ -426,6 +428,11 @@ components:
         model:
           type: string
           description: Wire model id the session is currently serving. Empty when no model resolves.
+        command_catalog:
+          $ref: '#/components/schemas/CommandCatalog'
+          description: >
+            Backend command metadata for help and presentation. Completion
+            matching remains server-owned through CompleteInput.
       additionalProperties: false
     PickEnvelope:
       type: object
@@ -582,10 +589,82 @@ components:
         - $ref: '#/components/schemas/AgentResponse'
       unevaluatedProperties: false
 
+    CommandCatalog:
+      type: object
+      required: [commands, aliases, suggestions]
+      properties:
+        commands:
+          type: array
+          items: { $ref: '#/components/schemas/CommandSpec' }
+        aliases:
+          type: array
+          items: { $ref: '#/components/schemas/CommandAlias' }
+        suggestions:
+          type: array
+          items: { $ref: '#/components/schemas/CommandSuggestion' }
+      additionalProperties: false
+    CommandSpec:
+      type: object
+      required: [name, summary, description, usage, examples, intent_keywords]
+      properties:
+        name: { type: string, examples: [/models] }
+        summary: { type: string }
+        description: { type: string }
+        usage:
+          type: array
+          items: { type: string }
+        examples:
+          type: array
+          items: { $ref: '#/components/schemas/CommandExample' }
+        intent_keywords:
+          type: array
+          items: { type: string }
+        category: { type: string }
+      additionalProperties: false
+    CommandExample:
+      type: object
+      required: [command, description]
+      properties:
+        command: { type: string }
+        description: { type: string }
+      additionalProperties: false
+    CommandAlias:
+      type: object
+      required: [name, target]
+      properties:
+        name: { type: string }
+        target: { type: string }
+      additionalProperties: false
+    CommandSuggestion:
+      type: object
+      required: [trigger, target, reason]
+      properties:
+        trigger: { type: string }
+        target: { type: string }
+        reason: { type: string }
+      additionalProperties: false
+    InputCompletion:
+      description: >
+        Backend-produced composer edit. Replacement offsets are Unicode-scalar
+        indices; the client splices insert_text verbatim over the range.
+      type: object
+      required: [label, description, insert_text, replace_start, replace_end, kind]
+      properties:
+        label: { type: string }
+        description: { type: string }
+        insert_text: { type: string }
+        replace_start: { type: integer, minimum: 0 }
+        replace_end: { type: integer, minimum: 0 }
+        kind:
+          enum: [slash, intent, path_file, path_dir, path_explicit]
+        command: { $ref: '#/components/schemas/CommandSpec' }
+      additionalProperties: false
+
     AgentRequest:
       oneOf:
         - $ref: '#/components/schemas/RequestChat'
         - $ref: '#/components/schemas/RequestSlashCommand'
+        - $ref: '#/components/schemas/RequestCompleteInput'
         - $ref: '#/components/schemas/RequestInterrupt'
         - $ref: '#/components/schemas/RequestPermissionReply'
         - $ref: '#/components/schemas/RequestUserQuestionReply'
@@ -635,6 +714,22 @@ components:
       required: [SlashCommand]
       properties:
         SlashCommand: { type: string, examples: [/help] }
+      additionalProperties: false
+    RequestCompleteInput:
+      type: object
+      required: [CompleteInput]
+      properties:
+        CompleteInput:
+          type: object
+          required: [request_id, input, cursor]
+          properties:
+            request_id: { type: integer, minimum: 0 }
+            input: { type: string }
+            cursor:
+              type: integer
+              minimum: 0
+              description: Unicode-scalar offset into input.
+          additionalProperties: false
       additionalProperties: false
     RequestInterrupt: { $ref: '#/components/schemas/UnitRequestInterrupt' }
     UnitRequestInterrupt:
@@ -987,6 +1082,7 @@ components:
         snapshots retain an open object payload where noted.
       oneOf:
         - $ref: '#/components/schemas/ResponseRound'
+        - $ref: '#/components/schemas/ResponseInputCompletions'
         - $ref: '#/components/schemas/ResponseParentStatus'
         - $ref: '#/components/schemas/ResponseSideViewOpened'
         - $ref: '#/components/schemas/ResponseSideViewClosed'
@@ -1014,6 +1110,25 @@ components:
           properties:
             session_id: { type: string }
             event: { $ref: '#/components/schemas/RoundEvent' }
+          additionalProperties: false
+      additionalProperties: false
+    ResponseInputCompletions:
+      type: object
+      required: [InputCompletions]
+      properties:
+        InputCompletions:
+          type: object
+          required: [request_id, input, cursor, items]
+          properties:
+            request_id: { type: integer, minimum: 0 }
+            input: { type: string }
+            cursor:
+              type: integer
+              minimum: 0
+              description: Echoed Unicode-scalar cursor offset.
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/InputCompletion' }
           additionalProperties: false
       additionalProperties: false
     ResponseParentStatus:

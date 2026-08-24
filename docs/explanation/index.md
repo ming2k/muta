@@ -12,7 +12,7 @@ Conceptual background and design rationale.
 
 ## Storage and persistence
 
-How neenee classifies files by lifetime, maps those categories to native OS
+How muta classifies files by lifetime, maps those categories to native OS
 locations, and accepts XDG paths as Linux defaults or explicit overrides.
 
 | Page | Purpose |
@@ -21,7 +21,7 @@ locations, and accepts XDG paths as Linux defaults or explicit overrides.
 
 ## Agent design
 
-The design canon for neenee's agent — how a round is steered, gated, isolated,
+The design canon for muta's agent — how a round is steered, gated, isolated,
 made durable, and kept honest. The pages share a set of recurring themes
 (capability gating, isolation boundaries, durable vs ephemeral state,
 streaming, fallback, control-plane separation) that the section index lays out
@@ -60,6 +60,6 @@ wire-level contract with model servers, and the terminal rendering surface.
 | [Table hit-testing and cell-locked selection](table-hit-testing.md) | How table cells get a parallel hit-test system: layout, dual coordinate maps, cell-locked drag, and border-stripped copy |
 | [Request flow](request-flow.md) | HTTP transaction shape, SSE streaming, and the ReAct loop's message evolution |
 | [Tool-call wire formats](tool-call-wire-formats.md) | How OpenAI Chat Completions and Anthropic Messages serialize tool declarations and tool-call arguments |
-| [Interrupt semantics](interrupt-semantics.md) | Why neenee is streaming-only, the three-phase interrupt model (pre-response unsend / local drop / remote tool cancel), what survives in context, the billing reality of an interrupted round, and the durable round-interrupt record (reason + timestamp, projected back on resume) |
+| [Interrupt semantics](interrupt-semantics.md) | Why muta is streaming-only, the three-phase interrupt model (pre-response unsend / local drop / remote tool cancel), what survives in context, the billing reality of an interrupted round, and the durable round-interrupt record (reason + timestamp, projected back on resume) |
 | [Provider capabilities](provider-capabilities.md) | Where tool calling and reasoning actually live across model weights, serving runtime, and client |
 | [Guided decoding](guided-decoding.md) | Constrained decoding, FSM compilation, and chat templates — the layer that guarantees valid tool calls |

@@ -11,7 +11,7 @@
 
   /**
    * Text rendering of a `CommandResult`, mirroring `CommandResult::to_text`
-   * in `crates/neenee-contracts/src/command.rs` — the single text scheme every
+   * in `crates/muta-contracts/src/command.rs` — the single text scheme every
    * consumer (live display, resume, export) agrees on.
    */
   function resultToText(result: CommandResult): string {
@@ -61,7 +61,7 @@
     }
   }
 
-  /** Mirrors `review_to_text` in `crates/neenee-contracts/src/command.rs`. */
+  /** Mirrors `review_to_text` in `crates/muta-contracts/src/command.rs`. */
   function reviewToText(verdicts: ReviewVerdict[], turns: number): string {
     const turnUnit = turns === 1 ? "turn" : "turns";
     const order: Record<string, number> = { Healthy: 0, Watch: 1, Stuck: 2 };

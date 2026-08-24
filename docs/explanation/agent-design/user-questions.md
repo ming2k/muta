@@ -7,7 +7,7 @@ how the TUI renders and returns the result.
 
 ## Why a dedicated tool
 
-Before `ask_user`, neenee followed a strict "do not ask permission" rule in its
+Before `ask_user`, muta followed a strict "do not ask permission" rule in its
 system prompt. The only interactive gate was the write-tool permission sheet,
 which is a safety control, not a model-driven question. As tasks grew more
 ambiguous, the model needed a structured way to resolve ambiguity without

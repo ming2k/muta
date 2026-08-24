@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="./assets/logo.png" alt="neenee logo" width="256">
+  <img src="./assets/logo.png" alt="muta logo" width="256">
 </p>
 
-<h1 align="center">neenee</h1>
+<h1 align="center">muta</h1>
 
 <p align="center">
   English | <a href="./README.zh-CN.md">简体中文</a>
@@ -19,10 +19,10 @@
 
 ## Features
 
-- **Semantic TUI** — In-house grid + diff rendering engine (`neenee-tui-engine`), built from scratch to replace ratatui. Retained-mode grid with write-marks-dirty diff, wide-glyph ownership, and `bce`-aware crossterm backend. Live status, expandable tool steps, and structured diffs.
+- **Semantic TUI** — In-house grid + diff rendering engine (`mutx-engine`), built from scratch to replace ratatui. Retained-mode grid with write-marks-dirty diff, wide-glyph ownership, and `bce`-aware crossterm backend. Live status, expandable tool steps, and structured diffs.
 - **Tool Use** — Full ReAct loop with native and fallback tool-calling; bash, file I/O, grep, glob, web search, and MCP servers.
 - **Scheduled Prompts** — Schedule prompts on a clock with `/schedule`: recurring cron jobs or one-shot countdown/absolute-time timers, so the agent can run on autopilot on a schedule.
-- **Session Daemon & Control Plane** — One user-level daemon owns every session across every project, so work survives closed terminals and you can watch or drive any of it from anywhere: `neenee daemon status` for a live multi-task view, `/dashboard` in the TUI to switch sessions without killing them, and a read/write control API (create / prompt / interrupt / approve / kill) over a local socket or a token-protected LAN port — the same protocol a web panel consumes.
+- **Session Daemon & Control Plane** — The `muta` core daemon owns every session across every project, while `mutx` and the web app are peer clients. Work survives closed terminals; `muta daemon status` provides a live multi-task view and `/dashboard` in `mutx` switches sessions without killing them.
 - **Durable Sessions** — Atomic persistence with compaction, resume, and fork.
 - **Skills** — Load domain-specific instructions on demand or automatically by mention.
 
@@ -31,47 +31,50 @@
 **Install in one line** on macOS or Linux — downloads and SHA-256 verifies a prebuilt binary into `~/.local/bin`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ming2k/neenee/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ming2k/muta/main/install.sh | bash
 ```
 
-> Pin this release with `NEENEE_VERSION=0.31.0`, or install into a custom dir with `INSTALL_DIR=/usr/local/bin`.
+> Pin this release with `MUTA_VERSION=0.31.0`, or install into a custom dir with `INSTALL_DIR=/usr/local/bin`.
 
 On Windows (PowerShell), install the verified release build for the current user:
 
 ```powershell
-irm https://raw.githubusercontent.com/ming2k/neenee/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/ming2k/muta/main/install.ps1 | iex
 ```
 
-The Windows installer supports x86-64, verifies the release SHA-256, installs under `%LOCALAPPDATA%\Programs\neenee\bin`, and adds that directory to the user `PATH`. Override it with `NEENEE_INSTALL_DIR`.
+The Windows installer supports x86-64, verifies the release SHA-256, installs under `%LOCALAPPDATA%\Programs\muta\bin`, and adds that directory to the user `PATH`. Override it with `MUTA_INSTALL_DIR`.
 
 **Or build from source**:
 
 ```bash
-git clone https://github.com/ming2k/neenee.git
-cd neenee
-cargo run --release
+git clone https://github.com/ming2k/muta.git
+cd muta
+cargo build --release -p muta -p mutx
+cargo run --release -p mutx
 ```
 
 On first launch, type `/models` to pick a model and enter your API key (`Ctrl+M` works too, where the Kitty keyboard protocol is active). Then just start typing.
 
-The first `neenee` spawns the session daemon (a one-time cold start; every later launch attaches instantly). See [Daemon mode](#daemon-mode-and-multi-session-tracking) below.
+The first `mutx` checks the Muta daemon and starts the sibling `muta` binary
+when needed. Later launches attach immediately. See
+[Daemon mode](#daemon-mode-and-multi-session-tracking) below.
 
 ## Daemon mode and multi-session tracking
 
-neenee runs as a client of one user-level **session daemon** that owns every
-session across every project (ADR-0096). Sessions keep running without a TUI,
-and several clients can co-drive or observe them:
+The `muta` core runs one user-level **session daemon** that owns every session
+across every project (ADR-0096). The `mutx` terminal app and the web app are
+independent clients. Sessions keep running without either frontend:
 
 ```bash
-neenee                   # attach to the daemon (auto-started on first use)
-neenee daemon start      # run the daemon (detached by default)
+mutx                   # open the TUI; auto-start muta when needed
+muta daemon start      # run the daemon (detached by default)
 
-neenee daemon start --fg --public  # foreground, all interfaces (TCP+token), for LAN clients
-neenee attach [id]       # drive a specific daemon-held session
-neenee daemon status     # one-shot table: sessions needing attention
-neenee daemon status --watch    # live table, redraws on every change
-neenee daemon status --json     # raw monitor frames (the control-panel API)
-neenee dashboard         # the full-screen dashboard, straight from the shell
+muta daemon start --fg --public  # foreground, all interfaces (TCP+token), for LAN clients
+mutx attach [id]       # drive a specific daemon-held session
+muta daemon status     # one-shot table: sessions needing attention
+muta daemon status --watch    # live table, redraws on every change
+muta daemon status --json     # raw monitor frames (the control-panel API)
+mutx dashboard         # the full-screen dashboard, straight from the shell
 ```
 
 Inside the TUI, **`/dashboard`** opens the session dashboard: a full-screen
@@ -81,15 +84,15 @@ sessions dock with one card per session. Enter opens a read-only preview; `a`
 attaches to a hosted session — the TUI detaches and re-attaches, so the
 session you leave **keeps running** in the daemon. From the same surface you
 can interrupt (`i`), prompt (`p`), or create (`n`) a session. Closing the TUI
-never ends a round; re-attach any time with `neenee attach <id>`. (`/host` is
+never ends a round; re-attach any time with `mutx attach <id>`. (`/host` is
 kept as a hidden alias.)
 
-**`neenee dashboard`** reaches that same full-screen dashboard straight from
+**`mutx dashboard`** reaches that same full-screen dashboard straight from
 the shell — no need to enter a session first. It attaches to the daemon's
 most-recently-active session only as the underlying carrier and raises the
 dashboard over it: Esc quits, `a` on a card attaches into that session. Like
-`neenee daemon status` it never spawns a daemon, so it needs a running host with at
-least one session.
+`mutx dashboard` performs the normal daemon readiness check, but it still
+needs at least one existing session as its carrier.
 
 The daemon speaks one read/write control-plane protocol (create, prompt,
 interrupt, approve, kill, plus the monitor stream) over a Unix socket on

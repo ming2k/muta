@@ -15,12 +15,12 @@ showcase lets you write fixture data and trigger any state directly.
 
 ```sh
 # List all available showcases
-neenee showcase
+mutx showcase
 
 # Run one
-neenee showcase question
-neenee showcase permission
-neenee showcase session
+mutx showcase question
+mutx showcase permission
+mutx showcase session
 ```
 
 Every showcase responds to `q` or `Ctrl+C` to quit. These always work, even
@@ -52,11 +52,11 @@ crossterm keypresses through a **key handler**, and redraws via the
                   ┌─────────────────────────────────┐
    real keypress  │  State struct (fixture data)     │  render closure
    ──────────────▶│  + on_key closure (state machine)│──────────────▶ draw_*_modal()
-   (crossterm)    │                                  │  (neenee-tui-engine Frame)
+   (crossterm)    │                                  │  (mutx-engine Frame)
                   └─────────────────────────────────┘
 ```
 
-The shared runner ([`common::run_showcase`](../../crates/neenee-tui/src/showcase/common.rs))
+The shared runner ([`common::run_showcase`](../../apps/tui/crates/mutx/src/showcase/common.rs))
 owns the terminal lifecycle (raw mode, alternate screen) and the event poll
 loop. Every showcase passes it a `&mut State` plus two closures:
 
@@ -70,7 +70,7 @@ individual showcases only handle their own keys.
 ## File layout
 
 ```text
-crates/neenee-tui/src/showcase/
+apps/tui/crates/mutx/src/showcase/
 ├── mod.rs        # dispatcher: parses `showcase <component>`, routes
 ├── common.rs     # shared: terminal setup/teardown + run_showcase() + chrome
 ├── question.rs   # question modal — uses the MVU QuestionModel
@@ -163,16 +163,16 @@ mod confirmation;
 ### 3. Verify
 
 ```sh
-cargo run -p neenee-cli -- showcase confirmation
-cargo clippy -p neenee-cli --tests
+cargo run -p mutx -- showcase confirmation
+cargo clippy -p mutx --tests
 ```
 
-That's it — the new component is now in the `neenee showcase` list.
+That's it — the new component is now in the `mutx showcase` list.
 
 ## The question modal and MVU
 
 The `question` showcase is special: it doesn't just call a renderer, it drives
-the [`QuestionModel`](../../crates/neenee-tui/src/question_model.rs) state
+the [`QuestionModel`](../../apps/tui/crates/mutx/src/question_model.rs) state
 machine — the same pure `update()` function the production event loop uses.
 This is possible because the question modal was refactored to
 [Model-View-Update](https://guide.elm-lang.org/architecture/):

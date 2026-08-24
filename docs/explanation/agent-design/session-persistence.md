@@ -1,6 +1,6 @@
 # Session Persistence
 
-A neenee session is a recoverable work site, not a transcript-shaped cache
+A muta session is a recoverable work site, not a transcript-shaped cache
 for the next model request. The local session has to preserve enough state to
 resume the work exactly where it stopped: what the user saw, what the model saw,
 which tool calls ran, which results returned, which context was projected out of
@@ -67,7 +67,7 @@ state instead of replaying an unsafe half-known action.
 ## Context Projection
 
 Context pressure changes what the model sees, but it must not erase the
-recoverable scene. neenee uses **model-context projection** for that boundary:
+recoverable scene. muta uses **model-context projection** for that boundary:
 
 - pruning clears stale tool-result bodies while preserving the tool-call chain,
 - compaction replaces older complete rounds with a checkpoint summary,
@@ -87,7 +87,7 @@ For the two projection layers, see [Context pruning](context-pruning.md) and
 ## Resume
 
 Resume starts from the durable session, not from provider memory. Providers are
-stateless; they do not remember previous requests. neenee therefore restores the
+stateless; they do not remember previous requests. muta therefore restores the
 local session first, then sends the restored model window on the next provider
 request.
 

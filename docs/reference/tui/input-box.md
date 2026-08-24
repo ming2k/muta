@@ -188,7 +188,7 @@ The rows `↑`/`↓` walk are **bound to the session, not the client window**:
   backfill** — the genuine chat prompts of the conversation on screen, rebuilt
   from the session file. The backfill is derived state and never persisted: the
   session file already is the durable record.
-- **Resuming restores history.** After `neenee attach <id>`, `/sessions <id>`, or
+- **Resuming restores history.** After `mutx attach <id>`, `/sessions <id>`, or
   picking a session from `/sessions`, the transcript's own
   prompts are backfilled automatically — including turns typed in another
   client or before this client's `history.json` existed. `↑` in a resumed

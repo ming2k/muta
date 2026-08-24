@@ -1,12 +1,12 @@
 # How to use sub2api relays
 
 Use a sub2api relay when the service exposes an OpenAI, Anthropic, or Google
-compatible HTTP surface and gives you a token plus a relay URL. neenee's
+compatible HTTP surface and gives you a token plus a relay URL. muta's
 provider editor creates a named provider instance, stores the token, and seeds
 the model list from the selected template.
 
-For templates with live model discovery, neenee queries the relay's `/models`
-endpoint at startup and keeps only ids that are also present in neenee's model
+For templates with live model discovery, muta queries the relay's `/models`
+endpoint at startup and keeps only ids that are also present in muta's model
 registry for that wire protocol. Unknown or incompatible ids are hidden. A
 failed request or an empty intersection keeps the last valid model list.
 Discovery never replaces the provider's token, token environment variable,
@@ -79,23 +79,23 @@ is not listed.
    `https://relay.example.com/antigravity/v1beta`.
 6. Press `Enter` to save and activate the provider.
 
-Google-native relays use the versioned base URL. neenee appends
+Google-native relays use the versioned base URL. muta appends
 `/models/{model}:generateContent` for each request.
 
 ## Configure a relay instance
 
 Edit the state store when you want a reproducible provider definition without
 using the TUI. Instances live in `providers.toml`
-(`$XDG_STATE_HOME/neenee/`), the selection in `config.toml`, and tokens in the
+(`$XDG_STATE_HOME/muta/`), the selection in `config.toml`, and tokens in the
 credentials file or an environment variable.
 
 ```toml
-# $XDG_CONFIG_HOME/neenee/config.toml — behavior only
+# $XDG_CONFIG_HOME/muta/config.toml — behavior only
 default_provider = "example-openai"
 ```
 
 ```toml
-# $XDG_STATE_HOME/neenee/providers.toml — instances
+# $XDG_STATE_HOME/muta/providers.toml — instances
 [[providers]]
 id = "example-openai"
 name = "Example OpenAI"
@@ -105,7 +105,7 @@ models = ["gpt-5.5"]
 ```
 
 ```toml
-# $XDG_CONFIG_HOME/neenee/credentials.toml — secrets (or set RELAY_API_KEY in the env)
+# $XDG_CONFIG_HOME/muta/credentials.toml — secrets (or set RELAY_API_KEY in the env)
 [providers]
 example-openai = "sk-..."
 ```
@@ -142,7 +142,7 @@ curl -fsS \
   https://relay.example.com/v1/models
 ```
 
-Then test the exact chat endpoint configured in neenee:
+Then test the exact chat endpoint configured in muta:
 
 ```bash
 curl -fsS \
@@ -153,4 +153,4 @@ curl -fsS \
 ```
 
 Use the endpoint that returns JSON chat-completion data. A relay root that
-returns HTML is not a valid neenee `Base URL`.
+returns HTML is not a valid muta `Base URL`.

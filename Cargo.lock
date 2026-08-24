@@ -1392,13 +1392,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "ndk-context"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
+name = "muta"
+version = "0.31.0"
+dependencies = [
+ "async-trait",
+ "libc",
+ "muta-agent",
+ "muta-contracts",
+ "muta-mcp",
+ "muta-persistence",
+ "muta-platform",
+ "muta-providers",
+ "muta-runtime",
+ "muta-skills",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
-name = "neenee-agent"
+name = "muta-agent"
 version = "0.31.0"
 dependencies = [
  "async-trait",
@@ -1410,13 +1424,13 @@ dependencies = [
  "image",
  "inventory",
  "mockito",
- "neenee-contracts",
- "neenee-llm-client",
- "neenee-persistence",
- "neenee-platform",
- "neenee-providers",
- "neenee-skills",
- "neenee-tool-derive",
+ "muta-contracts",
+ "muta-llm-client",
+ "muta-persistence",
+ "muta-platform",
+ "muta-providers",
+ "muta-skills",
+ "muta-tool-derive",
  "regex",
  "reqwest",
  "serde",
@@ -1432,27 +1446,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-cli"
-version = "0.31.0"
-dependencies = [
- "libc",
- "neenee-agent",
- "neenee-contracts",
- "neenee-mcp",
- "neenee-persistence",
- "neenee-platform",
- "neenee-providers",
- "neenee-runtime",
- "neenee-skills",
- "neenee-tui",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "neenee-contracts"
+name = "muta-contracts"
 version = "0.31.0"
 dependencies = [
  "async-trait",
@@ -1467,7 +1461,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-llm-client"
+name = "muta-llm-client"
 version = "0.31.0"
 dependencies = [
  "async-trait",
@@ -1475,7 +1469,7 @@ dependencies = [
  "httpdate",
  "inventory",
  "mockito",
- "neenee-contracts",
+ "muta-contracts",
  "reqwest",
  "serde",
  "serde_json",
@@ -1485,20 +1479,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-mcp"
+name = "muta-mcp"
 version = "0.31.0"
 dependencies = [
  "async-trait",
  "futures",
- "neenee-contracts",
- "neenee-platform",
+ "muta-contracts",
+ "muta-platform",
  "serde_json",
  "tokio",
  "tracing",
 ]
 
 [[package]]
-name = "neenee-persistence"
+name = "muta-persistence"
 version = "0.31.0"
 dependencies = [
  "chrono",
@@ -1508,9 +1502,9 @@ dependencies = [
  "hex",
  "inventory",
  "libc",
- "neenee-contracts",
- "neenee-persistence",
- "neenee-platform",
+ "muta-contracts",
+ "muta-persistence",
+ "muta-platform",
  "serde",
  "serde_json",
  "sha2",
@@ -1522,7 +1516,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-platform"
+name = "muta-platform"
 version = "0.31.0"
 dependencies = [
  "libc",
@@ -1533,16 +1527,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-providers"
+name = "muta-providers"
 version = "0.31.0"
 dependencies = [
  "base64",
  "futures",
  "inventory",
  "mockito",
- "neenee-contracts",
- "neenee-llm-client",
- "neenee-persistence",
+ "muta-contracts",
+ "muta-llm-client",
+ "muta-persistence",
  "reqwest",
  "serde",
  "serde_json",
@@ -1554,21 +1548,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-runtime"
+name = "muta-runtime"
 version = "0.31.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "dirs",
  "futures",
  "libc",
- "neenee-agent",
- "neenee-contracts",
- "neenee-mcp",
- "neenee-persistence",
- "neenee-platform",
- "neenee-providers",
- "neenee-skills",
- "neenee-web-assets",
+ "muta-agent",
+ "muta-contracts",
+ "muta-mcp",
+ "muta-persistence",
+ "muta-platform",
+ "muta-providers",
+ "muta-skills",
  "semver",
  "serde",
  "serde_json",
@@ -1585,14 +1579,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-skills"
+name = "muta-skills"
 version = "0.31.0"
 dependencies = [
  "async-trait",
  "dirs",
  "inventory",
- "neenee-contracts",
- "neenee-persistence",
+ "muta-contracts",
+ "muta-persistence",
  "reqwest",
  "serde",
  "serde_json",
@@ -1604,7 +1598,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-tool-derive"
+name = "muta-tool-derive"
 version = "0.31.0"
 dependencies = [
  "proc-macro2",
@@ -1614,7 +1608,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-tui"
+name = "mutx"
 version = "0.31.0"
 dependencies = [
  "arboard",
@@ -1623,11 +1617,11 @@ dependencies = [
  "crossterm",
  "dirs",
  "insta",
- "neenee-contracts",
- "neenee-persistence",
- "neenee-providers",
- "neenee-runtime",
- "neenee-tui-engine",
+ "muta-contracts",
+ "muta-persistence",
+ "muta-providers",
+ "muta-runtime",
+ "mutx-engine",
  "serde_json",
  "similar",
  "tempfile",
@@ -1642,7 +1636,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-tui-engine"
+name = "mutx-engine"
 version = "0.31.0"
 dependencies = [
  "bitflags",
@@ -1652,8 +1646,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "neenee-web-assets"
-version = "0.31.0"
+name = "ndk-context"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
 name = "nu-ansi-term"

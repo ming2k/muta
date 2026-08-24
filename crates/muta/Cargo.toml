@@ -1,0 +1,31 @@
+[package]
+name = "muta"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "muta"
+path = "src/main.rs"
+
+[dependencies]
+muta-agent = { path = "../muta-agent" }
+muta-contracts = { path = "../muta-contracts" }
+muta-persistence = { path = "../muta-persistence" }
+muta-platform = { path = "../muta-platform" }
+muta-runtime = { path = "../muta-runtime" }
+muta-skills = { path = "../muta-skills" }
+muta-providers = { path = "../muta-providers" }
+muta-mcp = { path = "../muta-mcp" }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+libc = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

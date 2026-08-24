@@ -1,17 +1,17 @@
-# install.ps1 — verified per-user installer for neenee on Windows.
+# install.ps1 — verified per-user installer for muta on Windows.
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/ming2k/neenee/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/ming2k/muta/main/install.ps1 | iex
 # Optional environment overrides:
-#   NEENEE_VERSION=0.30.2
-#   NEENEE_INSTALL_DIR=C:\Tools\neenee
+#   MUTA_VERSION=0.30.2
+#   MUTA_INSTALL_DIR=C:\Tools\muta
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$repo = 'ming2k/neenee'
+$repo = 'ming2k/muta'
 $target = 'x86_64-pc-windows-msvc'
-$version = $env:NEENEE_VERSION
+$version = $env:MUTA_VERSION
 
 if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64') {
     throw 'This release provides Windows x86-64 only.'
@@ -24,14 +24,14 @@ if ([string]::IsNullOrWhiteSpace($version)) {
 }
 $version = $version -replace '^v', ''
 
-$installDir = $env:NEENEE_INSTALL_DIR
+$installDir = $env:MUTA_INSTALL_DIR
 if ([string]::IsNullOrWhiteSpace($installDir)) {
-    $installDir = Join-Path $env:LOCALAPPDATA 'Programs\neenee\bin'
+    $installDir = Join-Path $env:LOCALAPPDATA 'Programs\muta\bin'
 }
 
-$archive = "neenee-$version-$target.zip"
+$archive = "muta-$version-$target.zip"
 $baseUrl = "https://github.com/$repo/releases/download/v$version"
-$temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("neenee-install-" + [guid]::NewGuid())
+$temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("muta-install-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $temporary | Out-Null
 
 try {
@@ -48,48 +48,80 @@ try {
     }
 
     Expand-Archive -LiteralPath $archivePath -DestinationPath $temporary
-    $source = Get-ChildItem -Path $temporary -Filter neenee.exe -File -Recurse |
-        Select-Object -First 1
-    if ($null -eq $source) {
-        throw 'neenee.exe was not found in the release archive.'
+    $binaryNames = @('muta', 'mutx')
+    $sources = @{}
+    foreach ($binaryName in $binaryNames) {
+        $source = Get-ChildItem -Path $temporary -Filter "$binaryName.exe" -File -Recurse |
+            Select-Object -First 1
+        if ($null -eq $source) {
+            throw "$binaryName.exe was not found in the release archive."
+        }
+        $sources[$binaryName] = $source.FullName
     }
 
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-    $destination = Join-Path $installDir 'neenee.exe'
-    $staged = Join-Path $installDir ("neenee.exe.new-" + [guid]::NewGuid())
-    $backup = Join-Path $installDir ("neenee.exe.backup-" + [guid]::NewGuid())
-    Copy-Item -LiteralPath $source.FullName -Destination $staged
-    $hadExistingInstall = Test-Path -LiteralPath $destination
+    $existingCore = Join-Path $installDir 'muta.exe'
+    if (Test-Path -LiteralPath $existingCore) {
+        # A running daemon keeps the old core image open on Windows. Ask it to
+        # drain before replacing the pair.
+        & $existingCore daemon stop 2>$null | Out-Null
+    }
 
+    $records = @()
     try {
-        if ($hadExistingInstall) {
-            # A running daemon keeps the old image open on Windows. Ask it to
-            # drain before the atomic replacement; failure remains explicit at
-            # File.Replace instead of leaving a partially-updated install.
-            & $destination daemon stop 2>$null | Out-Null
-            [System.IO.File]::Replace($staged, $destination, $backup, $true)
-        }
-        else {
-            Move-Item -LiteralPath $staged -Destination $destination
+        foreach ($binaryName in $binaryNames) {
+            $destination = Join-Path $installDir "$binaryName.exe"
+            $record = [pscustomobject]@{
+                Destination = $destination
+                Staged = Join-Path $installDir ("$binaryName.exe.new-" + [guid]::NewGuid())
+                Backup = Join-Path $installDir ("$binaryName.exe.backup-" + [guid]::NewGuid())
+                HadExisting = Test-Path -LiteralPath $destination
+            }
+            $records += $record
+            Copy-Item -LiteralPath $sources[$binaryName] -Destination $record.Staged
+
+            if ($record.HadExisting) {
+                [System.IO.File]::Replace(
+                    $record.Staged,
+                    $record.Destination,
+                    $record.Backup,
+                    $true
+                )
+            }
+            else {
+                Move-Item -LiteralPath $record.Staged -Destination $record.Destination
+            }
         }
 
-        $installedVersion = (& $destination --version | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0 -or $installedVersion -notmatch [regex]::Escape($version)) {
-            throw "Installed binary failed version validation (expected v$version, got '$installedVersion')."
+        foreach ($record in $records) {
+            $installedVersion = (& $record.Destination --version | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or $installedVersion -notmatch [regex]::Escape($version)) {
+                throw "Installed binary failed version validation (expected v$version, got '$installedVersion')."
+            }
         }
-        if (Test-Path -LiteralPath $backup) {
-            Remove-Item -LiteralPath $backup -Force
+        foreach ($record in $records) {
+            if (Test-Path -LiteralPath $record.Backup) {
+                Remove-Item -LiteralPath $record.Backup -Force
+            }
         }
     }
     catch {
-        if (Test-Path -LiteralPath $backup) {
-            [System.IO.File]::Replace($backup, $destination, $null, $true)
-        }
-        elseif (-not $hadExistingInstall -and (Test-Path -LiteralPath $destination)) {
-            Remove-Item -LiteralPath $destination -Force
-        }
-        if (Test-Path -LiteralPath $staged) {
-            Remove-Item -LiteralPath $staged -Force
+        for ($i = $records.Count - 1; $i -ge 0; $i--) {
+            $record = $records[$i]
+            if (Test-Path -LiteralPath $record.Backup) {
+                [System.IO.File]::Replace(
+                    $record.Backup,
+                    $record.Destination,
+                    $null,
+                    $true
+                )
+            }
+            elseif (-not $record.HadExisting -and (Test-Path -LiteralPath $record.Destination)) {
+                Remove-Item -LiteralPath $record.Destination -Force
+            }
+            if (Test-Path -LiteralPath $record.Staged) {
+                Remove-Item -LiteralPath $record.Staged -Force
+            }
         }
         throw
     }
@@ -103,8 +135,8 @@ try {
         Write-Host "› Added $installDir to your user PATH (new terminals will inherit it)."
     }
 
-    Write-Host "✓ Installed neenee v$version to $destination"
-    Write-Host '  Run neenee to start.'
+    Write-Host "✓ Installed muta and mutx v$version to $installDir"
+    Write-Host '  Run mutx to start.'
 }
 finally {
     if (Test-Path -LiteralPath $temporary) {

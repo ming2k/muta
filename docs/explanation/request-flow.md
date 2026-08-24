@@ -79,7 +79,7 @@ for the body to complete before reading. This is standard HTTP/1.1 (or
 HTTP/2 streaming) and is the mechanism OpenAI-compatible servers use to
 stream tokens.
 
-neenee reads the stream as a byte stream and splits on newlines. Each
+muta reads the stream as a byte stream and splits on newlines. Each
 `data:`-prefixed line is one SSE event. The literal `data: [DONE]`
 terminates the stream.
 
@@ -172,7 +172,7 @@ diagnostic has been retired; nothing fires a model call on turn counts.)
 ### Tool dispatch
 
 The branching after the assistant message differs by transport. For a
-native tool-call turn, neenee emits one tool-call event per call up front,
+native tool-call turn, muta emits one tool-call event per call up front,
 executes all calls concurrently, and records the results in input order.
 For a text-fallback turn it parses the assistant `content` as JSON,
 optionally retracts the raw JSON from the UI, promotes the parsed call onto
@@ -185,7 +185,7 @@ lookup, the write-scope gate, the permission broker, then execution.
 ### Messages evolution
 
 The model has no memory between requests. What it "knows" about prior
-tool calls is entirely a function of the `messages` array neenee
+tool calls is entirely a function of the `messages` array muta
 re-sends each turn. A round that reads a file, edits it, and summarizes
 produces three HTTP transactions:
 
@@ -200,7 +200,7 @@ tools: [<all schemas>]
 ```
 
 Response carries `tool_calls: [read_text("src/parser.rs")]`,
-`finish_reason: "tool_calls"`. neenee executes `read_text` locally and
+`finish_reason: "tool_calls"`. muta executes `read_text` locally and
 appends the result.
 
 **Request 2** — same endpoint, expanded history.
@@ -216,7 +216,7 @@ messages: [
 tools: [<all schemas>]   ← same set, re-sent verbatim
 ```
 
-Response carries `tool_calls: [edit_file(...)]`. neenee executes the
+Response carries `tool_calls: [edit_file(...)]`. muta executes the
 edit and appends the result.
 
 **Request 3** — history now contains two tool turns.
@@ -235,7 +235,7 @@ Response carries plain text `content: "The bug was ..."`,
 assistant message becomes the round's final answer.
 
 The `tools` array is byte-identical across all three requests. The
-`messages` array grows monotonically; neenee never edits prior messages
+`messages` array grows monotonically; muta never edits prior messages
 (except the attribution step described in
 [Rounds and turns](agent-design/rounds-and-turns.md)).
 
@@ -273,7 +273,7 @@ call as ordinary assistant text:
 {"tool": "read_text", "arguments": {"path": "src/parser.rs"}}
 ```
 
-After the stream completes, neenee extracts the JSON from the assistant
+After the stream completes, muta extracts the JSON from the assistant
 `content` and promotes the parsed call onto the preceding assistant message
 as a synthetic `tool_calls` entry, so the next request's `messages` array
 carries a valid `tool_calls` / `tool_call_id` pair even though the original

@@ -1,6 +1,6 @@
 # The session daemon and the control plane
 
-How neenee's processes are arranged, who owns a session's lifecycle, and how
+How muta's processes are arranged, who owns a session's lifecycle, and how
 every client — the TUI, the CLI, a web panel — talks to the same place. This
 is the conceptual companion to [ADR-0096](../adr/0096-unified-session-daemon.md);
 for the wire contract see the [Server WebSocket API](../reference/server-api.md),
@@ -10,17 +10,17 @@ and for day-to-day use see
 ## The shape
 
 ```
-┌─ neenee (the CLI) ──────────────── every verb is a client call
+┌─ muta (the CLI) ──────────────── every verb is a client call
 │    serve / attach / status
 │
-├─ neenee daemon start (the daemon) ─ one process per user; owns every session
+├─ muta daemon start (the daemon) ─ one process per user; owns every session
 │    session plane:  a SessionRegistry hosting N sessions across N projects
 │    control plane:  observe (Monitor) · drive (Attach) · manage (Control)
 │      ├─ native local IPC (Unix socket / Windows Named Pipe)
 │      └─ TCP + token  (--public; for LAN clients and the web panel)
 │
 └─ clients ───────────────────────── all speak the control plane
-     TUI (/host, attach)   neenee daemon status   a web control panel   scripts
+     TUI (/host, attach)   muta daemon status   a web control panel   scripts
 ```
 
 One user-level daemon — not one per project, not one per session — holds
@@ -70,15 +70,15 @@ Two transports carry it:
   Named Pipe with a protected current-user DACL and remote clients disabled.
   The OS access boundary authenticates local CLI and TUI clients, so this
   channel needs no bearer token.
-- **TCP + bearer token** (`neenee daemon start --fg --public`) — for LAN clients and
+- **TCP + bearer token** (`muta daemon start --fg --public`) — for LAN clients and
   the web panel. Exposing is always an explicit opt-in that carries a token
   (ADR-0054's model); TLS is fronted by a reverse proxy. See
   [How to expose the daemon to LAN clients](../how-to/expose-the-daemon-to-lan-clients.md).
 
-These locations describe the default instance. A second neenee that must
+These locations describe the default instance. A second muta that must
 not share them — a development build beside an installed daemon, a test
 suite — redirects socket, lock, discovery record, and port together with
-`NEENEE_HOME` / `NEENEE_PORT`
+`MUTA_HOME` / `MUTA_PORT`
 ([ADR-0121](../adr/0121-instance-isolation-for-development-and-testing.md));
 the two daemons then coexist with no shared state at all.
 
@@ -87,9 +87,9 @@ and calls control verbs — no web-specific server exists or is needed.
 
 ## Lifecycle in one pass
 
-1. Any `neenee` or `neenee attach` finds no live daemon record
+1. Any `muta` or `mutx attach` finds no live daemon record
    (`daemon.json`) and spawns the daemon detached; or you run
-   `neenee daemon start` yourself (detached by default; `--fg` for supervisors).
+   `muta daemon start` yourself (detached by default; `--fg` for supervisors).
 2. The daemon binds native local IPC and a TCP port (loopback by default,
    exposed with `--public`), writes the global discovery record, and waits.
 3. Sessions are created on demand (a client's attach, or a control

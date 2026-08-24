@@ -1,6 +1,6 @@
 # 0098. Crate renames and library extractions: contracts, host, tui, mcp
 
-- **Status:** Accepted
+- **Status:** Partially superseded by ADR-0136
 - **Date:** 2026-08-14
 - **Revises:** ADR-0005 (crate names, not the layering rules), ADR-0057 (the
   boundary stands; the crate it bound is renamed), ADR-0076 (name chain

@@ -1,8 +1,14 @@
 # 0105. One port, two protocols: embedded panel serving and control-plane hardening
 
-- **Status:** Accepted
+- **Status:** Partially superseded by ADR-0136
 - **Date:** 2026-08-15
 - **Builds on:** ADR-0096 (unified daemon), ADR-0100 (lifecycle), ADR-0101 (shutdown), ADR-0054 (secure serve defaults)
+
+> ADR-0136 retains this decision's one-port WebSocket/health split, bearer
+> authentication, browser subprotocol, and Origin checks. It supersedes the
+> embedded static bundle, the Web-asset crate, the `neenee panel` command, and
+> the `panel` health field: `apps/web` now builds and deploys independently,
+> while plain HTTP serves only `/healthz`.
 
 ## Context
 

@@ -5,7 +5,7 @@ rustup select it automatically from the repository root.
 
 ## Fast local loop
 
-Root Cargo commands default to the main `neenee` application:
+Root Cargo commands default to the main `muta` application:
 
 ```bash
 cargo check
@@ -16,8 +16,8 @@ cargo test
 Use package-scoped commands while changing a library:
 
 ```bash
-cargo check -p neenee-persistence
-cargo test -p neenee-agent
+cargo check -p muta-persistence
+cargo test -p muta-agent
 ```
 
 Apply the same boundary to package diagnostics. Configure rust-analyzer with
@@ -46,8 +46,8 @@ current gating set.
 
 ## Isolation from the host installation
 
-If an installed neenee daemon is running on this machine, run the checks
-above with `NEENEE_HOME` exported to a throwaway root, and any manual run of
+If an installed muta daemon is running on this machine, run the checks
+above with `MUTA_HOME` exported to a throwaway root, and any manual run of
 the debug binary with `--home <dir>`. Either confines the entire instance —
 sessions, config, daemon socket/lock, logs, port — so a checkout can never
 read, write, stop, or spawn into the installed daemon's state.

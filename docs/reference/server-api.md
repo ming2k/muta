@@ -11,7 +11,7 @@ Its machine-readable contract is [`server.asyncapi.yaml`](server.asyncapi.yaml).
 
 ## Roles and entry points
 
-The daemon (`neenee daemon start --fg` — the single binary, ADR-0102) serves one
+The core daemon (`muta daemon start --fg`, ADR-0136) serves one
 control-plane endpoint per user, on owner-only native local IPC plus a TCP
 loopback listener by default (fixed port 9800, ephemeral fallback), and on all
 interfaces when `--public` (ADR-0096/0105/0130). Unix uses a domain socket and
@@ -30,8 +30,8 @@ the unified daemon; the protocol below is the daemon's control plane.
 ## Bind and authentication
 
 - **Native local IPC (default, ADR-0096/0130):** Unix uses
-  `$XDG_RUNTIME_DIR/neenee/daemon.sock`, `0600` inside a `0700` directory.
-  Windows uses `\\.\pipe\neenee-<user-sid>-daemon-<instance-hash>`, rejects remote clients,
+  `$XDG_RUNTIME_DIR/muta/daemon.sock`, `0600` inside a `0700` directory.
+  Windows uses `\\.\pipe\muta-<user-sid>-daemon-<instance-hash>`, rejects remote clients,
   and applies a protected DACL for the current user and LocalSystem. No bearer
   token is required because the OS endpoint is the authentication boundary.
   The instance root selector moves Unix runtime files; Windows instance
@@ -40,10 +40,11 @@ the unified daemon; the protocol below is the daemon's control plane.
   `[daemon] local_auth` on (the default), **requires a bearer token**,
   generated per daemon start and published in the owner-only (0600)
   discovery record — co-located CLI/TUI clients read it from there and
-  authenticate transparently. `--no-local-auth` / `local_auth = false`
+  authenticate transparently. Operators can print it explicitly with
+  `muta daemon token`. `--no-local-auth` / `local_auth = false`
   restores trust-the-loopback. When the default port is taken, the daemon
   falls back to an ephemeral port; the record always carries the actual
-  one. `NEENEE_PORT` overrides the default (ADR-0121) — below an explicit
+  one. `MUTA_PORT` overrides the default (ADR-0121) — below an explicit
   `--port`, above the well-known 9800.
 - **TCP exposed (`--public`):** binds `0.0.0.0` and **requires a bearer
   token** (else HTTP 401). The daemon generates a token on startup and
@@ -68,24 +69,21 @@ so without this check any visited page could drive the daemon. Non-browser
 clients send no `Origin` and are governed by the token alone; the check is
 skipped on `--public` (the mandatory token is the boundary there).
 
-### HTTP endpoints on the same port (ADR-0105)
+### HTTP endpoint on the same port (ADR-0105/0136)
 
-The TCP listener splits plain HTTP from WebSocket upgrades by peeking at
-the request head. Plain HTTP serves:
-
-- `GET /` (and any unknown path, SPA fallback) — the embedded web panel
-  bundle (a placeholder page when the daemon was built without
-  `apps/web/dist`).
-- `GET /healthz` — unauthenticated `{"version", "auth", "panel"}` probe so
-  a browser can tell "daemon needs a token" apart from "nothing listening".
+The TCP listener splits plain HTTP from WebSocket upgrades by peeking at the
+request head. Plain HTTP serves only `GET`/`HEAD /healthz`, an unauthenticated
+`{"version", "auth"}` probe so a client can tell "daemon needs a token" apart
+from "nothing listening". Unknown paths return 404. Frontend applications
+build and deploy their own assets; the daemon has no static-file route.
 
 ### Security model
 
 | Mode | Bind | Auth | Use |
 |------|------|------|-----|
-| default (Unix) | `$XDG_RUNTIME_DIR/neenee/daemon.sock` | none — filesystem permissions (`0600` in a `0700` runtime dir) | local CLI / TUI |
-| default (Windows) | `\\.\pipe\neenee-<user-sid>-daemon-<instance-hash>` | none — protected current-user DACL; remote pipe clients rejected | local CLI / TUI |
-| default (TCP loopback) | `127.0.0.1:9800` | bearer token (default; `local_auth = false` disables) + loopback-origin check | local co-processes, the web panel |
+| default (Unix) | `$XDG_RUNTIME_DIR/muta/daemon.sock` | none — filesystem permissions (`0600` in a `0700` runtime dir) | local CLI / TUI |
+| default (Windows) | `\\.\pipe\muta-<user-sid>-daemon-<instance-hash>` | none — protected current-user DACL; remote pipe clients rejected | local CLI / TUI |
+| default (TCP loopback) | `127.0.0.1:9800` | bearer token (default; `local_auth = false` disables) + loopback-origin check | local co-processes and independently hosted browser clients |
 | `--public` | `0.0.0.0` | bearer token (mandatory) | remote client / another machine |
 
 Because the default binds native local IPC plus loopback, a casual host
@@ -130,7 +128,10 @@ The server answers one of:
   older daemons) the durable round-interrupt records, each
   `{ reason: "user" | "superseded" | "terminated", at_ms, round }`, to
   re-project into the transcript at their timestamp seams. Process it before
-  rendering subsequent live events.
+  rendering subsequent live events. `command_catalog` is the backend's
+  canonical slash-command metadata and alias/suggestion vocabulary for this
+  session; it is descriptive state, not a request for the client to implement
+  matching.
 - `Pick` means several sessions are hosted and the client must choose
   (`Attach(Some(id))` on a new connection).
 - `Error` is terminal. `code` (ADR-0105, optional) is the stable
@@ -158,6 +159,50 @@ const socket = new WebSocket("ws://host:8765/", {
 Browsers use the `bearer.<token>` subprotocol instead — see
 [Credential channels](#credential-channels-adr-0105).
 
+## Composer completion
+
+Completion is a daemon behavior shared by every attach frontend. Send a
+race-tagged request using Unicode-scalar cursor offsets:
+
+```json
+{
+  "type": "Request",
+  "CompleteInput": {
+    "request_id": 17,
+    "input": "review @src/ma",
+    "cursor": 14
+  }
+}
+```
+
+The daemon answers with ready-to-apply edits:
+
+```json
+{
+  "type": "Response",
+  "InputCompletions": {
+    "request_id": 17,
+    "input": "review @src/ma",
+    "cursor": 14,
+    "items": [{
+      "label": "src/main.rs",
+      "description": "",
+      "insert_text": "src/main.rs ",
+      "replace_start": 7,
+      "replace_end": 14,
+      "kind": "path_file"
+    }]
+  }
+}
+```
+
+The backend owns slash matching, intent steering, aliases, trusted project
+commands, project-file discovery, and explicit path resolution. Clients only
+discard responses whose id/input/cursor no longer match their latest composer
+state, translate Unicode-scalar edit offsets to native string offsets, and
+render/apply the result. Completion requests and responses require protocol
+version 2.
+
 Sessions can be renamed over the attach channel with
 `Request{RenameSession{id, title}}`: `id` takes a full id or a 4+ character
 hex short-id prefix and resolves live or archived sessions exactly like
@@ -178,7 +223,7 @@ the new title; an unknown id answers
 The server sends `{ "type": "Monitor", "kind": "snapshot", … }` first, then —
 while `watch` holds — `session_added` / `session_updated` / `session_removed`
 diffs. With `watch: false` it closes after the snapshot (one-shot poll, which
-is what `neenee daemon status` does). Each diff carries a whole
+is what `muta daemon status` does). Each diff carries a whole
 [`MonitoredSession`](#monitoredsession) row; consumers upsert by `id`.
 
 `include_idle: false` (the default) filters both the snapshot and the diff
@@ -240,7 +285,7 @@ The verbs (`Select{action: {control: {…}}}`):
 | `resolve_permission` | `session_id`, `request_id`, `decision` (`once`/`always`/`reject`) | Answer a pending tool-permission prompt |
 | `suspend_session` | `session_id` | Park the session **in memory only**: the driver is torn down but `SessionEnd` hooks do not fire and no `Exit` is broadcast — the transcript is durable, so the next attach rebuilds it via lazy resume (monitors get `session_removed`). Refused when a client is attached, the round is active, or the session has no persisted content |
 | `kill_session` | `session_id` | Tear the session down (monitors get `session_removed`) |
-| `shutdown` | — | Stop the daemon itself (ADR-0100): the same budgeted graceful drain as SIGINT/SIGTERM — listeners close, connections drain, every session's `SessionEnd` hooks fire, the discovery record is removed, exit 0. The `ControlReply{ok:true}` is sent *before* the drain starts (it would otherwise cancel the replier). This is what `neenee daemon stop` sends. |
+| `shutdown` | — | Stop the daemon itself (ADR-0100): the same budgeted graceful drain as SIGINT/SIGTERM — listeners close, connections drain, every session's `SessionEnd` hooks fire, the discovery record is removed, exit 0. The `ControlReply{ok:true}` is sent *before* the drain starts (it would otherwise cancel the replier). This is what `muta daemon stop` sends. |
 
 `ControlReply` is `{ ok, session_id?, error? }`. On `ok:false`, `error`
 explains (unknown session, host cannot create, …). The connection closes
@@ -462,11 +507,11 @@ A production frontend should:
    next monitor connection with a fresh `snapshot`.
 7. Do not assume one request maps to one response. This is an asynchronous,
    multiplexed event protocol.
-8. On a `--public` listener, send the bearer token on the handshake. Loopback
-   connections need no token; treat any token you do hold as a secret — it
-   grants full session access. For a public listener without TLS, front it with
-   a TLS-terminating reverse proxy; the bearer token protects the handshake but
-   not the wire from eavesdropping.
+8. Send the bearer token on authenticated TCP handshakes: always for
+   `--public`, and by default on loopback unless `local_auth = false`. Treat it
+   as a secret — it grants full session access. For a public listener without
+   TLS, front it with a TLS-terminating reverse proxy; the bearer token protects
+   the handshake but not the wire from eavesdropping.
 9. Upsert monitor diffs by `id`; handle `session_removed` even though hosted
    sessions are not yet torn down.
 10. Handle `daemon_draining` (ADR-0101): sent once to every watch client
@@ -482,7 +527,7 @@ A production frontend should:
 12. Send `protocol` on `Select` (ADR-0134) to opt into protocol-number
     negotiation: the daemon serves any number in its window
     `[MIN_PROTOCOL_VERSION, PROTOCOL_VERSION]` (see
-    `crates/neenee-contracts/src/wire.rs`) *regardless of your product
+    `crates/muta-contracts/src/wire.rs`) *regardless of your product
     version*, and refuses anything outside it with
     `Error{code: "protocol_mismatch"}` before any session work. Without
     the field, rule 11's product-version equality applies. The discovery
@@ -493,13 +538,15 @@ A production frontend should:
 
 The Rust serde types remain the runtime source of truth:
 
-- envelope: `crates/neenee-runtime/src/serve.rs` (`Wire`, `AttachAction`,
-  `ControlRequest`) and the daemon runtime `crates/neenee-runtime/src/host.rs`
-- requests/responses/events: `crates/neenee-contracts/src/events.rs`
-- monitor rows and status: `crates/neenee-contracts/src/monitor.rs`
-- session registry (hosting + control verbs): `crates/neenee-runtime/src/registry.rs`
-- transcript: `crates/neenee-contracts/src/message.rs`
-- tool output: `crates/neenee-contracts/src/tool_output.rs`
+- envelope: `crates/muta-contracts/src/wire.rs` (`Wire`, `AttachAction`,
+  `ControlRequest`) and the daemon runtime `crates/muta-runtime/src/host.rs`
+- requests/responses/events: `crates/muta-contracts/src/events.rs`
+- command and input completion: `crates/muta-contracts/src/completion.rs` and
+  `crates/muta-runtime/src/input_completion.rs`
+- monitor rows and status: `crates/muta-contracts/src/monitor.rs`
+- session registry (hosting + control verbs): `crates/muta-runtime/src/registry.rs`
+- transcript: `crates/muta-contracts/src/message.rs`
+- tool output: `crates/muta-contracts/src/tool_output.rs`
 
 Any wire-visible change to those types must update
 `docs/reference/server.asyncapi.yaml`, this guide when behavior changes, and

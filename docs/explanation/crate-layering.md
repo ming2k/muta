@@ -1,42 +1,41 @@
 # Crate layering
 
-How the neenee workspace is split into crates, what each one owns, and the
+How the Muta workspace is split into crates, what each one owns, and the
 dependency direction between them. This is the single picture to hold in your
 head before reading any individual crate or ADR.
 
 ## The layer diagram
 
 ```text
-neenee-cli ──► neenee-tui ──┐
-               │            ├──► neenee-runtime ──► neenee-agent ──► neenee-persistence
-               │            │         │   │            ├──► neenee-skills ───────┤
-               │            │         │   │            └──► neenee-providers     │
-               │            │         │   └──► neenee-mcp                        ▼
-               │            │         └──────────────────────────────────► neenee-contracts
-               └────────────┘
+muta core ──┐
+            ├──► muta-runtime ──► muta-agent ──► muta-persistence
+mutx app ───┘          │   │            ├──► muta-skills ───────┤
+     │                 │   │            └──► muta-providers     │
+     │                 │   └──► muta-mcp                        ▼
+     │                 └──────────────────────────────────► muta-contracts
+     └──► mutx-engine
 
-neenee-tui ──► neenee-tui-engine
+web app ── control protocol ──► muta-runtime
 ```
 
 An arrow means “depends on.” The diagram shows the important responsibility
 edges rather than every direct Cargo edge. Higher layers may depend on
-`neenee-contracts` directly for contracts. The application binary depends on
-`neenee-runtime`; `neenee-cli` is a thin shell whose entire terminal frontend
-lives in the `neenee-tui` library crate (ADR-0098), the sole consumer of the
-TUI engine. Provider implementations build on
-`neenee-llm-client`, the multi-protocol HTTP client (shared transport +
+`muta-contracts` directly for contracts. The `muta` core and `mutx` terminal
+app are separate binaries that both depend on `muta-runtime`; only `mutx`
+depends on the TUI and its engine. Provider implementations build on
+`muta-llm-client`, the multi-protocol HTTP client (shared transport +
 OpenAI/Anthropic/Google wire protocols); OAuth credential acquisition for the
-subscription providers lives in `neenee-providers`' `oauth` module.
+subscription providers lives in `muta-providers`' `oauth` module.
 
 The graph remains acyclic, but the foundation is not a set of three symmetric
-peers: the built-in tools (inside `neenee-agent`) use store-owned
+peers: the built-in tools (inside `muta-agent`) use store-owned
 project/search facilities, while provider
-implementations build on the `neenee-llm-client` protocol layer. The invariant
+implementations build on the `muta-llm-client` protocol layer. The invariant
 from ADR-0005 is dependency direction, not visual symmetry.
 
 ## Per-layer responsibility
 
-### `neenee-contracts` — shared contracts
+### `muta-contracts` — shared contracts
 
 Pure domain and wire contracts with no workspace dependencies:
 `AgentRequest` / `AgentResponse` / `Message` / `ModelRequest`, the `Provider`
@@ -45,7 +44,7 @@ and `Tool` traits, `ToolSet`, `AgentIdentity`, principal/envoy profiles,
 same vocabulary without depending on agent orchestration.
 
 Contracts is not the default home for all pure code. An item enters
-`neenee-contracts` only when
+`muta-contracts` only when
 multiple independent layers exchange it, it prevents a dependency cycle, or
 it is stable serialized/domain vocabulary. Agent-owned policy stays with the
 agent even when it performs no I/O (ADR-0057).
@@ -54,29 +53,29 @@ agent even when it performs no I/O (ADR-0057).
 
 These crates implement the contracts below orchestration:
 
-- **`neenee-llm-client`** — the multi-protocol HTTP client. Owns the pooled
+- **`muta-llm-client`** — the multi-protocol HTTP client. Owns the pooled
   transport (`Client`, `Endpoint`, SSE byte reassembly, retry/error
   classification) and one module per wire protocol
   (`protocol::{openai, anthropic, google}`) holding the per-vendor
   request/response semantics. Each provider embeds a shared `Client` so a
   single connection pool is reused across every turn.
-- **`neenee-providers`** — the channel registry and `build_provider_for_channel`
+- **`muta-providers`** — the channel registry and `build_provider_for_channel`
   factory, live model-list discovery, and the OAuth2/PKCE flows for
   subscription providers. It selects *which* backend to talk to;
-  `neenee-llm-client` knows *how*.
-- **`neenee-skills`** — skill metadata, discovery, remote caching, registry,
+  `muta-llm-client` knows *how*.
+- **`muta-skills`** — skill metadata, discovery, remote caching, registry,
   periodic refresh, and `use_skill` / `list_skills` tool adapters. The agent
   consumes the registry for model-context injection; Session also reads and
   refreshes it without reaching through Agent internals.
-- **`neenee-persistence`** — durable state: `SessionStore`, `Config`, embedding index,
+- **`muta-persistence`** — durable state: `SessionStore`, `Config`, embedding index,
   repeat store, XDG paths (ADR-0014).
-- **`neenee-mcp`** — the MCP connector (ADR-0060, re-extracted by ADR-0098):
+- **`muta-mcp`** — the MCP connector (ADR-0060, re-extracted by ADR-0098):
   stdio JSON-RPC transport, server lifecycle, tool adapters, the live
-  `McpRuntime`, and catalog refresh. A session (in `neenee-runtime`) owns each
+  `McpRuntime`, and catalog refresh. A session (in `muta-runtime`) owns each
   runtime; discovered tools reach the agent through the `DynamicToolSink`
-  contract, so `neenee-agent` carries no MCP protocol dependency.
+  contract, so `muta-agent` carries no MCP protocol dependency.
 
-### `neenee-agent` — orchestration
+### `muta-agent` — orchestration
 
 The engine. `Agent` + the round/turn loop (ADR-0047), model-request and
 system-prompt policy, durable conversation-context injection, tool-call
@@ -87,7 +86,7 @@ to run *one* LLM round with tools. It also owns the built-in tools
 (`bash`, `read_text`, `grep`, `glob`, `webfetch`, todo management, …) in its
 `tools` module: most self-register via `inventory`, and stateful todo tools
 receive an agent-owned context bound in `tool_integration`. It consumes
-`neenee-skills` and interacts
+`muta-skills` and interacts
 with static and dynamic tools through core contracts. It does not know about
 sessions, slash commands, or frontends. Identity-agnostic and
 role-agnostic by design.
@@ -96,7 +95,7 @@ The `agent -> skills` edge is intentional layering, not a
 cycle: the skills crate does not depend on agent orchestration.
 `EnvoyTool` remains in Agent because it constructs and controls agents.
 
-### `neenee-runtime` — session runtime & control plane
+### `muta-runtime` — session runtime & control plane
 
 The layer that turns "an engine that can run a turn" into "a running agent
 session a frontend can drive." It owns:
@@ -120,6 +119,9 @@ session a frontend can drive." It owns:
   the legacy per-project path resolution it replaced (ADR-0096).
 - **`slash_handler`** — the `SlashCommandHandler` extension point so embeddings
   register Rust slash commands without forking the server (ADR-0054).
+- **`input_completion`** — the shared composer-completion policy: command and
+  intent matching, aliases, trusted project commands, and `@path` discovery.
+  Clients request ready-to-apply edits and do not duplicate these rules.
 - **`UiBridge`** — the one frontend-capability trait (`/export` clipboard).
 - **`client`** — the client side of the control plane (ADR-0098): discovery,
   the attach handshake, one-shot control verbs, and the monitor stream. Client
@@ -141,23 +143,25 @@ ADR-0018 invariant, indexed `project → session`. The ADR-0037 Step 6 factory
 pays the assembly cost once per session, not once per process. The
 per-project, one-server-per-session model of ADR-0081 is superseded.
 
-### Application & Frontend layer — `neenee-cli`, `neenee-tui` & `apps/web`
+### Core and app layer — `muta`, `apps/tui`, and `apps/web`
 
 The user-facing presentation layers:
 
-1. **`neenee-cli`** (package name; binary `neenee`) — the single CLI entrypoint:
-   argument parsing, subcommand routing (`auth`, `config`, `mcp`, `skill`, `session`, `daemon`),
-   and process lifecycle. For interactive sessions, it connects to the session daemon via
-   `neenee-runtime::client`; for daemon serving (`neenee daemon start --fg`), it launches the host via
-   `neenee-runtime::host`. It depends strictly downwards and holds zero direct dependency on `neenee-agent`.
-2. **`neenee-tui`** — the terminal user interface library built on `neenee-tui-engine`.
-   It acts as a pure remote client attaching to daemon-hosted sessions via WebSocket channels,
-   rendering dialogue messages, interactive modals, and the live status monitor.
+1. **`muta`** — the core binary. It owns daemon lifecycle and service commands
+   (`auth`, `config`, `mcp`, `skill`, `session`, `daemon`, and `doctor`). It
+   contains no frontend dependency or frontend assets.
+2. **`apps/tui`** — one Rust app subproject containing `crates/mutx` and its
+   private `crates/mutx-engine`. It owns interactive and headless prompt
+   clients, attachment, the dashboard, clipboard behavior, and terminal
+   rendering. It checks the daemon at startup and launches `muta` on demand,
+   but cannot host the daemon.
 3. **`apps/web/`** — the lightweight web frontend connecting directly to the session daemon's
    WebSocket listener, enabling browser-based fleet monitoring and agent chat. A pnpm
    workspace package (`pnpm-workspace.yaml`), not a Rust crate: Svelte 5 + TypeScript +
-   Vite, with its wire types transcribed from `neenee-contracts` in `apps/web/src/lib/types.ts`.
-   Its lockfile is the root `pnpm-lock.yaml`.
+   Vite, with generated wire types from `muta-contracts` plus a small envelope
+   adapter in `apps/web/src/lib/types.ts`. It builds and deploys independently;
+   the daemon does not embed its output. Its lockfile is the root
+   `pnpm-lock.yaml`.
 
 ## How a request flows across the layers
 
@@ -165,7 +169,7 @@ The user-facing presentation layers:
 TUI keystroke / WS client
         │  AgentRequest (over mpsc, no source metadata)
         ▼
-neenee-runtime: SessionDriver  ──►  handlers_*  ──►  neenee-agent: Agent::turn
+muta-runtime: SessionDriver  ──►  handlers_*  ──►  muta-agent: Agent::turn
         │                                                     │
         │  AgentResponse (over mpsc → TUI; cloned → broadcast → WS)  ◄──┘
         ▼
@@ -195,8 +199,8 @@ multi-frontend transport details.
   skill/MCP capability crates and dynamic tool publication.
 - [ADR-0079](../adr/0079-remerge-tui-view-into-binary.md) — the view crate's
   re-merge into the application binary.
-- [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md) — the package rename
-  `neenee` → `neenee-cli` (command unchanged).
+- [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) — the Muta rename
+  and the core/TUI command split (current topology).
 - [ADR-0081](../adr/0081-neenee-server-and-attach-model.md) — the server
   binary, the `bootstrap::assemble` factory, and the attach model.
 - [ADR-0089](../adr/0089-multi-session-daemon.md) — the multi-session
@@ -208,5 +212,4 @@ multi-frontend transport details.
 - [ADR-0096](../adr/0096-unified-session-daemon.md) — the unified session
   daemon and control plane (current model).
 - [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) — the
-  `contracts`/`host` renames and the `neenee-tui` / `neenee-mcp` extractions
-  (current topology).
+  earlier `contracts`/`host` renames and frontend extractions.

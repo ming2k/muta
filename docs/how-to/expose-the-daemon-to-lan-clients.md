@@ -9,7 +9,7 @@ TCP loopback only, so nothing leaves the machine unless you ask for it.
 ## 1. Start the daemon with a public listener
 
 ```bash
-neenee daemon start --fg --port 8765 --public
+muta daemon start --fg --port 8765 --public
 ```
 
 (`--public` makes the daemon bind `0.0.0.0` instead of loopback.)
@@ -18,9 +18,9 @@ assigns one. On startup the daemon prints its endpoints to stderr, including
 the generated token:
 
 ```text
-neenee-server: control plane on unix:///run/user/1000/neenee/daemon.sock
-neenee-server: serving sessions on ws://0.0.0.0:8765
-neenee: exposed listener requires a bearer token; read it from the discovery file …
+muta: local control plane on unix:///run/user/1000/muta/daemon.sock
+muta: serving sessions on ws://0.0.0.0:8765
+muta: exposed listener requires a bearer token; read it from the discovery file …
 ```
 
 Copy the token and treat it as a secret: it grants full session access. The

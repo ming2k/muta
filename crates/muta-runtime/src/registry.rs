@@ -1,0 +1,1499 @@
+use crate::UiBridge;
+use crate::bootstrap::{self, BootstrapParams};
+use crate::monitor::MonitorTracker;
+use crate::serve::{ATTACH_SYNC_BUFFER_CAP, AttachAction, is_attach_sync_event};
+use muta_agent::{Agent, AgentIdentity, PrincipalProfile};
+use muta_contracts::{
+    AgentRequest, AgentResponse, MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession,
+    PermissionDecision, SessionHosting, SessionOverview, SessionStatus, WipStatus,
+};
+use muta_persistence::session::SessionStore;
+use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio_util::sync::CancellationToken;
+
+/// Wall-clock now in Unix-epoch milliseconds, for round-interrupt records
+/// (C11). Same convention as the TUI's `now_epoch_ms`. Shared with the
+/// driver's crash-residue inference.
+pub(crate) fn unix_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[derive(Clone)]
+pub struct HostParams {
+    pub identity: AgentIdentity,
+    pub principal: PrincipalProfile,
+    pub ui: Arc<dyn UiBridge>,
+}
+pub struct HostedSession {
+    /// The project this session belongs to (ADR-0096 two-level indexing:
+    /// sessions are queryable per project, hosted by one global daemon).
+    pub project_root: PathBuf,
+    pub session: Arc<SessionStore>,
+    pub req_tx: mpsc::UnboundedSender<AgentRequest>,
+    pub events: broadcast::Sender<AgentResponse>,
+    pub cancel: CancellationToken,
+    /// The panel-facing tracker folding this session's event stream
+    /// (ADR-0093). Owned here so the broadcast-tap task can fold events in
+    /// and the registry can read rows out for snapshots.
+    pub tracker: Arc<Mutex<MonitorTracker>>,
+    /// Attach-time state-sync buffer: the startup events an attaching client
+    /// cannot reconstruct (active provider/model, picker snapshot, key
+    /// readiness). Filled by the broadcast-tap; drained into each new client
+    /// after it subscribes so it hydrates immediately. Bounded; see
+    /// `ATTACH_SYNC_BUFFER_CAP`.
+    pub sync_buffer: Arc<Mutex<VecDeque<AgentResponse>>>,
+    /// Backend-owned slash-command vocabulary for every attached frontend.
+    pub command_catalog: muta_contracts::CommandCatalog,
+    /// When this hosted session was created (wall-clock, monotonic). Drives
+    /// the idle reaper: a session that stays `is_empty_unpersisted` (no real
+    /// content, never written to disk) past the idle TTL is reclaimed so
+    /// abandoned empty sessions cannot accumulate in memory. `Instant` is
+    /// process-local and never persisted, matching the in-memory-only nature
+    /// of the sessions it guards.
+    pub created_at: std::time::Instant,
+    /// Last time the broadcast tap folded an event for this session
+    /// (monotonic). Drives idle *suspension*: a persisted session with no
+    /// clients attached and no activity for `IDLE_HOSTED_SESSION_TTL` is
+    /// torn down in memory — its transcript is already durable, so the next
+    /// attach lazy-resumes it. Before this, every real session a daemon ever
+    /// hosted stayed resident forever (full transcript + agent + MCP
+    /// runtime + two tasks each), so a multi-project daemon's memory grew
+    /// monotonically with its session history.
+    ///
+    /// A `Mutex<Instant>` (not an atomic): this is written only by the
+    /// once-a-minute reaper sweep and read nowhere else on the hot path.
+    pub last_activity: Mutex<std::time::Instant>,
+    /// The tap-tick watermark the reaper last observed. When it differs from
+    /// [`Self::activity_tick`], events were folded since the last sweep and
+    /// `last_activity` refreshes.
+    pub last_seen_tick: std::sync::atomic::AtomicU64,
+    /// Broadcast-tap side of the activity clock: bumped once per folded
+    /// event under a cheap atomic so the reaper never touches the tracker
+    /// mutex on the hot path.
+    pub activity_tick: Arc<std::sync::atomic::AtomicU64>,
+    /// Handle on the session's primary agent (the same `Arc` the bootstrap
+    /// hands out as `agent_for_session_end`) so the registry can fire
+    /// SessionEnd hooks (ADR-0025) when the session ends — killed over the
+    /// control plane, reaped, or torn down on daemon shutdown. The driver
+    /// task owns the agent otherwise. `None` only for hand-built test
+    /// entries, which carry no agent and fire nothing.
+    pub agent_for_session_end: Option<Arc<Agent>>,
+}
+#[derive(Clone)]
+pub struct BoundSession {
+    pub session: Arc<SessionStore>,
+    pub req_tx: mpsc::UnboundedSender<AgentRequest>,
+    pub events: broadcast::Sender<AgentResponse>,
+    /// Attach-time state-sync events buffered for this session (see
+    /// [`HostedSession::sync_buffer`]). Drained by the WS layer into a new
+    /// client right after it subscribes, before it joins the live broadcast.
+    pub sync_buffer: Arc<Mutex<VecDeque<AgentResponse>>>,
+    pub command_catalog: muta_contracts::CommandCatalog,
+}
+pub enum ResolveOutcome {
+    Welcome(BoundSession),
+    Pick { sessions: Vec<SessionOverview> },
+    Error(String),
+}
+
+/// The host-level observability topic (ADR-0093): one broadcast channel
+/// carrying [`MonitorEvent`] diffs for every hosted session. The registry is
+/// the only publisher; any number of monitor clients subscribe. A fresh
+/// subscriber is expected to first take a [`SessionRegistry::monitor_snapshot`]
+/// so events published before it subscribed are not lost.
+pub type MonitorBus = broadcast::Sender<MonitorEvent>;
+
+/// Daemon provenance for monitor snapshots: who the host is and when it
+/// started. A `/serve` prehost (no host record) reports `started_at: 0`.
+#[derive(Clone, Default)]
+pub struct MonitorMeta {
+    pub project_root: Option<String>,
+    pub started_at: u64,
+}
+
+#[derive(Clone)]
+pub struct SessionRegistry {
+    params: Option<HostParams>,
+    sessions: Arc<Mutex<HashMap<String, Arc<HostedSession>>>>,
+    monitor: MonitorBus,
+    meta: Arc<Mutex<MonitorMeta>>,
+    /// Declared work-in-progress per session id (ADR-0097 §5): the
+    /// coordination registry sessions consult via `check_wip`. In-memory —
+    /// advisory by design, so a restart simply drops declarations until
+    /// peers re-declare (never a correctness hazard).
+    wip: Arc<Mutex<HashMap<String, WipStatus>>>,
+}
+
+/// Shared handle on the WIP-coordination registry (ADR-0097 §5), injected
+/// into the per-session `declare_wip`/`wip_done` tools so they mutate the
+/// daemon's coordination state without holding the whole registry.
+pub type WipRegistry = Arc<Mutex<HashMap<String, WipStatus>>>;
+
+/// How long a never-persisted (empty) hosted session may sit idle before the
+/// reaper reclaims it. Five minutes is comfortably longer than any legitimate
+/// create→attach→first-prompt gap, so an empty session a user is about to
+/// type into is never swept from under them.
+const IDLE_EMPTY_SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// How often the storage-maintenance pass (blob GC + usage-day retention)
+/// runs inside the idle reaper's tick loop. Both phases scan the whole data
+/// dir; daily is the right cadence for reclaiming garbage.
+const STORAGE_MAINTENANCE_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+
+/// How often the idle-empty reaper sweeps. One minute keeps abandoned empty
+/// sessions bounded without meaningfully waking the daemon.
+const IDLE_REAPER_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Per-session budget for `SessionEnd` hooks during teardown (ADR-0101).
+/// A user hook runs an external process; a hung one must not pin the daemon
+/// (this bound applies to single-session kills; daemon shutdown sizes the
+/// same budget against its remaining grace).
+const DEFAULT_SESSION_END_HOOK_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long an idle *persisted* hosted session with no attached clients may
+/// stay resident before it is suspended (torn down in memory; the transcript
+/// is durable, so the next attach lazy-resumes it). This is what bounds the
+/// daemon's memory: without it, every real session a daemon ever hosted
+/// stayed resident forever (full transcript + agent + MCP runtime + tasks).
+const IDLE_HOSTED_SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+impl SessionRegistry {
+    pub fn new(params: HostParams) -> Self {
+        Self::with_meta(Some(params))
+    }
+    pub fn prehost_only() -> Self {
+        Self::with_meta(None)
+    }
+    fn with_meta(params: Option<HostParams>) -> Self {
+        let (monitor, _) = broadcast::channel::<MonitorEvent>(256);
+        Self {
+            params,
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            monitor,
+            meta: Arc::new(Mutex::new(MonitorMeta::default())),
+            wip: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+    /// Record the host's provenance (project root + start time) so monitor
+    /// snapshots can identify the host. Called once by `host::run` before
+    /// the listener starts accepting monitor clients.
+    pub async fn set_monitor_meta(&self, project_root: String, started_at: u64) {
+        *self.meta.lock().await = MonitorMeta {
+            project_root: Some(project_root),
+            started_at,
+        };
+    }
+    /// Resolve an attach. `caller_project` scopes creation and lazy resume
+    /// (ADR-0096): `New` / `Attach(None)` create in the caller's project;
+    /// `Attach(Some(id))` first looks up every hosted session globally, then
+    /// lazy-resumes from the caller's project on disk.
+    pub async fn resolve(
+        &self,
+        action: AttachAction,
+        caller_project: &std::path::Path,
+    ) -> ResolveOutcome {
+        self.resolve_with_declaration(action, caller_project, true)
+            .await
+    }
+
+    /// [`Self::resolve`] with the caller's declaration status made explicit.
+    /// A *declared* project (modern client's `Select.project`) forbids
+    /// silently auto-binding a session from another project — that is the
+    /// "launched in project A, working in project B" trap. An undeclared
+    /// project (legacy client; the daemon guessing its own cwd) keeps the
+    /// historical lone-session auto-bind because the daemon cannot tell a
+    /// cross-project attach from a same-project one.
+    pub async fn resolve_with_declaration(
+        &self,
+        action: AttachAction,
+        caller_project: &std::path::Path,
+        declared: bool,
+    ) -> ResolveOutcome {
+        match action {
+            AttachAction::New => {
+                self.create_session_outcome(caller_project.to_path_buf())
+                    .await
+            }
+            AttachAction::Attach(None) => self.resolve_auto(caller_project, declared).await,
+            AttachAction::Attach(Some(id)) => self.resolve_id(&id, caller_project).await,
+            // The picker carrier (ADR-0116): a throwaway session whose only
+            // job is to host the client's picker modal. The bootstrap skips
+            // restore and hooks for it; `/sessions <id>` switches to the
+            // real session through the ordinary re-attach path.
+            AttachAction::Picker => self
+                .assemble_hosted(
+                    crate::startup::SessionStart::Picker,
+                    caller_project.to_path_buf(),
+                )
+                .await
+                .map(ResolveOutcome::Welcome)
+                .unwrap_or_else(|e| match e {
+                    AssembleErr::NoHost => {
+                        ResolveOutcome::Error("this host cannot create sessions".into())
+                    }
+                    AssembleErr::AssembleFailed(e) => {
+                        ResolveOutcome::Error(format!("could not open the session picker: {e}"))
+                    }
+                }),
+            // Monitor handshakes are intercepted by the WS layer
+            // (`serve::handle_connection`) and never reach `resolve`.
+            AttachAction::Monitor(_) => {
+                ResolveOutcome::Error("monitor connections are served directly".into())
+            }
+            AttachAction::Control(_) => {
+                ResolveOutcome::Error("control connections are served directly".into())
+            }
+        }
+    }
+
+    /// Control plane (ADR-0096): create a session for `project` and return
+    /// its id. The session is daemon-held; no client is attached yet.
+    pub async fn create_session(&self, project: PathBuf) -> Result<String, String> {
+        let bound = self
+            .assemble_hosted(crate::startup::SessionStart::Fresh, project)
+            .await
+            .map_err(|e| match e {
+                AssembleErr::NoHost => "this host cannot create sessions".to_string(),
+                AssembleErr::AssembleFailed(e) => format!("could not start a new session: {e}"),
+            })?;
+        Ok(bound.session.id().await)
+    }
+
+    async fn create_session_outcome(&self, project: PathBuf) -> ResolveOutcome {
+        match self
+            .assemble_hosted(crate::startup::SessionStart::Fresh, project)
+            .await
+        {
+            Ok(b) => ResolveOutcome::Welcome(b),
+            Err(AssembleErr::NoHost) => {
+                ResolveOutcome::Error("this host cannot create sessions".into())
+            }
+            Err(AssembleErr::AssembleFailed(e)) => {
+                ResolveOutcome::Error(format!("could not start a new session: {e}"))
+            }
+        }
+    }
+    /// Control plane (ADR-0096): send an interrupt to a hosted session.
+    pub async fn interrupt(&self, session_id: &str) -> Result<(), String> {
+        let map = self.sessions.lock().await;
+        let Some(e) = map.get(session_id) else {
+            return Err(format!(
+                "session '{session_id}' is not hosted on this server"
+            ));
+        };
+        let _ = e.req_tx.send(AgentRequest::Interrupt);
+        Ok(())
+    }
+
+    /// Control plane (ADR-0096): answer a pending permission request.
+    pub async fn resolve_permission(
+        &self,
+        session_id: &str,
+        request_id: String,
+        decision: PermissionDecision,
+    ) -> Result<(), String> {
+        let map = self.sessions.lock().await;
+        let Some(e) = map.get(session_id) else {
+            return Err(format!(
+                "session '{session_id}' is not hosted on this server"
+            ));
+        };
+        let _ = e.req_tx.send(AgentRequest::PermissionReply {
+            request_id,
+            decision,
+            parent_call_id: None,
+        });
+        Ok(())
+    }
+
+    /// Control plane (ADR-0096): send a prompt to a hosted session as a new
+    /// round (how a panel or web UI "starts a task" on an existing session).
+    pub async fn send_prompt(&self, session_id: &str, text: String) -> Result<(), String> {
+        let map = self.sessions.lock().await;
+        let Some(e) = map.get(session_id) else {
+            return Err(format!(
+                "session '{session_id}' is not hosted on this server"
+            ));
+        };
+        let _ = e.req_tx.send(AgentRequest::Chat {
+            text,
+            images: Vec::new(),
+            sent_at_ms: None,
+        });
+        Ok(())
+    }
+
+    /// Control plane (ADR-0096): tear down a hosted session — cancel its
+    /// driver, fire its SessionEnd hooks (ADR-0025: a killed session is a
+    /// session that ended), drop it from the registry, and tell monitors it
+    /// is gone.
+    ///
+    /// `hook_budget` bounds each `fire_session_end` call. A user-configured
+    /// SessionEnd hook runs an external process; a hung one must never pin
+    /// the daemon's shutdown (or this verb) open. On timeout the remaining
+    /// hook work is abandoned — the hook's side effects are best-effort by
+    /// design (ADR-0025) — and the teardown continues.
+    pub async fn kill_session(&self, session_id: &str) -> Result<(), String> {
+        self.kill_session_with_hook_budget(session_id, DEFAULT_SESSION_END_HOOK_BUDGET)
+            .await
+    }
+
+    /// Tear down a session whose driver task panicked (the "evict" leg of
+    /// task supervision). Reuses the kill path's cleanup — entry removal,
+    /// terminal `Exit` broadcast, bounded SessionEnd hooks, WIP clearing,
+    /// `SessionRemoved` — but is tolerant of racing callers (another client
+    /// may have already killed the session). Uses a tighter hook budget:
+    /// this runs from inside the crashed task, so a hanging SessionEnd hook
+    /// must not pin the teardown.
+    async fn evict_crashed_session(
+        &self,
+        session_id: &str,
+        cancel: &CancellationToken,
+        events: broadcast::Sender<AgentResponse>,
+        agent_for_session_end: Option<Arc<Agent>>,
+    ) {
+        // Only act if this exact entry is still live: kill_session or a
+        // concurrent crash-eviction may have removed it already. Comparing
+        // the cancel token distinguishes "already gone" from "a newer
+        // session under the same id".
+        {
+            let map = self.sessions.lock().await;
+            if map.get(session_id).is_none() {
+                tracing::debug!(
+                    session = %session_id,
+                    "crash eviction: entry already removed"
+                );
+                return;
+            }
+        }
+        // Same cleanup sequence as kill_session_with_hook_budget, with the
+        // tight crash budget (2s) — an external-process SessionEnd hook must
+        // not pin a teardown that already represents a failure path.
+        self.sessions.lock().await.remove(session_id);
+        cancel.cancel();
+        let _ = events.send(AgentResponse::Exit);
+        if let Some(agent) = agent_for_session_end
+            && tokio::time::timeout(std::time::Duration::from_secs(2), agent.fire_session_end())
+                .await
+                .is_err()
+        {
+            tracing::warn!(
+                session = %session_id,
+                "crash eviction: SessionEnd hook exceeded 2s; abandoning it"
+            );
+        }
+        self.clear_wip(session_id).await;
+        self.publish(MonitorEvent::SessionRemoved {
+            session_id: session_id.to_string(),
+        })
+        .await;
+    }
+
+    /// Suspend a hosted session: tear it down **in memory** without ending
+    /// it. Unlike [`Self::kill_session`], no terminal `Exit` is broadcast
+    /// (there are no clients to receive it — suspension requires zero
+    /// receivers) and SessionEnd hooks do **not** fire: the session is not
+    /// over, merely parked. Its transcript is durable, so the next attach
+    /// resolves through the standard lazy-resume path and rebuilds
+    /// everything. Scheduled jobs live in the session store, so they resume
+    /// with it.
+    ///
+    /// Returns `Ok(())` when the session was suspended, `Err` when it was
+    /// already gone (a racing kill/suspend) or is not suspendable.
+    pub async fn suspend_session(&self, session_id: &str) -> Result<(), String> {
+        let removed = self.sessions.lock().await.remove(session_id);
+        let Some(e) = removed else {
+            return Err(format!(
+                "session '{session_id}' is not hosted on this server"
+            ));
+        };
+        // Cancel the driver (drops the run future). The req_tx senders in
+        // clients' BoundSession clones die with the entry removal, so no
+        // further requests queue into a drained channel.
+        e.cancel.cancel();
+        // Deliberately NOT sending AgentResponse::Exit and NOT firing
+        // SessionEnd: suspension is invisible by design (no receivers exist
+        // as a precondition) and the session continues on resume.
+        self.clear_wip(session_id).await;
+        self.publish(MonitorEvent::SessionRemoved {
+            session_id: session_id.to_string(),
+        })
+        .await;
+        tracing::info!(session = %session_id, "suspended idle hosted session");
+        Ok(())
+    }
+
+    /// Control plane: park a hosted session on demand (the
+    /// `suspend_session` verb). The same in-memory teardown as the idle
+    /// reaper's [`Self::suspend_session`], but guarded for an explicit
+    /// human/panel request: a session with an attached client or an active
+    /// round (running / needs-approval / needs-input) is refused with a
+    /// message naming what to do instead — detach or interrupt first. A
+    /// never-persisted empty session is refused too: suspending it would
+    /// silently discard it (there is no transcript to lazy-resume from),
+    /// so killing is the honest verb for that case.
+    pub async fn suspend_session_control(&self, session_id: &str) -> Result<(), String> {
+        // Snapshot the probes under the lock; suspend outside it (never
+        // hold the map lock across an await). `is_empty_unpersisted` needs
+        // an await on the store, so the entry is cloned out and probed
+        // lock-free.
+        let entry = {
+            let map = self.sessions.lock().await;
+            let Some(e) = map.get(session_id) else {
+                return Err(format!(
+                    "session '{session_id}' is not hosted on this server"
+                ));
+            };
+            Arc::clone(e)
+        };
+        if entry.events.receiver_count() > 0 {
+            return Err(format!(
+                "session '{session_id}' has {} attached client(s); detach before suspending",
+                entry.events.receiver_count()
+            ));
+        }
+        let status = entry.tracker.lock().await.row().status;
+        if status.is_active() {
+            return Err(format!(
+                "session '{session_id}' is {} — interrupt it before suspending",
+                status.as_str()
+            ));
+        }
+        if entry.session.is_empty_unpersisted().await {
+            return Err(format!(
+                "session '{session_id}' has no content to keep — kill it instead"
+            ));
+        }
+        self.suspend_session(session_id).await
+    }
+
+    /// Sweep for idle hosted sessions to suspend. A session is suspendable
+    /// when (a) no client is attached (`receiver_count == 0`), (b) its
+    /// monitor status is not active (not running / awaiting approval /
+    /// awaiting input), and (c) it has had no tap activity for the TTL.
+    /// Empty unpersisted sessions are left to the tighter empty-reaper
+    /// above; this path exists for *real* sessions whose memory the daemon
+    /// would otherwise hold forever.
+    pub async fn suspend_idle_sessions(&self) -> Vec<String> {
+        self.suspend_idle_sessions_with(IDLE_HOSTED_SESSION_TTL)
+            .await
+    }
+
+    /// [`Self::suspend_idle_sessions`] with an explicit TTL (tests).
+    pub async fn suspend_idle_sessions_with(&self, ttl: std::time::Duration) -> Vec<String> {
+        // Snapshot under the lock; probe + suspend outside it (same pattern
+        // as the empty reaper: never hold the map lock across awaits).
+        let candidates: Vec<(String, Arc<HostedSession>)> = self
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .map(|(id, e)| (id.clone(), Arc::clone(e)))
+            .collect();
+        let mut suspended = Vec::new();
+        for (id, entry) in candidates {
+            if entry.events.receiver_count() != 0 {
+                continue; // someone is attached — theirs to keep alive
+            }
+            // Active-looking status (running round, pending approval/input)
+            // disqualifies even with no receivers: the work must be allowed
+            // to finish or be interrupted explicitly.
+            let status = entry.tracker.lock().await.row().status;
+            if status.is_active() {
+                continue;
+            }
+            // An armed `/schedule` job is work that *will* run unattended
+            // (ADR-0125): suspending the session parks its tick loop, so a
+            // due cron or countdown would silently stop firing — exactly the
+            // autonomy the schedule was created for. Idle-suspension exists
+            // to bound memory, and a session with armed jobs is not idle in
+            // the meaningful sense. The rehost path re-arms these after a
+            // daemon restart; this guard keeps them armed between restarts.
+            if !entry.session.scheduled_jobs().await.is_empty() {
+                continue;
+            }
+            // Activity clock: starts at host time and is refreshed below
+            // whenever the tap tick advanced since the last sweep, so "idle"
+            // means "no folded events for the whole TTL".
+            let tick_now = entry
+                .activity_tick
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let tick_seen = entry
+                .last_seen_tick
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if tick_now != tick_seen {
+                // Events were folded since the last sweep: refresh the idle
+                // clock and record the watermark. Not a suspension candidate
+                // this round.
+                *entry.last_activity.lock().await = std::time::Instant::now();
+                entry
+                    .last_seen_tick
+                    .store(tick_now, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
+            if entry.last_activity.lock().await.elapsed() < ttl {
+                continue;
+            }
+            // Never-persisted empties belong to the tighter reaper above.
+            if entry.session.is_empty_unpersisted().await {
+                continue;
+            }
+            if self.suspend_session(&id).await.is_ok() {
+                suspended.push(id);
+            }
+        }
+        suspended
+    }
+
+    /// [`Self::kill_session`] with an explicit hook budget, so daemon
+    /// shutdown can size it against its own remaining grace (ADR-0101).
+    pub async fn kill_session_with_hook_budget(
+        &self,
+        session_id: &str,
+        hook_budget: std::time::Duration,
+    ) -> Result<(), String> {
+        let removed = self.sessions.lock().await.remove(session_id);
+        let Some(e) = removed else {
+            return Err(format!(
+                "session '{session_id}' is not hosted on this server"
+            ));
+        };
+        // Record the terminated-with-process stop (C11) *before* dropping the
+        // driver future: the round task it kills here never runs its own tail,
+        // so this durable record is the only trace the round ever stopped.
+        // Best-effort — a persistence failure must not block teardown. The
+        // monitor tracker is the registry-side view of "a round is live";
+        // NeedsApproval/NeedsInput also count (parked work dies with the
+        // driver too).
+        let status = e.tracker.lock().await.row().status;
+        if status.is_active() {
+            let record = muta_contracts::RoundInterrupt {
+                reason: muta_contracts::RoundInterruptReason::Terminated,
+                at_ms: unix_epoch_ms(),
+                round: Some(e.session.round_counter().await),
+            };
+            if let Err(error) = e.session.record_round_interrupt(record).await {
+                tracing::warn!(
+                    session = %session_id,
+                    %error,
+                    "registry: could not record round interrupt on kill"
+                );
+            }
+        }
+        e.cancel.cancel();
+        let _ = e.events.send(AgentResponse::Exit);
+        // SessionEnd observers fire best-effort after the driver is cancelled;
+        // the hook context (session id + cwd) does not depend on it. Bounded:
+        // an external-process hook that hangs cannot pin the daemon open.
+        if let Some(agent) = &e.agent_for_session_end
+            && tokio::time::timeout(hook_budget, agent.fire_session_end())
+                .await
+                .is_err()
+        {
+            tracing::warn!(
+                session = %session_id,
+                timeout_secs = hook_budget.as_secs_f32(),
+                "registry: SessionEnd hook exceeded its budget; abandoning it"
+            );
+        }
+        // A killed session's declared WIP goes with it (ADR-0097 §5 cleanup).
+        self.clear_wip(session_id).await;
+        self.publish(MonitorEvent::SessionRemoved {
+            session_id: session_id.to_string(),
+        })
+        .await;
+        Ok(())
+    }
+
+    /// Broadcast an agent response to every hosted session's event bus.
+    pub async fn broadcast_all_sessions(&self, response: AgentResponse) {
+        let map = self.sessions.lock().await;
+        for session in map.values() {
+            let _ = session.events.send(response.clone());
+        }
+    }
+
+    /// Graceful daemon shutdown (ADR-0096): tear down every hosted session
+    /// via [`Self::kill_session_with_hook_budget`], so each one's SessionEnd
+    /// hooks (ADR-0025) fire before the process exits. `host::run` calls
+    /// this after the listeners stop accepting and the connections drain
+    /// (ADR-0101).
+    ///
+    /// Sessions are torn down **concurrently** and each hook is bounded by
+    /// `hook_budget` individually: N sessions cost max(hook) — not the sum —
+    /// so one slow hook cannot starve the others of their own budget.
+    /// Best-effort per session: one failure does not skip the rest.
+    pub async fn shutdown_all_sessions(&self) {
+        self.shutdown_all_sessions_with_hook_budget(DEFAULT_SESSION_END_HOOK_BUDGET)
+            .await;
+    }
+
+    pub async fn shutdown_all_sessions_with_hook_budget(&self, hook_budget: std::time::Duration) {
+        let ids: Vec<String> = self.sessions.lock().await.keys().cloned().collect();
+        let mut tears: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> =
+            Vec::with_capacity(ids.len());
+        for id in ids {
+            let this = self.clone();
+            tears.push(Box::pin(async move {
+                if let Err(error) = this.kill_session_with_hook_budget(&id, hook_budget).await {
+                    tracing::warn!(session = %id, %error, "registry: session teardown failed on shutdown");
+                }
+            }));
+        }
+        futures::future::join_all(tears).await;
+    }
+
+    /// One pass of the idle-empty reaper: remove every hosted session that is
+    /// still `is_empty_unpersisted` (no user-facing content, never written to
+    /// disk) **and** has been hosted longer than `IDLE_EMPTY_SESSION_TTL`
+    /// **and** currently has no attached client. Returns the reclaimed ids.
+    ///
+    /// Only never-persisted sessions are eligible — a session that has real
+    /// content (however brief) is user history and is never reaped. The
+    /// `receiver_count() == 0` probe treats any live event subscriber as an
+    /// attached client, so a session someone is actively watching is left
+    /// alone even while still empty. This is the in-memory counterpart of the
+    /// persistence layer's lazy-materialisation guard (ADR-0018): that guard
+    /// keeps empty sessions off disk, this one keeps them from piling up in
+    /// the daemon's memory when clients create-then-abandon them.
+    pub async fn reap_idle_empty_sessions(&self) -> Vec<String> {
+        self.reap_idle_empty_sessions_with(IDLE_EMPTY_SESSION_TTL)
+            .await
+    }
+
+    /// TTL-parameterised core of [`Self::reap_idle_empty_sessions`], split out
+    /// so tests can sweep immediately instead of waiting out the real TTL.
+    #[doc(hidden)]
+    pub async fn reap_idle_empty_sessions_with(&self, ttl: std::time::Duration) -> Vec<String> {
+        // Snapshot candidates under the lock, then probe + kill outside it so
+        // we never hold the map lock across an `await` on a session's state.
+        let candidates: Vec<(String, Arc<HostedSession>)> = self
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .map(|(id, e)| (id.clone(), Arc::clone(e)))
+            .collect();
+        let mut reaped = Vec::new();
+        for (id, entry) in candidates {
+            let idle_long_enough = entry.created_at.elapsed() >= ttl;
+            let no_clients = entry.events.receiver_count() == 0;
+            if !idle_long_enough || !no_clients {
+                continue;
+            }
+            if !entry.session.is_empty_unpersisted().await {
+                continue;
+            }
+            // Guard against the id-key stability hazard: an in-session
+            // `/session open` or `/new` may have repointed the store to a
+            // *different*, now persisted session while the map key still holds
+            // the original id.
+            // Only kill when the store is still on the entry's original id —
+            // otherwise the entry has been repurposed and must be left alone.
+            if entry.session.id().await != id {
+                continue;
+            }
+            if self.kill_session(&id).await.is_ok() {
+                tracing::info!(session_id = %id, "reaped idle never-persisted session");
+                reaped.push(id);
+            }
+        }
+        reaped
+    }
+
+    /// Spawn the background idle-empty reaper, sweeping every
+    /// `IDLE_REAPER_INTERVAL` until `cancel` fires. The daemon calls this
+    /// once at startup; the task stops cleanly on shutdown.
+    ///
+    /// The same tick runs the low-frequency storage-maintenance pass
+    /// ([`Self::spawn_storage_maintenance`]) at most once per day: blob
+    /// garbage collection and usage-day retention. Both are whole-data-dir
+    /// scans, far too expensive to run per session event.
+    pub fn spawn_idle_reaper(self: &Arc<Self>, cancel: CancellationToken) {
+        let registry = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(IDLE_REAPER_INTERVAL);
+            // `interval` fires immediately on creation; skip the first tick so
+            // a just-started daemon does not reap sessions still being set up.
+            tick.tick().await;
+            let mut last_maintenance = std::time::Instant::now();
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        tracing::info!("idle-session reaper: shutdown");
+                        break;
+                    }
+                    _ = tick.tick() => {
+                        registry.reap_idle_empty_sessions().await;
+                        registry.suspend_idle_sessions().await;
+                        if last_maintenance.elapsed() >= STORAGE_MAINTENANCE_INTERVAL {
+                            last_maintenance = std::time::Instant::now();
+                            registry.spawn_storage_maintenance();
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// One storage-maintenance pass: sweep unreferenced blobs and prune
+    /// over-age usage day files. Both phases are synchronous directory scans
+    /// proportional to the data dir's size, so the work runs on the blocking
+    /// pool.
+    pub fn spawn_storage_maintenance(self: &Arc<Self>) {
+        let dirs = muta_persistence::paths::get();
+        let blobs = muta_persistence::blobs::BlobStore::new(dirs.blobs_dir());
+        let projects = dirs.projects_dir();
+        let usage = muta_persistence::usage_stats::UsageStatsStore::new();
+        tokio::task::spawn_blocking(move || {
+            let (count, bytes) = blobs.collect_garbage(&projects);
+            let days = usage.prune_old_days();
+            if count > 0 || days > 0 {
+                tracing::info!(
+                    blobs = count,
+                    bytes,
+                    pruned_days = days,
+                    "storage maintenance: reclaimed unreferenced data"
+                );
+            }
+        });
+    }
+
+    // ── WIP coordination (ADR-0097 §5) ────────────────────────────────────
+
+    /// The shared WIP-coordination handle, for injecting into the session
+    /// tools (ADR-0097 §5).
+    pub fn wip_registry_handle(&self) -> WipRegistry {
+        Arc::clone(&self.wip)
+    }
+
+    /// A `check_wip` closure bound to one session, for injecting into the
+    /// `check_wip` tool. It clones the registry so the tool can query
+    /// against the live sessions index without holding a registry borrow.
+    fn check_wip_closure(&self, session_id: String) -> crate::wip_tools::CheckWipQuery {
+        let registry = self.clone();
+        Arc::new(move |paths: Vec<String>, concern: Option<String>| {
+            let registry = registry.clone();
+            let sid = session_id.clone();
+            Box::pin(async move { registry.check_wip(&sid, &paths, concern.as_deref()).await })
+        })
+    }
+
+    /// Register (or replace) a session's declared WIP and project it onto the
+    /// session's monitor row so peers and the dashboard see it.
+    pub async fn declare_wip(&self, session_id: &str, paths: Vec<String>, summary: String) {
+        let status = WipStatus { paths, summary };
+        self.wip
+            .lock()
+            .await
+            .insert(session_id.to_string(), status.clone());
+        let hosted = self.sessions.lock().await.get(session_id).cloned();
+        if let Some(e) = hosted {
+            e.tracker.lock().await.set_wip(Some(status));
+        }
+    }
+
+    /// Clear a session's declared WIP (on `wip_done`, kill, or natural
+    /// settle) and remove it from the monitor row.
+    pub async fn clear_wip(&self, session_id: &str) {
+        self.wip.lock().await.remove(session_id);
+        let hosted = self.sessions.lock().await.get(session_id).cloned();
+        if let Some(e) = hosted {
+            e.tracker.lock().await.set_wip(None);
+        }
+    }
+
+    /// Answer a session's `check_wip`: the conflicting declared-WIPs of
+    /// *other* sessions in the same workspace, plus the advice the session
+    /// should act on (ADR-0097 §5). Advisory, never a lock.
+    pub async fn check_wip(
+        &self,
+        session_id: &str,
+        query_paths: &[String],
+        concern: Option<&str>,
+    ) -> (Vec<muta_contracts::WipConflict>, muta_contracts::WipAdvice) {
+        let workspace = self
+            .sessions
+            .lock()
+            .await
+            .get(session_id)
+            .map(|e| e.project_root.clone());
+        let Some(workspace) = workspace else {
+            // Unknown session: no coordination data — proceed as today.
+            return (Vec::new(), muta_contracts::WipAdvice::Proceed);
+        };
+
+        // Peer sessions in the same workspace (by registry index), minus the
+        // asker itself. Snapshot the candidate stores under the lock, then
+        // resolve ids *outside* it: `session.id()` is async, and awaiting it
+        // with the map held serializes every concurrent resolve/kill/suspend
+        // against one another.
+        let peer_stores: Vec<Arc<SessionStore>> = {
+            let map = self.sessions.lock().await;
+            map.values()
+                .filter(|e| e.project_root == workspace)
+                .map(|e| Arc::clone(&e.session))
+                .collect()
+        };
+        let mut peers = Vec::new();
+        for store in peer_stores {
+            let id = store.id().await;
+            if id != session_id {
+                peers.push(id);
+            }
+        }
+
+        let declared = self.wip.lock().await;
+        let mut conflicts = Vec::new();
+        for peer in peers {
+            let Some(wip) = declared.get(&peer) else {
+                continue;
+            };
+            let overlap = overlap_paths(query_paths, &wip.paths);
+            // A peer whose WIP doesn't intersect the query at all is not a
+            // conflict for this concern (when the query named paths).
+            if !query_paths.is_empty() && overlap.is_empty() && concern.is_none() {
+                continue;
+            }
+            conflicts.push(muta_contracts::WipConflict {
+                session: peer,
+                paths: wip.paths.clone(),
+                summary: wip.summary.clone(),
+                overlap,
+            });
+        }
+
+        let advice = if conflicts.is_empty() {
+            muta_contracts::WipAdvice::Proceed
+        } else if query_paths.is_empty() {
+            // Whole-workspace concern (e.g. "run the full suite") with any
+            // WIP present: narrow / skip global verification.
+            muta_contracts::WipAdvice::ProceedScoped
+        } else if conflicts.iter().any(|c| !c.overlap.is_empty()) {
+            muta_contracts::WipAdvice::Defer
+        } else {
+            muta_contracts::WipAdvice::ProceedScoped
+        };
+        (conflicts, advice)
+    }
+
+    pub async fn host(&self, entry: HostedSession) -> BoundSession {
+        let id = entry.session.id().await;
+        let b = BoundSession {
+            session: entry.session.clone(),
+            req_tx: entry.req_tx.clone(),
+            events: entry.events.clone(),
+            sync_buffer: entry.sync_buffer.clone(),
+            command_catalog: entry.command_catalog.clone(),
+        };
+        let tracker = entry.tracker.clone();
+        self.publish(MonitorEvent::SessionAdded(tracker.lock().await.row()))
+            .await;
+        self.sessions.lock().await.insert(id, Arc::new(entry));
+        b
+    }
+    async fn resolve_auto(
+        &self,
+        caller_project: &std::path::Path,
+        declared: bool,
+    ) -> ResolveOutcome {
+        // Prefer the caller's own project's sessions; only when that project
+        // has none do we consider the global set, and only a single global
+        // session auto-binds (otherwise the client must choose).
+        let map = self.sessions.lock().await;
+        let mine: Vec<&Arc<HostedSession>> = map
+            .values()
+            .filter(|e| e.project_root == caller_project)
+            .collect();
+        match mine.len() {
+            1 => return ResolveOutcome::Welcome(self.bound_from(mine[0])),
+            n if n > 1 => {
+                return ResolveOutcome::Pick {
+                    sessions: self.overview_subset(&mine).await,
+                };
+            }
+            _ => {}
+        }
+        match map.len() {
+            0 => {
+                drop(map);
+                self.create_session_outcome(caller_project.to_path_buf())
+                    .await
+            }
+            1 => {
+                // The one hosted session belongs to a *different* project
+                // than the calling client declared. Auto-binding it would
+                // silently attach this client to another project's session —
+                // the "launched in project A, working in project B" trap —
+                // so a declared-project client gets the picker instead (the
+                // cross-project session is one explicit choice; a fresh
+                // session in the caller's project is created by `New`).
+                // A legacy client that declared no project keeps the
+                // historical auto-bind: the daemon cannot distinguish a
+                // cross-project attach from a same-project one.
+                if declared {
+                    return ResolveOutcome::Pick {
+                        sessions: self.overview(&map).await,
+                    };
+                }
+                if let Some(e) = map.values().next() {
+                    ResolveOutcome::Welcome(self.bound_from(e))
+                } else {
+                    unreachable!("len==1")
+                }
+            }
+            _ => ResolveOutcome::Pick {
+                sessions: self.overview(&map).await,
+            },
+        }
+    }
+    async fn resolve_id(&self, id: &str, caller_project: &std::path::Path) -> ResolveOutcome {
+        {
+            let map = self.sessions.lock().await;
+            if let Some(e) = map.get(id) {
+                return ResolveOutcome::Welcome(self.bound_from(e));
+            }
+        }
+        if self.params.is_none() {
+            return ResolveOutcome::Error(format!("session '{id}' is not hosted on this server"));
+        }
+        // Lazy resume searches the caller's project first, then every other
+        // project the daemon knows about on disk.
+        if !session_exists_on_disk(caller_project, id).await {
+            return ResolveOutcome::Error(format!("unknown session id '{id}'"));
+        }
+        match self
+            .assemble_hosted(
+                crate::startup::SessionStart::Resume(id.to_string()),
+                caller_project.to_path_buf(),
+            )
+            .await
+        {
+            Ok(b) => ResolveOutcome::Welcome(b),
+            Err(AssembleErr::NoHost) => {
+                ResolveOutcome::Error(format!("session '{id}' is not hosted on this server"))
+            }
+            Err(AssembleErr::AssembleFailed(e)) => {
+                ResolveOutcome::Error(format!("could not resume session {id}: {e}"))
+            }
+        }
+    }
+
+    /// Boot-time rehost of autonomous sessions (ADR-0125): scan every
+    /// project's persisted sessions for armed `/schedule` jobs and
+    /// re-assemble a hosted harness for each, so scheduled prompts keep
+    /// firing across daemon restarts (crash, upgrade, reboot) instead of
+    /// silently waiting for a human to attach.
+    ///
+    /// The scan reads snapshot headers only (no transcript decode), and each
+    /// assembly is the ordinary lazy-resume path — meaning a rehosted
+    /// session is indistinguishable from an attached one: it appears in the
+    /// dashboard, its idle-suspension guard keeps it resident, and its
+    /// scheduler fires from the first tick. A session whose project root no
+    /// longer exists is skipped with a warning (the harness would fail its
+    /// cwd-sensitive tooling anyway); rehost failures never block the daemon
+    /// from starting.
+    pub async fn rehost_armed_sessions(&self) -> Vec<String> {
+        if self.params.is_none() {
+            return Vec::new();
+        }
+        let armed =
+            tokio::task::spawn_blocking(muta_persistence::session::sessions_with_armed_schedules)
+                .await
+                .unwrap_or_default();
+        let mut rehosted = Vec::new();
+        for entry in armed {
+            if self.sessions.lock().await.contains_key(&entry.session_id) {
+                continue; // already hosted (e.g. a client raced the boot scan)
+            }
+            if !entry.project_root.is_dir() {
+                tracing::warn!(
+                    session = %entry.session_id,
+                    project = %entry.project_root.display(),
+                    "rehost: project root is gone; leaving the session dormant"
+                );
+                continue;
+            }
+            match self
+                .assemble_hosted(
+                    crate::startup::SessionStart::Resume(entry.session_id.clone()),
+                    entry.project_root.clone(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    tracing::info!(
+                        session = %entry.session_id,
+                        project = %entry.project_root.display(),
+                        "rehosted session with armed schedule"
+                    );
+                    rehosted.push(entry.session_id);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        session = %entry.session_id,
+                        ?error,
+                        "rehost: could not re-assemble session; it stays dormant and lazy-resumes on attach"
+                    );
+                }
+            }
+        }
+        rehosted
+    }
+    async fn assemble_hosted(
+        &self,
+        startup: crate::startup::SessionStart,
+        project_root: PathBuf,
+    ) -> Result<BoundSession, AssembleErr> {
+        let HostParams {
+            identity,
+            principal,
+            ui,
+        } = self.params.as_ref().ok_or(AssembleErr::NoHost)?.clone();
+        // The session's lifetime token (ADR-0125): shared by the driver
+        // select below and the background `/schedule` scheduler inside the
+        // assemble, so one cancel stops the harness *and* its tick loop.
+        // Created before the assemble because the scheduler is spawned
+        // during it and receives the token as a spawn parameter.
+        let cancel = CancellationToken::new();
+        // `autopilot: false` here is the *startup flag* (what `--autopilot`
+        // passed on the command line), not the posture: ADR-0132 moved the
+        // persisted posture into the session store, and the assemble's
+        // resume path restores it from there — so a rehosted session reopens
+        // in the posture it died in without any rehost-specific wiring.
+        let boot = bootstrap::assemble(BootstrapParams {
+            identity,
+            principal,
+            ui,
+            startup,
+            project_root: Some(project_root.clone()),
+            autopilot: false,
+            extra_session_tools: None,
+            teardown_token: Some(cancel.clone()),
+        })
+        .await
+        .map_err(AssembleErr::AssembleFailed)?;
+        let session = boot.session.clone();
+        let req_tx = boot.req_tx.clone();
+        let command_catalog = boot.command_catalog.clone();
+        // WIP-coordination tools (ADR-0097 §5): build them now that the
+        // session id is known, and publish them onto the agent the assemble
+        // built so its model can declare/consult WIP against this daemon's
+        // coordination registry. Done before the driver starts serving
+        // requests so the tools are present from the first turn.
+        let session_id = session.id().await;
+        let wip_tools = crate::wip_tools::build_wip_tools(
+            self.wip_registry_handle(),
+            session_id.clone(),
+            self.check_wip_closure(session_id),
+        );
+        boot.agent
+            .dynamic_tool_sink()
+            .replace("wip-coordination", wip_tools);
+        let (events_tx, _) = broadcast::channel::<AgentResponse>(1024);
+        let tap = events_tx.clone();
+        let mut rr = boot.resp_rx;
+
+        // Monitor wiring (ADR-0093): seed the tracker from the session header,
+        // then fold every broadcast response into the row and publish diffs.
+        // A lazily-resumed session whose round was cut off mid-flight will
+        // re-drive from the first `TurnStarted` the driver emits, so the
+        // tracker needs no transcript-tail heuristic — it starts Idle and
+        // catches up from the live stream.
+        let base = overview_of(&session, true).await;
+        let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
+            base_row(base, &project_root),
+            SessionStatus::Idle,
+        )));
+        let tracker_for_tap = tracker.clone();
+        let monitor_bus = self.monitor.clone();
+        let sync_buffer = Arc::new(Mutex::new(VecDeque::<AgentResponse>::new()));
+        let sync_buffer_for_tap = sync_buffer.clone();
+        // Idle-suspension clock: bumped once per folded event (cheap atomic,
+        // no mutex) so the reaper can distinguish "alive but quiet because
+        // idle" from "hosted but forgotten".
+        let activity_tick = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let tick_for_tap = activity_tick.clone();
+        tokio::spawn(async move {
+            use futures::FutureExt;
+            while let Some(r) = rr.recv().await {
+                // Isolate per event (the "isolate" supervision policy): a
+                // poison response costs one dropped frame, not the session's
+                // entire observability path. Before this, a panic anywhere in
+                // the fold killed the tap task; the driver kept running and
+                // burning tokens while every subscriber's stream froze.
+                let fold = std::panic::AssertUnwindSafe(async {
+                    {
+                        tick_for_tap.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let mut guard = tracker_for_tap.lock().await;
+                        guard.observe(&r);
+                        let row = guard.row();
+                        drop(guard);
+                        let _ = monitor_bus.send(MonitorEvent::SessionUpdated(row));
+                    }
+                    // Buffer the attach-sync events before broadcasting so a
+                    // client that attaches later still hydrates. Order within
+                    // the buffer matches emission order, so draining
+                    // reproduces the startup sync faithfully.
+                    if is_attach_sync_event(&r) {
+                        let mut buf = sync_buffer_for_tap.lock().await;
+                        if buf.len() >= ATTACH_SYNC_BUFFER_CAP {
+                            buf.pop_front();
+                        }
+                        buf.push_back(r.clone());
+                    }
+                    let _ = tap.send(r);
+                });
+                if let Err(payload) = fold.catch_unwind().await {
+                    tracing::error!(
+                        panic = %crate::supervise::panic_detail(payload),
+                        "monitor tap panicked folding an event; dropped one event"
+                    );
+                }
+            }
+        });
+        let cd = cancel.clone();
+        let driver = boot.driver;
+        // Supervised driver spawn (the "evict" policy). The select arm keeps
+        // kill_session's cancel semantics: cancellation drops the driver
+        // future. The catch_unwind wrapper adds the panic leg — before it, a
+        // driver panic left a zombie entry: nobody drained `req_tx` (an
+        // unbounded channel, so clients kept queueing into memory), the
+        // control plane's `let _ = req_tx.send(...)` silently succeeded, and
+        // the only recovery was restarting the daemon.
+        //
+        // The registry clone is cheap (every field is an Arc), and moving the
+        // spawn after the map insert is required so eviction can find the
+        // entry. `id` is cloned below for the same reason.
+        let crash_registry = self.clone();
+        let crash_id = session.id().await;
+        let crash_events = events_tx.clone();
+        let cancel_for_crash = cancel.clone();
+        let agent_for_crash = Some(boot.agent_for_session_end.clone());
+        let (driver_done_tx, mut driver_done_rx) = mpsc::channel::<()>(1);
+        tokio::spawn(async move {
+            use futures::FutureExt;
+            let run = async {
+                tokio::select! {
+                    _ = cd.cancelled() => (),
+                    _ = driver.run() => (),
+                }
+            };
+            let outcome = std::panic::AssertUnwindSafe(run).catch_unwind().await;
+            let _ = driver_done_tx.send(()).await;
+            if let Err(payload) = outcome {
+                let detail = crate::supervise::panic_detail(payload);
+                tracing::error!(
+                    session = %crash_id,
+                    panic = %detail,
+                    "session driver panicked; evicting the hosted session"
+                );
+                // Visible failure instead of silence: attached clients learn
+                // why before the Exit marker, then the entry is torn down
+                // through the standard path (SessionRemoved, WIP cleared,
+                // SessionEnd hooks bounded at 2s). The session stays on disk,
+                // so the next attach lazy-resumes it cleanly.
+                let _ = crash_events.send(AgentResponse::Error(format!(
+                    "internal error: session driver panicked: {detail}"
+                )));
+                crash_registry
+                    .evict_crashed_session(
+                        &crash_id,
+                        &cancel_for_crash,
+                        crash_events.clone(),
+                        agent_for_crash,
+                    )
+                    .await;
+            }
+        });
+        let id = session.id().await;
+        let bound = BoundSession {
+            session: session.clone(),
+            req_tx: req_tx.clone(),
+            events: events_tx.clone(),
+            sync_buffer: sync_buffer.clone(),
+            command_catalog: command_catalog.clone(),
+        };
+        let hosted = Arc::new(HostedSession {
+            project_root,
+            session,
+            req_tx,
+            events: events_tx,
+            cancel,
+            tracker,
+            sync_buffer,
+            command_catalog,
+            created_at: std::time::Instant::now(),
+            last_activity: Mutex::new(std::time::Instant::now()),
+            last_seen_tick: std::sync::atomic::AtomicU64::new(0),
+            activity_tick: activity_tick.clone(),
+            agent_for_session_end: Some(boot.agent_for_session_end),
+        });
+        self.publish(MonitorEvent::SessionAdded(
+            hosted.tracker.lock().await.row(),
+        ))
+        .await;
+        self.sessions.lock().await.insert(id, hosted);
+        // Keep the panic-supervision wrapper alive until the driver settles;
+        // dropping this receiver early would let the send above fail
+        // (harmlessly) but the wrapper task would already be parked on it.
+        let _ = &mut driver_done_rx;
+        Ok(bound)
+    }
+    fn bound_from(&self, e: &Arc<HostedSession>) -> BoundSession {
+        BoundSession {
+            session: e.session.clone(),
+            req_tx: e.req_tx.clone(),
+            events: e.events.clone(),
+            sync_buffer: e.sync_buffer.clone(),
+            command_catalog: e.command_catalog.clone(),
+        }
+    }
+
+    /// Number of currently hosted sessions (the idle-exit probe,
+    /// ADR-0100 rule 3).
+    pub async fn session_count(&self) -> usize {
+        self.sessions.lock().await.len()
+    }
+
+    /// Subscribe to the host-level monitor topic (ADR-0093 §4).
+    pub fn subscribe_monitor(&self) -> broadcast::Receiver<MonitorEvent> {
+        self.monitor.subscribe()
+    }
+
+    /// The current monitor snapshot: every hosted session's row, newest
+    /// activity first, honouring the client's `include_idle` filter.
+    pub async fn monitor_snapshot(&self, action: MonitorAction) -> MonitorSnapshot {
+        let mut sessions = Vec::new();
+        {
+            let map = self.sessions.lock().await;
+            for hosted in map.values() {
+                let row = hosted.tracker.lock().await.row();
+                if action.include_idle || row.status != SessionStatus::Idle {
+                    sessions.push(row);
+                }
+            }
+        }
+        sessions.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+        let meta = self.meta.lock().await.clone();
+        MonitorSnapshot {
+            project_root: meta.project_root.unwrap_or_default(),
+            daemon_started_at: meta.started_at,
+            sessions,
+        }
+    }
+
+    /// Publish a host-level diff. Best-effort: with no subscribers the
+    /// broadcast send fails, which is fine — a fresh subscriber always takes
+    /// a snapshot first (ADR-0093 §4).
+    async fn publish(&self, event: MonitorEvent) {
+        let _ = self.monitor.send(event);
+    }
+
+    /// Publish a host-level (daemon-scope) event on the monitor bus
+    /// (ADR-0101): the run loop announces `DaemonDraining` when the graceful
+    /// drain begins so every watch client learns the daemon is going away
+    /// before its connection closes. Public and synchronous because the bus
+    /// is a broadcast sender — sending never blocks on subscribers.
+    pub fn publish_host_event(&self, event: MonitorEvent) {
+        let _ = self.monitor.send(event);
+    }
+
+    /// Test-only hook: integration tests construct `HostedSession` by hand
+    /// (no driver), so they emulate the registry's broadcast-tap by folding
+    /// responses into the tracker themselves and publishing the diff through
+    /// this narrow seam. Not part of the production surface. Best-effort:
+    /// with no subscribers the send is dropped, exactly like production.
+    #[doc(hidden)]
+    pub fn publish_for_test(&self, event: MonitorEvent) {
+        let _ = self.monitor.send(event);
+    }
+
+    async fn overview(&self, map: &HashMap<String, Arc<HostedSession>>) -> Vec<SessionOverview> {
+        let hosted: Vec<&Arc<HostedSession>> = map.values().collect();
+        self.overview_subset(&hosted).await
+    }
+    async fn overview_subset(&self, entries: &[&Arc<HostedSession>]) -> Vec<SessionOverview> {
+        let mut out = Vec::new();
+        for e in entries {
+            out.push(overview_of(&e.session, true).await);
+        }
+        out.sort_by_key(|i| std::cmp::Reverse(i.updated_at));
+        out
+    }
+}
+enum AssembleErr {
+    NoHost,
+    AssembleFailed(Box<dyn std::error::Error>),
+}
+
+impl std::fmt::Debug for AssembleErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoHost => f.write_str("no host parameters"),
+            Self::AssembleFailed(e) => write!(f, "assemble failed: {e}"),
+        }
+    }
+}
+
+/// Project the picker's cheap header row into the monitor base row; every
+/// status/accounting field starts at its zero value and is folded from the
+/// live event stream by the [`MonitorTracker`]. `project_root` rides along
+/// from the registry's two-level index so clients can name the workspace
+/// without a second lookup.
+fn base_row(overview: SessionOverview, project_root: &std::path::Path) -> MonitoredSession {
+    MonitoredSession {
+        id: overview.id,
+        overview: overview.overview,
+        created_at: overview.created_at,
+        updated_at: overview.updated_at,
+        message_count: overview.message_count,
+        hosting: SessionHosting::Hosted,
+        status: SessionStatus::Idle,
+        round: 0,
+        turn: None,
+        output_tokens: 0,
+        elapsed_ms: 0,
+        current_tool: None,
+        activity: None,
+        context_tokens: None,
+        note: None,
+        project_root: project_root.display().to_string(),
+        wip: None,
+        // Lineage rides from the overview (ADR-0103 fork surfacing).
+        parent_id: overview.parent_id,
+        fork_kind: overview.fork_kind,
+    }
+}
+
+#[allow(clippy::collapsible_if)]
+async fn overview_of(session: &SessionStore, active: bool) -> SessionOverview {
+    let id = session.id().await;
+    if let Ok(items) = session.list().await {
+        if let Some(item) = items.into_iter().find(|i| i.id == id) {
+            return SessionOverview {
+                id: item.id,
+                overview: item.overview,
+                created_at: item.created_at,
+                updated_at: item.updated_at,
+                message_count: item.message_count,
+                active,
+                parent_id: item.parent_id,
+                fork_kind: item.fork_kind,
+            };
+        }
+    }
+    let mc = session.full_transcript().await.len();
+    SessionOverview {
+        id,
+        overview: String::new(),
+        created_at: 0,
+        updated_at: 0,
+        message_count: mc,
+        active,
+        // Not on disk yet (never persisted or empty): no lineage to report.
+        parent_id: None,
+        fork_kind: muta_contracts::SessionForkKind::Trunk,
+    }
+}
+async fn session_exists_on_disk(project_root: &std::path::Path, id: &str) -> bool {
+    SessionStore::load_for_project(project_root.to_path_buf())
+        .list()
+        .await
+        .map(|items| items.iter().any(|i| i.id == id))
+        .unwrap_or(false)
+}
+
+/// Insert/replace a session's declared WIP into the shared coordination
+/// registry (the half of `declare_wip` the session tools drive directly).
+pub(crate) async fn declare_wip_on(registry: &WipRegistry, session_id: &str, status: WipStatus) {
+    registry.lock().await.insert(session_id.to_string(), status);
+}
+
+/// Remove a session's declared WIP from the shared coordination registry.
+pub(crate) async fn clear_wip_on(registry: &WipRegistry, session_id: &str) {
+    registry.lock().await.remove(session_id);
+}
+
+/// The subset of `wip` paths overlapping the query's `query` paths. Paths are
+/// compared normalized (separators unified, trailing slashes stripped, `.`
+/// resolved); a declared path overlaps a queried path when either is a prefix
+/// of the other (a directory WIP covers files beneath it, and vice versa).
+/// Empty when the query named no paths.
+fn overlap_paths(query: &[String], wip: &[String]) -> Vec<String> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let norm = |p: &str| -> String {
+        let p = p.replace('\\', "/");
+        let mut p = p.trim_end_matches('/').to_string();
+        // Resolve leading "./" so workspace-relative forms compare equal.
+        while let Some(rest) = p.strip_prefix("./") {
+            p = rest.to_string();
+        }
+        p
+    };
+    let query_norm: Vec<String> = query.iter().map(|p| norm(p)).collect();
+    wip.iter()
+        .filter(|w| {
+            let w = norm(w);
+            query_norm.iter().any(|q| {
+                w == *q || w.starts_with(&format!("{q}/")) || q.starts_with(&format!("{w}/"))
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod wip_tests {
+    use super::overlap_paths;
+
+    fn v(paths: &[&str]) -> Vec<String> {
+        paths.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn overlap_exact_and_prefix_both_directions() {
+        // Exact match.
+        assert_eq!(
+            overlap_paths(&v(&["src/a.rs"]), &v(&["src/a.rs"])),
+            v(&["src/a.rs"])
+        );
+        // WIP dir covers queried file beneath it.
+        assert_eq!(overlap_paths(&v(&["src/a.rs"]), &v(&["src"])), v(&["src"]));
+        // Queried dir covers WIP file beneath it.
+        assert_eq!(
+            overlap_paths(&v(&["src"]), &v(&["src/a.rs"])),
+            v(&["src/a.rs"])
+        );
+        // Disjoint paths don't overlap.
+        assert!(overlap_paths(&v(&["src/a.rs"]), &v(&["docs/b.md"])).is_empty());
+        // Sibling names sharing a prefix string but not a path segment.
+        assert!(overlap_paths(&v(&["src/app"]), &v(&["src/apple"])).is_empty());
+    }
+
+    #[test]
+    fn overlap_normalizes_separators_and_dots() {
+        assert_eq!(
+            overlap_paths(&v(&["./src/a.rs"]), &v(&["src/a.rs"])),
+            v(&["src/a.rs"])
+        );
+        assert_eq!(
+            overlap_paths(&v(&["src\\a.rs"]), &v(&["src/a.rs"])),
+            v(&["src/a.rs"])
+        );
+        assert_eq!(overlap_paths(&v(&["src/"]), &v(&["src"])), v(&["src"]));
+    }
+
+    #[test]
+    fn overlap_empty_query_means_no_specific_paths() {
+        assert!(overlap_paths(&[], &v(&["src"])).is_empty());
+    }
+}

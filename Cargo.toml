@@ -1,6 +1,10 @@
 [workspace]
-members = ["crates/*"]
-default-members = ["crates/neenee-cli"]
+members = [
+    "crates/*",
+    "apps/tui/crates/mutx",
+    "apps/tui/crates/mutx-engine",
+]
+default-members = ["crates/muta", "apps/tui/crates/mutx"]
 resolver = "2"
 
 [workspace.package]
@@ -35,15 +39,15 @@ chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 tracing = "0.1"
 inventory = "0.3"
-# Proc-macro support for the tool-schema derive (neenee-tool-derive).
+# Proc-macro support for the tool-schema derive (muta-tool-derive).
 syn = { version = "2", features = ["derive"] }
 quote = "1"
 proc-macro2 = "1"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
-# TypeScript binding generation for the web panel's wire types: neenee-contracts
+# TypeScript binding generation for the web app's wire types: muta-contracts
 # derives `ts_rs::TS` on the payload types and exports them to
-# apps/web/src/lib/generated/wire.gen.ts when `cargo test -p neenee-contracts`
+# apps/web/src/lib/generated/wire.gen.ts when `cargo test -p muta-contracts`
 # runs (CI fails on drift). serde-compat stays on (it is what maps
 # rename/rename_all/tag/untagged/default onto the generated types);
 # no-serde-warnings only silences the advisory warning for serde attrs that
@@ -55,8 +59,8 @@ windows-sys = "0.61"
 
 # TUI stack. crossterm is the low-level terminal I/O layer (raw mode, input,
 # alt screen, escape-code emission); the shared `crossterm` feature set is
-# pinned once here. `neenee-tui-engine` is the in-house grid + diff rendering
-# engine (ADR-0038) and `neenee-tui` consumes it.
+# pinned once here. `mutx-engine` is the in-house grid + diff rendering
+# engine (ADR-0038) and the `mutx` app consumes it.
 crossterm = { version = "0.29", features = ["event-stream"] }
 unicode-width = "0.2"
 unicode-segmentation = "1.12"

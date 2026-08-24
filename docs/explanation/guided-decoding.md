@@ -2,11 +2,11 @@
 
 Tool calls arrive as well-formed JSON because of a layer of technology that
 sits between the model weights and the client. This page explains what that
-layer does, how it works, and why neenee can rely on it without implementing
+layer does, how it works, and why muta can rely on it without implementing
 itself.
 
 For the higher-level capability model, see
-[Provider capabilities](provider-capabilities.md). For where neenee's
+[Provider capabilities](provider-capabilities.md). For where muta's
 adapters assume this layer is present, see
 [Rounds and turns](agent-design/rounds-and-turns.md).
 
@@ -100,7 +100,7 @@ in language, performance, and schema coverage.
 | TensorRT-LLM outlines | C++ | GPU-side logit masking | TensorRT-LLM |
 | guidance | Python | Templated generation with embedded constraints | Microsoft ecosystem |
 
-For neenee's purposes the backend does not matter. What matters is whether
+For muta's purposes the backend does not matter. What matters is whether
 the serving runtime enables guided decoding at all and whether it is wired
 to the `tools` field of the OpenAI Chat Completions request. vLLM, SGLang,
 TGI, TensorRT-LLM, and every hosted gateway (OpenAI, DashScope, Zhipu,
@@ -126,15 +126,15 @@ actually sees. Every model family has its own tool-use template:
 - Qwen function-calling models wrap calls in `<tool_call>` tags.
 - Mistral models use a `[TOOL_CALLS]` marker.
 
-The diversity is why neenee never builds tool prompts itself. Sending the
+The diversity is why muta never builds tool prompts itself. Sending the
 OpenAI-shaped `tools` field and trusting the serving runtime to render the
 correct template keeps the client model-agnostic. A misconfigured template
 (a Llama-3 template applied to Hermes weights, or vice versa) produces a
 model that ignores tools entirely, even with perfect guided decoding.
 
-## Why neenee does not implement this
+## Why muta does not implement this
 
-neenee is a client. It cannot do guided decoding because it never sees the
+muta is a client. It cannot do guided decoding because it never sees the
 logits. The OpenAI Chat Completions contract exposes only the sampled
 text, not the per-token probability distribution. Constrained decoding
 must run inside the serving runtime where the logits live.
@@ -149,7 +149,7 @@ asserting two things about the upstream runtime:
 
 If either assumption fails, the model may still produce tool calls (its
 weights are tool-tuned) but with no syntactic guarantee. The client then
-faces occasional parse failures. neenee's universal fallback
+faces occasional parse failures. muta's universal fallback
 ([Rounds and turns](agent-design/rounds-and-turns.md)) is the graceful degradation for
 exactly this case: when guided decoding is absent or unreliable, the agent
 parses JSON out of assistant text and accepts that some calls will be
@@ -176,9 +176,9 @@ same API regardless of vendor.
 
 ## See also
 
-- [Provider capabilities](provider-capabilities.md) — how neenee maps this
+- [Provider capabilities](provider-capabilities.md) — how muta maps this
   layer into its adapter taxonomy
-- [Rounds and turns](agent-design/rounds-and-turns.md) — what neenee does with the tool calls
+- [Rounds and turns](agent-design/rounds-and-turns.md) — what muta does with the tool calls
   this layer produces
 - [Request flow](request-flow.md) — how the resulting `tool_calls` field
   drives the ReAct loop

@@ -38,7 +38,7 @@
 *.env
 
 # Local agent scratch state
-.neenee/
+.muta/
 
 # Claude Code local settings
 .claude/settings.local.json

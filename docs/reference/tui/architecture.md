@@ -1,10 +1,10 @@
 # TUI architecture
 
-The neenee terminal UI is split into **three layers** with dependencies
+The muta terminal UI is split into **three layers** with dependencies
 pointing strictly downward. The engine is its own crate; the view and shell
-layers are module trees inside the `neenee-tui` library crate (extracted
-from the `neenee-cli` binary by ADR-0098; the view had earlier been the
-separate `neenee-tui-view` crate until ADR-0079 re-merged it — so the
+layers are module trees inside the `mutx` library crate (extracted
+from the `mutx` binary by ADR-0098; the view had earlier been the
+separate `mutx-view` crate until ADR-0079 re-merged it — so the
 one-way seam remains a documented convention rather than
 compiler-enforced). The split exists so the rendering engine, the widgets,
 and the application wiring can be
@@ -13,24 +13,24 @@ secretly reach into application state.
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│  neenee-tui-engine  ·  ENGINE                                  (ADR-0038)     │
+│  mutx-engine  ·  ENGINE                                  (ADR-0038)     │
 │  Retained cell grid · write-marks-dirty tracking · back/front diff ·   │
 │  crossterm backend · Frame / Rect / Layout / Span primitives.         │
-│  Knows nothing about neenee — pure terminal drawing.                  │
+│  Knows nothing about muta — pure terminal drawing.                  │
 └──────────────────────────────────────────────────────────────────────┘
                           ▲  widgets render *into* the grid
                           │  (Frame::render_widget)
 ┌──────────────────────────────────────────────────────────────────────┐
-│  neenee-tui view modules  ·  VIEW (widgets + document model)         │
+│  mutx view modules  ·  VIEW (widgets + document model)         │
 │  render/ widget tree · document model · layout/hit-testing ·          │
 │  selection · fuzzy · provider ranking · shared modal discriminants.   │
-│  Renders neenee_contracts domain types → depends on neenee-contracts.           │
+│  Renders muta_contracts domain types → depends on muta-contracts.           │
 │  NEVER depends on the shell modules.                                  │
 └──────────────────────────────────────────────────────────────────────┘
                           ▲  the shell fills in a borrowed
                           │  TranscriptView<'a> each frame
 ┌──────────────────────────────────────────────────────────────────────┐
-│  neenee-tui shell modules  ·  APP SHELL (neenee-tui crate)           │
+│  mutx shell modules  ·  APP SHELL (mutx crate)           │
 │  App state · event loop · input→action mapping · terminal lifecycle · │
 │  completion logic · clipboard · session wiring.                       │
 │  Owns the data; drives the view modules in the same crate.            │
@@ -39,26 +39,26 @@ secretly reach into application state.
 
 ## The three layers
 
-### Engine — `crates/neenee-tui-engine`
+### Engine — `apps/tui/crates/mutx-engine`
 
 The in-house grid engine (ADR-0038). A retained 2-D cell grid with
 write-marks-dirty tracking, a back/front buffer diff, and a crossterm backend.
 It exposes `Frame`, `Rect`, `Layout`, `Span`, `Style`, `Grid`, `TestTerminal`,
-and friends. It has **no neenee dependencies** — it is a general terminal
+and friends. It has **no muta dependencies** — it is a general terminal
 drawing engine that the view layer paints into.
 
-### View — `crates/neenee-tui/src` (view modules)
+### View — `apps/tui/crates/mutx/src` (view modules)
 
 The widget layer and the semantic document model. Everything here is a pure
-function of borrowed data: it reads `neenee_contracts` domain types and a `Theme`
+function of borrowed data: it reads `muta_contracts` domain types and a `Theme`
 and writes cells into the engine's grid. The view modules depend on
-`neenee-tui-engine` (to draw),
-`neenee-contracts` (the domain types they render), and `neenee-providers` (the model
+`mutx-engine` (to draw),
+`muta-contracts` (the domain types they render), and `muta-providers` (the model
 catalog the picker ranks). They **do not** depend on the shell modules — since
 ADR-0079 re-merged the view crate into the binary, the one-way boundary is a
 documented convention rather than compiler-enforced.
 
-The view modules live flat under `crates/neenee-tui/src/`, grouped by concern:
+The view modules live flat under `apps/tui/crates/mutx/src/`, grouped by concern:
 
 | Module | Responsibility |
 |--------|----------------|
@@ -73,12 +73,12 @@ The view modules live flat under `crates/neenee-tui/src/`, grouped by concern:
 | `model/` | Semantic data model: `document` (`TranscriptMessage`, `Block`, markdown parsing), `layout` (`LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing), `selection` (`SelectionState`). |
 | `fuzzy` / `providers` / `modal` / `completion` | Helpers shared with the shell. |
 
-### App shell — `crates/neenee-tui/src`
+### App shell — `apps/tui/crates/mutx/src`
 
 The application: `App` state, the event loop, input→action mapping, terminal
 lifecycle, completion logic, clipboard, and session wiring. It owns all the
 mutable state and drives the view layer once per frame. Shell and view share
-the `neenee-tui` crate since ADR-0098; the shell addresses the view as
+the `mutx` crate since ADR-0098; the shell addresses the view as
 `crate::{view, components, …}`.
 
 | Module | Responsibility |

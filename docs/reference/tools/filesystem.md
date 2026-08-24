@@ -2,7 +2,7 @@
 
 Read and mutate files and directory listings. `read_text` / `read_image` /
 `grep` / `glob` / `list_dir` are `Read`; `write_file` / `edit_file` are
-`Write`. Source: `crates/neenee-agent/src/tools/`.
+`Write`. Source: `crates/muta-agent/src/tools/`.
 
 ## `read_text`
 
@@ -63,7 +63,7 @@ truncation notice; `--max-count` bounds matches per file at 50.
 | `pattern` | string | yes | — | Glob, e.g. `**/*.rs` |
 | `path` | string | no | `.` | Search root |
 
-Capped at `GLOB_MAX_RESULTS = 200` (`crates/neenee-agent/src/tools/glob.rs`).
+Capped at `GLOB_MAX_RESULTS = 200` (`crates/muta-agent/src/tools/glob.rs`).
 
 ## `list_dir`
 

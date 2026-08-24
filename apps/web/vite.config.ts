@@ -17,6 +17,6 @@ const { version } = JSON.parse(
 export default defineConfig({
   plugins: [svelte()],
   define: {
-    __NEENEE_CLIENT_VERSION__: JSON.stringify(version),
+    __MUTA_CLIENT_VERSION__: JSON.stringify(version),
   },
 })

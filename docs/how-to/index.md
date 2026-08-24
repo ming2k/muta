@@ -1,6 +1,6 @@
 # How-to guides
 
-Task-oriented guides for extending neenee. Each guide assumes familiarity
+Task-oriented guides for extending muta. Each guide assumes familiarity
 with the relevant reference material.
 
 | Guide | Task |

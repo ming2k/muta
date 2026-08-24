@@ -1,6 +1,6 @@
 # Rounds and turns
 
-neenee executes a request in two nested layers. A **round** is the unit the
+muta executes a request in two nested layers. A **round** is the unit the
 user perceives: one admitted message, one final reply. A **turn** is one
 iteration of the ReAct loop inside that round: one model request, plus the tool
 work that follows when the model asks for it. One round contains one or many
@@ -147,7 +147,7 @@ satisfy the wire contract, never rearranged to change what happened.
 
 Tool capability is uneven across providers. Some runtimes accept a
 native tool-call field and return structured calls; others speak only
-text. neenee answers that with a single tool registry behind two wire
+text. muta answers that with a single tool registry behind two wire
 protocols that mean the same thing:
 
 - **Native** — the runtime carries calls in its own structure; streamed

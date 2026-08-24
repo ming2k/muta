@@ -6,21 +6,21 @@ see [Built-in tools](../reference/tools/index.md). For the protocol the model us
 to call tools, see
 [Rounds and turns](../explanation/agent-design/rounds-and-turns.md).
 
-Most built-in tools live in `neenee-agent`'s `tools` module. Pick the module that
+Most built-in tools live in `muta-agent`'s `tools` module. Pick the module that
 matches the tool's domain: filesystem and web tools go in
-`crates/neenee-agent/src/tools/`, slash-command discovery and project
-scaffolding live in `crates/neenee-runtime/src/` (`commands` and `project`),
-MCP adapters live in `crates/neenee-mcp/src`,
-and skill tools live in `crates/neenee-skills`. `envoy` likewise
-lives in `crates/neenee-agent/src/` because it constructs agents.
-The todo tools in `crates/neenee-agent/src/tools/todo.rs` receive their
+`crates/muta-agent/src/tools/`, slash-command discovery and project
+scaffolding live in `crates/muta-runtime/src/` (`commands` and `project`),
+MCP adapters live in `crates/muta-mcp/src`,
+and skill tools live in `crates/muta-skills`. `envoy` likewise
+lives in `crates/muta-agent/src/` because it constructs agents.
+The todo tools in `crates/muta-agent/src/tools/todo.rs` receive their
 agent-owned state through `TodoToolContext`, injected by the agent's private
 integration module.
 
 ## Implement the `Tool` trait
 
 Define a struct and implement `Tool`
-(`crates/neenee-contracts/src/capability.rs`). The four required members are
+(`crates/muta-contracts/src/capability.rs`). The four required members are
 `name`, `description`, `parameters`, and `call`.
 
 ```rust
@@ -67,7 +67,7 @@ every required field so the model cannot invent extra keys.
 ## Return structured output (`ToolOutput`)
 
 Implement `call()` for the model-facing string result, then override
-`call_structured()` (`crates/neenee-contracts/src/capability.rs`) to return a typed
+`call_structured()` (`crates/muta-contracts/src/capability.rs`) to return a typed
 [`ToolOutput`](../adr/0001-tool-rendering-redesign.md) so the UI renders from
 data instead of a sniffed string. The default `call_structured()` just wraps
 `call()`'s string as `ToolOutput::Text`, so this is optional but recommended
@@ -93,7 +93,7 @@ async fn call_structured(&self, arguments: &str) -> Result<crate::ToolOutput, St
 ```
 
 The variants (`Text`, `Error`, `Shell`, `Code`, `Listing`, `Matches`) live in
-`crates/neenee-contracts/src/tool_output.rs`. `bash` is the reference example — it
+`crates/muta-contracts/src/tool_output.rs`. `bash` is the reference example — it
 also overrides `call_structured_with_events` to stream stdout live via
 `ToolStream`.
 
@@ -106,7 +106,7 @@ also overrides `call_structured_with_events` to stream stdout live via
 
 ## Choose a `ToolAccess`
 
-Override `access()` (`crates/neenee-contracts/src/capability.rs`) only when the
+Override `access()` (`crates/muta-contracts/src/capability.rs`) only when the
 tool is read-only. The default is `ToolAccess::Write`, which is the safe
 choice for any tool with side effects.
 
@@ -124,7 +124,7 @@ full gating matrix.
 ## Override `permission_scope` for write tools
 
 A `Write` tool should override `permission_scope`
-(`crates/neenee-contracts/src/capability.rs`) so cached `Always` rules match the
+(`crates/muta-contracts/src/capability.rs`) so cached `Always` rules match the
 smallest stable resource identifier. The default `"*"` causes any approval
 to authorize all future calls to that tool, which is rarely what users
 want.
@@ -135,7 +135,7 @@ fn permission_scope(&self, arguments: &str) -> String {
 }
 ```
 
-`json_string` (`crates/neenee-agent/src/tools/helpers.rs`) extracts a JSON field
+`json_string` (`crates/muta-agent/src/tools/helpers.rs`) extracts a JSON field
 from the arguments string and falls back to `"*"`. Existing scopes: file
 tools use the `path` argument, `bash` uses the full `command` text. Pick a scope that distinguishes
 meaningfully different invocations but is stable across retries of the same
@@ -147,7 +147,7 @@ invocation.
 instruction prose ("Call this only when…", "Do not infer…"). That text is
 fine for the model but confusing when the user reads it in a permission
 prompt. Two trait methods control what the prompt shows instead
-(`crates/neenee-contracts/src/capability.rs`):
+(`crates/muta-contracts/src/capability.rs`):
 
 - `permission_label()` (default: `name()`) — the header title.
 - `permission_description()` (default: `description()`) — the body shown
@@ -173,11 +173,11 @@ function schema sent to providers.
 ## Optional: stream sub-task events
 
 If the tool spawns long-running work that should surface in the TUI,
-override `call_with_events` (`crates/neenee-contracts/src/capability.rs`) instead
+override `call_with_events` (`crates/muta-contracts/src/capability.rs`) instead
 of `call`. The default implementation delegates to `call`, so overriding
 `call` alone is enough for synchronous tools.
 
-`EnvoyTool` (`crates/neenee-agent/src/envoy_tool.rs`) is currently the only
+`EnvoyTool` (`crates/muta-agent/src/envoy_tool.rs`) is currently the only
 tool that overrides `call_with_events`. It forwards `SubTaskEvent`s from
 the envoy so the parent harness can render live progress. Read its
 implementation before adopting the same pattern; the event surface is
@@ -190,16 +190,16 @@ collects these submissions through `inventory`, so no central tool list needs
 editing.
 
 ```rust
-neenee_contracts::register_tool!(CountLinesFactory => CountLinesTool);
+muta_contracts::register_tool!(CountLinesFactory => CountLinesTool);
 ```
 
 If a tool needs runtime services, use the context-aware macro form and return
 `None` when the service is unavailable. A tool that needs state created inside
-the agent still belongs in `neenee-agent`'s `tools` module when it only
+the agent still belongs in `muta-agent`'s `tools` module when it only
 consumes that state;
-construct it in `neenee-agent::tool_integration` so every agent lifecycle gets
+construct it in `muta-agent::tool_integration` so every agent lifecycle gets
 the same binding. Tools that create or control agents remain in
-`neenee-agent` proper.
+`muta-agent` proper.
 
 An embedding can add a runtime-selected or product-specific tool while
 constructing an agent:
@@ -227,8 +227,8 @@ and [ADR-0011](../adr/0011-subagent-profiles.md).
 Run the test suite before relying on the new tool:
 
 ```bash
-cargo test -p neenee-contracts
-cargo test -p neenee-cli
+cargo test -p muta-contracts
+cargo test -p mutx
 ```
 
 Then exercise the tool manually:

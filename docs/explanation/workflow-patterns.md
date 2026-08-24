@@ -1,11 +1,11 @@
 # Workflow patterns
 
-How developers, teams, and automation pipelines interact with neenee across
+How developers, teams, and automation pipelines interact with muta across
 different operational modes.
 
 ## Overview
 
-neenee is organized around a single unified binary that supports multiple
+muta is organized around a single unified binary that supports multiple
 interaction models. Rather than enforcing a rigid pairing loop, the system
 adapts to five distinct workflow patterns depending on whether the task
 requires direct human guidance, background execution, subagent delegation,
@@ -26,7 +26,7 @@ external tool expansion, or automated scheduling.
 ## Interactive pairing loop
 
 The primary interactive workflow operates in a fullscreen terminal user
-interface (TUI). When a developer launches `neenee` in a workspace, the client
+interface (TUI). When a developer launches `muta` in a workspace, the client
 transparently discovers or spawns a background session daemon, binds to a
 local Unix domain socket, and opens the session transcript.
 
@@ -58,7 +58,7 @@ one runtime. The developer can:
 - **Supervise via Dashboard**: The full-screen `/dashboard` view gives the
   developer a real-time monitor console over all running sessions across
   every repository, with instant keyboard switching and prompt injection.
-- **Resume anytime**: Running `neenee attach <session-id>` or selecting the
+- **Resume anytime**: Running `mutx attach <session-id>` or selecting the
   session in the dashboard reconnects the interactive TUI directly to the
   persisted event stream.
 
@@ -67,7 +67,7 @@ one runtime. The developer can:
 Complex engineering tasks often benefit from dividing responsibilities
 between a primary orchestrator and specialized subagents.
 
-neenee supports two complementary delegation patterns:
+muta supports two complementary delegation patterns:
 
 - **Research Delegation (`envoy`)**: The principal agent delegates broad
   exploration, documentation indexing, or log analysis to a read-only child
@@ -93,7 +93,7 @@ repository, **WIP coordination tools** prevent conflicting operations:
 ## Extensible capability integration
 
 When an engineering task requires capabilities outside built-in filesystem
-and shell operations, neenee integrates external tools through two
+and shell operations, muta integrates external tools through two
 extension surfaces:
 
 - **Model Context Protocol (MCP)**: Local stdio MCP servers expose external
@@ -106,13 +106,13 @@ extension surfaces:
 
 ## Headless automation and observability
 
-In addition to interactive sessions, neenee serves automated workflows in
+In addition to interactive sessions, muta serves automated workflows in
 CI/CD environments and background developer machines:
 
 - **Scheduled Prompts (`/schedule`)**: Developers can configure recurring
   cron triggers or countdown timers for periodic health checks, dependency
   audits, or release verification reports.
-- **Observability Streams (`neenee daemon status --json`)**: External dashboards, monitoring
+- **Observability Streams (`muta daemon status --json`)**: External dashboards, monitoring
   scripts, and supervisor units observe live session states through
   stream-oriented JSON output or watch tables without interfering with
   running turns.

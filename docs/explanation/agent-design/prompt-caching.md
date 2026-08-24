@@ -20,7 +20,7 @@ single rule that prevents drift.
 ## The three strategies
 
 A model family's caching strategy is classified once, in pure domain code, by
-`CachePolicy::for_family(family)` in `neenee-contracts::cache`:
+`CachePolicy::for_family(family)` in `muta-contracts::cache`:
 
 | `CachePolicy` | Who | What the client does | What the response reports |
 |---------------|-----|----------------------|---------------------------|
@@ -57,7 +57,7 @@ Context Usage modal's "Cache hit (with parenthesized hit-rate)" /
 ## The one rule (and why it exists)
 
 > **Every per-protocol `usage()` parser in the SDK layer MUST route its
-> cache-read count through `neenee_contracts::cache::read_cached_tokens()`, never
+> cache-read count through `muta_contracts::cache::read_cached_tokens()`, never
 > read the field inline.**
 
 This is not a style preference. It is the single structural lever against
@@ -103,7 +103,7 @@ edit point with a single test surface.
 ## Where the strategies act (request side)
 
 The write/control side is per-strategy and lives in the provider construction
-layer (`build_provider_for_channel` in `neenee-providers`), which already holds
+layer (`build_provider_for_channel` in `muta-providers`), which already holds
 the concrete provider type and the model family:
 
 - **`Breakpoints`** — the Anthropic request builder stamps up to four
@@ -136,7 +136,7 @@ three-strategy partition is load-bearing.
 
 ## What is deliberately *not* here
 
-- **No monetary cost layer.** neenee tracks tokens, not dollars. There is no
+- **No monetary cost layer.** muta tracks tokens, not dollars. There is no
   per-model price field and no `$` anywhere in the ledger; the cache savings
   are realized as fewer tokens, surfaced as a hit rate. (Adding pricing is an
   open extension point, intentionally deferred.)

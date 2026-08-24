@@ -2,23 +2,23 @@
 
 *Reasoning effort* is the per-model "how hard should it think before answering"
 knob — a **depth** control, distinct from the on/off reasoning switch (see
-[Model metadata](model-metadata.md#thinking-support)). Every provider neenee
-speaks exposes some form of it; neenee abstracts them all onto one concept.
+[Model metadata](model-metadata.md#thinking-support)). Every provider muta
+speaks exposes some form of it; muta abstracts them all onto one concept.
 
 This page is the single reference for the concept, the per-provider mapping,
 and how the effective ladder for a model is resolved. The implementation lives
-in `crates/neenee-contracts/src/effort.rs`.
+in `crates/muta-contracts/src/effort.rs`.
 
 ## The abstraction
 
-neenee models every provider's reasoning-depth control as one
+muta models every provider's reasoning-depth control as one
 provider-independent type — the `Effort` ladder, ascending by depth:
 
 ```
 none < minimal < low < medium < high < xhigh < max
 ```
 
-No code outside `neenee-contracts` ever sees a provider-specific depth shape: it
+No code outside `muta-contracts` ever sees a provider-specific depth shape: it
 sees `Effort`. The protocol layer translates a chosen rung onto the **public
 API specification** the channel speaks:
 
@@ -95,7 +95,7 @@ name (a future `"turbo"`, say). Such a tier is **preserved**, not dropped:
 This split is deliberate: the `Copy` static registry cannot hold heap strings,
 but the `Clone` runtime view can — so openness lives exactly where live
 discovery lands, and the vetted baseline stays cheap and closed. A provider
-adding a tier needs no neenee release for that tier to reach the wire; it only
+adding a tier needs no muta release for that tier to reach the wire; it only
 needs a release to gain a *ranked* clamp and a picker caption.
 
 ### Clamp semantics
@@ -115,7 +115,7 @@ stored in the discovery cache (`route_settings`) and edited from the model `e`
 picker in the TUI:
 
 ```toml
-# $XDG_CACHE_HOME/neenee/models_discovery.json
+# $XDG_CACHE_HOME/muta/models_discovery.json
 # route_settings["<instance_id>"]["<model_id>"] = { "effort": "high" }
 ```
 
@@ -129,7 +129,7 @@ the resolved model's ladder at request-build time.
 
 ## chat completions vs Responses
 
-neenee prefers the newer OpenAI **Responses** API over chat completions
+muta prefers the newer OpenAI **Responses** API over chat completions
 wherever the upstream supports it (OpenAI, xAI, DeepSeek, ChatGPT/Copilot
 OAuth). Both expose the same `effort` control — `reasoning.effort` (Responses)
 vs `reasoning_effort` (chat) — so the abstraction is unaffected by which

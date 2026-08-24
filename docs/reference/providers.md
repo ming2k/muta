@@ -1,9 +1,9 @@
 # Providers
 
 The agent talks to LLM providers through the `Provider` trait
-(`crates/neenee-contracts/src/capability.rs`). Every provider implementation lives
-in `crates/neenee-providers/src/`. Provider selection happens at startup and
-on `/models` (the flat model picker) in `crates/neenee-tui/src/providers.rs`.
+(`crates/muta-contracts/src/capability.rs`). Every provider implementation lives
+in `crates/muta-providers/src/`. Provider selection happens at startup and
+on `/models` (the flat model picker) in `apps/tui/crates/mutx/src/providers.rs`.
 
 ## Capability matrix
 
@@ -21,11 +21,11 @@ Three capability surfaces matter for tool-using agents:
 
 | Provider | Native tools | Reasoning | Structured streaming | Source |
 |----------|--------------|-----------|----------------------|--------|
-| `OpenAiChatCompletionsProvider` | yes | yes | yes | `neenee-llm-client` (protocol::openai) |
+| `OpenAiChatCompletionsProvider` | yes | yes | yes | `muta-llm-client` (protocol::openai) |
 | OpenAI-compatible registry presets | yes | yes | yes | `OpenAiProviderSpec` (delegates to `OpenAiChatCompletionsProvider`) |
-| `OpenAiResponsesProvider` (`OpenAiResponses`) | yes | yes | yes | `neenee-llm-client` (protocol::openai) |
-| `AnthropicMessagesProvider` (`Anthropic`) | yes | yes | yes | `neenee-llm-client` (protocol::anthropic) |
-| `GoogleProvider` (`Google`) | yes | no | yes | `neenee-llm-client` (protocol::google) |
+| `OpenAiResponsesProvider` (`OpenAiResponses`) | yes | yes | yes | `muta-llm-client` (protocol::openai) |
+| `AnthropicMessagesProvider` (`Anthropic`) | yes | yes | yes | `muta-llm-client` (protocol::anthropic) |
+| `GoogleProvider` (`Google`) | yes | no | yes | `muta-llm-client` (protocol::google) |
 
 The two OpenAI-compatible presets in `OPENAI_PROVIDER_SPECS` (`kimi-code`,
 `zai-code`) are built by `OpenAiProviderSpec::build`, which returns an
@@ -48,7 +48,7 @@ next launch follows it; see [Dual-write provider/model
 selection](../adr/0066-dual-write-provider-selection.md).
 
 Provider *instances* are declared in the state store
-(`$XDG_STATE_HOME/neenee/providers.toml`, one `[[providers]]` row per
+(`$XDG_STATE_HOME/muta/providers.toml`, one `[[providers]]` row per
 instance); each instance references a template by `template_id` (or is a
 pure-custom declaration) and owns exactly one credential, stored in
 `credentials.toml` keyed by instance id (`[providers.<id>]`, see
@@ -63,7 +63,7 @@ are no longer read at runtime.
 ### OpenAI-compatible presets
 
 Each row corresponds to one entry in the `OPENAI_PROVIDER_SPECS` table in
-`crates/neenee-providers/src/registry/mod.rs`. The endpoint, default model, and
+`crates/muta-providers/src/registry/mod.rs`. The endpoint, default model, and
 env vars are data in that table, not hard-coded per struct.
 
 | `default_provider` | Endpoint | Credentials | Default / popular models |
@@ -77,7 +77,7 @@ env vars are data in that table, not hard-coded per struct.
 |--------------------|--------|----------|-------------|--------------------------|
 | `openai` | `OpenAiChatCompletionsProvider` | `https://api.openai.com/v1/chat/completions` | instance credential (`credentials.toml [providers.<id>]`) | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` |
 | `anthropic` | `AnthropicMessagesProvider` | `https://api.anthropic.com/v1/messages` (overridable via an instance `base_url`) | instance credential (`credentials.toml [providers.<id>]`) | `claude-fable-5`, `claude-sonnet-5`, `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5-20251001` |
-| `google` | `GoogleProvider` | `{base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; overridable via an instance `base_url`) | instance credential (`credentials.toml [providers.<id>]`) | `gemini-3.7-flash`, `gemini-3.5-flash`, `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../../crates/neenee-providers/src/registry/google.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
+| `google` | `GoogleProvider` | `{base_url}/models/{model}:generateContent?key={key}` (default base `https://generativelanguage.googleapis.com/v1beta`; overridable via an instance `base_url`) | instance credential (`credentials.toml [providers.<id>]`) | `gemini-3.7-flash`, `gemini-3.5-flash`, `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash` — see [`GOOGLE_BUILTIN_MODELS`](../../crates/muta-providers/src/registry/google.rs). Native Gemini is a **closed** model set: the add-model overlay offers only these ids, no free-text fallback. |
 | `deepseek` | `OpenAiResponsesProvider` | `https://api.deepseek.com/v1/responses` | instance credential (`credentials.toml [providers.<id>]`) | `deepseek-v4-flash`, `deepseek-v4-flash-0731`, `deepseek-v4-pro`, `deepseek-v4-pro-0813` (1M context; thinking + non-thinking modes) |
 
 Notes:
@@ -115,7 +115,7 @@ Notes:
 ### OAuth and subscription providers
 
 Provider templates that authenticate with a browser OAuth flow instead of an
-API key (the `oauth` module in `neenee-providers`; tokens persist in
+API key (the `oauth` module in `muta-providers`; tokens persist in
 `auth.toml` — see [Paths](paths.md)). Added from the TUI's add-provider flow;
 the `/models` picker accepts them like any other provider.
 
@@ -158,13 +158,13 @@ registry does not know resolve through the conservative fallback.
 ## Dispatch sites
 
 Provider construction is split across two layers. The catalog
-(`build_catalog` in `crates/neenee-agent/src/catalog.rs`) materializes every
+(`build_catalog` in `crates/muta-agent/src/catalog.rs`) materializes every
 provider id — registry preset, built-in multi-model entry, or user-defined
 `[[providers]]` instance — into a `Channel` carrying fully resolved
 credentials, model id, and transport, so startup and runtime switching share
 one source of truth for the env-var-then-config resolution rules. The
 concrete `Provider` is then built by `build_provider_for_channel` in
-`crates/neenee-providers/src/registry/`, which matches on `Transport`.
+`crates/muta-providers/src/registry/`, which matches on `Transport`.
 
 1. The registry presets are built from `OPENAI_PROVIDER_SPECS` via
    `OpenAiProviderSpec::build`, yielding an `OpenAiChatCompletionsProvider` with its
@@ -183,20 +183,20 @@ concrete `Provider` is then built by `build_provider_for_channel` in
 | Model-name mirror | `catalog::resolved_model_name` | Friendly default model label for the TUI header |
 
 Runtime provider switching uses `ProxyProvider`
-(`crates/neenee-agent/src/orchestration.rs`), an
+(`crates/muta-agent/src/orchestration.rs`), an
 `Arc<RwLock<Arc<dyn Provider>>>` holder that hot-swaps the active provider
 without rebuilding the `Agent`.
 
 ## Retry
 
 Transient HTTP `408`, `429`, `5xx`, connection, and timeout failures are
-wrapped in `RetryableError` (`crates/neenee-contracts/src/error.rs`) by
-`ensure_success` and `transport_error` in `crates/neenee-providers/src/lib.rs`.
+wrapped in `RetryableError` (`crates/muta-contracts/src/error.rs`) by
+`ensure_success` and `transport_error` in `crates/muta-providers/src/lib.rs`.
 The marker prefix
-is `[NEENEE_RETRYABLE]`.
+is `[MUTA_RETRYABLE]`.
 
 Retry is a round-level loop inside `execute_round`
-(`crates/neenee-agent/src/orchestration.rs`),
+(`crates/muta-agent/src/orchestration.rs`),
 not a provider decorator. Configuration:
 
 | Config key | Default | Hard maximum |
@@ -208,7 +208,7 @@ not a provider decorator. Configuration:
 Backoff is computed by `retry_delay_ms` as exponential
 `base_ms * 2^(attempt-1)` capped at `max_ms`. Server `Retry-After` or
 `retry-after-ms` headers (parsed by `retry_after_ms` in
-`crates/neenee-providers/src/lib.rs`) take
+`crates/muta-providers/src/lib.rs`) take
 priority. Once any tool has run in the current round, retryable errors become
 terminal so tool side effects are never replayed.
 

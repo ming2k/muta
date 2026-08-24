@@ -28,7 +28,7 @@
         ? "tool"
         : message.role === "System"
           ? "notification"
-          : "Neenee",
+          : "Muta",
   );
 </script>
 

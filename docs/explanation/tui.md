@@ -1,6 +1,6 @@
 # Terminal UI
 
-neenee runs as a full-screen terminal application, not a line-oriented
+mutx runs as a full-screen terminal application, not a line-oriented
 command loop. This page explains *how* the TUI is built and *why* it can do
 things that raw terminal text cannot: live streaming, mouse selection,
 modal sheets, and a status surface that never looks frozen. For the
@@ -15,10 +15,10 @@ them onto a scrolling grid, and selection copies whatever characters
 happen to be on that grid. Output is append-only; interaction is a
 question/answer prompt; `Ctrl+C` means `SIGINT`.
 
-The neenee TUI abandons that model for the **full-screen application**
+The muta TUI abandons that model for the **full-screen application**
 model used by editors and multiplexers:
 
-| Concern | Line-oriented CLI | neenee TUI |
+| Concern | Line-oriented CLI | muta TUI |
 |---------|-------------------|------------|
 | Screen | Primary buffer, scrolling history | Alternate screen, restored on exit |
 | Input | Kernel line editing, `readline` | Raw bytes read directly, edited in-process |
@@ -52,19 +52,19 @@ Each call removes one limitation of the line-oriented terminal:
 
 ### Key collisions under tmux / screen
 
-The Kitty protocol negotiation happens between neenee and the *outer*
+The Kitty protocol negotiation happens between muta and the *outer*
 terminal. tmux sits in the middle with its own VT parser and, on most
 shipping versions, does **not** forward Kitty flags to the inner program.
 When that happens, several modifier-bearing keys collapse onto the legacy
 control byte they share in ASCII:
 
-| Outer keys (what you press) | Byte tmux forwards | What neenee sees |
+| Outer keys (what you press) | Byte tmux forwards | What muta sees |
 |-----------------------------|--------------------|------------------|
 | `Ctrl+H`, `Ctrl+Backspace`  | `0x08`             | `Ctrl+H`         |
 | `Ctrl+M`                    | `0x0d`             | `Enter`          |
 | `Ctrl+I`                    | `0x09`             | `Tab`            |
 
-Because neenee cannot tell the original keys apart from a single byte, the
+Because muta cannot tell the original keys apart from a single byte, the
 binding chosen for that byte wins for *all* of them. Concretely, under tmux
 without Kitty forwarding:
 
@@ -74,7 +74,7 @@ without Kitty forwarding:
 - `Ctrl+M` behaves as `Enter`, so `/models` is the reliable model-switch
   trigger.
 
-This is a terminal-layer limitation, not a neenee bug, so the reliable
+This is a terminal-layer limitation, not a muta bug, so the reliable
 fixes are on the tmux side. Two options, in order of preference:
 
 1. **tmux ≥ 3.5 with Kitty-key forwarding** (best — fully disambiguates the
@@ -112,19 +112,19 @@ for help (no byte collision) and `Alt+Backspace` for word-delete.
 
 A signal guard catches `SIGTERM`, `SIGINT`, `SIGHUP`, and `SIGQUIT`, then
 restores the terminal. Without it, an
-external `pkill neenee` would terminate the process before normal
+external `pkill muta` would terminate the process before normal
 cleanup, leaving the host terminal stranded in raw mode with mouse
 capture on, so every mouse motion would spew SGR escape codes into the
 shell.
 
 ## Retained-grid rendering
 
-Rendering is built on **`neenee-tui-engine`**, neenee's in-house terminal engine
+Rendering is built on **`mutx-engine`**, muta's in-house terminal engine
 (ADR-0038): a *retained-mode* cell grid, a back/front diff, and a crossterm
 backend that emits the minimal escape-code delta per frame. This is the
 vim/nvim `ScreenGrid` model, not an immediate-mode rebuild.
 
-The back [`Grid`](../../crates/neenee-tui-engine/src/grid.rs) is the single source of
+The back [`Grid`](../../apps/tui/crates/mutx-engine/src/grid.rs) is the single source of
 truth for what the application wants on screen, and it is **retained** — not
 rebuilt from scratch each frame. Every write (`set`, `put`, `fill_rect`) marks
 the touched row dirty from the changed column leftward at *write time* (the
@@ -154,25 +154,25 @@ therefore repaints once instead of once per character.
 
 ## Three layers, one-way seam
 
-`neenee-tui-engine` is the *bottom* of a three-layer stack. Dependencies point
+`mutx-engine` is the *bottom* of a three-layer stack. Dependencies point
 strictly downward — no higher layer's types leak into a lower one. The engine
 is its own crate; the view and shell layers are module trees inside the
-`neenee-tui` library crate (the view was the `neenee-tui-view`
+`mutx` library crate (the view was the `mutx-view`
 crate until ADR-0079 re-merged it, and ADR-0098 extracted the whole tree into
-`neenee-tui`, so the seam is held by convention rather than by the compiler):
+`mutx`, so the seam is held by convention rather than by the compiler):
 
 ```text
-neenee-tui-engine          engine: retained cell grid, back/front diff, crossterm
-                    (ADR-0038). Knows nothing about neenee.
+mutx-engine          engine: retained cell grid, back/front diff, crossterm
+                    (ADR-0038). Knows nothing about muta.
       ▲  widgets render into the grid
 tui view modules           view: the widget tree + the semantic document model
                     (ADR-0045, re-merged by ADR-0079, extracted into
-                    `neenee-tui` by ADR-0098). Renders neenee-contracts
+                    `mutx` by ADR-0098). Renders muta-contracts
                     domain types — but never the shell.
       ▲  the shell hands it borrowed data each frame
 tui shell modules          app shell: App state, the event loop, input→action
                     mapping, terminal lifecycle. Owns the data.
-                    (Same `neenee-tui` crate as the view.)
+                    (Same `mutx` crate as the view.)
 ```
 
 The split exists so the rendering engine, the widgets, and the application
@@ -218,9 +218,9 @@ as fast as the network allows while the UI repaints on its own cadence.
 
 This is the single biggest difference from terminal text. A line-oriented
 program emits a string; the terminal wraps it and the user can only copy
-the wrapped result. neenee keeps a **structured document** instead.
+the wrapped result. muta keeps a **structured document** instead.
 
-Each message is parsed with neenee's own markdown parser into a sequence of
+Each message is parsed with muta's own markdown parser into a sequence of
 blocks and tagged with a kind — plain text, a tool step, or a thinking
 trace. The block types carry the structure that copy and navigation depend
 on. The full pipeline from raw provider text through parsing to grid
@@ -423,5 +423,5 @@ live in the lookup reference:
 - [Request flow](request-flow.md) — how streamed tokens reach the TUI
   over SSE.
 
-[neenee-tui-engine]: ../../crates/neenee-tui-engine/src/lib.rs
+[mutx-engine]: ../../apps/tui/crates/mutx-engine/src/lib.rs
 [Markdown rendering]: markdown-rendering.md

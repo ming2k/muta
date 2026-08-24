@@ -1,6 +1,6 @@
 # 0102. Unified single-binary architecture and `neenee-runtime` rename
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0136
 - **Date:** 2026-08-15
 - **Revises:** ADR-0080 (single binary restored), ADR-0081 (the separate server binary is retired in favor of subcommands), ADR-0098 (crate rename chain extended), ADR-0099 (vocabulary refined)
 

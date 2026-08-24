@@ -1,6 +1,6 @@
 # 0080. Rename `neenee` → `neenee-cli` (package); the command stays `neenee`
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0136
 - **Date:** 2026-07-23
 - **Revises:** ADR-0075 (which renamed `neenee-code` → `neenee` earlier the
   same day, when the application layer was a single binary)

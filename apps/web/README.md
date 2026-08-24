@@ -1,6 +1,6 @@
-# neenee web panel
+# Muta Web
 
-Browser client for the neenee session daemon's WebSocket control plane
+Browser client for the muta session daemon's WebSocket control plane
 (`docs/reference/server-api.md`). Svelte 5 + TypeScript + Vite; no routing,
 no server — one static bundle that talks to the daemon directly.
 
@@ -41,20 +41,26 @@ no server — one static bundle that talks to the daemon directly.
 
 ## Connecting
 
-The daemon serves the panel itself (ADR-0105): the TCP listener splits plain
-HTTP from WebSocket on one port, so the whole setup is
+Web is an independent static app; the daemon does not build or serve its
+assets. Start the backend and the Vite development server separately:
 
 ```sh
-neenee daemon start          # serves the panel on http://127.0.0.1:9800
-neenee panel                 # prints the URL, token included
-neenee panel open            # ...and launches the browser
+muta daemon start
+muta daemon token          # copy the local TCP bearer token
+pnpm run dev
 ```
 
-The daemon requires a bearer token by default (`[daemon] local_auth`); the
-`neenee panel` URL carries it as `?token=`, which the panel persists to
-localStorage. Browsers cannot set WebSocket headers, so the token travels as
-a `bearer.<token>` subprotocol; handshakes from non-loopback browser origins
-are refused outright.
+Open the Vite URL, click the Online/Offline badge, and enter
+`ws://127.0.0.1:9800` plus the printed token. A production build in `dist/`
+can be deployed by any static host. Browser origins must be loopback when the
+daemon is loopback-only; a remote deployment therefore needs
+`muta daemon start --public` and a TLS-terminating reverse proxy as described
+in the server API guide.
+
+The daemon requires a bearer token by default (`[daemon] local_auth`). The
+dialog persists it to localStorage. Browsers cannot set WebSocket headers, so
+the token travels as a `bearer.<token>` subprotocol; handshakes from invalid
+browser origins are refused.
 
 Manual configuration (connection dialog — click the Online/Offline badge), in
 resolution order:
@@ -66,13 +72,12 @@ resolution order:
 
 `project` scopes session creation/monitoring; empty uses the daemon's own
 project root. When the requested port is taken the daemon falls back to an
-ephemeral port — the discovery file (`$XDG_RUNTIME_DIR/neenee/daemon.json`,
+ephemeral port — the discovery file (`$XDG_RUNTIME_DIR/muta/daemon.json`,
 owner-only) always carries the actual port and token.
 
-The client sends its `package.json` version (injected at build time) in the
-`Select` handshake; the daemon enforces exact equality with its workspace
-version (ADR-0100 rule 4), so a skewed panel is refused with a clear error.
-CI asserts the two versions match.
+The client sends protocol version 2 and its `package.json` version in the
+`Select` handshake. Protocol negotiation, rather than a shared build, is the
+compatibility authority (ADR-0134). Version remains diagnostic metadata.
 
 ## Development
 
@@ -90,10 +95,8 @@ root; the committed lockfile is the root `pnpm-lock.yaml`.
 
 ## Contract coupling
 
-`src/lib/types.ts` is transcribed from `crates/neenee-contracts`
-(`events.rs`, `monitor.rs`, `message.rs`, `todos.rs`, `command.rs`) and
-`crates/neenee-runtime/src/serve.rs` (`Wire`, `AttachAction`,
-`ControlRequest`). Any wire-visible change on the Rust side must update this
-file in the same change — the same rule `docs/reference/server-api.md`
-§ "Contract maintenance" applies to the AsyncAPI contract and the server
-contract tests.
+The shared Rust contracts generate `src/lib/generated/wire.gen.ts` via
+`ts-rs`; `src/lib/types.ts` adds the small handwritten envelope subset used by
+this app. Any wire-visible change must update the generated bindings, the
+handwritten envelope where applicable, and the AsyncAPI contract. See
+`docs/reference/server-api.md` § "Contract maintenance".

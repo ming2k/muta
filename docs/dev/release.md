@@ -11,7 +11,7 @@ skip the local re-run.
 
 ## Versioning
 
-neenee follows [Semantic Versioning][semver]:
+muta follows [Semantic Versioning][semver]:
 
 [semver]: https://semver.org/spec/v2.0.0.html
 
@@ -168,11 +168,11 @@ Release appears with all five archive assets attached:
 
 | Asset | Target |
 |-------|--------|
-| `neenee-<ver>-x86_64-unknown-linux-gnu.tar.gz` | Linux x86-64 |
-| `neenee-<ver>-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 |
-| `neenee-<ver>-x86_64-unknown-linux-musl.tar.gz` | Linux x86-64 (static) |
-| `neenee-<ver>-aarch64-apple-darwin.tar.gz` | macOS ARM64 |
-| `neenee-<ver>-x86_64-apple-darwin.tar.gz` | macOS x86-64 |
+| `muta-<ver>-x86_64-unknown-linux-gnu.tar.gz` | Linux x86-64 |
+| `muta-<ver>-aarch64-unknown-linux-gnu.tar.gz` | Linux ARM64 |
+| `muta-<ver>-x86_64-unknown-linux-musl.tar.gz` | Linux x86-64 (static) |
+| `muta-<ver>-aarch64-apple-darwin.tar.gz` | macOS ARM64 |
+| `muta-<ver>-x86_64-apple-darwin.tar.gz` | macOS x86-64 |
 
 If an asset is missing, the `build` job for that target failed. Re-run
 the failed job from the Actions UI; the artifacts are not published

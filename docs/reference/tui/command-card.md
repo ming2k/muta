@@ -64,6 +64,6 @@ vertical position naturally shifts downward according to Entry A's actual height
 ## Source
 
 `draw_command_result` / `command_summary_line` in
-`crates/neenee-tui/src/disclosure/renderers.rs`; band tokens in
-`crates/neenee-tui/src/theme.rs` (`command_surface`,
+`apps/tui/crates/mutx/src/disclosure/renderers.rs`; band tokens in
+`apps/tui/crates/mutx/src/theme.rs` (`command_surface`,
 `command_surface_hover`).

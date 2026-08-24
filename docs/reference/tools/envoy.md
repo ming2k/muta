@@ -1,6 +1,6 @@
 # `envoy`
 
-`EnvoyTool` (`crates/neenee-agent/src/envoy_tool.rs`) is the dispatch
+`EnvoyTool` (`crates/muta-agent/src/envoy_tool.rs`) is the dispatch
 tool that spawns a research envoy. It overrides `call_structured_with_events`
 to stream envoy activity back through `EnvoyEvent`, and is `Read` with
 `spawns_envoy() = true`, so every envoy profile excludes it (recursion
@@ -13,7 +13,7 @@ guard).
 
 Spawns an envoy that inherits the parent's provider, runs isolated in its own
 context, and receives only the tools admitted by the bound profile
-(`EXPLORE` by default; `crates/neenee-contracts/src/envoy.rs`). Its final answer
+(`EXPLORE` by default; `crates/muta-contracts/src/envoy.rs`). Its final answer
 is returned to the calling agent, which stays in control of all writes and any
 user questions. Communication is full-duplex
 ([ADR-0029](../../adr/0029-full-duplex-subagent-communication.md)): a
@@ -29,7 +29,7 @@ event streaming, the TUI zoom view, profiles, and full-duplex — is explained i
 ## `envoy_code`
 
 A second `EnvoyTool` instance, constructed alongside `envoy` in the
-bootstrap (`crates/neenee-runtime/src/bootstrap.rs`), bound to the
+bootstrap (`crates/muta-runtime/src/bootstrap.rs`), bound to the
 [`CODE`](../../explanation/agent-design/envoys.md#profiles) profile. Same
 parameters as `envoy` (`description`, `prompt`), same streaming and full-duplex
 plumbing, but a different role: where `envoy` is the read-only research

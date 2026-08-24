@@ -33,7 +33,7 @@ form is not used directly.
       f.write(blob)
   ```
 
-- **Consumed by:** `crates/neenee-contracts/src/tokenizer.rs`
+- **Consumed by:** `crates/muta-contracts/src/tokenizer.rs`
   (`include_bytes!`), parsed lazily on first use into a rank map. See
   [ADR-0117](../docs/adr/0117-native-cl100k-bpe-tokenizer.md).
 - **Upstream license note:** the vocabulary data is published by OpenAI for

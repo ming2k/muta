@@ -1,6 +1,6 @@
 # Color palette & Theme System
 
-All built-in colors are defined in `Theme::default()` (`crates/neenee-tui/src/theme.rs`).
+All built-in colors are defined in `Theme::default()` (`apps/tui/crates/mutx/src/theme.rs`).
 
 ## Design Token Architecture
 
@@ -82,10 +82,10 @@ Specialized UI components have dedicated tokens and fallback constants:
 
 ## 4. Custom Themes Directory & TOML Schema
 
-Neenee automatically loads all custom theme files located in the themes directory:
+Muta automatically loads all custom theme files located in the themes directory:
 
 ```text
-~/.config/neenee/themes/*.toml
+~/.config/muta/themes/*.toml
 ```
 
 Each theme file must adhere to the formal `ThemeFile` contract:
@@ -133,13 +133,12 @@ hover_bg = "#252940"
 
 ### Loading & Discovery
 
-1. Custom theme files placed in `~/.config/neenee/themes/` are dynamically parsed on launch.
+1. Custom theme files placed in `~/.config/muta/themes/` are dynamically parsed on launch.
 2. The stem of the filename (e.g. `dracula.toml` → `dracula`) becomes the unique theme ID.
 3. Themes appear automatically in the full-screen Settings View (`/config` › Appearance) with live transcript and component swatches.
-4. Themes can be selected directly or specified in `~/.config/neenee/config.toml`:
+4. Themes can be selected directly or specified in `~/.config/muta/config.toml`:
 
 ```toml
 [tui]
 color_scheme = "cyberpunk"
 ```
-

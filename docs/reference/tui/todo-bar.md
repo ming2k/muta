@@ -62,6 +62,6 @@ content). The list is agent-owned and read-only in the TUI.
 
 `draw_todo_bar` in `chrome.rs`. Current-item selection, progress, and the
 width-pressure legend live there; the underlying list is
-`neenee_contracts::TodoList` (`crates/neenee-contracts/src/todos.rs`), mirrored into the
+`muta_contracts::TodoList` (`crates/muta-contracts/src/todos.rs`), mirrored into the
 view via `TranscriptView::todos`. Height token: `TODO_BAR_ROWS = 1`
 (`design.rs`).

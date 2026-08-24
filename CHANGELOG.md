@@ -1,11 +1,34 @@
 # Changelog
 
-All notable changes to **neenee** are documented in this file.
+All notable changes to **Muta** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed
+
+- **The project is now Muta, with core and terminal app split at the process
+  boundary (ADR-0136).** `muta` contains only the daemon and related service
+  commands; the terminal application is the separate `mutx` binary under the
+  `apps/tui` subproject (`crates/mutx` plus its private
+  `crates/mutx-engine`). `mutx` still discovers the per-user daemon and starts
+  a sibling, `MUTA_BIN`, or `PATH`-resolved `muta` when needed. Crates,
+  package metadata, instance paths, environment variables, install scripts,
+  service files, CI, and release archives use the Muta names, and releases
+  ship both binaries.
+- **Composer completion is backend-owned for every frontend.** Protocol 2
+  adds `CompleteInput` / `InputCompletions`; the daemon now owns slash and
+  intent matching, aliases, trusted project commands, and `@path` discovery.
+  Results carry exact replacement ranges and insertion text, leaving TUI and
+  Web responsible only for cursor-unit translation, presentation, and
+  applying the returned edit.
+- **The Web app builds and deploys independently.** The Web-assets Rust crate,
+  embedded bundle, daemon `panel` command, and static-file route are removed.
+  The daemon keeps only the generic `/healthz` HTTP probe and adds
+  `muta daemon token` for explicit operator access to the local TCP bearer
+  credential.
 
 ## [0.31.0] - 2026-08-24
 
@@ -4565,7 +4588,7 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/neenee/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.31.0...HEAD
 [0.31.0]: https://github.com/ming2k/neenee/releases/tag/v0.31.0
 [0.30.5]: https://github.com/ming2k/neenee/releases/tag/v0.30.5
 [0.30.4]: https://github.com/ming2k/neenee/releases/tag/v0.30.4

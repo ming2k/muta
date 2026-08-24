@@ -8,7 +8,7 @@ and the envoy admission policy lives in
 
 ## `ToolAccess` tiers
 
-`ToolAccess` (`crates/neenee-contracts/src/capability.rs`) is an **ordered** enum
+`ToolAccess` (`crates/muta-contracts/src/capability.rs`) is an **ordered** enum
 `Read < Execute < Write`; variant order is load-bearing (it defines the `Ord`
 the harness derives threshold rules from). Each consumer expresses its rule as
 a threshold:

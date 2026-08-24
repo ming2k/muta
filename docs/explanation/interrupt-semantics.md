@@ -5,7 +5,7 @@ distinct phases, and an interrupt (`Esc` / `AgentOp::Interrupt`) means
 something different in each. This page is the single reference for *what an
 interrupt actually does* at each phase, *what survives in the conversation
 context*, and *what it costs*. It is the design rationale behind two
-intertwined decisions: neenee always uses streaming, and an interrupt is
+intertwined decisions: muta always uses streaming, and an interrupt is
 treated as a three-phase, billing-aware event rather than a blunt kill.
 
 For the round lifecycle that the phases below carve up, see
@@ -15,7 +15,7 @@ are normally booked on a *completed* round, see
 
 ## Why streaming (and why it matters here)
 
-Every model request neenee makes is a streaming request (`stream: true`,
+Every model request muta makes is a streaming request (`stream: true`,
 SSE). This is not a cosmetic choice for a nicer typing animation; it is the
 foundation that makes interrupt semantics tractable. The relevant property
 of streaming is this:
@@ -34,7 +34,7 @@ generation regardless. Under streaming, the client's read loop is also the
 server's backpressure channel: dropping the stream is a genuine "stop"
 instruction, acknowledged (after a small lag) on the server side.
 
-This is also why neenee's [Token accounting](agent-design/token-accounting.md)
+This is also why muta's [Token accounting](agent-design/token-accounting.md)
 can under-report on an interrupted round — the `usage` chunk that carries the
 authoritative count is the *last* SSE event, emitted only after generation
 completes, and an interrupt never reaches it. See [Interrupted turns and the
@@ -195,7 +195,7 @@ consequences are precise and important:
 - On the wire, the SSE connection is dropped (the `stream` binding goes out
   of scope), which the provider treats as a stop signal.
 
-**No marker is inserted.** neenee does *not* inject a "the previous response
+**No marker is inserted.** muta does *not* inject a "the previous response
 was interrupted" note, system reminder, or `[ANSWER NO LONGER NEEDED]`
 placeholder into the context. From the next round's point of view, the model
 never replied — the conversation simply ends with the user's prompt. The
@@ -347,7 +347,7 @@ discarded partial output never contributes to it.
 An interrupt optimizes the *conversation* and the *local accounting*, not
 the *invoice*. Three layers, three different truths:
 
-**1. neenee's local ledger** — records an interrupted attempt. It uses reported
+**1. muta's local ledger** — records an interrupted attempt. It uses reported
 usage when available and otherwise shows an explicit estimate. The estimate is
 diagnostic, not a provider invoice.
 
@@ -376,7 +376,7 @@ include cache-write (`cache_creation_input_tokens`) cost; the *next* request
 with the same prefix then hits cache-read pricing (cheaper). So an early
 interrupt on a fresh large context is disproportionately expensive relative
 to its (zero) local output, but it primes the cache for the retried round.
-See [Token accounting](agent-design/token-accounting.md) for how neenee
+See [Token accounting](agent-design/token-accounting.md) for how muta
 tracks cache tokens when they *are* reported.
 
 The unavoidable conclusion: **Escaping saves output tokens (the bigger the
@@ -391,14 +391,14 @@ only the second one:
 - **Secondary (output):** interrupt early when a response is clearly going
   wrong. Under streaming this genuinely stops generation and saves the
   un-generated output; under a non-streaming transport it would save
-  nothing, which is the concrete reason neenee is streaming-only.
+  nothing, which is the concrete reason muta is streaming-only.
 
 ## Why no "interrupted" marker in context
 
 A natural alternative to the current design is to record the fact of an
 interrupt in the context so the model "knows" its previous round was cut
 short — e.g. append a system or user message like `"[The previous response
-was interrupted by the user.]"`. neenee does not do this, for three
+was interrupted by the user.]"`. muta does not do this, for three
 reasons:
 
 1. **It costs tokens every time.** Every interrupt would inject a permanent
@@ -423,7 +423,7 @@ only.
 
 ## Summary
 
-- neenee is streaming-only because streaming is what makes an interrupt a
+- muta is streaming-only because streaming is what makes an interrupt a
   real "stop" signal to the provider rather than a dropped result.
 - An interrupt is interpreted by phase: **Phase 1** (pre-response) is
   reversible at the conversation layer and **unsends** the user message back

@@ -1,0 +1,33 @@
+[package]
+name = "muta-providers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+muta-contracts = { path = "../muta-contracts" }
+muta-llm-client = { path = "../muta-llm-client" }
+muta-persistence = { path = "../muta-persistence" }
+futures = { workspace = true }
+# Live model-list discovery (`GET /v1/models` &c.) and its JSON parsing.
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+inventory = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# `wire` integration test exercises the full HTTP → SSE → parse path against a
+# localhost mock server, covering behaviour the in-module unit tests (which can
+# only call pure parser functions) cannot reach.
+mockito = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

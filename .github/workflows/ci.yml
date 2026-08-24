@@ -40,13 +40,13 @@ jobs:
       # with Cargo.toml; a clean run proves the lock is committable as-is.
       - run: cargo fetch --locked
 
-  # The web panel is a pnpm workspace package (apps/web) — no Cargo surface,
+  # The Web app is a pnpm workspace package (apps/web) — no Cargo surface,
   # so it needs its own typecheck/build gate. `--frozen-lockfile` fails when
   # the committed root pnpm-lock.yaml is out of sync with apps/web/package.json,
   # mirroring the cargo `lockfile` job's drift check. pnpm is preinstalled on
   # ubuntu-latest runners (setup-node would shadow it with npm otherwise).
   web:
-    name: Web panel (check + build)
+    name: Web app (check + build)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -64,17 +64,6 @@ jobs:
       # Install from the root lockfile (workspace resolution needs the root).
       - run: pnpm install --frozen-lockfile
         working-directory: .
-      # Version handshake drift guard (ADR-0100): the daemon refuses clients
-      # whose Select.version does not exactly equal its workspace
-      # CARGO_PKG_VERSION, and the web client injects its package.json version
-      # at build time — so the two must stay in lockstep.
-      - name: Web version matches workspace version
-        working-directory: .
-        run: |
-          cargo_ver=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
-          web_ver=$(node -p "require('./apps/web/package.json').version")
-          echo "workspace: $cargo_ver, web: $web_ver"
-          test "$cargo_ver" = "$web_ver"
       # Wire-protocol bump enforcement (ADR-0134): a wire-surface change
       # without a PROTOCOL_VERSION bump fails unless the PR is labeled
       # `wire-compatible` (the author's assertion that the change is purely
@@ -85,66 +74,58 @@ jobs:
         run: bash scripts/check-wire-compat.sh
       # Wire-type drift guard: the web client's protocol types
       # (apps/web/src/lib/generated/wire.gen.ts) are generated from
-      # neenee-contracts by ts-rs; regenerate them and fail on any diff.
+      # muta-contracts by ts-rs; regenerate them and fail on any diff.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: wire.gen.ts is up to date
         working-directory: .
         run: |
-          cargo test -p neenee-contracts --locked
+          cargo test -p muta-contracts --locked
           if ! git diff --exit-code apps/web/src/lib/generated/; then
-            echo "::error::wire.gen.ts is stale — run cargo test -p neenee-contracts and commit the result"
+            echo "::error::wire.gen.ts is stale — run cargo test -p muta-contracts and commit the result"
             exit 1
           fi
       - run: pnpm run check
       - run: pnpm run test
       - run: pnpm run build
 
-  # End-to-end smoke (ADR-0105): the only gate that catches handshake/auth/
-  # transport regressions — unit tests on either side cannot see a version
-  # handshake refusal or a mislabeled subprotocol. Builds the web bundle
-  # first so the daemon under test embeds and serves the real panel.
+  # End-to-end smoke: the only gate that catches handshake/auth/transport
+  # regressions — unit tests on either side cannot see a version handshake
+  # refusal or a mislabeled subprotocol. The web app is built independently
+  # in the `web` job; the daemon does not embed frontend assets.
   e2e:
-    name: Daemon smoke (web panel protocol)
+    name: Daemon protocol smoke
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: pnpm install --frozen-lockfile
-        working-directory: .
-      - run: pnpm run build
-        working-directory: apps/web
-      - run: cargo build -p neenee-cli --locked
+      - run: cargo build -p muta -p mutx --locked
       - name: Start an isolated daemon and smoke it
         working-directory: .
         env:
           # ADR-0121: one variable isolates the instance root (config, data,
-          # state, daemon runtime files); NEENEE_PORT takes a port that can
+          # state, daemon runtime files); MUTA_PORT takes a port that can
           # never contend with anything else on the runner. The same contract
-          # `--home` / `NEENEE_HOME` provide locally.
-          NEENEE_HOME: ${{ runner.temp }}/neenee-e2e-home
-          NEENEE_PORT: "9800"
+          # `--home` / `MUTA_HOME` provide locally.
+          MUTA_HOME: ${{ runner.temp }}/muta-e2e-home
+          MUTA_PORT: "9800"
         run: |
           set -e
-          mkdir -p "$NEENEE_HOME"
-          ./target/debug/neenee daemon start --port 9800 &
+          mkdir -p "$MUTA_HOME"
+          ./target/debug/muta daemon start --port 9800 &
           for i in $(seq 1 50); do
             curl -fsS http://127.0.0.1:9800/healthz > /dev/null 2>&1 && break
             sleep 0.2
           done
           curl -fsS http://127.0.0.1:9800/healthz
-          TOKEN=$(node -p "JSON.parse(require('fs').readFileSync('$NEENEE_HOME/neenee/instance/daemon.json','utf8')).token")
+          TOKEN=$(./target/debug/muta daemon token)
           DAEMON_TOKEN="$TOKEN" node apps/web/e2e/daemon-smoke.mjs
-          ./target/debug/neenee daemon stop || true
+          ./target/debug/muta daemon stop || true
       # CLI-surface smoke (ADR-0119/0121): the binary's own contract —
       # retired spellings teach, noun-verb shapes parse, --remote connects.
       # Protocol-level coverage lives in daemon-smoke.mjs above; this pins
@@ -206,11 +187,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run workspace tests in an isolated home
         # ADR-0121: belt-and-braces. Every suite sandboxes itself, but a
-        # process-wide NEENEE_HOME means a test that forgets its own sandbox
+        # process-wide MUTA_HOME means a test that forgets its own sandbox
         # still resolves inside the throwaway root instead of the runner's
         # HOME. The runner context is valid at step scope, not job env scope.
         env:
-          NEENEE_HOME: ${{ runner.temp }}/neenee-test-home
+          MUTA_HOME: ${{ runner.temp }}/muta-test-home
         run: cargo test --workspace --locked --no-fail-fast
 
   msrv:
@@ -236,7 +217,7 @@ jobs:
     timeout-minutes: 30
     # Treat rustdoc warnings (broken intra-doc links, etc.) as failures so the
     # job can't quietly regress. The one prior broken link (`EXPLORE`) was fixed
-    # in `crates/neenee-agent/src/task_tool.rs`.
+    # in `crates/muta-agent/src/task_tool.rs`.
     env:
       RUSTDOCFLAGS: "-D warnings"
     steps:

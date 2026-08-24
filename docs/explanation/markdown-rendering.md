@@ -1,6 +1,6 @@
 # Markdown rendering
 
-neenee runs its own markdown parser and renderer. This page explains *why*
+mutx runs its own markdown parser and renderer. This page explains *why*
 that decision was made, how the pipeline turns raw provider text into a
 semantic document model, and how that model is drawn onto the terminal grid.
 For the low-level grid engine underneath, see [Terminal UI](tui.md); for
@@ -11,7 +11,7 @@ how the parsed blocks are projected through the renderer, see the
 
 Using an off-the-shelf markdown-to-terminal renderer (e.g. `termimad` or
 `pulldown-cmark` → `syntect` → `ratatui::Paragraph`) would produce a
-pixel-correct terminal image. That is not what neenee needs. The TUI is a
+pixel-correct terminal image. That is not what muta needs. The TUI is a
 **structured application**, not a print pipeline: it must support mouse
 selection that copies the *original source text*, addressable blocks that
 survive reflow, per-cell table hit-testing, and inline-code/bold paint
@@ -156,7 +156,7 @@ draw_message_body()          [message_body.rs]
   │   └─ Break    → blank row
   └─ for each rendered line:
       ├─ record BlockRegion in LayoutMap
-      └─ paint into neenee-tui-engine Grid via Frame
+      └─ paint into mutx-engine Grid via Frame
 ```
 
 `draw_message_body` walks each message's blocks sequentially, tracks the
@@ -164,7 +164,7 @@ current Y position, and respects `skip_rows` for scroll offset. Each block
 type has its own rendering branch, but they all share:
 
 - `wrap_text()` for width-aware wrapping with CJK kinsoku line-breaking
-  (ported from `neenee-tui-engine::text`).
+  (ported from `mutx-engine::text`).
 - `line_selection()` / `line_spans_rich()` for painting the selection
   highlight across multi-span lines (code, bold, and plain segments within
   one wrapped line).
@@ -207,7 +207,7 @@ readable rather than collapsing all columns equally.
 It is Unicode-width-aware (via `unicode_width`) and handles:
 
 - **CJK characters** — width-2 glyphs count as 2 display columns.
-- **Kinsoku line-breaking** — inherited from `neenee-tui-engine::text`, prevents
+- **Kinsoku line-breaking** — inherited from `mutx-engine::text`, prevents
   certain characters from starting or ending a line in CJK text.
 - **Code gutter** — `code_gutter_line()` produces the line-number column
   for code blocks, with a `│` separator and muted numbering.
@@ -283,12 +283,12 @@ transparent and maintainable.
 
 | Concern | File |
 |---------|------|
-| Document model (`Block`, `TranscriptMessage`, `MessageKind`) | `crates/neenee-tui/src/model/document.rs` |
-| Markdown parser (`parse_blocks_markdown`, inline scanner, table accumulator) | `crates/neenee-tui/src/model/document.rs` |
-| Message body renderer (`draw_message_body`) | `crates/neenee-tui/src/message_body.rs` |
-| Adaptive table layout (`build_table_render`, `shrink_column_widths`) | `crates/neenee-tui/src/markdown_table.rs` |
-| Text wrapping, CJK, code gutter, selection helpers | `crates/neenee-tui/src/text_layout.rs` |
-| Layout map and hit-testing (`LayoutMap`, `BlockRegion`, `TableCellHit`) | `crates/neenee-tui/src/model/layout.rs` |
-| Selection extraction (`get_selected_text`) | `crates/neenee-tui/src/model/selection.rs` |
-| Grid engine (`Grid`, `diff`, `Backend`) | `crates/neenee-tui-engine/src/` |
-| Export-to-markdown (clipboard handoff) | `crates/neenee-runtime/src/export.rs` |
+| Document model (`Block`, `TranscriptMessage`, `MessageKind`) | `apps/tui/crates/mutx/src/model/document.rs` |
+| Markdown parser (`parse_blocks_markdown`, inline scanner, table accumulator) | `apps/tui/crates/mutx/src/model/document.rs` |
+| Message body renderer (`draw_message_body`) | `apps/tui/crates/mutx/src/message_body.rs` |
+| Adaptive table layout (`build_table_render`, `shrink_column_widths`) | `apps/tui/crates/mutx/src/markdown_table.rs` |
+| Text wrapping, CJK, code gutter, selection helpers | `apps/tui/crates/mutx/src/text_layout.rs` |
+| Layout map and hit-testing (`LayoutMap`, `BlockRegion`, `TableCellHit`) | `apps/tui/crates/mutx/src/model/layout.rs` |
+| Selection extraction (`get_selected_text`) | `apps/tui/crates/mutx/src/model/selection.rs` |
+| Grid engine (`Grid`, `diff`, `Backend`) | `apps/tui/crates/mutx-engine/src/` |
+| Export-to-markdown (clipboard handoff) | `crates/muta-runtime/src/export.rs` |

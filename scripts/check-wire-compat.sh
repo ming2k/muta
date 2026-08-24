@@ -2,7 +2,7 @@
 # Wire-protocol bump enforcement (ADR-0134).
 #
 # The wire protocol number (PROTOCOL_VERSION in
-# crates/neenee-contracts/src/wire.rs) governs client/daemon compatibility.
+# crates/muta-contracts/src/wire.rs) governs client/daemon compatibility.
 # Its bump discipline is documented there: additive changes do not bump;
 # changes an older peer cannot deserialize or would misinterpret do. A
 # forgotten bump is a *silent* corruption bug — exactly the hazard version
@@ -43,12 +43,12 @@ fi
 BASE="$(git rev-parse "$BASE_REF")"
 
 # ── 1. Mirror agreement ────────────────────────────────────────────────
-rust_proto="$(sed -n 's/^pub const PROTOCOL_VERSION: u32 = \([0-9]*\);/\1/p' crates/neenee-contracts/src/wire.rs)"
-rust_min="$(sed -n 's/^pub const MIN_PROTOCOL_VERSION: u32 = \([0-9]*\);/\1/p' crates/neenee-contracts/src/wire.rs)"
+rust_proto="$(sed -n 's/^pub const PROTOCOL_VERSION: u32 = \([0-9]*\);/\1/p' crates/muta-contracts/src/wire.rs)"
+rust_min="$(sed -n 's/^pub const MIN_PROTOCOL_VERSION: u32 = \([0-9]*\);/\1/p' crates/muta-contracts/src/wire.rs)"
 web_proto="$(sed -n 's/^const PROTOCOL_VERSION = \([0-9]*\);/\1/p' apps/web/src/lib/stores/daemon.svelte.ts)"
 
-[ -n "$rust_proto" ] || die "PROTOCOL_VERSION not found in crates/neenee-contracts/src/wire.rs"
-[ -n "$rust_min" ] || die "MIN_PROTOCOL_VERSION not found in crates/neenee-contracts/src/wire.rs"
+[ -n "$rust_proto" ] || die "PROTOCOL_VERSION not found in crates/muta-contracts/src/wire.rs"
+[ -n "$rust_min" ] || die "MIN_PROTOCOL_VERSION not found in crates/muta-contracts/src/wire.rs"
 [ -n "$web_proto" ] || die "PROTOCOL_VERSION not found in apps/web/src/lib/stores/daemon.svelte.ts"
 
 [ "$rust_proto" = "$web_proto" ] \
@@ -61,11 +61,11 @@ web_proto="$(sed -n 's/^const PROTOCOL_VERSION = \([0-9]*\);/\1/p' apps/web/src/
 # mirror are the envelope itself; the contracts sources are the payload
 # types serde derives from.
 WIRE_PATHS=(
-    "crates/neenee-contracts/src/wire.rs"
+    "crates/muta-contracts/src/wire.rs"
     "apps/web/src/lib/generated/wire.gen.ts"
 )
 # Payload contract sources: everything the ts-rs export derives from.
-CONTRACT_SRCS="$(git ls-files 'crates/neenee-contracts/src/*.rs')"
+CONTRACT_SRCS="$(git ls-files 'crates/muta-contracts/src/*.rs')"
 
 changed_wire=()
 for path in "${WIRE_PATHS[@]}" $CONTRACT_SRCS; do
@@ -82,9 +82,9 @@ fi
 echo "check-wire-compat: wire surface changed:"
 printf '  %s\n' "${changed_wire[@]}"
 
-base_proto="$(git show "$BASE:crates/neenee-contracts/src/wire.rs" 2>/dev/null \
+base_proto="$(git show "$BASE:crates/muta-contracts/src/wire.rs" 2>/dev/null \
     | sed -n 's/^pub const PROTOCOL_VERSION: u32 = \([0-9]*\);/\1/p' || true)"
-base_min="$(git show "$BASE:crates/neenee-contracts/src/wire.rs" 2>/dev/null \
+base_min="$(git show "$BASE:crates/muta-contracts/src/wire.rs" 2>/dev/null \
     | sed -n 's/^pub const MIN_PROTOCOL_VERSION: u32 = \([0-9]*\);/\1/p' || true)"
 
 # First PR introducing the field: the file (and constants) are new, so the
@@ -117,7 +117,7 @@ cat >&2 <<EOF
 check-wire-compat: wire surface changed but PROTOCOL_VERSION stayed $rust_proto.
 
 Either:
-  * bump PROTOCOL_VERSION in crates/neenee-contracts/src/wire.rs (and the
+  * bump PROTOCOL_VERSION in crates/muta-contracts/src/wire.rs (and the
     web mirror in apps/web/src/lib/stores/daemon.svelte.ts) if an older
     peer cannot deserialize or would misinterpret the new frames, or
   * add the \`wire-compatible\` label to this PR if the change is purely

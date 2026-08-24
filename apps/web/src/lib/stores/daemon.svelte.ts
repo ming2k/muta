@@ -1,5 +1,5 @@
 /**
- * Daemon connection store — the web panel's client for the neenee
+ * Daemon connection store — the Web app's client for the muta
  * session-daemon WebSocket protocol.
  *
  * Contract: `docs/reference/server-api.md` + `docs/reference/server.asyncapi.yaml`
@@ -22,9 +22,11 @@ import type {
   AgentResponse,
   AttachAction,
   CommandRecord,
+  CommandCatalog,
   CommandResult,
   EnvoyEvent,
   ImagePart,
+  InputCompletion,
   InputRequest,
   Message,
   MonitorFrame,
@@ -63,21 +65,21 @@ export function interruptLabel(reason: RoundInterrupt["reason"]): string {
  * against their own `CARGO_PKG_VERSION` — so this must be the plain
  * workspace version (e.g. "0.24.0") with no client prefix. Injected at
  * build time from `package.json` by `vite.config.ts`
- * (`__NEENEE_CLIENT_VERSION__`); CI refuses a drift between the two. Empty
+ * (`__MUTA_CLIENT_VERSION__`); CI refuses a drift between the two. Empty
  * (tests / non-vite runtimes) omits the field, which the daemon tolerates.
  */
 const CLIENT_VERSION: string =
-  typeof __NEENEE_CLIENT_VERSION__ === "string" ? __NEENEE_CLIENT_VERSION__ : "";
+  typeof __MUTA_CLIENT_VERSION__ === "string" ? __MUTA_CLIENT_VERSION__ : "";
 
 /**
  * The wire protocol number this client speaks (ADR-0134). Must equal
- * `PROTOCOL_VERSION` in `crates/neenee-contracts/src/wire.rs` — CI refuses
+ * `PROTOCOL_VERSION` in `crates/muta-contracts/src/wire.rs` — CI refuses
  * a drift between the two (ts-rs cannot export constants, so this is the
  * one hand-maintained mirror of that value). The daemon serves any number
  * in its window; sending it is what opts this client into protocol-number
  * negotiation instead of product-version equality.
  */
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 
 /** Reconnect base delay for both channels; doubles per failure, capped. */
 const RECONNECT_BASE_MS = 1000;
@@ -87,9 +89,9 @@ const RECONNECT_MAX_MS = 15_000;
 const DEFAULT_WS_URL = "ws://127.0.0.1:9800";
 
 /** localStorage keys for the connection settings. */
-const WS_URL_STORAGE_KEY = "neenee.ws-url";
-const PROJECT_STORAGE_KEY = "neenee.project";
-const TOKEN_STORAGE_KEY = "neenee.ws-token";
+const WS_URL_STORAGE_KEY = "muta.ws-url";
+const PROJECT_STORAGE_KEY = "muta.project";
+const TOKEN_STORAGE_KEY = "muta.ws-token";
 
 /** Connection state, distinct from any session's status. */
 export type ConnectionState = "connecting" | "connected" | "disconnected";
@@ -209,7 +211,6 @@ function sanitizeWsUrl(raw: string | null | undefined): string | null {
 export interface DaemonProbe {
   version: string;
   auth: boolean;
-  panel: boolean;
 }
 
 /**
@@ -217,8 +218,8 @@ export interface DaemonProbe {
  * URL query params (`?ws=` / `?host=`+`?port=` / `?project=` / `?token=`),
  * then persisted localStorage settings, then the loopback default.
  * Query-param values are persisted so a shared/deep-linked URL sticks across
- * reloads (the token is a loopback-scoped credential; persisting it is what
- * makes the printed `neenee panel` URL a one-click flow).
+ * reloads. The token is a loopback-scoped credential supplied through the
+ * connection dialog or an operator-authored deep link.
  */
 export function resolveConfig(search: string, storage: ConfigStorage | null): DaemonConfig {
   const params = new URLSearchParams(search);
@@ -335,6 +336,16 @@ export class DaemonStore {
   public providerPicker = $state<ProviderPickerSnapshot | null>(null);
   /** Provider key-readiness summary (header surface). */
   public providerKeys = $state<[string, boolean][]>([]);
+  /** Slash-command completion/help data published by the daemon. */
+  public commandCatalog = $state<CommandCatalog>({
+    commands: [],
+    aliases: [],
+    suggestions: [],
+  });
+  /** Latest race-checked completion edits produced by the daemon. */
+  public inputCompletions = $state<InputCompletion[]>([]);
+  private completionRequestId = 0;
+  private completionRequestState: { input: string; cursor: number } | null = null;
 
   /**
    * Effective `[websearch]` configuration (presence-only view — API keys are
@@ -783,6 +794,11 @@ export class DaemonStore {
         this.sessionError = null;
         this.roundCounter = frame.round_counter;
         this.providerInfo = { provider: frame.provider, model: frame.model };
+        this.commandCatalog = frame.command_catalog ?? {
+          commands: [],
+          aliases: [],
+          suggestions: [],
+        };
         // C11: re-project the durable round-interrupt records into the feed
         // alongside the restored dialogue, merged by timestamp.
         this.feed = this.buildReplacedFeed(
@@ -793,7 +809,7 @@ export class DaemonStore {
         break;
       case "Pick":
         this.sessionError =
-          "The daemon asked this client to pick a session — not supported by the web panel yet.";
+          "The daemon asked this client to pick a session — not supported by the Web app yet.";
         break;
       case "Error":
         this.sessionError = frame.message;
@@ -801,13 +817,13 @@ export class DaemonStore {
           this.pushToast(
             "error",
             "Client/daemon protocol mismatch",
-            "Run `neenee stop`, then reload this panel — the daemon restarts on demand at the new build.",
+            "Run `muta daemon stop`, then reload this app — Mutx or another client can restart the new daemon build on demand.",
           );
         } else if (frame.code === "version_mismatch") {
           this.pushToast(
             "error",
             "Client/daemon version mismatch",
-            "Run `neenee stop`, then reload this panel — the daemon restarts on demand at the new build.",
+            "Run `muta daemon stop`, then reload this app — Mutx or another client can restart the new daemon build on demand.",
           );
         } else {
           this.pushToast("error", "Daemon error", frame.message);
@@ -840,6 +856,17 @@ export class DaemonStore {
         provider: resp.ProviderSwitched.provider,
         model: resp.ProviderSwitched.model,
       };
+    } else if ("InputCompletions" in resp) {
+      const result = resp.InputCompletions;
+      const state = this.completionRequestState;
+      if (
+        state !== null &&
+        result.request_id === this.completionRequestId &&
+        result.input === state.input &&
+        result.cursor === state.cursor
+      ) {
+        this.inputCompletions = result.items;
+      }
     } else if ("ConversationCleared" in resp) {
       // `/new` blanked the transcript: the harness switched this attached
       // connection to a brand-new empty session. The variant is a unit — it
@@ -1255,6 +1282,16 @@ export class DaemonStore {
     }
   }
 
+  /** Request completion from the daemon. `cursorUtf16` is the textarea's
+   * native offset; the wire uses Unicode-scalar indices across all clients. */
+  public requestInputCompletions(input: string, cursorUtf16: number) {
+    const cursor = Array.from(input.slice(0, cursorUtf16)).length;
+    const requestId = ++this.completionRequestId;
+    this.completionRequestState = { input, cursor };
+    this.inputCompletions = [];
+    this.send({ CompleteInput: { request_id: requestId, input, cursor } });
+  }
+
   public sendChat(text: string, images: ImagePart[] = []) {
     const trimmed = text.trim();
     if (!trimmed && images.length === 0) return;
@@ -1413,6 +1450,10 @@ export class DaemonStore {
     this.providerInfo = null;
     this.providerPicker = null;
     this.providerKeys = [];
+    this.commandCatalog = { commands: [], aliases: [], suggestions: [] };
+    this.inputCompletions = [];
+    this.completionRequestId += 1;
+    this.completionRequestState = null;
     this.pendingPermission = null;
     this.pendingQuestion = null;
     this.pendingInput = null;

@@ -1,12 +1,12 @@
 # Glossary
 
-Canonical terms used across the neenee documentation. Each entry links to
+Canonical terms used across the muta documentation. Each entry links to
 its primary explanation or decision record. Where a term names a code
 symbol, the symbol is backticked and never abbreviated.
 
 ## Execution model
 
-neenee names its two execution layers after
+muta names its two execution layers after
 [ADR-0047](../adr/0047-round-contains-turn-vocabulary.md): a **round** is the
 user-perceived exchange (one submitted message and one final reply), and a
 **turn** is one iteration of the ReAct loop inside it. This is the inverse of
@@ -38,7 +38,7 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 
 | Term | Definition |
 |------|------------|
-| **agent** | Umbrella term for the execution engine (`Agent`, crate `neenee-agent`) and the engine-level protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). Every running role is an agent; use `principal` or `envoy` when the role matters. [Harness architecture](../explanation/agent-design/harness.md) |
+| **agent** | Umbrella term for the execution engine (`Agent`, crate `muta-agent`) and the engine-level protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). Every running role is an agent; use `principal` or `envoy` when the role matters. [Harness architecture](../explanation/agent-design/harness.md) |
 | **principal** | The top-level, human-facing agent a frontend drives. Owns the visible conversation and the user-tunable `[principal]` config table (`hard_stop_turns`, `allow_model_stdin`, and the advanced `nudge` guard). [Configuration](configuration.md) |
 | **envoy** | An isolated child agent the principal spawns via the `envoy` tool to serve a bounded sub-question; fresh history, profile-filtered tools, shares only the provider. See the [Envoys](#envoys) section. [Envoys](../explanation/agent-design/envoys.md) |
 
@@ -136,7 +136,7 @@ before the round runs.
 | **thinking** | The reasoning on/off switch (an Anthropic/DeepSeek concept), distinct from effort (depth). [Model Metadata](model-metadata.md#thinking-support) |
 | **transport** | The wire protocol a channel uses (`OpenAi`, `Anthropic`, `Google`). [Configuration](configuration.md) |
 | **model catalog** | Centralized provider-construction factory; every provider id materializes into a `Channel`, so startup and runtime switching share one resolution source. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
-| **`RetryableError`** | The marker type wrapping transient provider errors; prefixed `[NEENEE_RETRYABLE]`. [Providers](providers.md) |
+| **`RetryableError`** | The marker type wrapping transient provider errors; prefixed `[MUTA_RETRYABLE]`. [Providers](providers.md) |
 | **provider retry** | Round-level retry loop: transient HTTP 408/429/5xx failures retried with bounded exponential backoff; retryable errors become terminal once any tool has run. [Harness architecture](../explanation/agent-design/harness.md) |
 | **fitted model** | A model id the static registry does not know, materialized from a trusted provider's live `/models` capability fields (context window, reasoning, vision, effort tiers); persisted per instance and overlaid onto `model::resolve` behind the static registry. [ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md) |
 | **model discovery** | Live `GET /models` fetch for template-sourced provider instances (`ModelSource::Api`); the result is intersected with the client registry, or fitted wholesale for trusted templates. [ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md) |
@@ -149,7 +149,7 @@ before the round runs.
 | **durable session** | The local recoverable scene for one coding session: durable transcript, model window, archived transcript, title, task list, and projection metadata. [Session persistence](../explanation/agent-design/session-persistence.md) |
 | **admission** | Writes the visible or hidden user message before provider work; each round records its admission session id. [Harness architecture](../explanation/agent-design/harness.md) |
 | **XDG layout** | Files classified by nature and routed to Config, Data, State, Cache, or Runtime categories with different operational lifetimes. [Persistence](../explanation/persistence.md) |
-| **override precedence** | Who decides a path, highest→lowest: CLI flag → app env (`NEENEE_*_DIR`) → standard XDG env → native per-OS default → `$HOME` fallback → current directory. [Persistence](../explanation/persistence.md) |
+| **override precedence** | Who decides a path, highest→lowest: CLI flag → app env (`MUTA_*_DIR`) → standard XDG env → native per-OS default → `$HOME` fallback → current directory. [Persistence](../explanation/persistence.md) |
 | **per-project bucket** | Under Data; keeps each working directory's history isolated. The hash is short (16 hex chars / 64 bits). [Persistence](../explanation/persistence.md) |
 | **advisory lock** | Process-level single-instance-per-project lock; falls back to State when no runtime dir is available. [ADR-0018](../adr/0018-per-project-multi-instance-concurrency.md) |
 
@@ -176,22 +176,22 @@ before the round runs.
 
 | Term | Definition |
 |------|------------|
-| **`neenee-contracts`** | Zero-I/O contract crate: shared provider/tool traits, `ModelRequest`, messages and events, role profiles, scopes, serialized schemas, and value types. Pure agent policy is excluded unless another independent layer shares the contract. [ADR-0057](../adr/0057-contract-only-core-boundary.md) |
-| **`neenee-persistence`** | The local coding-agent persistence layer: event-sourced session, blob store, config, paths, embedding index, advisory locks, telemetry. [ADR-0005](../adr/0005-strict-layering-and-renames.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
-| **`neenee-runtime`** | The session runtime layer between orchestration and frontends: `SessionDriver` request loop, chat/permission/provider/session/slash handlers, the `/serve` control-plane WebSocket bridge, the `client` control-plane client, `/btw` side sessions, MCP runtime ownership, hooks. Application-neutral. [ADR-0037](../adr/0037-server-layer.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
-| **`neenee-llm-client`** | The multi-protocol HTTP client: pooled transport (`Client`, `Endpoint`, SSE, retry/error) plus one module per wire protocol (OpenAI chat-completions + Responses, Anthropic Messages, Google native). [Crate layering](../explanation/crate-layering.md) |
-| **`neenee-providers`** | The channel registry and `build_provider_for_channel` factory, plus model-list discovery, the mock provider, and the `oauth` module (OAuth2 credential acquisition: PKCE S256, the RFC 8628 device-code grant, the ChatGPT JSON device variant, browser loopback OAuth, single-flight refresh, and the on-disk `auth.toml` token store); selects which backend, with `neenee-llm-client` knowing how. API-key auth is not here — it is config resolution in `neenee-persistence`. [Crate layering](../explanation/crate-layering.md), [ADR-0052](../adr/0052-xai-supergrok-provider.md) |
-| **`neenee-skills`** | Skill metadata, discovery, remote caching, registry, refresh, and skill tool adapters. Agent consumes it for optional model-context injection. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
-| **`neenee-agent`** | The orchestration layer; primary export is the `Agent` struct. Owns turn behavior and agent-specific policy, consumes built-in tools and optional skills through downward dependencies, and accepts connector tools through `DynamicToolSink`. Carries no MCP protocol dependency — the connector is `neenee-mcp`. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
-| **`neenee-mcp`** | The MCP connector crate: stdio JSON-RPC transport, server processes, tool adapters, the live `McpRuntime`, and the refresh catalog. A session (in `neenee-runtime`) owns each runtime; tools reach the agent through `DynamicToolSink`. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
+| **`muta-contracts`** | Zero-I/O contract crate: shared provider/tool traits, `ModelRequest`, messages and events, role profiles, scopes, serialized schemas, and value types. Pure agent policy is excluded unless another independent layer shares the contract. [ADR-0057](../adr/0057-contract-only-core-boundary.md) |
+| **`muta-persistence`** | The local coding-agent persistence layer: event-sourced session, blob store, config, paths, embedding index, advisory locks, telemetry. [ADR-0005](../adr/0005-strict-layering-and-renames.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
+| **`muta-runtime`** | The session runtime layer between orchestration and frontends: `SessionDriver` request loop, chat/permission/provider/session/slash handlers, the `/serve` control-plane WebSocket bridge, the `client` control-plane client, `/btw` side sessions, MCP runtime ownership, hooks. Application-neutral. [ADR-0037](../adr/0037-server-layer.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
+| **`muta-llm-client`** | The multi-protocol HTTP client: pooled transport (`Client`, `Endpoint`, SSE, retry/error) plus one module per wire protocol (OpenAI chat-completions + Responses, Anthropic Messages, Google native). [Crate layering](../explanation/crate-layering.md) |
+| **`muta-providers`** | The channel registry and `build_provider_for_channel` factory, plus model-list discovery, the mock provider, and the `oauth` module (OAuth2 credential acquisition: PKCE S256, the RFC 8628 device-code grant, the ChatGPT JSON device variant, browser loopback OAuth, single-flight refresh, and the on-disk `auth.toml` token store); selects which backend, with `muta-llm-client` knowing how. API-key auth is not here — it is config resolution in `muta-persistence`. [Crate layering](../explanation/crate-layering.md), [ADR-0052](../adr/0052-xai-supergrok-provider.md) |
+| **`muta-skills`** | Skill metadata, discovery, remote caching, registry, refresh, and skill tool adapters. Agent consumes it for optional model-context injection. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
+| **`muta-agent`** | The orchestration layer; primary export is the `Agent` struct. Owns turn behavior and agent-specific policy, consumes built-in tools and optional skills through downward dependencies, and accepts connector tools through `DynamicToolSink`. Carries no MCP protocol dependency — the connector is `muta-mcp`. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md) |
+| **`muta-mcp`** | The MCP connector crate: stdio JSON-RPC transport, server processes, tool adapters, the live `McpRuntime`, and the refresh catalog. A session (in `muta-runtime`) owns each runtime; tools reach the agent through `DynamicToolSink`. [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
 | **`SessionDriver`** | The server-side owner of one live session's request receiver, runtime state, and dispatch loop; external clients interact through a `SessionHandle`. [Crate layering](../explanation/crate-layering.md) |
-| **`neenee-cli`** | The unified package producing the single `neenee` command binary; a thin shell over the `neenee-tui` library (argument dispatch, product identity, the `status` verb rendering). Runs interactive TUI, `neenee serve` daemon, or client commands. [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md), [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md), [ADR-0096](../adr/0096-unified-session-daemon.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
-| **`neenee-tui`** | The terminal-frontend library crate: the app shell (event loop, transcript, input), the view tree (components/overlays/tools renderers), and the debug-only `showcase`; the sole consumer of `neenee-tui-engine`. [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
-| **attach mode** | `neenee attach [session-id]`: the TUI driving a daemon-held session as a control-plane client; the default mode for every interactive session (ADR-0096). [ADR-0081](../adr/0081-neenee-server-and-attach-model.md), [ADR-0096](../adr/0096-unified-session-daemon.md) |
-| **session daemon** | The single user-level daemon runtime (`neenee-runtime`) that owns all sessions across all projects, started on demand or via `neenee serve`. [ADR-0096](../adr/0096-unified-session-daemon.md), [ADR-0099](../adr/0099-daemon-vocabulary.md) |
+| **`muta`** | The core package and binary: owns daemon lifecycle, product identity, and service-control commands. It has no TUI dependency. [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| **`mutx`** | The terminal app package and binary under `apps/tui`: owns interactive/headless prompt clients, attachment, dashboard, clipboard behavior, rendering, and `mutx-engine`. [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| **attach mode** | `mutx attach [session-id]`: the TUI driving a daemon-held session as a control-plane client; the default mode for every interactive session (ADR-0096). [ADR-0081](../adr/0081-neenee-server-and-attach-model.md), [ADR-0096](../adr/0096-unified-session-daemon.md) |
+| **session daemon** | The single user-level daemon runtime (`muta-runtime`) that owns all sessions across all projects, started on demand by `mutx` or via `muta daemon start`. [ADR-0096](../adr/0096-unified-session-daemon.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
 | **control plane** | The daemon's read/write session-management API: the `Monitor` observability stream plus the control verbs (`create_session` / `send_prompt` / `interrupt` / `resolve_permission` / `kill_session`), served over UDS by default and TCP + token when exposed. [ADR-0096](../adr/0096-unified-session-daemon.md), [Server WebSocket API](server-api.md) |
 | **`/dashboard`** | The TUI session dashboard: a first-class, full-screen live view over every daemon session — a command console (dispatch receipts plus the selected session's live monitor read-out) over a sessions dock. The console speaks the ADR-0097 grammar (`@3 text` addresses a session, `@2 @3 text` fans out, `/kill` `/interrupt` `/suspend` `/new` `/help` manage, bare text prompts the selection) and logs every dispatch with the daemon's receipt. Enter previews, `a` attaches via detach + attach (never killing running work), and `i` / `s` / `k` / `p` / `n` interrupt / suspend / kill (confirm) / prompt / create. `/host` is a hidden alias. [ADR-0096](../adr/0096-unified-session-daemon.md), [ADR-0097](../adr/0097-session-addressing-and-orchestrator-console.md) |
-| **`Agent`** | The central type in `neenee-agent`; owns the round/turn loop, gates, permission broker, and operation scope. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
+| **`Agent`** | The central type in `muta-agent`; owns the round/turn loop, gates, permission broker, and operation scope. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **strict layering** | An acyclic dependency rule: shared contracts point toward core, concrete implementations point only downward, orchestration may consume implementations, and session/application layers never acquire reverse edges. [Crate layering](../explanation/crate-layering.md) |
 | **MCP server** | A local stdio MCP server exposing dynamically discovered tools; surfaces as `mcp__<server>__<tool>`. [MCP servers](../explanation/agent-design/mcp.md) |
 
@@ -202,24 +202,21 @@ documentation and ADRs.
 
 | Term | Superseded by | Reference |
 |------|---------------|-----------|
-| `neenee-host` | `neenee-runtime` | [Crate layering](../explanation/crate-layering.md) |
-| `neenee-server` (binary) | merged into `neenee` (`neenee daemon start --fg`) | [Crate layering](../explanation/crate-layering.md) |
-| `neenee-app` | `neenee-persistence` | [ADR-0005](../adr/0005-strict-layering-and-renames.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
-| `neenee-cli` (pre-ADR-0035 cli crate) | `neenee-code`, then `neenee`; the name is current again since ADR-0080 | [ADR-0035](../adr/0035-application-layer-split.md), [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md), [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md) |
-| `neenee-code` | `neenee`, then `neenee-cli` | [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md), [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md) |
-| `neenee-server` (ADR-0037 server library) | `neenee-session`, then `neenee-transport`, then `neenee-host`, now `neenee-runtime` | [ADR-0037](../adr/0037-server-layer.md), [ADR-0076](../adr/0076-rename-session-and-store-crates.md), [ADR-0081](../adr/0081-neenee-server-and-attach-model.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
-| `neenee-session` | `neenee-transport`, then `neenee-host`, now `neenee-runtime` | [ADR-0076](../adr/0076-rename-session-and-store-crates.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
-| `neenee-transport` | `neenee-host`, now `neenee-runtime` | [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
-| `neenee-core` | `neenee-contracts` | [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
-| `neenee-store` | `neenee-persistence` | [ADR-0076](../adr/0076-rename-session-and-store-crates.md) |
-| `neenee-auth` | `neenee-oauth`, then merged into `neenee-providers` (`oauth` module) | [ADR-0077](../adr/0077-rename-neenee-auth-to-neenee-oauth.md) |
-| `neenee-oauth` | `neenee-providers` (`oauth` module) | [Crate layering](../explanation/crate-layering.md) |
+| `neenee` (project and command) | Muta project; `muta` core plus `mutx` terminal app | [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| `neenee-host` | `neenee-runtime`, then `muta-runtime` | [Crate layering](../explanation/crate-layering.md) |
+| `neenee-server` (binary) | merged into `neenee`, then split as the `muta` core | [ADR-0102](../adr/0102-unified-binary-and-runtime-rename.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| `neenee-app` | `neenee-persistence`, then `muta-persistence` | [ADR-0005](../adr/0005-strict-layering-and-renames.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| `neenee-cli` | the former unified package; split into `muta` and `mutx` | [ADR-0080](../adr/0080-rename-neenee-to-neenee-cli.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| `neenee-code` | `neenee`, then the Muta project | [ADR-0075](../adr/0075-rename-neenee-code-to-neenee.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| `neenee-server` (ADR-0037 server library) | `neenee-session`, `neenee-transport`, `neenee-host`, `neenee-runtime`, then `muta-runtime` | [ADR-0037](../adr/0037-server-layer.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| `neenee-core` | `neenee-contracts`, then `muta-contracts` | [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| `neenee-auth` / `neenee-oauth` | merged into providers, now `muta-providers` | [ADR-0077](../adr/0077-rename-neenee-auth-to-neenee-oauth.md) |
 | session mirroring (`Mirror` / `MirrorUpdate`, `SessionHosting::Mirrored`) | removed — unified daemon ownership (ADR-0096) makes standalone sessions obsolete | [ADR-0095](../adr/0095-standalone-session-mirroring.md), [ADR-0096](../adr/0096-unified-session-daemon.md) |
-| `neenee-harness` | `neenee-agent` | [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
-| `neenee-tui-view` | merged into `neenee-cli` (`crate::tui` modules), now the `neenee-tui` crate | [ADR-0079](../adr/0079-remerge-tui-view-into-binary.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
-| `neenee-mcp` (ADR-0060 crate) | merged into `neenee-agent` (`mcp` module), re-extracted as `neenee-mcp` | [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
+| `neenee-harness` | `neenee-agent`, then `muta-agent` | [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
+| `neenee-tui-view` / `neenee-tui` | the `mutx` terminal app | [ADR-0079](../adr/0079-remerge-tui-view-into-binary.md), [ADR-0136](../adr/0136-muta-core-and-mutx-terminal-app.md) |
+| `muta-mcp` (ADR-0060 crate) | merged into `muta-agent` (`mcp` module), re-extracted as `muta-mcp` | [ADR-0060](../adr/0060-skills-and-mcp-extension-boundaries.md), [ADR-0098](../adr/0098-crate-renames-and-library-extractions.md) |
 | `/goal` + `/loop` | removed (`/pursue` removed in ADR-0082; `/repeat` kept) | [ADR-0082](../adr/0082-remove-pursuit-stop-gate.md) |
-| `[NEENEE_GOAL_COMPLETE]` | removed (marker gone with the pursuit stop-gate) | [ADR-0082](../adr/0082-remove-pursuit-stop-gate.md) |
+| `[MUTA_GOAL_COMPLETE]` | removed (marker gone with the pursuit stop-gate) | [ADR-0082](../adr/0082-remove-pursuit-stop-gate.md) |
 | Plan mode | plan-as-an-envoy | [ADR-0027](../adr/0027-plan-as-subagent.md) |
 | per-plan progress panel | unified todo list | [ADR-0020](../adr/0020-unified-task-list.md) |
 | `plan` / `verify_plan_execution` tools | removed (planning is prompt-level) | [ADR-0033](../adr/0033-remove-plan-and-verify-workflow.md) |

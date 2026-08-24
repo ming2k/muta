@@ -87,7 +87,7 @@
       {#if daemon.feed.length === 0 && !daemon.streamingAssistantText && Object.keys(daemon.liveTools).length === 0}
         <div class="empty-hero">
           <div class="icon">⚡</div>
-          <h3>Neenee Session Workspace</h3>
+          <h3>Muta Session Workspace</h3>
           <p>
             {#if daemon.connection !== "connected"}
               Connecting to the session daemon…

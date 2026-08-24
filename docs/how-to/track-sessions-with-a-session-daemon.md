@@ -1,34 +1,34 @@
 # How to track sessions with a session daemon
 
-Run several neenee sessions at once — across one project or many — and keep
+Run several muta sessions at once — across one project or many — and keep
 a live control view over all of them: which are running, which are blocked
-waiting for you, which finished. neenee is built around a single user-level
+waiting for you, which finished. muta is built around a single user-level
 **session daemon** (the daemon) that owns every session; every client (TUI,
 CLI, web) talks to it over one control-plane protocol (ADR-0096).
 
 ## Concepts
 
-- **Session daemon** (`neenee daemon start`): one
+- **Session daemon** (`muta daemon start`): one
   process per user that hosts and manages all sessions. It starts on demand
-  (the first `neenee` spawns it) or explicitly (`neenee daemon start`).
+  (the first `muta` spawns it) or explicitly (`muta daemon start`).
 - **Hosted sessions**: every session is daemon-held. It keeps running when
   its TUI closes, and any client can attach to it.
 - **Control plane**: the daemon's read/write API — observe (`Monitor`),
   drive (`Attach`), and manage (`CreateSession`, `SendPrompt`, `Interrupt`,
   `ResolvePermission`, `KillSession`).
-- **Control view**: `neenee daemon status` in a terminal, `/dashboard` inside a TUI,
-  or `neenee dashboard` to jump straight into that full-screen view from the
+- **Control view**: `muta daemon status` in a terminal, `/dashboard` inside a TUI,
+  or `mutx dashboard` to jump straight into that full-screen view from the
   shell.
 
 ## 1. Start (or don't) the daemon
 
 ```bash
-neenee daemon start       # detached by default; --fg stays in the foreground
-# (detached is the default; auto-started on first `neenee` anyway)
-neenee daemon start --fg --public  # all interfaces + mandatory bearer token
+muta daemon start       # detached by default; --fg stays in the foreground
+# (detached is the default; auto-started on first `muta` anyway)
+muta daemon start --fg --public  # all interfaces + mandatory bearer token
 ```
 
-You usually never run this yourself — any `neenee` or `neenee attach` spawns
+You usually never run this yourself — any `muta` or `mutx attach` spawns
 the daemon when none is running. Run it explicitly to keep it under
 systemd/tmux, or to expose the control plane to other machines — see
 [How to expose the daemon to LAN clients](expose-the-daemon-to-lan-clients.md).
@@ -36,20 +36,20 @@ systemd/tmux, or to expose the control plane to other machines — see
 A detached daemon runs in its own session (`setsid`), so it survives the
 terminal — or the compositor hosting it — that spawned it: closing the last
 terminal window does not stop the daemon or its sessions (ADR-0125). Use
-`neenee daemon stop` or `kill <pid>` when you mean to stop it.
+`muta daemon stop` or `kill <pid>` when you mean to stop it.
 
 ## 2. Work as usual — everything is a client
 
 ```bash
-neenee                  # attach to the daemon with a fresh/current session
-neenee attach <id>      # drive a specific session
+muta                  # attach to the daemon with a fresh/current session
+mutx attach <id>      # drive a specific session
 ```
 
 Because the daemon owns the session, **closing the TUI does not stop the
 work**. Start a long task, close the terminal, and re-attach later:
 
 ```bash
-neenee attach <id>      # the round is still running (or just finished)
+mutx attach <id>      # the round is still running (or just finished)
 ```
 
 ## 3. Watch everything
@@ -57,10 +57,10 @@ neenee attach <id>      # the round is still running (or just finished)
 Terminal, one-shot or live:
 
 ```bash
-neenee daemon status       # sessions needing attention, across all projects
-neenee daemon status --watch      # live table
-neenee daemon status --all        # also list idle sessions
-neenee daemon status --json       # raw monitor frames (scripts / a web panel)
+muta daemon status       # sessions needing attention, across all projects
+muta daemon status --watch      # live table
+muta daemon status --all        # also list idle sessions
+muta daemon status --json       # raw monitor frames (scripts / a web panel)
 ```
 
 Inside any TUI, press **`/dashboard`** (alias `/host`): a full-screen live
@@ -100,14 +100,14 @@ into the console (`› [#3] prompt …` / `✓ #3 queued` / `✗ #3 session … 
 not hosted on this server`), so the cockpit log answers *what did I ask the
 fleet to do* at a glance.
 
-Or open it straight from the shell with **`neenee dashboard`** — no need to
+Or open it straight from the shell with **`mutx dashboard`** — no need to
 enter a session first. It attaches to the daemon's most-recently-active
 session only as the underlying carrier and raises the dashboard over it:
 **Esc quits**, **Ctrl+C pressed twice** does the same (the app-wide
 double-press), and **`a`** on a card attaches into that session. Leaving the
 screen always exits the TUI entirely — there is no conversation to fall back
 into. Like
-`neenee daemon status`, it never spawns a daemon, so it needs a running host with at
+`muta daemon status`, it never spawns a daemon, so it needs a running host with at
 least one session.
 
 ```text
@@ -140,7 +140,7 @@ verbs the web panel and scripts use (the TUI uses attach + `/dashboard`):
 | `ResolvePermission { session_id, request_id, decision }` | Approve/reject a pending tool call |
 | `SuspendSession { session_id }` | Park a session in memory only — the daemon frees its RAM, `SessionEnd` hooks do not fire, and the next attach rebuilds it from disk (lazy resume). Refused while a client is attached or a round is active |
 | `KillSession { session_id }` | Tear a session down |
-| `Shutdown` | Stop the daemon itself — the same graceful drain as Ctrl-C/SIGTERM (what `neenee daemon stop` sends) |
+| `Shutdown` | Stop the daemon itself — the same graceful drain as Ctrl-C/SIGTERM (what `muta daemon stop` sends) |
 
 Over native local IPC these need no token: Unix uses a `0600` socket and
 Windows uses a Named Pipe protected for the current user. Over an exposed TCP
@@ -149,11 +149,11 @@ listener every call needs `Authorization: Bearer <token>`.
 ## 5. Stop the daemon
 
 ```bash
-neenee daemon stop       # graceful, through the control plane
-kill <pid>               # SIGTERM runs the same drain (pid is in `neenee daemon status`)
+muta daemon stop       # graceful, through the control plane
+kill <pid>               # SIGTERM runs the same drain (pid is in `muta daemon status`)
 ```
 
-On Windows, use `neenee daemon stop`; the protocol drain is the portable
+On Windows, use `muta daemon stop`; the protocol drain is the portable
 shutdown contract. Process termination is only the final force tier.
 
 Both run the same budgeted drain: stop accepting, close live connections
@@ -164,7 +164,7 @@ default 10s; a second signal skips the wait). Left alone, the daemon also
 exits by itself after `[daemon] idle_exit_minutes` (default 5) with nothing
 hosted and nobody attached; pass `--idle-exit 0` (or set the config key) for
 an always-on deployment — see
-[`assets/neenee.service`](https://github.com/ming2k/neenee/blob/main/assets/neenee.service)
+[`assets/muta.service`](https://github.com/ming2k/muta/blob/main/assets/muta.service)
 for a ready systemd user unit.
 
 After a restart, the daemon brings autonomous sessions back on its own
@@ -176,7 +176,7 @@ attached, the pre-0125 behavior).
 
 ## 6. Build your own panel
 
-`neenee daemon status --json` emits the exact frames a control panel consumes. The
+`muta daemon status --json` emits the exact frames a control panel consumes. The
 full contract — handshake roles, `MonitoredSession` fields, control verbs —
 is documented in [Server WebSocket API](../reference/server-api.md) and
 machine-readable in [`server.asyncapi.yaml`](../reference/server.asyncapi.yaml).
@@ -185,7 +185,7 @@ verbs; there is no separate web backend to run.
 
 ## Scope and limits
 
-- One daemon per user. `neenee daemon status` aggregates every project; TUI `/dashboard`
+- One daemon per user. `muta daemon status` aggregates every project; TUI `/dashboard`
   is the same view in-terminal.
 - Sessions outlive their TUIs by design — `KillSession` (or stopping the
   daemon) is how a session ends.
@@ -193,4 +193,4 @@ verbs; there is no separate web backend to run.
   daemon + control plane), [ADR-0093](../adr/0093-daemon-observability-monitor-protocol.md)
   (monitor protocol), [ADR-0054](../adr/0054-server-layer-followups.md)
   (loopback-default security), [ADR-0101](../adr/0101-daemon-shutdown-correctness.md)
-  (shutdown correctness: budgeted drain, signals, `neenee daemon stop`).
+  (shutdown correctness: budgeted drain, signals, `muta daemon stop`).

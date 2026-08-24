@@ -50,26 +50,12 @@ jobs:
             archive: zip
     steps:
       - uses: actions/checkout@v4
-      # The release binary embeds the web panel (ADR-0105): build the bundle
-      # first so `neenee-web-assets`' build script finds apps/web/dist.
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Tag matches Cargo and web versions
+      - name: Tag matches Cargo version
         shell: bash
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
           cargo_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
-          web_version="$(node -p "require('./apps/web/package.json').version")"
           test "$tag_version" = "$cargo_version"
-          test "$tag_version" = "$web_version"
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run build
-        working-directory: apps/web
       - uses: dtolnay/rust-toolchain@stable
       # rust-toolchain.toml pins the build toolchain (channel = "1.95.0"), and
       # that directory override wins over the action's `stable`. Install the
@@ -92,17 +78,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
-      - name: Build release binary
-        run: cargo build --release --locked --target ${{ matrix.target }} --bin neenee
+      - name: Build release binaries
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin muta --bin mutx
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
         id: package
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          dirname="neenee-${version}-${{ matrix.target }}"
+          dirname="muta-${version}-${{ matrix.target }}"
           mkdir "$dirname"
-          cp target/${{ matrix.target }}/release/neenee "$dirname/"
+          cp target/${{ matrix.target }}/release/muta "$dirname/"
+          cp target/${{ matrix.target }}/release/mutx "$dirname/"
           cp README.md LICENSE "$dirname/"
           tar -czf "$dirname.tar.gz" "$dirname"
           if command -v sha256sum >/dev/null 2>&1; then
@@ -115,9 +102,10 @@ jobs:
         shell: pwsh
         run: |
           $version = "${env:GITHUB_REF_NAME}" -replace '^v', ''
-          $dirname = "neenee-$version-${{ matrix.target }}"
+          $dirname = "muta-$version-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $dirname | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/neenee.exe" "$dirname/"
+          Copy-Item "target/${{ matrix.target }}/release/muta.exe" "$dirname/"
+          Copy-Item "target/${{ matrix.target }}/release/mutx.exe" "$dirname/"
           Copy-Item README.md, LICENSE "$dirname/"
           Compress-Archive -Path $dirname -DestinationPath "$dirname.zip"
           $hash = (Get-FileHash "$dirname.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -127,10 +115,10 @@ jobs:
         with:
           name: ${{ matrix.target }}
           path: |
-            neenee-*.tar.gz
-            neenee-*.tar.gz.sha256
-            neenee-*.zip
-            neenee-*.zip.sha256
+            muta-*.tar.gz
+            muta-*.tar.gz.sha256
+            muta-*.zip
+            muta-*.zip.sha256
           if-no-files-found: error
 
   publish:

@@ -36,7 +36,7 @@ lower-priority scope when two skills share a name.
 | **Remote** | Skill repositories fetched from `[skills] urls` and cached locally | Lowest |
 | **User** | User-global skills: the XDG data dir, plus external application conventions (`~/.agents/skills/`, `~/.claude/skills/`) | |
 | **Extra** | Extra paths configured under `[skills] paths` | |
-| **Repo** | Project-local skills in the project working tree (`.neenee/skills/`, `.agents/skills/`, `.claude/skills/`) | Highest |
+| **Repo** | Project-local skills in the project working tree (`.muta/skills/`, `.agents/skills/`, `.claude/skills/`) | Highest |
 
 The intent of the cascade is that the most specific source wins: a skill
 checked into a project overrides a user-global skill with the same name, which
@@ -46,7 +46,7 @@ Two design notes worth calling out:
 
 - **External directories are read-only.** `~/.agents/skills/` and
   `~/.claude/skills/` (and their project-local `.agents/skills/`,
-  `.claude/skills/` counterparts) are other tools' conventions. neenee reads
+  `.claude/skills/` counterparts) are other tools' conventions. muta reads
   them so a shared skill library works across agents, but it never writes to
   them.
 
@@ -121,7 +121,7 @@ allows it.
 
 The `/skills reload` slash command rescans every source — local directories and
 remote repositories — and rebuilds the registry in place. It is the way to pick
-up newly added, removed, or edited skill files without restarting neenee. (It
+up newly added, removed, or edited skill files without restarting muta. (It
 is also bound to the `r` key in the `/skills` modal.)
 
 ## Decision history

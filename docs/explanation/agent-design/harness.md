@@ -104,7 +104,7 @@ countdown/absolute-time jobs; `/repeat` is a cron-only alias) is the only
 scheduled-prompt mechanism and is fully orthogonal to the round loop.
 
 > The pursuit stop-gate and primitive (a forced-continuation gate plus a
-> `[NEENEE_PURSUIT_COMPLETE]` completion marker) were removed in
+> `[MUTA_PURSUIT_COMPLETE]` completion marker) were removed in
 > [ADR-0082](../../adr/0082-remove-pursuit-stop-gate.md). `Stop` hooks
 > (ADR-0025) remain the only lever that can refuse a round ending and force
 > one more turn.

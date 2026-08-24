@@ -25,7 +25,7 @@ describe("resolveConfig", () => {
     const store = storage();
     const cfg = resolveConfig("?ws=ws://10.0.0.2:1234", store);
     expect(cfg.wsUrl).toBe("ws://10.0.0.2:1234");
-    expect(store.map.get("neenee.ws-url")).toBe("ws://10.0.0.2:1234");
+    expect(store.map.get("muta.ws-url")).toBe("ws://10.0.0.2:1234");
   });
 
   it("builds a URL from ?host= and ?port=", () => {
@@ -34,9 +34,9 @@ describe("resolveConfig", () => {
 
   it("falls back to stored settings", () => {
     const store = storage();
-    store.map.set("neenee.ws-url", "ws://stored:1");
-    store.map.set("neenee.project", "/srv/proj");
-    store.map.set("neenee.ws-token", "stored-token");
+    store.map.set("muta.ws-url", "ws://stored:1");
+    store.map.set("muta.project", "/srv/proj");
+    store.map.set("muta.ws-token", "stored-token");
     expect(resolveConfig("", store)).toEqual({
       wsUrl: "ws://stored:1",
       project: "/srv/proj",
@@ -52,11 +52,11 @@ describe("resolveConfig", () => {
     expect(resolveConfig("?ws=localhost:7777", null).wsUrl).toBe("ws://localhost:7777");
   });
 
-  it("reads ?token= and persists it (the `neenee panel` URL flow)", () => {
+  it("reads ?token= and persists an operator-authored deep link", () => {
     const store = storage();
     const cfg = resolveConfig("?token=abc123", store);
     expect(cfg.token).toBe("abc123");
-    expect(store.map.get("neenee.ws-token")).toBe("abc123");
+    expect(store.map.get("muta.ws-token")).toBe("abc123");
   });
 });
 
@@ -81,9 +81,9 @@ describe("DaemonStore smoke", () => {
     // Injected by vite define from package.json — must equal the workspace
     // version or a pre-protocol daemon refuses the connection (ADR-0100).
     expect(typeof select.version).toBe("string");
-    expect(select.version).toBe(__NEENEE_CLIENT_VERSION__);
+    expect(select.version).toBe(__MUTA_CLIENT_VERSION__);
     // The wire protocol number (ADR-0134) is the compatibility gate; it
-    // must equal PROTOCOL_VERSION in neenee-contracts (CI checks).
+    // must equal PROTOCOL_VERSION in muta-contracts (CI checks).
     expect(typeof select.protocol).toBe("number");
     expect(select.protocol).toBeGreaterThan(0);
   });
@@ -258,6 +258,55 @@ describe("DaemonStore wire protocol", () => {
       expect(records[0]).toMatchObject({ name: "help", status: "success" });
       expect(records[1]).toMatchObject({ name: "bogus", status: "error" });
       expect(records[2]).toMatchObject({ name: "compact", status: "success" });
+    });
+  });
+
+  describe("backend completion", () => {
+    it("requests completion from the daemon and keeps only the newest result", () => {
+      const store = new DaemonStore();
+      const session = attachSession(store);
+
+      store.requestInputCompletions("/mo", 3);
+      expect(session.sentJson(session.sent.length - 1)).toEqual({
+        type: "Request",
+        CompleteInput: { request_id: 1, input: "/mo", cursor: 3 },
+      });
+      store.requestInputCompletions("/mod", 4);
+      session.message({
+        type: "Response",
+        InputCompletions: {
+          request_id: 1,
+          input: "/mo",
+          cursor: 3,
+          items: [{
+            label: "/models",
+            description: "Switch model",
+            insert_text: "/models",
+            replace_start: 0,
+            replace_end: 3,
+            kind: "slash",
+          }],
+        },
+      });
+      expect(store.inputCompletions).toEqual([]);
+
+      session.message({
+        type: "Response",
+        InputCompletions: {
+          request_id: 2,
+          input: "/mod",
+          cursor: 4,
+          items: [{
+            label: "/models",
+            description: "Switch model",
+            insert_text: "/models",
+            replace_start: 0,
+            replace_end: 4,
+            kind: "slash",
+          }],
+        },
+      });
+      expect(store.inputCompletions.map((item) => item.label)).toEqual(["/models"]);
     });
   });
 

@@ -3,7 +3,7 @@
 | Page | Purpose |
 |------|---------|
 | [Build and test workflow](build-and-test.md) | Fast local loops, optional feature boundaries, and full-workspace verification |
-| [Dev and test isolation](dev-and-test-isolation.md) | Running the checkout's builds and tests without touching the installed neenee (`--home`, `NEENEE_HOME`) |
+| [Dev and test isolation](dev-and-test-isolation.md) | Running the checkout's builds and tests without touching the installed muta (`--home`, `MUTA_HOME`) |
 | [Workspace layout](workspace-layout.md) | Product families, shared package groups, and placement rules |
 | [Release process](release.md) | Versioning, the pre-tag CI checklist, and the tag/publish workflow |
 | [Documentation governance](documentation/index.md) | Rules for organizing, writing, and reviewing docs |
@@ -21,5 +21,5 @@
 
 ## Policy
 
-- [ADR-0014: Unified XDG persistence architecture](../adr/0014-xdg-persistence-architecture.md) — new persistent locations must be added as methods on `Dirs`, classified by what the file *is*; no inline `dirs::home_dir().join(...)` for neenee-owned storage
-- [ADR-0121: Instance isolation for development and testing](../adr/0121-instance-isolation-for-development-and-testing.md) — daemon runtime paths derive from `Dirs::instance_dir()` only; auto-spawned daemons inherit the environment (sandbox inheritance); local runs beside an installed daemon use `--home` / `NEENEE_HOME`, never a bare `target/debug/neenee` against the host instance
+- [ADR-0014: Unified XDG persistence architecture](../adr/0014-xdg-persistence-architecture.md) — new persistent locations must be added as methods on `Dirs`, classified by what the file *is*; no inline `dirs::home_dir().join(...)` for muta-owned storage
+- [ADR-0121: Instance isolation for development and testing](../adr/0121-instance-isolation-for-development-and-testing.md) — daemon runtime paths derive from `Dirs::instance_dir()` only; auto-spawned daemons inherit the environment (sandbox inheritance); local runs beside an installed daemon use `--home` / `MUTA_HOME`, never a bare `target/debug/muta` against the host instance

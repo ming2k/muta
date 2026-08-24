@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>neenee — WebSocket test client</title>
+<title>muta — WebSocket test client</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, sans-serif; background: #1a1b26; color: #c0caf5; display: flex; flex-direction: column; height: 100vh; }
@@ -100,7 +100,7 @@ connectBtn.onclick = () => {
 };
 
 function renderMessage(msg) {
-  // neenee_contracts::Message — {role: "User"|"Assistant"|"Tool"|"System", content: string}
+  // muta_contracts::Message — {role: "User"|"Assistant"|"Tool"|"System", content: string}
   const role = (msg.role || '').toLowerCase();
   const cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : 'tool';
   addMsg(`[${msg.role}] ${msg.content || ''}`, cls);

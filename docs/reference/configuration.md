@@ -1,7 +1,7 @@
 # Configuration Reference
 
 Every option in `config.toml`, with its default. The file lives at
-`$XDG_CONFIG_HOME/neenee/config.toml` — see [Paths](paths.md) for the resolved
+`$XDG_CONFIG_HOME/muta/config.toml` — see [Paths](paths.md) for the resolved
 location and override precedence.
 
 All keys are optional: a missing key, a missing table, or an absent file uses
@@ -35,7 +35,7 @@ files. Performance limits are not part of context-capacity safety policy.
 | `compaction.target_utilization` | `0.25` | After a full compaction, compress the model window down to this fraction |
 | `compaction.prune_utilization` | `0.65` | Trigger cheap tool-result pruning at this fraction (below `utilization`) |
 | `compaction.fallback_window_tokens` | `32000` | Assumed window (tokens) when the model's context window is unknown |
-| `compaction_preserve_rounds` | `6` | Number of recent complete user rounds kept verbatim after a full compaction. The former key `compaction_preserve_turns` is **not** aliased (ADR-0120): it parses as an unknown key, is ignored, and is dropped on the next save — run `neenee config check` to find stale spellings |
+| `compaction_preserve_rounds` | `6` | Number of recent complete user rounds kept verbatim after a full compaction. The former key `compaction_preserve_turns` is **not** aliased (ADR-0120): it parses as an unknown key, is ignored, and is dropped on the next save — run `muta config check` to find stale spellings |
 | `compaction_summarize` | `true` | Use the active model for an anchored structured summary; `false` uses the deterministic excerpt fallback |
 | `compaction_prune` | `true` | Enable cheap tool-result pruning (pre-round and mid-round) |
 | `compaction_prune_protect_tokens` | `6000` | Most recent tool results (tokens) protected from pruning |
@@ -101,8 +101,8 @@ window = 8
 ## Provider instances and credentials
 
 Provider *instances* (the "who I connect to" records) live in the state store
-`$XDG_STATE_HOME/neenee/providers.toml`; secrets in
-`$XDG_CONFIG_HOME/neenee/credentials.toml`; `config.toml` holds only the
+`$XDG_STATE_HOME/muta/providers.toml`; secrets in
+`$XDG_CONFIG_HOME/muta/credentials.toml`; `config.toml` holds only the
 *selection* (`default_provider` / `default_model`, which reference instance
 ids). The routes a model actually travels (per-model transport/endpoint/
 reasoning) are **derived at runtime** from each instance's template and the
@@ -200,7 +200,7 @@ OpenAI (Responses and chat), Anthropic, xAI Grok, Kimi K3, DeepSeek, GLM-5.2,
 and Gemini. Valid values are clamped to the model's supported levels at
 request-build time (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`;
 GPT models expose a subset). Settings are stored per `(instance, model)` in the
-discovery cache (`$XDG_CACHE_HOME/neenee/models_discovery.json`) under
+discovery cache (`$XDG_CACHE_HOME/muta/models_discovery.json`) under
 `route_settings`, written by the model `e` editor in the picker — they are
 user-set route facts, not `config.toml` behavior.
 
@@ -312,23 +312,23 @@ retry remains the same turn.
 [[hooks]]
 event   = "PostToolUse"
 matcher = "Write|Edit"
-command = ".neenee/hooks/lint.sh"
+command = ".muta/hooks/lint.sh"
 
 [[hooks]]
 event   = "PreToolUse"
 matcher = "Bash"
-command = ".neenee/hooks/guard-rm.sh"
+command = ".muta/hooks/guard-rm.sh"
 
 [[hooks]]
 event   = "Stop"
-command = ".neenee/hooks/ci-gate.sh"
+command = ".muta/hooks/ci-gate.sh"
 
 # ADR-0030: fires once per ReAct turn, at turn end. Deny is ignored (no
 # de-facto turn cap); inject context or observe. Carries the read-only-turn
 # streak.
 [[hooks]]
 event   = "Turn"
-command = ".neenee/hooks/turn-watch.sh"
+command = ".muta/hooks/turn-watch.sh"
 
 # Symmetric partner: fires at the start of each ReAct turn, after tools are
 # prepared but before the next model completion. Use it to (re)inject context at
@@ -337,7 +337,7 @@ command = ".neenee/hooks/turn-watch.sh"
 # too.
 [[hooks]]
 event   = "TurnStart"
-command = ".neenee/hooks/turn-open.sh"
+command = ".muta/hooks/turn-open.sh"
 
 # Interrupt notifications (observe-only): fire-and-forget when the agent blocks
 # waiting for you. The canonical use is a desktop/bell notification so a
@@ -347,10 +347,10 @@ command = ".neenee/hooks/turn-open.sh"
 [[hooks]]
 event   = "PermissionRequest"
 matcher = "bash"
-command = ".neenee/hooks/notify.sh \"Needs approval\""
+command = ".muta/hooks/notify.sh \"Needs approval\""
 [[hooks]]
 event   = "UserQuestion"
-command = ".neenee/hooks/notify.sh \"AI asked a question\""
+command = ".muta/hooks/notify.sh \"AI asked a question\""
 ```
 
 ## Feature tables
@@ -371,7 +371,7 @@ session across every project (ADR-0096). It is read at daemon startup.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `daemon.shutdown_grace_secs` | `10` | How long a `neenee daemon stop` waits for hosted sessions to settle before forcing shutdown |
+| `daemon.shutdown_grace_secs` | `10` | How long a `muta daemon stop` waits for hosted sessions to settle before forcing shutdown |
 | `daemon.idle_exit_minutes` | `5` | A daemon with no hosted sessions exits after this idle period (armed `/schedule` jobs keep it alive — ADR-0125) |
 | `daemon.local_auth` | `true` | Require the bearer token on the Unix-socket control plane. Turn off only for locked-down single-user sockets |
 | `daemon.rehost_armed_schedules` | `true` | At daemon boot, rehost every persisted session that still has armed `/schedule` jobs, so scheduled prompts keep firing across daemon restarts (ADR-0125); `false` = cold start |

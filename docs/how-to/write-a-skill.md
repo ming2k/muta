@@ -15,11 +15,11 @@ should apply:
 
 | Scope | Location | Use when |
 |-------|----------|----------|
-| **Project-local** | `<project>/.neenee/skills/<name>/SKILL.md` | The skill belongs to one project and should travel with the repo |
-| **User-global** | `$XDG_DATA_HOME/neenee/skills/<name>/SKILL.md` | The skill should be available to every project under your user |
+| **Project-local** | `<project>/.muta/skills/<name>/SKILL.md` | The skill belongs to one project and should travel with the repo |
+| **User-global** | `$XDG_DATA_HOME/muta/skills/<name>/SKILL.md` | The skill should be available to every project under your user |
 
 `$XDG_DATA_HOME` resolves to `~/.local/share` on Linux by default, so the
-user-global location is normally `~/.local/share/neenee/skills/<name>/SKILL.md`.
+user-global location is normally `~/.local/share/muta/skills/<name>/SKILL.md`.
 Both paths resolve through the central `Dirs` layer and honour the standard XDG
 overrides; see [Paths](../reference/paths.md) for the full stack.
 
@@ -32,15 +32,15 @@ everywhere.
 Three other locations appear in the discovery cascade, but none of them is an
 author target:
 
-- `~/.cache/...` (more precisely `$XDG_CACHE_HOME/neenee/skills/remote/`) is the
+- `~/.cache/...` (more precisely `$XDG_CACHE_HOME/muta/skills/remote/`) is the
   **cache** for remote skill repositories fetched from `[skills] urls`. It is
   derived, deletable, and repopulated on demand. Never hand-author a skill
   there; a refetch overwrites it.
 - `~/.agents/skills/` and `~/.claude/skills/` (and the project-local
   `.agents/skills/`, `.claude/skills/` counterparts) are **other tools'**
-  conventions. neenee reads them so a shared skill library works across agents,
+  conventions. muta reads them so a shared skill library works across agents,
   but it never writes to them. You do not need them; the project-local
-  `.neenee/skills/` and user-global XDG locations cover every authoring case.
+  `.muta/skills/` and user-global XDG locations cover every authoring case.
 
 If you want skills sourced from somewhere else entirely (a private repo, a
 shared team directory), configure it as an extra scan path under
@@ -85,14 +85,14 @@ the name is derived from the parent directory.
 
 ## How discovery finds your skill
 
-The skill registry (`crates/neenee-skills/src/discovery.rs`) scans each
+The skill registry (`crates/muta-skills/src/discovery.rs`) scans each
 source directory **recursively**. Any file named exactly `SKILL.md` is parsed
 as a skill, regardless of how deeply it is nested. This means a single scan
 root can hold many skills side by side, and skills can live in nested
 subdirectories:
 
 ```text
-~/.local/share/neenee/skills/
+~/.local/share/muta/skills/
 ├── rust-expert/
 │   └── SKILL.md
 ├── team/

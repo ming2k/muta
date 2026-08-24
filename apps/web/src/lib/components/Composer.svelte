@@ -1,6 +1,6 @@
 <script lang="ts">
   import { daemon } from "../stores/daemon.svelte.js";
-  import type { ImagePart } from "../types.js";
+  import type { ImagePart, InputCompletion } from "../types.js";
 
   interface PendingImage {
     part: ImagePart;
@@ -12,6 +12,18 @@
   let textareaEl: HTMLTextAreaElement;
   let fileInputEl: HTMLInputElement;
   let images = $state<PendingImage[]>([]);
+  let completionMatches = $derived(
+    daemon.inputCompletions
+      .filter(
+        (item) =>
+          !(
+            item.replace_start === 0 &&
+            item.label === inputVal &&
+            item.replace_end === Array.from(inputVal).length
+          ),
+      )
+      .slice(0, 6),
+  );
 
   const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
@@ -60,6 +72,7 @@
       images.map((i) => i.part),
     );
     inputVal = "";
+    daemon.requestInputCompletions("", 0);
     clearImages();
     resize();
   }
@@ -69,6 +82,11 @@
       e.preventDefault();
       handleSend();
     }
+  }
+
+  function handleInput() {
+    resize();
+    daemon.requestInputCompletions(inputVal, textareaEl?.selectionStart ?? inputVal.length);
   }
 
   function readFile(file: File): Promise<PendingImage | null> {
@@ -124,9 +142,27 @@
 
   function insertCommand(cmd: string) {
     inputVal = cmd;
+    daemon.requestInputCompletions(cmd, cmd.length);
     if (textareaEl) {
       textareaEl.focus();
     }
+  }
+
+  function scalarToUtf16(text: string, scalarIndex: number): number {
+    return Array.from(text).slice(0, scalarIndex).join("").length;
+  }
+
+  function acceptCompletion(item: InputCompletion) {
+    const start = scalarToUtf16(inputVal, item.replace_start);
+    const end = scalarToUtf16(inputVal, item.replace_end);
+    inputVal = inputVal.slice(0, start) + item.insert_text + inputVal.slice(end);
+    const caret = start + item.insert_text.length;
+    resize();
+    queueMicrotask(() => {
+      textareaEl?.focus();
+      textareaEl?.setSelectionRange(caret, caret);
+      daemon.requestInputCompletions(inputVal, caret);
+    });
   }
 </script>
 
@@ -147,12 +183,23 @@
       bind:this={textareaEl}
       bind:value={inputVal}
       onkeydown={handleKeyDown}
-      oninput={resize}
+      oninput={handleInput}
       onpaste={handlePaste}
       placeholder="Type your message, or ask coding tasks... (Enter to send, Shift+Enter for newline)"
       rows="1"
       disabled={!daemon.sessionAttached}
     ></textarea>
+
+    {#if completionMatches.length > 0}
+      <div class="command-completions" aria-label="Command completions">
+        {#each completionMatches as item (`${item.kind}:${item.label}`)}
+          <button type="button" onclick={() => acceptCompletion(item)}>
+            <code>{item.label}</code>
+            <span>{item.description}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     <div class="toolbar">
       <div class="hints">
@@ -237,6 +284,39 @@
   textarea:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+  }
+
+  .command-completions {
+    display: grid;
+    gap: 2px;
+    margin: 6px -6px 2px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .command-completions button {
+    display: grid;
+    grid-template-columns: minmax(8rem, auto) 1fr;
+    gap: 12px;
+    align-items: baseline;
+    padding: 6px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .command-completions button:hover,
+  .command-completions button:focus-visible {
+    color: var(--text-primary);
+    background: var(--bg-surface-hover);
+    outline: none;
+  }
+
+  .command-completions code {
+    color: var(--accent-primary);
   }
 
   .image-chips {

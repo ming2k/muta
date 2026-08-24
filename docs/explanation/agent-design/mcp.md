@@ -1,8 +1,8 @@
 # MCP servers
 
-neenee connects to local stdio [Model Context Protocol][mcp] servers and exposes
+muta connects to local stdio [Model Context Protocol][mcp] servers and exposes
 their tools alongside the built-in ones, using the same execution path. A
-session-owned **MCP runtime** — the `neenee-mcp` crate (ADR-0098) — owns the
+session-owned **MCP runtime** — the `muta-mcp` crate (ADR-0098) — owns the
 live connections: it connects every configured server at startup, publishes
 per-server tool snapshots to the agent, and recovers crashed servers. This
 page covers the runtime and its recovery model, the tool wrapper, the `/mcp`
@@ -15,18 +15,18 @@ per-tool parameter surface, see
 ## Why MCP support
 
 Built-in tools cover the common cases — file access, search, bash, web. MCP
-lets a project add capabilities without forking neenee: a database query tool,
+lets a project add capabilities without forking muta: a database query tool,
 a private API client, a custom linter. The integration is deliberately narrow:
 
 1. **Same execution path.** An MCP tool shares the `Tool` trait, the
    permission broker, the [tool-turn](rounds-and-turns.md) loop, and the TUI step
    renderer with every built-in. The agent consumes a generic dynamic tool
    source and has no MCP protocol dependency.
-2. **Local stdio only.** neenee speaks JSON-RPC over a spawned child's
+2. **Local stdio only.** muta speaks JSON-RPC over a spawned child's
    stdin/stdout. No HTTP, no remote servers — the server runs under the user's
    account and filesystem.
 3. **Failure-isolated, self-healing.** A server that times out or crashes
-   cannot prevent neenee from starting, and it is reconnected automatically (see
+   cannot prevent muta from starting, and it is reconnected automatically (see
    [Failure isolation and recovery](#failure-isolation-and-recovery)).
 
 ## Configuration
@@ -80,7 +80,7 @@ The 8-second connect timeout bounds the whole spawn + initialize + `tools/list`
 sequence. Each `tools/call` request has a 120-second timeout; a server that
 accepts a request but never answers cannot pin the agent indefinitely.
 
-Connecting never returns a single `Result`: neenee always starts, with whatever
+Connecting never returns a single `Result`: muta always starts, with whatever
 tools came up. The runtime publishes them directly to the principal Agent's
 dynamic registry; it does not mutate the static tool set used to construct
 envoys or side agents.
@@ -111,7 +111,7 @@ the model.
 ## JSON-RPC transport
 
 Framing is **newline-delimited JSON** — one JSON-RPC message per line, blank
-lines skipped. This is the line-delimited variant the MCP spec allows; neenee
+lines skipped. This is the line-delimited variant the MCP spec allows; muta
 does not implement the `Content-Length` framing.
 
 All requests are serialized through one mutex over the single stdin/stdout

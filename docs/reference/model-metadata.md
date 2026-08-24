@@ -1,6 +1,6 @@
 # Model Metadata
 
-This page defines how neenee determines a model's capability and route for one
+This page defines how muta determines a model's capability and route for one
 provider channel. For provider availability and endpoints, see
 [Providers](providers.md). For the decision history, see
 [ADR-0070](../adr/0070-provider-scoped-remote-model-metadata.md).
@@ -14,11 +14,11 @@ provider channel. For provider availability and endpoints, see
 | Remote channel metadata | Provider instance and model | A trusted provider's live list explicitly supplies a field | Effective behavior for that channel |
 
 Each provider's baseline table lives beside its other registry data (e.g.
-`crates/neenee-providers/src/registry/openai.rs`) and is submitted to
-`neenee_contracts`'s lookup machinery at link time via
-`inventory::submit!(BaselineModels(...))`. `neenee_contracts` owns only the
+`crates/muta-providers/src/registry/openai.rs`) and is submitted to
+`muta_contracts`'s lookup machinery at link time via
+`inventory::submit!(BaselineModels(...))`. `muta_contracts` owns only the
 `resolve()` / `baseline_models()` mechanism — the data itself is distributed
-per provider. See [`neenee_contracts::model`](../../crates/neenee-contracts/src/model.rs)
+per provider. See [`muta_contracts::model`](../../crates/muta-contracts/src/model.rs)
 for the lookup precedence rules.
 
 Remote metadata never changes another provider's channel. A model id can have
@@ -62,7 +62,7 @@ provider-native model ids.
 The Copilot login template is a trusted `Api` source. Its model list controls
 the selectable set and each selectable model's route.
 
-| Remote field | neenee behavior |
+| Remote field | muta behavior |
 |--------------|-----------------|
 | `model_picker_enabled` | `false` excludes the model from the picker and channel set |
 | `supported_endpoints` with `/chat/completions` | Uses the OpenAI Chat Completions adapter |

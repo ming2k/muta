@@ -6,4 +6,4 @@
  * enforces exact equality with its own `CARGO_PKG_VERSION` (ADR-0100 rule 4),
  * so the two must stay in lockstep (CI checks this).
  */
-declare const __NEENEE_CLIENT_VERSION__: string;
+declare const __MUTA_CLIENT_VERSION__: string;

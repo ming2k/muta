@@ -2,15 +2,15 @@
 
 Both the OpenAI Chat Completions API and the Anthropic Messages API support
 *native function calling*, and both can return **multiple tool calls in a single
-assistant response** (parallel tool use). neenee speaks both: models tagged
+assistant response** (parallel tool use). muta speaks both: models tagged
 `WireFormat::OpenAi` go through `OpenAiChatCompletionsProvider`, models tagged
 `WireFormat::AnthropicCompat` go through `AnthropicMessagesProvider`
-(`crates/neenee-contracts/src/model.rs`, `crates/neenee-providers/src/`).
+(`crates/muta-contracts/src/model.rs`, `crates/muta-providers/src/`).
 
 The two protocols carry the *same* loop — declare tools, model emits calls,
 client runs them, client appends results, re-send — but disagree on almost every
 field name and on how messages are shaped. This page names those differences and
-shows where neenee bridges them. For the loop itself, see
+shows where muta bridges them. For the loop itself, see
 [Chat API primitives](chat-api-primitives.md). For which provider implements
 which capability, see [Provider capabilities](provider-capabilities.md).
 
@@ -31,7 +31,7 @@ differently:
 Either way the contract is: **every call you were given must get a result back**,
 or the next request is rejected. (OpenAI lets you set
 `parallel_tool_calls: false` to force one-at-a-time; Anthropic guides the same
-through `tool_choice` / prompting.) neenee enforces the pairing itself — see
+through `tool_choice` / prompting.) muta enforces the pairing itself — see
 *Orphan stripping* below.
 
 ## Field-by-field comparison
@@ -81,13 +81,13 @@ Anthropic:
   ] }
 ```
 
-## How neenee bridges the two
+## How muta bridges the two
 
-neenee's internal `Message` (`crates/neenee-contracts/src/`) is **OpenAI-shaped**: a
+muta's internal `Message` (`crates/muta-contracts/src/`) is **OpenAI-shaped**: a
 flat list with a `Tool` role, `tool_calls`, a JSON-string `arguments`, and a
 `tool_call_id`. `OpenAiChatCompletionsProvider` serializes that almost verbatim. The
 work lives in `AnthropicMessagesProvider::request_body`
-(`crates/neenee-providers/src/anthropic_compat.rs`), which reshapes the flat
+(`crates/muta-providers/src/anthropic_compat.rs`), which reshapes the flat
 list into Messages format on the way out:
 
 - **System lifting.** Leading `Role::System` messages are concatenated and moved
@@ -120,7 +120,7 @@ Parallel calls stream as fragments that the client must reassemble by index:
   `index`, carrying `id` + `name` up front) then `input_json_delta` fragments
   (`partial_json`) for the arguments, closed by `content_block_stop`.
 
-neenee normalizes both into `ProviderStreamEvent::ToolCallDelta { index, id,
+muta normalizes both into `ProviderStreamEvent::ToolCallDelta { index, id,
 name, arguments }` and concatenates `arguments` fragments per index, so the rest
 of the harness never sees the wire difference. See
 `parse_anthropic_stream_data` and the OpenAI delta loop in `openai_compat.rs`.
@@ -128,7 +128,7 @@ of the harness never sees the wire difference. See
 ## Practical guidance
 
 - **Targeting both?** Keep one OpenAI-shaped internal representation and convert
-  at the provider boundary — exactly what neenee does. Don't fork the harness on
+  at the provider boundary — exactly what muta does. Don't fork the harness on
   wire format.
 - **Parsing arguments:** OpenAI needs `JSON.parse(arguments)`; Anthropic gives
   you an object already.

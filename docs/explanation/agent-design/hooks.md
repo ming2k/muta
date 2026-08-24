@@ -24,7 +24,7 @@ where an external script could do useful work — enforce a rule, run a check,
 inject a reminder, record an event.
 
 Without hooks, every such practice earns its own code path through the core
-loop. The result is exactly what neenee had before this design: a handful of
+loop. The result is exactly what muta had before this design: a handful of
 one-shot abstractions, each invented for a single job, each with one
 implementation. Hooks replace that with one configurable surface: "when X
 happens, run Y."
@@ -58,7 +58,7 @@ This is deliberate. A design that exposed the context threshold, the turn
 count, and the clock as further hook axes would duplicate the engines that
 already govern them and muddy two clean concerns — "what the harness does
 under pressure or on a schedule" versus "what the user adds on a lifecycle
-event." neenee keeps the first internal and exposes only the second.
+event." muta keeps the first internal and exposes only the second.
 
 ## The event set
 

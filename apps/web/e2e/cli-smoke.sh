@@ -7,9 +7,10 @@
 # Complements apps/web/e2e/daemon-smoke.mjs (protocol-level) by exercising
 # the binary itself: parsing, errors, exit codes, and the --remote path.
 #
-# Env: NEENEE_BIN (default target/debug/neenee). Exits non-zero on the
-# first failed expectation; the instance root is a throwaway tempdir, so a
-# host daemon is never touched (ADR-0121).
+# Env: MUTA_BIN (default target/debug/muta) and MUTX_BIN (default
+# target/debug/mutx). Exits non-zero on the first failed expectation; the
+# instance root is a throwaway tempdir, so a host daemon is never touched
+# (ADR-0121).
 
 set -u
 
@@ -17,14 +18,19 @@ set -u
 # cwd and through symlinks: apps/web/e2e → three levels up is the root.
 SCRIPT_SOURCE=${BASH_SOURCE[0]}
 REPO_ROOT=$(cd -P "$(dirname "$SCRIPT_SOURCE")/../../.." >/dev/null 2>&1 && pwd)
-BIN=${NEENEE_BIN:-$REPO_ROOT/target/debug/neenee}
-if [ ! -x "$BIN" ]; then
-  echo "cli-smoke: no binary at $BIN — build it first: cargo build -p neenee-cli" >&2
+MUTA=${MUTA_BIN:-$REPO_ROOT/target/debug/muta}
+MUTX=${MUTX_BIN:-$REPO_ROOT/target/debug/mutx}
+if [ ! -x "$MUTA" ]; then
+  echo "cli-smoke: no core binary at $MUTA — build it first: cargo build -p muta" >&2
   exit 127
 fi
-ROOT=$(mktemp -d /tmp/neenee-cli-smoke.XXXXXX)
+if [ ! -x "$MUTX" ]; then
+  echo "cli-smoke: no terminal app at $MUTX — build it first: cargo build -p mutx" >&2
+  exit 127
+fi
+ROOT=$(mktemp -d /tmp/mutx-smoke.XXXXXX)
 PORT=${PORT:-9809}
-cleanup() { "$BIN" --home "$ROOT" daemon stop >/dev/null 2>&1; rm -rf "$ROOT"; }
+cleanup() { "$MUTA" --home "$ROOT" daemon stop >/dev/null 2>&1; rm -rf "$ROOT"; }
 trap cleanup EXIT
 
 pass=0
@@ -56,46 +62,49 @@ expect_out() {
 }
 
 echo "== retired spellings are removed =="
-expect_status 2 "bare session errors" "$BIN" session
-expect_out   "session rm" "session teaches rm" "$BIN" session
-expect_status 2 "session ls is an unknown subcommand" "$BIN" session ls
-expect_status 2 "bare mcp errors" "$BIN" mcp
-expect_out   "mcp ls" "mcp teaches ls" "$BIN" mcp
-expect_status 2 "bare skill errors" "$BIN" skill
-expect_out   "skill ls" "skill teaches ls" "$BIN" skill
-expect_status 2 "serve is unrecognized" "$BIN" serve
-expect_status 2 "stop is unrecognized" "$BIN" stop
+expect_status 2 "bare session errors" "$MUTA" session
+expect_out   "session rm" "session teaches rm" "$MUTA" session
+expect_status 2 "session ls is an unknown subcommand" "$MUTA" session ls
+expect_status 2 "bare mcp errors" "$MUTA" mcp
+expect_out   "mcp ls" "mcp teaches ls" "$MUTA" mcp
+expect_status 2 "bare skill errors" "$MUTA" skill
+expect_out   "skill ls" "skill teaches ls" "$MUTA" skill
+expect_status 2 "serve is unrecognized" "$MUTA" serve
+expect_status 2 "stop is unrecognized" "$MUTA" stop
 
 echo "== noun-verb shapes parse =="
-expect_status 0 "mcp ls runs" "$BIN" mcp ls
-expect_status 0 "skill ls runs" "$BIN" skill ls
-expect_status 2 "session rm needs an id" "$BIN" session rm
+expect_status 0 "mcp ls runs" "$MUTA" mcp ls
+expect_status 0 "skill ls runs" "$MUTA" skill ls
+expect_status 2 "session rm needs an id" "$MUTA" session rm
+
+echo "== core and terminal app have disjoint surfaces =="
+expect_status 2 "core rejects terminal run command" "$MUTA" run ping
+expect_out "muta service command" "terminal app points daemon users to muta" \
+  "$MUTX" daemon status
 
 echo "== remote transport validates its inputs =="
 expect_out "not host:port" "remote rejects a bare host" \
-  "$BIN" --remote box.lan --token t run x
+  "$MUTX" --remote box.lan --token t run x
 expect_out "needs --token" "remote demands the token" \
-  "$BIN" --remote box.lan:9800 run x
+  "$MUTX" --remote box.lan:9800 run x
 expect_out "not a port number" "remote rejects a bad port" \
-  "$BIN" --remote box.lan:notaport --token t run x
+  "$MUTX" --remote box.lan:notaport --token t run x
 
-echo "== panel names its acts =="
-expect_out "url" "help panel documents url/open" "$BIN" help panel
-
-echo "== live daemon: panel url and the --remote connection =="
-"$BIN" --home "$ROOT" daemon start --port "$PORT" >/dev/null 2>&1
+echo "== mutx auto-starts muta; remote connects to that daemon =="
+# No daemon exists yet. Reaching the daemon's provider error proves mutx found
+# and launched the core binary before attempting the run.
+expect_out "provider" "mutx auto-starts the sibling muta core" \
+  env MUTA_BIN="$MUTA" MUTA_PORT="$PORT" "$MUTX" --home "$ROOT" run "ping"
 for _ in $(seq 1 50); do
-  "$BIN" --home "$ROOT" panel 2>/dev/null | grep -q "127.0.0.1:$PORT" && break
+  [ -s "$ROOT/muta/instance/daemon.json" ] && break
   sleep 0.2
 done
-expect_out "127.0.0.1:$PORT/?token=" "panel url carries port and token" \
-  "$BIN" --home "$ROOT" panel
-TOKEN=$("$BIN" --home "$ROOT" panel | sed 's/.*?token=//')
+TOKEN=$("$MUTA" --home "$ROOT" daemon token)
 # The handshake must complete over TCP+bearer: with no provider configured
 # the daemon's own reply is the "no provider" error — proof the remote
 # path reached a live daemon rather than failing to connect.
 expect_out "provider" "--remote reaches the live daemon" \
-  "$BIN" --remote "127.0.0.1:$PORT" --token "$TOKEN" run "ping"
+  "$MUTX" --remote "127.0.0.1:$PORT" --token "$TOKEN" run "ping"
 
 echo
 echo "passed=$pass failed=$fail"

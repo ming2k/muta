@@ -9,7 +9,7 @@ session history. All are `Read` and bypass the permission broker.
 |-----------|------|----------|-------|
 | `name` | string | yes | Skill name from frontmatter |
 
-`UseSkillTool` (`crates/neenee-skills/src/tools.rs`) loads the skill body
+`UseSkillTool` (`crates/muta-skills/src/tools.rs`) loads the skill body
 into the conversation.
 
 ## `list_skills`
@@ -28,8 +28,8 @@ A skill is a Markdown file with YAML frontmatter, conventionally named
 `SKILL.md` inside a skill directory:
 
 ```text
-.neenee/skills/<name>/SKILL.md                          # project-local
-$XDG_DATA_HOME/neenee/skills/<name>/SKILL.md            # user-global
+.muta/skills/<name>/SKILL.md                          # project-local
+$XDG_DATA_HOME/muta/skills/<name>/SKILL.md            # user-global
 ```
 
 ```text
@@ -50,25 +50,25 @@ Skill body injected into the context on demand.
 
 ## Discovery
 
-The skill registry (`crates/neenee-skills/src/discovery.rs`) discovers
+The skill registry (`crates/muta-skills/src/discovery.rs`) discovers
 skills from, in priority order (later sources override earlier ones):
 
 1. **Remote skill repositories** configured under `[skills] urls` in
-   `config.toml`, cached under `$XDG_CACHE_HOME/neenee/skills/remote/`.
+   `config.toml`, cached under `$XDG_CACHE_HOME/muta/skills/remote/`.
 2. **External user-global formats** — `~/.agents/skills/`, `~/.claude/skills/`
    (someone else's app convention).
-3. **User-global skills (XDG)** — `$XDG_DATA_HOME/neenee/skills/`
-   (`~/.local/share/neenee/skills/` on Linux by default).
+3. **User-global skills (XDG)** — `$XDG_DATA_HOME/muta/skills/`
+   (`~/.local/share/muta/skills/` on Linux by default).
 4. **Extra local paths** configured under `[skills] paths` in `config.toml`.
 5. **External project formats** — `.agents/skills/`, `.claude/skills/` in the
    project root.
-6. **Project-local neenee skills** — `.neenee/skills/` in the project root
+6. **Project-local muta skills** — `.muta/skills/` in the project root
    (highest priority).
 
 All user-level paths resolve through the central `Dirs` layer
-(`crates/neenee-persistence/src/paths.rs`) and honour the standard XDG overrides
+(`crates/muta-persistence/src/paths.rs`) and honour the standard XDG overrides
 (`$XDG_DATA_HOME`, `$XDG_CACHE_HOME`) plus the app-specific overrides
-(`$NEENEE_DATA_DIR`, `$NEENEE_CACHE_DIR`). See [Paths](../paths.md) for
+(`$MUTA_DATA_DIR`, `$MUTA_CACHE_DIR`). See [Paths](../paths.md) for
 the full override stack and [Persistence and the XDG
 layout](../../explanation/persistence.md) for the conceptual model.
 

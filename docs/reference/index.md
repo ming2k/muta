@@ -12,7 +12,7 @@ Lookup-oriented documentation — tables, lists, and exact values.
 
 ## Commands
 
-- [Command line](cli.md) — `neenee` subcommands, options, exit codes, and
+- [Command line](cli.md) — `muta` subcommands, options, exit codes, and
   shell completions
 - [Slash commands](commands.md) — built-in commands, subcommands, custom commands
 
@@ -29,7 +29,7 @@ Lookup-oriented documentation — tables, lists, and exact values.
 
 ## Files and persistence
 
-- [Paths](paths.md) — every file neenee reads or writes, by XDG category,
+- [Paths](paths.md) — every file muta reads or writes, by XDG category,
   with override precedence and cleanup quick reference
 - [State and status model](state-model.md) — lifecycle subjects, transition
   authorities, parked requests, projections, and non-FSM status vocabularies

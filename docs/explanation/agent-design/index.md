@@ -1,6 +1,6 @@
 # Agent design
 
-This section is the design canon for neenee's agent — a bounded, tool-using,
+This section is the design canon for muta's agent — a bounded, tool-using,
 semi-autonomous coding agent. The pages here are not independent
 features; they are facets of one system. Read together they describe how a
 single agent round is steered, gated, isolated, made durable, and kept honest.

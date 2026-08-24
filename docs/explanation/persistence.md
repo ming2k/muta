@@ -1,6 +1,6 @@
 # Platform-native persistence categories
 
-neenee writes a lot to disk: conversations, file blobs, embeddings,
+muta writes a lot to disk: conversations, file blobs, embeddings,
 telemetry, advisory locks, cached skills. The question "where does this
 file live, what am I allowed to do with it, and what happens if I delete
 it" must have one answer per file — and that answer must be derivable from
@@ -16,16 +16,16 @@ recoverable coding-agent session inside the data category, see
 
 The [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/)
 provides a strong semantic split for user-level files with **different
-operational lifetimes**. neenee adopts those meanings without treating Linux
+operational lifetimes**. muta adopts those meanings without treating Linux
 paths as a universal filesystem convention. Linux uses XDG locations, macOS
 uses Application Support and Caches, and Windows uses Roaming and Local App
 Data. Explicit `XDG_*` variables remain portable overrides.
 
-The historical alternative — one monolithic `~/.neenee/` directory — had
+The historical alternative — one monolithic `~/.muta/` directory — had
 three problems in practice:
 
 1. **Backup blur.** Configuration, conversations, and rebuildable caches
-   sat together. Backing up "neenee" meant either too much (caches) or
+   sat together. Backing up "muta" meant either too much (caches) or
    too little (only config).
 2. **Cleanup ambiguity.** Nothing was safe to delete without reading the
    code to find out whether it would regenerate.
@@ -34,12 +34,12 @@ three problems in practice:
 
 ## The four categories
 
-neenee classifies every file by **what it is**, then routes it to the
+muta classifies every file by **what it is**, then routes it to the
 matching XDG category.
 
 ### Config — files the user edits by hand
 
-On Linux, `$XDG_CONFIG_HOME/neenee/` (default `~/.config/neenee/`).
+On Linux, `$XDG_CONFIG_HOME/muta/` (default `~/.config/muta/`).
 
 `config.toml` is the hand-edited configuration, and `credentials.toml`
 (0600) is its secret half: API keys split out so the config file can be
@@ -62,7 +62,7 @@ See [ADR-0115](../adr/0115-credential-placement-config-vs-state.md).
 
 ### Data — persistent, program-generated, must survive restart
 
-On Linux, `$XDG_DATA_HOME/neenee/` (default `~/.local/share/neenee/`).
+On Linux, `$XDG_DATA_HOME/muta/` (default `~/.local/share/muta/`).
 
 Conversations, content-addressed blobs, per-project
 embedding indices, cached permission approvals, and user-authored skills
@@ -77,7 +77,7 @@ projects astronomically unlikely.
 
 ### State — persistent, program-generated, rebuildable
 
-On Linux, `$XDG_STATE_HOME/neenee/` (default `~/.local/state/neenee/`).
+On Linux, `$XDG_STATE_HOME/muta/` (default `~/.local/state/muta/`).
 
 Slash-command history, per-model usage telemetry that orders the provider
 picker by recency, advisory lock files when no runtime directory is
@@ -97,14 +97,14 @@ login — the categories describe ownership and churn, not backup-worthiness
 
 ### Cache — derived, deletable, repopulated on demand
 
-On Linux, `$XDG_CACHE_HOME/neenee/` (default `~/.cache/neenee/`).
+On Linux, `$XDG_CACHE_HOME/muta/` (default `~/.cache/muta/`).
 
 The remote-skill cache. Safe to delete at any time; the next startup
 that needs a remote skill fetches it again. Treat as ephemeral.
 
 ### Runtime — ephemeral per daemon
 
-`$XDG_RUNTIME_DIR/neenee/` when the variable is set.
+`$XDG_RUNTIME_DIR/muta/` when the variable is set.
 
 On Linux, `$XDG_RUNTIME_DIR` holds ephemeral discovery and lock files when it
 is available. macOS uses its application-data fallback; Windows keeps the
@@ -116,13 +116,13 @@ Windows uses a per-user Named Pipe.
 
 Two categories of file deliberately live outside XDG:
 
-- **The project working tree.** Project-local skills (`.neenee/skills/`)
-  and project-local commands (`.neenee/commands/`) live with the project.
+- **The project working tree.** Project-local skills (`.muta/skills/`)
+  and project-local commands (`.muta/commands/`) live with the project.
   They travel with the repository and are owned by the project, not the
   user's environment.
-- **External applications' conventions.** neenee *reads* skills from
+- **External applications' conventions.** muta *reads* skills from
   `~/.agents/skills/`, `~/.claude/skills/`
-  because those are other tools' locations. neenee never writes to them.
+  because those are other tools' locations. muta never writes to them.
 
 ## Override precedence
 
@@ -133,19 +133,19 @@ From highest to lowest:
    instance-root selector (ADR-0121); `--config-dir`, `--data-dir`,
    `--state-dir`, `--cache-dir` are reserved plumbing for per-category
    flags.
-2. **App-specific env var.** `NEENEE_CONFIG_DIR`, `NEENEE_DATA_DIR`,
-   `NEENEE_STATE_DIR`, `NEENEE_CACHE_DIR`. Use these to redirect
-   neenee and only neenee.
-3. **Instance root.** `NEENEE_HOME` redirects *everything at once* —
+2. **App-specific env var.** `MUTA_CONFIG_DIR`, `MUTA_DATA_DIR`,
+   `MUTA_STATE_DIR`, `MUTA_CACHE_DIR`. Use these to redirect
+   muta and only muta.
+3. **Instance root.** `MUTA_HOME` redirects *everything at once* —
    the four categories plus the daemon's runtime files — under one root,
    and is how development and test runs isolate themselves from an
-   installed neenee (ADR-0121). The env form of `--home`; sits below the
+   installed muta (ADR-0121). The env form of `--home`; sits below the
    per-category vars so a sandbox can still carve one category out.
 4. **Standard XDG env var.** `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
    `XDG_STATE_HOME`, `XDG_CACHE_HOME`. Native on Linux and accepted as an
    explicit portable override elsewhere.
 5. **Native per-OS default.** On macOS, `~/Library/Application
-   Support/neenee`; on Windows, `%APPDATA%\neenee`. Provided by the
+   Support/muta`; on Windows, `%APPDATA%\muta`. Provided by the
    platform's convention rather than the spec.
 6. **`$HOME` fallback.** `~/.config`, `~/.local/share`, `~/.local/state`,
    `~/.cache` — the spec's default locations when nothing else applies.
@@ -154,16 +154,16 @@ From highest to lowest:
 The same precedence applies to every category — there is no per-subsystem
 special case. Relative values in the XDG env vars are ignored (per spec);
 absolute values win. The daemon's runtime files follow the same idea with
-their own tail: the instance root > `$XDG_RUNTIME_DIR/neenee` > the data
-directory, and `NEENEE_PORT` plays the same role for the daemon's default
+their own tail: the instance root > `$XDG_RUNTIME_DIR/muta` > the data
+directory, and `MUTA_PORT` plays the same role for the daemon's default
 TCP port.
 
 ## What is safe to delete
 
 | Delete | Consequence |
 |--------|-------------|
-| `$XDG_CACHE_HOME/neenee/` | None. Cache regenerates. |
-| `$XDG_STATE_HOME/neenee/` | Recency-based sort orders reset; permission caches drop and re-prompt on next session. |
-| `$XDG_DATA_HOME/neenee/projects/<bucket>/` | That project loses its session history and embeddings. |
-| `$XDG_DATA_HOME/neenee/` | All history, blobs, skills, commands. Effectively a factory reset; `config.toml` survives. |
-| `$XDG_CONFIG_HOME/neenee/` | Loses user-edited configuration. Sessions and skills survive. |
+| `$XDG_CACHE_HOME/muta/` | None. Cache regenerates. |
+| `$XDG_STATE_HOME/muta/` | Recency-based sort orders reset; permission caches drop and re-prompt on next session. |
+| `$XDG_DATA_HOME/muta/projects/<bucket>/` | That project loses its session history and embeddings. |
+| `$XDG_DATA_HOME/muta/` | All history, blobs, skills, commands. Effectively a factory reset; `config.toml` survives. |
+| `$XDG_CONFIG_HOME/muta/` | Loses user-edited configuration. Sessions and skills survive. |

@@ -1,12 +1,12 @@
 # Provider capabilities
 
 Tool calling and reasoning are often described as "model capabilities." In
-practice they are the product of three cooperating layers, and neenee
+practice they are the product of three cooperating layers, and muta
 consumes them differently depending on which layers are present. This page
 explains where each capability actually lives and why providers differ.
 
 For the per-provider capability matrix, see
-[Providers](../reference/providers.md). For the wire-level protocol neenee
+[Providers](../reference/providers.md). For the wire-level protocol muta
 uses to call tools, see [Rounds and turns](agent-design/rounds-and-turns.md).
 
 ## Three layers
@@ -15,12 +15,12 @@ uses to call tools, see [Rounds and turns](agent-design/rounds-and-turns.md).
 |-------|------|----------|
 | Model weights | Behavior under tool-use prompts; whether reasoning is emitted at all | `deepseek-v4-flash`, `glm-5.2`, `kimi-k2.7-code`, `gemini-2.0-flash` |
 | Serving runtime | HTTP API shape, `tools` / `tool_choice` field parsing, guided JSON decoding, SSE chunking, `reasoning_content` field passthrough | vLLM, SGLang, TGI, TensorRT-LLM, and the hosted gateways (`api.openai.com`, `api.deepseek.com`, `open.bigmodel.cn`, Moonshot, Volcengine Ark) |
-| Client (neenee) | Schema declaration, delta reconstruction, fallback parsing, registry, permission brokering | neenee |
+| Client (muta) | Schema declaration, delta reconstruction, fallback parsing, registry, permission brokering | muta |
 A tool call only succeeds when all three layers agree. A model whose weights
 were never tool-tuned will emit free text even if the runtime accepts a
 `tools` field; a runtime without guided decoding may return malformed JSON
 even from a tool-tuned model; a client that fails to reassemble `delta`
-fragments by `index` will drop calls mid-stream. neenee's design assumes the
+fragments by `index` will drop calls mid-stream. muta's design assumes the
 serving runtime implements the OpenAI Chat Completions contract and degrades
 gracefully when it does not.
 
@@ -45,7 +45,7 @@ This is why two servings of the same weights (for example a raw vLLM instance
 without a tool template versus the vendor's hosted endpoint) can behave
 differently on the same `tools` payload.
 
-neenee trusts the runtime to deliver well-formed OpenAI-shaped tool calls.
+muta trusts the runtime to deliver well-formed OpenAI-shaped tool calls.
 The OpenAI-compatible adapter declares schemas and injects them into every
 request body as the `tools` field. It does not implement its own guided
 decoding or prompt templating — that is the runtime's job. For the mechanics
@@ -60,7 +60,7 @@ such as DeepSeek V4 thinking mode, Qwen reasoning models, GLM reasoning models)
 and passed through verbatim by the serving runtime as a sibling of `content`
 in the response object.
 
-neenee never declares reasoning support and never sends a flag that would
+muta never declares reasoning support and never sends a flag that would
 enable it. The streaming and non-streaming response parsers simply observe
 the field when it is present and forward it as a reasoning delta. A
 non-reasoning model produces no such events; no capability negotiation is
@@ -68,19 +68,19 @@ involved.
 
 This makes reasoning cheap to consume but also impossible to enable from the
 client side. Using a reasoning-tuned model variant (e.g. DeepSeek V4 with
-thinking mode enabled) is what turns reasoning on, not any neenee setting.
+thinking mode enabled) is what turns reasoning on, not any muta setting.
 
 ## Streaming is a runtime contract
 
 SSE chunking is part of the OpenAI Chat Completions contract that serving
-runtimes implement. Two runtime behaviors matter to neenee:
+runtimes implement. Two runtime behaviors matter to muta:
 
 - **Delta fragmentation.** The runtime is allowed to split a single tool
-  call across many SSE chunks, indexed by `delta.tool_calls[].index`. neenee
+  call across many SSE chunks, indexed by `delta.tool_calls[].index`. muta
   reassembles them by index in the streaming loop and does not execute a tool
   until the stream terminates.
 - **Field selection.** A runtime may omit `reasoning_content` or
-  `tool_calls` entirely from deltas where they have no new data. neenee's
+  `tool_calls` entirely from deltas where they have no new data. muta's
   parser treats every delta field as optional.
 
 Providers that do not implement `stream_chat_events` fall back to the trait
@@ -92,7 +92,7 @@ reasoning channel.
 
 ## Why providers differ
 
-neenee's provider adapters encode an opinionated mapping between the three
+muta's provider adapters encode an opinionated mapping between the three
 layers:
 
 - **OpenAI-compatible registry presets** (`kimi-code`, `zai-code`, plus the
@@ -103,11 +103,11 @@ layers:
   presets are pure data, so they inherit every capability from that one
   shared implementation.
 - **Anthropic** (`AnthropicMessagesProvider`) speaks the `/messages` wire
-  format with `x-api-key` auth; neenee converts the internal tool schema
+  format with `x-api-key` auth; muta converts the internal tool schema
   into Anthropic `tools` and replays results as `tool_result` blocks.
 - **Google** (`GoogleProvider`) speaks a different request shape
   (`systemInstruction`, `model`/`user` roles, and
-  `tools[].functionDeclarations`). neenee bridges Google's native
+  `tools[].functionDeclarations`). muta bridges Google's native
   function-calling API by converting the internal OpenAI-shaped tool schema
   into Google declarations, reading `functionCall` parts, and replaying tool
   results as `functionResponse` parts.

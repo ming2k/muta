@@ -1,6 +1,6 @@
 # Model Context
 
-The model context is the request-scoped view neenee sends to a provider. It is
+The model context is the request-scoped view muta sends to a provider. It is
 derived from the durable session, but it is not the durable session itself. The
 provider receives only the current projection: a rebuilt system prompt, the
 model window, and the tool catalog valid for this turn.
@@ -54,7 +54,7 @@ declaration surface; it is resent every turn because the provider is stateless.
 The **tool trace** lives in messages. When the model calls a tool, the assistant
 message records the tool name and JSON arguments. A read tool call can therefore
 include parameters such as `offset` and `limit` as part of the assistant
-tool-call arguments. After local execution, neenee appends a tool-result message
+tool-call arguments. After local execution, muta appends a tool-result message
 with the matching tool-call id and the result content. On the next request, both
 the call and the result are present in the model window unless a later context
 projection has shortened them.
@@ -71,7 +71,7 @@ Provider transports serialize the same conceptual context differently.
 OpenAI-compatible providers receive a message array plus a separate native tool
 schema field. Other providers may map messages and tools into a different
 native shape, or may not support native function calling. When native tool
-calling is unavailable, neenee uses the fallback path: the model emits a
+calling is unavailable, muta uses the fallback path: the model emits a
 tool-call-shaped text response, the harness promotes it into the structured tool
 trace, then execution and result recording follow the same path as native tool
 calls.

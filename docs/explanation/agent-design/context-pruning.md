@@ -26,7 +26,7 @@ dropping one half breaks the chain for providers that validate it. So pruning
 shell. A candidate is either *truncated* (head and tail kept, middle elided) or
 *cleared* to an informative placeholder,
 `[cleared tool result: read config.rs (42 lines, 350 tokens)]`
-(`CLEARED_TOOL_PREFIX`, `neenee-contracts/src/pressure.rs`), which tells the model
+(`CLEARED_TOOL_PREFIX`, `muta-contracts/src/pressure.rs`), which tells the model
 exactly what it lost and lets it decide whether to re-fetch. The legacy
 `[Old tool result content cleared]` form (`PRUNED_TOOL_PLACEHOLDER`) is still
 recognised on read so older sessions stay idempotent. Either way the
@@ -34,7 +34,7 @@ recognised on read so older sessions stay idempotent. Either way the
 
 ## The core operation
 
-`prune_tool_results` (`neenee-contracts/src/pressure.rs`) is the pure, side-effect-free
+`prune_tool_results` (`muta-contracts/src/pressure.rs`) is the pure, side-effect-free
 heart of the layer. It plans degradations without mutating, then applies them
 atomically — and only when the planned reclaim exceeds `min_reclaim_tokens`, so
 the durable archive is never churned for a negligible win.
@@ -82,7 +82,7 @@ model-relative trigger — `prune_threshold_tokens`, i.e. `prune_utilization`
 [compaction](context-compaction.md#thresholds-are-model-relative) for how the
 policy resolves). Neither runs unconditionally. Pressure against that threshold
 is measured by the same char-class estimator used everywhere else —
-`estimate_tokens` (`neenee-contracts/src/pressure.rs`), which classifies each
+`estimate_tokens` (`muta-contracts/src/pressure.rs`), which classifies each
 Unicode scalar (CJK glyphs ≈1 token each, ASCII letters ≈0.25, code
 punctuation ≈1) rather than using a flat byte ratio. This is the current
 *estimate* path: provider-reported `usage` is authoritative for the context
@@ -93,7 +93,7 @@ differ. See [compaction](context-compaction.md#how-pressure-is-measured) and
 
 | Entry point | When | Code |
 |-------------|------|------|
-| **Pre-round** | Once at the start of a round, before the agentic loop begins. Relieves pressure the new user message plus history may already have built up. | `prune_and_commit` in `neenee-agent/src/orchestration.rs` |
+| **Pre-round** | Once at the start of a round, before the agentic loop begins. Relieves pressure the new user message plus history may already have built up. | `prune_and_commit` in `muta-agent/src/orchestration.rs` |
 | **Mid-round** | Between tool turns *inside* the loop, when a single round fans out across many tool calls and pressure climbs mid-flight. | `MidTurnPruneProjectionGate` (impl of `ContextProjectionGate`), driven by `Agent::project_context_if_needed` |
 
 > **History.** The pre-round entry point originally ran on *every* round with no
@@ -155,5 +155,5 @@ reclaim floor and is not configurable.
   [ADR-0044](../../adr/0044-layered-token-accounting.md)).
 - [Token accounting](token-accounting.md) — how the token count is measured.
 - [Context compaction](context-compaction.md) — the next, heavier relief layer.
-- `neenee-contracts/src/pressure.rs` — `prune_tool_results`, `CompactionPolicy`,
+- `muta-contracts/src/pressure.rs` — `prune_tool_results`, `CompactionPolicy`,
   `ContextBudget`.

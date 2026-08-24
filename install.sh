@@ -1,29 +1,30 @@
 #!/usr/bin/env bash
 #
-# install.sh — one-line installer for neenee.
+# install.sh — one-line installer for muta.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ming2k/neenee/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ming2k/muta/main/install.sh | bash
 #
 # Or, to pin a version:
-#   NEENEE_VERSION=0.10.0 curl -fsSL .../install.sh | bash
+#   MUTA_VERSION=0.10.0 curl -fsSL .../install.sh | bash
 #
-# Installs the `neenee` binary into ~/.local/bin (or $INSTALL_DIR if set).
+# Installs the `muta` core and `mutx` terminal app into ~/.local/bin (or
+# $INSTALL_DIR if set).
 # Detects OS + architecture and pulls the matching release tarball from GitHub.
 
 set -euo pipefail
 
 # --- config -------------------------------------------------------------
 
-REPO="ming2k/neenee"
-# Binary name as published inside the release tarball (matches `[[bin]]` in
-# `crates/neenee-cli/Cargo.toml`).
-BIN_NAME="neenee"
-# Where the binary lands. Honour an explicit override, otherwise ~/.local/bin
+REPO="ming2k/muta"
+# Both binaries are required for local use: mutx starts the sibling muta core
+# on demand.
+BIN_NAMES=(muta mutx)
+# Where the binaries land. Honour an explicit override, otherwise ~/.local/bin
 # (no sudo needed; create it if missing).
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
-# Pin a version with NEENEE_VERSION="0.10.0". Empty means "latest release".
-NEENEE_VERSION="${NEENEE_VERSION:-}"
+# Pin a version with MUTA_VERSION="0.10.0". Empty means "latest release".
+MUTA_VERSION="${MUTA_VERSION:-}"
 
 # --- pretty printing ----------------------------------------------------
 
@@ -85,19 +86,19 @@ info "Detected ${fmt_bold}${target}${fmt_reset}"
 
 # --- resolve version ----------------------------------------------------
 
-if [[ -z "$NEENEE_VERSION" ]]; then
+if [[ -z "$MUTA_VERSION" ]]; then
     info "Looking up the latest release…"
-    NEENEE_VERSION="$(fetch "https://api.github.com/repos/${REPO}/releases/latest" \
+    MUTA_VERSION="$(fetch "https://api.github.com/repos/${REPO}/releases/latest" \
         | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
-    [[ -n "$NEENEE_VERSION" ]] || abort "Could not determine the latest release."
+    [[ -n "$MUTA_VERSION" ]] || abort "Could not determine the latest release."
 fi
 # Allow the user to pass either "0.10.0" or "v0.10.0".
-version="${NEENEE_VERSION#v}"
-info "Installing ${fmt_bold}neenee v${version}${fmt_reset}"
+version="${MUTA_VERSION#v}"
+info "Installing ${fmt_bold}muta v${version}${fmt_reset}"
 
 # --- download + extract -------------------------------------------------
 
-tarball="neenee-${version}-${target}.tar.gz"
+tarball="muta-${version}-${target}.tar.gz"
 url="https://github.com/${REPO}/releases/download/v${version}/${tarball}"
 
 tmpdir="$(mktemp -d)"
@@ -121,18 +122,16 @@ fi
 info "Extracting…"
 tar -xzf "${tmpdir}/${tarball}" -C "$tmpdir"
 
-# The tarball contains a top-level dir `neenee-<version>-<target>/`; locate
-# the binary by name so we don't hard-code the exact directory.
-src="$(find "$tmpdir" -type f -name "$BIN_NAME" -perm -u+x | head -n1)"
-[[ -n "$src" ]] || abort "Binary '$BIN_NAME' not found inside the archive."
-
 # --- install ------------------------------------------------------------
 
 mkdir -p "$INSTALL_DIR"
-dest="${INSTALL_DIR%/}/${BIN_NAME}"
-install -m 0755 "$src" "$dest"
-
-good "Installed ${fmt_bold}${dest}${fmt_reset}"
+for bin_name in "${BIN_NAMES[@]}"; do
+    src="$(find "$tmpdir" -type f -name "$bin_name" -perm -u+x | head -n1)"
+    [[ -n "$src" ]] || abort "Binary '$bin_name' not found inside the archive."
+    dest="${INSTALL_DIR%/}/${bin_name}"
+    install -m 0755 "$src" "$dest"
+    good "Installed ${fmt_bold}${dest}${fmt_reset}"
+done
 
 # --- PATH sanity check --------------------------------------------------
 
@@ -148,5 +147,5 @@ esac
 # Shell-completion hint: the binary can print its own completions, but that
 # is left to the user. Finish with a friendly next-step.
 printf "\n"
-good "Done! Run ${fmt_bold}neenee${fmt_reset} to start."
+good "Done! Run ${fmt_bold}mutx${fmt_reset} to start."
 printf "  First launch: press ${fmt_bold}Ctrl+M${fmt_reset} to pick a provider.\n"

@@ -1,15 +1,15 @@
 # TUI reference
 
-The neenee terminal UI is split into three layers — see
+The muta terminal UI is split into three layers — see
 [architecture.md](architecture.md) for the full picture. In short: the in-house
-[neenee-tui-engine](../../../crates/neenee-tui-engine/src/lib.rs) engine (ADR-0038) is a
+[mutx-engine](../../../apps/tui/crates/mutx-engine/src/lib.rs) engine (ADR-0038) is a
 retained cell grid with write-marks-dirty tracking, a back/front diff, and a
 crossterm backend; the **view layer**
-(the view modules of the `neenee-tui` crate — formerly the `neenee-tui-view`
+(the view modules of the `mutx` crate — formerly the `mutx-view`
 crate, re-merged by ADR-0079 and re-extracted with the shell by ADR-0098) holds the widget
 tree (entry point `view.rs`) and the semantic document model, rendering
 *into* the engine's grid via `Frame::render_widget`; and the **app shell**
-(`crates/neenee-tui/src`) owns `App` state, the event loop, and input
+(`apps/tui/crates/mutx/src`) owns `App` state, the event loop, and input
 mapping, driving the view layer through the borrowed `TranscriptView` seam.
 
 ## Frame layout
@@ -81,10 +81,10 @@ that `Esc` dismissed); it is not a focus toggle.
 ## Source files
 
 See [architecture.md](architecture.md) for how these three groups depend on each
-other. View and shell files both live under `crates/neenee-tui/src/` since
+other. View and shell files both live under `apps/tui/crates/mutx/src/` since
 ADR-0079; paths below are relative to that directory.
 
-### View layer — `crates/neenee-tui/src/` (view modules)
+### View layer — `apps/tui/crates/mutx/src/` (view modules)
 
 | File | Responsibility |
 |------|---------------|
@@ -115,7 +115,7 @@ ADR-0079; paths below are relative to that directory.
 | `modal.rs` | Shared discriminants: `Modal`, `Recess`, `ActivityTab` |
 | `completion.rs` | Completion-menu data types: `Completion`, `CompletionKind` (matching logic stays in the shell) |
 
-### App shell — `crates/neenee-tui/src/` (shell modules)
+### App shell — `apps/tui/crates/mutx/src/` (shell modules)
 
 | File | Responsibility |
 |------|---------------|

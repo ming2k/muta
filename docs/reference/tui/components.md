@@ -1,6 +1,6 @@
 # TUI render components
 
-`crates/neenee-tui/src/components/` contains reusable view-layer
+`apps/tui/crates/mutx/src/components/` contains reusable view-layer
 components built above low-level drawing primitives and below per-feature
 renderers. Components are pure render helpers: callers pass borrowed state,
 theme tokens, body lines, scroll cursors, and selection indices; components
@@ -65,10 +65,10 @@ Interaction logic remains in the app shell or in shell-owned state machines:
 
 | Behavior | Owner |
 |----------|-------|
-| Keyboard and mouse event dispatch | `crates/neenee-tui/src/input/` |
-| Modal open/close and action handling | `crates/neenee-tui/src/event_loop.rs` |
-| Question-modal state machine | `crates/neenee-tui/src/question_model.rs` |
-| Transcript-step focus and toggles | `crates/neenee-tui/src/step_interaction.rs` |
+| Keyboard and mouse event dispatch | `apps/tui/crates/mutx/src/input/` |
+| Modal open/close and action handling | `apps/tui/crates/mutx/src/event_loop.rs` |
+| Question-modal state machine | `apps/tui/crates/mutx/src/question_model.rs` |
+| Transcript-step focus and toggles | `apps/tui/crates/mutx/src/step_interaction.rs` |
 | Hit-region storage and lookup | `LayoutMap` / `ModalHitMap`, owned by the shell and filled by renderers |
 
 This keeps the view layer React-like in composition, but not React-like in

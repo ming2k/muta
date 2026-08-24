@@ -1,16 +1,16 @@
 # How to add a provider
 
-This guide walks through wiring a new LLM provider into neenee. For the
+This guide walks through wiring a new LLM provider into muta. For the
 existing provider matrix, see [Providers](../reference/providers.md). For the
 capability model that decides which path to take, see
 [Provider capabilities](../explanation/provider-capabilities.md).
 
-neenee resolves every provider through one catalog
-(`build_catalog` in `crates/neenee-agent/src/catalog/`): it derives the
+muta resolves every provider through one catalog
+(`build_catalog` in `crates/muta-agent/src/catalog/`): it derives the
 concrete routes (per-model transport/endpoint/credential/reasoning) from each
 provider instance's template plus the discovery cache, then constructs the
 concrete `Provider` via `build_provider_for_channel` in
-`crates/neenee-providers/src/registry/mod.rs`.
+`crates/muta-providers/src/registry/mod.rs`.
 Startup and a `/models` pick share this single path — there is no separate
 dispatch `match` to edit for presets or user entries.
 
@@ -23,7 +23,7 @@ dispatch `match` to edit for presets or user entries.
 | A genuinely incompatible contract (different roles, no `tools` field) | Standalone adapter | Medium |
 
 Prefer the config path for private or self-hosted endpoints, and the registry
-path for a vendor preset every neenee user would want.
+path for a vendor preset every muta user would want.
 
 ## Path 0: The Custom OpenAI template (no code, no config editing)
 
@@ -45,17 +45,17 @@ Two properties worth knowing:
 
 The equivalent hand-written state looks like this (see [Path 1](#path-1-user-defined-entry-no-code)
 for the full field reference). Instances live in `providers.toml`
-(`$XDG_STATE_HOME/neenee/`), credentials in `credentials.toml`, and only the
+(`$XDG_STATE_HOME/muta/`), credentials in `credentials.toml`, and only the
 selection (`default_provider` / `default_model`) in `config.toml`:
 
 ```toml
-# $XDG_CONFIG_HOME/neenee/config.toml — behavior only
+# $XDG_CONFIG_HOME/muta/config.toml — behavior only
 default_provider = "wechat"
 default_model = "GLM-5.2"
 ```
 
 ```toml
-# $XDG_STATE_HOME/neenee/providers.toml — instances
+# $XDG_STATE_HOME/muta/providers.toml — instances
 [[providers]]
 id = "wechat"
 name = "WeChat OpenAI"
@@ -65,7 +65,7 @@ models = ["GLM-5.2"]
 ```
 
 ```toml
-# $XDG_CONFIG_HOME/neenee/credentials.toml — secrets
+# $XDG_CONFIG_HOME/muta/credentials.toml — secrets
 [providers]
 wechat = "sk-..."
 ```
@@ -88,7 +88,7 @@ models = ["acme-1"]
 
 ```toml
 [providers]
-acme = "sk-..."               # $XDG_CONFIG_HOME/neenee/credentials.toml
+acme = "sk-..."               # $XDG_CONFIG_HOME/muta/credentials.toml
 ```
 
 A **native-Google relay / 中转站** uses `Google`. The `base_url` is the
@@ -142,13 +142,13 @@ with the same `template_id`, and each owns its own credential keyed by its own
 
 ## Path 2: Built-in provider (per-provider file)
 
-Create a new file `crates/neenee-providers/src/registry/<name>.rs`. Each
+Create a new file `crates/muta-providers/src/registry/<name>.rs`. Each
 provider file owns three things: a model-id list, a baseline metadata table,
 and a template spec. Use `deepseek.rs` as a minimal reference.
 
 ```rust
-use neenee_contracts::thinking::ThinkingSupport;
-use neenee_contracts::{Model, WireFormat};
+use muta_contracts::thinking::ThinkingSupport;
+use muta_contracts::{Model, WireFormat};
 
 use super::ProviderTemplateSpec;
 
@@ -156,7 +156,7 @@ use super::ProviderTemplateSpec;
 pub const ACME_BUILTIN_MODELS: &[&str] = &["acme-1"];
 
 /// Baseline capability metadata — context window, thinking support, effort
-/// levels, wire format. Submitted to `neenee_contracts`'s registry at link time.
+/// levels, wire format. Submitted to `muta_contracts`'s registry at link time.
 pub const MODELS: &[Model] = &[
     Model {
         id: "acme-1",
@@ -172,7 +172,7 @@ pub const MODELS: &[Model] = &[
     },
 ];
 
-inventory::submit!(neenee_contracts::model::BaselineModels(MODELS));
+inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     id: "acme",
@@ -185,7 +185,7 @@ pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
 ```
 
 Then wire the file into the aggregate tables in
-`crates/neenee-providers/src/registry/mod.rs`:
+`crates/muta-providers/src/registry/mod.rs`:
 
 1. Add `pub mod acme;` (alphabetical order).
 2. Add `pub use acme::ACME_BUILTIN_MODELS;` to the re-export block.
@@ -213,7 +213,7 @@ bearer).
 Use this path only when the provider's contract is genuinely incompatible with
 OpenAI Chat Completions. `GoogleProvider` (`Google`) and
 `AnthropicMessagesProvider` (`Anthropic`) are the existing examples, exposed
-through `neenee-llm-client` and re-exported by `neenee-providers`.
+through `muta-llm-client` and re-exported by `muta-providers`.
 
 Implement a `Provider` struct with at minimum `chat` and `stream_chat`. Both
 methods receive one `ModelRequest` containing the messages and tool
@@ -236,23 +236,23 @@ parser directly.
 
 Then wire the adapter into the two construction sites:
 
-1. Add a `Transport` variant in `crates/neenee-contracts/src/catalog.rs` and an arm
+1. Add a `Transport` variant in `crates/muta-contracts/src/catalog.rs` and an arm
    in `build_provider_for_channel`
-   (`crates/neenee-providers/src/registry/mod.rs`) that constructs the adapter
+   (`crates/muta-providers/src/registry/mod.rs`) that constructs the adapter
    from the channel.
 2. Register the template in `PROVIDER_TEMPLATE_SPECS` (add a `route_for_model`
    arm if the adapter routes by model wire format) so the catalog's derivation
-   (`crates/neenee-agent/src/catalog/derive.rs`) exposes it by `id`.
+   (`crates/muta-agent/src/catalog/derive.rs`) exposes it by `id`.
 
-Map neenee's `Role` enum to the provider's role names in both `chat` and
+Map muta's `Role` enum to the provider's role names in both `chat` and
 `stream_chat`. The universal fallback assumes assistant text is reachable
 through the standard message channel; a misnamed role breaks it.
 
 ## Verify
 
 ```bash
-cargo test -p neenee-providers
-cargo test -p neenee-agent catalog
+cargo test -p muta-providers
+cargo test -p muta-agent catalog
 ```
 
 Then exercise the provider end-to-end:

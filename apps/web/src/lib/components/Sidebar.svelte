@@ -73,7 +73,7 @@
   <div class="brand-header">
     <div class="brand-logo">
       <span class="dot" class:online={daemon.connection === "connected"}></span>
-      <span class="title">neenee</span>
+      <span class="title">muta</span>
     </div>
     <button
       class="badge"

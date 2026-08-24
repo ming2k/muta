@@ -7,7 +7,7 @@
 ## 1. 背景与整体目标 (Background & Vision)
 
 ### 1.1 背景
-为了将 neenee 构建为一个语法一致、扩展性强且支持动态角色调度的 AI Agent 系统，我们需要将零散的上下文注入与角色管理收优为两大核心能力：
+为了将 muta 构建为一个语法一致、扩展性强且支持动态角色调度的 AI Agent 系统，我们需要将零散的上下文注入与角色管理收优为两大核心能力：
 1. **统一 Context Directives (命名空间指令系统)**：将隐式/现场注入语法规范化，支持 `@skill:xxx`、`@file:xxx` 等命名空间。
 2. **Principal Identity & Profile 动态切换**：支持在对话运行期通过指令动态切换或设定 Agent 的 Principal 身份与行动策略。
 
@@ -24,14 +24,14 @@
 ## 2. 详细设计与改动范围 (Detailed Architecture & Scope)
 
 ```text
-neenee workspace/
-├── crates/neenee-skills/src/render.rs        <-- 【模块一】@skill:xxx 前缀解析
-├── crates/neenee-agent/src/
+muta workspace/
+├── crates/muta-skills/src/render.rs        <-- 【模块一】@skill:xxx 前缀解析
+├── crates/muta-agent/src/
 │   ├── conversation_context/
 │   │   ├── skills.rs                          <-- Skill 注入处理器
 │   │   └── files.rs                           <-- 【模块二】@file:xxx 文件注入处理器
 │   └── agent.rs                               <-- 【模块三】Principal Identity/Profile 动态切换 API
-└── crates/neenee-core/src/
+└── crates/muta-core/src/
     └── principal.rs                            <-- PrincipalRole 与预设 Profile 定义 (ADR-0053)
 ```
 
@@ -42,7 +42,7 @@ neenee workspace/
 ### 3.1 模块一：`@skill:xxx` 命名空间注入增强
 * **格式**：`@skill:{name}` 或 `@skills:{name}`
 * **兼容性**：向后兼容 `@{name}` 和 `skill://{name}`。
-* **位置**：`crates/neenee-skills/src/render.rs`。
+* **位置**：`crates/muta-skills/src/render.rs`。
 
 ### 3.2 模块二：`@file:xxx` 文件现场注入机制
 * **格式**：`@file:{path}` 或 `@files:{path}`（例如 `@file:src/main.rs`）
@@ -61,7 +61,7 @@ neenee workspace/
 * **原理 (基于 ADR-0053)**：
   * `PrincipalProfile` 封装了 `AgentIdentity`（身份 Preambles）、`ToolSelection`（工具选择器）与 `OperationScope`（写操作/命令权限界限）。
 * **动态切换 API & 处理器**：
-  1. 在 `neenee-core` / `neenee-agent` 中定义预置 Principal Roles：
+  1. 在 `muta-core` / `muta-agent` 中定义预置 Principal Roles：
      - `code`（默认程序员身份）
      - `architect`（架构师身份，侧重设计与审查）
      - `reviewer`（代码审查员身份）
@@ -73,17 +73,17 @@ neenee workspace/
 
 ## 4. 实施状态 (Implementation Status)
 
-- [x] **Phase 1: `@skill:xxx` 命名空间解析支持**（`crates/neenee-skills/src/render.rs`）
+- [x] **Phase 1: `@skill:xxx` 命名空间解析支持**（`crates/muta-skills/src/render.rs`）
   - [x] 修改 `is_mentioned` 算法，支持 `@skill:name` / `@skills:name` / 裸 `@name` / `skill://…`。
   - [x] 单测覆盖四种提及形式。
 
 - [x] **Phase 2: `@file:xxx` 文件现场注入模块实现**
-  - [x] 新建 `neenee-agent/src/conversation_context/files.rs`。
+  - [x] 新建 `muta-agent/src/conversation_context/files.rs`。
   - [x] 实现 `inject_mentioned_files`（路径安全检查、50KB/文件上限、10 文件/轮上限、隐式 Message 追加、失败以隐藏错误注记呈现）。
   - [x] 在 agent 请求流程中挂载文件注入（与技能注入并列，无项目根目录时禁用）。
 
 - [x] **Phase 3: Principal Profile 动态切换集成**
-  - [x] 在 `neenee-core` 中定义 `PrincipalRole` 预设（`code` / `architect` / `reviewer` / `security`）。
+  - [x] 在 `muta-core` 中定义 `PrincipalRole` 预设（`code` / `architect` / `reviewer` / `security`）。
   - [x] 在 agent 中实现动态切换（`@principal:role` 提及 + `/principal <role>` 命令）。
   - [x] 切换后 System Prompt 的 Identity Preamble 与工具边界实时生效。
 
@@ -98,7 +98,7 @@ neenee workspace/
 1. **`@skill:xxx` 验收**：
    * 输入 `请按 @skill:rust-expert 规范处理`，正确加载 `rust-expert` 技能正文。
 2. **`@file:xxx` 验收**：
-   * 输入 `请重构 @file:crates/neenee-skills/src/lib.rs`，自动读取并隐式注入该文件内容给 LLM。
+   * 输入 `请重构 @file:crates/muta-skills/src/lib.rs`，自动读取并隐式注入该文件内容给 LLM。
    * 非法/超越项目根目录的路径（如 `@file:/etc/passwd`）会被安全防护拦截并报错。
 3. **`@principal:xxx` 切换验收**：
    * 输入 `@principal:architect 分析项目设计`，Agent 的 Identity Preamble 与 System Prompt 实时切换为架构师角色视角。

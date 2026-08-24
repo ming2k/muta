@@ -1,6 +1,6 @@
 packages:
-  - 'apps/*'
+  - 'apps/web'
 # vite bundles esbuild, whose install script links the platform binary; the
-# web panel's dev/build/check scripts fail without it.
+# Web app's dev/build/check scripts fail without it.
 allowBuilds:
   esbuild: true

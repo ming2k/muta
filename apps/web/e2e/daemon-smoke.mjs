@@ -1,19 +1,20 @@
 #!/usr/bin/env node
 /**
- * End-to-end smoke against a live daemon (ADR-0105): the exact flow the web
- * panel drives, over the exact transports it uses.
+ * End-to-end smoke against a live daemon (ADR-0105/0136): the exact flow a
+ * browser app drives, over the exact transports it uses.
  *
- *   1. GET /healthz                → version/auth/panel flags
- *   2. GET /                       → the embedded panel HTML
- *   3. WS monitor with token as `bearer.` subprotocol → snapshot
- *   4. Control create_session      → ControlReply with session_id
- *   5. Attach that session         → Welcome
+ *   1. GET /healthz                → generic version/auth probe
+ *   2. WS monitor with token as `bearer.` subprotocol → snapshot
+ *   3. Control create_session      → ControlReply with session_id
+ *   4. Attach that session         → Welcome
+ *   5. Backend composer completion → ready-to-apply edit
  *   6. WS without credentials      → must fail (when auth is on)
  *   7. Version-skewed Select       → Error frame with code version_mismatch
  *
  * Env: DAEMON_URL (default http://127.0.0.1:9800), DAEMON_TOKEN (required
- * when the daemon has local_auth on), CLIENT_VERSION (defaults to the web
- * package version, matching the production client's single source of truth).
+ * when the daemon has local_auth on), CLIENT_VERSION (defaults to the Web
+ * package version and remains handshake diagnostic metadata under protocol
+ * negotiation).
  * Exits non-zero on the first failed step.
  */
 
@@ -78,15 +79,11 @@ async function main() {
   if (health.auth && !TOKEN) fail(step, "daemon requires a token but DAEMON_TOKEN is unset");
   ok(`healthz ${JSON.stringify(health)}`);
 
-  step = "static";
-  const html = await fetch(`${BASE}/`).then((r) => r.text());
-  if (!html.includes("<html")) fail(step, "no HTML at /");
-  ok(`GET / serves the panel (${html.length} bytes)`);
-
   step = "monitor";
-  const monitor = await wsConnect({ monitor: { watch: true, include_idle: true } }).catch((e) =>
-    fail(step, e.message),
-  );
+  const monitor = await wsConnect(
+    { monitor: { watch: true, include_idle: true } },
+    { protocol: 2 },
+  ).catch((e) => fail(step, e.message));
   const snapshot = await nextFrame(
     monitor,
     (f) => f.type === "Monitor" && f.kind === "snapshot",
@@ -95,9 +92,10 @@ async function main() {
   ok(`monitor snapshot (sessions=${snapshot.sessions.length})`);
 
   step = "create_session";
-  const control = await wsConnect({ control: { verb: "create_session", project: "/" } }).catch(
-    (e) => fail(step, e.message),
-  );
+  const control = await wsConnect(
+    { control: { verb: "create_session", project: "/" } },
+    { protocol: 2 },
+  ).catch((e) => fail(step, e.message));
   const reply = await nextFrame(control, (f) => f.type === "ControlReply", "control").catch((e) =>
     fail(step, e.message),
   );
@@ -105,11 +103,31 @@ async function main() {
   ok(`create_session → ${reply.session_id}`);
 
   step = "attach";
-  const session = await wsConnect({ attach: reply.session_id }).catch((e) => fail(step, e.message));
+  const session = await wsConnect({ attach: reply.session_id }, { protocol: 2 }).catch((e) =>
+    fail(step, e.message),
+  );
   const welcome = await nextFrame(session, (f) => f.type === "Welcome", "welcome").catch((e) =>
     fail(step, e.message),
   );
   ok(`Welcome (messages=${welcome.messages.length})`);
+
+  step = "completion";
+  session.send(
+    JSON.stringify({
+      type: "Request",
+      CompleteInput: { request_id: 7, input: "/mod", cursor: 4 },
+    }),
+  );
+  const completion = await nextFrame(
+    session,
+    (f) => f.type === "Response" && f.InputCompletions?.request_id === 7,
+    "completion",
+  ).catch((e) => fail(step, e.message));
+  const modelItem = completion.InputCompletions.items.find((item) => item.label === "/models");
+  if (!modelItem || modelItem.insert_text !== "/models" || modelItem.replace_start !== 0) {
+    fail(step, `unexpected completion ${JSON.stringify(completion)}`);
+  }
+  ok("backend completion returned an executable edit");
 
   if (health.auth) {
     step = "auth-negative";

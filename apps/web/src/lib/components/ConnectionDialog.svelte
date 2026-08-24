@@ -86,7 +86,7 @@
         />
         <span class="hint">
           Daemons started with default settings require a token (local_auth). Find it in the
-          discovery file <code>$XDG_RUNTIME_DIR/neenee/daemon.json</code> — it is sent as a
+          discovery file <code>$XDG_RUNTIME_DIR/muta/daemon.json</code> — it is sent as a
           <code>bearer.</code> subprotocol because browsers cannot set WebSocket headers.
         </span>
       </label>
