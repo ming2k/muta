@@ -787,6 +787,131 @@ async fn interrupt_settles_in_flight_request_with_estimated_prompt() {
     assert_eq!(records[0].completion_tokens, 0);
 }
 
+/// Regression for the quadratic streamed-output bug: a stream of many text
+/// deltas that is interrupted mid-flight must book an *exact* completion
+/// count (one whole-text tokenization of what streamed), not the running
+/// total of `StreamingCounter::push` summed once per delta. The bug booked
+/// 14.7M "completion tokens" (a 130 050 tok/s rate) for a real interrupted
+/// turn whose actual output was a few thousand tokens.
+///
+/// The corpus and pacing are tuned to stay under the ledger's physical-rate
+/// ceiling (10 000 tok/s): ~9 600 tokens over a ≥1 s wall-clock span. The
+/// bug, by contrast, blows past the ceiling almost immediately (its sum
+/// grows quadratically), so this test catches both the arithmetic error and
+/// the clamp with the same stream.
+#[tokio::test]
+async fn interrupted_stream_books_exact_not_cumulative_completion_tokens() {
+    // The provider streams N deltas, then parks. Cancellation is armed only
+    // after the deltas have all been *consumed* (the event closure counts
+    // AssistantDeltas), so the accounting guard observes the full N-delta
+    // stream before it settles as interrupted — the exact shape of the real
+    // bug, where a long stream was interrupted mid-generation.
+    struct SlowStreamProvider {
+        deltas: usize,
+    }
+    #[async_trait]
+    impl Provider for SlowStreamProvider {
+        async fn chat(&self, _: neenee_contracts::ModelRequest) -> Result<Message, String> {
+            unreachable!("streaming path should be used")
+        }
+        async fn stream_chat(
+            &self,
+            _: neenee_contracts::ModelRequest,
+        ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+            Ok(Box::pin(stream::pending()))
+        }
+        async fn stream_chat_events(
+            &self,
+            _: neenee_contracts::ModelRequest,
+        ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+            let n = self.deltas;
+            // Pace the stream like a real model (~9 600 tokens over ≈1.2 s of
+            // wall clock ⇒ ≈8 000 tok/s, under the ledger's 10 000 tok/s
+            // physical ceiling) so the *fixed* code settles the exact count,
+            // while the bug's quadratic sum still rockets past the ceiling
+            // almost immediately and gets clamped — either way the test
+            // detects it.
+            let per_delta = std::time::Duration::from_micros(500);
+            let deltas = futures::stream::iter((0..n).map(|i| {
+                ProviderStreamEvent::TextDelta(format!("delta {i} of the interrupted stream. "))
+            }))
+            .then(move |delta| async move {
+                tokio::time::sleep(per_delta).await;
+                Ok(delta)
+            });
+            let parked = futures::stream::pending::<Result<ProviderStreamEvent, String>>();
+            Ok(Box::pin(deltas.chain(parked)))
+        }
+    }
+
+    const DELTAS: usize = 2_400;
+    // ~9 600 tokens over ≈1.2 s (500 µs/delta) ⇒ ≈8 000 tok/s — realistic
+    // and under the ledger's physical ceiling.
+    // The delta counter is file-static (the event closure is a plain FnMut
+    // with no environment capture); reset it so repeated runs of this test
+    // in one process start from zero.
+    SEEN_DELTAS.store(0, Ordering::SeqCst);
+    let agent = Arc::new(Agent::new(
+        Arc::new(SlowStreamProvider { deltas: DELTAS }),
+        Vec::new(),
+        crate::AgentIdentity::default(),
+    ));
+    agent.set_thread_id("interrupt-quadratic");
+    agent.bump_round();
+    let ledger = neenee_contracts::TokenSourceLedger::shared();
+    agent.install_token_ledger(ledger.clone());
+    let token = CancellationToken::new();
+    let cancel_on_start = token.clone();
+    let mut messages = vec![Message::new(Role::User, "hello")];
+
+    let result = agent
+        .run_streaming_with_events(&mut messages, &token, |event| {
+            if let AgentEvent::AssistantDelta { .. } = event {
+                // Cancel only once every delta has been observed by the
+                // accounting guard (the guard's observe_output runs before
+                // this event is emitted). The stream then parks forever, so
+                // the turn ends through this cancellation.
+                SEEN_DELTAS.fetch_add(1, Ordering::SeqCst);
+                if SEEN_DELTAS.load(Ordering::SeqCst) >= DELTAS {
+                    cancel_on_start.cancel();
+                }
+            }
+        })
+        .await;
+
+    assert!(matches!(result, Err(HarnessError::Interrupted)));
+    let records = ledger.records_for_session("interrupt-quadratic");
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(
+        record.status,
+        neenee_contracts::RequestUsageStatus::Interrupted
+    );
+    // The exact expectation: a whole-text tokenization of the very deltas
+    // the attempt streamed — the same predictor the implementation uses, so
+    // this pins the *arithmetic* (no cumulative summation), not the corpus.
+    let mut streamed = String::new();
+    for i in 0..DELTAS {
+        streamed.push_str(&format!("delta {i} of the interrupted stream. "));
+    }
+    let expected = neenee_contracts::tokenizer::Tokenizer::new().count(&streamed) as i64;
+    assert_eq!(
+        record.completion_tokens, expected,
+        "the estimate must be the exact whole-stream count, not a running-total sum"
+    );
+    // And the total must be prompt + completion, not an independent blob.
+    assert_eq!(
+        record.total_tokens,
+        record
+            .prompt_tokens
+            .saturating_add(record.completion_tokens)
+    );
+}
+
+/// Delta counter shared by [`interrupted_stream_books_exact_not_cumulative`]
+/// so the test's event closure knows when the scripted stream is exhausted.
+static SEEN_DELTAS: AtomicUsize = AtomicUsize::new(0);
+
 /// A provider whose `stream_chat_events` future never resolves simulates a
 /// server that accepts the TCP connection but never sends HTTP response
 /// headers (overloaded upstream, dropped proxy). Without the idle-timeout on
@@ -1591,11 +1716,14 @@ async fn golden_native_tool_turn_then_final_text() {
         transcript(&events),
         vec![
             "model-request turn=0",
+            "context-tokens",
             "tool-call alpha {\"k\":1}",
             "tool-call beta {\"k\":2}",
             "tool-result alpha \"A-out\"",
             "tool-result beta \"B-out\"",
+            "context-tokens",
             "model-request turn=1",
+            "context-tokens",
             "assistant-delta start=true \"all done\"",
             "assistant-end \"all done\"",
         ]
@@ -1622,12 +1750,15 @@ async fn golden_text_fallback_tool_call_is_discarded_then_dispatched() {
         transcript(&events),
         vec![
             "model-request turn=0",
+            "context-tokens",
             "assistant-delta start=true \"{\\\"tool\\\":\\\"alpha\\\",\\\"arguments\\\":{\\\"k\\\":1}}\"",
             "assistant-end \"{\\\"tool\\\":\\\"alpha\\\",\\\"arguments\\\":{\\\"k\\\":1}}\"",
             "assistant-discard",
             "tool-call alpha {\"k\":1}",
             "tool-result alpha \"A-out\"",
+            "context-tokens",
             "model-request turn=1",
+            "context-tokens",
             "assistant-delta start=true \"finished\"",
             "assistant-end \"finished\"",
         ]
@@ -1957,6 +2088,7 @@ async fn golden_reasoning_precedes_text_in_the_same_turn() {
         transcript(&events),
         vec![
             "model-request turn=0",
+            "context-tokens",
             "reasoning-delta start=true \"think\"",
             "assistant-delta start=true \"answer\"",
             "assistant-end \"answer\"",

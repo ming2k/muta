@@ -37,7 +37,7 @@ pub mod view_switcher;
 
 // Re-export the public API so `paint::overlays::draw_*` callers are unchanged.
 pub use activity::{ActivityModalView, draw_activity_modal};
-pub use config::{ConfigFocus, ConfigViewProps, draw_config_view};
+pub use config::{ConfigFocus, ConfigViewProps, cycle_websearch_backend, draw_config_view};
 pub use dashboard::{
     ConsoleCommand, ConsoleLine, ConsoleVerb, DashboardFocus, creation_order, draw_dashboard,
     draw_session_preview, parse_console_command,

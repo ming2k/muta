@@ -53,7 +53,7 @@ client_identity: ClientIdentity | null, } } | { "ConnectProvider": { id: string,
 /**
  * How many recent events to include in the event-log tail.
  */
-event_cap: number, } } | "QuerySessionContext" | { "RevokePermission": { tool: string, scope: string, } } | "ClearAllPermissions" | { "ToggleTool": { name: string, enabled: boolean, } } | { "ToggleMcpServer": { name: string, enabled: boolean, } } | { "ReconnectMcpServer": { name: string, } } | { "ShellCommand": { command: string, } } | "ExitSideView" | { "FocusSide": { side_id: string, } } | { "InterruptSide": { side_id: string, } } | { "CloseSide": { side_id: string, } } | "QueryBtwList" | { "UpdateTuiLayout": string } | { "UpdateTuiColorScheme": { name: string, custom: ColorSchemeConfig, } };
+event_cap: number, } } | "QuerySessionContext" | { "RevokePermission": { tool: string, scope: string, } } | "ClearAllPermissions" | { "ToggleTool": { name: string, enabled: boolean, } } | { "ToggleMcpServer": { name: string, enabled: boolean, } } | { "ReconnectMcpServer": { name: string, } } | { "ShellCommand": { command: string, } } | "ExitSideView" | { "FocusSide": { side_id: string, } } | { "InterruptSide": { side_id: string, } } | { "CloseSide": { side_id: string, } } | "QueryBtwList" | { "UpdateTuiLayout": string } | { "UpdateTuiColorScheme": { name: string, custom: ColorSchemeConfig, } } | "QueryWebSearchConfig" | { "UpdateWebSearchConfig": WebSearchConfigUpdate };
 
 /**
  * What a client wants from the daemon, declared on the `Select` frame.
@@ -154,7 +154,7 @@ export type CommandThemeConfig = { idle_bg: string | null, hover_bg: string | nu
  */
 export type ComponentThemesConfig = { input: InputThemeConfig | null, crate: CrateThemeConfig | null, diff: DiffThemeConfig | null, command: CommandThemeConfig | null, };
 
-export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource, };
+export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource, overhead_tokens?: number | null, history_tokens?: number | null, };
 
 /**
  * Session-scoped events emitted while a user round runs, carried under an
@@ -764,6 +764,15 @@ default_id: string, rows: Array<ProviderPickerRow>, };
 export type QueuedUserInput = { id: string, text: string, display_text?: string, images?: Array<ImagePart>, sent_at_ms?: number, };
 
 /**
+ * Estimated token shape of a provider request.
+ *
+ * `history_tokens` is the prepared, non-system conversation, including any
+ * skill messages injected for this request. `overhead_tokens` covers the
+ * freshly composed system message and visible tool schemas.
+ */
+export type RequestTokenEstimate = { history_tokens: number, overhead_tokens: number, total_tokens: number, };
+
+/**
  * The durable `/retry` resume point: everything a later round needs to
  * *continue* a stopped round as itself — same round number, contiguous turn
  * ordinals — rather than minting a fresh round.
@@ -1163,6 +1172,75 @@ export type UserQuestionOption = { label: string, description?: string, };
  * Request sent from the agent to the TUI when the model calls `ask_user`.
  */
 export type UserQuestionRequest = { id: string, questions: Array<UserQuestion>, };
+
+/**
+ * A partial update to the `[websearch]` table. Every field is optional:
+ * `None` keeps the current value, `Some` replaces it. Sent via
+ * [`AgentRequest::UpdateWebSearchConfig`].
+ *
+ * Secrets travel in the clear on this request (the wire is the local
+ * WebSocket to the user's own daemon, the same trust domain as the
+ * `AddProvider`/`EditProvider` requests that carry provider API keys), but
+ * they are persisted to `credentials.toml` — never `config.toml` — and are
+ * **never echoed back**: the reply carries only key presence.
+ */
+export type WebSearchConfigUpdate = { 
+/**
+ * Primary search backend (`exa` | `parallel` | `duckduckgo` | `searxng`
+ * | `tavily` | `bocha`).
+ */
+provider?: string, 
+/**
+ * Fallback backend tried when the primary fails; empty string disables.
+ */
+fallback?: string, 
+/**
+ * Page-content reader used by `webfetch` (`builtin` | `jina`).
+ */
+reader?: string, 
+/**
+ * Proxy URL applied to both tools (`http(s)://`, `socks5://`,
+ * `socks5h://`). Empty string clears it.
+ */
+proxy?: string, 
+/**
+ * Per-request timeout in seconds (clamped to ≥ 1).
+ */
+timeout_secs?: number, 
+/**
+ * SearXNG JSON endpoint; required when `provider = "searxng"`.
+ * Empty string clears it.
+ */
+searxng_url?: string, 
+/**
+ * Exa API key. Empty string clears the stored key.
+ */
+exa_api_key?: string, 
+/**
+ * Parallel API key. Empty string clears the stored key.
+ */
+parallel_api_key?: string, 
+/**
+ * Tavily API key. Empty string clears the stored key.
+ */
+tavily_api_key?: string, 
+/**
+ * Bocha API key. Empty string clears the stored key.
+ */
+bocha_api_key?: string, 
+/**
+ * Jina Reader API key. Empty string clears the stored key.
+ */
+jina_api_key?: string, };
+
+/**
+ * The frontend-facing view of the effective `[websearch]` configuration.
+ * Mirrors [`crate::WebSearchConfig`] with every API key reduced to a
+ * boolean **presence flag** — plaintext secrets never cross the wire in
+ * either reply ([`AgentResponse::WebSearchConfigSnapshot`] or
+ * [`AgentResponse::WebSearchConfigUpdated`]).
+ */
+export type WebSearchConfigView = { provider: string, fallback: string, reader: string, proxy?: string, timeout_secs: number, searxng_url?: string, exa_api_key_set: boolean, parallel_api_key_set: boolean, tavily_api_key_set: boolean, bocha_api_key_set: boolean, jina_api_key_set: boolean, };
 
 /**
  * A session's declared work-in-progress (ADR-0097 §5): the paths it is

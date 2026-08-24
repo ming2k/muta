@@ -233,7 +233,7 @@ impl ContentModalSpec {
     /// tables breathe; the viewport ceiling keeps long histories scrolled
     /// rather than full-height.
     pub const USAGE_STATS: Self = Self::new(76, 12, 86);
-    pub const ACTIVITY: Self = Self::new(72, 8, 80);
+    pub const ACTIVITY: Self = Self::new(72, 10, 80);
     /// The unified provider/model editor (`draw_model_editor`). Sizes to its
     /// content — at most three rows (API key, reasoning effort, extended
     /// thinking) — instead of reserving a fixed 30% slab that left most of

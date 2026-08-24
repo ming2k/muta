@@ -8,11 +8,12 @@ use neenee_tui_engine::{
 };
 
 use super::common::todo_status_glyph_color;
-use crate::components::selectable_body::{RowSegment, SelectableRow, render_selectable_body};
-use crate::design::{MODAL_BODY_LEADING_INDENT, MODAL_TITLE_META_GAP};
+use crate::components::selectable_body::{
+    RowSegment, SelectableRow, render_selectable_body, selectable_body_desired_rows,
+};
+use crate::design::MODAL_TITLE_META_GAP;
 use crate::primitives::{
-    ContentModalSpec, FooterHint, content_modal_area, keyvocab, modal_chrome_rows, modal_frame,
-    render_modal_footer,
+    ContentModalSpec, FooterHint, content_modal_area, keyvocab, modal_frame, render_modal_footer,
 };
 use crate::view::Theme;
 
@@ -74,11 +75,8 @@ pub fn draw_activity_modal(
     // The body is a selectable document (`render_selectable_body`): every
     // visual row registers a MODAL_DOC region so the round overview and the
     // todo list are drag-selectable and copyable like transcript text.
-    // Decoration (the leading indent, todo status glyphs) is declared as row
-    // prefixes, which paint but stay out of copied text; the component wraps
-    // in the application layer, replacing the old pre-wrapped
-    // `indented_wrapped_lines` emission.
-    let indent = || RowSegment::styled(" ".repeat(MODAL_BODY_LEADING_INDENT), Style::default());
+    // Content rows are flush with the left margin (aligned with the header
+    // and section titles) to maximize usable width.
     let heading = |text: &str| {
         SelectableRow::styled(
             text,
@@ -87,8 +85,7 @@ pub fn draw_activity_modal(
                 .add_modifier(Modifier::BOLD),
         )
     };
-    let body_row =
-        |text: &str, style: Style| SelectableRow::styled(text, style).with_prefix(indent());
+    let body_row = |text: &str, style: Style| SelectableRow::styled(text, style);
 
     let mut rows: Vec<SelectableRow> = Vec::new();
 
@@ -181,27 +178,22 @@ pub fn draw_activity_modal(
         }
         crate::modal::ActivityTab::Todos => {
             if let Some(list) = todos.filter(|l| !l.items.is_empty()) {
-                // Hanging indent via row prefixes: the status glyph + gutter
-                // leads the first visual row, continuation rows align under
-                // the content column. Both are decoration (excluded from
-                // copy); the component owns the wrapping, so a long task
-                // description wraps cleanly instead of spilling past the
-                // body's right edge.
-                let glyph_col = MODAL_BODY_LEADING_INDENT + 1;
-                let content_col = glyph_col + 1;
+                // The status glyph + space leads the first visual row flush
+                // with the left margin (aligning with the header title);
+                // continuation rows align under the content column (2-col
+                // hanging indent). Both are decoration (excluded from copy);
+                // the component owns the wrapping, so a long task description
+                // wraps cleanly instead of spilling past the body's right edge.
                 for item in &list.items {
                     let glyph_color = todo_status_glyph_color(item.status, theme, muted);
                     let glyph = item.status.glyph();
                     rows.push(
                         SelectableRow::styled(&item.content, Style::default().fg(theme.fg()))
                             .with_prefix(RowSegment::styled(
-                                format!("{}{} ", " ".repeat(glyph_col), glyph),
+                                format!("{glyph} "),
                                 Style::default().fg(glyph_color),
                             ))
-                            .with_hang_prefix(RowSegment::styled(
-                                " ".repeat(content_col),
-                                Style::default(),
-                            )),
+                            .with_hang_prefix(RowSegment::styled("  ", Style::default())),
                     );
                 }
             } else {
@@ -213,7 +205,7 @@ pub fn draw_activity_modal(
         }
     }
 
-    let desired = rows.len() as u16 + modal_chrome_rows(geometry.modal_spec());
+    let desired = selectable_body_desired_rows(frame, geometry, &rows);
     let area = content_modal_area(frame, geometry, desired);
     let f = modal_frame(frame, area, theme.panel(), true, true);
 

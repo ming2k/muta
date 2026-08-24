@@ -13,12 +13,14 @@
   import TodoPanel from "./lib/components/TodoPanel.svelte";
   import ModelPicker from "./lib/components/ModelPicker.svelte";
   import ConnectionDialog from "./lib/components/ConnectionDialog.svelte";
+  import WebSearchDialog from "./lib/components/WebSearchDialog.svelte";
 
   let transcriptEl: HTMLElement;
   let autoScroll = $state(true);
   let sidebarOpen = $state(false);
   let modelsOpen = $state(false);
   let connectionOpen = $state(false);
+  let webSearchOpen = $state(false);
 
   onMount(() => {
     // Surface unexpected client errors instead of dying silently.
@@ -78,6 +80,7 @@
     <ChatHeader
       onToggleSidebar={() => (sidebarOpen = !sidebarOpen)}
       onOpenModels={() => (modelsOpen = true)}
+      onOpenWebSearch={() => (webSearchOpen = true)}
     />
 
     <section class="transcript" bind:this={transcriptEl} onscroll={handleScroll}>
@@ -145,6 +148,10 @@
 
 {#if connectionOpen}
   <ConnectionDialog onclose={() => (connectionOpen = false)} />
+{/if}
+
+{#if webSearchOpen}
+  <WebSearchDialog onclose={() => (webSearchOpen = false)} />
 {/if}
 
 <ToastStack />

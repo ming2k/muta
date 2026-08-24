@@ -1223,6 +1223,8 @@ mod tests {
                     transcript_layout: crate::layout::Strategy::TurnBand,
                     expand_auto_scroll: false,
                     click_outside_dismiss: true,
+                    websearch: None,
+                    websearch_editing: None,
                     workspace: "~/workspace",
                     category_scroll: &mut 0,
                     detail_scroll: &mut 0,
@@ -1257,6 +1259,8 @@ mod tests {
                     transcript_layout: crate::layout::Strategy::TurnBand,
                     expand_auto_scroll: false,
                     click_outside_dismiss: true,
+                    websearch: None,
+                    websearch_editing: None,
                     workspace: "~/workspace",
                     category_scroll: &mut 0,
                     detail_scroll: &mut 0,
@@ -4751,8 +4755,8 @@ mod tests {
             );
         });
         let back = terminal.buffer();
-        let front = neenee_tui_engine::Grid::new(width, 12);
-        let cmd = neenee_tui_engine::diff::diff(back, &front);
+        let mut front = neenee_tui_engine::Grid::new(width, 12);
+        let cmd = neenee_tui_engine::diff::diff(back, &mut front);
         let underline = neenee_tui_engine::Modifier::UNDERLINE;
 
         let wide_run_style = cmd.draws.iter().find_map(|d| match d {

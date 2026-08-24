@@ -20,6 +20,12 @@ impl SearchProvider for ExaProvider {
         "Exa"
     }
 
+    fn clone_box(&self) -> Box<dyn SearchProvider> {
+        Box::new(Self {
+            api_key: self.api_key.clone(),
+        })
+    }
+
     async fn search(
         &self,
         client: &reqwest::Client,

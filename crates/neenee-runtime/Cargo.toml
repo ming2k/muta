@@ -33,6 +33,7 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+neenee-persistence = { path = "../neenee-persistence", features = ["test-path-override"] }
 
 [lints]
 workspace = true

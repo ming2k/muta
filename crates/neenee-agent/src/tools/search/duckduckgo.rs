@@ -29,6 +29,10 @@ impl SearchProvider for DdgProvider {
         "DuckDuckGo"
     }
 
+    fn clone_box(&self) -> Box<dyn SearchProvider> {
+        Box::new(Self)
+    }
+
     async fn search(
         &self,
         client: &reqwest::Client,

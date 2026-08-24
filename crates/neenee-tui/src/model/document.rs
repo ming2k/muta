@@ -1846,6 +1846,13 @@ impl TranscriptMessage {
     /// Human-readable summary for the reasoning trace (always one line).
     /// Reports **tokens** (ADR-0120) — the unit of what this thinking block
     /// costs against the context window, not a scalar count of the text.
+    ///
+    /// While the trace is still streaming (`duration_ms: None`) the token
+    /// count is quantized to a bucket (`~`-prefixed) rather than exact: the
+    /// streaming summary repaints on every render heartbeat, and an exact
+    /// count would dirty the row for nearly every delta — the per-frame
+    /// redraw churn the middle-component flicker is made of. A finished
+    /// trace reports the exact count.
     pub fn thinking_summary(&self) -> Option<String> {
         let MessageKind::Thinking {
             content,
@@ -1857,7 +1864,22 @@ impl TranscriptMessage {
         };
         let tokens = neenee_contracts::tokenizer::count_tokens(content);
         Some(match duration_ms {
-            None => format!("Thinking · {tokens} tokens"),
+            None => {
+                // Bucket to steps that grow geometrically-ish: the label
+                // changes O(log n) times over a trace instead of O(tokens).
+                const BUCKETS: &[usize] = &[0, 25, 50, 100, 200, 350, 500, 750, 1000, 1500, 2000];
+                let bucket = BUCKETS
+                    .iter()
+                    .rev()
+                    .find(|&&edge| tokens >= edge)
+                    .copied()
+                    .unwrap_or(0);
+                if bucket == 0 {
+                    "Thinking · …".to_string()
+                } else {
+                    format!("Thinking · ~{bucket} tokens")
+                }
+            }
             Some(_) => format!(
                 "Thinking · {tokens} tokens · {}",
                 duration_text(*duration_ms)

@@ -637,6 +637,39 @@ pub fn estimate_string_tokens(s: &str) -> i64 {
     tokenizer::count_tokens(s) as i64
 }
 
+/// Estimated token shape of a provider request.
+///
+/// `history_tokens` is the prepared, non-system conversation, including any
+/// skill messages injected for this request. `overhead_tokens` covers the
+/// freshly composed system message and visible tool schemas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct RequestTokenEstimate {
+    pub history_tokens: usize,
+    pub overhead_tokens: usize,
+    pub total_tokens: usize,
+}
+
+impl RequestTokenEstimate {
+    pub fn new(history_tokens: usize, overhead_tokens: usize) -> Self {
+        Self {
+            history_tokens,
+            overhead_tokens,
+            total_tokens: history_tokens.saturating_add(overhead_tokens),
+        }
+    }
+}
+
+/// Estimate the tokens of a draft user prompt in the composer before sending.
+pub fn estimate_draft_tokens(s: &str) -> usize {
+    if s.is_empty() {
+        0
+    } else {
+        // Message framing overhead ≈ 4 tokens
+        tokenizer::count_tokens(s).saturating_add(4)
+    }
+}
+
 /// Estimate the model-visible semantic content of structured JSON without
 /// charging for transport-only JSON syntax or generic envelope keys.
 ///

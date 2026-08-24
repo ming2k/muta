@@ -233,7 +233,7 @@ pub(super) async fn handle_selection_start(
         // the ledger being absent — it is a data-lifecycle concern, not an
         // open ritual, so it runs whenever the report is missing.
         app.open_view(crate::views::ViewId::TokenReport);
-        if app.token_ledger.is_none() && app.token_report.is_none() {
+        if app.token_ledger.is_none() {
             let _ = app.tx.send(AgentRequest::QueryTokenUsage {
                 session_id: viewed_session_id.to_string(),
             });

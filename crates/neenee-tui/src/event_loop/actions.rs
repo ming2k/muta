@@ -667,7 +667,12 @@ pub(super) async fn dispatch_action(
                 app.config_custom_editing = false;
                 app.config_scroll = 0;
                 app.config_detail_scroll = 0;
+                app.websearch_editing = None;
             }
+            // Refresh the Web Search pane's snapshot from the authoritative
+            // harness state on every open (cheap request; keeps a stale view
+            // from reading as current after an out-of-band config edit).
+            let _ = app.tx.send(AgentRequest::QueryWebSearchConfig);
         }
         input::InputAction::ConfigFocusToggle => {
             if app.active_modal == Modal::Config {
@@ -753,6 +758,159 @@ pub(super) async fn dispatch_action(
                                 // Behavior category:
                                 app.click_outside_dismiss = !app.click_outside_dismiss;
                             }
+                            3 => {
+                                // Web Search category. Row indices mirror
+                                // `draw_websearch_detail`.
+                                let idx = app.config_detail_index;
+                                if let Some(field) = app.websearch_editing {
+                                    // Editing: Enter submits the drafted value.
+                                    let draft = app.input.trim().to_string();
+                                    app.websearch_editing = None;
+                                    app.input.clear();
+                                    app.set_cursor(0);
+                                    let update = match field {
+                                        4 => neenee_contracts::WebSearchConfigUpdate {
+                                            searxng_url: Some(draft),
+                                            ..Default::default()
+                                        },
+                                        5 => neenee_contracts::WebSearchConfigUpdate {
+                                            exa_api_key: Some(draft),
+                                            ..Default::default()
+                                        },
+                                        6 => neenee_contracts::WebSearchConfigUpdate {
+                                            parallel_api_key: Some(draft),
+                                            ..Default::default()
+                                        },
+                                        7 => neenee_contracts::WebSearchConfigUpdate {
+                                            tavily_api_key: Some(draft),
+                                            ..Default::default()
+                                        },
+                                        8 => neenee_contracts::WebSearchConfigUpdate {
+                                            bocha_api_key: Some(draft),
+                                            ..Default::default()
+                                        },
+                                        9 => neenee_contracts::WebSearchConfigUpdate {
+                                            jina_api_key: Some(draft),
+                                            ..Default::default()
+                                        },
+                                        _ => neenee_contracts::WebSearchConfigUpdate::default(),
+                                    };
+                                    let _ = app.tx.send(AgentRequest::UpdateWebSearchConfig(
+                                        Box::new(update),
+                                    ));
+                                } else {
+                                    match idx {
+                                        // Cycle the primary backend.
+                                        0 => {
+                                            let next = app
+                                                .websearch_config
+                                                .as_ref()
+                                                .map(|ws| ws.provider.as_str())
+                                                .map(crate::overlays::cycle_websearch_backend)
+                                                .unwrap_or("exa");
+                                            let _ = app.tx.send(
+                                                AgentRequest::UpdateWebSearchConfig(Box::new(
+                                                    neenee_contracts::WebSearchConfigUpdate {
+                                                        provider: Some(next.to_string()),
+                                                        ..Default::default()
+                                                    },
+                                                )),
+                                            );
+                                        }
+                                        // Cycle the fallback (wraps through
+                                        // "(none)" = disabled).
+                                        1 => {
+                                            let current = app
+                                                .websearch_config
+                                                .as_ref()
+                                                .map(|ws| ws.fallback.trim().to_string())
+                                                .unwrap_or_default();
+                                            let next = if current.is_empty() {
+                                                "exa".to_string()
+                                            } else {
+                                                let cycled =
+                                                    crate::overlays::cycle_websearch_backend(
+                                                        &current,
+                                                    );
+                                                if cycled
+                                                    == app
+                                                        .websearch_config
+                                                        .as_ref()
+                                                        .map(|ws| ws.provider.as_str())
+                                                        .unwrap_or("")
+                                                {
+                                                    // full cycle back to the
+                                                    // primary wraps to disabled
+                                                    String::new()
+                                                } else {
+                                                    cycled.to_string()
+                                                }
+                                            };
+                                            let _ = app.tx.send(
+                                                AgentRequest::UpdateWebSearchConfig(Box::new(
+                                                    neenee_contracts::WebSearchConfigUpdate {
+                                                        fallback: Some(next),
+                                                        ..Default::default()
+                                                    },
+                                                )),
+                                            );
+                                        }
+                                        // Cycle the reader.
+                                        2 => {
+                                            let current = app
+                                                .websearch_config
+                                                .as_ref()
+                                                .map(|ws| ws.reader.as_str())
+                                                .unwrap_or("builtin");
+                                            let next = if current == "builtin" {
+                                                "jina"
+                                            } else {
+                                                "builtin"
+                                            };
+                                            let _ = app.tx.send(
+                                                AgentRequest::UpdateWebSearchConfig(Box::new(
+                                                    neenee_contracts::WebSearchConfigUpdate {
+                                                        reader: Some(next.to_string()),
+                                                        ..Default::default()
+                                                    },
+                                                )),
+                                            );
+                                        }
+                                        // Timeout +5s per press (min 5).
+                                        3 => {
+                                            let current = app
+                                                .websearch_config
+                                                .as_ref()
+                                                .map(|ws| ws.timeout_secs)
+                                                .unwrap_or(20);
+                                            let _ = app.tx.send(
+                                                AgentRequest::UpdateWebSearchConfig(Box::new(
+                                                    neenee_contracts::WebSearchConfigUpdate {
+                                                        timeout_secs: Some((current + 5).max(5)),
+                                                        ..Default::default()
+                                                    },
+                                                )),
+                                            );
+                                        }
+                                        // Text fields: start editing, seeded
+                                        // with the current value.
+                                        4..=9 => {
+                                            app.websearch_editing = Some(idx);
+                                            let seed = match idx {
+                                                4 => app
+                                                    .websearch_config
+                                                    .as_ref()
+                                                    .and_then(|ws| ws.searxng_url.clone())
+                                                    .unwrap_or_default(),
+                                                _ => String::new(), // keys never echo
+                                            };
+                                            app.input = seed;
+                                            app.set_cursor_end();
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -761,7 +919,13 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::ConfigBack => {
             if app.active_modal == Modal::Config {
-                if app.config_custom_editing {
+                if app.websearch_editing.is_some() {
+                    // Cancel the web-search field edit: restore browse mode
+                    // and hand the composer row back unchanged.
+                    app.websearch_editing = None;
+                    app.input.clear();
+                    app.set_cursor(0);
+                } else if app.config_custom_editing {
                     app.config_custom_editing = false;
                     app.theme =
                         Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);

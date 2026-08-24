@@ -15,6 +15,12 @@ impl SearchProvider for SearxngProvider {
         "SearXNG"
     }
 
+    fn clone_box(&self) -> Box<dyn SearchProvider> {
+        Box::new(Self {
+            url: self.url.clone(),
+        })
+    }
+
     async fn search(
         &self,
         client: &reqwest::Client,

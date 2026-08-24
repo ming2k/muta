@@ -20,12 +20,12 @@
 //!   suppressed and the switch handler owns the terminal events.
 //!
 //! Both paths record *why* they stopped (C11): [`RoundLifecycle::record_interrupt`]
-//! parks a reason on the lifecycle the moment the cancellation is requested,
-//! and the unwinding round task reads it back via [`RoundLifecycle::take_interrupt`]
-//! when it emits its terminal cleanup. This is what lets one
-//! `HarnessError::Interrupted` unwind render as "Esc Esc" versus "new
-//! message" versus "process exited" without threading a reason through every
-//! producer of the error.
+//! parks a reason — stamped with the stop-request moment — on the lifecycle the
+//! instant the cancellation is requested, and the unwinding round task reads it
+//! back via [`RoundLifecycle::take_interrupt`] when it emits its terminal
+//! cleanup. This is what lets one `HarnessError::Interrupted` unwind render as
+//! "Esc Esc" versus "new message" versus "process exited" without threading a
+//! reason through every producer of the error.
 //!
 //! Parked reasons are one-round-scoped by construction: a stop site parks
 //! unconditionally (even with no round live), but [`RoundLifecycle::begin`]
@@ -48,7 +48,7 @@ pub struct RoundLifecycle {
     /// stop site ([`Self::record_interrupt`]) and consumed by the unwinding
     /// round task ([`Self::take_interrupt`]). `Mutex` (not `RwLock`) because
     /// [`Self::take_interrupt`] mutates.
-    interrupt_reason: std::sync::Mutex<Option<neenee_contracts::RoundInterruptReason>>,
+    interrupt_reason: std::sync::Mutex<Option<ParkedInterrupt>>,
 }
 
 /// The result of [`RoundLifecycle::begin`].
@@ -62,6 +62,21 @@ pub struct RoundBegin {
     /// The superseded round's token, if one was installed. Cancel it *after*
     /// rejecting pending permissions/inputs so parked replies resolve first.
     pub previous: Option<CancellationToken>,
+}
+
+/// A stop reason parked at the moment the cancellation was **requested**, with
+/// the clock reading of that same moment (ADR-0127). Parking the timestamp
+/// here — not stamping it later in the unwinding round's tail — is what keeps
+/// the durable record honest: by the time a superseded round's tail runs, the
+/// superseding message has already been sent, so a tail-time clock read lands
+/// *after* it and the resume seam-merge projects the marker below the newer
+/// round's answer, reading as an interrupt of a round that completed
+/// normally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParkedInterrupt {
+    pub reason: neenee_contracts::RoundInterruptReason,
+    /// Unix-epoch milliseconds at stop-request time.
+    pub at_ms: u64,
 }
 
 impl RoundLifecycle {
@@ -132,22 +147,50 @@ impl RoundLifecycle {
         }
     }
 
-    /// Park the reason an in-flight round is being stopped (C11). Called by
-    /// the stop site at the same moment it requests the cancellation, so the
-    /// unwinding round task can label its own terminal event without a
-    /// reason ever being threaded through the error type. Last writer wins:
-    /// a supersede that follows a plain interrupt re-labels the same unwind.
+    /// Park the reason an in-flight round is being stopped (C11), stamped
+    /// with the stop-request moment (ADR-0127). Called by the stop site at
+    /// the same instant it requests the cancellation, so the unwinding round
+    /// task can label its own terminal event without a reason ever being
+    /// threaded through the error type — and without the record's timestamp
+    /// drifting to tail time, where it lands after the superseding message.
+    /// Last writer wins: a supersede that follows a plain interrupt re-labels
+    /// the same unwind.
     pub fn record_interrupt(&self, reason: neenee_contracts::RoundInterruptReason) {
+        let parked = ParkedInterrupt {
+            reason,
+            at_ms: crate::orchestration::unix_epoch_ms(),
+        };
         *self
             .interrupt_reason
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(reason);
+            .unwrap_or_else(|e| e.into_inner()) = Some(parked);
+    }
+
+    /// [`Self::record_interrupt`] with an explicit clock reading, for stop
+    /// sites that know the more honest instant: a supersede parks *before*
+    /// cancelling the predecessor but the event the user anchored the stop to
+    /// is the newer message's send time, so the marker re-projects before
+    /// that message on resume (the seam rule, `transcript.rs`). `sent_at_ms`
+    /// of `None` (a message with no captured send time) falls back to now.
+    pub fn record_interrupt_at(
+        &self,
+        reason: neenee_contracts::RoundInterruptReason,
+        at_ms: Option<u64>,
+    ) {
+        let parked = ParkedInterrupt {
+            reason,
+            at_ms: at_ms.unwrap_or_else(crate::orchestration::unix_epoch_ms),
+        };
+        *self
+            .interrupt_reason
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(parked);
     }
 
     /// Consume the parked interrupt reason, if any (C11). Called once by the
     /// unwinding round task when it emits its terminal cleanup; the take
     /// semantics prevent a later round from reading a stale label.
-    pub fn take_interrupt(&self) -> Option<neenee_contracts::RoundInterruptReason> {
+    pub fn take_interrupt(&self) -> Option<ParkedInterrupt> {
         self.interrupt_reason
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -246,7 +289,7 @@ mod tests {
         let lifecycle = RoundLifecycle::new();
         lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::User);
         assert_eq!(
-            lifecycle.take_interrupt(),
+            lifecycle.take_interrupt().map(|parked| parked.reason),
             Some(neenee_contracts::RoundInterruptReason::User)
         );
 
@@ -271,7 +314,7 @@ mod tests {
         first.token.cancel();
         // The tail of the cancelled round reads it back...
         assert_eq!(
-            lifecycle.take_interrupt(),
+            lifecycle.take_interrupt().map(|parked| parked.reason),
             Some(neenee_contracts::RoundInterruptReason::User)
         );
         // ...and a stray late park while idle is again cleared by begin.
@@ -283,5 +326,31 @@ mod tests {
             "begin admits the new round with a clean interrupt slot"
         );
         assert!(second.previous.is_some(), "second begin supersedes first");
+    }
+
+    #[test]
+    fn parked_interrupt_carries_the_stop_request_clock() {
+        // The timestamp is the stop-request moment, not tail time: a record
+        // stamped when the unwinding round's cleanup finally runs can land
+        // after the superseding message and misplace the marker on resume.
+        let lifecycle = RoundLifecycle::new();
+        lifecycle.record_interrupt_at(
+            neenee_contracts::RoundInterruptReason::Superseded,
+            Some(1_000),
+        );
+        let parked = lifecycle
+            .take_interrupt()
+            .expect("park survives until taken");
+        assert_eq!(
+            parked.reason,
+            neenee_contracts::RoundInterruptReason::Superseded
+        );
+        assert_eq!(parked.at_ms, 1_000);
+
+        // A park without an explicit instant falls back to the wall clock,
+        // which is still the stop-request moment — never tail time.
+        lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::User);
+        let parked = lifecycle.take_interrupt().expect("fallback park exists");
+        assert!(parked.at_ms > 0, "wall-clock fallback is populated");
     }
 }

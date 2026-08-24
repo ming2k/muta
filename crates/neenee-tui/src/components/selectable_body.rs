@@ -28,9 +28,13 @@
 
 use neenee_tui_engine::{Frame, Line, Rect, Span, Style};
 
+use crate::design::MODAL_INNER_H_PADDING;
 use crate::model::layout::{BlockRegion, LayoutMap, MODAL_DOC_MSG_IDX};
 use crate::model::selection::SelectionState;
-use crate::primitives::{SCROLL_EDGE_MARGIN, draw_scrollbar, resolve_scroll};
+use crate::primitives::{
+    ContentModalSpec, SCROLL_EDGE_MARGIN, content_modal_probe, draw_scrollbar, modal_chrome_rows,
+    resolve_scroll,
+};
 use crate::text_layout::{WrappedLine, block_selection_range, line_selection, wrap_text};
 use crate::theme::Theme;
 
@@ -165,12 +169,48 @@ impl SelectableRow {
 
     /// The row's document text (content segments only — the decoration
     /// prefix is not part of the document).
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         self.segments
             .iter()
             .map(|s| s.text.as_str())
             .collect::<String>()
     }
+
+    /// Calculate the visual row count for this logical row when wrapped to `body_width`.
+    ///
+    /// Mirrors the wrap-budgeting logic in [`render_selectable_body`].
+    pub(crate) fn visual_row_count(&self, body_width: usize) -> usize {
+        let seg_width = |s: &RowSegment| neenee_tui_engine::text::str_width(&s.text);
+        let prefix_w = self.prefix.as_ref().map(seg_width).unwrap_or(0);
+        let budget = body_width.saturating_sub(prefix_w).max(1);
+        let full = self.text();
+        let rows = wrap_text(&full, budget);
+        if rows.is_empty() { 1 } else { rows.len() }
+    }
+}
+
+/// Compute the total visual rows for a slice of [`SelectableRow`]s within `body_width`.
+pub(crate) fn selectable_body_visual_rows(rows: &[SelectableRow], body_width: usize) -> usize {
+    rows.iter().map(|r| r.visual_row_count(body_width)).sum()
+}
+
+/// Compute the desired modal height (in rows, including chrome) for a selectable body
+/// inside a [`ContentModalSpec`].
+///
+/// Probes the modal's available body width in `frame` and wraps every row, matching
+/// [`render_selectable_body`]'s visual row accounting so content-sized modals open
+/// at the exact height needed to show their content without false scrollbars.
+pub(crate) fn selectable_body_desired_rows(
+    frame: &Frame,
+    geometry: ContentModalSpec,
+    rows: &[SelectableRow],
+) -> u16 {
+    let probe = content_modal_probe(frame, geometry);
+    let body_w = (probe.width as usize)
+        .saturating_sub(2 * MODAL_INNER_H_PADDING as usize)
+        .max(1);
+    let visual_rows = selectable_body_visual_rows(rows, body_w);
+    (visual_rows as u16) + modal_chrome_rows(geometry.modal_spec())
 }
 
 /// Render a documentary modal body with default-on text selection.
@@ -705,6 +745,37 @@ mod tests {
         assert!(
             map.cursor_at(10, 4).is_none(),
             "empty panel area must not resolve to a document cursor"
+        );
+    }
+
+    #[test]
+    fn visual_row_count_and_desired_rows_match_wrapped_rendering() {
+        let mut grid = neenee_tui_engine::Grid::new(80, 24);
+        let frame = neenee_tui_engine::Frame::new(&mut grid);
+        let geometry = ContentModalSpec::ACTIVITY;
+
+        let rows = vec![
+            SelectableRow::styled("Header", neenee_tui_engine::Style::default()),
+            SelectableRow::styled(
+                "This is a long line of text that is expected to wrap across multiple visual lines when given a standard content modal width.",
+                neenee_tui_engine::Style::default(),
+            ),
+            SelectableRow::empty(),
+            SelectableRow::styled("Footer", neenee_tui_engine::Style::default()),
+        ];
+
+        let probe = content_modal_probe(&frame, geometry);
+        let body_w = (probe.width as usize)
+            .saturating_sub(2 * MODAL_INNER_H_PADDING as usize)
+            .max(1);
+
+        let visual_rows = selectable_body_visual_rows(&rows, body_w);
+        assert!(visual_rows >= 4);
+
+        let desired = selectable_body_desired_rows(&frame, geometry, &rows);
+        assert_eq!(
+            desired,
+            visual_rows as u16 + modal_chrome_rows(geometry.modal_spec())
         );
     }
 }

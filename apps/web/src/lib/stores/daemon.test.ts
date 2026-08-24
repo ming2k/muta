@@ -675,6 +675,46 @@ describe("DaemonStore wire protocol", () => {
       expect(store.providerKeys).toEqual([["kimi-code", true]]);
     });
 
+    it("stores the websearch config snapshot and update ack, never a secret", () => {
+      const store = new DaemonStore();
+      const session = attachSession(store);
+
+      session.message({
+        type: "Response",
+        WebSearchConfigSnapshot: {
+          provider: "exa",
+          fallback: "parallel",
+          reader: "builtin",
+          timeout_secs: 20,
+          exa_api_key_set: false,
+          parallel_api_key_set: false,
+          tavily_api_key_set: true,
+          bocha_api_key_set: false,
+          jina_api_key_set: false,
+        },
+      });
+      expect(store.websearchConfig?.provider).toBe("exa");
+      // Presence flags, never key material — the view has no such field.
+      expect(store.websearchConfig?.tavily_api_key_set).toBe(true);
+
+      session.message({
+        type: "Response",
+        WebSearchConfigUpdated: {
+          provider: "tavily",
+          fallback: "duckduckgo",
+          reader: "jina",
+          timeout_secs: 30,
+          exa_api_key_set: false,
+          parallel_api_key_set: false,
+          tavily_api_key_set: true,
+          bocha_api_key_set: false,
+          jina_api_key_set: false,
+        },
+      });
+      expect(store.websearchConfig?.provider).toBe("tavily");
+      expect(store.websearchConfig?.reader).toBe("jina");
+    });
+
     it("ConversationReplaced merges messages and commands sorted by timestamp", () => {
       const store = new DaemonStore();
       const session = attachSession(store);

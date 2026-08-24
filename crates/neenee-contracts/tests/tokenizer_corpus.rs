@@ -101,7 +101,7 @@ fn file_corpus_stays_within_two_percent() {
         ("../../docs/adr/0044-layered-token-accounting.md", 1_742),
         (
             "../../docs/explanation/agent-design/token-accounting.md",
-            5_287,
+            5_553,
         ),
     ];
     let t = Tokenizer::new();

@@ -329,6 +329,13 @@ pub async fn run_tui(
     let subtask_question_parent_clone = envoy_question_parent.clone();
     let key_status = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
     let key_status_clone = key_status.clone();
+    // Effective `[websearch]` config (presence-only view), fetched when the
+    // Settings view opens and refreshed on every update ack. The event loop
+    // mirrors it into `App::websearch_config` each frame.
+    let websearch_config = Arc::new(Mutex::new(
+        Option::<neenee_contracts::WebSearchConfigView>::None,
+    ));
+    let websearch_config_clone = websearch_config.clone();
     let provider_picker = Arc::new(Mutex::new(ProviderPickerSnapshot::default()));
     let provider_picker_clone = provider_picker.clone();
     let sessions_overview = Arc::new(Mutex::new(Vec::<SessionOverview>::new()));
@@ -937,9 +944,11 @@ pub async fn run_tui(
                                 msgs.record_text_delta(id, delta);
                             } else {
                                 // This is the first visible text in the ReAct turn.
-                                // Upgrade to a structural write and create the transcript item
-                                // from real content, never from a transport-level start signal.
-                                drop(msgs);
+                                // Create the transcript item from real content,
+                                // never from a transport-level start signal — but
+                                // keep it on the streaming patch path (a targeted
+                                // append): the frozen history's heights are
+                                // untouched by a tail append.
                                 let (provider, model) =
                                     event_loop::attribution(&cp_clone, &cm_clone).await;
                                 let effort = event_loop::picker_effort(
@@ -949,7 +958,7 @@ pub async fn run_tui(
                                 )
                                 .await;
                                 *provider_retry_clone.lock().await = None;
-                                let mut msgs = buf.write().await;
+                                let pre_append_tail = msgs.last().map(|tail| tail.id);
                                 let mut message = TranscriptMessage::new(Role::Assistant, delta)
                                     .with_attribution(provider, model)
                                     .with_effort(effort);
@@ -957,6 +966,8 @@ pub async fn run_tui(
                                     message.round = Some(round);
                                     message.turn = Some(turn);
                                 }
+                                msgs.invalidate_message_height(message.id);
+                                msgs.record_append_message(pre_append_tail, message.clone());
                                 msgs.push(message);
                             }
                         }
@@ -969,7 +980,10 @@ pub async fn run_tui(
                             let round = position.map(|(round, _)| round);
                             let turn = position.map(|(_, turn)| turn);
                             *provider_retry_clone.lock().await = None;
-                            let mut msgs = buf.write().await;
+                            // Targeted finalize (no full snapshot): the final
+                            // text replaces the streaming entry in place and
+                            // evicts only that entry's cached height.
+                            let mut msgs = buf.write_streaming().await;
                             // Identity-addressed (ADR-0114): a command entry
                             // dispatched during the stream can sit between the
                             // assistant-text entry and the transcript tail;
@@ -982,6 +996,10 @@ pub async fn run_tui(
                             }) {
                                 message.raw = final_content;
                                 message.reparse();
+                                let finalized = message.clone();
+                                let id = message.id;
+                                msgs.invalidate_message_height(id);
+                                msgs.record_replace_message(id, finalized);
                             } else if !final_content.is_empty() {
                                 // Defensive fallback for providers that deliver only a final
                                 // payload without any preceding text delta.
@@ -1001,6 +1019,8 @@ pub async fn run_tui(
                                     message.round = Some(round);
                                     message.turn = Some(turn);
                                 }
+                                let pre_append_tail = msgs.last().map(|tail| tail.id);
+                                msgs.record_append_message(pre_append_tail, message.clone());
                                 msgs.push(message);
                             }
                         }
@@ -1099,7 +1119,8 @@ pub async fn run_tui(
                                 // The first disclosed reasoning delta creates the visible
                                 // reasoning component directly. `StreamStart` intentionally
                                 // creates no transcript placeholder, so hidden-chain models
-                                // cannot leave phantom spacing behind.
+                                // cannot leave phantom spacing behind. Targeted append —
+                                // the settled history's cached heights survive.
                                 let (provider, model) =
                                     event_loop::attribution(&cp_clone, &cm_clone).await;
                                 let effort = event_loop::picker_effort(
@@ -1123,13 +1144,13 @@ pub async fn run_tui(
                                 thinking.set_thinking_expanded(config::thinking_default_expanded(
                                     &tui_config_clone,
                                 ));
+                                let pre_append_tail = msgs.last().map(|tail| tail.id);
+                                msgs.record_append_message(pre_append_tail, thinking.clone());
                                 msgs.push(thinking);
                                 reasoning_start = Some(std::time::Instant::now());
                             }
                             if let Some(id) = changed {
                                 msgs.record_reasoning_delta(id, delta);
-                            } else {
-                                msgs.require_transcript_snapshot();
                             }
                         }
                         RoundEvent::StreamReasoningEnd(content) => {
@@ -1139,7 +1160,14 @@ pub async fn run_tui(
                             let position = positions_by_session.get(&session_id).copied();
                             let round = position.map(|(round, _)| round);
                             let turn = position.map(|(_, turn)| turn);
-                            let mut msgs = buf.write().await;
+                            // Targeted finalize (no full snapshot): a
+                            // streaming write resolves the trace by position
+                            // (ADR-0114), swaps in the finalized clone, and
+                            // drops only that message's height entry. A
+                            // finished trace gains a cached height (its
+                            // summary stops moving), which is exactly why
+                            // the entry must be evicted once.
+                            let mut msgs = buf.write_streaming().await;
                             // The round closes with `AssistantEnd` *before* `ReasoningEnd`
                             // (see golden_reasoning_precedes_text_in_the_same_turn), so by
                             // the time this arrives the assistant's text message is usually
@@ -1167,6 +1195,10 @@ pub async fn run_tui(
                                         *d = Some(duration_ms.unwrap_or(0));
                                     }
                                 }
+                                let finalized = last.clone();
+                                let id = last.id;
+                                msgs.invalidate_message_height(id);
+                                msgs.record_replace_message(id, finalized);
                             }
                         }
                         RoundEvent::ToolCall {
@@ -1193,7 +1225,13 @@ pub async fn run_tui(
                             let position = positions_by_session.get(&session_id).copied();
                             let sent_at_ms = event_loop::now_epoch_ms();
                             *provider_retry_clone.lock().await = None;
-                            let mut msgs = buf.write().await;
+                            // Targeted append (no full snapshot): a new
+                            // running tool step has no height-cache entry and
+                            // cannot disturb any settled message's height,
+                            // so the streaming patch path carries it and the
+                            // frozen history keeps its cached heights.
+                            let mut msgs = buf.write_streaming().await;
+                            let pre_append_tail = msgs.last().map(|tail| tail.id);
                             // A tool step starts collapsed: there's no result to show
                             // yet. The lifecycle-aware default (see `step_interaction`)
                             // expands it on completion — Ok follows per-tool density,
@@ -1205,6 +1243,7 @@ pub async fn run_tui(
                             if let Some((round, turn)) = position {
                                 message = message.with_round(round).with_turn(turn);
                             }
+                            msgs.record_append_message(pre_append_tail, message.clone());
                             msgs.push(message);
                             if !routes_to_side {
                                 ir_clone.store(true, Ordering::SeqCst);
@@ -1223,8 +1262,15 @@ pub async fn run_tui(
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
                             let density = tool_density_clone.load(Ordering::SeqCst);
-                            let mut msgs = buf.write().await;
+                            // Targeted finalize (no full snapshot): finishing
+                            // a running step swaps in the finished clone and
+                            // evicts exactly that message's height entry (a
+                            // finished step gains a cached height, and the
+                            // lifecycle default may expand it — both reasons
+                            // the old entry, if any, is stale).
+                            let mut msgs = buf.write_streaming().await;
                             let mut finished = false;
+                            let mut finalized_step: Option<(u64, TranscriptMessage)> = None;
                             for existing in msgs.iter_mut() {
                                 if existing.finish_tool_step(
                                     &id,
@@ -1246,6 +1292,7 @@ pub async fn run_tui(
                                         existing.set_tool_step_expanded(default);
                                     }
                                     finished = true;
+                                    finalized_step = Some((existing.id, existing.clone()));
                                     break;
                                 }
                             }
@@ -1279,7 +1326,13 @@ pub async fn run_tui(
                                     );
                                     message.set_tool_step_expanded(default);
                                 }
+                                let pre_append_tail = msgs.last().map(|tail| tail.id);
+                                msgs.record_append_message(pre_append_tail, message.clone());
                                 msgs.push(message);
+                            }
+                            if let Some((id, message)) = finalized_step {
+                                msgs.invalidate_message_height(id);
+                                msgs.record_replace_message(id, message);
                             }
                         }
                         RoundEvent::ToolCancelled { id, .. } => {
@@ -1842,6 +1895,14 @@ pub async fn run_tui(
                     // `AgentResponse::Error`; this success response is kept
                     // explicit for protocol exhaustiveness.
                 }
+                AgentResponse::WebSearchConfigSnapshot(snapshot) => {
+                    *websearch_config_clone.lock().await = Some(snapshot);
+                }
+                AgentResponse::WebSearchConfigUpdated(snapshot) => {
+                    // Authoritative post-update ack: the pane re-renders from
+                    // persisted state, discarding any optimistic local edit.
+                    *websearch_config_clone.lock().await = Some(snapshot);
+                }
             }
         }
     });
@@ -1919,6 +1980,8 @@ pub async fn run_tui(
         config_detail_index: 0,
         config_detail_scroll: 0,
         config_custom_editing: false,
+        websearch_config: None,
+        websearch_editing: None,
         skills_expanded: None,
         history_scroll: 0,
         history_modal_follow: true,
@@ -2120,6 +2183,7 @@ pub async fn run_tui(
             session_detail,
             token_report,
             usage_stats,
+            websearch_config,
             open_sessions,
             host_sessions,
             host_sessions_rev,

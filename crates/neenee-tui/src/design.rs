@@ -244,8 +244,9 @@ pub(crate) const COMPOSER_RIGHT_PAD_COLS: usize = 2;
 // Every centered modal (Activity, Sessions, Provider, Help, …) goes through
 // `modal_frame`, which paints a borderless solid-bg panel and splits it into
 // header / body / footer. These tokens are the single source of truth for
-// spacing *inside* that panel, so every modal indents its content the same
-// way instead of hard-coding whitespace per file.
+// spacing *inside* that panel: header and body content flush-align to the
+// inner area (`MODAL_INNER_H_PADDING`), maximizing usable horizontal space
+// across every overlay.
 
 /// Left/right padding between the panel edge and the header/body/footer.
 /// Applied once by `modal_frame` via `Margin { horizontal, .. }`; section
@@ -259,11 +260,6 @@ pub(crate) const SCROLLBAR_GAP: u16 = 1;
 /// Top/bottom padding between the panel edge and the header/body/footer.
 /// Applied once by `modal_frame` via `Margin { vertical, .. }`.
 pub(crate) const MODAL_INNER_V_PADDING: u16 = 1;
-
-/// Leading indent for body content (items, prose) under the header or a
-/// section label, so all sections align across every modal regardless of
-/// which overlay renders them. Added on top of `MODAL_INNER_H_PADDING`.
-pub(crate) const MODAL_BODY_LEADING_INDENT: usize = 2;
 
 /// Columns between a header title and a trailing meta value shown beside it
 /// (e.g. the Todos `done/total` counter), so title + meta read as one line.

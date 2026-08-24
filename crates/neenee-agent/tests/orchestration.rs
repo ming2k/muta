@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use futures::StreamExt;
 use futures::stream;
 
 struct RetryOnceProvider(AtomicUsize);
@@ -888,6 +889,62 @@ impl Provider for InstantProvider {
     }
 }
 
+/// A provider that streams one text delta, then *finishes on a delay* —
+/// closing the stream (the terminal event a real provider sends after its
+/// last delta + usage chunk) only after `settle_ms`. This is the exact shape
+/// of the end-of-answer race: the answer's content has all arrived, but the
+/// stream's `Ok(None)` terminator is still in flight when the user's next
+/// message (or Esc Esc) lands. Whether the round completes or unwinds as
+/// `Interrupted` is decided by the finish-drain window, not by which signal
+/// happened to poll first.
+struct SettlingProvider {
+    settle_ms: u64,
+}
+
+#[async_trait]
+impl Provider for SettlingProvider {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
+        Err("chat is not used by the streaming path".to_string())
+    }
+    async fn stream_chat(
+        &self,
+        _request: neenee_contracts::ModelRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        let settle_ms = self.settle_ms;
+        Ok(Box::pin(stream::unfold(0u8, move |state| async move {
+            match state {
+                0 => Some((Ok("done".to_string()), 1)),
+                // Terminal: close the stream shortly after the delta.
+                1 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(settle_ms)).await;
+                    None
+                }
+                _ => None,
+            }
+        })))
+    }
+}
+
+/// A provider that streams one delta and then goes **silent forever** — an
+/// answer that was *not* settling when the cancel landed. The finish-drain
+/// window must expire and honour the interrupt.
+struct TrickleThenSilentProvider;
+
+#[async_trait]
+impl Provider for TrickleThenSilentProvider {
+    async fn chat(&self, _request: neenee_contracts::ModelRequest) -> Result<Message, String> {
+        Err("chat is not used by the streaming path".to_string())
+    }
+    async fn stream_chat(
+        &self,
+        _request: neenee_contracts::ModelRequest,
+    ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
+        Ok(Box::pin(
+            stream::once(async { Ok("partial answer".to_string()) }).chain(stream::pending()),
+        ))
+    }
+}
+
 /// A provider whose single stream item is gated: it signals `started` when
 /// the round reaches the model request, then holds the stream open until
 /// `release` fires, and finally converges ("done", no tool calls). This lets
@@ -1181,4 +1238,124 @@ async fn superseded_live_round_still_records() {
         neenee_contracts::RoundInterruptReason::Superseded
     );
     let _ = std::fs::remove_dir_all(directory);
+}
+
+// ---------------------------------------------------------------------------
+// The end-of-answer supersede race (the false "▲ interrupted · new message"
+// over a round that finished): the model's final delta has arrived and only
+// the stream terminator is in flight when the next message lands.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn late_supersede_on_a_settling_stream_completes_the_round() {
+    // The answer's content fully arrived; the stream closes 100 ms later. A
+    // new message cancelling the round inside that window must NOT unwind it
+    // as interrupted — the user watched the answer finish, so the round
+    // commits and no marker is recorded.
+    let InteractiveRoundFixture {
+        session,
+        mut rx,
+        lifecycle,
+        agent,
+        directory,
+    } = interactive_round_fixture(Arc::new(SettlingProvider { settle_ms: 100 })).await;
+
+    let delta =
+        next_event_where(&mut rx, |event| matches!(event, RoundEvent::StreamDelta(_))).await;
+    assert!(delta.is_some(), "round must stream its answer delta");
+
+    // The user sends the next message: park + cancel exactly as
+    // `start_interactive_round`'s replacement arm does.
+    lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::Superseded);
+    lifecycle.cancel_current().await;
+
+    let outcome = next_event_where(&mut rx, |event| {
+        matches!(
+            event,
+            RoundEvent::RoundCompleted(_) | RoundEvent::RoundInterrupted(_)
+        )
+    })
+    .await;
+    match outcome {
+        Some(RoundEvent::RoundCompleted(_)) => {}
+        other => panic!("a fully streamed answer must complete, got {other:?}"),
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(
+        session.round_interrupts().await.is_empty(),
+        "no interrupt record for a round that committed its answer"
+    );
+    assert_eq!(agent.round_count(), 1);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[tokio::test]
+async fn supersede_on_a_silent_stream_still_interrupts() {
+    // Control: a delta arrived but the stream then went silent — the answer
+    // was NOT settling when the cancel landed. The drain window expires and
+    // the interrupt stands (a genuinely unfinished answer is interrupted
+    // work). Parked at the stop moment, the record must still be written.
+    let InteractiveRoundFixture {
+        session,
+        mut rx,
+        lifecycle,
+        directory,
+        ..
+    } = interactive_round_fixture(Arc::new(TrickleThenSilentProvider)).await;
+
+    let delta =
+        next_event_where(&mut rx, |event| matches!(event, RoundEvent::StreamDelta(_))).await;
+    assert!(delta.is_some(), "round must stream its first delta");
+
+    lifecycle.record_interrupt(neenee_contracts::RoundInterruptReason::Superseded);
+    lifecycle.cancel_current().await;
+
+    let interrupted = next_event_where(&mut rx, |event| {
+        matches!(event, RoundEvent::RoundInterrupted(_))
+    })
+    .await;
+    assert!(
+        interrupted.is_some(),
+        "a stream that never settles is genuinely interrupted"
+    );
+    let records = session.round_interrupts().await;
+    assert_eq!(records.len(), 1, "exactly one durable record: {records:?}");
+    assert_eq!(
+        records[0].reason,
+        neenee_contracts::RoundInterruptReason::Superseded
+    );
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[tokio::test]
+async fn supersede_record_is_stamped_at_the_message_send_time() {
+    // Seam regression: the marker's `at_ms` must not postdate the superseding
+    // message's `sent_at_ms`, or the resume merge drops the marker below the
+    // newer round's answer — reading as an interrupt of a round that
+    // completed normally. The park API is exercised directly here (the full
+    // replacement flow is runtime-level); what it must guarantee is that the
+    // explicit send time wins over the park-moment clock.
+    let lifecycle = RoundLifecycle::new();
+    lifecycle.begin().await;
+    lifecycle.record_interrupt_at(
+        neenee_contracts::RoundInterruptReason::Superseded,
+        Some(42_000),
+    );
+    let parked = lifecycle
+        .take_interrupt()
+        .expect("park survives until taken");
+    assert_eq!(parked.at_ms, 42_000);
+    assert!(
+        parked.at_ms < crate::unix_epoch_ms_for_test(),
+        "an explicit send time must win over the wall clock"
+    );
+}
+
+/// Wall clock for [`supersede_record_is_stamped_at_the_message_send_time`]:
+/// guaranteed past the fixed send time the test parks.
+fn unix_epoch_ms_for_test() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(u64::MAX)
 }

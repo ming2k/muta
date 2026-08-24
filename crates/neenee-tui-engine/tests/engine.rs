@@ -30,7 +30,7 @@ fn render_cycle(back: &mut Grid, front: &mut Grid, bce: Bce) -> String {
         let mut be = Backend::with_bce(&mut buf, bce);
         be.render(&cmd).unwrap();
     }
-    diff::promote(back, front);
+    diff::promote_scrolled(back, front, &cmd);
     String::from_utf8(buf).unwrap()
 }
 
@@ -81,8 +81,8 @@ fn wide_glyph_trailing_column_carries_background_not_reset() {
     );
 
     // Diff must emit the glyph once; the trailing column is implicit.
-    let front = Grid::new(6, 1);
-    let cmd = diff::diff(&back, &front);
+    let mut front = Grid::new(6, 1);
+    let cmd = diff::diff(&back, &mut front);
     assert_eq!(cmd.draws.len(), 1);
     let emitted_cells = match &cmd.draws[0] {
         diff::Draw::Cells { cells, .. } => cells.clone(),
@@ -108,7 +108,7 @@ fn streaming_token_grows_only_the_changed_run() {
     let end = back.put(5, 0, Fit::Clip, style, " world");
     assert_eq!(end, Pos { x: 11, y: 0 });
 
-    let cmd = diff::diff(&back, &front);
+    let cmd = diff::diff(&back, &mut front);
     // The single changed run is exactly the new text, starting at col 5.
     assert_eq!(cmd.draws.len(), 1);
     if let diff::Draw::Cells {
@@ -166,7 +166,7 @@ fn clear_row_then_redraw_marks_only_that_row() {
     back.clear_row(1, 0, Style::default().bg(Color::Rgb(10, 10, 10)));
     back.put(0, 1, Fit::Clip, Style::default(), "bbbbb");
 
-    let cmd = diff::diff(&back, &front);
+    let cmd = diff::diff(&back, &mut front);
     let touched_rows: std::collections::HashSet<u16> = cmd
         .draws
         .iter()
@@ -197,7 +197,7 @@ fn resize_preserves_content_and_converges() {
     // New cells are blank.
     assert_eq!(back.get(5, 2).unwrap().symbol, " ");
 
-    let cmd = diff::diff(&back, &front);
+    let cmd = diff::diff(&back, &mut front);
     let _ = render_cycle(&mut back, &mut front, Bce::Yes);
     // Either nothing changed (empty diff) or only genuinely new content did.
     let _ = cmd;
@@ -268,7 +268,7 @@ fn diff_collapses_uniform_blank_tail_to_clear_eol() {
     let bg = Style::default().bg(Color::Rgb(7, 8, 9));
     back.clear_row(0, 2, bg);
 
-    let cmd = diff::diff(&back, &front);
+    let cmd = diff::diff(&back, &mut front);
     assert!(matches!(
         cmd.draws.as_slice(),
         [diff::Draw::ClearEol {
@@ -572,5 +572,88 @@ fn resize_then_repaint_does_not_inherit_stale_bold() {
     assert!(
         s.contains("\x1b[0m"),
         "resize must emit a real SGR reset so plain repaints drop stale bold, got: {s:?}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scroll translation: the streaming-transcript frame (ADR on middle-component
+// flicker). A transcript whose content grows at the bottom while following it
+// shifts every settled row up; the diff must translate that into one terminal
+// scroll plus the genuinely-new row, and convergence must hold afterwards.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Fill `back` with one labeled row per label, then clear dirty so the test
+/// controls exactly what the "writer" repaints.
+fn labeled(w: u16, labels: &[&str]) -> Grid {
+    let mut g = Grid::new(w, labels.len() as u16);
+    for (y, label) in labels.iter().enumerate() {
+        g.put(0, y as u16, Fit::Clip, Style::default(), label);
+    }
+    g.clear_dirty();
+    g
+}
+
+#[test]
+fn streaming_append_scrolls_history_instead_of_repainting_it() {
+    let (w, h) = (10, 4);
+    // Frame 1: an established transcript view — h1 h2 h3, one blank row.
+    let mut back = Grid::new(w, h);
+    for (y, text) in [(0u16, "h1"), (1, "h2"), (2, "h3")] {
+        back.put(0, y, Fit::Clip, Style::default(), text);
+    }
+    let mut front = Grid::new(w, h);
+    let first = render_cycle(&mut back, &mut front, Bce::Yes);
+    assert!(first.contains("h1") && first.contains("h3"));
+
+    // Frame 2 (the streaming frame): the view advanced down by one row —
+    // history moved up, one new line appeared at the bottom. The writer
+    // repaints the whole moved band (rows 0..=2).
+    let mut next = labeled(w, &["h2", "h3", "NEW", ""]);
+    next.clear_dirty();
+    for (y, text) in [(0u16, "h2"), (1, "h3"), (2, "NEW")] {
+        next.put(0, y, Fit::Clip, Style::default(), text);
+    }
+    let cmd = diff::diff(&next, &mut front);
+
+    // One scroll op leads the frame…
+    match cmd.scroll() {
+        Some(diff::Draw::ScrollUp { y, height, amount }) => {
+            assert_eq!((*y, *height, *amount), (0, 3, 1), "history scrolls up by 1");
+        }
+        other => panic!("expected ScrollUp, got {other:?} — draws: {:?}", cmd.draws),
+    }
+    // …and the only repaint is the genuinely-new row.
+    let repaints: Vec<u16> = cmd.draws[1..]
+        .iter()
+        .filter_map(|d| match d {
+            diff::Draw::Cells { y, .. } => Some(*y),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        repaints.iter().all(|&y| y == 2),
+        "only the new bottom row repaints, got {repaints:?}"
+    );
+
+    // The bytes carry DECSTBM + SU, not a row-by-row repaint of history.
+    let mut buf = Vec::new();
+    {
+        let mut be = Backend::with_bce(&mut buf, Bce::Yes);
+        be.render(&cmd).unwrap();
+    }
+    let s = String::from_utf8(buf).unwrap();
+    assert!(
+        s.contains("\x1b[1;3r"),
+        "scroll region covers the moved band: {s:?}"
+    );
+    assert!(s.contains("\x1b[1S"), "scroll-up by 1: {s:?}");
+    assert!(!s.contains("h1"), "history must not be repainted: {s:?}");
+
+    // Convergence: after promote, the next idle frame emits nothing.
+    diff::promote_scrolled(&mut next, &mut front, &cmd);
+    let idle = render_cycle(&mut next, &mut front, Bce::Yes);
+    assert!(
+        idle.is_empty(),
+        "post-scroll frame must be idle, got {idle:?}"
     );
 }

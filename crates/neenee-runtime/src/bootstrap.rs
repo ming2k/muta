@@ -369,8 +369,16 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // self-register and are assembled explicitly below. MCP tools are
     // discovered at runtime and published directly to the principal Agent;
     // they are not part of this static capability set.
+    // Hot-reloadable `[websearch]` handle: the web tools hold the same `Arc`
+    // (via the tool context below), and `UpdateWebSearchConfig` /
+    // `/settings reload` write into it, so backend/reader/proxy changes
+    // reach the tools on their next call without a toolset rebuild.
+    let websearch_shared = Arc::new(neenee_contracts::SharedWebSearchConfig::new(
+        config.websearch.clone(),
+    ));
     let tool_ctx = {
         let mut builder = ToolContextBuilder::new();
+        builder.provide(websearch_shared.clone());
         builder.provide(config.websearch.clone());
         builder.provide(skills_registry.clone());
         builder.provide(embedding_store.clone());
@@ -835,6 +843,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ui,
         token_ledger: token_ledger.clone(),
         extra_commands: Arc::new(crate::slash_handler::SlashCommandRegistry::new()),
+        websearch_shared,
     };
 
     Ok(Bootstrap {

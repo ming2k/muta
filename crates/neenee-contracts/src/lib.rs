@@ -116,7 +116,7 @@ pub use events::{
     ProviderPickerSnapshot, QueuedUserInput, RetryPoint, RoundEvent, RoundInterrupt,
     RoundInterruptReason, RoundSummary, SessionContextSnapshot, SessionDetail, SessionForkKind,
     SessionOverview, SessionSnapshot, SkillInfo, ToolInfo, UserQuestion, UserQuestionOption,
-    UserQuestionReply, UserQuestionRequest,
+    UserQuestionReply, UserQuestionRequest, WebSearchConfigUpdate, WebSearchConfigView,
 };
 pub mod monitor;
 pub use hooks::{
@@ -134,8 +134,9 @@ pub use monitor::{
     WipAdvice, WipConflict, WipStatus,
 };
 pub use pressure::{
-    CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PruneOutcome, estimate_bytes,
-    estimate_message_tokens, estimate_semantic_json_tokens, estimate_tokens, prune_tool_results,
+    CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PruneOutcome, RequestTokenEstimate,
+    estimate_bytes, estimate_draft_tokens, estimate_message_tokens, estimate_semantic_json_tokens,
+    estimate_tokens, prune_tool_results,
 };
 pub use principal::{PrincipalProfile, PrincipalRole, PrincipalRuntimeConfig};
 pub use secret::SecretString;
@@ -152,7 +153,7 @@ pub use tool_registry::{
     WorkspaceRoot, collect_toolset,
 };
 pub mod wire;
-pub use web_config::WebSearchConfig;
+pub use web_config::{SharedWebSearchConfig, WebSearchConfig};
 pub use wire::{
     AttachAction, ControlRequest, ERR_PROTOCOL_MISMATCH, ERR_VERSION_MISMATCH,
     MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, Wire, protocol_accepts,

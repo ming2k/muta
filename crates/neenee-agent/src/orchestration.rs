@@ -688,6 +688,15 @@ pub struct InteractiveRoundContext {
 }
 
 pub async fn start_interactive_round(context: InteractiveRoundContext, input: RoundInput) {
+    // Snapshot the counter *before* `begin`: this is the number the round
+    // this task is about to run will be admitted under (fresh rounds bump in
+    // `execute_round`; a `/retry` resume keeps the stopped round's frozen
+    // number, which is also what `round_count` returns until the resume
+    // re-admits it). Capturing it here keeps the superseded predecessor's
+    // tail — which runs concurrently with this round's own bump — from
+    // misattributing its interrupt record to whichever round owns the live
+    // counter at tail time.
+    let round_at_admission = context.agent.round_count();
     let RoundBegin {
         token,
         generation,
@@ -698,9 +707,20 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         // superseded reason *before* cancelling so the predecessor's tail can
         // label its own unwind (C11). Without this the stale round's
         // generation-guarded cleanup is silent and leaves no trace.
-        context
-            .lifecycle
-            .record_interrupt(neenee_contracts::RoundInterruptReason::Superseded);
+        //
+        // The park is stamped with the *superseding input's* send time when
+        // the user authored one: the stop the marker describes is anchored to
+        // that send (the predecessor was still running when it left the
+        // composer), and the resume seam-merge places the marker before the
+        // first user message sent later than `at_ms` — a tail-time or
+        // park-time clock read can land a few milliseconds *after* the send,
+        // dropping the marker below the newer round's answer where it reads
+        // as an interrupt of a round that completed normally. A hidden or
+        // clock-less input falls back to the park moment.
+        context.lifecycle.record_interrupt_at(
+            neenee_contracts::RoundInterruptReason::Superseded,
+            input.sent_at_ms,
+        );
         context.agent.reject_pending_permissions();
         context.agent.reject_pending_user_questions();
         context.agent.reject_pending_inputs();
@@ -794,13 +814,21 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
             Ok(RoundCompletion::Unsent) | Err(_) => true,
         };
         let interrupt_record = if stopped {
+            // Attribution: this round's own admitted number, not the live
+            // agent counter — by the time a superseded round's tail runs
+            // here, the superseding round has already bumped that counter,
+            // and stamping `round N+1` over round N's stop read as an
+            // interrupt of the wrong (normally completed) round. The counter
+            // is only read for error outcomes: a round that never got far
+            // enough to know its own number (and never will — it is dead)
+            // has no honest number to claim.
             context
                 .lifecycle
                 .take_interrupt()
-                .map(|reason| neenee_contracts::RoundInterrupt {
-                    reason,
-                    at_ms: unix_epoch_ms(),
-                    round: result.as_ref().err().map(|_| context.agent.round_count()),
+                .map(|parked| neenee_contracts::RoundInterrupt {
+                    reason: parked.reason,
+                    at_ms: parked.at_ms,
+                    round: result.as_ref().err().map(|_| round_at_admission),
                 })
         } else {
             // Success: drop whatever was parked so it cannot leak into a
@@ -1457,13 +1485,13 @@ fn send_context_projection(
     agent: &Agent,
     messages: &[Message],
 ) {
-    let tokens = agent.estimate_next_request_tokens(messages).total_tokens;
+    let estimate = agent.estimate_next_request_tokens(messages);
     let _ = tx.send(round_response(
         session_id,
-        RoundEvent::ContextTokens(neenee_contracts::ContextTokenSnapshot {
-            tokens,
-            source: neenee_contracts::ContextTokenSource::Projection,
-        }),
+        RoundEvent::ContextTokens(neenee_contracts::ContextTokenSnapshot::from_estimate(
+            estimate,
+            neenee_contracts::ContextTokenSource::Projection,
+        )),
     ));
 }
 
@@ -1547,10 +1575,10 @@ pub fn relay_agent_event(
             // pre-wire boundary, after hooks and request preparation.
             let _ = tx.send(round_response(
                 session_id,
-                RoundEvent::ContextTokens(neenee_contracts::ContextTokenSnapshot {
-                    tokens: context_tokens,
-                    source: neenee_contracts::ContextTokenSource::Projection,
-                }),
+                RoundEvent::ContextTokens(neenee_contracts::ContextTokenSnapshot::new(
+                    context_tokens,
+                    neenee_contracts::ContextTokenSource::Projection,
+                )),
             ));
             // Structured turn signal first, so the Activity modal can show
             // `round N · turn M · waiting for model` with the turn as a

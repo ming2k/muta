@@ -33,21 +33,30 @@ the shared modal component in
   the viewport (the frame minus the global 1-row top/bottom margin). The
   surrounding gutters are kept as `app_bg`.
 - `modal_frame(area, theme.panel(), header, footer)` produces a borderless
-  solid-bg panel with 2-col horizontal and 1-row vertical inner padding,
-  vertically split into `header(Length 1) → gap(Length 1) → body(Min 0) →
-  gap(Length 1) → footer(Length 1)`. Header/footer/gap rows are omitted when
-  not requested.
+  solid-bg panel with 3-col horizontal and 1-row vertical inner padding
+  (`MODAL_INNER_H_PADDING` and `MODAL_INNER_V_PADDING`), vertically split into
+  `header(Length 1) → gap(Length 1) → body(Min 0) → gap(Length 1) →
+  footer(Length 1)`. Header/footer/gap rows are omitted when not requested.
 - `draw_modal_page(ModalPage { ... })` composes geometry, frame chrome,
   header, `ScrollBody`, and modal footer hints for simple centered modals.
 - `draw_selectable_list_page(SelectableListPage { ... })` adds selected-row
   follow scrolling and item/empty footer selection for list modals.
+
+### Alignment convention
+
+Modal bodies follow a **flush-alignment** convention: header titles, section
+headings, list rows, status glyphs, and body prose all align directly at the
+inner margin (`MODAL_INNER_H_PADDING`). No extra outer indent is added to body
+rows, ensuring maximum horizontal budget for text and tables. Where list items
+feature leading glyphs (e.g. status bullets `● `, `✓ `), continuation rows use a
+2-column hanging indent so wrapped text stays aligned under the item content.
 
 ```text
                 ┌──── centered_rect(px_w, px_h) ────┐
    app_bg gutter│ ░░ modal padding (top, full row)  │app_bg gutter
                 │  Header  ·  brand+muted           │
                 │                                   │
-                │  Body  (scrollable, follow=sel.)  │
+                │  Body  (flush-aligned, follow=sel)│
                 │                                   │
                 │  Footer  ·  muted                 │
    app_bg gutter│ ░░ modal padding (bot, full row)  │app_bg gutter

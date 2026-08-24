@@ -106,6 +106,11 @@ pub struct SessionDriver {
     /// before falling back to the markdown-template path. Empty for `neenee`
     /// today; populated by embeddings that need it.
     pub extra_commands: Arc<crate::slash_handler::SlashCommandRegistry>,
+    /// Shared hot-reloadable `[websearch]` configuration. The web tools hold
+    /// the same handle; `UpdateWebSearchConfig` and `/settings reload` write
+    /// into it so provider/reader/proxy changes take effect on the next tool
+    /// call without rebuilding the toolset.
+    pub websearch_shared: Arc<neenee_contracts::SharedWebSearchConfig>,
 }
 
 impl SessionDriver {
@@ -143,6 +148,7 @@ impl SessionDriver {
             ui,
             token_ledger,
             extra_commands,
+            websearch_shared,
         } = self;
         // Hand the shared token-source ledger to the agent so each turn's token
         // usage (reported vs. estimated) is booked into it for the report modal.
@@ -207,10 +213,12 @@ impl SessionDriver {
             .total_tokens;
         let _ = resp_tx.send(round_response(
             &initial_session_id,
-            neenee_contracts::RoundEvent::ContextTokens(neenee_contracts::ContextTokenSnapshot {
-                tokens: initial_context,
-                source: neenee_contracts::ContextTokenSource::Projection,
-            }),
+            neenee_contracts::RoundEvent::ContextTokens(
+                neenee_contracts::ContextTokenSnapshot::new(
+                    initial_context,
+                    neenee_contracts::ContextTokenSource::Projection,
+                ),
+            ),
         ));
         // Session-scoped idle snapshot (ADR-0128): publishes the `/retry`
         // affordance from the durable resume point so a session whose round
@@ -650,6 +658,7 @@ impl SessionDriver {
                         &startup,
                         &*ui,
                         &extra_commands,
+                        &websearch_shared,
                     )
                     .await;
                 }
@@ -740,6 +749,18 @@ impl SessionDriver {
                         let _ = resp_tx.send(AgentResponse::TuiColorSchemeUpdated { name, custom });
                     }
                 }
+                AgentRequest::QueryWebSearchConfig => {
+                    crate::handlers_websearch::query(&config, &resp_tx);
+                }
+                AgentRequest::UpdateWebSearchConfig(update) => {
+                    crate::handlers_websearch::update(
+                        &mut config,
+                        &websearch_shared,
+                        *update,
+                        &resp_tx,
+                    )
+                    .await;
+                }
                 AgentRequest::EndSession => {
                     // Unreachable in the normal topology: the WS attach path
                     // intercepts `EndSession` at the connection layer
@@ -800,10 +821,10 @@ impl SessionDriver {
                 let _ = resp_tx.send(round_response(
                     &post_session_id,
                     neenee_contracts::RoundEvent::ContextTokens(
-                        neenee_contracts::ContextTokenSnapshot {
-                            tokens: post_projection,
-                            source: neenee_contracts::ContextTokenSource::Projection,
-                        },
+                        neenee_contracts::ContextTokenSnapshot::new(
+                            post_projection,
+                            neenee_contracts::ContextTokenSource::Projection,
+                        ),
                     ),
                 ));
             }

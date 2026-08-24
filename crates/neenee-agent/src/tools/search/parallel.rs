@@ -19,6 +19,12 @@ impl SearchProvider for ParallelProvider {
         "Parallel"
     }
 
+    fn clone_box(&self) -> Box<dyn SearchProvider> {
+        Box::new(Self {
+            api_key: self.api_key.clone(),
+        })
+    }
+
     async fn search(
         &self,
         client: &reqwest::Client,

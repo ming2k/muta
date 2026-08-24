@@ -734,6 +734,8 @@ pub struct HintBarView<'a> {
     /// Whether the previous turn ended in an unrecovered error and is eligible for /retry.
     pub can_retry: bool,
     pub context_tokens: Option<usize>,
+    /// Live token count of the draft prompt in the composer (including message framing).
+    pub draft_tokens: usize,
     pub ignition_elapsed_ms: Option<u128>,
 }
 
@@ -814,6 +816,7 @@ pub fn draw_hint_bar(
         busy,
         can_retry,
         context_tokens,
+        draft_tokens,
         ignition_elapsed_ms,
     } = view;
 
@@ -911,7 +914,7 @@ pub fn draw_hint_bar(
     let mut context_spans: Vec<Span<'static>> = Vec::new();
     if context_max > 0 {
         let used = context_tokens.unwrap_or(0);
-        context_spans = context_usage_spans(used, context_max, theme, bg);
+        context_spans = context_usage_spans(used, draft_tokens, context_max, theme, bg);
     }
     let context_seg_width = context_spans
         .iter()
@@ -1378,15 +1381,23 @@ fn format_token_count(n: usize) -> String {
     }
 }
 
-/// Context-window usage indicator: `89.2k (8%)`. The percentage takes the
-/// green → yellow → red threshold color so a nearly full window is
-/// unmissable; the token count stays muted. `bg` is applied to every span so
-/// the indicator reads on a solid background.
-fn context_usage_spans(used: usize, max: usize, theme: &Theme, bg: Color) -> Vec<Span<'static>> {
+/// Context-window usage indicator: `89.2k (8%)` or `89.2k (+320) (8%)` when drafting.
+/// The percentage takes the green → yellow → red threshold color so a nearly
+/// full window is unmissable; the token count stays muted and the draft increment
+/// uses the brand/info tone. `bg` is applied to every span so the indicator
+/// reads on a solid background.
+fn context_usage_spans(
+    used: usize,
+    draft: usize,
+    max: usize,
+    theme: &Theme,
+    bg: Color,
+) -> Vec<Span<'static>> {
+    let total = used.saturating_add(draft);
     let ratio = if max == 0 {
         0.0
     } else {
-        ((used as f64) / (max as f64)).clamp(0.0, 1.0)
+        ((total as f64) / (max as f64)).clamp(0.0, 1.0)
     };
     let color = if ratio < CONTEXT_USAGE_WARN_THRESHOLD {
         theme.ok()
@@ -1397,13 +1408,22 @@ fn context_usage_spans(used: usize, max: usize, theme: &Theme, bg: Color) -> Vec
     };
     let pct = (ratio * 100.0).round() as u32;
 
-    vec![
-        Span::styled(
-            format_token_count(used),
-            Style::default().fg(theme.muted()).bg(bg),
-        ),
-        Span::styled(format!(" ({}%)", pct), Style::default().fg(color).bg(bg)),
-    ]
+    let mut spans = Vec::with_capacity(4);
+    spans.push(Span::styled(
+        format_token_count(used),
+        Style::default().fg(theme.muted()).bg(bg),
+    ));
+    if draft > 0 {
+        spans.push(Span::styled(
+            format!(" (+{})", format_token_count(draft)),
+            Style::default().fg(theme.info()).bg(bg),
+        ));
+    }
+    spans.push(Span::styled(
+        format!(" ({}%)", pct),
+        Style::default().fg(color).bg(bg),
+    ));
+    spans
 }
 
 #[cfg(test)]
@@ -1715,9 +1735,13 @@ mod tests {
     #[test]
     fn context_usage_spans_render_used_and_percentage() {
         let theme = Theme::default();
-        let spans = context_usage_spans(20_200, 256_000, &theme, theme.panel());
+        let spans = context_usage_spans(20_200, 0, 256_000, &theme, theme.panel());
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "20.2k (8%)");
+
+        let draft_spans = context_usage_spans(20_200, 320, 256_000, &theme, theme.panel());
+        let draft_text: String = draft_spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(draft_text, "20.2k (+320) (8%)");
     }
 
     /// The `@<instance>` suffix is the first hint-bar segment to hide as the
@@ -1741,6 +1765,7 @@ mod tests {
                         busy: false,
                         can_retry: false,
                         context_tokens: None,
+                        draft_tokens: 0,
                         ignition_elapsed_ms: None,
                     },
                     &Theme::default(),
@@ -1787,6 +1812,7 @@ mod tests {
                     busy: false,
                     can_retry: false,
                     context_tokens: None,
+                    draft_tokens: 0,
                     ignition_elapsed_ms: None,
                 },
                 &theme,
@@ -1811,6 +1837,7 @@ mod tests {
                     busy: false,
                     can_retry: false,
                     context_tokens: None,
+                    draft_tokens: 0,
                     ignition_elapsed_ms: None,
                 },
                 &theme,
@@ -1840,6 +1867,7 @@ mod tests {
                     busy,
                     can_retry: false,
                     context_tokens: None,
+                    draft_tokens: 0,
                     ignition_elapsed_ms: None,
                 };
                 draw_hint_bar(f, Rect::new(0, 0, 80, 1), view, &Theme::default());
@@ -1875,6 +1903,7 @@ mod tests {
                     busy: false,
                     can_retry: true,
                     context_tokens: None,
+                    draft_tokens: 0,
                     ignition_elapsed_ms: None,
                 },
                 &theme,
@@ -1911,6 +1940,7 @@ mod tests {
                     busy: false,
                     can_retry: false,
                     context_tokens: None,
+                    draft_tokens: 0,
                     ignition_elapsed_ms: None,
                 },
                 &theme,
@@ -1955,6 +1985,7 @@ mod tests {
                     busy: true,
                     can_retry: false,
                     context_tokens: None,
+                    draft_tokens: 0,
                     ignition_elapsed_ms: None,
                 },
                 &Theme::default(),
@@ -1987,6 +2018,7 @@ mod tests {
                     busy: true,
                     can_retry: false,
                     context_tokens: None,
+                    draft_tokens: 0,
                     ignition_elapsed_ms: None,
                 },
                 &Theme::default(),
@@ -2026,6 +2058,7 @@ mod tests {
                         busy: false,
                         can_retry: false,
                         context_tokens: None,
+                        draft_tokens: 0,
                         ignition_elapsed_ms: None,
                     },
                     &Theme::default(),
@@ -2073,6 +2106,7 @@ mod tests {
                         busy: false,
                         can_retry: false,
                         context_tokens: None,
+                        draft_tokens: 0,
                         ignition_elapsed_ms: None,
                     },
                     &Theme::default(),
@@ -2121,6 +2155,7 @@ mod tests {
                     busy: false,
                     can_retry: false,
                     context_tokens: None,
+                    draft_tokens: 0,
                     ignition_elapsed_ms: None,
                 },
                 &Theme::default(),
@@ -2162,6 +2197,7 @@ mod tests {
                         reasoning_effort: Some("max"),
                         busy: false,
                         can_retry: false,
+                        draft_tokens: 0,
                         context_tokens: Some(12_400),
                         ignition_elapsed_ms: elapsed_ms,
                     },

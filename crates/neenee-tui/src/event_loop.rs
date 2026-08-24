@@ -206,7 +206,7 @@ mod displayed_transcript_change_tests {
 /// session replacement, missed update, or unexpected event ordering; ordinary
 /// text/tool streaming stays on this cheap path.
 pub(super) fn apply_transcript_patch(
-    messages: &mut [TranscriptMessage],
+    messages: &mut Vec<TranscriptMessage>,
     patch: TranscriptPatch,
 ) -> bool {
     let updates = match patch {
@@ -254,6 +254,34 @@ pub(super) fn apply_transcript_patch(
                 .iter_mut()
                 .find(|message| message.tool_step_call_id() == Some(parent_call_id.as_str()))
                 .is_some_and(|message| message.push_envoy_event(&event)),
+            TranscriptUpdate::ReplaceMessage {
+                message_id,
+                message,
+            } => {
+                let Some(existing) = messages
+                    .iter_mut()
+                    .rfind(|message| message.id == message_id)
+                else {
+                    return false;
+                };
+                *existing = message;
+                true
+            }
+            TranscriptUpdate::AppendMessage {
+                pre_append_tail,
+                message,
+            } => {
+                // Append is only safe when the app-side tail is the exact
+                // tail the append was computed against; any divergence (a
+                // missed replace, a popped tail, a session switch) falls
+                // back to the snapshot instead of building a fork.
+                let local_tail = messages.last().map(|tail| tail.id);
+                if local_tail != pre_append_tail {
+                    return false;
+                }
+                messages.push(message);
+                true
+            }
         };
         if !applied {
             return false;
@@ -354,6 +382,10 @@ pub(super) struct UiRuntime {
     /// `/session open`.
     pub live_session_id: Arc<Mutex<String>>,
     pub key_status: Arc<Mutex<HashMap<String, bool>>>,
+    /// Effective `[websearch]` config view (presence-only), kept current by
+    /// the response listener; mirrored into [`App::websearch_config`] each
+    /// frame for the Settings view's Web Search pane.
+    pub websearch_config: Arc<Mutex<Option<neenee_contracts::WebSearchConfigView>>>,
     /// Model-picker snapshot shared with the response listener.
     pub provider_picker: Arc<Mutex<ProviderPickerSnapshot>>,
     /// Sessions picker rows + a one-shot request to open the picker modal.
@@ -471,6 +503,7 @@ impl UiRuntime {
             viewed_session_id: Arc::new(Mutex::new(None)),
             live_session_id: Arc::new(Mutex::new(String::new())),
             key_status: Arc::new(Mutex::new(HashMap::new())),
+            websearch_config: Arc::new(Mutex::new(None)),
             provider_picker: Arc::new(Mutex::new(Default::default())),
             sessions_overview: Arc::new(Mutex::new(Vec::new())),
             sessions_overview_rev: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -1157,6 +1190,7 @@ async fn sync_runtime_state(
     app.round_started_at = *runtime.round_started_at.lock().await;
     app.pending_permission = runtime.pending_permission.lock().await.front().cloned();
     app.key_status = runtime.key_status.lock().await.clone();
+    app.websearch_config = runtime.websearch_config.lock().await.clone();
     app.provider_picker = runtime.provider_picker.lock().await.clone();
     if app.pending_permission.is_some() && app.active_modal == Modal::None {
         app.active_modal = Modal::Permission;
@@ -1316,6 +1350,9 @@ async fn sync_runtime_state(
     // Mirror the on-demand cross-session usage statistics (ADR-0122).
     if let Some(report) = runtime.usage_stats.lock().await.take() {
         app.usage_stats = Some(report);
+    }
+    if let Some(config) = runtime.websearch_config.lock().await.take() {
+        app.websearch_config = Some(config);
     }
     if let Some(sig) = runtime.oauth_add_signal.lock().await.take() {
         match sig {
@@ -2291,6 +2328,7 @@ pub(super) async fn run_app_loop(
                         history_clear_confirm: app.history_clear_confirm,
                         host_prompting: app.host_prompting,
                         config_custom_editing: app.config_custom_editing,
+                        config_websearch_editing: app.websearch_editing.is_some(),
                     },
                     &mut app.drag,
                 )
@@ -2534,6 +2572,140 @@ pub(super) fn extract_selection_text(
             (start < end).then(|| input[start..end].to_string())
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod transcript_patch_tests {
+    //! Behavior locks for the targeted streaming patches (ADR-0114 replay
+    //! path): a streaming boundary must mutate only its own message —
+    //! replacing it in place or appending at the tail — and a stale local
+    //! copy must refuse the patch so the caller falls back to the snapshot.
+
+    use super::*;
+    use crate::model::document::{MessageKind, TranscriptMessage};
+    use crate::versioned::{TranscriptPatch, TranscriptUpdate};
+    use neenee_contracts::Role;
+
+    fn text(content: &str) -> TranscriptMessage {
+        TranscriptMessage::new(Role::Assistant, content)
+    }
+
+    #[test]
+    fn replace_message_swaps_in_place_without_touching_neighbors() {
+        let mut messages = vec![text("before"), text("target"), text("after")];
+        let target_id = messages[1].id;
+        let mut finalized = messages[1].clone();
+        finalized.raw = "finalized".to_string();
+        finalized.reparse();
+
+        let patch = TranscriptPatch::Updates(vec![TranscriptUpdate::ReplaceMessage {
+            message_id: target_id,
+            message: finalized,
+        }]);
+        assert!(apply_transcript_patch(&mut messages, patch));
+        assert_eq!(messages.len(), 3, "replace never changes length");
+        assert_eq!(messages[0].raw, "before");
+        assert_eq!(messages[1].raw, "finalized");
+        assert_eq!(messages[2].raw, "after");
+    }
+
+    #[test]
+    fn replace_missing_message_falls_back_to_snapshot() {
+        let mut messages = vec![text("only")];
+        let ghost = text("ghost");
+        let patch = TranscriptPatch::Updates(vec![TranscriptUpdate::ReplaceMessage {
+            message_id: ghost.id,
+            message: ghost,
+        }]);
+        assert!(!apply_transcript_patch(&mut messages, patch));
+    }
+
+    #[test]
+    fn append_message_pushes_when_tail_matches() {
+        let mut messages = vec![text("tail")];
+        let tail_id = messages[0].id;
+        let fresh = text("new");
+        let patch = TranscriptPatch::Updates(vec![TranscriptUpdate::AppendMessage {
+            pre_append_tail: Some(tail_id),
+            message: fresh,
+        }]);
+        assert!(apply_transcript_patch(&mut messages, patch));
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].raw, "new");
+    }
+
+    #[test]
+    fn append_with_diverged_tail_refuses_instead_of_forking() {
+        // The listener appended against tail X, but the local copy's tail is
+        // someone else (a missed update). Accepting the append would fork the
+        // transcript; the patch must refuse so the snapshot path reconciles.
+        let stale_tail = text("stale");
+        let mut messages = vec![text("different")];
+        let fresh = text("new");
+        let patch = TranscriptPatch::Updates(vec![TranscriptUpdate::AppendMessage {
+            pre_append_tail: Some(stale_tail.id),
+            message: fresh,
+        }]);
+        assert!(!apply_transcript_patch(&mut messages, patch));
+        assert_eq!(messages.len(), 1, "nothing may be pushed on refusal");
+    }
+
+    #[test]
+    fn append_into_empty_transcript_requires_none_tail() {
+        let mut messages: Vec<TranscriptMessage> = Vec::new();
+        let fresh = text("first");
+        assert!(apply_transcript_patch(
+            &mut messages,
+            TranscriptPatch::Updates(vec![TranscriptUpdate::AppendMessage {
+                pre_append_tail: None,
+                message: fresh,
+            }])
+        ));
+        assert_eq!(messages.len(), 1);
+
+        // A non-None expected tail against an empty local copy must refuse.
+        let mut messages: Vec<TranscriptMessage> = Vec::new();
+        let other = text("x");
+        assert!(!apply_transcript_patch(
+            &mut messages,
+            TranscriptPatch::Updates(vec![TranscriptUpdate::AppendMessage {
+                pre_append_tail: Some(other.id),
+                message: text("y"),
+            }])
+        ));
+    }
+
+    #[test]
+    fn reasoning_finalize_is_one_replace_not_a_snapshot() {
+        // The streaming `StreamReasoningEnd` path records a ReplaceMessage;
+        // the replay must apply it without disturbing the settled history.
+        let mut messages = vec![text("history")];
+        let mut trace = TranscriptMessage::thinking("partial");
+        let trace_id = trace.id;
+        messages.push(trace.clone());
+
+        trace.raw = "full trace".to_string();
+        trace.reparse();
+        if let MessageKind::Thinking {
+            content,
+            duration_ms,
+            ..
+        } = &mut trace.kind
+        {
+            *content = "full trace".to_string();
+            *duration_ms = Some(1200);
+        }
+
+        assert!(apply_transcript_patch(
+            &mut messages,
+            TranscriptPatch::Updates(vec![TranscriptUpdate::ReplaceMessage {
+                message_id: trace_id,
+                message: trace,
+            }])
+        ));
+        assert_eq!(messages[0].raw, "history");
+        assert!(!messages[1].is_thinking_streaming());
     }
 }
 

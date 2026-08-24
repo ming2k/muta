@@ -89,6 +89,27 @@ A backend that requires a key reports a pointing error at call time
 — check the `provider` value matches the key you configured, and that
 `fallback` is not `""` if you want automatic failover.
 
+## Runtime configuration entry points
+
+Editing `config.toml` (then `/settings reload`) is one way in; the wire
+protocol now exposes the table as a live setting for both frontends:
+
+- **`QueryWebSearchConfig`** → `WebSearchConfigSnapshot`: the effective
+  configuration with every API key reduced to a **presence flag** — key
+  plaintext never crosses the wire in a reply.
+- **`UpdateWebSearchConfig`** (a PATCH: absent fields keep their values) →
+  `WebSearchConfigUpdated`: validates (unknown backend/reader names and a
+  `searxng` selection without a URL are rejected with a pointing error),
+  persists behavior fields to `config.toml` and keys to
+  `credentials.toml` (an empty-string key **clears** it), then hot-applies
+  through a shared config handle — the running `websearch`/`webfetch`
+  tools rebuild their provider chain and HTTP client on the next call, no
+  restart needed. `/settings reload` goes through the same hot-apply path
+  for out-of-band `config.toml` edits.
+
+The TUI exposes this as the Settings view's **Web Search** category
+(`/settings`); the web frontend as the `⌕ web` header dialog.
+
 > **Privacy note:** the default (anonymous) Exa and Parallel backends send
 > your search queries to their hosted services. Switch to a self-hosted
 > `searxng` (or any keyed backend you trust) if that matters.

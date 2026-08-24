@@ -38,6 +38,8 @@ import type {
   RoundSummary,
   TodoList,
   UserQuestionRequest,
+  WebSearchConfigUpdate,
+  WebSearchConfigView,
   Wire,
 } from "../types.js";
 
@@ -333,6 +335,13 @@ export class DaemonStore {
   public providerPicker = $state<ProviderPickerSnapshot | null>(null);
   /** Provider key-readiness summary (header surface). */
   public providerKeys = $state<[string, boolean][]>([]);
+
+  /**
+   * Effective `[websearch]` configuration (presence-only view — API keys are
+   * never echoed back). Refreshed when the settings dialog opens and on
+   * every update ack.
+   */
+  public websearchConfig = $state<WebSearchConfigView | null>(null);
 
   public pendingPermission = $state<PendingPermission | null>(null);
   public pendingQuestion = $state<PendingQuestion | null>(null);
@@ -852,6 +861,12 @@ export class DaemonStore {
     } else if ("Error" in resp) {
       this.sessionError = resp.Error;
       this.pushToast("error", "Agent error", resp.Error);
+    } else if ("WebSearchConfigSnapshot" in resp) {
+      this.websearchConfig = resp.WebSearchConfigSnapshot;
+    } else if ("WebSearchConfigUpdated" in resp) {
+      // Authoritative post-update ack: re-render from persisted state.
+      this.websearchConfig = resp.WebSearchConfigUpdated;
+      this.pushToast("info", "Web search", "Configuration saved and applied.");
     } else if ("Exit" in resp) {
       this.sessionAttached = false;
     }
@@ -1274,6 +1289,21 @@ export class DaemonStore {
   /** Switch the active model (and persist it as the default). */
   public setDefaultModel(id: string) {
     this.send({ SetDefaultModel: { id } });
+  }
+
+  /** Fetch the effective `[websearch]` configuration (presence-only view). */
+  public queryWebSearchConfig() {
+    this.send({ QueryWebSearchConfig: null });
+  }
+
+  /**
+   * PATCH the `[websearch]` configuration. Absent fields keep their values;
+   * an empty-string API key clears it. Behavior fields persist to
+   * config.toml, keys to credentials.toml; the daemon hot-applies to the
+   * live web tools and acks with the authoritative view.
+   */
+  public updateWebSearchConfig(update: Partial<WebSearchConfigUpdate>) {
+    this.send({ UpdateWebSearchConfig: update });
   }
 
   /** Delete a session (active or archived) by id or short-id prefix. */

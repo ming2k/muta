@@ -784,6 +784,99 @@ fn activity_modal_renders_provider_retry_failure() {
     assert!(rect.width > 0 && rect.height > 0);
 }
 
+#[test]
+fn activity_modal_todos_align_with_header() {
+    let mut todos = neenee_contracts::TodoList::new();
+    todos.items.push(neenee_contracts::TodoItem {
+        id: neenee_contracts::TodoId(1),
+        content: "First todo task".to_string(),
+        status: neenee_contracts::TodoStatus::InProgress,
+        created_at: 0,
+        updated_at: 0,
+    });
+    let mut terminal = neenee_tui_engine::TestTerminal::new(80, 24);
+    let mut scroll = 0;
+    let theme = Theme::default();
+    let mut layout_map = crate::model::layout::LayoutMap::new();
+    let mut rect = neenee_tui_engine::Rect::default();
+    terminal.draw(|frame| {
+        rect = crate::overlays::draw_activity_modal(
+            frame,
+            crate::overlays::ActivityModalView {
+                active_tab: crate::modal::ActivityTab::Todos,
+                todos: Some(&todos),
+                user_prompt: None,
+                round_count: 0,
+                current_turn: 0,
+                current_model: "",
+                round_started_at: None,
+                activity: "",
+                provider_retry: None,
+            },
+            &mut scroll,
+            &theme,
+            &crate::model::selection::SelectionState::None,
+            &mut layout_map,
+        );
+    });
+    let buffer = terminal.buffer();
+    let inner_x = rect.x + crate::design::MODAL_INNER_H_PADDING;
+    let header_y = rect.y + crate::design::MODAL_INNER_V_PADDING;
+    // Header title "Todos" starts at inner_x
+    assert_eq!(buffer.get(inner_x, header_y).unwrap().symbol(), "T");
+    // Todo item status glyph "●" starts at the exact same column inner_x, aligning with header title
+    let body_y = header_y + 2;
+    assert_eq!(buffer.get(inner_x, body_y).unwrap().symbol(), "●");
+    assert_eq!(buffer.get(inner_x + 1, body_y).unwrap().symbol(), " ");
+    assert_eq!(buffer.get(inner_x + 2, body_y).unwrap().symbol(), "F");
+}
+
+#[test]
+fn activity_modal_expands_to_fit_multiline_prompt_without_scrolling() {
+    let long_prompt = "This is a very long prompt submitted by the user that will wrap across multiple visual lines when displayed inside the modal body in an eighty column terminal viewport.";
+    let mut terminal = neenee_tui_engine::TestTerminal::new(80, 40);
+    let mut scroll = 0;
+    let theme = Theme::default();
+    let mut layout_map = crate::model::layout::LayoutMap::new();
+    let mut rect = neenee_tui_engine::Rect::default();
+    terminal.draw(|frame| {
+        rect = crate::overlays::draw_activity_modal(
+            frame,
+            crate::overlays::ActivityModalView {
+                active_tab: crate::modal::ActivityTab::Activity,
+                todos: None,
+                user_prompt: Some(long_prompt),
+                round_count: 1,
+                current_turn: 1,
+                current_model: "claude-sonnet",
+                round_started_at: None,
+                activity: "idle",
+                provider_retry: None,
+            },
+            &mut scroll,
+            &theme,
+            &crate::model::selection::SelectionState::None,
+            &mut layout_map,
+        );
+    });
+
+    // In an 80-column terminal, modal width is 72% (56 cols) and body width is 54 cols.
+    // The prompt wraps to 3 visual lines.
+    // Total visual rows: 1 (Prompt heading) + 3 (prompt) + 1 (blank) + 1 (Status heading) + 1 (detail) + 1 (idle) = 8 rows.
+    // With 6 chrome rows, desired is 14 rows.
+    assert!(rect.height >= 14);
+
+    // Ensure all visual lines fit in the body without triggering scroll
+    assert_eq!(scroll, 0);
+
+    // Ensure no scrollbar arrow is drawn because max_scroll is 0
+    let buffer = terminal.buffer();
+    let track_x = rect.x + rect.width - crate::design::MODAL_INNER_H_PADDING;
+    let track_y = rect.y + crate::design::MODAL_INNER_V_PADDING + 2;
+    // The top scrollbar cap is not "▲"
+    assert_ne!(buffer.get(track_x, track_y).map(|c| c.symbol()), Some("▲"));
+}
+
 /// Build a small conversation with two sibling envoy tasks, each with a
 /// couple of child messages, for focus-navigation tests.
 fn conversation_with_envoys() -> Vec<TranscriptMessage> {
@@ -1690,6 +1783,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         config_detail_index: 0,
         config_detail_scroll: 0,
         config_custom_editing: false,
+        websearch_config: None,
+        websearch_editing: None,
         skills_expanded: None,
         history_scroll: 0,
         history_modal_follow: true,

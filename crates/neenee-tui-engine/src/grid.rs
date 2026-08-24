@@ -57,6 +57,16 @@ pub enum Fit {
     Wrap,
 }
 
+/// Direction of an in-place band rotation ([`Grid::rotate_band`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BandRotation {
+    /// Rows move down; the top of the band is blanked (a terminal "scroll").
+    Down,
+    /// Rows move up; the bottom of the band is blanked. The streaming-append
+    /// shape: a new row lands at the bottom and history shifts up.
+    Up,
+}
+
 /// A retained cell grid with write-marks-dirty tracking.
 ///
 /// Stored as a flat `Vec<Cell>` in row-major order. The dirty bookkeeping
@@ -74,6 +84,10 @@ pub struct Grid {
     /// Leftmost changed column on each row since the last flush, or `None`
     /// when the row is clean. Mirrors vim's per-line `dirty_col`.
     pub(crate) dirty_col: Vec<Option<u16>>,
+    /// Whether [`crate::diff`] may translate a wholesale row shift into a
+    /// scroll op. Off for grids that must repaint in place (tests asserting
+    /// raw draw commands); on for the terminal path.
+    pub(crate) scroll_enabled: bool,
     /// Inclusive bounds of the dirty row range, or `None` when nothing is
     /// dirty. Lets the diff skip entire clean regions.
     pub(crate) dirty_row_lo: Option<u16>,
@@ -90,6 +104,7 @@ impl Grid {
             height,
             content,
             dirty_col: vec![None; height as usize],
+            scroll_enabled: true,
             dirty_row_lo: None,
             dirty_row_hi: None,
         }
@@ -370,6 +385,76 @@ impl Grid {
     /// Whether any row is currently dirty.
     pub fn is_dirty(&self) -> bool {
         self.dirty_row_lo.is_some()
+    }
+
+    /// Enable/disable scroll-translation for this grid's diffs (see
+    /// [`Self::scroll_enabled`]). Returns the previous value.
+    pub fn set_scroll_enabled(&mut self, enabled: bool) -> bool {
+        std::mem::replace(&mut self.scroll_enabled, enabled)
+    }
+
+    /// Whether scroll-translation is enabled for this grid.
+    pub fn scroll_enabled(&self) -> bool {
+        self.scroll_enabled
+    }
+
+    /// Rotate rows `[y, y+height)` in place: `Down` moves every row down by
+    /// `amount`, blanking the `amount` rows at the top of the band. This is
+    /// the grid-side twin of the terminal's scroll op — the diff applies it
+    /// to the **front** grid before the row diff so post-scroll comparisons
+    /// are honest, and `promote` leaves it in place because the terminal
+    /// performs the same rotation. Content scrolled past the band's bottom
+    /// edge is discarded, exactly as a scroll region discards it.
+    pub fn rotate_band(&mut self, y: u16, height: u16, direction: BandRotation, amount: u16) {
+        if amount == 0 || height == 0 || amount >= height || y >= self.height {
+            return;
+        }
+        let top = y as usize;
+        let band_end = ((top + height as usize).min(self.height as usize)).max(top);
+        let band_len = band_end - top;
+        if (amount as usize) >= band_len {
+            return;
+        }
+        let w = self.width as usize;
+        match direction {
+            BandRotation::Down => {
+                // Move rows [top, band_end - amount) down by `amount`, then
+                // blank the top `amount` rows. Iterate destination rows from
+                // the bottom up through a scratch row so no in-flight source
+                // row is clobbered (Cell is Clone, not Copy).
+                let mut scratch: Vec<Cell> = Vec::with_capacity(w);
+                for dst in (top + amount as usize..band_end).rev() {
+                    let src = dst - amount as usize;
+                    scratch.clear();
+                    scratch.extend(self.content[src * w..src * w + w].iter().cloned());
+                    self.content[dst * w..dst * w + w].clone_from_slice(&scratch);
+                }
+                for row in top..top + amount as usize {
+                    let range = row * w..row * w + w;
+                    for cell in &mut self.content[range] {
+                        *cell = Cell::blank();
+                    }
+                }
+            }
+            BandRotation::Up => {
+                // Move rows [top + amount, band_end) up by `amount`, then
+                // blank the bottom `amount` rows. Forward iteration keeps
+                // every source row intact when it is read.
+                let mut scratch: Vec<Cell> = Vec::with_capacity(w);
+                for dst in top..band_end - amount as usize {
+                    let src = dst + amount as usize;
+                    scratch.clear();
+                    scratch.extend(self.content[src * w..src * w + w].iter().cloned());
+                    self.content[dst * w..dst * w + w].clone_from_slice(&scratch);
+                }
+                for row in band_end - amount as usize..band_end {
+                    let range = row * w..row * w + w;
+                    for cell in &mut self.content[range] {
+                        *cell = Cell::blank();
+                    }
+                }
+            }
+        }
     }
 
     /// The inclusive dirty row range, or `None` if clean.

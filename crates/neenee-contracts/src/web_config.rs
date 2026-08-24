@@ -7,6 +7,8 @@
 //! `neenee-agent`. It is plain serialisable data; the tool implementations
 //! live in `neenee-agent::tools::web` and read this struct as input.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 /// User-tunable web-tool configuration, deserialized from the `[websearch]`
@@ -110,5 +112,86 @@ impl Default for WebSearchConfig {
             jina_api_key: None,
             reader: "builtin".to_string(),
         }
+    }
+}
+
+/// A process-wide, shared, hot-reloadable handle to the effective
+/// `[websearch]` configuration.
+///
+/// The web tools snapshot [`WebSearchConfig`] at construction time
+/// (bootstrap), but the runtime can now mutate the configuration live
+/// (`AgentRequest::UpdateWebSearchConfig`, and `/settings reload`). Rather
+/// than rebuilding the toolset, the tools hold this shared handle and
+/// re-derive their provider chain / HTTP client whenever the config's
+/// *signature* ([`WebSearchConfig::signature`]) changes — a cheap string
+/// comparison on the call path instead of a toolset rebuild.
+///
+/// The handle is intentionally tiny (`Arc<RwLock<...>>`) and lives in
+/// `neenee-contracts` so both `neenee-persistence` (config load) and
+/// `neenee-agent` (tool construction) can share it without new crate edges.
+#[derive(Debug, Clone, Default)]
+pub struct SharedWebSearchConfig(Arc<std::sync::RwLock<WebSearchConfig>>);
+
+impl SharedWebSearchConfig {
+    /// Wrap an initial effective configuration.
+    pub fn new(initial: WebSearchConfig) -> Self {
+        Self(Arc::new(std::sync::RwLock::new(initial)))
+    }
+
+    /// Replace the effective configuration. Wakes every holders; the web
+    /// tools notice on their next call via the signature check.
+    pub fn set(&self, config: WebSearchConfig) {
+        *self
+            .0
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = config;
+    }
+
+    /// Clone the effective configuration out.
+    pub fn get(&self) -> WebSearchConfig {
+        self.0
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
+impl WebSearchConfig {
+    /// A canonical fingerprint of every field that changes how the web tools
+    /// behave (backends, keys presence, proxy, timeout, reader). Two configs
+    /// with equal signatures are interchangeable for tool construction, so
+    /// the tools compare signatures instead of whole structs and rebuild
+    /// their cached provider chain / HTTP client only when something actually
+    /// moved.
+    ///
+    /// Key material enters the signature only through its **presence** (and a
+    /// content hash, so changing a key is picked up) — the plaintext is
+    /// never part of the string.
+    pub fn signature(&self) -> String {
+        fn key(sig: Option<&crate::SecretString>) -> String {
+            sig.map(|k| {
+                // Fingerprint, not the value: enough to detect a change.
+                let hash = std::collections::hash_map::DefaultHasher::new();
+                let mut hasher = hash;
+                std::hash::Hash::hash_slice(k.expose_secret().as_bytes(), &mut hasher);
+                format!("{:016x}", std::hash::Hasher::finish(&hasher))
+            })
+            .unwrap_or_else(|| "-".to_string())
+        }
+        format!(
+            "v1|provider={}|fallback={}|reader={}|proxy={}|timeout={}|searxng_url={}|\
+             exa={}|parallel={}|tavily={}|bocha={}|jina={}",
+            self.provider,
+            self.fallback,
+            self.reader,
+            self.proxy.as_deref().unwrap_or("-"),
+            self.timeout_secs,
+            self.searxng_url.as_deref().unwrap_or("-"),
+            key(self.exa_api_key.as_ref()),
+            key(self.parallel_api_key.as_ref()),
+            key(self.tavily_api_key.as_ref()),
+            key(self.bocha_api_key.as_ref()),
+            key(self.jina_api_key.as_ref()),
+        )
     }
 }

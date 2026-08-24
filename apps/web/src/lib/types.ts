@@ -39,6 +39,7 @@
  */
 
 export * from "./generated/wire.gen.js";
+import type { WebSearchConfigView } from "./generated/wire.gen.js";
 
 import type {
   AgentRequest as AgentRequestPayload,
@@ -139,6 +140,8 @@ export type AgentResponse =
   // the store).
   | { ConversationCleared: null }
   | { ConversationReplaced: ConversationReplacedPayload }
+  | { WebSearchConfigSnapshot: WebSearchConfigView }
+  | { WebSearchConfigUpdated: WebSearchConfigView }
   | { Error: string }
   | { Exit: null };
 

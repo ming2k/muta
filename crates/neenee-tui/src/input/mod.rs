@@ -104,6 +104,9 @@ pub struct InputContext {
     pub host_prompting: bool,
     /// Whether the custom color scheme hex editor in Settings is actively editing.
     pub config_custom_editing: bool,
+    /// Whether a Web Search settings field (SearXNG URL / API key) in
+    /// Settings is actively editing. Mirrors `App::websearch_editing`.
+    pub config_websearch_editing: bool,
 }
 
 impl InputContext {
@@ -125,7 +128,7 @@ impl InputContext {
 fn edits_input_field(context: &InputContext) -> bool {
     match context.active_modal {
         super::Modal::None | super::Modal::ModelEditor | super::Modal::InputInjection => true,
-        super::Modal::Config => context.config_custom_editing,
+        super::Modal::Config => context.config_custom_editing || context.config_websearch_editing,
         super::Modal::Models | super::Modal::Connections => context.model_searching,
         super::Modal::HistorySearch => context.history_searching,
         // The provider editor edits the composer line on every visible field

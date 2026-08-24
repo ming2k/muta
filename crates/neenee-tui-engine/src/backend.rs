@@ -155,9 +155,17 @@ impl<W: Write> Backend<W> {
     pub fn render(&mut self, cmd: &DrawCmd) -> io::Result<usize> {
         let terminal_w = cmd.w;
         let terminal_h = cmd.h;
+        let mut processed = 0usize;
 
         for draw in &cmd.draws {
+            processed += 1;
             match draw {
+                Draw::ScrollDown { y, height, amount } => {
+                    self.scroll_region(*y, *height, *amount, terminal_h, false)?;
+                }
+                Draw::ScrollUp { y, height, amount } => {
+                    self.scroll_region(*y, *height, *amount, terminal_h, true)?;
+                }
                 Draw::Cells { x, y, style, cells } => {
                     self.move_to(*x, *y)?;
                     self.apply_style(*style)?;
@@ -208,7 +216,49 @@ impl<W: Write> Backend<W> {
                 }
             }
         }
-        Ok(cmd.draws.len())
+        Ok(processed)
+    }
+
+    /// Scroll the screen rows `[y, y+height)` using DECSTBM (scroll region)
+    /// plus `CSI S` (SU, content up) or `CSI T` (SD, content down). The
+    /// region is set, the scroll issued, and the region reset — all queued in
+    /// order. Cursor position tracking is reset to unknown because the
+    /// terminal's post-scroll cursor position is not specified by the
+    /// standard and varies by terminal.
+    fn scroll_region(
+        &mut self,
+        y: u16,
+        height: u16,
+        amount: u16,
+        terminal_h: u16,
+        up: bool,
+    ) -> io::Result<()> {
+        if amount == 0 || height == 0 {
+            return Ok(());
+        }
+        let top = y;
+        // DECSTBM bounds are inclusive 1-based rows.
+        let bottom = y.saturating_add(height).min(terminal_h).saturating_sub(1);
+        if bottom < top {
+            return Ok(());
+        }
+        // Set the scroll region, scroll, restore the region. `CSI r` with no
+        // args resets to the full screen. SGR is not touched by these ops.
+        write!(self.out, "\x1b[{};{}r", top + 1, bottom + 1)?;
+        // Moving to the region's home keeps the cursor inside the region
+        // across the scroll on every xterm-family terminal (SU/SD scroll the
+        // region regardless of cursor position, but the cursor itself may be
+        // clamped into it — starting at the home makes the clamp a no-op).
+        write!(self.out, "\x1b[{};1H", top + 1)?;
+        if up {
+            write!(self.out, "\x1b[{}S", amount)?;
+        } else {
+            write!(self.out, "\x1b[{}T", amount)?;
+        }
+        // Reset the scroll region; the cursor tracking is invalidated below.
+        write!(self.out, "\x1b[r")?;
+        self.cur = None; // terminal moved the cursor; forget our tracking
+        Ok(())
     }
 
     /// Move the terminal cursor to `(x, y)` if we aren't already there.
@@ -407,8 +457,8 @@ mod tests {
             Style::default().fg(Color::Rgb(1, 2, 3)),
             "ab",
         );
-        let front = Grid::new(4, 1);
-        let cmd = crate::diff::diff(&back, &front);
+        let mut front = Grid::new(4, 1);
+        let cmd = crate::diff::diff(&back, &mut front);
         let s = render_to_string(&cmd, Bce::Yes);
         // crossterm emits RGB foreground as `\x1b[38;2;r;g;bm`.
         assert!(s.contains("\x1b[38;2;1;2;3m"), "fg SGR present: {s:?}");
@@ -422,8 +472,8 @@ mod tests {
         let style = Style::default().fg(Color::Rgb(9, 9, 9));
         back.put(0, 0, Fit::Clip, style, "a");
         back.set(2, 0, Cell::narrow("b", style));
-        let front = Grid::new(4, 1);
-        let cmd = crate::diff::diff(&back, &front);
+        let mut front = Grid::new(4, 1);
+        let cmd = crate::diff::diff(&back, &mut front);
         let s = render_to_string(&cmd, Bce::Yes);
         // Count occurrences of the SGR set; should appear exactly once.
         let count = s.matches("\x1b[38;2;9;9;9m").count();
@@ -600,6 +650,44 @@ mod tests {
             + guard_off;
         let spaces = s[guard_off..guard_on].matches(' ').count();
         assert_eq!(spaces, 2, "clear must paint through the corner: {s:?}");
+    }
+
+    #[test]
+    fn scroll_up_emits_scroll_region_and_su() {
+        crossterm::style::force_color_output(true);
+        let cmd = DrawCmd {
+            w: 20,
+            h: 10,
+            draws: vec![Draw::ScrollUp {
+                y: 1,
+                height: 8,
+                amount: 2,
+            }],
+        };
+        let s = render_to_string(&cmd, Bce::Yes);
+        // DECSTBM for rows 2..=9 (1-based), home cursor inside, SU by 2, reset.
+        assert!(s.contains("\x1b[2;9r"), "scroll region set: {s:?}");
+        assert!(s.contains("\x1b[2;1H"), "cursor homed inside region: {s:?}");
+        assert!(s.contains("\x1b[2S"), "scroll-up issued: {s:?}");
+        assert!(s.contains("\x1b[r"), "scroll region reset: {s:?}");
+    }
+
+    #[test]
+    fn scroll_down_emits_scroll_region_and_sd() {
+        crossterm::style::force_color_output(true);
+        let cmd = DrawCmd {
+            w: 20,
+            h: 10,
+            draws: vec![Draw::ScrollDown {
+                y: 0,
+                height: 10,
+                amount: 1,
+            }],
+        };
+        let s = render_to_string(&cmd, Bce::Yes);
+        assert!(s.contains("\x1b[1;10r"), "full-screen region: {s:?}");
+        assert!(s.contains("\x1b[1T"), "scroll-down issued: {s:?}");
+        assert!(s.contains("\x1b[r"), "region reset: {s:?}");
     }
 
     #[test]

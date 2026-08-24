@@ -518,6 +518,7 @@ pub async fn dispatch(
     startup: &SessionStart,
     ui: &dyn crate::UiBridge,
     extra_commands: &SlashCommandRegistry,
+    websearch_shared: &Arc<neenee_contracts::SharedWebSearchConfig>,
 ) {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if parts.is_empty() {
@@ -600,8 +601,23 @@ pub async fn dispatch(
             agent.seed_permissions_from_config(&reloaded.permissions.allow);
             crate::agent_setup::reseed_prune_threshold(agent, &reloaded);
             crate::agent_setup::reseed_tool_variants(agent, &reloaded);
+            // `[websearch]` is hot-reloadable too: push the re-read table
+            // (already merged with credentials.toml by `Config::load`)
+            // through the shared handle so the web tools pick up backend /
+            // reader / proxy changes on their next call.
+            crate::handlers_websearch::apply_reloaded(websearch_shared, &reloaded);
 
             let mut lines = Vec::new();
+            lines.push(format!(
+                "Web search: provider {}, fallback {}, reader {}.",
+                reloaded.websearch.provider,
+                if reloaded.websearch.fallback.trim().is_empty() {
+                    "disabled"
+                } else {
+                    reloaded.websearch.fallback.trim()
+                },
+                reloaded.websearch.reader,
+            ));
             if report.removed.is_empty()
                 && report.connected.is_empty()
                 && report.unchanged.is_empty()
@@ -1047,10 +1063,10 @@ pub async fn dispatch(
                 .total_tokens;
             let _ = resp_tx.send(round_response(
                 &side_id,
-                RoundEvent::ContextTokens(neenee_contracts::ContextTokenSnapshot {
-                    tokens: side_context,
-                    source: neenee_contracts::ContextTokenSource::Projection,
-                }),
+                RoundEvent::ContextTokens(neenee_contracts::ContextTokenSnapshot::new(
+                    side_context,
+                    neenee_contracts::ContextTokenSource::Projection,
+                )),
             ));
             // Register + make it the active view, then tell the TUI to enter
             // the aside view — `SideViewOpened` carries the aside's full

@@ -205,9 +205,9 @@ impl<W: io::Write> Terminal<W> {
             self.pending_clear = false;
         }
 
-        let cmd: DrawCmd = diff::diff(&self.back, &self.front);
+        let cmd: DrawCmd = diff::diff(&self.back, &mut self.front);
         self.backend.render(&cmd)?;
-        diff::promote(&mut self.back, &mut self.front);
+        diff::promote_scrolled(&mut self.back, &mut self.front, &cmd);
 
         // Apply cursor state through the backend so its cursor tracker stays
         // aligned with the real terminal before the next diff render.

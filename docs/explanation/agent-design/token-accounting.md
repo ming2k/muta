@@ -166,6 +166,26 @@ transcripts). It deliberately excludes:
   them; this is the main reason the upstream number is always preferred when
   available.
 
+### The streamed-completion side: read the counter, never sum it
+
+When a request fails or is interrupted mid-stream there is no `usage` object,
+so the completion side falls back to counting what actually streamed — the
+deltas themselves, fed through the exact incremental BPE
+`StreamingCounter`. One contract is load-bearing here: `push` returns the
+counter's **running total**, not a per-delta increment, so the current count
+must be *read* (`tokens()`, or `finish()` to also finalize the trailing
+pretoken) rather than summed per call. Summing re-counts every early token
+once per later delta and grows quadratically — the regression that once
+booked a 4 000-delta interrupted stream as 14 786 219 completion tokens and
+rendered it as a 130 050 tok/s round.
+
+Because that bug shipped, the ledger also defends in depth:
+[`RequestUsageRecord::sanitize_poisoned_estimate`] clamps any *estimated*
+completion count above a physically implausible ceiling to "prompt only, no
+completion" — both when an attempt settles and when older persisted records
+are loaded back. Provider-reported counts are authoritative and never
+clamped.
+
 ## The token-source ledger
 
 To make the reported-vs-estimated distinction observable, neenee keeps one

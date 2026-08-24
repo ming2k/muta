@@ -276,6 +276,35 @@ guards keep the record honest:
   already converged, the history already committed — changes nothing and
   must not fabricate an `▲ interrupted` marker over a successful round.
 
+A third race lives in the stream loop itself, and it is the one users
+actually hit: the model's final delta arrives (the UI has rendered a
+complete answer), but the stream's terminal event is still in flight when
+the next message lands. The stream `select!` is `biased` toward
+cancellation, so the cancel used to win the very next poll and unwind the
+round as interrupted *after* every delta was already displayed — the marker
+then read as an interrupt of a round the user watched finish. The loop now
+gives a stream that has already delivered output this turn one short,
+strictly bounded **finish-drain window** (`FINISH_DRAIN_GRACE`) to reach
+its natural end: a settling stream commits the answer as a completed
+round, while a stream that stays silent past the window was not settling,
+and the interrupt stands. Esc Esc feels no different — an interrupt is
+delayed by at most the window, and only when the answer was already on
+screen.
+
+Two details keep the record's own geometry honest once it *is* written:
+
+- **`at_ms` is the stop-request moment, not tail time.** The park carries
+  its clock reading (`RoundLifecycle::record_interrupt`), and a supersede
+  parks the *superseding message's send time* when the user authored one.
+  A tail-time stamp can land a few milliseconds after that message, and
+  the resume seam-merge places the marker before the first user message
+  sent later than `at_ms` — a late stamp therefore dropped the marker
+  below the newer round's answer, where it read as an interrupt of a
+  round that completed normally.
+- **`round` is the interrupted round's own admitted number**, snapshotted
+  before the round started — not the live agent counter read at tail time,
+  which by then the superseding round has already bumped to N+1.
+
 Two termination paths cannot run *any* code, so they are covered by
 inference instead:
 

@@ -504,6 +504,13 @@ pub struct App {
     pub config_detail_scroll: usize,
     /// Whether the custom theme hex editor is actively focused for text entry.
     pub config_custom_editing: bool,
+    /// Latest `[websearch]` snapshot (presence-only view) from the harness.
+    /// Refreshed when the Settings view opens (`QueryWebSearchConfig`) and
+    /// on every `WebSearchConfigUpdated` ack.
+    pub websearch_config: Option<neenee_contracts::WebSearchConfigView>,
+    /// Web-search settings pane: which field index borrows the composer
+    /// input row for text entry (SearXNG URL / API keys). `None` = browse.
+    pub websearch_editing: Option<usize>,
     /// Index of the skills-modal row whose detail block is expanded
     /// (`Modal::Skills`), or `None` when every row is collapsed. `Enter`
     /// toggles the selected row; reset to `None` each time the modal opens.

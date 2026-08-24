@@ -62,6 +62,11 @@ pub(crate) trait SearchProvider: Send + Sync {
     /// (surfaced verbatim to the model/user).
     async fn search(&self, client: &reqwest::Client, query: &str)
     -> Result<ProviderOutput, String>;
+    /// Duplicate the provider. Providers are tiny config-carrying structs
+    /// (connection state lives in the shared `reqwest::Client`), so the web
+    /// tool's signature-keyed chain cache can hand each call a consistent
+    /// chain snapshot even while a config reload swaps the cache.
+    fn clone_box(&self) -> Box<dyn SearchProvider>;
 }
 
 /// Names `build_provider` recognizes. Used by config validation to warn on

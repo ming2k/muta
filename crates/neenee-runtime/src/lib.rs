@@ -75,6 +75,7 @@ pub mod handlers_permission;
 pub mod handlers_provider;
 pub mod handlers_session;
 pub mod handlers_slash;
+pub mod handlers_websearch;
 pub mod hooks;
 pub mod host;
 pub mod log_rotate;

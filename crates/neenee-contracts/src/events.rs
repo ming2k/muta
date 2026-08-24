@@ -334,6 +334,134 @@ pub enum AgentRequest {
         name: String,
         custom: crate::ColorSchemeConfig,
     },
+    /// Query the effective `[websearch]` configuration (provider, fallback,
+    /// reader, proxy, timeout, SearXNG URL, and **key presence only** —
+    /// secrets never cross the wire). Replied with
+    /// [`AgentResponse::WebSearchConfigSnapshot`].
+    QueryWebSearchConfig,
+    /// Update the `[websearch]` configuration live. Every field is optional:
+    /// absent fields keep their current value, so a frontend can PATCH one
+    /// setting at a time. API keys are optional and follow the credentials
+    /// store discipline (persisted to `credentials.toml`, never to
+    /// `config.toml`); an empty-string key **clears** it. The harness
+    /// validates, persists, hot-applies the new config to the web tools, and
+    /// replies with [`AgentResponse::WebSearchConfigUpdated`] carrying the
+    /// effective post-update view (key presence only).
+    UpdateWebSearchConfig(Box<WebSearchConfigUpdate>),
+}
+
+/// A partial update to the `[websearch]` table. Every field is optional:
+/// `None` keeps the current value, `Some` replaces it. Sent via
+/// [`AgentRequest::UpdateWebSearchConfig`].
+///
+/// Secrets travel in the clear on this request (the wire is the local
+/// WebSocket to the user's own daemon, the same trust domain as the
+/// `AddProvider`/`EditProvider` requests that carry provider API keys), but
+/// they are persisted to `credentials.toml` — never `config.toml` — and are
+/// **never echoed back**: the reply carries only key presence.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct WebSearchConfigUpdate {
+    /// Primary search backend (`exa` | `parallel` | `duckduckgo` | `searxng`
+    /// | `tavily` | `bocha`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider: Option<String>,
+    /// Fallback backend tried when the primary fails; empty string disables.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fallback: Option<String>,
+    /// Page-content reader used by `webfetch` (`builtin` | `jina`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reader: Option<String>,
+    /// Proxy URL applied to both tools (`http(s)://`, `socks5://`,
+    /// `socks5h://`). Empty string clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub proxy: Option<String>,
+    /// Per-request timeout in seconds (clamped to ≥ 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub timeout_secs: Option<u64>,
+    /// SearXNG JSON endpoint; required when `provider = "searxng"`.
+    /// Empty string clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub searxng_url: Option<String>,
+    /// Exa API key. Empty string clears the stored key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub exa_api_key: Option<String>,
+    /// Parallel API key. Empty string clears the stored key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parallel_api_key: Option<String>,
+    /// Tavily API key. Empty string clears the stored key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tavily_api_key: Option<String>,
+    /// Bocha API key. Empty string clears the stored key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub bocha_api_key: Option<String>,
+    /// Jina Reader API key. Empty string clears the stored key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub jina_api_key: Option<String>,
+}
+
+/// The frontend-facing view of the effective `[websearch]` configuration.
+/// Mirrors [`crate::WebSearchConfig`] with every API key reduced to a
+/// boolean **presence flag** — plaintext secrets never cross the wire in
+/// either reply ([`AgentResponse::WebSearchConfigSnapshot`] or
+/// [`AgentResponse::WebSearchConfigUpdated`]).
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct WebSearchConfigView {
+    pub provider: String,
+    pub fallback: String,
+    pub reader: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub proxy: Option<String>,
+    pub timeout_secs: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub searxng_url: Option<String>,
+    #[serde(default)]
+    pub exa_api_key_set: bool,
+    #[serde(default)]
+    pub parallel_api_key_set: bool,
+    #[serde(default)]
+    pub tavily_api_key_set: bool,
+    #[serde(default)]
+    pub bocha_api_key_set: bool,
+    #[serde(default)]
+    pub jina_api_key_set: bool,
+}
+
+impl From<&crate::WebSearchConfig> for WebSearchConfigView {
+    fn from(cfg: &crate::WebSearchConfig) -> Self {
+        let is_set = |k: &Option<crate::SecretString>| {
+            k.as_ref()
+                .map(|s| !s.expose_secret().trim().is_empty())
+                .unwrap_or(false)
+        };
+        Self {
+            provider: cfg.provider.clone(),
+            fallback: cfg.fallback.clone(),
+            reader: cfg.reader.clone(),
+            proxy: cfg.proxy.clone(),
+            timeout_secs: cfg.timeout_secs,
+            searxng_url: cfg.searxng_url.clone(),
+            exa_api_key_set: is_set(&cfg.exa_api_key),
+            parallel_api_key_set: is_set(&cfg.parallel_api_key),
+            tavily_api_key_set: is_set(&cfg.tavily_api_key),
+            bocha_api_key_set: is_set(&cfg.bocha_api_key),
+            jina_api_key_set: is_set(&cfg.jina_api_key),
+        }
+    }
 }
 
 /// User-authored input waiting to be inserted into a running round.
@@ -500,6 +628,14 @@ pub enum AgentResponse {
         name: String,
         custom: crate::ColorSchemeConfig,
     },
+    /// The effective `[websearch]` configuration (key presence only — no
+    /// plaintext secrets). Replied to [`AgentRequest::QueryWebSearchConfig`].
+    WebSearchConfigSnapshot(WebSearchConfigView),
+    /// An [`AgentRequest::UpdateWebSearchConfig`] was validated, persisted,
+    /// and hot-applied to the live web tools. Carries the authoritative
+    /// post-update view so the frontend re-renders from persisted state, not
+    /// its optimistic local edit (mirrors `TuiLayoutUpdated`'s discipline).
+    WebSearchConfigUpdated(WebSearchConfigView),
 }
 
 /// A user-visible notice emitted by the agent or harness.
@@ -664,6 +800,33 @@ pub enum ContextTokenSource {
 pub struct ContextTokenSnapshot {
     pub tokens: usize,
     pub source: ContextTokenSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overhead_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_tokens: Option<usize>,
+}
+
+impl ContextTokenSnapshot {
+    pub fn new(tokens: usize, source: ContextTokenSource) -> Self {
+        Self {
+            tokens,
+            source,
+            overhead_tokens: None,
+            history_tokens: None,
+        }
+    }
+
+    pub fn from_estimate(
+        estimate: crate::RequestTokenEstimate,
+        source: ContextTokenSource,
+    ) -> Self {
+        Self {
+            tokens: estimate.total_tokens,
+            source,
+            overhead_tokens: Some(estimate.overhead_tokens),
+            history_tokens: Some(estimate.history_tokens),
+        }
+    }
 }
 
 /// A durable record of one round being stopped before its natural terminal

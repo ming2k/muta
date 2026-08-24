@@ -97,6 +97,24 @@ pub(super) enum TranscriptUpdate {
         parent_call_id: String,
         event: EnvoyEvent,
     },
+    /// One finalized message must be replaced wholesale (same position, same
+    /// id) without disturbing its neighbors. Streaming boundaries emit this
+    /// instead of forcing a full snapshot: `message` is the listener-side
+    /// post-mutation clone, and the app-side replay swaps it in by id.
+    ReplaceMessage {
+        message_id: u64,
+        message: crate::model::document::TranscriptMessage,
+    },
+    /// One message was appended at the transcript tail (a new tool step or
+    /// the first thinking/text component of a turn). Cheaper than the full
+    /// snapshot: the app-side replay pushes it without cloning history.
+    /// `pre_append_tail` is the id of the last message before the append (or
+    /// `None` for an empty transcript) — the replay uses it to prove the
+    /// local tail is the one the append was computed against.
+    AppendMessage {
+        pre_append_tail: Option<u64>,
+        message: crate::model::document::TranscriptMessage,
+    },
 }
 
 impl TranscriptPatch {
@@ -287,11 +305,34 @@ impl<T> WriteGuard<'_, T> {
             });
     }
 
-    /// Upgrade a streaming write if it discovered that it actually changed the
-    /// transcript structure (for example, the first reasoning delta replacing
-    /// an empty assistant placeholder).
-    pub(super) fn require_transcript_snapshot(&mut self) {
-        self.transcript_patch = TranscriptPatch::Replace;
+    /// Record a wholesale replacement of one finalized message. Only valid
+    /// on a streaming guard; an ordinary guard already forces the snapshot.
+    pub(super) fn record_replace_message(
+        &mut self,
+        message_id: u64,
+        message: crate::model::document::TranscriptMessage,
+    ) {
+        self.transcript_patch
+            .push_pending(TranscriptUpdate::ReplaceMessage {
+                message_id,
+                message,
+            });
+    }
+
+    /// Record a tail append of one new message. Only valid on a streaming
+    /// guard; an ordinary guard already forces the snapshot.
+    /// `pre_append_tail` is the id of the tail before the append (`None` if
+    /// the transcript was empty), letting the replay verify continuity.
+    pub(super) fn record_append_message(
+        &mut self,
+        pre_append_tail: Option<u64>,
+        message: crate::model::document::TranscriptMessage,
+    ) {
+        self.transcript_patch
+            .push_pending(TranscriptUpdate::AppendMessage {
+                pre_append_tail,
+                message,
+            });
     }
 }
 

@@ -612,6 +612,8 @@ components:
         - $ref: '#/components/schemas/RequestShellCommand'
         - $ref: '#/components/schemas/RequestExitSideView'
         - $ref: '#/components/schemas/RequestUpdateTuiLayout'
+        - $ref: '#/components/schemas/RequestQueryWebSearchConfig'
+        - $ref: '#/components/schemas/RequestUpdateWebSearchConfig'
         - $ref: '#/components/schemas/RequestRefreshProviderModels'
     RequestChat:
       type: object
@@ -914,6 +916,58 @@ components:
       required: [UpdateTuiLayout]
       properties: { UpdateTuiLayout: { type: string, enum: [turn_band, default] } }
       additionalProperties: false
+    RequestQueryWebSearchConfig:
+      type: object
+      required: [QueryWebSearchConfig]
+      properties: { QueryWebSearchConfig: { type: 'null' } }
+      additionalProperties: false
+    RequestUpdateWebSearchConfig:
+      description: |
+        PATCH the `[websearch]` table: absent fields keep their values. Behavior
+        fields persist to config.toml; API keys persist to credentials.toml and
+        an empty-string value CLEARS the stored key. The daemon validates,
+        persists, hot-applies to the live web tools, and replies with
+        ResponseWebSearchConfigUpdated (key presence only).
+      type: object
+      required: [UpdateWebSearchConfig]
+      properties:
+        UpdateWebSearchConfig: { $ref: '#/components/schemas/WebSearchConfigUpdate' }
+      additionalProperties: false
+    WebSearchConfigUpdate:
+      type: object
+      properties:
+        provider: { type: string, enum: [exa, parallel, duckduckgo, ddg, searxng, tavily, bocha] }
+        fallback: { type: string, description: 'Empty string disables the fallback.' }
+        reader: { type: string, enum: [builtin, jina] }
+        proxy: { type: string, description: 'Empty string clears it.' }
+        timeout_secs: { type: integer, minimum: 1 }
+        searxng_url: { type: string, description: 'Required when a backend is searxng; empty clears.' }
+        exa_api_key: { type: string }
+        parallel_api_key: { type: string }
+        tavily_api_key: { type: string }
+        bocha_api_key: { type: string }
+        jina_api_key: { type: string }
+      additionalProperties: false
+    WebSearchConfigView:
+      description: |
+        The effective `[websearch]` configuration with every API key reduced to
+        a boolean presence flag — plaintext secrets never cross the wire.
+      type: object
+      required:
+        [provider, fallback, reader, timeout_secs, exa_api_key_set, parallel_api_key_set,
+         tavily_api_key_set, bocha_api_key_set, jina_api_key_set]
+      properties:
+        provider: { type: string }
+        fallback: { type: string }
+        reader: { type: string }
+        proxy: { type: string }
+        timeout_secs: { type: integer, minimum: 1 }
+        searxng_url: { type: string }
+        exa_api_key_set: { type: boolean }
+        parallel_api_key_set: { type: boolean }
+        tavily_api_key_set: { type: boolean }
+        bocha_api_key_set: { type: boolean }
+        jina_api_key_set: { type: boolean }
     RequestRefreshProviderModels:
       type: object
       required: [RefreshProviderModels]
@@ -948,6 +1002,8 @@ components:
         - $ref: '#/components/schemas/ResponseConnectStatus'
         - $ref: '#/components/schemas/ResponseSessionContext'
         - $ref: '#/components/schemas/ResponseTuiLayoutUpdated'
+        - $ref: '#/components/schemas/ResponseWebSearchConfigSnapshot'
+        - $ref: '#/components/schemas/ResponseWebSearchConfigUpdated'
     ResponseRound:
       type: object
       required: [Round]
@@ -1056,6 +1112,20 @@ components:
       type: object
       required: [TuiLayoutUpdated]
       properties: { TuiLayoutUpdated: { type: string } }
+      additionalProperties: false
+    ResponseWebSearchConfigSnapshot:
+      type: object
+      required: [WebSearchConfigSnapshot]
+      properties: { WebSearchConfigSnapshot: { $ref: '#/components/schemas/WebSearchConfigView' } }
+      additionalProperties: false
+    ResponseWebSearchConfigUpdated:
+      description: |
+        Ack for RequestUpdateWebSearchConfig: the config was validated,
+        persisted, and hot-applied to the live web tools. Carries the
+        authoritative post-update view.
+      type: object
+      required: [WebSearchConfigUpdated]
+      properties: { WebSearchConfigUpdated: { $ref: '#/components/schemas/WebSearchConfigView' } }
       additionalProperties: false
 
     RoundEvent:

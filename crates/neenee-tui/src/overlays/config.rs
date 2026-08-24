@@ -44,14 +44,16 @@ pub enum ConfigCategory {
     Appearance = 0,
     Transcript = 1,
     Behavior = 2,
-    System = 3,
+    WebSearch = 3,
+    System = 4,
 }
 
 impl ConfigCategory {
-    pub const ALL: [ConfigCategory; 4] = [
+    pub const ALL: [ConfigCategory; 5] = [
         ConfigCategory::Appearance,
         ConfigCategory::Transcript,
         ConfigCategory::Behavior,
+        ConfigCategory::WebSearch,
         ConfigCategory::System,
     ];
 
@@ -60,6 +62,7 @@ impl ConfigCategory {
             0 => ConfigCategory::Appearance,
             1 => ConfigCategory::Transcript,
             2 => ConfigCategory::Behavior,
+            3 => ConfigCategory::WebSearch,
             _ => ConfigCategory::System,
         }
     }
@@ -69,6 +72,7 @@ impl ConfigCategory {
             ConfigCategory::Appearance => "Appearance",
             ConfigCategory::Transcript => "Transcript",
             ConfigCategory::Behavior => "Behavior",
+            ConfigCategory::WebSearch => "Web Search",
             ConfigCategory::System => "System & Info",
         }
     }
@@ -78,6 +82,7 @@ impl ConfigCategory {
             ConfigCategory::Appearance => "Themes, palette swatches & custom colors",
             ConfigCategory::Transcript => "Turn bands, auto-scroll & disclosures",
             ConfigCategory::Behavior => "Click-outside dismiss & interaction rules",
+            ConfigCategory::WebSearch => "Search backend, reader & API keys",
             ConfigCategory::System => "Config file paths, runtime & daemon info",
         }
     }
@@ -87,6 +92,7 @@ impl ConfigCategory {
             ConfigCategory::Appearance => "◐",
             ConfigCategory::Transcript => "≡",
             ConfigCategory::Behavior => "⚙",
+            ConfigCategory::WebSearch => "⌕",
             ConfigCategory::System => "ℹ",
         }
     }
@@ -115,10 +121,26 @@ pub struct ConfigViewProps<'a> {
     pub transcript_layout: crate::view::layout::Strategy,
     pub expand_auto_scroll: bool,
     pub click_outside_dismiss: bool,
+    /// Latest `[websearch]` snapshot from the harness (`None` while the
+    /// query is still in flight — the pane renders a placeholder).
+    pub websearch: Option<&'a neenee_contracts::WebSearchConfigView>,
+    /// Web-search pane text-editing mode: which field index borrows the
+    /// composer input row (`Some(4)` = SearXNG URL, `Some(5..=9)` = API
+    /// keys). `None` = browse mode.
+    pub websearch_editing: Option<usize>,
     pub workspace: &'a str,
     pub category_scroll: &'a mut usize,
     pub detail_scroll: &'a mut usize,
     pub theme: &'a Theme,
+}
+
+impl ConfigViewProps<'_> {
+    /// Which web-search field (if any) is capturing composer input. `None`
+    /// means the web-search detail pane is in browse mode. Field indices
+    /// match the rows of [`draw_websearch_detail`].
+    pub fn websearch_editing_field(&self) -> Option<usize> {
+        self.websearch_editing
+    }
 }
 
 /// Draw the full-screen Settings View.
@@ -352,6 +374,9 @@ fn draw_category_detail(
         }
         ConfigCategory::Behavior => {
             draw_behavior_detail(frame, body, props, focused);
+        }
+        ConfigCategory::WebSearch => {
+            draw_websearch_detail(frame, body, props, focused);
         }
         ConfigCategory::System => {
             draw_system_detail(frame, body, props, focused);
@@ -783,7 +808,246 @@ fn draw_behavior_detail(
     );
 }
 
-// 4. System Detail Pane
+// 4. Web Search Detail Pane
+//
+// Row indices here must stay in sync with the activate handler in
+// `event_loop/actions.rs` (`InputAction::ConfigActivate`, category 3):
+//   0 Primary Backend   — Enter cycles exa→parallel→duckduckgo→searxng→tavily→bocha
+//   1 Fallback Backend  — Enter cycles the same list plus "(none)"
+//   2 Reader            — Enter cycles builtin→jina
+//   3 Timeout           — Enter +5s (shift: −5s)
+//   4 SearXNG URL       — Enter starts/stops inline editing (composer row)
+//   5..9 API keys       — Enter starts/stops inline editing; empty submit clears
+const WEBSEARCH_BACKENDS: &[(&str, &str)] = &[
+    ("exa", "hosted MCP, anonymous by default (default)"),
+    ("parallel", "hosted MCP, anonymous by default"),
+    ("duckduckgo", "keyless scraping, frequently blocked"),
+    ("searxng", "self-hosted, keyless, needs a URL"),
+    ("tavily", "hosted, needs a Tavily key"),
+    ("bocha", "hosted AI search, needs a key; China-direct"),
+];
+
+/// Cycle a backend id through the known list (unknown → exa). Shared by the
+/// Settings pane's activate handler for both primary and fallback rows.
+pub fn cycle_websearch_backend(current: &str) -> &'static str {
+    let idx = WEBSEARCH_BACKENDS.iter().position(|(id, _)| *id == current);
+    let next = match idx {
+        Some(i) => (i + 1) % WEBSEARCH_BACKENDS.len(),
+        None => 0,
+    };
+    WEBSEARCH_BACKENDS[next].0
+}
+
+#[allow(clippy::too_many_lines)]
+fn draw_websearch_detail(
+    frame: &mut Frame,
+    body: Rect,
+    props: &mut ConfigViewProps<'_>,
+    focused: bool,
+) {
+    let _ = frame;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut selected_line = None;
+
+    let Some(ws) = props.websearch else {
+        lines.push(Line::from(Span::styled(
+            "Loading web-search configuration…",
+            Style::default().fg(props.theme.muted()),
+        )));
+        render_scrollable(frame, body, lines, props.detail_scroll, None, props.theme);
+        return;
+    };
+
+    lines.push(Line::from(Span::styled(
+        "websearch/webfetch backends. Changes apply live and persist to config.toml.",
+        Style::default().fg(props.theme.muted()),
+    )));
+    lines.push(Line::from(""));
+
+    let backend_desc = |id: &str| -> &str {
+        WEBSEARCH_BACKENDS
+            .iter()
+            .find(|(bid, _)| *bid == id)
+            .map(|(_, d)| *d)
+            .unwrap_or("unknown backend")
+    };
+
+    let searxng_note = if ws.provider == "searxng" || ws.fallback == "searxng" {
+        ws.searxng_url
+            .as_deref()
+            .map(|u| format!("JSON endpoint: {u}"))
+            .unwrap_or_else(|| {
+                "JSON endpoint not set — searxng will error at call time".to_string()
+            })
+    } else {
+        "only used when a backend is searxng".to_string()
+    };
+
+    let key_row = |set: bool| -> String {
+        if set {
+            "set [●]".to_string()
+        } else {
+            "not set [○]".to_string()
+        }
+    };
+
+    let items: Vec<(String, String, String)> = vec![
+        (
+            "Primary Backend".to_string(),
+            ws.provider.clone(),
+            backend_desc(&ws.provider).to_string(),
+        ),
+        (
+            "Fallback Backend".to_string(),
+            if ws.fallback.trim().is_empty() {
+                "(none)".to_string()
+            } else {
+                ws.fallback.clone()
+            },
+            "tried automatically when the primary fails".to_string(),
+        ),
+        (
+            "Page Reader".to_string(),
+            ws.reader.clone(),
+            if ws.reader == "jina" {
+                "r.jina.ai: JS rendering + readability extraction"
+            } else {
+                "direct fetch + local HTML stripping (no JS)"
+            }
+            .to_string(),
+        ),
+        (
+            "Timeout".to_string(),
+            format!("{} s", ws.timeout_secs),
+            "per-request timeout for both tools".to_string(),
+        ),
+        (
+            "SearXNG URL".to_string(),
+            ws.searxng_url.clone().unwrap_or_default(),
+            searxng_note,
+        ),
+        (
+            "Exa API Key".to_string(),
+            key_row(ws.exa_api_key_set),
+            "optional — raises the anonymous quota".to_string(),
+        ),
+        (
+            "Parallel API Key".to_string(),
+            key_row(ws.parallel_api_key_set),
+            "optional — raises the anonymous quota".to_string(),
+        ),
+        (
+            "Tavily API Key".to_string(),
+            key_row(ws.tavily_api_key_set),
+            "required when the backend is tavily".to_string(),
+        ),
+        (
+            "Bocha API Key".to_string(),
+            key_row(ws.bocha_api_key_set),
+            "required when the backend is bocha".to_string(),
+        ),
+        (
+            "Jina Reader Key".to_string(),
+            key_row(ws.jina_api_key_set),
+            "optional — raises the reader rate limit".to_string(),
+        ),
+    ];
+
+    let editing_field = props.websearch_editing_field();
+    for (i, (label, val, desc)) in items.iter().enumerate() {
+        let is_sel = i == props.detail_index;
+        if is_sel {
+            selected_line = Some(lines.len());
+        }
+        let editing_this = editing_field == Some(i);
+
+        let cursor = if is_sel { "›" } else { " " };
+        let row_style = if is_sel && focused {
+            Style::default()
+                .fg(props.theme.brand())
+                .add_modifier(Modifier::BOLD)
+        } else if is_sel {
+            Style::default()
+                .fg(props.theme.fg())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(props.theme.fg())
+        };
+
+        let shown: String = if editing_this {
+            props.input.to_string()
+        } else if i == 4 && val.is_empty() {
+            "(not set)".to_string()
+        } else {
+            val.clone()
+        };
+
+        let mut row_spans = vec![
+            Span::styled(
+                format!(" {cursor} "),
+                Style::default().fg(if is_sel {
+                    props.theme.brand()
+                } else {
+                    props.theme.dim()
+                }),
+            ),
+            Span::styled(format!("{:<18}", label), row_style),
+            Span::styled("  ", Style::default()),
+        ];
+        if editing_this {
+            // Composer-style cursor rendering inside the settings row.
+            let cursor_pos = props.cursor_position.min(shown.len());
+            let (left, right) = shown.split_at(cursor_pos);
+            let (mid, right) = if !right.is_empty() {
+                right.split_at(1)
+            } else {
+                (" ", "")
+            };
+            row_spans.push(Span::styled(
+                left.to_string(),
+                Style::default().fg(props.theme.brand()),
+            ));
+            row_spans.push(Span::styled(
+                mid.to_string(),
+                Style::default()
+                    .bg(props.theme.brand())
+                    .fg(props.theme.body()),
+            ));
+            row_spans.push(Span::styled(
+                right.to_string(),
+                Style::default().fg(props.theme.brand()),
+            ));
+        } else {
+            row_spans.push(Span::styled(
+                format!("{:<16}", shown),
+                Style::default().fg(props.theme.brand()),
+            ));
+        }
+        lines.push(Line::from(row_spans));
+        lines.push(Line::from(vec![
+            Span::raw("     "),
+            Span::styled(desc.clone(), Style::default().fg(props.theme.muted())),
+        ]));
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(Span::styled(
+        "Keys persist to credentials.toml (never config.toml); submitting an \
+         empty value clears a key. Proxy: set [websearch] proxy in config.toml.",
+        Style::default().fg(props.theme.dim()),
+    )));
+
+    render_scrollable(
+        frame,
+        body,
+        lines,
+        props.detail_scroll,
+        selected_line,
+        props.theme,
+    );
+}
+
+// 5. System Detail Pane
 fn draw_system_detail(
     frame: &mut Frame,
     body: Rect,

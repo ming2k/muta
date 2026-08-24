@@ -334,6 +334,13 @@ pub(super) fn render_frame(
                 busy,
                 can_retry,
                 context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
+                // Live composer-draft token count (framing included), shown
+                // as the `(+n)` addend next to the used-context figure.
+                draft_tokens: if app.input.is_empty() {
+                    0
+                } else {
+                    neenee_contracts::count_tokens(&app.input)
+                },
                 ignition_elapsed_ms: app
                     .effort_ignition_epoch
                     .map(|epoch| epoch.elapsed().as_millis()),
@@ -894,6 +901,7 @@ pub(super) fn render_frame(
                 view::ContextUsageView {
                     snapshot: app.context_tokens,
                     window_tokens: crate::providers::model_context_window(&app.current_model),
+                    draft_tokens: neenee_contracts::estimate_draft_tokens(&app.input),
                 },
                 app.modal_index
                     .min(view::token_report_round_count(&report).saturating_sub(1)),
@@ -969,6 +977,8 @@ pub(super) fn render_frame(
                     transcript_layout: app.transcript_layout,
                     expand_auto_scroll: app.expand_auto_scroll,
                     click_outside_dismiss: app.click_outside_dismiss,
+                    websearch: app.websearch_config.as_ref(),
+                    websearch_editing: app.websearch_editing,
                     workspace: &app.current_workspace,
                     category_scroll: &mut app.config_scroll,
                     detail_scroll: &mut app.config_detail_scroll,

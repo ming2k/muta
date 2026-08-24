@@ -113,6 +113,51 @@ pub struct RequestUsageRecord {
 }
 
 impl RequestUsageRecord {
+    /// Physically implausible *implied output rate* (tokens/sec), used to
+    /// detect records poisoned by the quadratic `observe_output` bug (a
+    /// stream that re-counted every early token once per later delta). Real
+    /// models peak in the low hundreds of tok/s (the fastest rate ever
+    /// observed across this install's reported records is 138 tok/s); 10 000
+    /// is ~70× that and still orders of magnitude below the bug's output
+    /// (up to 172 134 tok/s). Only a measured `generation_ms` can express a
+    /// rate, so untimed records keep the absolute companion ceiling below.
+    pub const IMPLAUSIBLE_TOKENS_PER_SECOND: f64 = 10_000.0;
+
+    /// Companion absolute ceiling for records with no measured generation
+    /// span (legacy rows, or a failure before the clock sealed): no single
+    /// assistant response reaches eight figures in tokens.
+    pub const IMPLAUSIBLE_COMPLETION_TOKENS: i64 = 10_000_000;
+
+    /// Clamp a poisoned estimated completion count in place, returning
+    /// whether the record was repaired. Only estimated records are touched
+    /// (a provider-reported count is authoritative by definition, however
+    /// surprising), and only when the count is physically impossible —
+    /// either its implied tokens/sec rate or, without a measured span, its
+    /// absolute size. The repaired shape is `total = prompt,
+    /// completion = 0`: the honest statement for an interrupted attempt
+    /// whose stream was never validated is "no trustworthy completion
+    /// count" — which renders as a `–` rate — not a fabricated
+    /// millions-strong figure.
+    pub fn sanitize_poisoned_estimate(&mut self) -> bool {
+        if self.source != RequestUsageSource::Estimated || self.completion_tokens <= 0 {
+            return false;
+        }
+        let implausible = if self.generation_ms > 0 {
+            // Implied rate vs the physical ceiling.
+            (self.completion_tokens as f64) * 1000.0 / (self.generation_ms as f64)
+                > Self::IMPLAUSIBLE_TOKENS_PER_SECOND
+        } else {
+            self.completion_tokens > Self::IMPLAUSIBLE_COMPLETION_TOKENS
+                || self.total_tokens > Self::IMPLAUSIBLE_COMPLETION_TOKENS
+        };
+        if !implausible {
+            return false;
+        }
+        self.completion_tokens = 0;
+        self.total_tokens = self.prompt_tokens;
+        true
+    }
+
     fn totals(&self) -> TokenSourceTotals {
         match self.source {
             RequestUsageSource::Reported => TokenSourceTotals {
@@ -438,6 +483,13 @@ impl TokenSourceLedger {
             record.total_tokens = record
                 .prompt_tokens
                 .saturating_add(record.completion_tokens);
+            // Belt-and-braces: a caller bug cannot be allowed to persist a
+            // physically impossible streamed count (this exact class of bug
+            // once booked 14.7M completion tokens for one interrupted
+            // attempt, which rendered as a 130 050 tok/s rate). Silently
+            // clamped — this crate carries no tracing dependency, and the
+            // repair is visible in the report itself.
+            record.sanitize_poisoned_estimate();
         }
         // Mirror the terminal record into the durable cross-session usage
         // store (ADR-0122). The sink owns its error handling; a stats failure
@@ -477,7 +529,10 @@ impl TokenSourceLedger {
 
     /// Replace one session's records from durable state. Any persisted
     /// in-flight request is crash residue and becomes `Abandoned` with an
-    /// estimated prompt lower-bound before being exposed.
+    /// estimated prompt lower-bound before being exposed. Records persisted
+    /// by the quadratic `observe_output` bug (see
+    /// [`RequestUsageRecord::sanitize_poisoned_estimate`]) are repaired on
+    /// load so a resumed session's report and rates stop showing the poison.
     pub fn restore_session(&self, session_id: &str, records: Vec<RequestUsageRecord>) {
         let mut requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
         requests.retain(|key, _| key.session_id != session_id);
@@ -489,6 +544,11 @@ impl TokenSourceLedger {
                 record.prompt_tokens = record.projected_prompt_tokens.max(0);
                 record.total_tokens = record.prompt_tokens;
             }
+            // Repair records persisted by the quadratic double-count bug
+            // (silently — this crate carries no tracing dependency; the
+            // repair is visible in the report itself, and the round/turn
+            // identity stays intact).
+            record.sanitize_poisoned_estimate();
             requests.insert(record.key.clone(), record);
         }
     }
@@ -846,6 +906,140 @@ mod tests {
         assert_eq!(records[0].source, RequestUsageSource::Estimated);
         assert_eq!(records[0].prompt_tokens, 700);
         assert_eq!(records[0].total_tokens, 700);
+    }
+
+    /// The quadratic `observe_output` bug (summing `StreamingCounter::push`'s
+    /// *running total* once per delta) persisted absurd completion counts on
+    /// interrupted/failed attempts — e.g. a real turn booked 14 786 219
+    /// completion tokens over 113 s and rendered as 130 050 tok/s. Both the
+    /// load path and the settle path must repair such records, judging by the
+    /// implied rate (real models peak ≈138 tok/s; the ceiling is 10 000).
+    #[test]
+    fn implausible_estimated_completion_is_repaired() {
+        // Settle path: a caller passing a poisoned estimate is clamped.
+        let ledger = TokenSourceLedger::new();
+        let key = ledger.begin_request("s1", "p1", "m1", 1, 1, 800);
+        ledger.settle_request(
+            &key,
+            RequestUsageStatus::Interrupted,
+            None,
+            14_786_219,
+            113_696,
+        );
+        let records = ledger.records_for_session("s1");
+        assert_eq!(records[0].status, RequestUsageStatus::Interrupted);
+        assert_eq!(records[0].completion_tokens, 0);
+        assert_eq!(records[0].total_tokens, records[0].prompt_tokens);
+
+        // A *small* poisoned count whose implied rate is still impossible
+        // (2 393 tokens in 2.165 s → 1 105 tok/s... is under the 10 000
+        // ceiling and survives; 9 500 in 2 s → 4 750 tok/s also survives).
+        // The rate ceiling only fires far beyond physical reality, so these
+        // remain — the ceiling catches the quadratic blow-up (which always
+        // rockets past 10 000 tok/s within a few hundred deltas), not
+        // merely-fast streams.
+        let ledger = TokenSourceLedger::new();
+        let key = ledger.begin_request("s2", "p1", "m1", 1, 1, 800);
+        ledger.settle_request(&key, RequestUsageStatus::Interrupted, None, 9_500, 2_000);
+        let records = ledger.records_for_session("s2");
+        assert_eq!(records[0].completion_tokens, 9_500);
+
+        // A count implying >10 000 tok/s is repaired even at modest size.
+        let ledger = TokenSourceLedger::new();
+        let key = ledger.begin_request("s3", "p1", "m1", 1, 1, 800);
+        ledger.settle_request(&key, RequestUsageStatus::Failed, None, 25_000, 2_000);
+        let records = ledger.records_for_session("s3");
+        assert_eq!(records[0].completion_tokens, 0);
+        assert_eq!(records[0].total_tokens, 800);
+
+        // Untimed poison: an eight-figure count with no measured span is
+        // repaired via the absolute companion ceiling.
+        let ledger = TokenSourceLedger::new();
+        let key = ledger.begin_request("s4", "p1", "m1", 1, 1, 800);
+        ledger.settle_request(&key, RequestUsageStatus::Failed, None, 98_732_687, 0);
+        let records = ledger.records_for_session("s4");
+        assert_eq!(records[0].completion_tokens, 0);
+
+        // Load path: a poisoned record persisted by an older build is
+        // repaired on restore.
+        let ledger = TokenSourceLedger::new();
+        let poisoned = RequestUsageRecord {
+            key: RequestUsageKey {
+                session_id: "old".to_string(),
+                actor_id: "principal".to_string(),
+                round: 1,
+                turn: 44,
+                attempt: 1,
+            },
+            provider: "relay".to_string(),
+            model: "model".to_string(),
+            status: RequestUsageStatus::Interrupted,
+            source: RequestUsageSource::Estimated,
+            projected_prompt_tokens: 64_572,
+            prompt_tokens: 64_572,
+            completion_tokens: 14_786_219,
+            total_tokens: 14_850_791,
+            generation_ms: 113_696,
+            ..Default::default()
+        };
+        ledger.restore_session("repaired", vec![poisoned]);
+        let records = ledger.records_for_session("repaired");
+        assert_eq!(records[0].completion_tokens, 0);
+        assert_eq!(records[0].total_tokens, 64_572);
+        // The generation span survives — the *rate* column falls back to `–`
+        // (zero completion), not a fabricated figure.
+
+        // A plausible estimated completion is untouched.
+        let plausible = RequestUsageRecord {
+            key: RequestUsageKey {
+                session_id: "old".to_string(),
+                actor_id: "principal".to_string(),
+                round: 2,
+                turn: 1,
+                attempt: 1,
+            },
+            provider: "relay".to_string(),
+            model: "model".to_string(),
+            status: RequestUsageStatus::Completed,
+            source: RequestUsageSource::Estimated,
+            projected_prompt_tokens: 1_000,
+            prompt_tokens: 1_000,
+            completion_tokens: 2_400,
+            total_tokens: 3_400,
+            generation_ms: 40_000,
+            ..Default::default()
+        };
+        ledger.restore_session("plausible", vec![plausible.clone()]);
+        let restored = ledger.records_for_session("plausible");
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].completion_tokens, 2_400);
+        assert_eq!(restored[0].total_tokens, 3_400);
+
+        // A provider-reported count is authoritative and never clamped.
+        let reported = RequestUsageRecord {
+            key: RequestUsageKey {
+                session_id: "old".to_string(),
+                actor_id: "principal".to_string(),
+                round: 3,
+                turn: 1,
+                attempt: 1,
+            },
+            provider: "relay".to_string(),
+            model: "model".to_string(),
+            status: RequestUsageStatus::Completed,
+            source: RequestUsageSource::Reported,
+            prompt_tokens: 50_000,
+            completion_tokens: 12_000_000,
+            total_tokens: 12_050_000,
+            generation_ms: 600_000,
+            ..Default::default()
+        };
+        ledger.restore_session("reported", vec![reported.clone()]);
+        let restored = ledger.records_for_session("reported");
+        assert_eq!(restored.len(), 1);
+        // Authoritative provider counts are never clamped.
+        assert_eq!(restored[0].completion_tokens, 12_000_000);
+        assert_eq!(restored[0].total_tokens, 12_050_000);
     }
 
     #[test]

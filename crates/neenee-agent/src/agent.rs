@@ -124,19 +124,7 @@ impl ScopedToolDisable {
 pub(crate) type TurnPersistFn =
     Arc<dyn Fn(&[Message]) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
 
-/// Estimated token shape of the next provider request.
-///
-/// `history_tokens` is the prepared, non-system conversation, including any
-/// skill messages injected for this request. `overhead_tokens` covers the
-/// freshly composed system message and currently visible tool schemas.
-/// Wire-format framing is intentionally left to the compaction policy's
-/// utilization headroom.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RequestTokenEstimate {
-    pub history_tokens: usize,
-    pub overhead_tokens: usize,
-    pub total_tokens: usize,
-}
+pub use neenee_contracts::RequestTokenEstimate;
 
 // `AgentIdentity` now lives in `neenee-contracts` (`identity.rs`) as pure domain
 // vocabulary, alongside the role profiles. It is re-exported by name at the
@@ -629,9 +617,23 @@ impl RequestAccountingGuard {
         // Streamed deltas feed an exact incremental BPE counter: BPE is not
         // additive across delta boundaries (merges span them), so summing
         // per-delta counts overestimates by 2–100% depending on chunk size.
-        self.observed_completion_tokens = self
-            .observed_completion_tokens
-            .saturating_add(self.output_counter.push(text) as i64);
+        // `push` returns the counter's *running* total — not a per-delta
+        // increment — so the count is read off the counter afterwards rather
+        // than summed per call (summing would re-count every early token once
+        // per later delta; a real interrupted 4 000-delta stream booked 14.7M
+        // "completion tokens" and a 130 050 tok/s rate from exactly that).
+        self.output_counter.push(text);
+        self.observed_completion_tokens = self.output_counter.tokens() as i64;
+    }
+
+    /// Close the stream counter (finalizing the unfinished trailing pretoken)
+    /// so the observed count equals a whole-text tokenization of everything
+    /// the attempt streamed. Idempotent.
+    fn finish_output(&mut self) {
+        let finished = self.output_counter.finish() as i64;
+        if finished > self.observed_completion_tokens {
+            self.observed_completion_tokens = finished;
+        }
     }
 
     fn observe_usage(&mut self, usage: TokenUsage) {
@@ -693,6 +695,11 @@ impl Drop for RequestAccountingGuard {
             return;
         }
         self.seal_generation();
+        // Finalize the streamed-output counter so the estimate equals a
+        // whole-text count of everything the attempt streamed before it was
+        // interrupted or failed (the interrupted path cannot go through
+        // `book_turn_usage`, which normally closes the counter).
+        self.finish_output();
         let status = if self.cancel.is_cancelled() {
             neenee_contracts::RequestUsageStatus::Interrupted
         } else {
@@ -1314,10 +1321,9 @@ impl Agent {
         // Any streamed-but-unfinalized tail (the last open pretoken) belongs
         // to the completion count too: close the incremental counter before
         // settling so the estimate matches what a whole-text count would say.
-        let streamed_total = request.output_counter.finish() as i64;
-        if streamed_total > request.observed_completion_tokens {
-            request.observed_completion_tokens = streamed_total;
-        }
+        // (This is a maximum, never a downgrade: `finish_output` keeps the
+        // larger of the finalized total and the already-observed count.)
+        request.finish_output();
         if let Some(usage) = reported {
             state.token_usage.total_tokens += usage.total_tokens;
             state.token_usage.prompt_tokens += usage.prompt_tokens;
@@ -2454,7 +2460,8 @@ impl Agent {
                     "internal error: provider request was not assembled".to_string(),
                 ));
             };
-            let request_projection = Self::estimate_model_request(request).total_tokens;
+            let request_estimate = Self::estimate_model_request(request);
+            let request_projection = request_estimate.total_tokens;
             let request_provider = self.provider.provider_id();
             let request_model = self.provider.model();
             let mut request_accounting = RequestAccountingGuard::begin(
@@ -2470,6 +2477,12 @@ impl Agent {
                 turn: round.turn_index,
                 context_tokens: request_projection,
             });
+            on_event(AgentEvent::ContextTokens(
+                neenee_contracts::ContextTokenSnapshot::from_estimate(
+                    request_estimate,
+                    neenee_contracts::ContextTokenSource::Projection,
+                ),
+            ));
             // Race the model request against cancellation so an interrupt
             // while we're waiting on the network resolves promptly instead of
             // blocking until the first stream chunk arrives. The idle-timeout
@@ -2515,11 +2528,35 @@ impl Agent {
             // `include_usage`, Anthropic `message_delta`). Captured here and
             // preferred over the local estimate when booking the turn.
             let mut streamed_usage: Option<TokenUsage> = None;
+            // Finish-drain deadline (FINISH_DRAIN_GRACE). Once this turn's
+            // stream has produced at least one delta, a cancellation no
+            // longer wins the biased select outright: the stream gets one
+            // short, strictly bounded window to reach its natural end. A
+            // model that finished its answer right as the user sent the
+            // next message (or hit Esc Esc) then commits that answer as a
+            // completed round instead of unwinding as `Interrupted` after
+            // every delta was already rendered — the false
+            // "▲ interrupted · new message" marker over a round the user
+            // watched finish. A stream that is still silent when the
+            // deadline expires was not settling: the interrupt stands, so
+            // an interrupt is delayed by at most FINISH_DRAIN_GRACE and a
+            // genuinely mid-generation answer is still cut.
+            let mut finish_drain: Option<std::time::Instant> = None;
+            let mut turn_streamed = false;
 
             loop {
                 tokio::select! {
                     biased;
-                    _ = cancel.cancelled() => return Err(HarnessError::Interrupted),
+                    _ = cancel.cancelled(), if finish_drain.is_none() => {
+                        if !turn_streamed {
+                            return Err(HarnessError::Interrupted);
+                        }
+                        // The stream already produced output this turn; open
+                        // the bounded settle window instead of cutting now.
+                        finish_drain = Some(std::time::Instant::now()
+                            + crate::FINISH_DRAIN_GRACE);
+                        continue;
+                    }
                     // Guard against a stalled SSE stream: providers share a
                     // pooled client whose connect timeout covers the handshake
                     // but which deliberately sets no read timeout on streaming
@@ -2529,10 +2566,22 @@ impl Agent {
                     // idle clock resets on every chunk, so a legitimately slow
                     // reasoning model that keeps trickling deltas is never cut
                     // off.
-                    event = tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()) => {
+                    event = tokio::time::timeout(
+                        finish_drain.map_or(STREAM_IDLE_TIMEOUT, |deadline| {
+                            deadline.saturating_duration_since(std::time::Instant::now())
+                        }),
+                        stream.next(),
+                    ) => {
                         let event = match event {
                             Ok(Some(event)) => event,
                             Ok(None) => break,
+                            Err(_elapsed) if finish_drain.is_some() => {
+                                // The settle window expired with the stream
+                                // neither ended nor producing a chunk: the
+                                // answer was not finishing after all. Honour
+                                // the interrupt.
+                                return Err(HarnessError::Interrupted);
+                            }
                             Err(_elapsed) => {
                                 tracing::warn!(
                                     idle_timeout_secs = STREAM_IDLE_TIMEOUT.as_secs(),
@@ -2550,6 +2599,11 @@ impl Agent {
                                 });
                             }
                         };
+                        // Any chunk — text, reasoning, tool-call bytes, or the
+                        // terminal `usage` event — proves this turn's stream
+                        // was delivering, so a subsequent cancellation opens
+                        // the settle window instead of discarding the turn.
+                        turn_streamed = true;
                         match event? {
                             ProviderStreamEvent::TextDelta(delta) => {
                                 request_accounting.observe_output(&delta);
@@ -2726,6 +2780,13 @@ impl Agent {
                 // any further work, so a crash leaves the transcript in sync
                 // with filesystem side effects.
                 self.fire_turn_persist(messages).await?;
+                let post_turn_estimate = self.estimate_next_request_tokens(messages);
+                on_event(AgentEvent::ContextTokens(
+                    neenee_contracts::ContextTokenSnapshot::from_estimate(
+                        post_turn_estimate,
+                        neenee_contracts::ContextTokenSource::Projection,
+                    ),
+                ));
                 self.run_turn_hooks(messages, &round.state, round.turn_index)
                     .await;
                 // Restore TurnEnd-scoped disables now that the ReAct turn is

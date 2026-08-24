@@ -101,6 +101,21 @@ use tokio_util::sync::CancellationToken;
 /// hanging.
 const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// How long a provider stream that has *already delivered output this turn*
+/// gets to reach its natural end after the round is cancelled, before the
+/// cancellation is honoured anyway. This closes the biased-select race at the
+/// end of an answer: the model can emit its final delta (and the terminal
+/// `usage` chunk) in the same instant the user sends the next message or hits
+/// Esc Esc — the UI has already rendered a complete answer, but the cancel arm
+/// of the stream `select!` used to win the very next poll, unwinding the round
+/// as `Interrupted` and later projecting a false "▲ interrupted · new message"
+/// marker over a round that finished. Within this window the stream is drained
+/// normally (chunks keep flowing, so a still-generating answer completes or
+/// the window expires); if the stream stays silent past it, the interrupt
+/// stands. Kept short — an interrupt must feel instant, and a stream that
+/// needs longer than this to finish was not settling.
+pub(crate) const FINISH_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(750);
+
 /// How long the tool executors wait for a cooperatively-cancelled in-flight
 /// call (an envoy) to drain after the user interrupts a turn, before falling
 /// back to dropping its future. The envoy observes its token at the next safe
@@ -133,7 +148,7 @@ pub mod orchestration;
 mod permission_policy;
 mod permission_store;
 pub mod round_lifecycle;
-pub use round_lifecycle::{RoundBegin, RoundLifecycle};
+pub use round_lifecycle::{ParkedInterrupt, RoundBegin, RoundLifecycle};
 pub mod session_title;
 mod shell_input;
 use neenee_skills as skills;

@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A round that finished its answer right as the next message landed is no
+  longer mislabelled `▲ interrupted · new message`.** The reported case:
+  the model's answer fully streamed, the user sent the next message, and
+  the transcript grew an interrupt marker *over the completed round* — on
+  resume it even sat below the newer round's answer. Three stacked defects:
+  (1) the stream loop's `select!` is `biased` toward cancellation, so a
+  cancel arriving between the final delta and the stream's terminal event
+  won the next poll and unwound the round as `Err(Interrupted)` even though
+  every delta was already rendered — a stream that has delivered output
+  this turn now gets one bounded finish-drain window
+  (`FINISH_DRAIN_GRACE`, 750 ms) to reach its natural end, so a settling
+  stream commits as a completed round while a stream that stays silent is
+  still genuinely interrupted; (2) the durable record's `at_ms` was stamped
+  at *tail time* — after the superseding message's send — so the resume
+  seam-merge dropped the marker below that message; the stop reason is now
+  parked with its clock reading at the moment the stop is requested
+  (`RoundLifecycle::record_interrupt` / `record_interrupt_at`, a supersede
+  parks the superseding message's `sent_at_ms`); (3) the record's `round`
+  read the live agent counter at tail time, which the superseding round
+  had already bumped, stamping round N+1 over round N's stop — it now uses
+  the interrupted round's own admitted number. Interrupt UX is unchanged
+  for real interrupts (Esc Esc still cuts a generating answer at the next
+  chunk; only an already-settling stream completes).
+- **Interrupted/failed turns booked absurd completion-token counts (and TPS
+  figures like 130 050).** The streamed-output estimator fed every delta
+  into the exact BPE `StreamingCounter` but then *summed* the counter's
+  return value across deltas — and `push` returns the **running total**, not
+  a per-delta increment. Every early token was therefore re-counted once per
+  later delta, growing quadratically: a real 4 000-delta interrupted stream
+  settled as 14 786 219 "completion tokens" over 113 s → the 130 050 tok/s
+  row in the Context Usage modal. Completed turns masked the bug only by an
+  accident of ordering (`book_turn_usage` finished the counter and took the
+  maximum); interrupted and failed attempts settled straight through the
+  inflated sum. The count is now read off the counter (`tokens()` /
+  `finish()`) — exact across delta boundaries — and the counter is finalized
+  on the interrupt/failure path too, so an interrupted attempt books the
+  true whole-text count of what it streamed. Existing poison is repaired in
+  place: `TokenSourceLedger::restore_session` clamps physically implausible
+  *estimated* completion counts (>10M tokens — nothing real streams that)
+  to "prompt only, no completion" so resumed sessions and the durable
+  `/usage` mirror stop showing seven-figure counts and fabricated rates.
+  Provider-reported counts are never touched.
+
+### Added
+
+- **`[websearch]` is now a live wire-configurable setting** (was
+  boot-time-only). Two additive `AgentRequest` variants —
+  `QueryWebSearchConfig` (replies `WebSearchConfigSnapshot`) and
+  `UpdateWebSearchConfig` (a PATCH; replies `WebSearchConfigUpdated`) —
+  expose the search backend / fallback / reader / timeout / SearXNG URL
+  and API-key presence over the session protocol. Replies carry **key
+  presence flags only**; plaintext secrets never cross the wire. Updates
+  validate at the boundary (unknown backend/reader names and `searxng`
+  without a URL are rejected with pointing errors), persist behavior
+  fields to `config.toml` and keys to `credentials.toml` (empty string
+  clears), and hot-apply through a new shared
+  `SharedWebSearchConfig` handle — the running `websearch`/`webfetch`
+  tools rebuild their provider chain / HTTP client on the next call by
+  signature comparison, no restart or toolset rebuild.
+  `/settings reload` pushes an out-of-band `config.toml` edit through the
+  same hot-apply path. Frontends: the TUI Settings view gains a **Web
+  Search** category (`/settings`, cycle backends/reader, inline editing
+  for the SearXNG URL and keys), and the web panel gains a `⌕ web` header
+  dialog. Wire-compatible (additive variants; see
+  `scripts/check-wire-compat.sh`'s `wire-compatible` label).
+
 ## [0.30.5] - 2026-08-23
 
 ### Added

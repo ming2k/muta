@@ -45,6 +45,7 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )
@@ -99,6 +100,7 @@ fn enter_with_completion(
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )
@@ -309,6 +311,7 @@ fn esc_closes_slash_completion_menu() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -358,6 +361,7 @@ fn esc_closes_path_completion_menu() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -406,6 +410,7 @@ fn esc_falls_through_when_no_completion_is_open() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -451,6 +456,7 @@ fn typing_in_compose_returns_insert_char() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -496,6 +502,7 @@ fn backspace_in_compose_returns_backspace_action() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -545,6 +552,7 @@ fn backspace_atomically_deletes_an_image_chip() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -594,6 +602,7 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -638,6 +647,7 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -714,6 +724,7 @@ fn enter_shell(input: &mut String) -> InputAction {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )
@@ -759,6 +770,7 @@ fn escape_returns_from_always_confirmation() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -800,6 +812,7 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -844,6 +857,7 @@ fn star_in_models_modal_toggles_model_favorite() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -886,6 +900,7 @@ fn a_in_connections_modal_opens_template_chooser() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -930,6 +945,7 @@ fn enter_in_connections_modal_is_inert_no_activate_concept() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -973,6 +989,7 @@ fn esc_in_models_browse_closes_the_modal() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -1015,6 +1032,7 @@ fn esc_in_connections_browse_closes_the_modal() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -1059,6 +1077,7 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -1103,6 +1122,7 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -1143,6 +1163,7 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
         history_clear_confirm: false,
         host_prompting: false,
         config_custom_editing: false,
+        config_websearch_editing: false,
     };
     let letter = process_event(
         Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)),
@@ -1205,6 +1226,7 @@ fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -1242,6 +1264,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
         history_clear_confirm: false,
         host_prompting: false,
         config_custom_editing: false,
+        config_websearch_editing: false,
     };
     let action = process_event(
         Event::Key(crossterm::event::KeyEvent::new(
@@ -1290,6 +1313,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -1338,6 +1362,7 @@ fn key_in_side_view_with(
         history_clear_confirm: false,
         host_prompting: false,
         config_custom_editing: false,
+        config_websearch_editing: false,
     };
     tune(&mut context);
     process_event(
@@ -1387,6 +1412,7 @@ fn key_with_focus(code: KeyCode) -> InputAction {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )
@@ -1456,6 +1482,7 @@ fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -1647,6 +1674,7 @@ fn escape_in_btw_modal_closes_the_modal() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -1692,6 +1720,7 @@ fn enter_in_btw_modal_focuses_the_selected_aside() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -1772,6 +1801,7 @@ fn run_key(
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )
@@ -2120,6 +2150,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 history_clear_confirm: false,
                 host_prompting: false,
                 config_custom_editing: false,
+                config_websearch_editing: false,
             },
             &mut drag,
         )
@@ -2816,6 +2847,7 @@ fn run_history_key(
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )
@@ -2962,6 +2994,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -3002,6 +3035,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -3046,6 +3080,7 @@ fn up_with_queued(has_queued: bool) -> InputAction {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )
@@ -3217,6 +3252,7 @@ fn queue_modal_char(c: char) -> InputAction {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )
@@ -3264,6 +3300,7 @@ fn queue_modal_key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> Inp
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )
@@ -3353,6 +3390,7 @@ fn up_arrow_in_browse_does_not_recall_queued() {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -3401,6 +3439,7 @@ fn run_paste(
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )
@@ -3538,6 +3577,7 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     );
@@ -3825,6 +3865,7 @@ fn oauth_key(c: char) -> InputAction {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )
@@ -3869,6 +3910,7 @@ fn oauth_keycode(code: KeyCode) -> InputAction {
             history_clear_confirm: false,
             host_prompting: false,
             config_custom_editing: false,
+            config_websearch_editing: false,
         },
         &mut drag,
     )

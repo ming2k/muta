@@ -1,11 +1,9 @@
+use crate::tools::search::SearchProvider;
 use async_trait::async_trait;
 use neenee_contracts::{Tool, WebSearchConfig, truncate_utf8};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::sync::{Arc, OnceLock};
-
-use crate::tools::search::SearchProvider;
 
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 
@@ -41,25 +39,32 @@ pub(crate) const WEB_FETCH_MAX_TOKENS: usize = 4_000;
 
 /// Fetch a URL and return its text content (HTML stripped to text).
 pub struct WebFetchTool {
-    config: Arc<WebSearchConfig>,
-    /// Cached HTTP client, built once from `config` on first use so repeated
-    /// fetches reuse the connection pool and keep-alive. Rebuilding a
-    /// `reqwest::Client` per call (the old behaviour) pays a fresh TLS
-    /// handshake and defeats pooling.
-    client: OnceLock<Result<reqwest::Client, String>>,
+    /// Hot-reloadable handle to the effective `[websearch]` config. The
+    /// cached client below is rebuilt when the config's *signature* changes
+    /// (see [`Self::client`]), so a live `UpdateWebSearchConfig` (proxy /
+    /// timeout change) takes effect on the next call without rebuilding the
+    /// toolset.
+    config: neenee_contracts::SharedWebSearchConfig,
+    /// Cached HTTP client keyed by the config signature it was built from:
+    /// repeated fetches reuse the connection pool and keep-alive (rebuilding
+    /// a `reqwest::Client` per call pays a fresh TLS handshake and defeats
+    /// pooling), while a signature change swaps in a fresh client.
+    /// `reqwest::Client` is a cheap `Arc` clone.
+    client: std::sync::RwLock<Option<(String, Result<reqwest::Client, String>)>>,
 }
 
 impl WebFetchTool {
     pub fn new() -> Self {
-        Self {
-            config: Arc::new(WebSearchConfig::default()),
-            client: OnceLock::new(),
-        }
+        Self::with_config(WebSearchConfig::default())
     }
     pub fn with_config(config: WebSearchConfig) -> Self {
+        Self::with_shared_config(neenee_contracts::SharedWebSearchConfig::new(config))
+    }
+    /// Share a hot-reloadable config handle instead of snapshotting a value.
+    pub fn with_shared_config(config: neenee_contracts::SharedWebSearchConfig) -> Self {
         Self {
-            config: Arc::new(config),
-            client: OnceLock::new(),
+            config,
+            client: std::sync::RwLock::new(None),
         }
     }
 }
@@ -71,12 +76,31 @@ impl Default for WebFetchTool {
 }
 
 impl WebFetchTool {
-    /// Lazily build (once) and return the shared HTTP client for this tool's
-    /// config. A build failure is remembered and replayed on every call so the
-    /// caller sees a consistent error instead of retrying the bad config.
-    fn client(&self) -> Result<&reqwest::Client, String> {
-        let built = self.client.get_or_init(|| http_client(&self.config));
-        built.as_ref().map_err(|e| e.clone())
+    /// Return the shared HTTP client for the *current* config, rebuilding the
+    /// cache when the config signature changed since it was built (hot
+    /// reload). A build failure is cached alongside the signature and
+    /// replayed until the config changes again, so the caller sees a
+    /// consistent error instead of retrying the bad config every call.
+    fn client(&self) -> Result<reqwest::Client, String> {
+        let snapshot = self.config.get();
+        let sig = snapshot.signature();
+        {
+            let guard = self
+                .client
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some((cached_sig, built)) = guard.as_ref()
+                && *cached_sig == sig
+            {
+                return built.clone().map_err(|e| e.clone());
+            }
+        }
+        let built = http_client(&snapshot);
+        *self
+            .client
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((sig, built.clone()));
+        built.map_err(|e| e.clone())
     }
 
     /// Observe a public URL for durable change tracking.
@@ -111,7 +135,7 @@ impl WebFetchTool {
         let checked_at_ms = unix_now_ms();
         // 304 is a success-range status, so `guarded_get` returns it as a
         // normal (empty) body — detect the validator match by header equality.
-        let response = guarded_get(client, url, headers).await?;
+        let response = guarded_get(&client, url, headers).await?;
         let final_url = response.final_url;
         let headers = response.headers;
         let sent_etag = etag.map(str::trim).filter(|v| !v.is_empty());
@@ -443,9 +467,10 @@ impl Tool for WebFetchTool {
         crate::tools::ssrf::assert_public_url(url).await?;
         let raw = args["raw"].as_bool().unwrap_or(false);
         let client = self.client()?;
-        let reader = crate::tools::reader::build_reader(&self.config);
+        let snapshot = self.config.get();
+        let reader = crate::tools::reader::build_reader(&snapshot);
         let reader_name = reader.name();
-        let output = match reader.read(client, url, raw).await {
+        let output = match reader.read(&client, url, raw).await {
             Ok(output) => output,
             Err(reader_err) if matches!(reader, crate::tools::reader::Reader::Jina(_)) => {
                 // The configured reader failed (network, quota, HTTP error).
@@ -453,7 +478,7 @@ impl Tool for WebFetchTool {
                 // the whole call — a degraded page beats no page — but keep
                 // the failure visible so misconfiguration is diagnosable.
                 let builtin = crate::tools::reader::Reader::Builtin;
-                let output = builtin.read(client, url, raw).await.map_err(|builtin_err| {
+                let output = builtin.read(&client, url, raw).await.map_err(|builtin_err| {
                     format!("Jina reader failed: {reader_err}\nDirect fetch also failed: {builtin_err}")
                 })?;
                 annotate_with_reader_failure(url, output, &reader_err)
@@ -514,13 +539,30 @@ fn annotate_with_reader_failure(
 /// backend-specific logic lives behind the `SearchProvider` trait so new
 /// backends can be added without touching this tool.
 pub struct WebSearchTool {
-    config: Arc<WebSearchConfig>,
+    /// Hot-reloadable handle (see [`WebFetchTool::config`]).
+    config: neenee_contracts::SharedWebSearchConfig,
+    /// Provider chain + shared client cache, keyed by the config signature
+    /// they were built from: unchanged signature reuses the pool; a changed
+    /// signature (live `UpdateWebSearchConfig`) rebuilds the chain on the
+    /// next call — no toolset rebuild needed.
+    chain: std::sync::RwLock<Option<ChainCache>>,
+}
+
+/// The derivable state [`WebSearchTool`] caches per config signature.
+struct ChainCache {
+    sig: String,
     primary: Box<dyn SearchProvider>,
     fallback: Option<Box<dyn SearchProvider>>,
-    /// Cached HTTP client, built once from `config` (see [`WebFetchTool`]'s
-    /// rationale: connection pooling and keep-alive across searches).
-    client: OnceLock<Result<reqwest::Client, String>>,
+    client: Result<reqwest::Client, String>,
 }
+
+/// A per-call provider-chain snapshot: the primary backend, its optional
+/// fallback, and the shared HTTP client they run over.
+type ProviderChain = (
+    Box<dyn SearchProvider>,
+    Option<Box<dyn SearchProvider>>,
+    reqwest::Client,
+);
 
 impl WebSearchTool {
     pub fn new() -> Self {
@@ -528,19 +570,60 @@ impl WebSearchTool {
     }
 
     pub fn with_config(config: WebSearchConfig) -> Self {
-        let primary = crate::tools::search::build_provider(&config, &config.provider);
-        let fallback_name = config.fallback.trim();
+        Self::with_shared_config(neenee_contracts::SharedWebSearchConfig::new(config))
+    }
+
+    /// Share a hot-reloadable config handle instead of snapshotting a value.
+    pub fn with_shared_config(config: neenee_contracts::SharedWebSearchConfig) -> Self {
+        Self {
+            config,
+            chain: std::sync::RwLock::new(None),
+        }
+    }
+
+    /// Snapshot the current provider chain + client, rebuilding when the
+    /// config signature changed since the cache was filled. Held clones of
+    /// the provider objects stay consistent for the duration of one call
+    /// even if a concurrent reload swaps the cache mid-flight.
+    fn current_chain(&self) -> Result<ProviderChain, String> {
+        let snapshot = self.config.get();
+        let sig = snapshot.signature();
+        {
+            let guard = self
+                .chain
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(cache) = guard.as_ref()
+                && cache.sig == sig
+            {
+                return Ok((
+                    clone_provider(cache.primary.as_ref()),
+                    cache.fallback.as_deref().map(clone_provider),
+                    cache.client.clone().map_err(|e| e.clone())?,
+                ));
+            }
+        }
+        let primary = crate::tools::search::build_provider(&snapshot, &snapshot.provider);
+        let fallback_name = snapshot.fallback.trim();
         let fallback = if fallback_name.is_empty() {
             None
         } else {
-            Some(crate::tools::search::build_provider(&config, fallback_name))
+            Some(crate::tools::search::build_provider(
+                &snapshot,
+                fallback_name,
+            ))
         };
-        Self {
-            config: Arc::new(config),
-            primary,
-            fallback,
-            client: OnceLock::new(),
-        }
+        let client = http_client(&snapshot);
+        *self
+            .chain
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ChainCache {
+            sig,
+            primary: clone_provider(primary.as_ref()),
+            fallback: fallback.as_deref().map(clone_provider),
+            client: client.clone(),
+        });
+        Ok((primary, fallback, client.map_err(|e| e.clone())?))
     }
 
     /// Model-facing description, built per request (not cached at
@@ -580,13 +663,13 @@ The backend is configurable via the `[websearch]` table in config.toml: `exa` \
 `fallback` backend is tried automatically if the primary fails."
         )
     }
+}
 
-    /// Lazily build (once) and return the shared HTTP client. Mirrors
-    /// [`WebFetchTool::client`].
-    fn client(&self) -> Result<&reqwest::Client, String> {
-        let built = self.client.get_or_init(|| http_client(&self.config));
-        built.as_ref().map_err(|e| e.clone())
-    }
+/// Clone a provider out of the cache. Providers are cheap config-carrying
+/// structs (no connection state — the shared `reqwest::Client` owns the
+/// pool), so duplication is the cloning mechanism.
+fn clone_provider(p: &dyn SearchProvider) -> Box<dyn SearchProvider> {
+    p.clone_box()
 }
 
 impl Default for WebSearchTool {
@@ -623,17 +706,17 @@ impl Tool for WebSearchTool {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let query = args["query"].as_str().ok_or("Missing 'query'")?;
-        let client = self.client()?;
+        let (primary, fallback, client) = self.current_chain()?;
 
-        let output = match self.primary.search(client, query).await {
+        let output = match primary.search(&client, query).await {
             Ok(output) => output,
-            Err(primary_err) => match &self.fallback {
-                Some(fallback) => match fallback.search(client, query).await {
+            Err(primary_err) => match &fallback {
+                Some(fallback) => match fallback.search(&client, query).await {
                     Ok(output) => output,
                     Err(fallback_err) => {
                         return Err(format!(
                             "Primary backend {} failed: {}\nFallback backend {} also failed: {}",
-                            self.primary.name(),
+                            primary.name(),
                             primary_err,
                             fallback.name(),
                             fallback_err
@@ -648,12 +731,12 @@ impl Tool for WebSearchTool {
         // list); blobs pass through the same token cap.
         let body = match output {
             crate::tools::search::ProviderOutput::Results(results) => {
-                crate::tools::search::format_results(query, self.primary.name(), results)
+                crate::tools::search::format_results(query, primary.name(), results)
             }
             crate::tools::search::ProviderOutput::Blob(text) => {
                 format!(
                     "Search results for '{query}' (via {}):\n\n{text}",
-                    self.primary.name()
+                    primary.name()
                 )
             }
         };
@@ -662,18 +745,30 @@ impl Tool for WebSearchTool {
 }
 
 neenee_contracts::register_tool!(WebFetchFactory => |ctx| {
-    let cfg = ctx
-        .get::<neenee_contracts::WebSearchConfig>()
+    // Prefer the shared hot-reloadable handle when the bootstrap provided
+    // one; fall back to a snapshot for direct/test construction.
+    ctx.get::<neenee_contracts::SharedWebSearchConfig>()
         .cloned()
-        .unwrap_or_default();
-    WebFetchTool::with_config(cfg)
+        .map(WebFetchTool::with_shared_config)
+        .unwrap_or_else(|| {
+            WebFetchTool::with_config(
+                ctx.get::<neenee_contracts::WebSearchConfig>()
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        })
 });
 neenee_contracts::register_tool!(WebSearchFactory => |ctx| {
-    let cfg = ctx
-        .get::<neenee_contracts::WebSearchConfig>()
+    ctx.get::<neenee_contracts::SharedWebSearchConfig>()
         .cloned()
-        .unwrap_or_default();
-    WebSearchTool::with_config(cfg)
+        .map(WebSearchTool::with_shared_config)
+        .unwrap_or_else(|| {
+            WebSearchTool::with_config(
+                ctx.get::<neenee_contracts::WebSearchConfig>()
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        })
 });
 
 #[cfg(test)]
@@ -771,5 +866,55 @@ mod guarded_get_tests {
             .await
             .expect_err("private IP must be refused by the pre-flight");
         assert!(err.contains("SSRF guard"));
+    }
+}
+
+#[cfg(test)]
+mod shared_config_tests {
+    use super::*;
+    use neenee_contracts::SharedWebSearchConfig;
+
+    #[test]
+    fn websearch_chain_rebuilds_when_shared_config_changes() {
+        let shared = SharedWebSearchConfig::new(WebSearchConfig::default());
+        let tool = WebSearchTool::with_shared_config(shared.clone());
+        let (primary, _, _) = tool.current_chain().expect("default chain builds");
+        assert_eq!(primary.name(), "Exa");
+
+        // Hot-reload: switch the backend; the next chain read must reflect
+        // it without reconstructing the tool.
+        shared.set(WebSearchConfig {
+            provider: "tavily".to_string(),
+            tavily_api_key: Some(neenee_contracts::SecretString::new("tvly-x")),
+            ..WebSearchConfig::default()
+        });
+        let (primary, fallback, _) = tool.current_chain().expect("rebuilt chain builds");
+        assert_eq!(primary.name(), "Tavily");
+        assert_eq!(fallback.expect("default fallback").name(), "Parallel");
+
+        // An unchanged signature reuses the cache (same values, second read).
+        let (again, _, _) = tool.current_chain().expect("cached chain builds");
+        assert_eq!(again.name(), "Tavily");
+    }
+
+    #[test]
+    fn signature_ignores_nothing_that_matters_and_hides_secrets() {
+        let mut a = WebSearchConfig::default();
+        let b = WebSearchConfig::default();
+        assert_eq!(a.signature(), b.signature());
+        a.provider = "bocha".to_string();
+        assert_ne!(a.signature(), b.signature());
+        // The secret value must fingerprint, not appear.
+        a.provider = b.provider.clone();
+        a.bocha_api_key = Some(neenee_contracts::SecretString::new("sk-secret-value"));
+        let sig = a.signature();
+        assert!(!sig.contains("sk-secret-value"));
+        // A different key changes the signature.
+        let mut c = a.clone();
+        c.bocha_api_key = Some(neenee_contracts::SecretString::new("sk-other"));
+        assert_ne!(a.signature(), c.signature());
+        // Presence vs absence differ.
+        c.bocha_api_key = None;
+        assert_ne!(a.signature(), c.signature());
     }
 }

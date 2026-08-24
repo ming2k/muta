@@ -760,6 +760,33 @@ mod tests {
         assert_eq!(counter.finish(), first);
     }
 
+    /// `push` returns the counter's **running total**, not a per-delta
+    /// increment. Callers must read `tokens()` (or `finish()`) for the current
+    /// count — summing `push`'s returns re-counts every early token once per
+    /// later delta and grows quadratically (a real 4 000-delta interrupted
+    /// stream was booked as 14.7M tokens / 130 050 tok/s by exactly that
+    /// mistake in the agent's request accounting).
+    #[test]
+    fn push_returns_running_total_not_per_delta_increment() {
+        let text = "The quick brown fox jumps over the lazy dog. ".repeat(50);
+        let whole = Tokenizer::new().count(&text);
+        let mut counter = StreamingCounter::new();
+        let mut bogus_sum = 0i64;
+        let scalars: Vec<char> = text.chars().collect();
+        for chunk in scalars.chunks(8) {
+            let delta: String = chunk.iter().collect();
+            bogus_sum += counter.push(&delta) as i64;
+        }
+        // The counter itself is exact…
+        assert_eq!(counter.finish(), whole);
+        // …while summing the return values explodes quadratically.
+        assert!(
+            bogus_sum > (whole as i64) * 10,
+            "cumulative sum {bogus_sum} must dwarf the exact count {whole} \
+             for this many deltas"
+        );
+    }
+
     #[test]
     fn vocab_loads_and_covers_all_single_bytes() {
         let r = ranks();

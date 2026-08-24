@@ -643,6 +643,13 @@ impl Credentials {
             .filter(|k| !k.expose_secret().trim().is_empty())
     }
 
+    /// Replace the whole `[websearch]` key table. Serialization already
+    /// skips an empty table, so a cleared configuration never grows an empty
+    /// `[websearch]` section in `credentials.toml`.
+    pub fn set_websearch_keys(&mut self, keys: WebSearchKeys) {
+        self.websearch = keys;
+    }
+
     /// Set (or clear) the credential for `connection_id`.
     pub fn set_api_key(&mut self, connection_id: &str, key: Option<SecretString>) {
         match key {
