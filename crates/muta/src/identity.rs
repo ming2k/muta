@@ -44,7 +44,10 @@ pub struct DaemonUiBridge;
 #[async_trait::async_trait]
 impl muta_runtime::UiBridge for DaemonUiBridge {
     async fn copy_to_clipboard(&self, _text: &str) -> Result<muta_runtime::CopyOutcome, String> {
-        Err("clipboard export is a client capability; use mutx's local copy action".to_string())
+        Err(
+            "clipboard export is a client capability; use the client's local copy action"
+                .to_string(),
+        )
     }
 }
 

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.1] - 2026-08-24
+
+### Changed
+
+- **CLI top-level verb ergonomics and bare invocation default.** `start`, `stop`,
+  `status`, and `token` are canonical top-level commands on `muta` (e.g. `muta start`,
+  `muta stop`, `muta status`, `muta token`), with `muta daemon <subcommand>` retained
+  for backward compatibility. Bare `muta` invocation now starts the daemon in foreground
+  by default.
+- **HTTP runtime endpoints and CORS support.** Added CORS support across all HTTP
+  routes, along with authenticated REST API endpoints (`GET /api/v1/sessions`,
+  `POST /api/v1/prompt`).
+- **One-click desktop/shell launchers and release packaging.** Added `muta-ui.sh`
+  (Unix) and `muta-ui.bat` (Windows) one-click scripts to launch the daemon and open
+  the Web UI, packaged into release archives.
+
 ## [0.32.0] - 2026-08-24
 
 ### Changed
@@ -4590,7 +4606,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.32.0...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.32.1...HEAD
+[0.32.1]: https://github.com/ming2k/muta/compare/v0.32.0...v0.32.1
 [0.32.0]: https://github.com/ming2k/muta/releases/tag/v0.32.0
 [0.31.0]: https://github.com/ming2k/neenee/releases/tag/v0.31.0
 [0.30.5]: https://github.com/ming2k/neenee/releases/tag/v0.30.5

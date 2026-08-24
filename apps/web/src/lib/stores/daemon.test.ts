@@ -269,13 +269,13 @@ describe("DaemonStore wire protocol", () => {
       store.requestInputCompletions("/mo", 3);
       expect(session.sentJson(session.sent.length - 1)).toEqual({
         type: "Request",
-        CompleteInput: { request_id: 1, input: "/mo", cursor: 3 },
+        CompleteInput: { request_id: 2, input: "/mo", cursor: 3 },
       });
       store.requestInputCompletions("/mod", 4);
       session.message({
         type: "Response",
         InputCompletions: {
-          request_id: 1,
+          request_id: 2,
           input: "/mo",
           cursor: 3,
           items: [{
@@ -293,7 +293,7 @@ describe("DaemonStore wire protocol", () => {
       session.message({
         type: "Response",
         InputCompletions: {
-          request_id: 2,
+          request_id: 3,
           input: "/mod",
           cursor: 4,
           items: [{

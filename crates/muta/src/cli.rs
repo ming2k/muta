@@ -274,14 +274,34 @@ const SKILL_SUBS: &[Spec] = &[Spec {
 
 const COMMANDS: &[Spec] = &[
     Spec {
+        name: "start",
+        names: &["start"],
+        about: "start the daemon (detached by default; --fg stays in the foreground)",
+    },
+    Spec {
+        name: "stop",
+        names: &["stop"],
+        about: "stop the daemon gracefully",
+    },
+    Spec {
+        name: "status",
+        names: &["status"],
+        about: "show the daemon's sessions and endpoints",
+    },
+    Spec {
+        name: "token",
+        names: &["token"],
+        about: "print the local daemon bearer token",
+    },
+    Spec {
         name: "session",
         names: &["session"],
-        about: "manage sessions (rm; listing is `daemon status`)",
+        about: "manage sessions (rm; listing is `status`)",
     },
     Spec {
         name: "daemon",
         names: &["daemon"],
-        about: "manage the session daemon (start, stop, status)",
+        about: "manage the session daemon (start, stop, status, token)",
     },
     Spec {
         name: "config",
@@ -560,19 +580,34 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     }
 
     let Some(cmd) = rest.first().cloned() else {
-        return ok(Mode::Help(None));
+        return ok(Mode::Daemon(DaemonAction::Start {
+            foreground: true,
+            port: None,
+            public: false,
+            no_local_auth: false,
+            idle_exit_minutes: None,
+            shutdown_grace_secs: None,
+        }));
     };
+
+    if cmd.starts_with('-') {
+        let flags = parse_daemon_start_flags(&rest).map_err(|e| e.0)?;
+        return ok(Mode::Daemon(DaemonAction::Start {
+            foreground: flags.foreground,
+            port: flags.port,
+            public: flags.public,
+            no_local_auth: flags.no_local_auth,
+            idle_exit_minutes: flags.idle_exit_minutes,
+            shutdown_grace_secs: flags.shutdown_grace_secs,
+        }));
+    }
+
     let extra: Vec<String> = rest[1..].to_vec();
     let unexpected = |arg: &str| {
         Err(format!(
             "unexpected argument '{arg}' found for 'muta {cmd}'"
         ))
     };
-
-    // Retired top-level spellings (ADR-0116) carry no compatibility shim:
-    // a single retired word falls through to the unrecognized-command error
-    // below, and a multi-word retired form (`muta serve --fg`) is a positional
-    // prompt like any other unknown phrase.
 
     if resolve(&cmd, COMMANDS).is_none() && !cmd.starts_with('-') {
         let tip = suggest_command(&cmd)
@@ -587,20 +622,43 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
         return Err(format!("unrecognized command '{cmd}'"));
     };
     let mode = match spec.name {
+        "start" => {
+            let flags = parse_daemon_start_flags(&extra).map_err(|e| e.0)?;
+            Mode::Daemon(DaemonAction::Start {
+                foreground: flags.foreground,
+                port: flags.port,
+                public: flags.public,
+                no_local_auth: flags.no_local_auth,
+                idle_exit_minutes: flags.idle_exit_minutes,
+                shutdown_grace_secs: flags.shutdown_grace_secs,
+            })
+        }
+        "stop" => {
+            let args: &[String] = &extra;
+            match args {
+                [] => Mode::Daemon(DaemonAction::Stop),
+                [bad, ..] => return unexpected(bad),
+            }
+        }
+        "status" => {
+            let flags = parse_table_flags(&extra, false).map_err(|e| e.0)?;
+            Mode::Daemon(DaemonAction::Status {
+                watch: flags.watch,
+                json: flags.json || json,
+                include_idle: flags.include_idle,
+                diagnostic: flags.diagnostic,
+            })
+        }
+        "token" => match extra.as_slice() {
+            [] => Mode::Daemon(DaemonAction::Token),
+            [bad, ..] => return unexpected(bad),
+        },
         "session" => {
             if extra.is_empty() {
-                // `muta session` teaches instead of defaulting: the noun
-                // has exactly one subcommand now (the listing moved to
-                // `daemon status` — the session table *is* the daemon's
-                // view), so the bare noun has no obvious default.
                 return Err("muta session needs a subcommand: `muta session rm <id>` \
-                     (to list sessions, use `muta daemon status`)"
+                     (to list sessions, use `muta status`)"
                     .into());
             }
-            // `ls`/`list` is not a session subcommand: the session table
-            // is the daemon's view (`daemon status`), per ADR-0116's
-            // one-noun-per-resource. It falls through to the generic
-            // unknown-subcommand error below like any other unknown word.
             let sub = match resolve(&extra[0], SESSION_SUBS) {
                 Some(sub) => sub,
                 None => return unexpected(&extra[0]),
@@ -798,6 +856,26 @@ fn levenshtein(a: &str, b: &str) -> usize {
 /// completion share them.
 fn command_flags(cmd: &str) -> &'static [(&'static str, &'static str)] {
     match cmd {
+        "start" => &[
+            ("--fg", "stay in the foreground (default: detach)"),
+            ("--port <n>", "TCP port (default: MUTA_PORT, else 9800)"),
+            ("--public", "bind all interfaces; requires the bearer token"),
+            (
+                "--no-local-auth",
+                "drop the loopback bearer-token requirement",
+            ),
+            (
+                "--idle-exit <min>",
+                "auto-exit after <min> idle minutes (0 = never)",
+            ),
+            ("--grace <secs>", "graceful-drain budget in seconds"),
+        ],
+        "status" => &[
+            ("--watch", "keep streaming live updates"),
+            ("--json", "emit one JSON frame per update"),
+            ("--all", "include idle sessions"),
+            ("--diagnostic", "report discovery/lock/socket/log health"),
+        ],
         "daemon" => &[
             ("start --fg", "stay in the foreground (default: detach)"),
             (
@@ -838,8 +916,8 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
     let mut out = String::new();
     match topic {
         None => {
-            out.push_str("muta — session daemon and service control plane\n\n");
-            out.push_str("Usage: muta [OPTIONS] <COMMAND>\n\nCommands:\n");
+            out.push_str("muta — AI agent session daemon and control plane\n\n");
+            out.push_str("Usage: muta [OPTIONS]\n       muta [OPTIONS] <COMMAND>\n\nCommands:\n");
             let width = COMMANDS.iter().map(|s| s.name.len()).max().unwrap_or(0);
             for spec in COMMANDS {
                 out.push_str(&format!("  {:<width$}  {}\n", spec.name, spec.about));
@@ -852,7 +930,6 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
             );
             out.push_str("  -h, --help             print help ('muta help <command>' for more)\n");
             out.push_str("  -V, --version          print the version and exit\n");
-            out.push_str("\nUse `mutx` for the terminal app, prompts, and session attachment.\n");
         }
         Some(topic) => {
             let spec = resolve(topic, COMMANDS)?;
@@ -875,7 +952,7 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
                     out.push_str(&format!("  {:<width$}  {about}\n", flag));
                 }
             }
-            if spec.name == "daemon" {
+            if spec.name == "start" || spec.name == "daemon" {
                 out.push_str(
                     "\nThe daemon hosts every session across every project. `start` runs it\n",
                 );
@@ -1072,12 +1149,38 @@ mod surface_tests {
     }
 
     #[test]
-    fn bare_invocation_shows_core_help() {
-        assert!(matches!(parse(&[]).unwrap().mode, Mode::Help(None)));
+    fn bare_invocation_starts_foreground_daemon() {
+        assert!(matches!(
+            parse(&[]).unwrap().mode,
+            Mode::Daemon(DaemonAction::Start {
+                foreground: true,
+                ..
+            })
+        ));
     }
 
     #[test]
-    fn daemon_commands_remain_on_the_core_surface() {
+    fn top_level_daemon_verbs_are_canonical() {
+        assert!(matches!(
+            parse(&["start"]).unwrap().mode,
+            Mode::Daemon(DaemonAction::Start { .. })
+        ));
+        assert!(matches!(
+            parse(&["stop"]).unwrap().mode,
+            Mode::Daemon(DaemonAction::Stop)
+        ));
+        assert!(matches!(
+            parse(&["status"]).unwrap().mode,
+            Mode::Daemon(DaemonAction::Status { .. })
+        ));
+        assert!(matches!(
+            parse(&["token"]).unwrap().mode,
+            Mode::Daemon(DaemonAction::Token)
+        ));
+    }
+
+    #[test]
+    fn legacy_daemon_commands_remain_compatible() {
         assert!(matches!(
             parse(&["daemon", "start"]).unwrap().mode,
             Mode::Daemon(DaemonAction::Start { .. })

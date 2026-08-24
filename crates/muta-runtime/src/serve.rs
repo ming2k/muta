@@ -499,13 +499,14 @@ fn spawn_tcp_connection(
     peer: String,
 ) {
     tokio::spawn(async move {
-        let auth_required = token.is_some();
+        let expected_token = token.as_deref();
         match classify(&stream).await {
             Ok(TcpTransport::Http) => {
                 // Health responses are momentary and stateless; they stay out
                 // of the drain-tracked connection table by design.
                 if let Err(e) =
-                    crate::health_http::serve(stream, gate.version_of_daemon(), auth_required).await
+                    crate::health_http::serve(stream, gate.version_of_daemon(), expected_token)
+                        .await
                 {
                     tracing::debug!(%peer, error=%e, "muta daemon: http error");
                 }

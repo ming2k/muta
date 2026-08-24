@@ -190,22 +190,18 @@ pub(crate) fn format_diagnostics(diag: &DaemonDiagnostics) -> String {
     // High level diagnosis
     out.push_str("  Diagnosis:        ");
     if diag.discovery_valid && diag.tcp_listening {
-        out.push_str("Daemon is running and healthy. (Observe with `muta daemon status --watch`, drive with `mutx attach`)\n");
+        out.push_str("Daemon is running and healthy. (Observe with `muta status --watch`)\n");
     } else if diag.lock_held && diag.discovery_record.is_none() {
         out.push_str(
             "Ghost daemon detected: Instance lock is held but discovery record is missing.\n",
         );
-        out.push_str("                    Run `muta daemon stop` or kill the locking PID, then start with `muta daemon start`.\n");
+        out.push_str("                    Run `muta stop` or kill the locking PID, then start with `muta start`.\n");
     } else if !diag.lock_held && diag.discovery_record.is_some() {
         out.push_str("Stale discovery record: Process is gone but discovery record remains.\n");
-        out.push_str(
-            "                    Start a new daemon with `muta daemon start` or `mutx attach`.\n",
-        );
+        out.push_str("                    Start a new daemon with `muta start`.\n");
     } else if !diag.lock_held {
         out.push_str("No session daemon is running.\n");
-        out.push_str(
-            "                    Start one with `muta daemon start` (or `mutx attach` on demand).\n",
-        );
+        out.push_str("                    Start one with `muta start`.\n");
     } else {
         out.push_str("Daemon state is transitioning or unresponsive.\n");
     }

@@ -70,12 +70,13 @@ expect_out   "mcp ls" "mcp teaches ls" "$MUTA" mcp
 expect_status 2 "bare skill errors" "$MUTA" skill
 expect_out   "skill ls" "skill teaches ls" "$MUTA" skill
 expect_status 2 "serve is unrecognized" "$MUTA" serve
-expect_status 2 "stop is unrecognized" "$MUTA" stop
 
 echo "== noun-verb shapes parse =="
 expect_status 0 "mcp ls runs" "$MUTA" mcp ls
 expect_status 0 "skill ls runs" "$MUTA" skill ls
 expect_status 2 "session rm needs an id" "$MUTA" session rm
+expect_status 0 "top-level stop runs" "$MUTA" --home "$ROOT" stop
+expect_status 0 "top-level status runs" "$MUTA" --home "$ROOT" status
 
 echo "== core and terminal app have disjoint surfaces =="
 expect_status 2 "core rejects terminal run command" "$MUTA" run ping

@@ -117,15 +117,15 @@ jobs:
         run: |
           set -e
           mkdir -p "$MUTA_HOME"
-          ./target/debug/muta daemon start --port 9800 &
+          ./target/debug/muta start --port 9800 &
           for i in $(seq 1 50); do
             curl -fsS http://127.0.0.1:9800/healthz > /dev/null 2>&1 && break
             sleep 0.2
           done
           curl -fsS http://127.0.0.1:9800/healthz
-          TOKEN=$(./target/debug/muta daemon token)
+          TOKEN=$(./target/debug/muta token)
           DAEMON_TOKEN="$TOKEN" node apps/web/e2e/daemon-smoke.mjs
-          ./target/debug/muta daemon stop || true
+          ./target/debug/muta stop || true
       # CLI-surface smoke (ADR-0119/0121): the binary's own contract —
       # retired spellings teach, noun-verb shapes parse, --remote connects.
       # Protocol-level coverage lives in daemon-smoke.mjs above; this pins

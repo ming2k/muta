@@ -227,21 +227,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
     if let Some(info) = client::discover(std::path::Path::new(".")) {
         return Err(format!(
-            "a muta daemon is already running (pid {}, port {}). Stop it with `muta daemon stop` before starting another.",
+            "a muta daemon is already running (pid {}, port {}). Stop it with `muta stop` before starting another.",
             info.pid, info.port
         ));
     }
     let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("muta"));
     let mut command = std::process::Command::new(&program);
-    // The supervisor form: the child re-enters `daemon start --fg` —
+    // The supervisor form: the child re-enters `start --fg` —
     // foreground by construction, its lifecycle flags from [daemon] config.
     // No `--home` restatement needed: `install_home_override` restates the
     // flag as `MUTA_HOME` in this process's environment, and the child
     // inherits it (ADR-0121).
-    command.args(["daemon", "start", "--fg"]);
+    command.args(["start", "--fg"]);
     // Every explicit start flag survives the detach: the child is the same
     // start the operator asked for, minus the daemonization. Dropping them
-    // here would make `daemon start --port N` silently bind the default —
+    // here would make `start --port N` silently bind the default —
     // exactly the class of lie a detached process can afford (nobody is
     // watching its output). Only pass what was set: unset flags keep the
     // [daemon]-config defaults the child resolves itself.
@@ -272,7 +272,7 @@ fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("could not spawn {}: {e}", program.display()))?;
     eprintln!(
-        "muta: daemon started in the background (`muta daemon status` to observe, `muta daemon stop` to stop it)"
+        "muta: daemon started in the background (`muta status` to observe, `muta stop` to stop it)"
     );
     Ok(())
 }
