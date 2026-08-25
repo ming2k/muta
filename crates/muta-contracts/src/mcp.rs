@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// One MCP server entry from the `[mcp.<name>]` table of `config.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,6 +17,11 @@ pub struct McpServerConfig {
     pub environment: HashMap<String, String>,
     pub enabled: bool,
     pub read_only: bool,
+    /// Runtime-only origin marker. Project-defined servers carry their exact
+    /// workspace root and must be launched read-only/offline inside the
+    /// workspace sandbox. Global user configuration leaves this unset.
+    #[serde(skip)]
+    pub sandbox_root: Option<PathBuf>,
 }
 
 impl Default for McpServerConfig {
@@ -25,6 +31,7 @@ impl Default for McpServerConfig {
             environment: HashMap::new(),
             enabled: true,
             read_only: false,
+            sandbox_root: None,
         }
     }
 }

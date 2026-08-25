@@ -349,9 +349,13 @@ async fn handle_permission_request(
     is_tty: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if autopilot {
+        eprintln!(
+            "mutx: authority is missing for tool '{}' while autopilot is active; rejecting without prompting.",
+            req.tool
+        );
         let _ = tx.send(AgentRequest::PermissionReply {
             request_id: req.id,
-            decision: PermissionDecision::Once,
+            decision: PermissionDecision::Reject,
             parent_call_id: None,
         });
         return Ok(());
@@ -359,7 +363,7 @@ async fn handle_permission_request(
 
     if !is_tty {
         eprintln!(
-            "mutx: permission requested for tool '{}' in non-interactive mode; rejecting (use -y/--autopilot to auto-approve).",
+            "mutx: authority is missing for tool '{}' in non-interactive mode; rejecting. Configure workspace authority or a narrow persistent permission first.",
             req.tool
         );
         let _ = tx.send(AgentRequest::PermissionReply {

@@ -174,9 +174,9 @@ fn frame_loop_converges() {
     let mut back = Grid::new(10, 2);
     let mut front = Grid::new(10, 2);
     back.put(0, 0, Fit::Clip, Style::default(), "hi");
-    let first = diff::diff(&back, &mut front);
+    let first = diff::diff(&back, &front);
     assert!(!first.draws.is_empty());
     diff::promote(&mut back, &mut front);
-    let second = diff::diff(&back, &mut front);
+    let second = diff::diff(&back, &front);
     assert!(second.draws.is_empty(), "idle frame emits nothing");
 }

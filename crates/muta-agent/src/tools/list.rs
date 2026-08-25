@@ -69,6 +69,17 @@ impl Tool for ListDirTool {
             Some(root) => root.join(path),
             None => std::path::PathBuf::from(path),
         };
+        let metadata = env
+            .fs()
+            .metadata(&resolved)
+            .await
+            .map_err(|error| format!("Cannot list '{}': {error}", path))?;
+        if !metadata.is_dir {
+            return Err(format!("List path is not a directory: {path}"));
+        }
+        if let Some(pattern) = pattern {
+            reject_pattern_traversal(pattern)?;
+        }
         let path = resolved.to_string_lossy().to_string();
         // Display strips the workspace root (not the process cwd) so results
         // stay relative to what the model asked about.
@@ -150,6 +161,22 @@ impl Tool for ListDirTool {
             entries: out.split('\n').map(str::to_string).collect(),
         })
     }
+}
+
+fn reject_pattern_traversal(pattern: &str) -> Result<(), String> {
+    if std::path::Path::new(pattern).is_absolute()
+        || std::path::Path::new(pattern).components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err("List pattern must stay relative to its workspace directory".to_string());
+    }
+    Ok(())
 }
 
 muta_contracts::register_tool!(ListDirFactory => |ctx| ListDirTool {

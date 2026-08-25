@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 use muta_contracts::execution::{
     DirEntry, ExecutionEnvironment, FsError, FsMetadata, FsProvider, ProcessOutput, ProcessRunner,
+    ShellIsolation,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -199,5 +200,304 @@ impl ExecutionEnvironment for LocalExecutionEnvironment {
 
     fn workspace_root(&self) -> &Path {
         &self.workspace_root
+    }
+}
+
+/// Filesystem provider that physically confines every operation to one root.
+#[derive(Debug, Clone)]
+struct WorkspaceFsProvider {
+    inner: LocalFsProvider,
+    root: PathBuf,
+}
+
+impl WorkspaceFsProvider {
+    fn new(root: PathBuf) -> Self {
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
+        Self {
+            inner: LocalFsProvider::new(),
+            root,
+        }
+    }
+
+    fn confined(&self, path: &Path) -> Result<PathBuf, FsError> {
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        };
+        let resolved = resolve_existing_ancestor(&candidate).ok_or_else(|| {
+            FsError::PermissionDenied(format!(
+                "workspace sandbox could not resolve '{}'",
+                path.display()
+            ))
+        })?;
+        if resolved.starts_with(&self.root) {
+            // Operate on the checked path, not the original spelling. This
+            // collapses `..` and already-resolved symlink parents so the I/O
+            // call cannot reinterpret a different lexical route.
+            Ok(resolved)
+        } else {
+            Err(FsError::PermissionDenied(format!(
+                "'{}' is outside workspace '{}'",
+                path.display(),
+                self.root.display()
+            )))
+        }
+    }
+}
+
+fn resolve_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    let mut cursor = path;
+    let mut suffix = Vec::new();
+    while !cursor.exists() {
+        suffix.push(cursor.file_name()?.to_os_string());
+        cursor = cursor.parent()?;
+    }
+    let mut resolved = std::fs::canonicalize(cursor).ok()?;
+    for component in suffix.into_iter().rev() {
+        resolved.push(component);
+    }
+    Some(resolved)
+}
+
+#[async_trait]
+impl FsProvider for WorkspaceFsProvider {
+    async fn read(&self, path: &Path) -> Result<Vec<u8>, FsError> {
+        self.inner.read(&self.confined(path)?).await
+    }
+
+    async fn read_to_string(&self, path: &Path) -> Result<String, FsError> {
+        self.inner.read_to_string(&self.confined(path)?).await
+    }
+
+    async fn write(&self, path: &Path, content: &[u8]) -> Result<(), FsError> {
+        self.inner.write(&self.confined(path)?, content).await
+    }
+
+    async fn exists(&self, path: &Path) -> bool {
+        match self.confined(path) {
+            Ok(path) => self.inner.exists(&path).await,
+            Err(_) => false,
+        }
+    }
+
+    async fn is_dir(&self, path: &Path) -> bool {
+        match self.confined(path) {
+            Ok(path) => self.inner.is_dir(&path).await,
+            Err(_) => false,
+        }
+    }
+
+    async fn is_file(&self, path: &Path) -> bool {
+        match self.confined(path) {
+            Ok(path) => self.inner.is_file(&path).await,
+            Err(_) => false,
+        }
+    }
+
+    async fn list_dir(&self, path: &Path) -> Result<Vec<DirEntry>, FsError> {
+        self.inner.list_dir(&self.confined(path)?).await
+    }
+
+    async fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
+        self.inner.create_dir_all(&self.confined(path)?).await
+    }
+
+    async fn remove_file(&self, path: &Path) -> Result<(), FsError> {
+        self.inner.remove_file(&self.confined(path)?).await
+    }
+
+    async fn metadata(&self, path: &Path) -> Result<FsMetadata, FsError> {
+        self.inner.metadata(&self.confined(path)?).await
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct WorkspaceProcessRunner;
+
+#[async_trait]
+impl ProcessRunner for WorkspaceProcessRunner {
+    async fn exec(
+        &self,
+        _command: &str,
+        _cwd: &Path,
+        _env: Option<&HashMap<String, String>>,
+        _timeout: Duration,
+    ) -> Result<ProcessOutput, String> {
+        Err("Direct process execution is disabled in the workspace sandbox; use the sandbox-aware shell capability.".to_string())
+    }
+}
+
+/// Product runtime environment: filesystem tools are physically confined and
+/// shell tools are required to enter a workspace sandbox.
+#[derive(Debug, Clone)]
+pub struct WorkspaceExecutionEnvironment {
+    fs: WorkspaceFsProvider,
+    process: WorkspaceProcessRunner,
+    workspace_root: PathBuf,
+}
+
+impl WorkspaceExecutionEnvironment {
+    pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
+        let workspace_root = workspace_root.into();
+        Self {
+            fs: WorkspaceFsProvider::new(workspace_root.clone()),
+            process: WorkspaceProcessRunner,
+            workspace_root,
+        }
+    }
+}
+
+/// Probe the physical sandbox once. Existence is insufficient: distributions
+/// may install bubblewrap while disabling unprivileged user namespaces.
+pub fn workspace_sandbox_available() -> bool {
+    muta_platform::workspace_sandbox::available()
+}
+
+impl ExecutionEnvironment for WorkspaceExecutionEnvironment {
+    fn fs(&self) -> &dyn FsProvider {
+        &self.fs
+    }
+
+    fn process(&self) -> &dyn ProcessRunner {
+        &self.process
+    }
+
+    fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
+    fn shell_isolation(&self) -> ShellIsolation {
+        ShellIsolation::Workspace
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    fn scratch() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("muta-workspace-fs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[tokio::test]
+    async fn workspace_fs_allows_inside_and_denies_outside() {
+        let root = scratch();
+        let outside = scratch().join("secret.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        let env = WorkspaceExecutionEnvironment::new(&root);
+
+        env.fs()
+            .write(Path::new("inside.txt"), b"ok")
+            .await
+            .unwrap();
+        assert_eq!(
+            env.fs().read(&root.join("inside.txt")).await.unwrap(),
+            b"ok"
+        );
+        assert!(matches!(
+            env.fs().read(&outside).await,
+            Err(FsError::PermissionDenied(_))
+        ));
+        assert_eq!(env.shell_isolation(), ShellIsolation::Workspace);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_fs_denies_symlink_escape() {
+        let root = scratch();
+        let outside = scratch().join("secret.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+        let env = WorkspaceExecutionEnvironment::new(&root);
+        assert!(matches!(
+            env.fs().read(&root.join("escape")).await,
+            Err(FsError::PermissionDenied(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn workspace_process_runner_fails_closed() {
+        let env = WorkspaceExecutionEnvironment::new(scratch());
+        let error = env
+            .process()
+            .exec(
+                "echo unsafe",
+                env.workspace_root(),
+                None,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("disabled in the workspace sandbox"));
+    }
+
+    #[tokio::test]
+    async fn every_builtin_file_discovery_path_rejects_workspace_escape() {
+        use crate::tools::{FindTool, GlobTool, GrepTool, ListDirTool, ReadImageTool};
+        use muta_contracts::Tool;
+
+        let root = scratch();
+        let outside_root = scratch();
+        let outside_text = outside_root.join("secret.txt");
+        let outside_image = outside_root.join("secret.png");
+        std::fs::write(&outside_text, "secret").unwrap();
+        std::fs::write(&outside_image, b"not actually an image").unwrap();
+        let env: std::sync::Arc<dyn ExecutionEnvironment> =
+            std::sync::Arc::new(WorkspaceExecutionEnvironment::new(&root));
+
+        let find = FindTool::with_env(env.clone());
+        let glob = GlobTool::with_env(env.clone());
+        let grep = GrepTool::with_env(env.clone());
+        let list = ListDirTool::with_env(env.clone());
+        let image = ReadImageTool::with_env(env);
+
+        assert!(
+            find.call(&serde_json::json!({ "path": outside_root }).to_string())
+                .await
+                .unwrap_err()
+                .contains("outside workspace")
+        );
+        assert!(
+            glob.call(&serde_json::json!({ "pattern": "*", "path": outside_root }).to_string())
+                .await
+                .unwrap_err()
+                .contains("outside workspace")
+        );
+        assert!(
+            grep.call(
+                &serde_json::json!({ "pattern": "secret", "path": outside_text }).to_string()
+            )
+            .await
+            .unwrap_err()
+            .contains("outside workspace")
+        );
+        assert!(
+            list.call(&serde_json::json!({ "path": outside_root }).to_string())
+                .await
+                .unwrap_err()
+                .contains("outside workspace")
+        );
+        assert!(
+            image
+                .call(&serde_json::json!({ "path": outside_image }).to_string())
+                .await
+                .unwrap_err()
+                .contains("outside workspace")
+        );
+        assert!(
+            glob.call(r#"{"pattern":"../*","path":"."}"#)
+                .await
+                .unwrap_err()
+                .contains("must stay relative")
+        );
+        assert!(
+            list.call(r#"{"pattern":"../*","path":"."}"#)
+                .await
+                .unwrap_err()
+                .contains("must stay relative")
+        );
     }
 }

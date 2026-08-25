@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-22
+- **Authorization semantics:** ADR-0140; this ADR governs persistence of the
+  interaction posture only
 
 ## Context
 

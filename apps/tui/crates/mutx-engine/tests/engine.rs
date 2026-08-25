@@ -81,8 +81,8 @@ fn wide_glyph_trailing_column_carries_background_not_reset() {
     );
 
     // Diff must emit the glyph once; the trailing column is implicit.
-    let mut front = Grid::new(6, 1);
-    let cmd = diff::diff(&back, &mut front);
+    let front = Grid::new(6, 1);
+    let cmd = diff::diff(&back, &front);
     assert_eq!(cmd.draws.len(), 1);
     let emitted_cells = match &cmd.draws[0] {
         diff::Draw::Cells { cells, .. } => cells.clone(),
@@ -108,7 +108,7 @@ fn streaming_token_grows_only_the_changed_run() {
     let end = back.put(5, 0, Fit::Clip, style, " world");
     assert_eq!(end, Pos { x: 11, y: 0 });
 
-    let cmd = diff::diff(&back, &mut front);
+    let cmd = diff::diff(&back, &front);
     // The single changed run is exactly the new text, starting at col 5.
     assert_eq!(cmd.draws.len(), 1);
     if let diff::Draw::Cells {
@@ -166,7 +166,7 @@ fn clear_row_then_redraw_marks_only_that_row() {
     back.clear_row(1, 0, Style::default().bg(Color::Rgb(10, 10, 10)));
     back.put(0, 1, Fit::Clip, Style::default(), "bbbbb");
 
-    let cmd = diff::diff(&back, &mut front);
+    let cmd = diff::diff(&back, &front);
     let touched_rows: std::collections::HashSet<u16> = cmd
         .draws
         .iter()
@@ -197,7 +197,7 @@ fn resize_preserves_content_and_converges() {
     // New cells are blank.
     assert_eq!(back.get(5, 2).unwrap().symbol, " ");
 
-    let cmd = diff::diff(&back, &mut front);
+    let cmd = diff::diff(&back, &front);
     let _ = render_cycle(&mut back, &mut front, Bce::Yes);
     // Either nothing changed (empty diff) or only genuinely new content did.
     let _ = cmd;
@@ -268,7 +268,7 @@ fn diff_collapses_uniform_blank_tail_to_clear_eol() {
     let bg = Style::default().bg(Color::Rgb(7, 8, 9));
     back.clear_row(0, 2, bg);
 
-    let cmd = diff::diff(&back, &mut front);
+    let cmd = diff::diff(&back, &front);
     assert!(matches!(
         cmd.draws.as_slice(),
         [diff::Draw::ClearEol {
@@ -610,10 +610,10 @@ fn streaming_append_scrolls_history_instead_of_repainting_it() {
     // repaints the whole moved band (rows 0..=2).
     let mut next = labeled(w, &["h2", "h3", "NEW", ""]);
     next.clear_dirty();
-    for (y, text) in [(0u16, "h2"), (1, "h3"), (2, "NEW")] {
-        next.put(0, y, Fit::Clip, Style::default(), text);
+    for y in 0..=2 {
+        next.mark(0, y);
     }
-    let cmd = diff::diff(&next, &mut front);
+    let cmd = diff::diff(&next, &front);
 
     // One scroll op leads the frame…
     match cmd.scroll() {

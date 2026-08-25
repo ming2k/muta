@@ -1,11 +1,11 @@
 //! Project and user-defined slash command templates.
 //!
 //! Commands are markdown files stored in:
-//!   - Project-local: `.muta/commands/` (highest priority; loaded only when
-//!     the project root is trusted — ADR-0085 §5, extended from MCP/hooks to
-//!     prompt-injecting project content)
+//!   - Project-local: `.muta/commands/` (highest priority; loaded only while
+//!     the exact extension content is attested)
 //!   - User-global (XDG): `$XDG_DATA_HOME/muta/commands/`
 
+use muta_contracts::WorkspaceExtensionsState;
 use muta_persistence::paths;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -55,40 +55,40 @@ pub struct CommandDiscovery {
 }
 
 /// Discover commands for a session rooted at `project_root`, gating the
-/// *project-local* directory (`.muta/commands`) behind the ADR-0085 §5
-/// trust flag. User-global commands (`$XDG_DATA_HOME/muta/commands`) always
+/// *project-local* directory (`.muta/commands`) behind content-bound extension
+/// trust. User-global commands (`$XDG_DATA_HOME/muta/commands`) always
 /// load — they live on the user's own machine and are trusted
 /// unconditionally, mirroring the global-config rule.
 ///
-/// When `project_trusted` is `false`, project-local slash commands are skipped
-/// entirely (not discovered, so not completable, not runnable). This closes
-/// the gap where a cloned/vendored repo could inject `/<name>` command
-/// templates (arbitrary prompt text) merely because the user opened the
-/// directory.
+/// Unless `extension_state` is [`WorkspaceExtensionsState::Trusted`],
+/// project-local slash commands are not discovered, completed, or runnable.
 ///
 /// The project root is passed explicitly (not derived from the process cwd):
 /// under the unified daemon (ADR-0096) one process hosts sessions for many
 /// projects, so the cwd belongs to whichever client spawned it.
-pub fn discover_commands_trusted(project_root: &Path, project_trusted: bool) -> CommandDiscovery {
+pub fn discover_commands_with_extensions(
+    project_root: &Path,
+    extension_state: WorkspaceExtensionsState,
+) -> CommandDiscovery {
     merge_command_scopes(
         &project_commands_dir(project_root),
         &paths::get().user_commands_dir(),
-        project_trusted,
+        extension_state,
     )
 }
 
 /// Merge the project and user command scopes (testable core of
-/// [`discover_commands_trusted`]). Order encodes priority: project (highest)
+/// [`discover_commands_with_extensions`]). Order encodes priority: project (highest)
 /// → user. A project command claiming a name a user command also holds is a
 /// shadow event the user must see — a cloned repo could be overriding their
 /// own `/<name>`.
 fn merge_command_scopes(
     project_dir: &Path,
     user_dir: &Path,
-    project_trusted: bool,
+    extension_state: WorkspaceExtensionsState,
 ) -> CommandDiscovery {
     let user_commands = discover_commands_in(&[user_dir.to_path_buf()]);
-    if !project_trusted {
+    if !extension_state.is_trusted() {
         return CommandDiscovery {
             commands: user_commands,
             shadowed: Vec::new(),
@@ -114,10 +114,8 @@ fn merge_command_scopes(
     CommandDiscovery { commands, shadowed }
 }
 
-/// Scan only the project-local commands directory. Used by the trust-gate
-/// notices (does this project even declare commands?) and by the dispatcher's
-/// trust-checked fallback that makes newly-trusted project commands runnable
-/// without a restart.
+/// Scan only the project-local commands directory. Used for contribution
+/// presence checks and live, content-attested dispatch.
 pub fn discover_project_commands(project_root: &Path) -> Vec<CustomCommand> {
     discover_commands_in(std::slice::from_ref(&project_commands_dir(project_root)))
 }
@@ -311,10 +309,10 @@ mod tests {
     }
 
     #[test]
-    fn trusted_gate_skips_project_dir_when_untrusted() {
-        // The trust gate must OMIT the project dir when `project_trusted` is
-        // false (so a cloned/vendored repo cannot inject `/<name>` prompt
-        // templates), while still loading user-global ones.
+    fn extension_quarantine_skips_project_command_dir() {
+        // Extension quarantine must omit the project dir (so a cloned or
+        // vendored repo cannot inject `/<name>` prompt templates), while still
+        // loading user-global ones.
         let root = std::env::temp_dir().join(format!("muta-trust-cmd-{}", uuid::Uuid::new_v4()));
         let project = root.join("project");
         let user = root.join("user");
@@ -323,20 +321,21 @@ mod tests {
         std::fs::write(project.join("danger.md"), "pwn $ARGUMENTS").unwrap();
         std::fs::write(user.join("safe.md"), "safe $ARGUMENTS").unwrap();
 
-        // Untrusted: project command must NOT appear (user commands do).
-        let untrusted = merge_command_scopes(&project, &user, false);
-        assert_eq!(untrusted.commands.len(), 1);
+        // Quarantined: project command must not appear (user commands do).
+        let quarantined =
+            merge_command_scopes(&project, &user, WorkspaceExtensionsState::Quarantined);
+        assert_eq!(quarantined.commands.len(), 1);
         assert_eq!(
-            untrusted.commands[0].name, "safe",
-            "project command hidden when untrusted"
+            quarantined.commands[0].name, "safe",
+            "project command hidden while extensions are quarantined"
         );
         assert!(
-            untrusted.shadowed.is_empty(),
+            quarantined.shadowed.is_empty(),
             "no shadow report when the project dir was never scanned"
         );
 
         // Trusted: both project and user commands appear.
-        let trusted = merge_command_scopes(&project, &user, true);
+        let trusted = merge_command_scopes(&project, &user, WorkspaceExtensionsState::Trusted);
         assert_eq!(trusted.commands.len(), 2);
         assert!(
             trusted.commands.iter().any(|c| c.name == "danger"),
@@ -360,7 +359,7 @@ mod tests {
         std::fs::write(user.join("review.md"), "user version").unwrap();
         std::fs::write(user.join("unique.md"), "only mine").unwrap();
 
-        let discovery = merge_command_scopes(&project, &user, true);
+        let discovery = merge_command_scopes(&project, &user, WorkspaceExtensionsState::Trusted);
         assert_eq!(discovery.commands.len(), 2, "clash must not duplicate");
         let review = discovery
             .commands

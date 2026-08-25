@@ -86,21 +86,50 @@ impl Tool for GrepTool {
             Some(root) => root.join(path),
             None => env.workspace_root().join(path),
         };
+        env.fs()
+            .metadata(&search_root)
+            .await
+            .map_err(|error| format!("Cannot search '{}': {error}", path))?;
 
-        let mut cmd = Command::new("rg");
-        cmd.args(["-n", "--color=never", "--max-count", "50"]);
+        let mut command_args = vec![
+            "-n".to_string(),
+            "--color=never".to_string(),
+            "--max-count".to_string(),
+            "50".to_string(),
+        ];
         if context > 0 {
-            cmd.arg("-C").arg(context.to_string());
+            command_args.push("-C".to_string());
+            command_args.push(context.to_string());
         }
         if let Some(e) = ext {
-            cmd.arg("-g").arg(format!("*.{}", e));
+            command_args.push("-g".to_string());
+            command_args.push(format!("*.{}", e));
         }
         // Prune the same set of directories the glob/list tools ignore, so the
         // three tools agree about what exists in a tree.
         for dir in crate::tools::helpers::IGNORED_DIRS {
-            cmd.arg("-g").arg(format!("!{}", dir));
+            command_args.push("-g".to_string());
+            command_args.push(format!("!{}", dir));
         }
-        cmd.arg(pattern).arg(&search_root);
+        command_args.push(pattern.to_string());
+        command_args.push(search_root.to_string_lossy().into_owned());
+        let mut cmd = match env.shell_isolation() {
+            muta_contracts::ShellIsolation::Host => {
+                let mut command = Command::new("rg");
+                command.args(&command_args);
+                command
+            }
+            muta_contracts::ShellIsolation::Workspace => {
+                muta_platform::workspace_sandbox::command_with_environment(
+                    "rg",
+                    &command_args,
+                    &std::collections::HashMap::new(),
+                    env.workspace_root(),
+                    muta_platform::workspace_sandbox::WorkspaceAccess::ReadOnly,
+                    muta_platform::workspace_sandbox::NetworkAccess::Disabled,
+                )?
+            }
+        };
 
         // Spawn under tokio (releasing the runtime while rg runs) and bound the
         // whole invocation by `GREP_TIMEOUT`. On timeout the child is killed

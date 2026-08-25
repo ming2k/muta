@@ -19,7 +19,7 @@ use muta_contracts::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use muta_mcp::McpRuntime;
 use muta_persistence::{
     config::Config, connection_usage::ConnectionUsage, embedding, session::SessionStore,
-    trusted_projects::TrustGate,
+    workspace_security::WorkspaceSecurityStore,
 };
 use muta_skills::SkillRegistry;
 
@@ -68,10 +68,8 @@ pub struct SessionDriver {
     /// Mutated by the `/mcp` modal (toggle / reconnect) and the periodic
     /// catalog refresh; read for the session-context snapshot's MCP pane.
     pub mcp_runtime: Arc<McpRuntime>,
-    /// Project-scope trust grants (ADR-0085 §5). Records which project roots
-    /// may auto-load `.muta/config.toml` `[mcp.*]` servers. Mutated by
-    /// `/trust` / `/untrust`; consulted by bootstrap and `/reload`.
-    pub trust_gate: Arc<TrustGate>,
+    /// Workspace execution authority and content-bound extension trust.
+    pub workspace_security: Arc<WorkspaceSecurityStore>,
     /// User-defined `/<name>` commands (`commands_for_task` in the old code).
     pub commands: Arc<HashMap<String, CustomCommand>>,
     /// Backend-owned command vocabulary used by both attach metadata and the
@@ -139,7 +137,7 @@ impl SessionDriver {
             skills_registry,
             envoy_registry,
             mcp_runtime,
-            trust_gate,
+            workspace_security,
             commands: commands_for_task,
             command_catalog,
             embedding_store: embedding_store_for_commands,
@@ -661,7 +659,7 @@ impl SessionDriver {
                         &config,
                         &agent,
                         &mcp_runtime,
-                        &trust_gate,
+                        &workspace_security,
                         &resp_tx,
                         &session,
                         &lifecycle,

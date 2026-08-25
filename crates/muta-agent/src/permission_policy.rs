@@ -34,16 +34,16 @@
 //!    broker: `Unspecified` skips all three.
 //! 3. **`Reject` is collective** — one reject rejects the whole pending batch
 //!    (owned by the permission store's `reply`, keyed on a reject decision).
-//! 4. **`autopilot` bypasses interactive policies only** (broker, bash-confirm,
-//!    ask-user), never the hook. The scope gate *reads* `autopilot` (to decide
-//!    whether an out-of-scope call can be elevated by the user or must be
-//!    blocked), but it never opens an interactive modal of its own.
+//! 4. **`autopilot` is not authority.** Scope, bash, and broker decisions are
+//!    identical for attended and unattended sessions. Only the executor decides
+//!    whether a missing grant can be requested interactively.
 //! 5. **`PermissionDenied` vs `Error`** distinguish user-aborts from hard
 //!    failures.
 //! 6. **One prompt per call.** Both the bash confirm gate and the broker emit
-//!    [`PolicyDecision::Ask`]; the caller parks once, emits one prompt, and
-//!    awaits one decision. A bash command is never prompted twice (the old
-//!    chain-external re-evaluation is gone). An `Ask`'s [`muta_contracts::PermissionRequest`]
+//!    [`PolicyDecision::MissingAuthority`]; the caller may park once, emit one prompt, and
+//!    await one decision. A bash command is never prompted twice (the old
+//!    chain-external re-evaluation is gone). A missing-authority
+//!    [`muta_contracts::PermissionRequest`]
 //!    carries `elevation` (out-of-scope, ADR-0028) and `one_off` (the bash
 //!    dangerous-command confirm: an `Always` reply is honoured but not
 //!    persisted) so the caller and the TUI handle both uniformly.
@@ -65,7 +65,7 @@ use crate::permission_store::{PermissionRule, PermissionStore};
 /// event channel" — a load-bearing lie that forced a second full bash-policy
 /// re-evaluation outside the chain. The three variants are now disjoint and
 /// self-describing, so [`BashPolicy`] can decide everything itself and return a
-/// real [`PolicyDecision::Ask`] for the confirm path (no more chain-external
+/// real [`PolicyDecision::MissingAuthority`] for the confirm path (no more chain-external
 /// re-run, no more double evaluation, no more double prompt).
 pub enum BashVerdict {
     /// The command fell through to the normal permission broker.
@@ -74,7 +74,7 @@ pub enum BashVerdict {
     /// one-off. Carries the rule match so the gate can build the prompt
     /// payload (label/description/detail) without re-evaluating.
     Confirm { match_: BashPolicyMatch },
-    /// A hard refusal (`Deny`, or a `Confirm` resolved under autopilot).
+    /// A hard refusal from an unconditional deny rule.
     Deny { output: ToolOutput },
 }
 
@@ -94,14 +94,14 @@ pub enum PolicyDecision {
     /// synchronous chain denies are per-call, and a `ToolOutput::PermissionDenied`
     /// is enough for the caller to treat the outcome as a user-style abort.
     Deny { output: ToolOutput },
-    /// Defer to the user: park and await a [`muta_contracts::PermissionDecision`].
-    /// The chain caller parks, emits the request, awaits; the policy only
-    /// contributes the request payload + the rule to remember on `Always`.
+    /// The call lacks authority. The interaction layer may ask a user, or fail
+    /// immediately when no user is reachable. The policy only contributes the
+    /// request payload and the rule to remember on `Always`.
     ///
     /// The request's `one_off` flag tells the caller **not to persist** an
     /// `Always` reply (the bash dangerous-command confirm is one-off); its
     /// `elevation` flag tells the TUI the call is out-of-scope (ADR-0028).
-    Ask {
+    MissingAuthority {
         request: muta_contracts::PermissionRequest,
         rule: PermissionRule,
     },
@@ -129,10 +129,7 @@ pub trait PermissionContext: Send + Sync {
     /// outcome — including the interactive confirm — is resolved inside the
     /// chain. There is no longer a chain-external re-evaluation.
     ///
-    /// Autopilot sessions never yield [`BashVerdict::Confirm`]: a confirm is
-    /// resolved silently to `Allow` or `Deny` per `autopilot_confirm_action`,
-    /// so the gate produces no [`PolicyDecision::Ask`] under autopilot (the
-    /// broker's autopilot bypass therefore sees a `Pass`, as before).
+    /// This verdict is independent of attended/autopilot posture.
     async fn check_bash_policy(&self, command: &str, arguments: &str) -> BashVerdict;
 
     /// The permission store, for synchronous `is_always_allowed` checks.
@@ -149,7 +146,7 @@ pub struct PolicyContext<'a> {
     pub call_name: &'a str,
     pub arguments: &'a str,
     pub scope_target: ScopeTarget,
-    pub autopilot: bool,
+    pub workspace_execution: muta_contracts::WorkspaceExecutionProfile,
     pub operation_scope: muta_contracts::OperationScope,
     pub disabled: std::collections::HashSet<String>,
     pub scoped_disabled: ScopedToolDisable,
@@ -214,7 +211,6 @@ pub fn default_chain() -> Vec<Box<dyn PermissionPolicy>> {
         Box::new(SchemaPolicy),
         Box::new(ScopeGatePolicy),
         Box::new(BashPolicy),
-        Box::new(AskUserPolicy),
         Box::new(BrokerPolicy),
     ]
 }
@@ -301,23 +297,12 @@ impl PermissionPolicy for SchemaPolicy {
     }
 }
 
-/// Gate 4: operation-scope gate (ADR-0028). A *soft* capability limit before
-/// the broker: the right to decide out-of-scope calls is handed to the user.
+/// Gate 4: operation-scope gate. The authority result is independent of
+/// whether a human is currently reachable.
 ///
-/// A call whose [`ScopeTarget`] falls outside the agent's granted
-/// [`muta_contracts::OperationScope`] is not hard-blocked. Instead:
-/// - **Attended** (a human is reachable, `ctx.autopilot == false`) → `Pass`, so
-///   the call falls through to the next gate — the [`BrokerPolicy`], which
-///   surfaces the standard approve / always-allow / reject prompt. The user, not
-///   a builtin limit, decides whether the elevation is granted.
-/// - **Autopilot** (no human reachable, `ctx.autopilot == true`) → hard `Deny`.
-///   With no user to answer a prompt, blocking outright is the only safe
-///   resolution; auto-allowing would remove the safety floor entirely. The
-///   message is a `ToolOutput::Text` (not `PermissionDenied`) so the model can
-///   retry with a different path, preserving the pre-softening retry semantics.
-///
-/// A target that *is* inside scope, or a tool with `ScopeTarget::Unspecified`
-/// (no locatable target), always `Pass`es — the broker then applies as usual.
+/// An out-of-scope target with no explicit rule yields `MissingAuthority` in
+/// both postures. A target inside scope, or one with no locatable target,
+/// continues to the action/broker policies.
 pub struct ScopeGatePolicy;
 #[async_trait]
 impl PermissionPolicy for ScopeGatePolicy {
@@ -331,20 +316,26 @@ impl PermissionPolicy for ScopeGatePolicy {
         if ctx.operation_scope.allows(&ctx.scope_target) {
             return PolicyDecision::Pass;
         }
-        // Out of scope. Attended → hand the decision to the user (the broker);
-        // autopilot → block outright, since no human can answer an elevation.
-        if ctx.autopilot {
-            PolicyDecision::Deny {
-                output: ToolOutput::Text(format!(
-                    "[operation scope] Tool '{}' targets '{}' outside its granted scope, and no \
-                     user is reachable to approve the elevation. Use a path or command inside the \
-                     granted scope.",
-                    ctx.call_name,
+        let rule = scope_target_to_rule(ctx.call_name, &ctx.scope_target);
+        if ctx.ctx.permissions().is_always_allowed(&rule) {
+            return PolicyDecision::Pass;
+        }
+        PolicyDecision::MissingAuthority {
+            request: muta_contracts::PermissionRequest {
+                id: String::new(),
+                tool: ctx.call_name.to_string(),
+                label: format!("Elevate {}", ctx.tool.permission_label()),
+                description: format!(
+                    "This call targets {} outside the agent's delegated operation scope.",
                     ScopeTargetDisplay(&ctx.scope_target)
-                )),
-            }
-        } else {
-            PolicyDecision::Pass
+                ),
+                arguments: ctx.arguments.to_string(),
+                scope: rule.scope.clone(),
+                elevation: true,
+                one_off: false,
+                origin: None,
+            },
+            rule,
         }
     }
 }
@@ -369,16 +360,13 @@ impl std::fmt::Display for ScopeTargetDisplay<'_> {
 /// park"), which forced three corollary hacks: a chain-external re-evaluation
 /// of the same policy, an ambiguous `Option<ToolOutput>` return whose `None`
 /// conflated Allow with "needs confirm", and a *second* prompt on top of the
-/// broker's own `Ask` for the same command.
+/// broker's own missing-authority result for the same command.
 ///
 /// All of that is gone. The gate now maps the [`BashVerdict`] directly:
-/// - [`BashVerdict::Allow`] → `Pass` (fall through to the broker, which may
-///   still `Ask` for a not-yet-approved command — the *single* prompt).
-/// - [`BashVerdict::Deny`] → `Deny` (hard refusal, or a confirm resolved under
-///   autopilot).
-/// - [`BashVerdict::Confirm`] → `Ask` with `one_off: true`, carrying the rule
-///   match. The caller parks through the **same** `Ask` path the broker uses,
-///   so there is one park/emit/await block, one prompt, no re-evaluation.
+/// - [`BashVerdict::Allow`] → `Pass` (fall through to the authority broker).
+/// - [`BashVerdict::Deny`] → `Deny` (unconditional hard refusal).
+/// - [`BashVerdict::Confirm`] → `MissingAuthority` with `one_off: true`.
+///   An attended caller may park once; an autopilot caller fails immediately.
 ///
 /// Because the confirm is `one_off`, an `Always` reply is honoured for this one
 /// call but **not persisted** — a dangerous-command confirmation is sharper
@@ -405,7 +393,7 @@ impl PermissionPolicy for BashPolicy {
                 // Build the one-off dangerous-command prompt. `one_off: true`
                 // tells the caller (and the TUI) that an `Always` reply is not
                 // persisted and the option should be de-emphasised.
-                PolicyDecision::Ask {
+                PolicyDecision::MissingAuthority {
                     request: muta_contracts::PermissionRequest {
                         id: String::new(), // caller fills the generated id
                         tool: "bash".to_string(),
@@ -426,7 +414,7 @@ impl PermissionPolicy for BashPolicy {
                     },
                     // A well-formed rule that is never persisted: `one_off`
                     // short-circuits persistence in the caller. Carried only to
-                    // satisfy the `Ask` shape uniformly.
+                    // satisfy the missing-authority shape uniformly.
                     rule: PermissionRule {
                         tool: "bash".to_string(),
                         scope: command,
@@ -437,39 +425,9 @@ impl PermissionPolicy for BashPolicy {
     }
 }
 
-/// Gate 6: ask_user shortcut. Under autopilot, refuse (no human to answer).
-pub struct AskUserPolicy;
-#[async_trait]
-impl PermissionPolicy for AskUserPolicy {
-    fn name(&self) -> &'static str {
-        "ask-user"
-    }
-    async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if ctx.call_name == "ask_user" && ctx.autopilot {
-            return PolicyDecision::Deny {
-                output: ToolOutput::Text(
-                    "ask_user is unavailable: this session is running on autopilot and no human \
-                     is reachable to answer. Resolve the ambiguity yourself — pick the most \
-                     reasonable default and proceed."
-                        .to_string(),
-                ),
-            };
-        }
-        PolicyDecision::Pass
-    }
-}
-
-/// Gate 7: the permission broker. A non-`Unspecified` target not already
-/// always-allowed (and not autopilot) yields `Ask`; the chain caller parks.
-///
-/// **Autopilot bypass:** when `ctx.autopilot` is true this gate auto-approves
-/// every call that survived scope-gate (gate 4) and bash-policy (gate 5). The
-/// broker therefore does *no* work for the common read-only envoy profiles,
-/// which are `autopilot: true` — their real safety floor is admission
-/// (`resolve_tools`, which filters the toolset at spawn) plus the scope-gate.
-/// The broker is the live layer only for the principal agent and for the
-/// `INTERACTIVE` profile (`autopilot: false`), which forwards prompts up to
-/// the parent (ADR-0029).
+/// Gate 6: the authority broker. Explicit grants win. A Development workspace
+/// pre-authorises ordinary calls inside the operation scope. Otherwise the
+/// result is `MissingAuthority`; the caller decides whether it can ask a human.
 pub struct BrokerPolicy;
 #[async_trait]
 impl PermissionPolicy for BrokerPolicy {
@@ -480,20 +438,17 @@ impl PermissionPolicy for BrokerPolicy {
         if matches!(ctx.scope_target, ScopeTarget::Unspecified) {
             return PolicyDecision::Pass;
         }
-        if ctx.autopilot {
-            return PolicyDecision::Approve;
-        }
         let rule = scope_target_to_rule(ctx.call_name, &ctx.scope_target);
         if ctx.ctx.permissions().is_always_allowed(&rule) {
             return PolicyDecision::Approve;
         }
-        // #10: an attended call whose target is OUTSIDE the granted scope is an
-        // *elevation* — the soft scope-gate (gate 4) deliberately let it reach
-        // here so the user, not a builtin limit, decides. Mark the prompt so the
-        // TUI can render a distinct ⚠ treatment; the operator must understand
-        // they are authorising access beyond the configured boundary.
+        if ctx.workspace_execution == muta_contracts::WorkspaceExecutionProfile::Development {
+            return PolicyDecision::Approve;
+        }
+        // Direct policy tests may evaluate the broker without the preceding
+        // scope gate, so retain the elevation bit from the declarative scope.
         let elevation = !ctx.operation_scope.allows(&ctx.scope_target);
-        PolicyDecision::Ask {
+        PolicyDecision::MissingAuthority {
             request: muta_contracts::PermissionRequest {
                 id: String::new(), // caller fills the generated id
                 tool: ctx.call_name.to_string(),
@@ -550,7 +505,6 @@ mod tests {
                 "schema",
                 "scope-gate",
                 "bash-policy",
-                "ask-user",
                 "broker",
             ]
         );
@@ -604,7 +558,7 @@ mod tests {
         name: &'a str,
         args: &'a str,
         target: ScopeTarget,
-        autopilot: bool,
+        _autopilot: bool,
         op: muta_contracts::OperationScope,
         disabled: std::collections::HashSet<String>,
         scoped: ScopedToolDisable,
@@ -615,7 +569,7 @@ mod tests {
             call_name: name,
             arguments: args,
             scope_target: target,
-            autopilot,
+            workspace_execution: muta_contracts::WorkspaceExecutionProfile::Restricted,
             operation_scope: op,
             disabled,
             scoped_disabled: scoped,
@@ -666,8 +620,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scope_gate_autopilot_blocks_out_of_scope() {
-        // No user reachable → an out-of-scope call is hard-denied (safety floor).
+    async fn scope_gate_reports_same_missing_authority_under_autopilot() {
         let (granted, _inside, outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
@@ -695,13 +648,12 @@ mod tests {
         );
         assert!(matches!(
             ScopeGatePolicy.evaluate(&c).await,
-            PolicyDecision::Deny { .. }
+            PolicyDecision::MissingAuthority { .. }
         ));
     }
 
     #[tokio::test]
-    async fn scope_gate_attended_hands_out_of_scope_to_user() {
-        // A human is reachable → the gate passes; the broker (next gate) asks.
+    async fn scope_gate_reports_same_missing_authority_when_attended() {
         let (granted, _inside, outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
@@ -729,7 +681,7 @@ mod tests {
         );
         assert!(matches!(
             ScopeGatePolicy.evaluate(&c).await,
-            PolicyDecision::Pass
+            PolicyDecision::MissingAuthority { .. }
         ));
     }
 
@@ -768,7 +720,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broker_autopilot_approves() {
+    async fn broker_autopilot_does_not_create_authority() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/anywhere")),
@@ -792,12 +744,39 @@ mod tests {
         );
         assert!(matches!(
             BrokerPolicy.evaluate(&c).await,
+            PolicyDecision::MissingAuthority { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn broker_development_profile_approves_ordinary_in_scope_call() {
+        let tool: Arc<dyn Tool> = Arc::new(StubTool {
+            name: "write_file".into(),
+            target: ScopeTarget::Path(PathBuf::from("/workspace/file")),
+        });
+        let ctxr = StubCtx {
+            perms: PermissionStore::new(),
+        };
+        let mut c = pctx(
+            &tool,
+            "write_file",
+            "{}",
+            ScopeTarget::Path(PathBuf::from("/workspace/file")),
+            true,
+            muta_contracts::OperationScope::unrestricted(),
+            HashSet::new(),
+            ScopedToolDisable::default(),
+            &ctxr,
+        );
+        c.workspace_execution = muta_contracts::WorkspaceExecutionProfile::Development;
+        assert!(matches!(
+            BrokerPolicy.evaluate(&c).await,
             PolicyDecision::Approve
         ));
     }
 
     #[tokio::test]
-    async fn broker_asks_when_not_allowed() {
+    async fn broker_reports_missing_authority_when_not_allowed() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
@@ -821,14 +800,14 @@ mod tests {
         );
         assert!(matches!(
             BrokerPolicy.evaluate(&c).await,
-            PolicyDecision::Ask { .. }
+            PolicyDecision::MissingAuthority { .. }
         ));
     }
 
     #[tokio::test]
     async fn broker_marks_out_of_scope_as_elevation() {
         // #10: an attended out-of-scope call reaches the broker (the soft gate
-        // passes it), and the broker's Ask request must carry elevation: true so
+        // passes it), and the broker's request must carry elevation: true so
         // the TUI renders the distinct ⚠ treatment.
         let (granted, _inside, outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
@@ -856,14 +835,14 @@ mod tests {
             &ctxr,
         );
         match BrokerPolicy.evaluate(&c).await {
-            PolicyDecision::Ask { request, .. } => assert!(request.elevation),
-            other => panic!("expected Ask, got {other:?}"),
+            PolicyDecision::MissingAuthority { request, .. } => assert!(request.elevation),
+            other => panic!("expected MissingAuthority, got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn broker_in_scope_ask_is_not_elevation() {
-        // An in-scope call's Ask must carry elevation: false (routine prompt).
+    async fn broker_in_scope_request_is_not_elevation() {
+        // An in-scope call's request must carry elevation: false.
         let (granted, inside, _outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
@@ -890,8 +869,8 @@ mod tests {
             &ctxr,
         );
         match BrokerPolicy.evaluate(&c).await {
-            PolicyDecision::Ask { request, .. } => assert!(!request.elevation),
-            other => panic!("expected Ask, got {other:?}"),
+            PolicyDecision::MissingAuthority { request, .. } => assert!(!request.elevation),
+            other => panic!("expected MissingAuthority, got {other:?}"),
         }
     }
 
@@ -955,7 +934,8 @@ mod tests {
     #[tokio::test]
     async fn chain_out_of_scope_attended_reaches_broker() {
         // The behaviour the soft gate exists for: an attended out-of-scope call
-        // is not hard-blocked — it flows scope-gate (Pass) → broker (Ask), so the
+        // is not hard-blocked — it flows scope-gate (Pass) → broker
+        // (MissingAuthority), so the
         // user, not a builtin limit, decides the elevation.
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
@@ -984,14 +964,12 @@ mod tests {
         let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
         assert!(matches!(
             chain.evaluate(&c).await,
-            PolicyDecision::Ask { .. }
+            PolicyDecision::MissingAuthority { .. }
         ));
     }
 
     #[tokio::test]
-    async fn chain_out_of_scope_autopilot_blocks() {
-        // No human → the soft gate must still block out-of-scope calls; it never
-        // reaches a broker that would silently auto-approve under autopilot.
+    async fn chain_out_of_scope_autopilot_has_same_authority_result() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
@@ -1019,7 +997,7 @@ mod tests {
         let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
         assert!(matches!(
             chain.evaluate(&c).await,
-            PolicyDecision::Deny { .. }
+            PolicyDecision::MissingAuthority { .. }
         ));
     }
 }

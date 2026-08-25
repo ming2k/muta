@@ -196,12 +196,12 @@ The daemon answers with ready-to-apply edits:
 }
 ```
 
-The backend owns slash matching, intent steering, aliases, trusted project
-commands, project-file discovery, and explicit path resolution. Clients only
-discard responses whose id/input/cursor no longer match their latest composer
-state, translate Unicode-scalar edit offsets to native string offsets, and
-render/apply the result. Completion requests and responses require protocol
-version 2.
+The backend owns slash matching, intent steering, aliases, content-admitted
+workspace commands, project-file discovery, and explicit path resolution.
+Clients only discard responses whose id/input/cursor no longer match their
+latest composer state, translate Unicode-scalar edit offsets to native string
+offsets, and render/apply the result. Completion requests and responses require
+protocol version 2.
 
 Sessions can be renamed over the attach channel with
 `Request{RenameSession{id, title}}`: `id` takes a full id or a 4+ character

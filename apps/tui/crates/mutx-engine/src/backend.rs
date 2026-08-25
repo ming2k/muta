@@ -321,9 +321,15 @@ impl<W: Write> Backend<W> {
 
     /// Show the terminal cursor at `(x, y)`, keeping the backend's cursor
     /// tracker in sync with the real terminal.
+    ///
+    /// Positioning happens while the cursor is still hidden. Showing first
+    /// would expose the last draw coordinate for one terminal update before
+    /// the final `MoveTo`, which is visible as a jumping caret whenever a
+    /// terminal, multiplexer, or IME does not present synchronized updates as
+    /// one indivisible operation.
     pub fn show_cursor_at(&mut self, x: u16, y: u16) -> io::Result<()> {
-        self.show_cursor()?;
-        self.move_to(x, y)
+        self.move_to(x, y)?;
+        self.show_cursor()
     }
 
     /// Apply only the style attributes that differ from the currently-applied
@@ -482,8 +488,8 @@ mod tests {
             Style::default().fg(Color::Rgb(1, 2, 3)),
             "ab",
         );
-        let mut front = Grid::new(4, 1);
-        let cmd = crate::diff::diff(&back, &mut front);
+        let front = Grid::new(4, 1);
+        let cmd = crate::diff::diff(&back, &front);
         let s = render_to_string(&cmd, Bce::Yes);
         // crossterm emits RGB foreground as `\x1b[38;2;r;g;bm`.
         assert!(s.contains("\x1b[38;2;1;2;3m"), "fg SGR present: {s:?}");
@@ -497,8 +503,8 @@ mod tests {
         let style = Style::default().fg(Color::Rgb(9, 9, 9));
         back.put(0, 0, Fit::Clip, style, "a");
         back.set(2, 0, Cell::narrow("b", style));
-        let mut front = Grid::new(4, 1);
-        let cmd = crate::diff::diff(&back, &mut front);
+        let front = Grid::new(4, 1);
+        let cmd = crate::diff::diff(&back, &front);
         let s = render_to_string(&cmd, Bce::Yes);
         // Count occurrences of the SGR set; should appear exactly once.
         let count = s.matches("\x1b[38;2;9;9;9m").count();
@@ -555,6 +561,26 @@ mod tests {
             .expect("second frame text must be emitted")
             + redraw_move;
         assert!(redraw_move < redraw_text, "MoveTo must precede B: {s:?}");
+    }
+
+    #[test]
+    fn show_cursor_at_positions_before_revealing_the_cursor() {
+        let mut buf = Vec::new();
+        {
+            let mut be = Backend::with_bce(&mut buf, Bce::Yes);
+            be.hide_cursor().unwrap();
+            be.show_cursor_at(5, 7).unwrap();
+        }
+
+        let s = String::from_utf8(buf).unwrap();
+        let move_at = s
+            .find("\x1b[8;6H")
+            .expect("final caret MoveTo must be emitted");
+        let show_at = s.find("\x1b[?25h").expect("cursor Show must be emitted");
+        assert!(
+            move_at < show_at,
+            "the cursor must be positioned while hidden, then shown: {s:?}"
+        );
     }
 
     #[test]
@@ -752,6 +778,10 @@ mod tests {
         assert!(
             s.contains("\x1b[?25h") && s.contains("\x1b[8;6H"),
             "the out-of-band caret write sits inside the envelope: {s:?}"
+        );
+        assert!(
+            s.find("\x1b[8;6H") < s.find("\x1b[?25h"),
+            "the caret is positioned before it becomes visible: {s:?}"
         );
     }
 

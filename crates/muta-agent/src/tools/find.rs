@@ -91,8 +91,13 @@ impl Tool for FindTool {
         let display_base = env.workspace_root().to_path_buf();
         let search_root = display_base.join(base_dir);
 
-        if !search_root.exists() {
-            return Err(format!("Directory not found: {}", base_dir));
+        let metadata = env
+            .fs()
+            .metadata(&search_root)
+            .await
+            .map_err(|error| format!("Cannot search '{}': {error}", base_dir))?;
+        if !metadata.is_dir {
+            return Err(format!("Search path is not a directory: {base_dir}"));
         }
 
         let compiled_glob = raw_pattern.and_then(|p| glob::Pattern::new(p).ok());

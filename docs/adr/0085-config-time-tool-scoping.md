@@ -1,7 +1,9 @@
 # 0085. Config-time tool scoping: unified external-tool sources, no runtime discovery
 
-- **Status:** Accepted
+- **Status:** Accepted; the project-security decision in §5 is superseded by
+  ADR-0140
 - **Date:** 2026-08-14
+- **Current workspace authority:** ADR-0140
 - **Revises:** the "progressive disclosure" direction noted (but never wired) in
   `crates/neenee-agent/src/lib.rs:135-138` (`disclosure_ledger` /
   `disclosure_bridge`, marked `#[allow(dead_code)]`)

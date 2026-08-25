@@ -357,10 +357,7 @@ pub struct EnvoyBarInfo {
 /// insets (applied by `footer_stack::place` to the composer's rect) and the
 /// composer's own prompt prefix + right pad.
 ///
-/// Single source of truth for this formula. The height reservation here and
-/// the app's between-frame geometry probe (`App::input_geometry_is_clean`)
-/// both resolve through it, so the probe re-measures exactly what the
-/// renderer measured — no derived-invariant coupling on the placed rect.
+/// Single source of truth for the composer's frame-relative width budget.
 pub(crate) fn composer_layout_text_width(frame_width: usize) -> usize {
     frame_width
         .saturating_sub(
@@ -372,13 +369,6 @@ pub(crate) fn composer_layout_text_width(frame_width: usize) -> usize {
 pub struct TranscriptRender {
     /// The input box area.
     pub input_rect: Rect,
-    /// Wrapped text-row count this frame reserved for the input box (the
-    /// same value that sized `input_rect.height`, derived from the —
-    /// possibly masked — text the renderer actually laid out). The app
-    /// records it alongside the rect so its between-frame geometry probe
-    /// compares against what the renderer measured, not a re-derivation
-    /// that could drift from the masking rules.
-    pub input_rows: usize,
     /// The hint-bar area pinned directly below the input box (zero-sized when
     /// hidden).
     pub hint_rect: Rect,
@@ -469,7 +459,6 @@ pub fn draw_transcript(
         draw_too_small_notice(frame, full, theme);
         return TranscriptRender {
             input_rect: Rect::default(),
-            input_rows: 0,
             hint_rect: Rect::default(),
             footer: PlacedFooter::default(),
             content_lines: 0,
@@ -905,7 +894,6 @@ pub fn draw_transcript(
 
     TranscriptRender {
         input_rect,
-        input_rows: input_wrapped_lines,
         hint_rect,
         footer: placed_footer,
         content_lines,
@@ -2798,15 +2786,8 @@ mod tests {
         }
     }
 
-    /// Regression for the IME cursor-lag fix: the input-driven immediate flush
-    /// places the terminal cursor via [`composer::cursor_screen_pos`], and the
-    /// draw path places it via [`draw_composer`]'s `set_cursor_position`. The
-    /// two **must agree** for every (input, caret offset) pair — if they ever
-    /// diverge, the IME composition window (which samples the cursor on its own
-    /// schedule) anchors to a different coordinate than the rendered caret, the
-    /// exact "IME 捕获位置错乱" symptom. This test locks the invariant by
-    /// rendering each case and asserting the rendered cursor equals the pure
-    /// function's output.
+    /// The composer must forward its resolved cursor coordinate unchanged to
+    /// the frame for ASCII, CJK, empty, and wrapped inputs.
     #[test]
     fn cursor_screen_pos_matches_drawn_caret() {
         use super::composer::cursor_screen_pos;
@@ -2854,24 +2835,21 @@ mod tests {
                 other => panic!("{label}: caret should be visible, got {other:?}"),
             };
 
-            // What the immediate-flush pure function places.
+            // What the authoritative geometry function resolves.
             let mut scroll = 0usize;
-            let flushed = cursor_screen_pos(rect, input, byte_cursor, &mut scroll)
+            let resolved = cursor_screen_pos(rect, input, byte_cursor, &mut scroll)
                 .unwrap_or_else(|| panic!("{label}: cursor_screen_pos returned None"));
 
             assert_eq!(
-                drawn, flushed,
+                drawn, resolved,
                 "{label} (input={input:?}, byte={byte_cursor}): \
-                 draw path and immediate-flush path disagree — \
-                 this is what re-introduces the IME anchor drift"
+                 draw path did not forward the resolved caret"
             );
         }
     }
 
-    /// The immediate flush must update `input_scroll` to keep the caret in view
-    /// exactly as the draw path does — otherwise a caret moved below the
-    /// visible window would render at the right place but be anchored
-    /// off-screen by the flush, desyncing scroll state across frames.
+    /// Cursor resolution updates `input_scroll` to keep the final caret inside
+    /// the visible composer rows.
     #[test]
     fn cursor_screen_pos_clamps_scroll_like_draw() {
         use super::composer::cursor_screen_pos;
@@ -2883,18 +2861,18 @@ mod tests {
         let byte_cursor = input.len();
 
         let mut scroll = 0usize;
-        let flushed = cursor_screen_pos(rect, &input, byte_cursor, &mut scroll)
+        let resolved = cursor_screen_pos(rect, &input, byte_cursor, &mut scroll)
             .expect("caret position resolves");
 
-        // The flushed caret must sit on a visible row (within the box's text
+        // The resolved caret must sit on a visible row (within the box's text
         // rows), proving scroll advanced to track it.
         let visible_rows = (rect.height as usize)
             .saturating_sub(crate::design::COMPOSER_VERTICAL_CHROME_ROWS as usize)
             .max(1);
-        let caret_row = (flushed.1 - rect.y - crate::design::COMPOSER_TEXT_ROW_OFFSET) as usize;
+        let caret_row = (resolved.1 - rect.y - crate::design::COMPOSER_TEXT_ROW_OFFSET) as usize;
         assert!(
             caret_row < visible_rows,
-            "flushed caret row {caret_row} outside the {visible_rows} visible rows"
+            "resolved caret row {caret_row} outside the {visible_rows} visible rows"
         );
         assert!(scroll > 0, "scroll should have advanced to track the caret");
     }
@@ -4770,8 +4748,8 @@ mod tests {
             );
         });
         let back = terminal.buffer();
-        let mut front = mutx_engine::Grid::new(width, 12);
-        let cmd = mutx_engine::diff::diff(back, &mut front);
+        let front = mutx_engine::Grid::new(width, 12);
+        let cmd = mutx_engine::diff::diff(back, &front);
         let underline = mutx_engine::Modifier::UNDERLINE;
 
         let wide_run_style = cmd.draws.iter().find_map(|d| match d {

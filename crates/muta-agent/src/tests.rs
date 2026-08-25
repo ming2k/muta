@@ -1962,7 +1962,7 @@ async fn doom_guard_suppressed_when_disabled() {
 }
 
 #[tokio::test]
-async fn bash_policy_blocks_git_reset_hard_even_when_bash_is_allowed() {
+async fn bash_policy_confirm_requires_authority_under_autopilot() {
     let bash = RecordingTool::read("bash", "BASH-OUT");
     let calls = bash.calls_handle();
     let agent = Arc::new(Agent::new(
@@ -1989,7 +1989,12 @@ async fn bash_policy_blocks_git_reset_hard_even_when_bash_is_allowed() {
         .iter()
         .find(|m| m.role == Role::Tool)
         .expect("policy refusal should be recorded as the bash tool result");
-    assert!(tool_message.content.contains("[bash policy]"));
+    assert!(tool_message.content.contains("[authority required]"));
+    assert!(
+        tool_message
+            .content
+            .contains("Autopilot controls interaction only")
+    );
     assert!(tool_message.content.contains("git reset --hard"));
     assert!(outcome.unwrap().message.content.contains("done"));
 }

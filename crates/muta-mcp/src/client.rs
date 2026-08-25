@@ -111,13 +111,27 @@ impl McpClient {
             .split_first()
             .ok_or_else(|| "MCP command must not be empty".to_string())?;
 
-        let mut command = Command::new(program);
+        let mut command = if let Some(root) = &config.sandbox_root {
+            // Project-authored servers are untrusted executable extensions.
+            // Extension trust permits loading their exact declaration, but it
+            // never grants ambient host or workspace-write/network authority.
+            muta_platform::workspace_sandbox::command_with_environment(
+                program,
+                args,
+                &config.environment,
+                root,
+                muta_platform::workspace_sandbox::WorkspaceAccess::ReadOnly,
+                muta_platform::workspace_sandbox::NetworkAccess::Disabled,
+            )?
+        } else {
+            let mut command = Command::new(program);
+            command.args(args).envs(&config.environment);
+            command
+        };
         // MCP servers are usually wrappers (`npx`, `uvx`) around a real
         // server process. Native owned-tree containment ensures teardown
         // reaches the wrapped process too.
         command
-            .args(args)
-            .envs(&config.environment)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -261,6 +275,17 @@ impl McpServer {
     /// Connect (or reconnect) and return the live client. If a client is
     /// already held, it is reused; otherwise a fresh connection is established.
     async fn ensure_connected(&self) -> Result<Arc<McpClient>, String> {
+        if let Some(root) = &self.config.sandbox_root {
+            let snapshot =
+                muta_persistence::workspace_security::WorkspaceSecurityStore::load().snapshot(root);
+            if !snapshot.extensions.is_trusted() {
+                *self.client.lock().await = None;
+                return Err(format!(
+                    "project MCP '{}' is quarantined because its extension content is not currently attested",
+                    self.server_name
+                ));
+            }
+        }
         let mut guard = self.client.lock().await;
         if let Some(c) = guard.as_ref() {
             return Ok(c.clone());

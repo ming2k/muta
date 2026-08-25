@@ -66,10 +66,9 @@ struct PermissionState {
 pub struct PermissionStore {
     state: Mutex<PermissionState>,
     persistence: Mutex<Option<PermissionPersistence>>,
-    /// When true, the agent runs **autopilot** — without human intervention:
-    /// no permission confirmations, no questions. Operationally this skips the
-    /// permission prompt entirely (and bypasses the allowlist wholesale), but
-    /// the flag's meaning is "no human in the loop," not just "skip prompts."
+    /// When true, the agent runs **autopilot** — without human intervention.
+    /// This controls only interaction: a missing authority result is returned
+    /// immediately instead of parking, and the allowlist is never bypassed.
     ///
     /// This is the **single source of truth** for the agent's attended state:
     /// `Agent::get_autopilot`/`set_autopilot` are thin forwards here, and the

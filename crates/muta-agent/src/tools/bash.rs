@@ -137,6 +137,12 @@ impl Tool for BashTool {
                 .env
                 .clone()
                 .unwrap_or_else(|| env_from_root(&self.root));
+            if env.shell_isolation() == muta_contracts::ShellIsolation::Workspace {
+                return Err(
+                    "Persistent terminal sessions are disabled in the workspace sandbox; run a non-persistent command instead."
+                        .to_string(),
+                );
+            }
             let root = env.workspace_root().to_path_buf();
             let session_arc = {
                 let mut pool = PERSISTENT_TERMINALS.lock().await;
@@ -195,16 +201,21 @@ impl Tool for BashTool {
             // to a different project than the session invoking this tool.
             // `Command::current_dir` chdirs between fork and exec, so the
             // rest of the native spawn containment and pipes is unaffected.
-            let mut invocation = muta_platform::shell::native_shell(command);
+            let env = self
+                .env
+                .clone()
+                .unwrap_or_else(|| env_from_root(&self.root));
+            let mut invocation = match env.shell_isolation() {
+                muta_contracts::ShellIsolation::Host => muta_platform::shell::native_shell(command),
+                muta_contracts::ShellIsolation::Workspace => {
+                    workspace_sandbox_shell(command, env.workspace_root())?
+                }
+            };
             invocation
                 .kill_on_drop(true)
                 .stdin(stdin_stdio)
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
-            let env = self
-                .env
-                .clone()
-                .unwrap_or_else(|| env_from_root(&self.root));
             invocation.current_dir(env.workspace_root());
             muta_platform::process::spawn_owned(&mut invocation)
         }
@@ -410,6 +421,18 @@ impl Tool for BashTool {
         }
         outcome
     }
+}
+
+fn workspace_sandbox_shell(
+    command: &str,
+    workspace_root: &std::path::Path,
+) -> Result<tokio::process::Command, String> {
+    muta_platform::workspace_sandbox::shell(
+        command,
+        workspace_root,
+        muta_platform::workspace_sandbox::WorkspaceAccess::ReadWrite,
+        muta_platform::workspace_sandbox::NetworkAccess::Enabled,
+    )
 }
 
 muta_contracts::register_tool!(BashFactory => |ctx| BashTool {
@@ -746,6 +769,47 @@ mod tests {
             other => panic!("expected Shell, got {:?}", other),
         }
         std::fs::remove_dir_all(&marker).ok();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn workspace_shell_sees_only_runtime_and_exact_workspace() {
+        if !crate::execution::workspace_sandbox_available() {
+            return;
+        }
+        let base = std::env::temp_dir().join(format!(
+            "muta-bash-sandbox-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let workspace = base.join("workspace");
+        let outside = base.join("outside-secret");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        std::fs::write(workspace.join("visible"), "workspace").expect("write workspace marker");
+        std::fs::write(&outside, "host secret").expect("write host marker");
+
+        let env = std::sync::Arc::new(crate::execution::WorkspaceExecutionEnvironment::new(
+            &workspace,
+        ));
+        let tool = BashTool::with_env(env);
+        let command = format!(
+            "test -r visible && test ! -e {} && test ! -e /etc/passwd && \
+             test -z \"${{CARGO_MANIFEST_DIR:-}}\" && printf sandboxed > created",
+            outside.display()
+        );
+        let output = tool
+            .call_structured(&serde_json::json!({ "command": command }).to_string())
+            .await
+            .expect("sandbox command");
+        assert!(matches!(
+            output,
+            muta_contracts::ToolOutput::Shell { exit: Some(0), .. }
+        ));
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("created")).unwrap(),
+            "sandboxed"
+        );
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "host secret");
+        std::fs::remove_dir_all(base).ok();
     }
 
     #[cfg(unix)]

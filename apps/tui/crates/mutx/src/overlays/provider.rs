@@ -123,7 +123,7 @@ pub fn draw_connections_modal(
 
     let (search_rect, body_rect) = split_search_body(f.body, search);
     if let Some(search_rect) = search_rect {
-        draw_picker_search_row(frame, search_rect, query, theme);
+        draw_picker_search_row(frame, search_rect, query, cursor_position, theme);
     }
 
     // Empty state: no provider instance exists. Show a vertically and
@@ -146,10 +146,7 @@ pub fn draw_connections_modal(
             render_modal_footer_with_more(frame, fo, hints, extra, theme);
         }
         if let Some(sr) = search_rect {
-            let prefix = " Search  › ".width() as u16;
-            let cursor_x = sr.x + prefix + caret_column(query, cursor_position);
-            let cursor_y = sr.y;
-            frame.set_cursor_position((cursor_x, cursor_y));
+            place_picker_search_cursor(frame, sr, query, cursor_position);
         }
         return area;
     }
@@ -187,10 +184,7 @@ pub fn draw_connections_modal(
     // The real terminal caret only exists in search mode — browse mode has no
     // editable field. Place it in the dedicated search row, not in the header.
     if search && let Some(sr) = search_rect {
-        let prefix = " Search  › ".width() as u16;
-        let cursor_x = sr.x + prefix + caret_column(query, cursor_position);
-        let cursor_y = sr.y;
-        frame.set_cursor_position((cursor_x, cursor_y));
+        place_picker_search_cursor(frame, sr, query, cursor_position);
     }
     area
 }
@@ -291,7 +285,7 @@ pub fn draw_models_modal(
 
     let (search_rect, body_rect) = split_search_body(f.body, search);
     if let Some(search_rect) = search_rect {
-        draw_picker_search_row(frame, search_rect, query, theme);
+        draw_picker_search_row(frame, search_rect, query, cursor_position, theme);
     }
 
     // Empty state: no model available. Show a vertically and horizontally
@@ -313,10 +307,7 @@ pub fn draw_models_modal(
             render_modal_footer_with_more(frame, fo, hints, extra, theme);
         }
         if let Some(sr) = search_rect {
-            let prefix = " Search  › ".width() as u16;
-            let cursor_x = sr.x + prefix + caret_column(query, cursor_position);
-            let cursor_y = sr.y;
-            frame.set_cursor_position((cursor_x, cursor_y));
+            place_picker_search_cursor(frame, sr, query, cursor_position);
         }
         return area;
     }
@@ -356,10 +347,7 @@ pub fn draw_models_modal(
     // The real terminal caret only exists in search mode — browse mode has no
     // editable field. Place it in the dedicated search row, not in the header.
     if search && let Some(sr) = search_rect {
-        let prefix = " Search  › ".width() as u16;
-        let cursor_x = sr.x + prefix + caret_column(query, cursor_position);
-        let cursor_y = sr.y;
-        frame.set_cursor_position((cursor_x, cursor_y));
+        place_picker_search_cursor(frame, sr, query, cursor_position);
     }
     area
 }
@@ -385,7 +373,18 @@ fn split_search_body(body: Rect, search: bool) -> (Option<Rect>, Rect) {
     (Some(search_rect), list_rect)
 }
 
-fn draw_picker_search_row(frame: &mut Frame, rect: Rect, query: &str, theme: &Theme) {
+const PICKER_SEARCH_PREFIX: &str = " Search  › ";
+
+fn draw_picker_search_row(
+    frame: &mut Frame,
+    rect: Rect,
+    query: &str,
+    cursor_position: usize,
+    theme: &Theme,
+) {
+    let prefix_width = PICKER_SEARCH_PREFIX.width();
+    let field_width = (rect.width as usize).saturating_sub(prefix_width);
+    let visible_query = field_viewport(query, cursor_position, field_width).1;
     let value_style = Style::default()
         .fg(if query.is_empty() {
             theme.muted()
@@ -395,19 +394,33 @@ fn draw_picker_search_row(frame: &mut Frame, rect: Rect, query: &str, theme: &Th
         .add_modifier(Modifier::BOLD);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" Search", Style::default().fg(theme.muted())),
-            Span::styled("  › ", Style::default().fg(theme.muted())),
+            Span::styled(PICKER_SEARCH_PREFIX, Style::default().fg(theme.muted())),
             Span::styled(
                 if query.is_empty() {
-                    "type to fuzzy-filter"
+                    "type to fuzzy-filter".to_string()
                 } else {
-                    query
+                    visible_query
                 },
                 value_style,
             ),
         ])),
         rect,
     );
+}
+
+fn place_picker_search_cursor(frame: &mut Frame, rect: Rect, query: &str, cursor_position: usize) {
+    let prefix_width = PICKER_SEARCH_PREFIX.width() as u16;
+    let field_width = rect.width.saturating_sub(prefix_width);
+    if rect.height == 0 || field_width == 0 {
+        return;
+    }
+    let (offset, _) = field_viewport(query, cursor_position, field_width as usize);
+    let caret = caret_column(query, cursor_position);
+    let local = caret
+        .saturating_sub(offset.min(u16::MAX as usize) as u16)
+        .min(field_width.saturating_sub(1));
+    let x = rect.x.saturating_add(prefix_width).saturating_add(local);
+    frame.set_cursor_position((x, rect.y));
 }
 
 /// Build the **Connections** provider list body via the shared [`crate::components::row::ListRow`]
@@ -1114,14 +1127,17 @@ pub fn draw_model_editor(
     // only free-text field: the effort selector is cycled / jumped and the
     // thinking row is a toggle, so neither shows a caret — a parked cursor on
     // a non-text field reads as "type here" and jitters as the value cycles.
-    if show_key && focused_field == 0 {
+    if show_key && focused_field == 0 && body_rect.width > 0 && body_rect.height > 0 {
         let prefix = format!("{:<8}", "API key");
         // Subtract the field's viewport offset so the caret tracks the visible
         // (scrolled) text, and clamp it to stay inside the body rect.
         let caret_col = caret_column(input, cursor_position);
-        let max_x = body_rect.x + body_rect.width.saturating_sub(1);
-        let mut cursor_x =
-            (body_rect.x + prefix.width() as u16 + caret_col).saturating_sub(api_key_off as u16);
+        let max_x = body_rect.right().saturating_sub(1);
+        let local_caret = (caret_col as usize).saturating_sub(api_key_off);
+        let mut cursor_x = body_rect
+            .x
+            .saturating_add(prefix.width().min(u16::MAX as usize) as u16)
+            .saturating_add(local_caret.min(u16::MAX as usize) as u16);
         if cursor_x > max_x {
             cursor_x = max_x;
         }
@@ -1695,8 +1711,12 @@ pub fn draw_custom_provider_editor(
     if in_view {
         let prefix_w = 3 + LABEL_W as u16; // focus marker + padded label
         let caret_col = caret_column(input, cursor_position);
-        let max_x = body_rect.x + body_rect.width.saturating_sub(1);
-        let mut cursor_x = (body_rect.x + prefix_w + caret_col).saturating_sub(focus_off as u16);
+        let max_x = body_rect.right().saturating_sub(1);
+        let local_caret = (caret_col as usize).saturating_sub(focus_off);
+        let mut cursor_x = body_rect
+            .x
+            .saturating_add(prefix_w)
+            .saturating_add(local_caret.min(u16::MAX as usize) as u16);
         if cursor_x > max_x {
             cursor_x = max_x;
         }
@@ -2485,6 +2505,34 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(text.contains("(no matches — try a shorter or different query)"));
         assert!(text.contains("clear search"));
+    }
+
+    #[test]
+    fn picker_search_viewport_keeps_long_query_and_caret_inside_row() {
+        let theme = Theme::default();
+        let rect = Rect::new(2, 3, 16, 1);
+        let query = "abcdefghijklmnopqrstuvwxyz";
+        let mut terminal = mutx_engine::TestTerminal::new(24, 8);
+        terminal.draw(|frame| {
+            draw_picker_search_row(frame, rect, query, query.chars().count(), &theme);
+            place_picker_search_cursor(frame, rect, query, query.chars().count());
+        });
+
+        let (x, y) = match terminal.cursor() {
+            mutx_engine::CursorState::Visible(x, y) => (x, y),
+            other => panic!("search field must own a caret, got {other:?}"),
+        };
+        assert!(x >= rect.x && x < rect.right());
+        assert_eq!(y, rect.y);
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("xyz"),
+            "the viewport must follow the end of a long query: {text:?}"
+        );
+        assert!(
+            !text.contains("abcdefgh"),
+            "the off-screen query prefix must not be painted"
+        );
     }
 
     #[test]

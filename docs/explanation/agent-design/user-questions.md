@@ -138,10 +138,9 @@ envoy that hits ambiguity returns it in its written answer instead. See
 
 ## See also
 
-- [Autopilot operation](autopilot.md) — the autonomous counterpart to this
-  surface: when `autopilot` is on it reclaims `ask_user` outright (and
-  auto-approves tool permissions), so the question surface is governed by the
-  same flag rather than left to the model's discretion.
+- [Autopilot operation](autopilot.md) — the unattended counterpart to this
+  surface: it reclaims `ask_user` and returns missing authority immediately;
+  it never creates or bypasses grants.
 - [How to ask the user a question](../../how-to/ask-the-user.md)
 - [Built-in tools](../../reference/tools/index.md)
 - [Rounds and turns](rounds-and-turns.md)

@@ -233,11 +233,18 @@ pub fn draw_question_modal(
         let visible_bottom = scroll.saturating_add(f.body.height as usize);
         if caret_row >= visible_top && caret_row < visible_bottom {
             let indent: u16 = OTHER_FIELD_INDENT as u16;
-            let cursor_x = f.body.x + indent + other_caret_col as u16;
-            let cursor_y = f.body.y + (caret_row - visible_top) as u16;
+            let cursor_x = f
+                .body
+                .x
+                .saturating_add(indent)
+                .saturating_add(other_caret_col.min(u16::MAX as usize) as u16);
+            let cursor_y = f
+                .body
+                .y
+                .saturating_add((caret_row - visible_top).min(u16::MAX as usize) as u16);
             // Clamp to the body's right edge so a wide-glyph caret at the last
             // column never lands in the scrollbar gutter.
-            let cursor_x = cursor_x.min(f.body.x + f.body.width.saturating_sub(1));
+            let cursor_x = cursor_x.min(f.body.right().saturating_sub(1));
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }

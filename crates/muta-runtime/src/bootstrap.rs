@@ -18,20 +18,21 @@
 //! (or client-side) short-circuits and must be dispatched by the caller
 //! before invoking [`assemble`].
 
-use crate::commands::{CustomCommand, discover_commands_trusted};
+use crate::commands::{CustomCommand, discover_commands_with_extensions};
 use muta_agent::catalog;
 use muta_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round_response};
 use muta_agent::{Agent, AgentIdentity, EnvoyTool, PrincipalProfile, RoundLifecycle};
 use muta_contracts::{
     AgentNotice, AgentRequest, AgentResponse, EXPLORE, Message, NoticeKind, NoticeSeverity,
-    NoticeSource, Provider, RoundEvent, ToolContextBuilder, ToolSet, collect_toolset,
+    NoticeSource, NoticeSurface, Provider, RoundEvent, ToolContextBuilder, ToolSet,
+    WorkspaceExecutionProfile, WorkspaceExtensionsState, WorkspaceSandboxState, collect_toolset,
 };
 use muta_mcp::{McpCatalog, McpRuntime};
 use muta_persistence::{
     config::{Config, InputHistoryConfig, TuiConfig},
     connection_usage, embedding, paths,
     session::SessionStore,
-    trusted_projects::TrustGate,
+    workspace_security::WorkspaceSecurityStore,
 };
 use muta_skills::{SkillCatalog, SkillRegistry};
 
@@ -321,13 +322,11 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let mut skills_config = config.skills.clone();
     skills_config.project_root = Some(project_root.clone());
     let skills_registry = Arc::new(SkillRegistry::empty_with_config(&skills_config));
-    // Shadowing alert (ADR-0085 §5 extended to skills): a trusted project's
-    // `.muta/skills/<name>/SKILL.md` wins over a same-named user/remote
-    // skill by priority — a silent override would be invisible prompt
-    // injection, so every scan that newly observes one surfaces a warning
-    // notice (deduped per name per session inside the registry). The sink is
-    // installed BEFORE the background refresh is spawned so the startup scan
-    // is covered; `/skills reload` and `/trust` rescan through the same path.
+    // A content-admitted `.muta/skills/<name>/SKILL.md` wins over a same-named
+    // user or remote skill by priority. Surface every newly observed shadow so
+    // that prompt injection cannot hide behind normal precedence. Install the
+    // sink before background refresh so startup, `/skills reload`, and
+    // `/extensions trust` all report through the same path.
     {
         let resp_tx_for_shadows = resp_tx.clone();
         let session_id_for_shadows = session.id().await;
@@ -348,7 +347,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                         .with_body(format!(
                             "Loading {} instead. Project-local skills win by priority; \
                              if this is unexpected, inspect the project's skills directories \
-                             (.muta/skills, .agents/skills, .claude/skills) or /untrust.",
+                             (.muta/skills, .agents/skills, .claude/skills) or run \
+                             `/extensions untrust`.",
                             shadow.winner_source.display()
                         )),
                     ),
@@ -383,7 +383,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         builder.provide(embedding_store.clone());
         builder.provide(session.clone());
         let execution_env: Arc<dyn muta_contracts::ExecutionEnvironment> = Arc::new(
-            muta_agent::execution::LocalExecutionEnvironment::new(project_root.clone()),
+            muta_agent::execution::WorkspaceExecutionEnvironment::new(project_root.clone()),
         );
         builder.provide(execution_env);
         // The session's workspace root: every workspace-relative tool
@@ -444,6 +444,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // inherit the parent's tool-variant selection. The profile still owns the
     // orthogonal scope axis.
     envoy_tool_handle.bind_variant_selection(agent.variant_selection_handle());
+    envoy_tool_handle.bind_workspace_security(agent.workspace_security_handle());
     // Wire the per-project "always allow" allowlist so prior `Always`
     // approvals survive across sessions in this project. Best-effort: a
     // missing or unreadable permissions.json just means we re-prompt.
@@ -452,7 +453,9 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // policies are data-driven. Runtime "Always" decisions still write to
     // permissions.json; these config rules re-apply on every start.
     agent.seed_permissions_from_config(&config.permissions.allow);
-    // Project-scope trust gate (ADR-0085 §5, extended). A project's
+    // Workspace execution authority and project-extension trust are separate
+    // axes. Opening a path grants neither, and extension trust is bound to the
+    // current contribution digest rather than the path alone.
     // `.muta/config.toml` may declare `[mcp.*]` servers (which execute
     // processes) and `[[hooks]]` entries (which run shell commands at lifecycle
     // points); its `.muta/skills` and `.muta/commands` trees inject
@@ -463,17 +466,21 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // execution — or prompt injection, which for an agent holding tools is
     // execution-by-proxy — merely because the user opened it. The whole
     // package — MCP servers, hooks, project skills AND project slash
-    // commands — loads only after the user has explicitly trusted this
-    // project root (`/trust`). The trust root is git-aware
-    // (resolve_trust_root), so one grant covers every subdirectory and linked
-    // worktree of the repo. Global config is user-authored and trusted
-    // unconditionally.
-    let trust_gate = Arc::new(TrustGate::load());
-    let project_trusted = trust_gate.is_trusted(&project_root);
+    // commands — loads only after the current content has been explicitly
+    // trusted. Global config is user-authored and trusted unconditionally.
+    let workspace_security = Arc::new(WorkspaceSecurityStore::load());
+    let mut security_snapshot = workspace_security.snapshot(&project_root);
+    security_snapshot.sandbox = if muta_agent::execution::workspace_sandbox_available() {
+        WorkspaceSandboxState::Enforced
+    } else {
+        WorkspaceSandboxState::Unavailable
+    };
+    agent.set_workspace_security(security_snapshot.clone());
+    let extensions_trusted = security_snapshot.extensions.is_trusted();
     let project_mcp = Config::load_project_mcp(&project_root);
     let project_hooks = Config::load_project_hooks(&project_root);
     let has_project_external = !project_mcp.is_empty() || !project_hooks.is_empty();
-    if project_trusted {
+    if extensions_trusted {
         if !project_mcp.is_empty() {
             config.merge_project_mcp(project_mcp);
         }
@@ -481,11 +488,55 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             config.merge_project_hooks(project_hooks);
         }
     }
-    // Skills are gated inside discovery itself (the scan consults the trust
-    // store), so bootstrap only needs the presence checks for the notice; the
-    // background refresh will simply find no Repo-scope sources while
-    // untrusted.
-    if !project_trusted {
+    // Skills are gated inside discovery itself (the scan consults the
+    // content-bound extension state), so bootstrap only needs the presence
+    // checks for the notice; the background refresh finds no Repo-scope
+    // sources while they are quarantined.
+    if security_snapshot.execution == WorkspaceExecutionProfile::Unknown {
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
+            RoundEvent::Notice(
+                AgentNotice::new(
+                    NoticeKind::ReviewAlert,
+                    NoticeSeverity::Warning,
+                    "Workspace authority has not been configured",
+                    NoticeSource::Harness,
+                )
+                .with_surface(NoticeSurface::Banner)
+                .with_body(
+                    "Opening a directory does not grant execution authority. Run \
+                     `/workspace restricted` for read-oriented work or `/workspace development` \
+                     to authorise ordinary development inside this workspace. Autopilot does not \
+                     change this decision.",
+                ),
+            ),
+        ));
+    }
+    if security_snapshot.execution == WorkspaceExecutionProfile::Development
+        && security_snapshot.sandbox == WorkspaceSandboxState::Unavailable
+    {
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
+            RoundEvent::Notice(
+                AgentNotice::new(
+                    NoticeKind::ReviewAlert,
+                    NoticeSeverity::Error,
+                    "Workspace sandbox is unavailable",
+                    NoticeSource::Harness,
+                )
+                .with_surface(NoticeSurface::Banner)
+                .with_body(
+                    "The persisted development authority cannot be enforced on this host. \
+                     Shell execution will fail closed; install/enable bubblewrap on Linux or \
+                     choose `/workspace restricted`.",
+                ),
+            ),
+        ));
+    }
+    if matches!(
+        security_snapshot.extensions,
+        WorkspaceExtensionsState::Quarantined | WorkspaceExtensionsState::Changed
+    ) {
         let mut gated: Vec<&str> = Vec::new();
         if has_project_external {
             gated.push("MCP servers and/or hooks in .muta/config.toml");
@@ -497,22 +548,37 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             gated.push("project slash commands (.muta/commands)");
         }
         if !gated.is_empty() {
+            let reason = if security_snapshot.extensions == WorkspaceExtensionsState::Changed {
+                "changed since they were trusted"
+            } else {
+                "have not been trusted"
+            };
             let _ = resp_tx.send(round_response(
                 &session.id().await,
-                RoundEvent::Text(format!(
-                    "This project declares {}. They run project-supplied commands or inject \
-                     project-supplied prompt text, so they stay disabled until you run /trust \
-                     to load them.",
-                    gated.join(", ")
-                )),
+                RoundEvent::Notice(
+                    AgentNotice::new(
+                        NoticeKind::ReviewAlert,
+                        NoticeSeverity::Warning,
+                        "Project extensions are quarantined",
+                        NoticeSource::Harness,
+                    )
+                    .with_surface(NoticeSurface::Banner)
+                    .with_body(format!(
+                        "This workspace declares {}. Their exact content {reason}; inspect it, \
+                         then run `/extensions trust` to load it.",
+                        gated.join(", ")
+                    )),
+                ),
             ));
         }
     }
     // Project-local slash commands (`.muta/commands/`) are prompt-text
     // templates: a malicious repo must not inject `/<name>` commands just
     // because the directory was opened. Only the user-global commands dir
-    // loads when the project is untrusted; project commands join once trusted.
-    let command_discovery = discover_commands_trusted(&project_root, project_trusted);
+    // loads while project extensions are quarantined; project commands join
+    // only when their exact current content is trusted.
+    let command_discovery =
+        discover_commands_with_extensions(&project_root, security_snapshot.extensions);
     // Shadowing alert: a project command that reuses a user command's name
     // wins by priority — warn once per shadowed name so the override cannot
     // happen silently. Built-in-named entries are skipped: built-ins always
@@ -539,7 +605,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 .with_body(format!(
                     "Running /{} uses {}. Project-local commands win by priority; \
                      if this is unexpected, inspect the project's .muta/commands \
-                     directory or /untrust.",
+                     directory or `/extensions untrust`.",
                     shadow.name,
                     shadow.winner_source.display()
                 )),
@@ -550,7 +616,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         .commands
         .into_iter()
         .filter(|command| {
-            // ALL holds slash-prefixed names ("/trust"); command names are
+            // ALL holds slash-prefixed names ("/workspace"); command names are
             // slash-less — compare against the stripped form.
             !BuiltinCmd::ALL
                 .iter()
@@ -616,7 +682,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         let _ = resp_tx.send(round_response(
             &session.id().await,
             RoundEvent::Notice(AgentNotice::command_ack(
-                "Autopilot ON: the agent will run without human intervention (no confirmations, no questions).",
+                "Autopilot ON: no human interaction; approved actions run and missing authority fails immediately.",
             )),
         ));
     }
@@ -683,17 +749,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     agent.set_doom_guard_config(config.principal.nudge);
     agent.set_allow_model_stdin(config.principal.allow_model_stdin);
     agent.set_skip_interactive_input(config.principal.skip_interactive_input);
-    // Bash policy: harden for untrusted projects (P2). An untrusted project's
-    // `bash_policy` gets a fetch/install/pipe-to-shell `confirm` rule prepended
-    // and its `autopilot_confirm` locked to deny, so a human eyeballs classic
-    // prompt-injection payloads from a cloned/vendored tree. `/trust` re-seeds
-    // with the raw config.
-    let bash_policy = if project_trusted {
-        config.bash_policy.clone()
-    } else {
-        config.bash_policy.clone().with_untrusted_hardening()
-    };
-    agent.set_bash_policy(&bash_policy);
+    // Bash safety is action-based and independent from project-extension trust.
+    // Workspace authority is enforced by the permission chain; unconditional
+    // destructive denies and explicit high-risk confirmations remain here.
+    agent.set_bash_policy(&config.bash_policy);
 
     // Lifecycle event hooks (ADR-0025): each `[[hooks]]` entry runs a shell
     // command at one lifecycle point (PreToolUse / PostToolUse / Stop / …).
@@ -829,7 +888,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         skills_registry,
         envoy_registry,
         mcp_runtime,
-        trust_gate,
+        workspace_security,
         commands: commands_for_task,
         command_catalog: command_catalog.clone(),
         embedding_store: embedding_store_for_commands,

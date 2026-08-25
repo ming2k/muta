@@ -23,8 +23,8 @@ Without isolation:
 - dev sessions, `/reload` edits, OAuth refreshes, and logs land in the real
   user data — a debugging run can pollute or corrupt it;
 - a test that forgets its own tempdir sandbox writes into the real home the
-  same way (this has happened; see the regression notes in
-  `trusted_projects.rs` and the `test-path-override` feature).
+  same way (this has happened; isolated path capabilities and the
+  `test-path-override` feature prevent recurrence).
 
 ## The mechanism: one selector
 

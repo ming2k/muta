@@ -12,6 +12,7 @@ pub mod lock;
 pub mod process;
 pub mod secure_file;
 pub mod shell;
+pub mod workspace_sandbox;
 
 #[cfg(windows)]
 mod windows_security;

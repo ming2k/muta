@@ -287,6 +287,11 @@ round_counter: number,
  */
 autopilot: boolean, 
 /**
+ * Workspace authority is independent from attended/autopilot posture.
+ * Frontends surface this state continuously so authority is never implicit.
+ */
+workspace_security: WorkspaceSecuritySnapshot, 
+/**
  * Whether a stopped round is parked for `/retry`: the previous round
  * ended before completing (terminal provider error or an interrupt that
  * left committed content) and its durable resume point is still armed.
@@ -1323,3 +1328,27 @@ paths: Array<string>,
  * retry loop — tree doesn't build").
  */
 summary: string, };
+
+/**
+ * The authority a workspace grants to ordinary agent operations.
+ */
+export type WorkspaceExecutionProfile = "unknown" | "restricted" | "development";
+
+/**
+ * Trust state for project-authored control-plane contributions.
+ */
+export type WorkspaceExtensionsState = "absent" | "quarantined" | "trusted" | "changed";
+
+/**
+ * Runtime enforcement state for the physical workspace sandbox.
+ */
+export type WorkspaceSandboxState = "unavailable" | "enforced";
+
+/**
+ * First-class security state attached to every harness snapshot.
+ */
+export type WorkspaceSecuritySnapshot = { 
+/**
+ * Canonical exact workspace root used for persisted decisions.
+ */
+root: string, execution: WorkspaceExecutionProfile, extensions: WorkspaceExtensionsState, sandbox: WorkspaceSandboxState, };

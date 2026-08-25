@@ -152,6 +152,10 @@ pub struct EnvoyTool {
     /// overrides. `None` (the default, e.g. in tests) means default variants.
     parent_variants:
         std::sync::Mutex<Option<Arc<std::sync::Mutex<muta_contracts::VariantSelection>>>>,
+    /// Live workspace authority inherited from the parent. Delegation may
+    /// narrow this through the envoy's operation scope, never widen it.
+    parent_workspace_security:
+        std::sync::Mutex<Option<Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>>>,
     /// Full-duplex handle registry (ADR-0029): each spawned envoy's
     /// [`EnvoyHandle`] is lodged here keyed by the parent tool-call id, so
     /// the harness can route a user's permission / `ask_user` reply back down
@@ -258,6 +262,7 @@ impl EnvoyTool {
             tool_name,
             tool_description,
             parent_variants: std::sync::Mutex::new(None),
+            parent_workspace_security: std::sync::Mutex::new(None),
             registry: Arc::new(EnvoyRegistry::default()),
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -284,6 +289,7 @@ impl EnvoyTool {
             tool_name,
             tool_description,
             parent_variants: std::sync::Mutex::new(None),
+            parent_workspace_security: std::sync::Mutex::new(None),
             registry,
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -332,6 +338,16 @@ impl EnvoyTool {
             .parent_variants
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(handle);
+    }
+
+    pub fn bind_workspace_security(
+        &self,
+        handle: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
+    ) {
+        *self
+            .parent_workspace_security
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(handle);
     }
 
     /// Snapshot the parent's current variant selection (empty when unbound).
@@ -552,7 +568,17 @@ impl EnvoyTool {
         // persona/mission framing for this role (e.g. EXPLORE's research
         // framing). `from_persona` injects it verbatim as the preamble.
         let identity = crate::AgentIdentity::from_persona(self.profile.system_prompt);
-        let envoy = Arc::new(Agent::new(self.provider.clone(), sub_tools, identity));
+        let mut envoy = Agent::new(self.provider.clone(), sub_tools, identity);
+        if let Some(handle) = self
+            .parent_workspace_security
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .cloned()
+        {
+            envoy.bind_workspace_security_handle(handle);
+        }
+        let envoy = Arc::new(envoy);
         if let Some(accounting) = self
             .accounting
             .lock()

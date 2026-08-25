@@ -162,7 +162,6 @@ broker and the bash command guard.
 |-----|---------|---------|
 | `permissions.allow` | `[]` | Rules to pre-seed the "always allow" allowlist at startup: each rule is a `{ tool, scope }` pair. `scope = "*"` matches every call to the tool; any other value must match the call's scope exactly (a full path, or the exact command string for `bash`) — no prefix or substring matching |
 | `bash_policy.enabled` | `true` | Master switch for the bash policy guard; dangerous built-in commands stay protected even when `bash` is broadly allowed |
-| `bash_policy.autopilot_confirm` | `"deny"` | What a `confirm` decision becomes while autopilot/no-human mode is active |
 | `bash_policy.allow_user_override_builtin_deny` | `false` | Whether an explicit user `allow` rule may override a compiled-in `deny` rule (user `allow` can still override compiled-in `confirm` rules) |
 | `bash_policy.rules` | `[]` | User rules evaluated before built-in `confirm` rules: each rule is a `{ name, match, pattern, action, reason }` tuple. `match` is `"regex"` (default), `"contains"`, `"startswith"`, or `"program"`; `action` is `"allow"`, `"confirm"`, or `"deny"` |
 
@@ -172,7 +171,6 @@ allow = [ { tool = "bash", scope = "git status" } ]
 
 [bash_policy]
 enabled = true
-autopilot_confirm = "deny"
 allow_user_override_builtin_deny = false
 
 [[bash_policy.rules]]

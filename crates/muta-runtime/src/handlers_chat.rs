@@ -15,7 +15,8 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::shell::run_shell_command;
 use crate::side::{
-    SideRegistry, refuse_if_no_provider, start_active_turn, start_session_turn, target_agent,
+    SideRegistry, refuse_if_no_provider, refuse_if_workspace_preflight, start_active_turn,
+    start_session_turn, target_agent,
 };
 
 /// `AgentRequest::Chat` — start an interactive round against whichever session
@@ -166,12 +167,15 @@ pub async fn shell(
     project_root: &std::path::Path,
     command: String,
 ) {
+    let shell_session_id = session.id().await;
+    if refuse_if_workspace_preflight(resp_tx, agent, &shell_session_id) {
+        return;
+    }
     let shell_tx = resp_tx.clone();
     let shell_lifecycle = lifecycle.clone();
     let shell_agent = agent.clone();
     let shell_session = session.clone();
     let shell_root = project_root.to_path_buf();
-    let shell_session_id = session.id().await;
     tokio::spawn(async move {
         run_shell_command(
             command,

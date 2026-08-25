@@ -1,9 +1,9 @@
 //! Backend-owned composer completion.
 //!
 //! Frontends send the current input and cursor, then render the returned edit
-//! candidates. Command matching, intent steering, trusted project commands,
-//! project-file discovery, and explicit-path expansion all live here so the
-//! terminal and browser apps cannot drift into separate completion products.
+//! candidates. Command matching, intent steering, content-admitted workspace
+//! commands, project-file discovery, and explicit-path expansion all live here
+//! so terminal and browser apps cannot drift into separate completion products.
 
 use muta_contracts::{
     AgentResponse, CommandCatalog, CommandSpec, InputCompletion, InputCompletionKind,

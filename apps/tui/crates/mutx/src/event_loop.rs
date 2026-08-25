@@ -143,10 +143,6 @@ mod input_selection_relay_tests {
         app.cursor_position = 0; // stale pre-drag caret
         super::actions::handle_selection_end_for_test(&mut app);
         assert_eq!(app.cursor_position, 5, "caret parks at the head byte");
-        assert!(
-            app.cursor_sync_pending,
-            "the parked caret must arm the immediate sync"
-        );
     }
 
     #[test]
@@ -490,6 +486,7 @@ impl UiRuntime {
                 loop_status: LoopStatus::Idle,
                 round_counter: 0,
                 autopilot: false,
+                workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
                 retry_pending: false,
             })),
             activity_status: Arc::new(Mutex::new(String::new())),
@@ -1809,18 +1806,6 @@ fn auto_dispatch_ready_round(app: &mut App) {
     }
 }
 
-/// Loop stage: cursor ownership & IME anchor — consume the cursor sync flag.
-/// All physical cursor positioning, shielding during diff execution, and
-/// visibility transitions are handled atomically by `Terminal::commit_frame`
-/// inside the synchronized frame envelope.
-fn sync_caret_and_cursor(
-    app: &mut App,
-    _terminal: &mut Terminal<std::io::Stdout>,
-    _displayed_transcript_changed: bool,
-) {
-    app.cursor_sync_pending = false;
-}
-
 pub(super) async fn run_app_loop(
     terminal: &mut Terminal<std::io::Stdout>,
     app: &mut App,
@@ -1997,9 +1982,6 @@ pub(super) async fn run_app_loop(
         // paste), so a per-frame counter would make the breathing speed up and
         // stutter with input activity instead of holding a steady cadence.
 
-        // ── Cursor ownership & IME anchor ───────────────────────────────────
-        sync_caret_and_cursor(app, terminal, displayed_transcript_changed);
-
         // A mutation of the transcript currently on screen (or a transition to
         // a different transcript view) can change the measured bottom after
         // layout. While following that bottom, stage the measurement frame in
@@ -2019,25 +2001,8 @@ pub(super) async fn run_app_loop(
         // before the post-draw clamp runs — the settle check below compares
         // against it to detect a clamp-induced move.
         let painted_scroll = app.scroll;
-        // Pre-stage snapshot of the composer-geometry bookkeeping (see the
-        // staged draw below): restored when a settle branch discards the
-        // staged grid, kept when it is committed.
-        let mut staged_rect_snapshot: Option<(mutx_engine::Rect, mutx_engine::Rect, usize)> = None;
         if needs_draw {
             if stage_bottom_follow || stage_settle {
-                // A staged pass measures the new layout but commits nothing
-                // yet. Its `observe_input_rect` records the *staged* rect —
-                // correct only if the grid below is committed as-is. When a
-                // settle branch below instead `continue`s (the clamp moved
-                // the offset), that rect was never published, so the branch
-                // restores the pre-stage snapshot before continuing; the
-                // committed case keeps the staged observation. Snapshot here,
-                // decide below.
-                staged_rect_snapshot = Some((
-                    app.last_input_rect,
-                    app.last_frame_area,
-                    app.last_input_rows,
-                ));
                 terminal.stage(|f| render::render_frame(app, f, &viewed_session_id))?;
             } else {
                 terminal.draw(|f| render::render_frame(app, f, &viewed_session_id))?;
@@ -2069,11 +2034,6 @@ pub(super) async fn run_app_loop(
             if app.scroll != app.max_scroll {
                 app.scroll = app.max_scroll;
                 input_redraw_pending = true;
-                if let Some((rect, area, rows)) = staged_rect_snapshot.take() {
-                    app.last_input_rect = rect;
-                    app.last_frame_area = area;
-                    app.last_input_rows = rows;
-                }
                 continue;
             }
             terminal.commit_staged()?;
@@ -2090,11 +2050,6 @@ pub(super) async fn run_app_loop(
             app.scroll_settle_pending = false;
             if app.scroll != painted_scroll {
                 input_redraw_pending = true;
-                if let Some((rect, area, rows)) = staged_rect_snapshot.take() {
-                    app.last_input_rect = rect;
-                    app.last_frame_area = area;
-                    app.last_input_rows = rows;
-                }
                 continue;
             }
             terminal.commit_staged()?;
@@ -2248,20 +2203,6 @@ pub(super) async fn run_app_loop(
             // has trigger text to come back to, evaluated against the
             // pre-keystroke composer (the keystroke itself decides whether
             // the latch clears via the InsertChar/Backspace passes).
-            // `process_event` mutates `cursor_position` in place (it cannot go
-            // through `App::set_cursor`), so any keystroke that moved the caret
-            // must still mark the terminal cursor for an immediate re-sync.
-            // Key events and pastes are the only inputs that move it — a mouse
-            // report (hover/scroll/drag) or a resize does not, and arming the
-            // flush for those used to emit an out-of-envelope cursor write on
-            // essentially every loop iteration (a mode-1002 drag emits one per
-            // motion report), which read as per-frame caret jitter. Computing
-            // this before the mapper borrows `event` (which it consumes).
-            let event_moves_caret = matches!(
-                &event,
-                crossterm::event::Event::Key(_) | crossterm::event::Event::Paste(_)
-            );
-
             let has_trigger_text = app.completion_trigger_text_present();
             let active_modal = app.active_modal();
             let action = if let Some(overlay_action) = probe_delete_overlay(app, &event) {
@@ -2323,10 +2264,6 @@ pub(super) async fn run_app_loop(
                     &mut app.drag,
                 )
             };
-
-            if event_moves_caret {
-                app.note_cursor_moved();
-            }
 
             // A `/`-leading input whose first token is NOT a recognized command
             // (built-in or discovered project command) is ordinary prose, not
@@ -2831,116 +2768,5 @@ mod question_effects {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod caret_flush_gate_tests {
-    //! Behavior locks for the caret anti-drift gate in `sync_caret_and_cursor`
-    //! and `App::input_geometry_is_clean`. The immediate cursor flush and the
-    //! frame's `set_cursor_position` are the two writers of the caret
-    //! coordinate; when the flush fires against geometry the next frame
-    //! re-measures differently, the terminal shows a two-step caret jump —
-    //! the "反复漂移/闪烁" symptom. These lock the gate's contract: the flush
-    //! is permitted exactly when the cached rect provably still matches.
-
-    use super::*;
-
-    fn sized_app(input: &str, rect_w: u16, rect_h: u16, frame_w: u16, frame_h: u16) -> App {
-        let mut app = crate::tests::new_app_for_relay_tests();
-        app.input = input.to_string();
-        app.set_cursor_end();
-        let rect = mutx_engine::Rect::new(0, 10, rect_w, rect_h);
-        let area = mutx_engine::Rect::new(0, 0, frame_w, frame_h);
-        // Mirror the renderer: rows measured through the same width formula
-        // the transcript layout uses for the frame, not the placed rect.
-        let rows = crate::composer::input_row_count(
-            input,
-            crate::view::composer_layout_text_width(frame_w as usize),
-            app.byte_cursor(),
-        );
-        app.observe_input_rect(rect, area, rows);
-        app
-    }
-
-    /// Geometry unchanged → the cached rect is clean and the flush may fire.
-    #[test]
-    fn geometry_clean_when_rows_and_size_match() {
-        // Frame width 80 → text width 72; "hello world" (11 chars) is one row
-        // and the probe measures through the same frame-derived width.
-        let app = sized_app("hello world", 76, 3, 80, 24);
-        assert!(
-            app.input_geometry_is_clean((80, 24)),
-            "same size, same row count → clean"
-        );
-    }
-
-    /// A keystroke that crosses a wrap boundary (row count changes) must
-    /// invalidate the cached rect so the flush defers to the frame. The
-    /// probe measures through `composer_layout_text_width(frame_width)` —
-    /// the same formula the renderer used — so the boundary case is
-    /// constructed against the frame width, not the placed rect.
-    #[test]
-    fn geometry_dirty_when_wrap_boundary_crossed() {
-        // Frame width 80 → text width 80 - 2*2 - 2 - 2 = 72 columns.
-        let text_width = crate::view::composer_layout_text_width(80);
-        assert_eq!(text_width, 72);
-        // Exactly one full row: clean. One more char wraps → 2 rows → dirty.
-        let full_row = "a".repeat(text_width);
-        let mut app = sized_app(&full_row, 76, 3, 80, 24);
-        assert!(
-            app.input_geometry_is_clean((80, 24)),
-            "exactly one full row → still one wrapped row → clean"
-        );
-        app.input.push('e');
-        assert!(
-            !app.input_geometry_is_clean((80, 24)),
-            "wrap boundary crossed → the box height moves → flush must defer to the frame"
-        );
-    }
-
-    /// A resize between the observed rect and the current terminal size must
-    /// invalidate the cached rect (every wrap reflows).
-    #[test]
-    fn geometry_dirty_on_resize() {
-        let app = sized_app("hello", 20, 3, 80, 24);
-        assert!(!app.input_geometry_is_clean((100, 30)));
-    }
-
-    /// A never-observed rect (width 0, e.g. before the first frame) must be
-    /// treated as dirty — there is nothing valid to flush against.
-    #[test]
-    fn geometry_dirty_before_first_observation() {
-        let app = crate::tests::new_app_for_relay_tests();
-        assert!(!app.input_geometry_is_clean((80, 24)));
-    }
-
-    /// Only key events and pastes arm the immediate flush; mouse reports and
-    /// resizes must not (they do not move the caret, and the armed flush used
-    /// to emit an out-of-envelope cursor write per motion report).
-    #[test]
-    fn non_caret_events_do_not_arm_flush() {
-        let mut app = crate::tests::new_app_for_relay_tests();
-        app.cursor_sync_pending = false;
-
-        // Simulate the loop's gate for a mouse-move event.
-        let event = crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
-            kind: crossterm::event::MouseEventKind::Moved,
-            column: 1,
-            row: 1,
-            modifiers: crossterm::event::KeyModifiers::NONE,
-        });
-        let moves_caret = matches!(
-            &event,
-            crossterm::event::Event::Key(_) | crossterm::event::Event::Paste(_)
-        );
-        assert!(!moves_caret);
-        if moves_caret {
-            app.note_cursor_moved();
-        }
-        assert!(
-            !app.cursor_sync_pending,
-            "a mouse report must not arm the immediate cursor flush"
-        );
     }
 }

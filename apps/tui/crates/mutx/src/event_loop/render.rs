@@ -513,11 +513,6 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     app.activity_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Activity);
     app.todos_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Todos);
     app.queue_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Queue);
-    // Feed the observed composer rect back so the *next* iteration's
-    // immediate cursor flush (which runs before this draw closure
-    // re-runs) places the caret against the geometry the user is
-    // actually looking at.
-    app.observe_input_rect(input_rect, f.area(), transcript_render.input_rows);
     match sticky {
         Some(info) => {
             app.sticky_step = Some(info.message_idx);

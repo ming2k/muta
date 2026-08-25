@@ -451,41 +451,10 @@ pub struct App {
     /// cannot see the loop's `viewed_session_id`, so the block site records
     /// the target here and the exit hook consumes it.
     pub(crate) queue_exit_session: Option<String>,
-    /// Last-known screen rect of the composer. Refreshed every draw and reused
-    /// between frames by the input-driven immediate cursor flush so the IME
-    /// composition window is re-anchored in the *same* iteration a keystroke is
-    /// handled — before the next frame is even rendered (the fix for the
-    /// one-frame cursor lag that mis-anchored IME). It is only an approximation
-    /// of the rect the *next* frame will compute (the footer height can change
-    /// when wrapping shifts), but a follow-up full draw always lands when that
-    /// happens, so the approximation is correct exactly when it matters (the
-    /// non-wrap-moving keystrokes that dominate real typing).
-    pub last_input_rect: mutx_engine::Rect,
-    /// Full-frame area the last render pass measured the composer against.
-    /// Lets [`Self::input_geometry_is_clean`] detect a resize between the
-    /// observed rect and the current frame (a reflow makes every cached rect
-    /// stale by definition). Recorded in the same draw as `last_input_rect`.
-    pub(crate) last_frame_area: mutx_engine::Rect,
-    /// Wrapped text-row count the last render reserved for the composer at
-    /// `last_input_rect.width`. The immediate cursor flush re-derives the
-    /// count and skips itself when it differs — a wrap boundary crossing
-    /// moves the box (and the caret with it), so the flush must not write a
-    /// coordinate the next frame corrects.
-    pub(crate) last_input_rows: usize,
     /// Wall-clock instant of the last user key press or input edit. Used by
     /// the event loop to quiesce background animation redraws while active
     /// composition / typing is in progress.
     pub last_key_press: std::time::Instant,
-    /// Whether the terminal cursor should be moved to match `cursor_position`
-    /// before the next frame, eliminating the one-frame IME lag. Set by
-    /// [`App::set_cursor`] (the single write site for `cursor_position`) and
-    /// cleared by the event loop's immediate-flush after it syncs the backend.
-    pub cursor_sync_pending: bool,
-    /// The cursor visibility we last told the terminal. The event loop's
-    /// hide/show state machine consults this so show/hide is a state
-    /// transition (escape codes emitted only on an edge) driven by
-    /// [`App::caret_visible`], not a per-frame guess.
-    pub cursor_visible: bool,
     /// Body scroll offset shared by the Tools / Mcp / Skills managers
     /// (`Modal::Tools` / `Modal::Mcp` / `Modal::Skills`). Reset to 0 on
     /// open. Clamped (and, when `session_modal_follow` is set, auto-followed to
@@ -1175,10 +1144,8 @@ impl App {
         root_surface
             && !(active_view == Some(crate::views::ViewId::Host)
                 && (self.host_prompting || self.host_preview.is_some()))
-            && !(active_view == Some(crate::views::ViewId::Sessions)
-                && self.session_info_detail)
-            && !(active_view == Some(crate::views::ViewId::TokenReport)
-                && self.token_report_detail)
+            && !(active_view == Some(crate::views::ViewId::Sessions) && self.session_info_detail)
+            && !(active_view == Some(crate::views::ViewId::TokenReport) && self.token_report_detail)
             && !(active_view == Some(crate::views::ViewId::Config)
                 && (self.config_custom_editing
                     || self.websearch_editing.is_some()
@@ -1327,17 +1294,10 @@ impl App {
             .unwrap_or(self.input.len())
     }
 
-    /// Set the input caret position and mark the terminal cursor as needing an
-    /// immediate re-sync before the next frame.
-    ///
-    /// This is the **single sanctioned write site** for `cursor_position`.
-    /// Routing every caret move through it guarantees the event loop's
-    /// immediate-flush (which re-anchors the IME composition window in the same
-    /// iteration as the keystroke) always fires — a raw `app.cursor_position =
-    /// …` would silently skip the flush and re-introduce the one-frame lag.
+    /// Set the logical input caret position. Physical cursor placement has one
+    /// writer only: the next frame's terminal commit transaction.
     pub fn set_cursor(&mut self, pos: usize) {
         self.cursor_position = pos;
-        self.cursor_sync_pending = true;
     }
 
     /// Set the input caret to the end of `self.input` (common case after a
@@ -1470,109 +1430,14 @@ impl App {
         }
     }
 
-    /// Record the composer's screen rect as observed during the latest draw, so
-    /// the input-driven immediate cursor flush can place the caret without
-    /// waiting for the next frame.
-    pub fn observe_input_rect(
-        &mut self,
-        rect: mutx_engine::Rect,
-        frame_area: mutx_engine::Rect,
-        input_rows: usize,
-    ) {
-        self.last_input_rect = rect;
-        self.last_frame_area = frame_area;
-        // The renderer-measured row count — the same value that sized
-        // `rect.height` — not a re-derivation. Re-deriving here would create
-        // a second source of truth that can drift from the masking rules
-        // (the ModelEditor key field renders `•`s while `self.input` holds
-        // the raw key) and from any future change to the wrap width formula.
-        self.last_input_rows = input_rows;
-    }
-
-    /// Record that the caret moved without going through [`App::set_cursor`]
-    /// (the only legitimate caller is the input handler, which mutates
-    /// `cursor_position` in place for performance and then reports the new
-    /// value). Marks the immediate flush pending.
-    pub fn note_cursor_moved(&mut self) {
-        self.cursor_sync_pending = true;
-    }
-
-    /// Whether the composer's on-screen geometry can still be trusted to
-    /// match [`Self::last_input_rect`] — i.e. whether the input-driven
-    /// immediate cursor flush may place the caret against it *without* the
-    /// very next `commit_frame` re-measuring a different rect and moving the
-    /// caret a second time. That flush→draw two-step is what users perceived
-    /// as the caret "drifting"/bouncing while typing (most visibly during a
-    /// streaming round, where the footer geometry moves underneath the
-    /// composer).
-    ///
-    /// Rather than duplicating every input of the footer-stack layout, the
-    /// divergence is detected empirically and conservatively:
-    ///
-    /// * the terminal size the last frame rendered at must still be current —
-    ///   a resize reflows every wrap, so the observed rect is stale by
-    ///   definition until the next committed frame;
-    /// * re-measuring the composer's wrapped-row count at the same width the
-    ///   last frame used must yield the same count — a wrap boundary crossed,
-    ///   a newline added or removed, a paste, or a history recall all change
-    ///   the box height, and with it every row above it.
-    ///
-    /// The remaining geometry movers (activity/todo/queue bar toggles,
-    /// page-hints row, recess, envoy zoom) are always driven by a listener
-    /// update or a caret-ownership change: the loop suppresses the flush for
-    /// the former (see `sync_caret_and_cursor`) and `caret_owner`/visibility
-    /// already gate the latter, so no layout knowledge is duplicated here.
-    #[cfg(test)]
-    pub(crate) fn input_geometry_is_clean(&self, terminal_size: (u16, u16)) -> bool {
-        if self.last_input_rect.width == 0 || self.last_input_rows == 0 {
-            return false;
-        }
-        if (self.last_frame_area.width, self.last_frame_area.height) != terminal_size {
-            return false;
-        }
-        // Measure the *displayed* text — the same string the renderer laid
-        // out to produce `last_input_rows` — never the raw buffer. For the
-        // ModelEditor's masked key field the displayed text is the `•` mask,
-        // and only the masked pair (text + caret byte offset) reproduces the
-        // renderer's measurement.
-        let text_width =
-            crate::view::composer_layout_text_width(self.last_frame_area.width as usize);
-        self.displayed_input_with_cursor()
-            .map(|(text, byte_cursor)| {
-                crate::composer::input_row_count(&text, text_width, byte_cursor)
-                    == self.last_input_rows
-            })
-            .unwrap_or(false)
-    }
-
-    /// The text the composer will *display* this state, paired with the
-    /// caret's byte offset into that displayed text. This is the exact pair
-    /// [`crate::event_loop::render`] hands the transcript layout, extracted
-    /// so the geometry probe measures the same string the renderer measured
-    /// (masking included) instead of re-deriving from the raw buffer.
-    #[cfg(test)]
-    pub(crate) fn displayed_input_with_cursor(&self) -> Option<(String, usize)> {
-        if self.active_modal() == Modal::ModelEditor && self.editor_field == 0 {
-            const MASK_CHAR: &str = "•";
-            let mask = MASK_CHAR.repeat(self.input.chars().count());
-            let caret_byte = MASK_CHAR.len() * self.cursor_position.min(mask.chars().count());
-            Some((mask, caret_byte))
-        } else {
-            Some((self.input.clone(), self.byte_cursor()))
-        }
-    }
-
     /// The single source of truth for which surface owns the terminal cursor
     /// this frame. See [`CaretOwner`].
     ///
-    /// This is a pure function of (`active_modal`, `focused_target`,
-    /// `focus_stack`) — never of the selection, which is folded in separately
-    /// by [`Self::caret_visible`] because a selection hides the cursor
-    /// regardless of who owns it. Keeping ownership and selection-appearance
-    /// decoupled is what lets the event loop distinguish "reposition the
-    /// composer's caret" (owner = `Composer`, no selection) from "hide it"
-    /// (owner = `Composer` but a selection is active) without re-deriving
-    /// either from raw fields.
+    /// This is a pure function of active surface and edit mode — never of the
+    /// selection, which is folded in separately by [`Self::caret_visible`].
+    /// Keeping ownership and appearance separate lets one authoritative frame
+    /// cursor state represent both an inactive surface and a hidden selection
+    /// caret without a second physical-cursor writer.
     pub fn caret_owner(&self) -> CaretOwner {
         if self.active_modal() != Modal::None {
             // The provider-delete confirm overlay is a keyboard-only sub-layer
@@ -1594,6 +1459,25 @@ impl App {
                     CaretOwner::Composer
                 };
             }
+            // Models and Connections are editable only while their search
+            // row is open. Browse mode renders no text field and therefore
+            // must not claim a terminal/IME caret.
+            if matches!(self.active_modal(), Modal::Models | Modal::Connections) {
+                return if self.model_search {
+                    CaretOwner::Modal
+                } else {
+                    CaretOwner::None
+                };
+            }
+            // The provider-key form has one text field. Per-model settings
+            // contain only effort/thinking controls and render no caret.
+            if self.active_modal() == Modal::ModelEditor {
+                return if !self.editor_model_settings_only && self.editor_field == 0 {
+                    CaretOwner::Modal
+                } else {
+                    CaretOwner::None
+                };
+            }
             return if self.active_modal().owns_caret() {
                 CaretOwner::Modal
             } else if self.active_modal() == Modal::Question
@@ -1607,8 +1491,9 @@ impl App {
                 // it becomes a real text-input surface, so it must own the
                 // terminal cursor for that one state — otherwise the host IME
                 // has no coordinate to anchor its composition window to. This
-                // is the only state-dependent ownership; every other modal's
-                // ownership is static via `Modal::owns_caret`.
+                // Like picker search and the provider-key editor above, this
+                // ownership is resolved from live modal state rather than the
+                // unconditional `Modal::owns_caret` classification.
                 CaretOwner::Modal
             } else {
                 CaretOwner::None
@@ -2344,9 +2229,7 @@ impl App {
                 .unwrap_or_default()
         };
         let query_active = match id {
-            crate::views::ViewId::Models | crate::views::ViewId::Connections => {
-                self.model_search
-            }
+            crate::views::ViewId::Models | crate::views::ViewId::Connections => self.model_search,
             crate::views::ViewId::HistorySearch => self.history_search,
             _ => false,
         };
@@ -4165,69 +4048,5 @@ impl App {
             name: tool.name.clone(),
             enabled: !tool.enabled,
         })
-    }
-}
-
-#[cfg(test)]
-mod displayed_input_tests {
-    //! Behavior locks for `App::displayed_input_with_cursor` — the single
-    //! pairing of displayed text and caret byte offset. The renderer and the
-    //! geometry probe both resolve through it, so a masked state must never
-    //! pair the `•` string with the *unmasked* buffer's byte offset.
-
-    use super::*;
-
-    fn app_with(modal: Modal, input: &str, cursor: usize) -> App {
-        let mut app = crate::tests::new_app_for_relay_tests();
-        app.set_active_modal_for_test(modal);
-        app.input = input.to_string();
-        app.editor_field = 0;
-        app.set_cursor(cursor);
-        app
-    }
-
-    #[test]
-    fn unmasked_state_returns_raw_buffer_pair() {
-        let app = app_with(Modal::None, "héllo", 3); // é is 2 bytes
-        let (text, cursor) = app.displayed_input_with_cursor().unwrap();
-        assert_eq!(text, "héllo");
-        assert_eq!(cursor, app.byte_cursor());
-    }
-
-    #[test]
-    fn masked_state_pairs_mask_text_with_masked_offset() {
-        // 5 chars, 3 of them multi-byte in the raw buffer; the mask is 5 ×
-        // `•` (3 bytes each) and the caret at char 3 must be byte 3×3 = 9 —
-        // NOT the raw buffer's byte offset (which would land mid-`•`).
-        let app = app_with(Modal::ModelEditor, "a中b文c", 3);
-        let (text, cursor) = app.displayed_input_with_cursor().unwrap();
-        assert_eq!(text.chars().count(), 5);
-        assert!(
-            text.chars().all(|c| c == '•'),
-            "text is fully masked: {text:?}"
-        );
-        assert_eq!(cursor, 9, "caret offset is measured in mask bytes");
-        // The offset must be a char boundary of the masked string.
-        assert!(
-            text.is_char_boundary(cursor),
-            "offset lands on a mask boundary"
-        );
-    }
-
-    #[test]
-    fn masked_state_caret_at_end_maps_to_mask_end() {
-        let app = app_with(Modal::ModelEditor, "abc", 3);
-        let (text, cursor) = app.displayed_input_with_cursor().unwrap();
-        assert_eq!(cursor, text.len(), "end caret maps to the mask's end");
-    }
-
-    #[test]
-    fn masked_state_caret_past_end_clamps() {
-        // A stale cursor beyond the buffer (defensive) must clamp, not
-        // produce an out-of-bounds offset.
-        let mut app = app_with(Modal::ModelEditor, "abc", 3);
-        app.cursor_position = 10;
-        let (text, cursor) = app.displayed_input_with_cursor().unwrap();
-        assert_eq!(cursor, text.len(), "clamped to the mask's end");
     }
 }

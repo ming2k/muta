@@ -1667,12 +1667,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         cursor_position: 0,
         input_scroll: 0,
         modal_index: 0,
-        last_input_rect: mutx_engine::Rect::default(),
-        last_frame_area: mutx_engine::Rect::default(),
-        last_input_rows: 1,
         last_key_press: std::time::Instant::now(),
-        cursor_sync_pending: false,
-        cursor_visible: true,
         session_scroll: 0,
         session_modal_follow: true,
         session_info_detail: false,
@@ -4003,33 +3998,6 @@ fn composer_image_paste_accepted_when_model_has_vision() {
     assert!(app.copy_toast_until.is_some());
 }
 
-#[test]
-fn set_cursor_marks_immediate_sync_pending() {
-    // The IME-correctness fix hinges on every caret move routing through
-    // `set_cursor` so the event loop's immediate flush re-anchors the
-    // terminal cursor before the next frame. A raw write to
-    // `cursor_position` would silently skip it. This locks the contract.
-    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.input = "hello".to_string();
-    app.cursor_sync_pending = false;
-
-    app.set_cursor(3);
-    assert_eq!(app.cursor_position, 3);
-    assert!(
-        app.cursor_sync_pending,
-        "set_cursor must arm the immediate cursor sync — the whole IME fix depends on it"
-    );
-
-    // set_cursor_end is the common post-replacement helper and must do the same.
-    app.cursor_sync_pending = false;
-    app.set_cursor_end();
-    assert_eq!(app.cursor_position, 5);
-    assert!(
-        app.cursor_sync_pending,
-        "set_cursor_end must also arm the sync"
-    );
-}
-
 // ── Caret ownership / visibility (IME anchor) ─────────────────────────────
 // `App::caret_owner` / `App::caret_visible` are the single source of truth for
 // which surface holds the terminal cursor. The IME anchors its composition
@@ -4072,13 +4040,7 @@ fn caret_owner_none_in_envoy_view() {
 #[test]
 fn caret_owner_modal_for_caret_modals() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    for modal in [
-        Modal::Models,
-        Modal::Connections,
-        Modal::ModelEditor,
-        Modal::CustomProvider,
-        Modal::InputInjection,
-    ] {
+    for modal in [Modal::CustomProvider, Modal::InputInjection] {
         app.set_active_modal_for_test(modal);
         assert_eq!(
             app.caret_owner(),
@@ -4088,6 +4050,39 @@ fn caret_owner_modal_for_caret_modals() {
         assert!(
             app.caret_visible(),
             "{modal:?} must keep the cursor visible so the IME anchors to its field",
+        );
+    }
+}
+
+#[test]
+fn model_editor_owns_caret_only_for_provider_key_field() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.set_active_modal_for_test(Modal::ModelEditor);
+    app.editor_model_settings_only = false;
+    app.editor_field = 0;
+    assert_eq!(app.caret_owner(), CaretOwner::Modal);
+
+    app.editor_model_settings_only = true;
+    app.editor_field = 1;
+    assert_eq!(app.caret_owner(), CaretOwner::None);
+}
+
+#[test]
+fn picker_caret_owner_exists_only_in_search_mode() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    for modal in [Modal::Models, Modal::Connections] {
+        app.set_active_modal_for_test(modal);
+        app.model_search = false;
+        assert_eq!(
+            app.caret_owner(),
+            CaretOwner::None,
+            "{modal:?} browse mode has no editable field"
+        );
+        app.model_search = true;
+        assert_eq!(
+            app.caret_owner(),
+            CaretOwner::Modal,
+            "{modal:?} search mode owns the visible query field"
         );
     }
 }
@@ -4210,10 +4205,10 @@ fn caret_hidden_while_selection_active_even_for_composer() {
 }
 
 #[test]
-fn modal_owns_caret_matches_renderer_set_cursor_sites() {
-    // Every modal that calls `set_cursor_position` in its renderer must be
-    // declared in `Modal::owns_caret`, and vice versa — the two lists must
-    // stay in lockstep so visibility and paint never disagree.
+fn modal_owns_caret_lists_only_unconditional_input_surfaces() {
+    // Static ownership is reserved for modals that render a text field in
+    // every state. Browse/search pickers are state-dependent and resolved in
+    // `App::caret_owner` instead.
     //
     // The one deliberate exception is `Modal::Question`: its renderer places
     // the real cursor only while the "Other" free-text row is highlighted, and
@@ -4221,17 +4216,11 @@ fn modal_owns_caret_matches_renderer_set_cursor_sites() {
     // consults `QuestionModel::is_other_highlighted`) rather than by the static
     // `owns_caret()`. It therefore appears in neither list here — it is tested
     // separately by `caret_owner_question_owns_caret_only_on_other`.
-    // HistorySearch is also a deliberate exception: its panel floats above a
+    // HistorySearch is also state-dependent: its panel floats above a
     // live composer that IS the filter field, so the composer (not the modal)
     // owns the caret — handled state-dependently in `App::caret_owner`. It
     // appears in `not_owns` below and is exercised by the caret-owner tests.
-    let owns = [
-        Modal::Models,
-        Modal::Connections,
-        Modal::ModelEditor,
-        Modal::CustomProvider,
-        Modal::InputInjection,
-    ];
+    let owns = [Modal::CustomProvider, Modal::InputInjection];
     for m in owns {
         assert!(m.owns_caret(), "{m:?} must own the caret");
     }
@@ -4248,6 +4237,9 @@ fn modal_owns_caret_matches_renderer_set_cursor_sites() {
         Modal::Config,
         Modal::ProviderTemplate,
         Modal::HistorySearch,
+        Modal::Models,
+        Modal::Connections,
+        Modal::ModelEditor,
     ];
     for m in not_owns {
         assert!(!m.owns_caret(), "{m:?} must not own the caret");
@@ -5213,10 +5205,6 @@ fn relay_left_arrow_breaks_selection_at_head_then_steps() {
     assert_eq!(
         app.cursor_position, 10,
         "first ← lands one past the release point"
-    );
-    assert!(
-        app.cursor_sync_pending,
-        "relay must go through set_cursor so the IME flush fires"
     );
 }
 

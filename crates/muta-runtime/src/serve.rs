@@ -892,6 +892,7 @@ where
             loop_status: muta_contracts::LoopStatus::Idle,
             round_counter: bound.session.round_counter().await,
             autopilot: bound.session.autopilot().await,
+            workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
             retry_pending: bound.session.retry_pending().await.is_some(),
         };
         let frame = serde_json::to_string(&Wire::Response {

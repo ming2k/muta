@@ -338,8 +338,10 @@ impl QuestionModel {
                 let other_idx = self.other_index_of(q);
                 if highlight == other_idx
                     && let Some(text) = self.other_text.get_mut(q)
+                    && !text.is_empty()
                 {
-                    text.pop();
+                    let start = mutx_engine::text::floor_grapheme_boundary(text, text.len() - 1);
+                    text.truncate(start);
                 }
                 Vec::new()
             }
@@ -664,6 +666,18 @@ mod tests {
         let m = m.update(QuestionAction::InsertChar('b')).0;
         let (m, _) = m.update(QuestionAction::Backspace);
         assert_eq!(m.other_text(), &["a"]);
+    }
+
+    #[test]
+    fn backspace_deletes_last_grapheme_cluster() {
+        let family = "👨‍👩‍👧‍👦";
+        let mut m = QuestionModel::open(single_select_req());
+        m = m.update(QuestionAction::Select(3)).0;
+        for ch in family.chars() {
+            m = m.update(QuestionAction::InsertChar(ch)).0;
+        }
+        m = m.update(QuestionAction::Backspace).0;
+        assert_eq!(m.other_text(), &[""]);
     }
 
     #[test]

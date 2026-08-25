@@ -192,7 +192,7 @@ pub enum StdinPolicy {
     /// with a real exit code, instead of hanging silently until the wall-clock
     /// timeout. This is the only policy that is *correct by default* for an
     #[default]
-    /// autopilot agent.
+    /// unattended agent.
     Closed,
     /// Provide `data` bytes via a pipe. Used in exactly two declared-source
     /// situations, decided before spawn by the agent dispatch layer:

@@ -86,13 +86,12 @@ impl DrawCmd {
 /// ([`promote`](crate::grid::Grid) happens after the backend applies the
 /// commands).
 ///
-/// `front` is `&mut` for one narrow purpose: when the diff resolves a
-/// wholesale band translation into a leading [`Draw::ScrollDown`], it applies
-/// the same rotation to `front` so the per-row comparisons (and the caller's
-/// subsequent [`promote`]) run against the post-scroll terminal state. The
-/// rotation mirrors what the backend's scroll op does to the real terminal;
-/// no cell content is invented.
-pub fn diff(back: &Grid, front: &mut Grid) -> DrawCmd {
+/// This function never mutates either grid. For a proven scroll translation,
+/// it compares against a temporary projection of the post-scroll front grid.
+/// The real front grid is rotated only by [`promote_scrolled`] after the
+/// backend has successfully flushed the command stream. A failed write can
+/// therefore never advance the model ahead of the physical terminal.
+pub fn diff(back: &Grid, front: &Grid) -> DrawCmd {
     let (w, h) = back.size();
     debug_assert_eq!(
         front.size(),
@@ -109,31 +108,31 @@ pub fn diff(back: &Grid, front: &mut Grid) -> DrawCmd {
     // Translation stage: a band of rows that moved wholesale (a streaming
     // transcript pushing history up) becomes one scroll op instead of a full
     // repaint. Correctness contract for a candidate shift k:
-    //   * every CLEAN row (not dirty → not repainted) must hold identical
-    //     content at its shifted source — otherwise the scroll would corrupt
-    //     a row nobody repaints;
-    //   * at least one DIRTY row must resolve to a no-op under the shift —
-    //     that is the work the scroll saves. With none, the scroll only
-    //     shuffles identical rows and the plain repaint is equally cheap.
-    // The largest qualifying k wins (it maximizes no-op rows).
+    //   * every overlapping row must be identical to its shifted source,
+    //     regardless of dirty bookkeeping;
+    //   * every vacated non-blank row must be dirty so it is repainted;
+    //   * at least one row that differs at its current coordinate must become
+    //     equal after the shift. Rewritten-but-identical and repeated blank
+    //     rows are not scroll evidence.
+    // These conditions make translation a proof, not a similarity heuristic.
     let scroll = if hi.saturating_sub(lo) >= 2 && back.scroll_enabled() {
         detect_scroll(back, front, lo, hi, MAX_SCROLL_LINES)
     } else {
         None
     };
 
-    if let Some(scroll) = scroll {
-        // Undo the band rotation in the front grid so the row diff below
-        // compares each back row against the row the terminal actually holds
-        // there after the scroll lands. The rotated-out rows are blanked
-        // (scrolls expose blanks); they stay that way through promote,
-        // exactly like the backend's scrolled terminal.
+    let mut projected_front = None;
+    if let Some(ref scroll) = scroll {
+        // Project the post-scroll terminal state for row comparisons without
+        // mutating the committed front grid.
         let rotation = if scroll.up {
             BandRotation::Up
         } else {
             BandRotation::Down
         };
-        front.rotate_band(scroll.y, scroll.height, rotation, scroll.amount);
+        let mut projected = front.clone();
+        projected.rotate_band(scroll.y, scroll.height, rotation, scroll.amount);
+        projected_front = Some(projected);
         let op = if scroll.up {
             Draw::ScrollUp {
                 y: scroll.y,
@@ -150,11 +149,21 @@ pub fn diff(back: &Grid, front: &mut Grid) -> DrawCmd {
         draws.insert(0, op);
     }
 
+    let comparison_front = projected_front.as_ref().unwrap_or(front);
+
     for y in lo..=hi {
         let Some(start) = back.dirty_col_of(y) else {
             continue;
         };
-        diff_row(&mut draws, back, front, y, start, w);
+        // A terminal scroll blanks each vacated row in full. Its original
+        // dirty column was measured against the pre-scroll row and therefore
+        // cannot be used as a safe comparison prefix after projection: cells
+        // before `start` may have matched the old row but differ from the new
+        // blank row. Comparing every dirty row in the translated band from
+        // column zero is both exact and cheap (overlapping translated rows
+        // compare equal immediately).
+        let start = if scroll.is_some() { 0 } else { start };
+        diff_row(&mut draws, back, comparison_front, y, start, w);
     }
 
     DrawCmd { draws, w, h }
@@ -170,6 +179,7 @@ pub(super) struct ScrollOp {
     pub(super) y: u16,
     pub(super) height: u16,
     pub(super) amount: u16,
+    saved_rows: usize,
 }
 
 /// Whether two cells match for scroll-detection purposes.
@@ -201,16 +211,24 @@ fn rows_equal(back: &Grid, front: &Grid, back_y: u16, front_y: u16, w: u16) -> b
 /// `front[y - k]`.
 ///
 /// See the contract comment at the call site. Rows whose shifted source falls
-/// outside the band impose no evidence (the caller repaints them or they are
-/// the vacated rows). The largest qualifying `k` wins per direction, and the
-/// up direction is tried first (the overwhelmingly common streaming case).
+/// outside the band impose no translation evidence (the caller repaints them
+/// or they are the vacated rows). The candidate that saves the most genuinely
+/// changed rows wins; ties prefer the smaller shift. The up direction is tried
+/// first because streaming append is the common case.
 fn detect_scroll(back: &Grid, front: &Grid, lo: u16, hi: u16, max_shift: u16) -> Option<ScrollOp> {
+    let mut best: Option<ScrollOp> = None;
     for up in [true, false] {
         if let Some(op) = detect_scroll_direction(back, front, lo, hi, max_shift, up) {
-            return Some(op);
+            match best {
+                Some(ref current)
+                    if current.saved_rows > op.saved_rows
+                        || (current.saved_rows == op.saved_rows && current.amount <= op.amount) => {
+                }
+                _ => best = Some(op),
+            }
         }
     }
-    None
+    best
 }
 
 fn detect_scroll_direction(
@@ -243,10 +261,10 @@ fn detect_scroll_direction(
         }
     };
 
-    let mut best: Option<u16> = None;
+    let mut best: Option<(usize, u16)> = None;
     for k in 1..=max_shift {
         let mut ok = true;
-        let mut saved_dirty_row = false;
+        let mut saved_changed_rows = 0usize;
         for y in lo..=hi {
             let row_is_dirty = back.dirty_col_of(y).is_some();
             let Some(src) = source_row(y, k) else {
@@ -254,11 +272,12 @@ fn detect_scroll_direction(
                 // repainted by the row diff).
                 if !row_is_dirty {
                     // A CLEAN vacated row would be blanked with nobody
-                    // repainting it — only safe when the back row is blank.
-                    let blank = (0..w).all(|x| {
-                        back.get(x, y)
-                            .is_none_or(|c| c.symbol == " " && c.width == 1)
-                    });
+                    // repainting it — only safe when the back row is the
+                    // terminal's default blank, including style. A visually
+                    // blank row with a panel background is not equivalent:
+                    // SU/SD exposes terminal-default cells, not styled ones.
+                    let terminal_blank = crate::cell::Cell::blank();
+                    let blank = (0..w).all(|x| back.get(x, y).is_none_or(|c| c == &terminal_blank));
                     if !blank {
                         ok = false;
                         break;
@@ -266,28 +285,34 @@ fn detect_scroll_direction(
                 }
                 continue;
             };
-            let matches = rows_equal(back, front, y, src, w);
-            if row_is_dirty {
-                if matches {
-                    saved_dirty_row = true;
-                }
-            } else if !matches {
-                // A clean row that disagrees under the shift would be
-                // corrupted by the scroll with no repaint to fix it.
+            if !rows_equal(back, front, y, src, w) {
+                // Dirty rows are not exempt. Repainting a suffix cannot prove
+                // the untouched prefix survived an incorrect translation,
+                // and permissive matching turns repeated blank rows into
+                // false scroll evidence.
                 ok = false;
                 break;
             }
+            if row_is_dirty && !rows_equal(back, front, y, y, w) {
+                saved_changed_rows += 1;
+            }
         }
-        if ok && saved_dirty_row {
-            best = Some(k);
+        if ok && saved_changed_rows > 0 {
+            match best {
+                Some((best_saved, best_k))
+                    if best_saved > saved_changed_rows
+                        || (best_saved == saved_changed_rows && best_k <= k) => {}
+                _ => best = Some((saved_changed_rows, k)),
+            }
         }
     }
-    let amount = best?;
+    let (saved_rows, amount) = best?;
     Some(ScrollOp {
         up,
         y: lo,
         height: band_height,
         amount,
+        saved_rows,
     })
 }
 
@@ -404,6 +429,17 @@ pub fn promote(back: &mut Grid, front: &mut Grid) {
 /// cover, so those rows are copied in full (equal cells are cheap; unequal
 /// ones are exactly the drift the rotation introduced).
 pub fn promote_scrolled(back: &mut Grid, front: &mut Grid, cmd: &DrawCmd) {
+    if let Some(scroll) = cmd.scroll() {
+        match *scroll {
+            Draw::ScrollDown { y, height, amount } => {
+                front.rotate_band(y, height, BandRotation::Down, amount)
+            }
+            Draw::ScrollUp { y, height, amount } => {
+                front.rotate_band(y, height, BandRotation::Up, amount)
+            }
+            _ => {}
+        }
+    }
     let band = cmd.scroll().and_then(|scroll| match *scroll {
         Draw::ScrollDown { y, height, .. } | Draw::ScrollUp { y, height, .. } => Some((y, height)),
         _ => None,
@@ -473,16 +509,16 @@ mod tests {
     #[test]
     fn wholesale_up_shift_becomes_one_scroll_plus_new_row() {
         // Front (current screen): h1 h2 h3 blank.
-        let mut front = labeled(10, &["h1", "h2", "h3", ""]);
+        let front = labeled(10, &["h1", "h2", "h3", ""]);
         // Back (wanted): history shifted up one + NEW at the bottom.
         let mut back = labeled(10, &["h2", "h3", "NEW", ""]);
         // The writer repaints the moved band (rows 0..=2).
         back.clear_dirty();
-        for (y, ch) in [(0u16, '2'), (1, '3'), (2, 'N')] {
-            back.set(1, y, Cell::narrow(ch.to_string(), Style::default()));
+        for y in 0..=2 {
+            back.mark(0, y);
         }
 
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         match cmd.scroll() {
             Some(Draw::ScrollUp { y, height, amount }) => {
                 assert_eq!(
@@ -510,18 +546,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn vacated_scroll_row_repaints_prefix_that_was_clean_before_scroll() {
+        let front = labeled(8, &["aaaaAAAA", "bbbbBBBB", "keepOLD!"]);
+        let mut back = front.clone();
+        back.put(0, 0, Fit::Clip, Style::default(), "bbbbBBBB");
+        back.put(0, 1, Fit::Clip, Style::default(), "keepOLD!");
+        // Only the suffix differs at this coordinate before scrolling, so the
+        // retained dirty marker begins at column four. ScrollUp will blank the
+        // whole row, however, and the unchanged `keep` prefix must be painted
+        // again from column zero.
+        back.put(0, 2, Fit::Clip, Style::default(), "keepNEW!");
+
+        let cmd = diff(&back, &front);
+        assert!(matches!(
+            cmd.scroll(),
+            Some(Draw::ScrollUp { amount: 1, .. })
+        ));
+        assert!(cmd.draws.iter().any(|draw| {
+            matches!(draw, Draw::Cells { x: 0, y: 2, cells, .. }
+                if cells.iter().map(|(symbol, _)| symbol.as_str()).collect::<String>()
+                    == "keepNEW!")
+        }));
+    }
+
     /// Prepend shape: content inserted above the viewport pushes history
     /// **down**. The scroll resolves to the down direction.
     #[test]
     fn wholesale_down_shift_becomes_one_scroll() {
-        let mut front = labeled(10, &["h2", "h3", ""]);
+        let front = labeled(10, &["h2", "h3", ""]);
         let mut back = labeled(10, &["NEW", "h2", "h3"]);
         back.clear_dirty();
-        for (y, ch) in [(0u16, 'E'), (1, '2'), (2, '3')] {
-            back.set(1, y, Cell::narrow(ch.to_string(), Style::default()));
+        for y in 0..=2 {
+            back.mark(0, y);
         }
 
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         match cmd.scroll() {
             Some(Draw::ScrollDown { y, height, amount }) => {
                 assert_eq!(
@@ -541,13 +601,77 @@ mod tests {
     #[test]
     fn in_place_edits_do_not_scroll() {
         let mut back = labeled(10, &["one", "two"]);
-        let mut front = labeled(10, &["one", "two"]);
+        let front = labeled(10, &["one", "two"]);
         back.set(0, 0, Cell::narrow("O", Style::default()));
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         assert!(
             cmd.scroll().is_none(),
             "an in-place edit must never translate to a scroll: {:?}",
             cmd.draws
+        );
+    }
+
+    #[test]
+    fn full_dirty_local_edit_with_repeated_blank_rows_does_not_scroll() {
+        let front = labeled(12, &["Header", "", "body", "", "", ""]);
+        let mut back = front.clone();
+        back.set(0, 0, Cell::narrow("h", Style::default()));
+        // Full-frame background/widget passes can conservatively mark every
+        // row. Repeated blanks must never be treated as translation evidence.
+        back.mark_all_dirty();
+
+        let cmd = diff(&back, &front);
+        assert!(
+            cmd.scroll().is_none(),
+            "a local edit must not become a terminal scroll: {:?}",
+            cmd.draws
+        );
+    }
+
+    #[test]
+    fn scroll_rejects_clean_vacated_row_with_nondefault_style() {
+        let mut front = labeled(6, &["A", "B", "C", "", "D"]);
+        let panel = Style::default().bg(Color::Rgb(8, 9, 10));
+        front.fill_rect(0, 3, 6, 1, panel);
+        front.clear_dirty();
+
+        let mut back = front.clone();
+        // Desired rows 0..=2 are an exact two-row upward translation. Row 3
+        // remains a clean, panel-colored blank; row 4 is genuinely new.
+        for y in 0..=2 {
+            for x in 0..6 {
+                back.set(x, y, front.get(x, y + 2).unwrap().clone());
+            }
+        }
+        back.put(0, 4, Fit::Clip, Style::default(), "NEW");
+
+        let cmd = diff(&back, &front);
+        assert!(
+            cmd.scroll().is_none(),
+            "scrolling would erase the clean row's panel background: {:?}",
+            cmd.draws
+        );
+    }
+
+    #[test]
+    fn diff_does_not_mutate_front_before_successful_promotion() {
+        let front = labeled(10, &["h1", "h2", "h3", ""]);
+        let original: Vec<String> = (0..4)
+            .map(|y| front.get(0, y).unwrap().symbol.to_string())
+            .collect();
+        let mut back = labeled(10, &["h2", "h3", "NEW", ""]);
+        for y in 0..=2 {
+            back.mark(0, y);
+        }
+
+        let cmd = diff(&back, &front);
+        assert!(cmd.scroll().is_some());
+        let after_diff: Vec<String> = (0..4)
+            .map(|y| front.get(0, y).unwrap().symbol.to_string())
+            .collect();
+        assert_eq!(
+            after_diff, original,
+            "planning a scroll must not advance committed terminal state"
         );
     }
 
@@ -556,13 +680,13 @@ mod tests {
     #[test]
     fn mismatched_shift_does_not_scroll() {
         // Front history differs from what the back's shift implies.
-        let mut front = labeled(10, &["hx", "h3", ""]);
+        let front = labeled(10, &["hx", "h3", ""]);
         let mut back = labeled(10, &["h3", "NEW", ""]);
         back.clear_dirty();
         for (y, ch) in [(0u16, '3'), (1, 'N')] {
             back.set(1, y, Cell::narrow(ch.to_string(), Style::default()));
         }
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         assert!(
             cmd.scroll().is_none(),
             "a shift over changed history must fall back to repaint: {:?}",
@@ -576,13 +700,13 @@ mod tests {
     /// hypothetical scroll, and matches without one).
     #[test]
     fn pure_shift_without_repaint_is_not_a_scroll() {
-        let mut front = labeled(10, &["a", "b", "c"]);
+        let front = labeled(10, &["a", "b", "c"]);
         let mut back = labeled(10, &["a", "b", "c"]);
         // Mark rows dirty with content equal to what's already there — the
         // degenerate "writer rewrote identical bytes" frame.
         back.set(0, 1, Cell::narrow("b", Style::default()));
         back.set(0, 2, Cell::narrow("c", Style::default()));
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         assert!(cmd.scroll().is_none(), "no-repaint frame must not scroll");
         assert!(
             cmd.draws
@@ -599,11 +723,11 @@ mod tests {
         let mut front = labeled(10, &["h1", "h2", "h3", ""]);
         let mut back = labeled(10, &["h2", "h3", "NEW", ""]);
         back.clear_dirty();
-        for (y, ch) in [(0u16, '2'), (1, '3'), (2, 'N')] {
-            back.set(1, y, Cell::narrow(ch.to_string(), Style::default()));
+        for y in 0..=2 {
+            back.mark(0, y);
         }
 
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         assert!(cmd.scroll().is_some());
         promote_scrolled(&mut back, &mut front, &cmd);
 
@@ -618,7 +742,7 @@ mod tests {
             }
         }
         // And a second diff against the promoted front is empty.
-        assert!(diff(&back, &mut front).draws.is_empty());
+        assert!(diff(&back, &front).draws.is_empty());
     }
 
     /// Grid band rotation sanity: content moves, exposed rows blank, and the
@@ -656,7 +780,7 @@ mod tests {
     fn identical_grids_emit_nothing() {
         let back = grid("abc", 4, 1);
         let mut front = grid("abc", 4, 1);
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         assert!(cmd.draws.is_empty());
         promote(&mut Grid::new(4, 1), &mut front); // no-op smoke
     }
@@ -666,9 +790,9 @@ mod tests {
         let mut back = grid("abc", 4, 1);
         // Change 'b' to 'B'.
         back.set(1, 0, Cell::narrow("B", Style::default()));
-        let mut front = grid("abc", 4, 1);
+        let front = grid("abc", 4, 1);
 
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         assert_eq!(cmd.draws.len(), 1);
         match &cmd.draws[0] {
             Draw::Cells { x, y, cells, .. } => {
@@ -695,9 +819,9 @@ mod tests {
             0,
             Cell::narrow("D", Style::default().fg(Color::Rgb(1, 1, 1))),
         );
-        let mut front = grid("abcd", 4, 1);
+        let front = grid("abcd", 4, 1);
 
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         // One run: cols 2..4, uniform style.
         assert_eq!(cmd.draws.len(), 1);
     }
@@ -706,9 +830,9 @@ mod tests {
     fn wide_glyph_head_emitted_continuation_skipped() {
         let mut back = grid("", 6, 1);
         back.put(0, 0, crate::grid::Fit::Clip, Style::default(), "😀a");
-        let mut front = Grid::new(6, 1);
+        let front = Grid::new(6, 1);
 
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         // The continuation cell at col 1 is skipped; we get one run with the
         // wide head and 'a'.
         assert_eq!(cmd.draws.len(), 1);
@@ -728,9 +852,9 @@ mod tests {
         // Dirty only row 2.
         back.clear_dirty();
         back.set(0, 2, Cell::narrow("Z", Style::default()));
-        let mut front = grid("abc", 4, 3);
+        let front = grid("abc", 4, 3);
 
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         assert!(
             cmd.draws
                 .iter()
@@ -748,7 +872,7 @@ mod tests {
         assert_eq!(front.get(1, 0).unwrap().symbol, "B");
         assert!(!back.is_dirty());
         // A second diff against the promoted front is now empty.
-        assert!(diff(&back, &mut front).draws.is_empty());
+        assert!(diff(&back, &front).draws.is_empty());
     }
 
     #[test]
@@ -782,7 +906,7 @@ mod tests {
         for x in 2..w {
             back.set(x, 0, Cell::blank_styled(Style::default().bg(panel)));
         }
-        let cmd = diff(&back, &mut front);
+        let cmd = diff(&back, &front);
         // The wide head must be emitted with the SELECTED bg.
         assert!(cmd.draws.iter().any(|d| matches!(d,
                 Draw::Cells { style, cells, .. }

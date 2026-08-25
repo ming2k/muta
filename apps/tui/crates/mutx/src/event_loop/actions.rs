@@ -1454,7 +1454,13 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::ViewSwitcherBackspace => {
             if app.active_modal() == Modal::ViewSwitcher {
-                app.view_switcher_query.pop();
+                if !app.view_switcher_query.is_empty() {
+                    let start = mutx_engine::text::floor_grapheme_boundary(
+                        &app.view_switcher_query,
+                        app.view_switcher_query.len() - 1,
+                    );
+                    app.view_switcher_query.truncate(start);
+                }
                 app.modal_index = 0;
                 app.session_scroll = 0;
                 app.session_modal_follow = true;
@@ -2167,7 +2173,12 @@ mod view_entry_tests {
         app.tx = tx;
         let runtime = UiRuntime::minimal_for_test();
 
-        assert!(enter_view(&mut app, crate::views::ViewId::Tree, &runtime, "s1"));
+        assert!(enter_view(
+            &mut app,
+            crate::views::ViewId::Tree,
+            &runtime,
+            "s1"
+        ));
         assert!(matches!(rx.try_recv(), Ok(AgentRequest::QuerySessionTree)));
         app.dismiss_surface();
         assert!(!enter_view(
@@ -2186,22 +2197,12 @@ mod view_entry_tests {
         app.tx = tx;
         let runtime = UiRuntime::minimal_for_test();
 
-        enter_view(
-            &mut app,
-            crate::views::ViewId::Sessions,
-            &runtime,
-            "s1",
-        );
+        enter_view(&mut app, crate::views::ViewId::Sessions, &runtime, "s1");
         assert!(matches!(
             rx.try_recv(),
             Ok(AgentRequest::QuerySessionsOverview)
         ));
-        enter_view(
-            &mut app,
-            crate::views::ViewId::Skills,
-            &runtime,
-            "s1",
-        );
+        enter_view(&mut app, crate::views::ViewId::Skills, &runtime, "s1");
         assert!(matches!(
             rx.try_recv(),
             Ok(AgentRequest::QuerySessionContext)

@@ -1,174 +1,96 @@
 # Autopilot operation
 
-`autopilot` is the mode that lets an agent run **without human intervention**:
-no permission confirmations, no questions — it decides and acts on its own
-authority. The point of the flag is autonomy, not speed: an autopilot agent is
-one the human can walk away from.
+Autopilot is an interaction posture: the agent runs without waiting for a
+human. It is not an authority level and does not expand what the agent may do.
 
-This page is about the *design intent* and how that intent maps onto the
-mechanisms that actually enforce it. For the operational surfaces — the slash
-command, the CLI flag, the toggle's wire behaviour — see
-[Slash commands](../../reference/commands.md); for the one-line definition, see
-the [Glossary](../../reference/glossary.md#tools-and-capabilities).
+This distinction is the core safety invariant:
 
-## Intent vs. enforcement
+> The same action with the same grants produces the same authority decision in
+> attended and autopilot sessions.
 
-The design intent of autopilot is broad: a session in which the agent never
-stops to wait on a human. There are two distinct surfaces a round can stop on:
+The posture is session-scoped and persisted. A daemon restart restores it, but
+restoring the posture does not restore, infer, or widen workspace authority.
+For command and flag syntax, see [Slash commands](../../reference/commands.md).
 
-| Surface | What stops the round | Who answers |
-|---------|----------------------|-------------|
-| **Permission broker** | A `Write`/`Execute` tool fires; the broker parks a oneshot and emits `PermissionRequest` | The user, via the once/always/reject modal |
-| **User question** | The model calls `ask_user`; the harness parks a oneshot and emits `UserQuestionRequest` | The user, via the question modal |
-| **Interactive stdin** | The model emits a command the interactive classifier matches; the harness parks a oneshot and emits `InputRequest` | The user, via the inline input panel |
+## Authority and interaction are separate
 
-`autopilot` **enforces the whole posture**, not just one gate. With the flag on
-every one of these surfaces is reclaimed: the broker auto-approves every
-side-effecting tool, `ask_user` is dropped from the advertised toolset (and a
-stale call short-circuits with a refusal rather than parking), and an
-interactive command's stdin is closed instead of prompting the operator. The
-flag is now a guaranteed floor for the "no confirmations, no questions" target
-posture, not merely an expression of it.
+Every side-effecting tool passes through the authority chain first. The chain
+can approve the call, deny it unconditionally, or report a missing grant. Only
+after that result exists does the interaction posture matter:
 
-This convergence is deliberate. A round that can stop on any of the three
-surfaces is not truly walk-away-able; suppressing only the broker left two
-deadlock paths that a model-driven `ask_user` or an interactive command could
-still trip. Reclaiming all three when the flag is on makes the autonomy
-contract honest: with `autopilot` on, nothing the model does will pause for a
-human.
+| Authority result | Attended | Autopilot |
+|------------------|----------|-----------|
+| Approved | Execute | Execute |
+| Hard denied | Refuse | Refuse |
+| Missing grant | Offer once/always/reject | Refuse immediately with the missing scope |
 
-## The broker gate
+Autopilot never auto-approves the broker, converts a confirmation into an
+allow, or treats an unrestricted operation scope as authority. This keeps
+unattended execution deterministic and prevents a UI convenience flag from
+becoming a privilege escalation mechanism.
 
-The only code path the flag actually controls is the permission broker
-([Harness architecture → Permission broker](harness.md#permission-broker)).
-After the write-scope gate clears a side-effecting tool, the broker branch
-decides whether to park:
+## Workspace preflight
 
-```text
-tool with real ScopeTarget (Path/Command)
-  └─ autopilot OR always-allow rule matches?
-        ├─ yes → skip the prompt, run the tool
-        └─ no  → emit PermissionRequest, park oneshot, await decision
-```
+Opening a directory creates a workspace identity but grants no execution
+profile. A workspace starts as `unknown`; the operator chooses one of two
+explicit profiles:
 
-Two things follow from where this check sits:
+- `restricted` is read-oriented. Each side effect needs a narrow explicit
+  grant.
+- `development` pre-authorizes ordinary work inside the physical workspace
+  sandbox.
 
-- **Reads never consult it.** A tool whose `ScopeTarget` is `Unspecified`
-  (`read_text`, `grep`, `glob`, …) bypasses the broker regardless of the flag —
-  a read is not a side effect the user must approve. So autopilot changes
-  nothing for the read-heavy exploration phases of a round; it only removes the
-  pauses before *actions*.
-- **It composes with the allowlist, it does not replace it.** The condition is
-  `autopilot || always_allowed`. With autopilot off, a cached `Always` rule
-  still lets a tool through without prompting; with autopilot on, the rule set
-  is simply irrelevant. Autopilot is the broader dial; `/permissions` is the
-  narrow, per-tool one.
+No agent round or direct-shell command can start while the profile is `unknown`,
+whether autopilot is on or off. It fails before the provider or process launch
+and points to `/workspace restricted` and `/workspace development`. A persisted
+`development` profile also fails preflight when the host cannot enforce the
+required sandbox.
 
-Under autopilot the write-scope gate is also load-bearing in a second way: an
-out-of-scope write cannot be elevated (there is no human to answer the broker's
-prompt), so the gate blocks it outright before the broker ever sees it.
+Project-authored MCP servers, hooks, skills, and commands use a separate
+content-bound extension decision. `/extensions trust` does not select a
+workspace execution profile, and `/workspace development` does not load
+project extensions.
 
-## Reclaiming ask_user and interactive stdin
+## Non-interactive surfaces
 
-The broker gate covers side-effecting tools, but two more surfaces can also stop
-a round on a human. Under autopilot both are reclaimed so the "no questions"
-half of the posture is enforced, not just expressed:
+Autopilot reclaims the surfaces that would otherwise park a round:
 
-```text
-ask_user
-  └─ autopilot? → schema dropped from the advertised toolset; a stale call
-                   (name carried over from an earlier turn) short-circuits with
-                   a refusal instead of parking a oneshot.
+- `ask_user` is unavailable; the model must choose a reasonable default.
+- interactive command stdin is closed instead of opening an input panel.
+- a missing authority grant returns immediately instead of emitting a
+  permission modal.
 
-interactive command (bash stdin)
-  └─ autopilot? → stdin closed instead of emitting InputRequest; the command
-                   fails fast with a non-interactive remedy.
-```
+These rules guarantee that an unattended round does not deadlock. They do not
+guarantee that every attempted action succeeds: missing grants, sandbox
+failures, hard bash denies, provider errors, and ordinary tool failures remain
+terminal or model-visible results.
 
-The system prompt is also told the session is on autopilot — that no human is
-reachable, that the question tool is gone, and that the model must decide and
-act on its own authority. This pairs the mechanical reclaim (the harness cannot
-deadlock) with the behavioral one (the model is steered away from deferring).
-See [User questions](user-questions.md) for the interactive counterpart.
+## Bash and dependency installation
 
-The flag is **live and session-persisted** (ADR-0132). Every write path
-(`/autopilot`, `--autopilot` at startup, `/principal` role switches) mirrors
-the posture onto the session store as a `AutopilotSet` event, and every
-restore path (bootstrap resume — attach, lazy-resume, boot rehost — and
-in-process `/sessions <id>` switches) re-arms it from there, so a daemon
-crash, kill, upgrade, or reboot mid-task reopens the session in the posture
-it died in instead of silently de-escalating to attended. `/reset` starts
-the new session attended; the posture is never inherited by a fresh session.
-Sessions created before ADR-0132 are recovered from the command ledger (the
-last `Autopilot ON`/`OFF` ack) with a loud notice. Toggling it mid-round
-still takes effect on the very next broker check — persistence changes
-nothing about liveness. Envoy profiles and side conversations that force the
-flag on do so on their own agents, never on the principal's session store.
+Package installation is an ordinary development action, not a proxy for
+project-extension trust. In a `development` workspace, commands such as
+`pnpm install` may run without a permission prompt, but they run inside the
+workspace sandbox: only the workspace and a fresh temporary directory are
+writable; the process otherwise sees a minimal read-only system runtime and
+public DNS/TLS configuration. HOME is isolated, inherited credentials are
+scrubbed, and user-home toolchain shims are not admitted.
 
-## What autopilot is not
+Project MCP servers and hooks are narrower still: after content trust they run
+with a read-only workspace, no network, and no ambient credentials. A project
+cannot turn extension trust into workspace mutation or network authority.
 
-Three neighbouring ideas that are easy to mistake for autopilot:
+High-risk actions remain distinct. Destructive commands, publishing,
+infrastructure mutation, and remote-content pipe-to-shell patterns retain
+hard-deny or explicit-confirm behavior. Under autopilot, an explicit-confirm
+result is a missing grant and therefore fails immediately.
 
-- **The `always` allowlist** is durable and per-rule (`/permissions`), not a
-  mode. Autopilot is the live, blanket version of the same relaxation — on for
-  every side-effecting tool at once, off again with a single toggle. A session
-  that wants a permanent "always allow `bash`" uses the allowlist; one that
-  wants "don't bother me for the rest of this task" uses autopilot.
-- **The `WriteScope` boundary** is a *soft* capability limit. A write tool
-  outside the agent's scope is routed to the permission broker so an attended
-  user can approve the elevation (or reject it); it is blocked outright only
-  under autopilot, where no human can answer the prompt. See
-  [Rounds and turns](rounds-and-turns.md).
-- **Headless rejection** is the opposite posture. The headless entry point
-  *automatically rejects* write permissions rather than suppressing the prompt.
-  Autopilot says "act without asking"; headless says "refuse because no one can
-  answer." They solve different problems and never coexist in one client.
+## Persistence and visibility
 
-## Where it is forced on
+Autopilot remains session-persisted as defined by ADR-0132. Workspace security
+is persisted separately in `workspace_security.json`, keyed by the canonical
+exact workspace root. Every harness snapshot carries both fields, so a
+frontend can show the interaction posture and authority state without deriving
+either from transcript messages.
 
-Three places set autopilot automatically rather than at the user's request:
-
-| Site | Why | Reference |
-|------|-----|-----------|
-| **Envoy children** | A spawned agent has historically had no guaranteed path to surface a reply back down; defaulting to autopilot preserves the autonomous contract. Full-duplex (ADR-0029) now wires that path, so an interactive profile can opt out, but the built-in profiles stay `true`. | [Envoys → Full-duplex](envoys.md#full-duplex) |
-| **Side conversations** (`/btw`) | A side `Agent` shares the principal's permission channel; a modal it raised could not be routed back to the right child, so the aside runs on autopilot to stay deadlock-free. | [ADR-0017](../../adr/0017-side-conversations.md) |
-| **`--autopilot` at startup / `/autopilot on`** | The user explicitly elevates the whole session to the no-intervention posture. | [Slash commands](../../reference/commands.md) |
-
-In every case the rationale is the same: the agent is running in a context
-where a prompt either *cannot* be answered or the human has declared it
-shouldn't be.
-
-## Visibility
-
-Because an autopilot session silently executes actions that would otherwise
-pause, the harness makes the state impossible to miss without making it loud:
-
-- The head row shows a flat `autopilot` label in the warning tone for the
-  whole session — plain text, not a raised pill, because it is a persistent
-  state flag rather than a momentary mode. See
-  [TUI head row](../../reference/tui/status-bar.md).
-- Toggling emits a `RoundEvent::AutopilotChanged` so the TUI refreshes the badge
-  immediately, mid-turn, without flushing the activity bar.
-
-The elevated state is always visible; it never needs to interrupt.
-
-## Safety bounds still apply
-
-Autopilot removes the *interactive* backstop, not the *automatic* ones. A round
-running on autopilot is still subject to every execution bound the harness enforces
-on its own — the repeated-read guard, the optional `hard_stop_turns` budget,
-and the user's `Esc` interrupt. The agent is
-freer to act without asking, not freed from the guards that keep an uncapped
-autonomous loop honest. See [Harness architecture → Safety bounds](harness.md).
-
-## See also
-
-- [Harness architecture](harness.md) — the permission broker and safety bounds
-  autopilot sits inside.
-- [User questions](user-questions.md) — the `ask_user` surface, the other thing
-  a round can stop on, and why it is governed separately.
-- [Envoys → Full-duplex](envoys.md#full-duplex) — why envoy children default to
-  autopilot.
-- [Tool access and capability axes](../../reference/tools/access.md) — the
-  factual reference for which tools hit the broker.
-- [Slash commands](../../reference/commands.md) — `/autopilot [on|off]`.
+See [ADR-0140](../../adr/0140-workspace-authority-and-content-bound-extension-trust.md)
+for the authority model and physical enforcement decision.

@@ -228,7 +228,7 @@ define_builtin_commands! {
     },
     Permissions = "/permissions" : {
         summary: "Show or clear always-allowed tool rules",
-        description: "Inspect active tool execution rules or clear process-local auto-approval permissions.",
+        description: "Inspect active explicit authority rules or clear the persisted per-workspace grants.",
         usage: ["/permissions", "/permissions clear"],
         examples: [("/permissions", "Show active permission rules"), ("/permissions clear", "Clear process-local auto-allow rules")],
         intent_keywords: ["permission", "allow", "rule", "policy", "security", "approve", "always-allow", "grant"],
@@ -244,7 +244,7 @@ define_builtin_commands! {
     },
     Autopilot = "/autopilot" : {
         summary: "Toggle autonomous execution mode",
-        description: "Toggles autopilot mode: runs without interactive confirmation prompts for tool actions, auto-approving tools and reclaiming question tools.",
+        description: "Toggles unattended interaction posture: approved actions run, missing authority fails immediately, and question tools are reclaimed.",
         usage: ["/autopilot", "/autopilot on", "/autopilot off"],
         examples: [("/autopilot on", "Enable autonomous execution"), ("/autopilot off", "Return to interactive confirmation mode")],
         intent_keywords: ["autopilot", "yolo", "auto", "autonomous", "unattended", "headless", "skip-confirm"],
@@ -370,20 +370,20 @@ define_builtin_commands! {
         intent_keywords: ["init", "scaffold", "setup", "bootstrap", "create-config"],
         category: Project,
     },
-    Trust = "/trust" : {
-        summary: "Trust project's .muta/ configuration",
-        description: "Grant trust to this project to enable its local MCP servers, lifecycle hooks, skills, and project slash commands.",
-        usage: ["/trust"],
-        examples: [("/trust", "Trust and activate project contributions")],
-        intent_keywords: ["trust", "allow-project", "approve-project", "enable-project", "grant-trust"],
+    Workspace = "/workspace" : {
+        summary: "Inspect or set workspace execution authority",
+        description: "Show workspace security state, choose restricted or development execution authority, or reset the decision.",
+        usage: ["/workspace", "/workspace restricted|development|reset"],
+        examples: [("/workspace", "Show workspace security state"), ("/workspace development", "Authorise ordinary development in this workspace")],
+        intent_keywords: ["workspace", "authority", "restricted", "development", "grant"],
         category: Project,
     },
-    Untrust = "/untrust" : {
-        summary: "Revoke trust for project configuration",
-        description: "Revoke trust for this project, immediately disconnecting local MCP servers and unloading hooks, skills, and commands.",
-        usage: ["/untrust"],
-        examples: [("/untrust", "Revoke trust for current project")],
-        intent_keywords: ["untrust", "revoke", "disallow", "disable-project", "deny"],
+    Extensions = "/extensions" : {
+        summary: "Inspect or trust project-authored extensions",
+        description: "Manage content-bound trust for project MCP servers, hooks, skills, and slash commands independently from execution authority.",
+        usage: ["/extensions", "/extensions trust|untrust"],
+        examples: [("/extensions", "Show extension trust state"), ("/extensions trust", "Trust and load the exact current contribution content")],
+        intent_keywords: ["extensions", "trust", "untrust", "mcp", "hooks", "project-skills"],
         category: Project,
     },
     Export = "/export" : {

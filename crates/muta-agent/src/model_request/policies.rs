@@ -129,17 +129,17 @@ impl SystemPromptSection for PersistenceGuidance {
 }
 
 /// The autonomous-operation posture. Active only when the agent is running
-/// autopilot this round. With the harness having reclaimed `ask_user` and
-/// auto-approving every side-effecting tool, this tells the model the human is
-/// unreachable — it must resolve ambiguity itself, pick a sensible default, and
-/// never block waiting for an answer that will not come. Leading `\n`
+/// autopilot this round. The harness reclaims `ask_user`; approved actions run
+/// without pausing and missing authority fails immediately. This tells the
+/// model the human is unreachable — it must resolve ambiguity itself, pick a
+/// sensible default, and never block waiting for an answer. Leading `\n`
 /// separates it from the paragraphs above.
 struct AutopilotGuidance;
 
 const AUTOPILOT: &str = "\nYou are running on autopilot: no human is reachable this round. The \
-                          question tool has been reclaimed and every tool permission auto-approves, \
-                          so nothing you do will pause for confirmation. Decide and act on your own \
-                          authority: when faced with ambiguity, pick the most reasonable default \
+                          question tool has been reclaimed; approved actions run without pausing, \
+                          while missing authority fails immediately and must never be treated as \
+                          granted. When faced with ambiguity, pick the most reasonable safe default \
                           and proceed rather than asking — there is no one to answer. Surface any \
                           irreversible or high-stakes choice you made on your own in your final \
                           summary instead of stopping to ask.";

@@ -31,8 +31,8 @@ Project and user-defined commands are covered under
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/init [path]` | Initialize a `.muta/` config tree |
-| `/trust` | Trust this project's `.muta/` contributions (MCP servers, hooks, project skills, project commands) and load them |
-| `/untrust` | Revoke trust for this project (disconnects MCP, unloads hooks, skills, and commands) |
+| `/workspace` | Inspect or set workspace execution authority |
+| `/extensions` | Inspect or trust project-authored extensions |
 | `/skills [list\|reload]` | List or reload available skills |
 | `/skill <name>` | Load a skill by name |
 | `/tools` | Toggle individual session tools on or off |
@@ -175,15 +175,14 @@ apply immediately and persist in the `[tui]` table of `config.toml`.
 | Form | Effect |
 |------|--------|
 | `/autopilot` | Toggle autopilot on/off |
-| `/autopilot on` | Run without human intervention (no confirmations, no questions) |
+| `/autopilot on` | Run without human interaction; missing authority fails instead of prompting |
 | `/autopilot off` | Restore interactive prompts |
 
-When on, the agent acts without human intervention: tool permissions
-auto-approve before write/execute tools (`bash`, `write_file`,
-`edit_file`, …), the `ask_user` question tool is reclaimed (hidden from
-the model; any stale call short-circuits), interactive command stdin is
-closed instead of prompting, and the system prompt is told no human is
-reachable. The posture is persisted on the session
+When on, the agent acts without human interaction: already-authorized tools
+run, missing grants fail immediately rather than opening a modal, the
+`ask_user` question tool is reclaimed, interactive command stdin is closed,
+and the system prompt is told no human is reachable. Autopilot never expands
+workspace authority or bypasses explicit rules. The posture is persisted on the session
 ([ADR-0132](../adr/0132-session-persisted-autopilot-posture.md)): a daemon
 crash, kill, upgrade, or reboot reopens the session in the same posture, so
 an accidentally-interrupted unattended run picks up where it left off
@@ -263,28 +262,58 @@ recalling earlier decisions inside one long session; cross-session recall is
 |------|--------|
 | `/init [path]` | Initialize a `.muta/` config tree; `path` defaults to `.` |
 
-### `/trust` and `/untrust`
+### `/workspace`
 
 | Form | Effect |
 |------|--------|
-| `/trust` | Trust this project's `.muta/` contributions (MCP servers, hooks, project skills, project slash commands) and load them |
-| `/untrust` | Revoke trust for this project (disconnects MCP, unloads hooks, skills, and commands) |
+| `/workspace` or `/workspace status` | Show the canonical workspace identity, execution profile, extension state, physical sandbox state, and interaction posture |
+| `/workspace restricted` | Select the read-oriented profile; each side effect still needs an explicit authority rule |
+| `/workspace development` | Pre-authorize ordinary development inside the physically enforced workspace sandbox |
+| `/workspace reset` | Remove the workspace execution decision and return to `unknown` |
 
-Project trust (ADR-0085 §5, extended by ADR-0107) gates every
-project-supplied capability. While a project is untrusted, its
+Opening a directory grants no execution authority. The initial `unknown`
+profile is visible in harness state and as a retained startup banner. An
+agent round or direct `!shell` command in `unknown` fails preflight before a
+provider or process launch, whether autopilot is on or off. The
+`development` profile is accepted only when the runtime can enforce its
+workspace sandbox; it never means host-level shell access. Package-manager
+installs are ordinary development actions inside that sandbox. Package-manager
+executables must exist in the admitted system runtime; binaries and shims under
+the user's home directory are intentionally not mounted. Destructive,
+publishing, infrastructure, and pipe-to-shell commands remain governed by
+the bash action policy.
+
+### `/extensions`
+
+| Form | Effect |
+|------|--------|
+| `/extensions` or `/extensions status` | Show whether project-authored extensions are absent, quarantined, trusted, or changed |
+| `/extensions trust` | Trust and load the exact current extension content |
+| `/extensions untrust` | Quarantine extensions immediately; disconnect project MCP and unload project hooks, skills, and commands |
+
+Extension trust gates every project-supplied capability. While extensions are
+quarantined, the workspace's
 `.muta/config.toml` `[mcp.*]` servers and `[[hooks]]`, its project skills
 (`.muta/skills`, `.agents/skills`, `.claude/skills`), and its project
-slash commands (`.muta/commands/`) are not loaded at all — the trust store
-is consulted at scan time, so every path (startup, the periodic skills
-refresh, `/skills reload`) is gated identically. `/trust` applies
+slash commands (`.muta/commands/`) are not loaded. The content-bound state
+is consulted at scan time, so every path (startup, periodic refresh, and
+`/skills reload`) is gated identically. `/extensions trust` applies
 immediately: project skills rescan in, and project slash commands become
-runnable through a trust-checked dispatcher fallback. When a trusted
+runnable through an extension-checked dispatcher fallback. When a trusted
 project's skill or command reuses the name of a user-scope entry, the
 project entry wins by priority and the harness emits a one-time warning
-notice naming the winner, so silent overrides are impossible. Untrusted
-projects get a startup notice listing exactly what stayed disabled until
-`/trust`. The trust root is git-aware: one grant covers the repo's
-subdirectories and linked worktrees.
+notice naming the winner. Trust is keyed to the canonical exact workspace root
+and stores a digest of the contribution paths. Any content change moves the
+state to `changed` and quarantines it until it is inspected and trusted again.
+The digest includes paths, file bytes, and permission modes. Symlinks are
+rejected because their mutable targets cannot be content-attested; special
+files and enumeration/read failures also quarantine the contribution. Project MCP
+servers and hooks run read-only and offline in the workspace sandbox with no
+ambient credentials. Integrations requiring network or workspace writes belong
+in explicit user-global configuration. Hooks and MCP calls re-attest the digest
+immediately before execution, so changing content cannot continue under a stale
+startup grant.
+Execution authority and extension trust never imply one another.
 
 ### `/export`
 

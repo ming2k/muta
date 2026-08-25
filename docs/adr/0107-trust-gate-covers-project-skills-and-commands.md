@@ -1,7 +1,8 @@
 # 0107. Trust gate covers project skills and slash commands
 
-- **Status:** Accepted
+- **Status:** Superseded
 - **Date:** 2026-08-15
+- **Superseded by:** ADR-0140
 - **Builds on:** ADR-0085 (config-time tool scoping + trust model), ADR-0096 (unified daemon)
 
 ## Context

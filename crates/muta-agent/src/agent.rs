@@ -193,6 +193,9 @@ pub struct Agent {
     /// `updated_at_round` for the TUI stale detector.
     round_counter: Arc<std::sync::Mutex<u64>>,
     permissions: crate::permission_store::PermissionStore,
+    /// Workspace authority is orthogonal to interaction posture. Shared with
+    /// spawned envoys so delegation cannot silently widen the parent's grant.
+    workspace_security: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
     ask_user: std::sync::Mutex<AskUserState>,
     /// Parked interactive-input requests (L3.5 β). Mirrors `ask_user`.
     input: std::sync::Mutex<InputState>,
@@ -946,6 +949,9 @@ impl Agent {
             todos,
             round_counter,
             permissions: crate::permission_store::PermissionStore::new(),
+            workspace_security: Arc::new(std::sync::Mutex::new(
+                muta_contracts::WorkspaceSecuritySnapshot::default(),
+            )),
             ask_user: std::sync::Mutex::new(AskUserState::default()),
             input: std::sync::Mutex::new(InputState::default()),
             skills_registry,
@@ -1061,8 +1067,9 @@ impl Agent {
     }
 
     /// The permission policy chain for this agent. Built fresh per call.
-    /// Holds the synchronous permission gates; the asynchronous gates (hook,
-    /// bash-policy, ask_user, broker park) stay in `execute_tool`.
+    /// Holds the complete authority policy chain. Interaction-only behavior
+    /// (`ask_user`, stdin, and missing-authority prompting) stays in
+    /// `execute_tool`, outside the authority context by construction.
     pub(crate) fn permission_chain(&self) -> crate::permission_policy::PermissionChain {
         crate::permission_policy::PermissionChain::new(crate::permission_policy::default_chain())
     }
@@ -1595,6 +1602,36 @@ impl Agent {
         self.permissions.set_autopilot(enabled);
     }
 
+    pub fn set_workspace_security(&self, snapshot: muta_contracts::WorkspaceSecuritySnapshot) {
+        *self
+            .workspace_security
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = snapshot;
+    }
+
+    pub fn workspace_security(&self) -> muta_contracts::WorkspaceSecuritySnapshot {
+        self.workspace_security
+            .lock()
+            .map(|snapshot| snapshot.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn workspace_security_handle(
+        &self,
+    ) -> Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>> {
+        Arc::clone(&self.workspace_security)
+    }
+
+    /// Bind a child agent to the parent's live workspace authority cell. This
+    /// is intentionally a construction-time operation: once an Agent is shared
+    /// through `Arc`, its authority principal cannot be swapped.
+    pub fn bind_workspace_security_handle(
+        &mut self,
+        handle: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
+    ) {
+        self.workspace_security = handle;
+    }
+
     /// Set this agent's operation boundary (ADR-0028). The main agent leaves it
     /// unrestricted; `EnvoyTool` sets the scope resolved from the bound
     /// envoy profile on the child before it runs.
@@ -1638,24 +1675,9 @@ impl Agent {
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
         self.set_autopilot(profile.autopilot);
 
-        // #9 — a principal running on autopilot with an unrestricted operation
-        // scope has *no* permission floor: the scope-gate is open on both axes,
-        // the broker is bypassed (autopilot), and admission is the full pool.
-        // Any write or execute the model attempts will run unchecked. This is a
-        // legitimate configuration (e.g. a fully-trusted automation runner),
-        // but it is dangerous enough to warrant a loud, unmissable warning at
-        // startup rather than failing silently. A sandboxed scope (any `Some`
-        // dimension) keeps the scope-gate as the safety floor even autopilot.
-        if profile.autopilot && profile.operation_scope.is_unrestricted() {
-            tracing::warn!(
-                autopilot = true,
-                scope = "unrestricted",
-                "principal is running AUTOPILOT with an unrestricted operation scope — no \
-                 permission checks will gate writes or command execution. Ensure this is \
-                 intended (e.g. a trusted automation runner); otherwise pin write_paths / \
-                 command_allowlist, or set autopilot = false.",
-            );
-        }
+        // Autopilot deliberately does not alter workspace authority. An
+        // unrestricted operation scope is still subordinate to the workspace
+        // execution profile and explicit authority rules.
     }
 
     /// Replace this agent's identity (name + mission, or a persona override).
@@ -3609,14 +3631,13 @@ impl Agent {
 
         // ── Permission policy chain (full async chain) ──
         // Every permission gate — PreToolUse hook, disabled mask, schema
-        // validation, operation-scope gate, bash policy (Deny/autopilot),
-        // ask_user shortcut, and the broker's always-allowed fast path — runs
+        // validation, operation-scope gate, bash policy, and the broker's
+        // explicit-grant/development fast paths — runs
         // as one chain evaluation (see `permission_policy`). The chain is
         // async because some gates await (hooks, bash policy). Outcomes:
         //   • Deny    → short-circuit with the policy's output.
-        //   • Approve → proceed (already-allowed, or autopilot bypass).
-        //   • Ask     → the broker wants a live user decision: park, emit the
-        //               request, fire observe hooks, await.
+        //   • Approve → proceed under existing authority.
+        //   • MissingAuthority → attended: ask once; autopilot: fail now.
         //   • Pass    → (chain fallback) proceed.
         let target = tool.scope_target(&call.arguments);
         // Snapshot the disable masks and scope *before* the chain runs, then
@@ -3641,7 +3662,7 @@ impl Agent {
             call_name: call.name.as_str(),
             arguments: &call.arguments,
             scope_target: target.clone(),
-            autopilot: self.get_autopilot(),
+            workspace_execution: self.workspace_security().execution,
             operation_scope,
             disabled: disabled_snapshot,
             scoped_disabled: scoped_snapshot,
@@ -3653,7 +3674,16 @@ impl Agent {
             crate::permission_policy::PolicyDecision::Deny { output, .. } => {
                 return output;
             }
-            crate::permission_policy::PolicyDecision::Ask { request, rule } => {
+            crate::permission_policy::PolicyDecision::MissingAuthority { request, rule } => {
+                if self.get_autopilot() {
+                    return ToolOutput::Text(format!(
+                        "[authority required] Tool '{}' is not authorised for scope '{}'. \
+                         Autopilot controls interaction only and cannot create grants. \
+                         Run `/workspace development` to authorise ordinary workspace work, \
+                         or add a narrow permission rule.",
+                        request.tool, request.scope
+                    ));
+                }
                 // The single interactive-park path. Both the broker (a
                 // write/execute the user must approve) and the bash
                 // dangerous-command confirm reach here; `request.one_off`
@@ -3704,9 +3734,18 @@ impl Agent {
             }
         }
 
-        // ask_user: the chain's AskUserPolicy refused under autopilot; here we
-        // execute the interactive path (park for a user answer).
+        // Interaction posture is intentionally resolved only after the
+        // authority chain. PolicyContext does not contain autopilot, so no
+        // authority policy can accidentally turn posture into a grant.
         if call.name == "ask_user" {
+            if self.get_autopilot() {
+                return ToolOutput::Text(
+                    "ask_user is unavailable: this session is running on autopilot and no human \
+                     is reachable to answer. Resolve the ambiguity yourself — pick the most \
+                     reasonable default and proceed."
+                        .to_string(),
+                );
+            }
             return self.execute_ask_user(call, call_id, event_tx).await;
         }
 
@@ -4001,27 +4040,7 @@ impl crate::permission_policy::PermissionContext for Agent {
                 }
             }
             crate::bash_policy::BashPolicyAction::Confirm => {
-                // Under autopilot there is no human to confirm, so resolve
-                // silently per `autopilot_confirm_action` (default Deny). The
-                // gate therefore never yields a Confirm Ask under autopilot —
-                // matching the broker's autopilot bypass.
-                if self.get_autopilot() {
-                    match policy.autopilot_confirm_action() {
-                        crate::bash_policy::BashPolicyAction::Allow => {
-                            tracing::warn!(
-                                command = %command,
-                                rule = %decision.name,
-                                "bash policy confirmation bypassed by autopilot_confirm=allow"
-                            );
-                            crate::permission_policy::BashVerdict::Allow
-                        }
-                        _ => crate::permission_policy::BashVerdict::Deny {
-                            output: decision.autopilot_confirm_output(command),
-                        },
-                    }
-                } else {
-                    crate::permission_policy::BashVerdict::Confirm { match_: decision }
-                }
+                crate::permission_policy::BashVerdict::Confirm { match_: decision }
             }
             crate::bash_policy::BashPolicyAction::Allow => {
                 crate::permission_policy::BashVerdict::Allow

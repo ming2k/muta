@@ -36,9 +36,9 @@ In this workflow, the developer and the agent work in an iterative loop:
    feature implementation, or test suite addition).
 2. **Tool Execution & Safety Gating**: The agent reads project files,
    analyzes dependencies, executes test commands, and proposes code edits.
-   By default, destructive actions pass through an attended permission
-   broker. The user can toggle `/autopilot on` for uninterrupted autonomous
-   execution.
+   Workspace authority and the physical sandbox decide what may run.
+   Attended mode can request a missing grant; `/autopilot on` makes the same
+   decision non-interactive and fails immediately when authority is missing.
 3. **Isolated Side Inquiries**: When the user has a tangent question that
    would otherwise pollute the main conversation context, the `/btw` command
    spawns an isolated side inquiry, answers it, and cleanly returns to the

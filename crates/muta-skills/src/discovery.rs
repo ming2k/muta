@@ -3,8 +3,9 @@
 use super::SkillsConfig;
 use super::metadata::{Skill, SkillScope, parse_skill_metadata};
 use super::remote::{cached_remote_roots, fetch_remote_repo};
+use muta_contracts::WorkspaceExtensionsState;
 use muta_persistence::paths;
-use muta_persistence::trusted_projects::TrustGate;
+use muta_persistence::workspace_security::WorkspaceSecurityStore;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -37,8 +38,8 @@ pub struct DiscoveryResult {
     pub skills: Vec<Skill>,
     pub errors: Vec<String>,
     /// Project-local skills that shadowed a same-named lower-scope skill in
-    /// this scan (empty when the project is untrusted — Repo sources are not
-    /// scanned at all then).
+    /// this scan. Empty unless the workspace extension state admits the
+    /// project-local sources.
     pub shadowed: Vec<ShadowedSkill>,
 }
 
@@ -48,26 +49,25 @@ pub struct DiscoveryResult {
 /// skills override lower-priority skills with the same name.
 ///
 /// Project-local sources (`.muta/skills`, `.agents/skills`, `.claude/skills`)
-/// are gated by the ADR-0085 §5 trust decision, consulted live at scan time
-/// from the on-disk trust store: an untrusted project's skills are not
-/// discovered at all. A cloned/vendored repo's `SKILL.md` files are prompt
-/// content; loading them just because the directory was opened is the same
-/// hazard class as project MCP servers and hooks. Because the check happens
-/// here, every scan path — startup, the periodic background refresh, and
-/// `/skills reload` — is gated identically, and a `/trust` grant takes effect
-/// on the very next scan.
+/// are admitted only while the workspace's content-bound extension state is
+/// [`WorkspaceExtensionsState::Trusted`]. A cloned or vendored workspace's
+/// `SKILL.md` files are prompt content, so merely opening the directory must
+/// not load them. The state is read at scan time, which gives startup,
+/// background refresh, and `/skills reload` the same boundary.
 pub async fn discover_all(config: &SkillsConfig) -> DiscoveryResult {
-    let project_trusted = TrustGate::load().is_trusted(&resolve_project_root(config));
-    discover_all_with_trust(config, project_trusted).await
+    let extension_state = WorkspaceSecurityStore::load()
+        .snapshot(&resolve_project_root(config))
+        .extensions;
+    discover_all_with_extension_state(config, extension_state).await
 }
 
-/// Discovery with the trust decision supplied by the caller. Production code
-/// uses [`discover_all`] (which resolves trust from the store); this seam
-/// exists so tests can exercise both trust states without touching the
-/// on-disk trust store.
-pub async fn discover_all_with_trust(
+/// Discovery with an explicit extension state. Production code uses
+/// [`discover_all`], which resolves the live state from workspace security;
+/// this seam lets tests cover every admission state without mutating user
+/// state.
+pub async fn discover_all_with_extension_state(
     config: &SkillsConfig,
-    project_trusted: bool,
+    extension_state: WorkspaceExtensionsState,
 ) -> DiscoveryResult {
     let mut result = DiscoveryResult::default();
     // name -> position in `result.skills`. Scanning runs lowest- to
@@ -75,7 +75,7 @@ pub async fn discover_all_with_trust(
     // while preserving the first-seen position for stable catalog ordering.
     let mut index: HashMap<String, usize> = HashMap::new();
 
-    for source in skill_sources(config, project_trusted).await {
+    for source in skill_sources(config, extension_state).await {
         match source {
             SkillSource::Local { root, scope } => {
                 discover_local_skills(&root, scope, config, &mut index, &mut result);
@@ -102,7 +102,10 @@ enum SkillSource {
     Remote { roots: Vec<PathBuf> },
 }
 
-async fn skill_sources(config: &SkillsConfig, project_trusted: bool) -> Vec<SkillSource> {
+async fn skill_sources(
+    config: &SkillsConfig,
+    extension_state: WorkspaceExtensionsState,
+) -> Vec<SkillSource> {
     let mut sources: Vec<SkillSource> = Vec::new();
     let dirs = paths::get();
 
@@ -157,15 +160,12 @@ async fn skill_sources(config: &SkillsConfig, project_trusted: bool) -> Vec<Skil
         });
     }
 
-    // 5/6. Project-local skills (highest priority) — GATED by the ADR-0085
-    //    §5 trust decision: an untrusted project's sources are not even
-    //    scanned, so a cloned/vendored repo cannot inject or shadow skills
-    //    merely because the directory was opened. The project root comes from
-    //    the config when the session bootstrap designated one (ADR-0096: the
-    //    daemon's process cwd belongs to whichever client first spawned it,
-    //    not necessarily this session's project); otherwise fall back to the
-    //    process cwd for contexts without a designated project.
-    if project_trusted {
+    // 5/6. Project-local skills (highest priority). Only the exact content
+    //    represented by a Trusted extension state is scanned. The project
+    //    root comes from the config when session bootstrap designated one;
+    //    otherwise discovery falls back to the process cwd for embeddings
+    //    without a designated workspace.
+    if extension_state.is_trusted() {
         let project_root = resolve_project_root(config);
         // 5. Project-local external skills.
         for dir in EXTERNAL_SKILL_DIRS {
@@ -195,7 +195,7 @@ fn resolve_project_root(config: &SkillsConfig) -> PathBuf {
 }
 
 /// Whether the project tree declares any project-local skills. Used to word
-/// the trust-gate user notices (bootstrap, `/trust`) without running a full
+/// extension-security notices without running a full
 /// scan; deliberately cheap and purely local.
 pub fn project_skills_present(project_root: &Path) -> bool {
     EXTERNAL_SKILL_DIRS
@@ -364,8 +364,8 @@ mod tests {
     /// process cwd — which under the daemon belongs to a different project
     /// than the session invoking discovery.
     ///
-    /// Uses the `_with_trust` seam: `discover_all` itself consults the real
-    /// on-disk trust store, which a temp test project is not in.
+    /// Uses the explicit-state seam because `discover_all` consults persisted
+    /// workspace security, while this temporary workspace has no grant.
     #[tokio::test]
     async fn pinned_project_root_scopes_project_local_skills() {
         let root = std::env::temp_dir().join(format!("muta-skills-{}", uuid::Uuid::new_v4()));
@@ -381,7 +381,8 @@ mod tests {
             project_root: Some(root.clone()),
             ..Default::default()
         };
-        let result = discover_all_with_trust(&config, true).await;
+        let result =
+            discover_all_with_extension_state(&config, WorkspaceExtensionsState::Trusted).await;
         assert!(
             result.skills.iter().any(|skill| skill.name == "pinned"),
             "project-local skill must be discovered from the pinned root"
@@ -390,7 +391,8 @@ mod tests {
         // Without a pinned root the same config discovers nothing here: the
         // process cwd (the test binary's) has no `.muta/skills/pinned`.
         let unpinned = muta_contracts::SkillsConfig::default();
-        let result = discover_all_with_trust(&unpinned, true).await;
+        let result =
+            discover_all_with_extension_state(&unpinned, WorkspaceExtensionsState::Trusted).await;
         assert!(
             !result.skills.iter().any(|skill| skill.name == "pinned"),
             "unpinned discovery must not reach into an unrelated directory"
@@ -399,12 +401,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// ADR-0085 §5 extended to skills: an untrusted project's Repo-scope
-    /// sources (`.muta/skills`, `.agents/skills`, `.claude/skills`) are not
-    /// scanned at all, so a cloned/vendored repo cannot inject skills or
-    /// shadow user skills merely because the directory was opened.
+    /// Repo-scope sources are invisible until their exact content has been
+    /// admitted by workspace extension security.
     #[tokio::test]
-    async fn untrusted_project_skips_repo_scoped_sources() {
+    async fn quarantined_extensions_skip_repo_scoped_sources() {
         let root = std::env::temp_dir().join(format!("muta-skills-{}", uuid::Uuid::new_v4()));
         for dir in [".muta/skills/evil", ".agents/skills/evil2"] {
             let skill_dir = root.join(dir);
@@ -422,27 +422,26 @@ mod tests {
             ..Default::default()
         };
 
-        // Untrusted: no Repo-scope skill appears, and no shadow is reported
-        // (the project sources were never scanned).
-        let result = discover_all_with_trust(&config, false).await;
+        let result =
+            discover_all_with_extension_state(&config, WorkspaceExtensionsState::Quarantined).await;
         assert!(
             !result
                 .skills
                 .iter()
                 .any(|skill| skill.scope == SkillScope::Repo),
-            "untrusted project must contribute no repo skills"
+            "quarantined extensions must contribute no repo skills"
         );
         assert!(
             !result
                 .skills
                 .iter()
                 .any(|s| s.name == "evil" || s.name == "evil2"),
-            "planted skills must not load while untrusted"
+            "quarantined skills must not load"
         );
         assert!(result.shadowed.is_empty());
 
-        // Trusted: both project skills load.
-        let result = discover_all_with_trust(&config, true).await;
+        let result =
+            discover_all_with_extension_state(&config, WorkspaceExtensionsState::Trusted).await;
         assert!(result.skills.iter().any(|s| s.name == "evil"));
         assert!(result.skills.iter().any(|s| s.name == "evil2"));
 

@@ -9,6 +9,19 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Physical containment required for shell commands in an execution environment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ShellIsolation {
+    /// Direct host execution. Intended for explicit embedding/test environments,
+    /// never the default product runtime.
+    #[default]
+    Host,
+    /// Minimal read-only system runtime, writable workspace bind, isolated
+    /// HOME/tmp/process namespaces, and scrubbed environment. Implementations
+    /// must fail closed when unavailable.
+    Workspace,
+}
+
 /// Errors produced by a [`FsProvider`] implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsError {
@@ -180,6 +193,11 @@ pub trait ExecutionEnvironment: Send + Sync {
 
     /// The canonical root directory for this environment.
     fn workspace_root(&self) -> &Path;
+
+    /// Required containment for shell-capable tools.
+    fn shell_isolation(&self) -> ShellIsolation {
+        ShellIsolation::Host
+    }
 }
 
 /// Interceptor middleware for the tool execution pipeline.

@@ -292,6 +292,7 @@ pub async fn run_tui(
         loop_status: LoopStatus::Idle,
         round_counter: initial_round_count,
         autopilot: false,
+        workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
         retry_pending: false,
     }));
     let harness_clone = harness.clone();
@@ -2005,12 +2006,7 @@ pub async fn run_tui(
         cursor_position: 0,
         input_scroll: 0,
         modal_index: 0,
-        last_input_rect: mutx_engine::Rect::default(),
-        last_frame_area: mutx_engine::Rect::default(),
-        last_input_rows: 1,
         last_key_press: std::time::Instant::now(),
-        cursor_sync_pending: false,
-        cursor_visible: true,
         session_scroll: 0,
         session_modal_follow: true,
         session_info_detail: false,

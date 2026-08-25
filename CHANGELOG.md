@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added first-class workspace security (ADR-0140): independent execution
+  profiles and content-bound extension admission, visible preflight state,
+  interaction-only autopilot semantics, and a fail-closed physical workspace
+  sandbox for filesystem and shell operations.
+
+### Fixed
+
+- Rebuilt TUI cursor submission as one terminal commit transaction. The
+  backend now installs the final coordinate while the cursor is hidden and
+  reveals it only afterward, keeps cursor-only frames free of visibility
+  toggles, parks hidden frames at the last input anchor, clamps coordinates,
+  and forces a full recovery repaint after any failed terminal write.
+- Made scroll translation proof-based. Every overlapping row must match its
+  shifted source and the operation must eliminate real changed rows, so local
+  edits and repeated blank lines can no longer produce false terminal scrolls.
+  Diff planning no longer mutates committed terminal state before a successful
+  flush, and identical retained-grid writes stay clean.
+- Unified text-input geometry around grapheme clusters. Long picker and editor
+  fields now use bounded horizontal viewports, caret ownership follows the
+  active edit mode, and cursor motion or deletion cannot split combining
+  sequences, wide glyphs, or zero-width-joiner emoji.
+
 ## [0.34.0] - 2026-08-25
 
 ### Added

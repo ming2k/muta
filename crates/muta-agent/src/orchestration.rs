@@ -553,6 +553,7 @@ pub fn send_harness_state(
             loop_status,
             round_counter,
             autopilot: agent.get_autopilot(),
+            workspace_security: agent.workspace_security(),
             retry_pending: false,
         }),
     ));
@@ -584,6 +585,7 @@ pub async fn send_harness_state_for_session(
             loop_status,
             round_counter,
             autopilot: agent.get_autopilot(),
+            workspace_security: agent.workspace_security(),
             retry_pending,
         }),
     ));

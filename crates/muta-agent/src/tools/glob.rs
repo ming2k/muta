@@ -55,7 +55,7 @@ impl Tool for GlobTool {
         let pattern = args["pattern"].as_str().ok_or("Missing 'pattern'")?;
         let base = args["path"].as_str().unwrap_or(".");
 
-        let _env = self
+        let env = self
             .env
             .clone()
             .unwrap_or_else(|| env_from_root(&self.root));
@@ -67,6 +67,15 @@ impl Tool for GlobTool {
             Some(root) => root.join(base),
             None => std::path::PathBuf::from(base),
         };
+        let metadata = env
+            .fs()
+            .metadata(&base_path)
+            .await
+            .map_err(|error| format!("Cannot search glob base '{}': {error}", base))?;
+        if !metadata.is_dir {
+            return Err(format!("Glob base is not a directory: {base}"));
+        }
+        reject_pattern_traversal(pattern)?;
         let candidates = if pattern.contains('/') || base != "." {
             vec![base_path.join(pattern).to_string_lossy().to_string()]
         } else {
@@ -118,6 +127,22 @@ impl Tool for GlobTool {
             Ok(results.join("\n"))
         }
     }
+}
+
+fn reject_pattern_traversal(pattern: &str) -> Result<(), String> {
+    if std::path::Path::new(pattern).is_absolute()
+        || std::path::Path::new(pattern).components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err("Glob pattern must stay relative to its workspace base".to_string());
+    }
+    Ok(())
 }
 
 muta_contracts::register_tool!(GlobFactory => |ctx| GlobTool {

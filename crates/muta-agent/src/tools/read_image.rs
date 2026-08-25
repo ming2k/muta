@@ -12,7 +12,9 @@ use async_trait::async_trait;
 use muta_contracts::{Tool, ToolOutput};
 use serde_json::json;
 
-use crate::tools::helpers::{WorkspaceBase, resolve_workspace_path, workspace_base};
+use crate::tools::helpers::{
+    WorkspaceBase, env_from_root, execution_environment, resolve_workspace_path, workspace_base,
+};
 
 /// Read an image file so the model can see it.
 ///
@@ -20,6 +22,21 @@ use crate::tools::helpers::{WorkspaceBase, resolve_workspace_path, workspace_bas
 /// factory time), not the daemon process's cwd (ADR-0096).
 pub struct ReadImageTool {
     pub(crate) root: WorkspaceBase,
+    pub(crate) env: Option<std::sync::Arc<dyn muta_contracts::ExecutionEnvironment>>,
+}
+
+impl ReadImageTool {
+    pub fn new(root: WorkspaceBase) -> Self {
+        Self { root, env: None }
+    }
+
+    pub fn with_env(env: std::sync::Arc<dyn muta_contracts::ExecutionEnvironment>) -> Self {
+        let root = Some(env.workspace_root().to_path_buf());
+        Self {
+            root,
+            env: Some(env),
+        }
+    }
 }
 
 /// Images are downscaled so the longest edge is at most this many pixels
@@ -69,7 +86,14 @@ impl Tool for ReadImageTool {
         let mime =
             mime_for_path(path).ok_or_else(|| format!("Unsupported image format: {}", path))?;
 
-        let bytes = std::fs::read(resolve_workspace_path(&self.root, path))
+        let env = self
+            .env
+            .clone()
+            .unwrap_or_else(|| env_from_root(&self.root));
+        let bytes = env
+            .fs()
+            .read(&resolve_workspace_path(&self.root, path))
+            .await
             .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
 
         // Resize if the image decodes and is larger than the cap; otherwise
@@ -88,6 +112,7 @@ impl Tool for ReadImageTool {
 
 muta_contracts::register_tool!(ReadImageFactory => |ctx| ReadImageTool {
     root: workspace_base(ctx),
+    env: Some(execution_environment(ctx)),
 });
 
 /// Map a file extension to the MIME type muta can encode. We accept the
@@ -163,7 +188,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_non_image_extension() {
-        let err = ReadImageTool { root: None }
+        let err = ReadImageTool::new(None)
             .call_structured(r#"{"path":"missing.txt"}"#)
             .await
             .unwrap_err();
@@ -172,7 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn reports_missing_file() {
-        let err = ReadImageTool { root: None }
+        let err = ReadImageTool::new(None)
             .call_structured(r#"{"path":"nope.png"}"#)
             .await
             .unwrap_err();
@@ -192,7 +217,7 @@ mod tests {
         std::fs::write(&path, buf.into_inner()).unwrap();
 
         let arguments = serde_json::json!({ "path": &path }).to_string();
-        let out = ReadImageTool { root: None }
+        let out = ReadImageTool::new(None)
             .call_structured(&arguments)
             .await
             .unwrap();

@@ -116,7 +116,7 @@ user message
             └─ fallback? [Rounds and turns] parse tool call from text
        └─ per tool call:
             ├─ [Hooks] PreToolUse gate (matcher?) ── deny? → blocked
-            ├─ [Harness] permission broker (Write tools only) — autopilot? → skip
+            ├─ [Harness] authority chain — missing grant? attended → ask; autopilot → fail
             ├─ [Envoys] if call is `envoy`: spawn isolated child,
             │              stream SubTaskEvent back through the same pipeline
             ├─ [MCP]       if call is `mcp__*`: JSON-RPC over stdio

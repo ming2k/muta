@@ -99,7 +99,7 @@ re-prompts; no conversation is lost.
 | `history.json` | Slash-command input history | Rebuildable |
 | `providers.toml` | **Provider instances** — the program-managed "who I connect to" records: id/name, `template_id`, `auth`, optional `api_key_env`, and a pure-custom instance's declared transport/endpoint/models. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each instance's template + the discovery cache, never persisted | No (user-managed connections) |
 | `route_settings.json` | The user's per-(instance, model) reasoning overrides — set from the model `e` editor. State, not cache: deleting it loses user configuration no endpoint can re-derive (migrated out of `models_discovery.json`) | No |
-| `trusted_projects.json` | The per-project trust grant set (which projects' `.muta/config.toml` external tools are loaded) | Rebuildable (re-trust) |
+| `workspace_security.json` | Versioned workspace execution profiles plus content digests for trusted project extensions | Rebuildable (authority choices and extension trust must be granted again) |
 | `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |
 | `auth.toml` | OAuth token sets per provider id (`[tokens.<provider>]`, 0600) — access/refresh/expiry for SuperGrok, ChatGPT, Copilot, and Google Antigravity logins. Rebuildable only by re-logging in (the refresh tokens are the durable secret; losing the file means re-auth, so back it up if rotating logins is costly) | Re-auth on loss |
 | `muta.lock` | Cross-process advisory lock when no runtime directory is available | Rebuildable |

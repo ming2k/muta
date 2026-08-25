@@ -72,6 +72,7 @@ pub enum BandRotation {
 /// Stored as a flat `Vec<Cell>` in row-major order. The dirty bookkeeping
 /// (`dirty_col`, `dirty_row_lo`, `dirty_row_hi`) is updated on every mutating
 /// call so the diff only walks the region that actually changed.
+#[derive(Clone)]
 pub struct Grid {
     pub width: u16,
     pub height: u16,
@@ -172,24 +173,28 @@ impl Grid {
             return;
         }
         let idx = self.index_of(x, y);
+        if self.content[idx] == cell {
+            return;
+        }
 
         // If we are overwriting the right half of a wide character, clear its head.
         if x > 0 && self.content[idx].is_wide_continuation() {
             let left_idx = self.index_of(x - 1, y);
-            self.content[left_idx].symbol = " ".into();
-            self.content[left_idx].width = 1;
-            self.mark(x - 1, y);
+            let mut cleared = self.content[left_idx].clone();
+            cleared.symbol = " ".into();
+            cleared.width = 1;
+            self.replace_cell(x - 1, y, cleared);
         }
         // If we are overwriting a wide character's head, clear its trailing continuation.
         if self.content[idx].width >= 2 && x + 1 < self.width {
             let right_idx = self.index_of(x + 1, y);
-            self.content[right_idx].symbol = " ".into();
-            self.content[right_idx].width = 1;
-            self.mark(x + 1, y);
+            let mut cleared = self.content[right_idx].clone();
+            cleared.symbol = " ".into();
+            cleared.width = 1;
+            self.replace_cell(x + 1, y, cleared);
         }
 
-        self.content[idx] = cell;
-        self.mark(x, y);
+        self.replace_cell(x, y, cell);
     }
 
     /// Write a string at `(x, y)` with a uniform style, honoring grapheme
@@ -263,34 +268,51 @@ impl Grid {
                 style: cell_style,
             };
             let head_idx = self.index_of(cx, cy);
+            let trail =
+                (w >= 2 && cx + 1 < self.width).then(|| Cell::wide_continuation(cell_style));
+
+            // The immediate-mode application may repaint an identical widget
+            // into the retained grid. Preserve a clean row when the complete
+            // glyph (head plus wide continuation) is already present.
+            let glyph_unchanged = self.content[head_idx] == head
+                && trail.as_ref().is_none_or(|want| {
+                    self.content
+                        .get(self.index_of(cx + 1, cy))
+                        .is_some_and(|have| have == want)
+                });
+            if glyph_unchanged {
+                cx += w as u16;
+                continue;
+            }
 
             if cx > 0 && self.content[head_idx].is_wide_continuation() {
                 let left_idx = self.index_of(cx - 1, cy);
-                self.content[left_idx].symbol = " ".into();
-                self.content[left_idx].width = 1;
-                self.mark(cx - 1, cy);
+                let mut cleared = self.content[left_idx].clone();
+                cleared.symbol = " ".into();
+                cleared.width = 1;
+                self.replace_cell(cx - 1, cy, cleared);
             }
             if self.content[head_idx].width >= 2 && cx + 1 < self.width {
                 let right_idx = self.index_of(cx + 1, cy);
-                self.content[right_idx].symbol = " ".into();
-                self.content[right_idx].width = 1;
-                self.mark(cx + 1, cy);
+                let mut cleared = self.content[right_idx].clone();
+                cleared.symbol = " ".into();
+                cleared.width = 1;
+                self.replace_cell(cx + 1, cy, cleared);
             }
 
-            self.content[head_idx] = head;
-            self.mark(cx, cy);
+            self.replace_cell(cx, cy, head);
             // Place the trailing continuation cell for a wide glyph, carrying
             // the glyph's background so the column can never ghost.
-            if w >= 2 && cx + 1 < self.width {
+            if let Some(trail) = trail {
                 let trail_idx = self.index_of(cx + 1, cy);
                 if self.content[trail_idx].width >= 2 && cx + 2 < self.width {
                     let right_idx = self.index_of(cx + 2, cy);
-                    self.content[right_idx].symbol = " ".into();
-                    self.content[right_idx].width = 1;
-                    self.mark(cx + 2, cy);
+                    let mut cleared = self.content[right_idx].clone();
+                    cleared.symbol = " ".into();
+                    cleared.width = 1;
+                    self.replace_cell(cx + 2, cy, cleared);
                 }
-                self.content[trail_idx] = Cell::wide_continuation(cell_style);
-                self.mark(cx + 1, cy);
+                self.replace_cell(cx + 1, cy, trail);
             }
             cx += w as u16;
         }
@@ -313,33 +335,33 @@ impl Grid {
                 let left_idx = self.index_of(col_start, row);
                 if self.content[left_idx].is_wide_continuation() {
                     let head_idx = self.index_of(col_start - 1, row);
-                    self.content[head_idx].symbol = " ".into();
-                    self.content[head_idx].width = 1;
-                    self.mark(col_start - 1, row);
+                    let mut cleared = self.content[head_idx].clone();
+                    cleared.symbol = " ".into();
+                    cleared.width = 1;
+                    self.replace_cell(col_start - 1, row, cleared);
                 }
             }
             if col_end > col_start {
                 let right_idx = self.index_of(col_end - 1, row);
                 if self.content[right_idx].width >= 2 && col_end < self.width {
                     let trail_idx = self.index_of(col_end, row);
-                    self.content[trail_idx].symbol = " ".into();
-                    self.content[trail_idx].width = 1;
-                    self.mark(col_end, row);
+                    let mut cleared = self.content[trail_idx].clone();
+                    cleared.symbol = " ".into();
+                    cleared.width = 1;
+                    self.replace_cell(col_end, row, cleared);
                 }
             }
 
             for col in col_start..col_end {
-                let idx = self.index_of(col, row);
-                self.content[idx] = blank.clone();
+                self.replace_cell(col, row, blank.clone());
             }
-            self.mark(x, row);
         }
     }
 
     /// Clear a single row to blank cells of the given style, from column `x`
     /// to the right edge.
     pub fn clear_row(&mut self, y: u16, x: u16, style: crate::Style) {
-        if y >= self.height {
+        if y >= self.height || self.width == 0 {
             return;
         }
         let start_x = x.min(self.width.saturating_sub(1));
@@ -347,19 +369,17 @@ impl Grid {
             let start_idx = self.index_of(start_x, y);
             if self.content[start_idx].is_wide_continuation() {
                 let head_idx = self.index_of(start_x - 1, y);
-                self.content[head_idx].symbol = " ".into();
-                self.content[head_idx].width = 1;
-                self.mark(start_x - 1, y);
+                let mut cleared = self.content[head_idx].clone();
+                cleared.symbol = " ".into();
+                cleared.width = 1;
+                self.replace_cell(start_x - 1, y, cleared);
             }
         }
 
         let blank = Cell::blank_styled(style);
-        let start = self.index_of(start_x, y);
-        let end = self.index_of(self.width, y);
-        for cell in &mut self.content[start..end] {
-            *cell = blank.clone();
+        for col in start_x..self.width {
+            self.replace_cell(col, y, blank.clone());
         }
-        self.mark(x, y);
     }
 
     /// Mark every cell dirty. Used after a wholesale replacement of contents
@@ -498,6 +518,21 @@ impl Grid {
         self.dirty_row_hi = Some(self.dirty_row_hi.map(|hi| hi.max(y)).unwrap_or(y));
     }
 
+    /// Replace one in-bounds cell and mark it only when its final value
+    /// differs. Widget redraws commonly write the same cell again; treating
+    /// those writes as changes expands the diff band and can feed false
+    /// evidence into higher-level optimizations such as scroll translation.
+    #[inline]
+    fn replace_cell(&mut self, x: u16, y: u16, cell: Cell) -> bool {
+        let idx = self.index_of(x, y);
+        if self.content[idx] == cell {
+            return false;
+        }
+        self.content[idx] = cell;
+        self.mark(x, y);
+        true
+    }
+
     /// The grid's rows as per-row cell slices (test/debug inspection).
     pub fn rows(&self) -> Vec<&[Cell]> {
         self.content.chunks(self.width as usize).collect()
@@ -551,6 +586,24 @@ mod tests {
         assert_eq!(g.dirty_col_of(0), None);
         assert_eq!(g.dirty_col_of(1), Some(2));
         assert_eq!(g.dirty_col_of(2), None);
+    }
+
+    #[test]
+    fn identical_writes_do_not_dirty_the_retained_grid() {
+        let mut g = Grid::new(8, 2);
+        let style = Style::default().bg(crate::Color::Rgb(1, 2, 3));
+        g.fill_rect(0, 0, 8, 2, style);
+        g.put(1, 0, Fit::Clip, style, "中a");
+        g.clear_dirty();
+
+        g.fill_rect(0, 1, 8, 1, style);
+        g.put(1, 0, Fit::Clip, style, "中a");
+
+        assert!(
+            !g.is_dirty(),
+            "rewriting identical narrow and wide cells must stay clean"
+        );
+        assert!(g.get(2, 0).unwrap().is_wide_continuation());
     }
 
     #[test]

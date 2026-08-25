@@ -271,7 +271,6 @@ pub struct PermissionConfig {
 /// ```toml
 /// [bash_policy]
 /// enabled = true
-/// autopilot_confirm = "deny"
 ///
 /// [[bash_policy.rules]]
 /// name = "deny git reset hard"
@@ -287,9 +286,6 @@ pub struct BashPolicyConfig {
     /// built-in commands are protected even when the user has broadly allowed
     /// the `bash` tool.
     pub enabled: bool,
-    /// What to do with a `confirm` decision while autopilot/no-human mode is
-    /// active. Defaults to `deny`.
-    pub autopilot_confirm: BashPolicyAutopilotAction,
     /// Whether an explicit user `allow` rule may override a compiled-in `deny`
     /// rule. Defaults to `false`; user `allow` rules can still override
     /// compiled-in `confirm` rules.
@@ -304,63 +300,10 @@ impl Default for BashPolicyConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            autopilot_confirm: BashPolicyAutopilotAction::Deny,
             allow_user_override_builtin_deny: false,
             rules: Vec::new(),
         }
     }
-}
-
-impl BashPolicyConfig {
-    /// Return a copy hardened for an **untrusted** project (codex
-    /// `UnlessTrusted` analogue). Applied only when the project is not yet
-    /// trusted; `/trust` re-seeds with the raw config.
-    ///
-    /// Two adjustments, both reversibly additive:
-    /// 1. Lock `autopilot_confirm` to `Deny`. A confirmation-gated command
-    ///    must not auto-proceed when no human is reachable — a cloned/vendored
-    ///    repo is exactly the case a human should eyeball.
-    /// 2. Prepend a `confirm` rule matching common prompt-injection payloads:
-    ///    package-manager installs (`npm i`, `pip install`, `cargo add`,
-    ///    `go get`, …) and pipe-to-shell execution (`curl … | sh`, `wget … |
-    ///    bash`). The built-in destructive-command rules already cover `rm`/
-    ///    `git reset`; this layer covers *fetch-and-execute*, the other classic
-    ///    untrusted-repo hazard.
-    ///
-    /// This is a lint (see `bash_policy.rs`), not a capability boundary — the
-    /// envoy `OperationScope` remains the real wall — but it surfaces the
-    /// decision to the human in the loop instead of letting it run silently.
-    pub fn with_untrusted_hardening(mut self) -> Self {
-        self.autopilot_confirm = BashPolicyAutopilotAction::Deny;
-        let hardening_rule = BashPolicyRuleConfig {
-            name: "untrusted-project confirm".to_string(),
-            matcher: BashPolicyMatcherConfig::Regex,
-            pattern: r"(?i)(^|[;&|]\s*|\s\|\s)*(?:npm\s+(?:install|i|ci|exec)\b|npx\s+-y\b|pnpm\s+(?:install|add|exec)\b|yarn\s+(?:add|install)\b|pip3?\s+install\b|pipx\s+install\b|uv\s+(?:pip\s+)?install\b|poetry\s+add\b|cargo\s+(?:add|install)\b|go\s+get\b|gem\s+install\b|brew\s+install\b|apt(?:-get)?\s+install\b|yum\s+install\b|dnf\s+install\b|pacman\s+-S\b|\b(?:curl|wget)\b[^|]*\|\s*(?:sh|bash|zsh|python3?|ruby|perl)\b)".to_string(),
-            action: BashPolicyActionConfig::Confirm,
-            reason: Some(
-                "Project is not trusted: confirm fetch/install/pipe-to-shell commands."
-                    .to_string(),
-            ),
-        };
-        // Prepend so it is evaluated first (a later user `allow` rule for the
-        // same command still wins, matching the override semantics).
-        let mut rules = Vec::with_capacity(self.rules.len() + 1);
-        rules.push(hardening_rule);
-        rules.append(&mut self.rules);
-        self.rules = rules;
-        self
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BashPolicyAutopilotAction {
-    /// Refuse commands that require confirmation when no human is reachable.
-    #[default]
-    Deny,
-    /// Allow confirmation-gated commands to proceed autopilot. Useful only for
-    /// highly controlled automation; not recommended for normal agent use.
-    Allow,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -940,6 +883,11 @@ pub struct HookSpec {
     /// Shell command run when the event matches. Executed with the project
     /// root as cwd and the hook context as JSON on stdin.
     pub command: String,
+    /// Runtime-only origin marker. Project-defined hooks carry their exact
+    /// workspace root and execute read-only/offline inside the workspace
+    /// sandbox. Global user hooks leave this unset.
+    #[serde(skip)]
+    pub sandbox_root: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
@@ -1047,9 +995,9 @@ impl Config {
     ///
     /// This reads a *narrow* projection — just the mcp table — so a project
     /// config that also carries unrelated keys (or partial/incomplete TOML)
-    /// does not fail the whole load. Project-scope MCP is untrusted until a
-    /// trust grant exists (§5); this function is pure parsing, the trust gate
-    /// is applied by the caller (bootstrap / `/reload`).
+    /// does not fail the whole load. Project-scope MCP stays quarantined until
+    /// the current extension digest is trusted; this function is pure parsing,
+    /// and the caller applies the content-bound decision.
     pub fn load_project_mcp(project_root: &std::path::Path) -> HashMap<String, McpServerConfig> {
         let path = project_root.join(".muta/config.toml");
         let Some(content) = fs::read_to_string(&path).ok() else {
@@ -1063,7 +1011,14 @@ impl Config {
             mcp: HashMap<String, McpServerConfig>,
         }
         match toml::from_str::<ProjectMcpProjection>(&content) {
-            Ok(parsed) => parsed.mcp,
+            Ok(mut parsed) => {
+                let root = std::fs::canonicalize(project_root)
+                    .unwrap_or_else(|_| project_root.to_path_buf());
+                for config in parsed.mcp.values_mut() {
+                    config.sandbox_root = Some(root.clone());
+                }
+                parsed.mcp
+            }
             Err(err) => {
                 tracing::warn!(
                     path = %path.display(),
@@ -1089,8 +1044,8 @@ impl Config {
     /// `.muta/config.toml`. Returns an empty vec when the file or table is
     /// absent. Like [`Self::load_project_mcp`], this is a *narrow* projection
     /// (just the hooks array) so an unrelated key in the project file does not
-    /// fail the whole load. Project-scope hooks are untrusted until a trust
-    /// grant exists; the caller applies the gate.
+    /// fail the whole load. Project-scope hooks are quarantined until their
+    /// exact extension content is trusted; the caller applies the gate.
     ///
     /// A project `[[hooks]]` entry whose `command` points at a project-supplied
     /// script (e.g. `.muta/hooks/lint.sh`) is the same class of hazard as a
@@ -1109,7 +1064,14 @@ impl Config {
             hooks: Vec<HookSpec>,
         }
         match toml::from_str::<ProjectHooksProjection>(&content) {
-            Ok(parsed) => parsed.hooks,
+            Ok(mut parsed) => {
+                let root = std::fs::canonicalize(project_root)
+                    .unwrap_or_else(|_| project_root.to_path_buf());
+                for hook in &mut parsed.hooks {
+                    hook.sandbox_root = Some(root.clone());
+                }
+                parsed.hooks
+            }
             Err(err) => {
                 tracing::warn!(
                     path = %path.display(),
@@ -1280,76 +1242,6 @@ pub fn load_theme_files(themes_dir: &std::path::Path) -> Vec<muta_contracts::The
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn untrusted_hardening_locks_autopilot_confirm_and_prepends_rule() {
-        // A default (trusted-shape) policy allows autopilot-confirm to be
-        // configured; hardening for an untrusted project forces Deny and
-        // prepends exactly one `confirm` rule for fetch/install/pipe-to-shell.
-        let base = BashPolicyConfig {
-            autopilot_confirm: BashPolicyAutopilotAction::Allow, // user opted in
-            ..BashPolicyConfig::default()
-        };
-        let hardened = base.clone().with_untrusted_hardening();
-
-        assert_eq!(
-            hardened.autopilot_confirm,
-            BashPolicyAutopilotAction::Deny,
-            "untrusted project must not auto-proceed confirm-gated commands"
-        );
-        // Exactly one hardening rule prepended.
-        assert!(
-            hardened
-                .rules
-                .iter()
-                .any(|r| r.name == "untrusted-project confirm"),
-            "hardening rule present"
-        );
-        assert_eq!(
-            hardened.rules.len(),
-            base.rules.len() + 1,
-            "only the hardening rule was added"
-        );
-        // The hardening rule is first (prepended) so it is evaluated before any
-        // user rule.
-        assert_eq!(hardened.rules[0].name, "untrusted-project confirm");
-        assert_eq!(hardened.rules[0].action, BashPolicyActionConfig::Confirm);
-    }
-
-    #[test]
-    fn untrusted_hardening_matches_common_injection_payloads() {
-        // The hardening rule's pattern must target the classic untrusted-repo
-        // payloads. The regex itself is compiled and exercised in the agent
-        // crate (which owns `regex`); here we assert the pattern text covers
-        // the expected command families so a refactor cannot silently narrow it.
-        let hardened = BashPolicyConfig::default().with_untrusted_hardening();
-        let rule = hardened
-            .rules
-            .iter()
-            .find(|r| r.name == "untrusted-project confirm")
-            .expect("hardening rule");
-        let pattern = rule.pattern.as_str();
-
-        // Each token anchors one payload family the rule must catch.
-        for needle in [
-            "npm\\s+(?:install",
-            "npx\\s+-y",
-            "pip3?\\s+install",
-            "uv\\s+(?:pip\\s+)?install",
-            "cargo\\s+(?:add|install)",
-            "go\\s+get",
-            "brew\\s+install",
-            "apt",
-            "curl",
-            "wget",
-            "\\|\\s*(?:sh|bash|zsh|python3?|ruby|perl)",
-        ] {
-            assert!(
-                pattern.contains(needle),
-                "hardening pattern missing {needle:?} (got: {pattern})"
-            );
-        }
-    }
 
     #[test]
     fn agent_table_round_trips_through_toml() {
@@ -1781,6 +1673,10 @@ name = "DeepSeek"
         assert_eq!(mcp.len(), 1);
         assert_eq!(mcp["project-db"].command, vec!["./bin/db-mcp".to_string()]);
         assert!(mcp["project-db"].enabled);
+        assert_eq!(
+            mcp["project-db"].sandbox_root.as_deref(),
+            Some(root.canonicalize().unwrap().as_path())
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1886,6 +1782,11 @@ name = "DeepSeek"
         assert_eq!(hooks[0].event, HookEventKind::PostToolUse);
         assert_eq!(hooks[0].command, ".muta/hooks/lint.sh");
         assert_eq!(hooks[1].event, HookEventKind::Stop);
+        assert!(
+            hooks
+                .iter()
+                .all(|hook| hook.sandbox_root.as_deref() == Some(root.as_path()))
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1931,11 +1832,13 @@ name = "DeepSeek"
             event: HookEventKind::Stop,
             matcher: None,
             command: "global-notify.sh".to_string(),
+            sandbox_root: None,
         });
         let project_hooks = vec![HookSpec {
             event: HookEventKind::PostToolUse,
             matcher: Some("Write".to_string()),
             command: ".muta/hooks/lint.sh".to_string(),
+            sandbox_root: Some(std::path::PathBuf::from("/project")),
         }];
         global.merge_project_hooks(project_hooks);
         assert_eq!(global.hooks.len(), 2, "global + project appended");

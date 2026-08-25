@@ -1485,6 +1485,7 @@ dependencies = [
  "async-trait",
  "futures",
  "muta-contracts",
+ "muta-persistence",
  "muta-platform",
  "serde_json",
  "tokio",

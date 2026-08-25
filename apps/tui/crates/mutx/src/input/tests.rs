@@ -4380,6 +4380,58 @@ fn delete_key_removes_full_grapheme_cluster() {
 }
 
 #[test]
+fn horizontal_motion_skips_entire_zwj_grapheme() {
+    let family = "👨‍👩‍👧‍👦";
+    let mut input = format!("a{family}b");
+    let mut cursor = 1 + family.chars().count();
+
+    assert_eq!(
+        compose_key(KeyCode::Left, KeyModifiers::NONE, &mut input, &mut cursor),
+        InputAction::None
+    );
+    assert_eq!(cursor, 1, "Left lands before the whole family emoji");
+
+    compose_key(KeyCode::Right, KeyModifiers::NONE, &mut input, &mut cursor);
+    assert_eq!(
+        cursor,
+        1 + family.chars().count(),
+        "Right lands after the whole family emoji"
+    );
+}
+
+#[test]
+fn backspace_removes_entire_zwj_grapheme() {
+    let family = "👨‍👩‍👧‍👦";
+    let mut input = format!("a{family}b");
+    let mut cursor = 1 + family.chars().count();
+
+    assert_eq!(
+        compose_key(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+            &mut input,
+            &mut cursor,
+        ),
+        InputAction::Backspace
+    );
+    assert_eq!(input, "ab");
+    assert_eq!(cursor, 1);
+}
+
+#[test]
+fn delete_removes_entire_combining_grapheme() {
+    let mut input = "ae\u{301}b".to_string();
+    let mut cursor = 1;
+
+    assert_eq!(
+        compose_key(KeyCode::Delete, KeyModifiers::NONE, &mut input, &mut cursor),
+        InputAction::DeleteForward
+    );
+    assert_eq!(input, "ab");
+    assert_eq!(cursor, 1);
+}
+
+#[test]
 fn delete_key_eats_whole_attachment_chip() {
     // Forward-deleting the `[` of an attachment chip removes the whole chip
     // (plus the trailing space a paste inserts) in one keystroke, mirroring

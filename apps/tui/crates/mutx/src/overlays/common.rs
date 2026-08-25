@@ -3,6 +3,7 @@
 use mutx_engine::{
     {Color, Style}, {Line, Span},
 };
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::primitives::contrast_fg;
@@ -77,13 +78,8 @@ pub fn truncate_ellipsis(s: &str, max: usize) -> String {
 /// primitive the composer uses, so both caret sites can never disagree with the
 /// grid's paint width.
 pub fn caret_column(display: &str, cursor_position: usize) -> u16 {
-    let n = cursor_position.min(display.chars().count());
-    let byte = display
-        .char_indices()
-        .nth(n)
-        .map(|(i, _)| i)
-        .unwrap_or(display.len());
-    mutx_engine::text::cursor_column(display, byte) as u16
+    let byte = char_index_to_byte(display, cursor_position);
+    mutx_engine::text::cursor_column(display, byte).min(u16::MAX as usize) as u16
 }
 
 /// A single-line input's horizontal viewport (caret-following): the mechanism
@@ -95,37 +91,64 @@ pub fn caret_column(display: &str, cursor_position: usize) -> u16 {
 /// 3/4 across the window so typing forward stays as jitter-free as a normal
 /// text input. Width-aware so wide glyphs never desync the budget.
 pub fn field_viewport(display: &str, cursor_position: usize, width: usize) -> (usize, String) {
-    use unicode_width::UnicodeWidthChar;
     if width == 0 {
         return (0, String::new());
     }
-    let total = display.width();
+    let total = mutx_engine::text::str_len(display);
     if total <= width {
         return (0, display.to_string());
     }
-    let n = cursor_position.min(display.chars().count());
-    let caret_col = display.chars().take(n).fold(0usize, |acc, c| {
-        acc + UnicodeWidthChar::width(c).unwrap_or(1)
-    });
+    let caret_byte = char_index_to_byte(display, cursor_position);
+    let caret_col = mutx_engine::text::cursor_column(display, caret_byte);
 
-    let mut offset = caret_col.saturating_sub(width * 3 / 4);
-    if offset + width > total {
-        offset = total.saturating_sub(width);
+    let desired_offset = caret_col.saturating_sub(width * 3 / 4);
+
+    // Snap the left edge backward to a grapheme boundary. A viewport may
+    // contain an entire grapheme or none of it; starting in the middle of a
+    // combining sequence or ZWJ emoji would make the rendered text and caret
+    // use different column models.
+    let mut start_byte = 0usize;
+    let mut offset = 0usize;
+    for (byte, grapheme) in display.grapheme_indices(true) {
+        let grapheme_width = mutx_engine::text::grapheme_width(grapheme) as usize;
+        if offset + grapheme_width > desired_offset {
+            start_byte = byte;
+            break;
+        }
+        offset += grapheme_width;
+        start_byte = byte + grapheme.len();
+    }
+    // A backward snap over a wide grapheme can leave the caret exactly one
+    // column beyond the viewport. Advance by whole graphemes until the caret
+    // itself occupies a real field cell. This intentionally allows unused
+    // cells at the right edge near end-of-input; caret visibility is more
+    // important than filling the viewport with preceding text.
+    while caret_col.saturating_sub(offset) >= width && start_byte < display.len() {
+        let Some(grapheme) = display[start_byte..].graphemes(true).next() else {
+            break;
+        };
+        offset += mutx_engine::text::grapheme_width(grapheme) as usize;
+        start_byte += grapheme.len();
     }
 
     let mut text = String::new();
-    let mut col = 0usize;
-    for c in display.chars() {
-        let cw = UnicodeWidthChar::width(c).unwrap_or(1);
-        if col >= offset && col < offset + width {
-            text.push(c);
-        }
-        col += cw;
-        if col >= offset + width {
+    let mut used = 0usize;
+    for grapheme in display[start_byte..].graphemes(true) {
+        let grapheme_width = mutx_engine::text::grapheme_width(grapheme) as usize;
+        if used + grapheme_width > width {
             break;
         }
+        text.push_str(grapheme);
+        used += grapheme_width;
     }
     (offset, text)
+}
+
+fn char_index_to_byte(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .nth(char_index.min(text.chars().count()))
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len())
 }
 
 /// Draw the unified provider editor Two fields — API key
@@ -289,5 +312,55 @@ pub fn todo_status_glyph_color(
         TodoStatus::Completed => theme.ok(),
         TodoStatus::InProgress => theme.warn(),
         TodoStatus::Pending | TodoStatus::Cancelled => muted,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caret_column_floors_char_positions_inside_graphemes() {
+        let combining = "e\u{301}x";
+        assert_eq!(caret_column(combining, 1), 0);
+        assert_eq!(caret_column(combining, 2), 1);
+
+        let family = "👨‍👩‍👧‍👦";
+        assert_eq!(caret_column(family, 1), 0);
+        assert_eq!(caret_column(family, family.chars().count()), 2);
+    }
+
+    #[test]
+    fn field_viewport_never_splits_a_zwj_grapheme() {
+        let family = "👨‍👩‍👧‍👦";
+        let display = format!("abcd{family}xyz");
+        let cursor = format!("abcd{family}").chars().count();
+        let (offset, visible) = field_viewport(&display, cursor, 4);
+
+        assert_eq!(offset, 3);
+        assert_eq!(visible, format!("d{family}x"));
+        assert_eq!(mutx_engine::text::str_len(&visible), 4);
+    }
+
+    #[test]
+    fn field_viewport_keeps_end_caret_inside_narrow_cjk_field() {
+        let display = "abcd中文";
+        let (offset, visible) = field_viewport(display, display.chars().count(), 3);
+        let local_caret = caret_column(display, display.chars().count()) as usize - offset;
+
+        assert_eq!(offset, 6);
+        assert_eq!(visible, "文");
+        assert!(local_caret < 3, "caret must occupy a real field cell");
+    }
+
+    #[test]
+    fn field_viewport_preserves_combining_cluster_at_left_edge() {
+        let display = "abcde\u{301}xyz";
+        let cursor = display.chars().count();
+        let (_, visible) = field_viewport(display, cursor, 4);
+        assert!(
+            !visible.starts_with('\u{301}'),
+            "viewport must never begin with a detached combining mark"
+        );
     }
 }

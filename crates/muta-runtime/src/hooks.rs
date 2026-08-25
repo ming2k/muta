@@ -27,6 +27,7 @@ pub struct CommandHook {
     kind: HookEventKind,
     matcher: Option<String>,
     command: String,
+    sandbox_root: Option<std::path::PathBuf>,
 }
 
 impl CommandHook {
@@ -35,6 +36,7 @@ impl CommandHook {
             kind: spec.event,
             matcher: spec.matcher.clone(),
             command: spec.command.clone(),
+            sandbox_root: spec.sandbox_root.clone(),
         }
     }
 }
@@ -53,14 +55,38 @@ impl Hook for CommandHook {
         let stdin_json = context_to_json(ctx);
         let cwd = ctx.cwd.as_deref().unwrap_or_else(|| Path::new("."));
 
-        let mut command = muta_platform::shell::native_shell(&self.command);
+        let mut command = if let Some(root) = &self.sandbox_root {
+            let snapshot =
+                muta_persistence::workspace_security::WorkspaceSecurityStore::load().snapshot(root);
+            if !snapshot.extensions.is_trusted() {
+                tracing::warn!(command = %self.command, workspace = %root.display(), "project hook quarantined after extension attestation changed");
+                return HookOutcome::Pass;
+            }
+            // Project hooks are executable extensions. They may inspect the
+            // exact workspace but cannot mutate it, reach the network, read
+            // unrelated host files, or inherit ambient credentials.
+            match muta_platform::workspace_sandbox::shell(
+                &self.command,
+                root,
+                muta_platform::workspace_sandbox::WorkspaceAccess::ReadOnly,
+                muta_platform::workspace_sandbox::NetworkAccess::Disabled,
+            ) {
+                Ok(command) => command,
+                Err(error) => {
+                    tracing::warn!(command = %self.command, %error, "project hook sandbox unavailable");
+                    return HookOutcome::Pass;
+                }
+            }
+        } else {
+            muta_platform::shell::native_shell(&self.command)
+        };
         command
-            .current_dir(cwd)
+            .current_dir(self.sandbox_root.as_deref().unwrap_or(cwd))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        // Inherit MUTA_* and the ambient environment so scripts can reach
-        // configured tools; nothing secret is added.
+        // Global user hooks intentionally retain the ambient environment.
+        // Project hooks were built with a cleared deterministic environment.
         let (child, process_tree) = match muta_platform::process::spawn_owned(&mut command) {
             Ok(owned) => owned,
             Err(error) => {

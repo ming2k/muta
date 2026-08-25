@@ -100,9 +100,14 @@ pub use usage_stats::{
 pub mod doom_guard_config;
 pub mod execution;
 pub mod secret;
+pub mod security;
 pub use execution::{
     DirEntry, ExecutionEnvironment, FsError, FsMetadata, FsProvider, ProcessOutput, ProcessRunner,
-    ToolMiddleware,
+    ShellIsolation, ToolMiddleware,
+};
+pub use security::{
+    WorkspaceExecutionProfile, WorkspaceExtensionsState, WorkspaceSandboxState,
+    WorkspaceSecuritySnapshot,
 };
 pub mod session_title;
 pub mod session_tree;

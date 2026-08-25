@@ -120,8 +120,9 @@ session a frontend can drive." It owns:
 - **`slash_handler`** — the `SlashCommandHandler` extension point so embeddings
   register Rust slash commands without forking the server (ADR-0054).
 - **`input_completion`** — the shared composer-completion policy: command and
-  intent matching, aliases, trusted project commands, and `@path` discovery.
-  Clients request ready-to-apply edits and do not duplicate these rules.
+  intent matching, aliases, content-admitted workspace commands, and `@path`
+  discovery. Clients request ready-to-apply edits and do not duplicate these
+  rules.
 - **`UiBridge`** — the one frontend-capability trait (`/export` clipboard).
 - **`client`** — the client side of the control plane (ADR-0098): discovery,
   the attach handshake, one-shot control verbs, and the monitor stream. Client

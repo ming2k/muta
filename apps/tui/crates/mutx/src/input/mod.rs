@@ -742,14 +742,71 @@ impl InputAction {
 /// entry bindings (plain Enter sends the message).
 fn insert_newline(input: &mut String, cursor_position: &mut usize, active_modal: super::Modal) {
     if matches!(active_modal, super::Modal::None) {
-        let byte_pos = input
-            .char_indices()
-            .map(|(i, _)| i)
-            .nth(*cursor_position)
-            .unwrap_or(input.len());
+        let byte_pos = normalized_cursor_byte(input, *cursor_position);
+        *cursor_position = input[..byte_pos].chars().count();
         input.insert(byte_pos, '\n');
         *cursor_position += 1;
     }
+}
+
+/// Convert the application's char-index cursor to a grapheme boundary. The
+/// logical model remains a char index for compatibility with selection and
+/// word-navigation code, but every visible edit/motion lands only between
+/// grapheme clusters.
+fn normalized_cursor_byte(input: &str, cursor_position: usize) -> usize {
+    let raw = input
+        .char_indices()
+        .nth(cursor_position.min(input.chars().count()))
+        .map(|(byte, _)| byte)
+        .unwrap_or(input.len());
+    mutx_engine::text::floor_grapheme_boundary(input, raw)
+}
+
+fn char_index_at_byte(input: &str, byte: usize) -> usize {
+    input[..byte.min(input.len())].chars().count()
+}
+
+fn normalize_cursor_char_index(input: &str, cursor_position: usize) -> usize {
+    char_index_at_byte(input, normalized_cursor_byte(input, cursor_position))
+}
+
+fn previous_grapheme_char_index(input: &str, cursor_position: usize) -> usize {
+    let cursor_byte = normalized_cursor_byte(input, cursor_position);
+    if cursor_byte == 0 {
+        return 0;
+    }
+    let previous = mutx_engine::text::floor_grapheme_boundary(input, cursor_byte - 1);
+    char_index_at_byte(input, previous)
+}
+
+fn next_grapheme_char_index(input: &str, cursor_position: usize) -> usize {
+    let cursor_byte = normalized_cursor_byte(input, cursor_position);
+    let next = mutx_engine::text::inclusive_grapheme_end(input, cursor_byte);
+    char_index_at_byte(input, next)
+}
+
+fn delete_previous_grapheme(input: &mut String, cursor_position: &mut usize) -> bool {
+    let end = normalized_cursor_byte(input, *cursor_position);
+    if end == 0 {
+        *cursor_position = 0;
+        return false;
+    }
+    let start = mutx_engine::text::floor_grapheme_boundary(input, end - 1);
+    input.replace_range(start..end, "");
+    *cursor_position = char_index_at_byte(input, start);
+    true
+}
+
+fn delete_next_grapheme(input: &mut String, cursor_position: &mut usize) -> bool {
+    let start = normalized_cursor_byte(input, *cursor_position);
+    let end = mutx_engine::text::inclusive_grapheme_end(input, start);
+    if end <= start {
+        *cursor_position = char_index_at_byte(input, start);
+        return false;
+    }
+    input.replace_range(start..end, "");
+    *cursor_position = char_index_at_byte(input, start);
+    true
 }
 
 /// Move the caret to the start of the current logical line.
@@ -891,7 +948,7 @@ fn cursor_line_up(input: &str, cursor_position: &mut usize) -> bool {
         0
     };
     let target = prev_start + col.min(prev_end - prev_start);
-    *cursor_position = target;
+    *cursor_position = normalize_cursor_char_index(input, target);
     true
 }
 
@@ -915,7 +972,7 @@ fn cursor_line_down(input: &str, cursor_position: &mut usize) -> bool {
         chars.len()
     };
     let target = next_start + col.min(next_end - next_start);
-    *cursor_position = target;
+    *cursor_position = normalize_cursor_char_index(input, target);
     true
 }
 
@@ -1211,25 +1268,14 @@ pub fn process_event(
             if context.active_modal == super::Modal::Host && context.host_prompting {
                 match key.code {
                     KeyCode::Char(c) => {
-                        let byte_pos = input
-                            .char_indices()
-                            .map(|(i, _)| i)
-                            .nth(*cursor_position)
-                            .unwrap_or(input.len());
+                        let byte_pos = normalized_cursor_byte(input, *cursor_position);
+                        *cursor_position = char_index_at_byte(input, byte_pos);
                         input.insert(byte_pos, c);
                         *cursor_position += 1;
                         return InputAction::InsertChar(c);
                     }
                     KeyCode::Backspace => {
-                        if *cursor_position > 0 {
-                            let byte_pos = input
-                                .char_indices()
-                                .map(|(i, _)| i)
-                                .nth(*cursor_position - 1)
-                                .unwrap_or(0);
-                            input.remove(byte_pos);
-                            *cursor_position -= 1;
-                        }
+                        delete_previous_grapheme(input, cursor_position);
                         return InputAction::None;
                     }
                     KeyCode::Delete => {
@@ -1237,18 +1283,15 @@ pub fn process_event(
                         // Del key behaves here exactly as it does in the main
                         // composer (no chip handling — the dashboard prompt
                         // never stages attachments).
-                        if *cursor_position < input.chars().count() {
-                            let byte_pos = input
-                                .char_indices()
-                                .map(|(i, _)| i)
-                                .nth(*cursor_position)
-                                .unwrap_or(input.len());
-                            let end_byte =
-                                crate::model::selection::inclusive_grapheme_end(input, byte_pos);
-                            if end_byte > byte_pos {
-                                input.replace_range(byte_pos..end_byte, "");
-                            }
-                        }
+                        delete_next_grapheme(input, cursor_position);
+                        return InputAction::None;
+                    }
+                    KeyCode::Left => {
+                        *cursor_position = previous_grapheme_char_index(input, *cursor_position);
+                        return InputAction::None;
+                    }
+                    KeyCode::Right => {
+                        *cursor_position = next_grapheme_char_index(input, *cursor_position);
                         return InputAction::None;
                     }
                     // Enter submits the prompt (never swallowed by the `_`
@@ -1659,7 +1702,7 @@ pub fn process_event(
                 // 'b' or scrolls.
                 KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if edits_input_field(&context) && *cursor_position > 0 {
-                        *cursor_position -= 1;
+                        *cursor_position = previous_grapheme_char_index(input, *cursor_position);
                     }
                     InputAction::None
                 }
@@ -1761,14 +1804,20 @@ pub fn process_event(
                 // Alt+B: jump back one word (readline `backward-word`).
                 KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if edits_input_field(&context) {
-                        *cursor_position = prev_word_start(input, *cursor_position);
+                        *cursor_position = normalize_cursor_char_index(
+                            input,
+                            prev_word_start(input, *cursor_position),
+                        );
                     }
                     InputAction::None
                 }
                 // Alt+F: jump forward one word (readline `forward-word`).
                 KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
                     if edits_input_field(&context) {
-                        *cursor_position = next_word_end(input, *cursor_position);
+                        *cursor_position = normalize_cursor_char_index(
+                            input,
+                            next_word_end(input, *cursor_position),
+                        );
                     }
                     InputAction::None
                 }
@@ -2087,11 +2136,8 @@ pub fn process_event(
                         // The key editor's thinking field (2) is a toggle, not
                         // a text field — don't let printable chars mutate the
                         // borrowed input line while it's focused.
-                        let byte_pos = input
-                            .char_indices()
-                            .map(|(i, _)| i)
-                            .nth(*cursor_position)
-                            .unwrap_or(input.len());
+                        let byte_pos = normalized_cursor_byte(input, *cursor_position);
+                        *cursor_position = char_index_at_byte(input, byte_pos);
                         input.insert(byte_pos, c);
                         *cursor_position += 1;
                         // Return InsertChar so the event loop can reset the
@@ -2163,13 +2209,7 @@ pub fn process_event(
                             *cursor_position -= removed_chars;
                             return InputAction::Backspace;
                         }
-                        *cursor_position -= 1;
-                        let byte_pos = input
-                            .char_indices()
-                            .map(|(i, _)| i)
-                            .nth(*cursor_position)
-                            .unwrap_or(input.len());
-                        input.remove(byte_pos);
+                        delete_previous_grapheme(input, cursor_position);
                         // Return Backspace so the event loop resets the
                         // completion-dismissal latch and suggestion highlight,
                         // matching InsertChar above.
@@ -2202,15 +2242,7 @@ pub fn process_event(
                             input.replace_range(start..end, "");
                             return InputAction::DeleteForward;
                         }
-                        // Snap to a grapheme boundary: a `chars()` cursor can
-                        // only land mid-cluster via hand-set test state, but a
-                        // byte slice there would panic on `remove`, so
-                        // resolve the whole cluster the way selection copy
-                        // does (never split what the user sees as one glyph).
-                        let end_byte =
-                            crate::model::selection::inclusive_grapheme_end(input, byte_cursor);
-                        if end_byte > byte_cursor {
-                            input.replace_range(byte_cursor..end_byte, "");
+                        if delete_next_grapheme(input, cursor_position) {
                             return InputAction::DeleteForward;
                         }
                     }
@@ -2237,9 +2269,13 @@ pub fn process_event(
                             .modifiers
                             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
                         {
-                            *cursor_position = prev_word_start(input, *cursor_position);
+                            *cursor_position = normalize_cursor_char_index(
+                                input,
+                                prev_word_start(input, *cursor_position),
+                            );
                         } else {
-                            *cursor_position -= 1;
+                            *cursor_position =
+                                previous_grapheme_char_index(input, *cursor_position);
                         }
                     }
                     InputAction::None
@@ -2260,9 +2296,12 @@ pub fn process_event(
                             .modifiers
                             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
                         {
-                            *cursor_position = next_word_end(input, *cursor_position);
+                            *cursor_position = normalize_cursor_char_index(
+                                input,
+                                next_word_end(input, *cursor_position),
+                            );
                         } else {
-                            *cursor_position += 1;
+                            *cursor_position = next_grapheme_char_index(input, *cursor_position);
                         }
                     }
                     InputAction::None

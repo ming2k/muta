@@ -252,23 +252,12 @@ impl Modal {
         )
     }
 
-    /// Whether this modal renders its own text caret (and thus owns the
-    /// terminal cursor while active) — the modals that borrow the composer
-    /// input line as a free-text field. Read-only / info overlays (Help,
-    /// Session, Activity, …) and the decision sheets (Question, Permission)
-    /// do not own a caret; while they are open the terminal cursor is hidden
-    /// so the host IME has no stale anchor to bind to. This is the modal half
-    /// of `App::caret_owner`; the composer half is decided there from
-    /// `focused_target` / `in_envoy_view`.
+    /// Whether this modal unconditionally renders its own text caret. Pickers
+    /// with browse/search modes are intentionally excluded because their
+    /// ownership depends on live state and is resolved by `App::caret_owner`.
+    /// Read-only overlays and decision sheets do not own a caret.
     pub fn owns_caret(self) -> bool {
-        matches!(
-            self,
-            Modal::Models
-                | Modal::Connections
-                | Modal::ModelEditor
-                | Modal::CustomProvider
-                | Modal::InputInjection
-        )
+        matches!(self, Modal::CustomProvider | Modal::InputInjection)
     }
 }
 

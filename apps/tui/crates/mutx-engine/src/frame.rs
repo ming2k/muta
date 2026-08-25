@@ -71,7 +71,14 @@ impl<'a> Frame<'a> {
     /// call wins.
     pub fn set_cursor_position<P: Into<(u16, u16)>>(&mut self, pos: P) {
         let (x, y) = pos.into();
-        self.cursor = CursorState::Visible(x, y);
+        self.cursor = if self.area_rect.width == 0 || self.area_rect.height == 0 {
+            CursorState::Hidden
+        } else {
+            CursorState::Visible(
+                x.min(self.area_rect.right().saturating_sub(1)),
+                y.min(self.area_rect.bottom().saturating_sub(1)),
+            )
+        };
     }
 
     /// Write a styled string directly into the grid (convenience for callers
@@ -114,6 +121,14 @@ pub struct Terminal<W: io::Write> {
     back: Grid,
     front: Grid,
     cursor: CursorState,
+    /// Cursor state known to have reached the terminal after the last
+    /// successful flush. `None` means an external operation, resize, or write
+    /// failure made the physical state unknown.
+    presented_cursor: Option<CursorState>,
+    /// Last successfully presented visible caret coordinate. Hidden frames
+    /// park the physical cursor here after drawing so IME implementations that
+    /// sample a hidden cursor never chase transient diff coordinates.
+    cursor_anchor: Option<(u16, u16)>,
     /// A resize invalidated the terminal contents, but the clear/reset is held
     /// until the next committed frame. Staged measurement frames must never
     /// write terminal bytes of their own.
@@ -131,6 +146,8 @@ impl<W: io::Write> Terminal<W> {
             back,
             front,
             cursor: CursorState::Hidden,
+            presented_cursor: None,
+            cursor_anchor: None,
             pending_clear: false,
         }
     }
@@ -141,6 +158,7 @@ impl<W: io::Write> Terminal<W> {
         self.front = Grid::new(width, height);
         self.back.mark_all_dirty();
         self.pending_clear = true;
+        self.presented_cursor = None;
     }
 
     fn render_frame<F>(&mut self, render: F)
@@ -155,6 +173,7 @@ impl<W: io::Write> Terminal<W> {
             self.front = Grid::new(w, h);
             self.back.mark_all_dirty();
             self.pending_clear = true;
+            self.presented_cursor = None;
         }
         let mut frame = Frame::new(&mut self.back);
         render(&mut frame);
@@ -162,51 +181,115 @@ impl<W: io::Write> Terminal<W> {
     }
 
     fn commit(&mut self) -> io::Result<()> {
-        self.backend.begin_sync_update()?;
-        let commit_result = self.commit_frame();
+        let cmd: DrawCmd = diff::diff(&self.back, &self.front);
+        let desired_cursor = self.normalized_cursor(self.cursor);
+        let cursor_changed = self.presented_cursor != Some(desired_cursor);
+
+        // Repainting an identical widget may leave conservative dirty marks
+        // but no terminal commands. Clear those marks without opening an
+        // otherwise empty synchronized-update envelope.
+        if !self.pending_clear && cmd.draws.is_empty() && !cursor_changed {
+            diff::promote_scrolled(&mut self.back, &mut self.front, &cmd);
+            return Ok(());
+        }
+
+        if let Err(error) = self.backend.begin_sync_update() {
+            self.recover_failed_commit();
+            return Err(error);
+        }
+        let commit_result = self.commit_frame(&cmd, desired_cursor);
+        // Always close an envelope that was successfully opened, even when a
+        // queued write failed, so a terminal never remains update-suspended.
         let end_result = self.backend.end_sync_update();
-        commit_result.and(end_result)
+        let result = match (commit_result, end_result) {
+            (Err(error), _) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        };
+
+        if let Err(error) = result {
+            self.recover_failed_commit();
+            return Err(error);
+        }
+
+        // Only a successful flush commits logical terminal state. In
+        // particular, scroll projection in `diff` cannot mutate `front`
+        // before this point.
+        diff::promote_scrolled(&mut self.back, &mut self.front, &cmd);
+        self.pending_clear = false;
+        self.presented_cursor = Some(desired_cursor);
+        if let CursorState::Visible(x, y) = desired_cursor {
+            self.cursor_anchor = Some((x, y));
+        }
+        Ok(())
     }
 
     /// Emit one already-rendered logical frame. [`Self::commit`] owns the
     /// synchronized-update envelope around this method.
-    fn commit_frame(&mut self) -> io::Result<()> {
+    fn commit_frame(&mut self, cmd: &DrawCmd, desired_cursor: CursorState) -> io::Result<()> {
         if self.pending_clear {
             // Reconcile the SGR tracker and real terminal only when a frame is
             // actually committed. A staged layout pass may resize the grids,
             // but it must remain completely invisible.
-            let _ = self.backend.invalidate();
-            let _ = self.backend.writer().queue(crossterm::terminal::Clear(
-                crossterm::terminal::ClearType::All,
-            ));
-            self.pending_clear = false;
+            self.backend.invalidate()?;
         }
 
-        let cmd: DrawCmd = diff::diff(&self.back, &mut self.front);
-
-        // ── Cursor Shielding ────────────────────────────────────────────────
-        // Hide the physical cursor before emitting cell drawing commands so
-        // that neither the host terminal emulator nor the OS IME samples
-        // intermediate/transient cursor coordinates while rendering cells.
-        if !cmd.draws.is_empty() {
+        // Hide before any command that can expose a transient physical cursor
+        // coordinate. Correctness does not depend on DEC synchronized-update
+        // support: unsupported terminals may present these bytes separately,
+        // but the caret remains hidden until its final position is installed.
+        if self.pending_clear || !cmd.draws.is_empty() {
             self.backend.hide_cursor()?;
         }
 
-        self.backend.render(&cmd)?;
-        diff::promote_scrolled(&mut self.back, &mut self.front, &cmd);
+        if self.pending_clear {
+            self.backend.writer().queue(crossterm::terminal::Clear(
+                crossterm::terminal::ClearType::All,
+            ))?;
+        }
 
-        // ── Single Atomic Cursor Placement ──────────────────────────────────
-        // Only at the very end of the frame is the hardware cursor positioned
-        // at its final desired screen coordinate in a single atomic step.
-        match self.cursor {
+        self.backend.render(cmd)?;
+
+        // Install the final coordinate while hidden, then reveal the cursor.
+        // Hidden frames return it to the last input anchor so IME sampling is
+        // stable even while transcript cells continue to stream.
+        match desired_cursor {
             CursorState::Hidden => {
-                self.backend.hide_cursor()?;
+                if let Some((x, y)) = self.normalized_anchor() {
+                    self.backend.hide_cursor_at(x, y)?;
+                } else {
+                    self.backend.hide_cursor()?;
+                }
             }
             CursorState::Visible(x, y) => {
                 self.backend.show_cursor_at(x, y)?;
             }
         }
         Ok(())
+    }
+
+    fn normalized_cursor(&self, cursor: CursorState) -> CursorState {
+        let (w, h) = self.back.size();
+        match cursor {
+            CursorState::Visible(x, y) if w > 0 && h > 0 => {
+                CursorState::Visible(x.min(w - 1), y.min(h - 1))
+            }
+            _ => CursorState::Hidden,
+        }
+    }
+
+    fn normalized_anchor(&self) -> Option<(u16, u16)> {
+        let (w, h) = self.back.size();
+        let (x, y) = self.cursor_anchor?;
+        (w > 0 && h > 0).then_some((x.min(w - 1), y.min(h - 1)))
+    }
+
+    fn recover_failed_commit(&mut self) {
+        // The terminal may have consumed an arbitrary prefix of the failed
+        // stream. Force the next attempt through reset + clear + full repaint,
+        // and forget cursor state until that recovery frame flushes.
+        self.back.mark_all_dirty();
+        self.pending_clear = true;
+        self.presented_cursor = None;
     }
 
     /// Run the app's draw closure against a fresh frame, then diff → render
@@ -252,11 +335,9 @@ impl<W: io::Write> Terminal<W> {
     /// The live terminal size as crossterm reports it right now (falling
     /// back to the retained grid's size if the query fails).
     ///
-    /// Distinct from the grids' size on purpose: a `Resize` event only
-    /// reaches the grids at the next [`Self::render_frame`], so callers
-    /// deciding between frames whether cached geometry is still valid —
-    /// e.g. an immediate cursor placement ahead of the next draw — must
-    /// compare against the live size, not the retained one.
+    /// Distinct from the grids' size on purpose: a `Resize` event reaches the
+    /// retained grids at the next [`Self::render_frame`], while callers that
+    /// report or validate the physical terminal need the live dimensions.
     pub fn size(&self) -> (u16, u16) {
         crossterm::terminal::size().unwrap_or_else(|_| self.back.size())
     }
@@ -268,15 +349,17 @@ impl<W: io::Write> Terminal<W> {
         // already enjoys). `move_to`/position parking is the caller's job when
         // an explicit coordinate is wanted; see `show_cursor_at`.
         self.backend.show_cursor()?;
-        self.backend.writer().flush()?;
-        Ok(())
+        let result = self.backend.writer().flush();
+        self.presented_cursor = None;
+        result
     }
 
     /// Hide the cursor.
     pub fn hide_cursor(&mut self) -> io::Result<()> {
         self.backend.hide_cursor()?;
-        self.backend.writer().flush()?;
-        Ok(())
+        let result = self.backend.writer().flush();
+        self.presented_cursor = None;
+        result
     }
 }
 
@@ -326,6 +409,29 @@ mod tests {
     use crate::Style;
     use crate::backend::Bce;
 
+    #[derive(Default)]
+    struct FailOnByteWriter {
+        bytes: Vec<u8>,
+        fail_on: Option<u8>,
+    }
+
+    impl io::Write for FailOnByteWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.fail_on.is_some_and(|needle| buf.contains(&needle)) {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "injected terminal write failure",
+                ));
+            }
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn staged_frame_emits_only_the_final_committed_grid() {
         crossterm::style::force_color_output(true);
@@ -355,6 +461,163 @@ mod tests {
         );
         assert!(rendered.contains("final"));
         assert!(!rendered.contains("intermediate"));
+    }
+
+    #[test]
+    fn incremental_frame_positions_caret_before_showing_it() {
+        crossterm::style::force_color_output(true);
+        let backend = Backend::with_bce(Vec::new(), Bce::No);
+        let mut terminal = Terminal::new(backend);
+
+        terminal
+            .draw(|frame| {
+                frame.put(0, 0, Style::default(), "A");
+                frame.set_cursor_position((5, 5));
+            })
+            .unwrap();
+        terminal.writer().clear();
+
+        terminal
+            .draw(|frame| {
+                frame.put(0, 0, Style::default(), "B");
+                frame.set_cursor_position((5, 5));
+            })
+            .unwrap();
+        let rendered = String::from_utf8(terminal.writer().clone()).unwrap();
+
+        let hide = rendered.find("\x1b[?25l").expect("cursor is shielded");
+        let draw = rendered.find('B').expect("changed cell is rendered");
+        let final_move = rendered
+            .rfind("\x1b[6;6H")
+            .expect("final caret position is emitted");
+        let show = rendered.find("\x1b[?25h").expect("cursor is restored");
+        assert!(
+            hide < draw && draw < final_move && final_move < show,
+            "frame order must be hide → draw → final MoveTo → show: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn cursor_only_frame_moves_without_visibility_toggle() {
+        crossterm::style::force_color_output(true);
+        let backend = Backend::with_bce(Vec::new(), Bce::No);
+        let mut terminal = Terminal::new(backend);
+        terminal
+            .draw(|frame| frame.set_cursor_position((1, 1)))
+            .unwrap();
+        terminal.writer().clear();
+
+        terminal
+            .draw(|frame| frame.set_cursor_position((2, 1)))
+            .unwrap();
+        let rendered = String::from_utf8(terminal.writer().clone()).unwrap();
+        assert!(rendered.contains("\x1b[2;3H"), "caret moves: {rendered:?}");
+        assert!(
+            !rendered.contains("\x1b[?25l") && !rendered.contains("\x1b[?25h"),
+            "a cursor-only move must not blink visibility: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn hidden_frame_parks_at_last_visible_input_anchor() {
+        crossterm::style::force_color_output(true);
+        let backend = Backend::with_bce(Vec::new(), Bce::No);
+        let mut terminal = Terminal::new(backend);
+        terminal
+            .draw(|frame| {
+                frame.put(0, 0, Style::default(), "A");
+                frame.set_cursor_position((5, 5));
+            })
+            .unwrap();
+        terminal.writer().clear();
+
+        terminal
+            .draw(|frame| frame.put(0, 0, Style::default(), "B"))
+            .unwrap();
+        let rendered = String::from_utf8(terminal.writer().clone()).unwrap();
+        assert!(
+            rendered.rfind("\x1b[6;6H").is_some(),
+            "hidden cursor returns to its stable input anchor: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("\x1b[?25h"),
+            "a hidden frame never reveals the cursor: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn identical_frame_emits_no_envelope_or_cursor_bytes() {
+        crossterm::style::force_color_output(true);
+        let backend = Backend::with_bce(Vec::new(), Bce::No);
+        let mut terminal = Terminal::new(backend);
+        terminal
+            .draw(|frame| {
+                frame.put(0, 0, Style::default(), "same");
+                frame.set_cursor_position((4, 0));
+            })
+            .unwrap();
+        terminal.writer().clear();
+
+        terminal
+            .draw(|frame| {
+                frame.put(0, 0, Style::default(), "same");
+                frame.set_cursor_position((4, 0));
+            })
+            .unwrap();
+        assert!(
+            terminal.writer().is_empty(),
+            "an identical logical frame must be a zero-byte commit"
+        );
+    }
+
+    #[test]
+    fn frame_clamps_requested_cursor_to_terminal_bounds() {
+        let mut terminal = TestTerminal::new(4, 3);
+        terminal.draw(|frame| frame.set_cursor_position((u16::MAX, u16::MAX)));
+        assert_eq!(terminal.cursor(), CursorState::Visible(3, 2));
+    }
+
+    #[test]
+    fn failed_frame_closes_envelope_then_forces_clear_and_full_repaint() {
+        crossterm::style::force_color_output(true);
+        let backend = Backend::with_bce(FailOnByteWriter::default(), Bce::No);
+        let mut terminal = Terminal::new(backend);
+        terminal
+            .draw(|frame| {
+                frame.put(0, 0, Style::default(), "A");
+                frame.set_cursor_position((1, 0));
+            })
+            .unwrap();
+
+        terminal.writer().bytes.clear();
+        terminal.writer().fail_on = Some(b'B');
+        assert!(
+            terminal
+                .draw(|frame| {
+                    frame.put(0, 0, Style::default(), "B");
+                    frame.set_cursor_position((1, 0));
+                })
+                .is_err()
+        );
+        let failed = String::from_utf8_lossy(&terminal.writer().bytes);
+        assert!(
+            failed.ends_with("\x1b[?2026l"),
+            "a successfully opened envelope must be closed after failure: {failed:?}"
+        );
+
+        terminal.writer().bytes.clear();
+        terminal.writer().fail_on = None;
+        terminal
+            .draw(|frame| {
+                frame.put(0, 0, Style::default(), "B");
+                frame.set_cursor_position((1, 0));
+            })
+            .unwrap();
+        let recovered = String::from_utf8_lossy(&terminal.writer().bytes);
+        assert!(
+            recovered.contains("\x1b[2J") && recovered.contains('B'),
+            "the retry must clear and repaint from logical state: {recovered:?}"
+        );
     }
 }
 

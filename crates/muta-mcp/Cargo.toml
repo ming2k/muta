@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 muta-contracts = { path = "../muta-contracts" }
 muta-platform = { path = "../muta-platform" }
+muta-persistence = { path = "../muta-persistence" }
 async-trait = { workspace = true }
 futures = { workspace = true }
 serde_json = { workspace = true }

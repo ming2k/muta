@@ -28,6 +28,7 @@ fn server_config(python: &str) -> McpServerConfig {
         environment: HashMap::new(),
         enabled: true,
         read_only: false,
+        sandbox_root: None,
     }
 }
 

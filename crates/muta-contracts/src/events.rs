@@ -1294,6 +1294,10 @@ pub struct HarnessSnapshot {
     /// (`--autopilot` / `/autopilot on`). The TUI mirrors this into a
     /// visible badge so the elevated state is never silent.
     pub autopilot: bool,
+    /// Workspace authority is independent from attended/autopilot posture.
+    /// Frontends surface this state continuously so authority is never implicit.
+    #[serde(default)]
+    pub workspace_security: crate::WorkspaceSecuritySnapshot,
     /// Whether a stopped round is parked for `/retry`: the previous round
     /// ended before completing (terminal provider error or an interrupt that
     /// left committed content) and its durable resume point is still armed.

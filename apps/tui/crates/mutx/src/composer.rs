@@ -100,11 +100,9 @@ pub fn composer_text_width(full_width: usize) -> usize {
 /// laid out inside `input_rect`, updating `input_scroll` in place to keep the
 /// caret within the visible window.
 ///
-/// This is the **single source of truth** for the caret's screen position.
-/// Both the per-frame draw path ([`draw_composer`]) and the input-driven
-/// immediate flush (which syncs the terminal cursor to the IME *before* the
-/// next draw, eliminating the one-frame lag that mis-anchors IME composition
-/// windows) resolve through this function, so the two paths can never diverge.
+/// This is the **single source of truth** for the caret's screen position. The
+/// draw path resolves it once, then the terminal commit installs that final
+/// coordinate while the physical cursor is hidden.
 ///
 /// Returns `None` when `input_rect` has no room for text rows. The caller is
 /// responsible for deciding whether the caret should be shown at all (modal

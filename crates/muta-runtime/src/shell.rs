@@ -91,7 +91,10 @@ pub async fn run_shell_command(
     // Run in the session's workspace root, not the daemon process's cwd
     // (ADR-0096): the `!` path must land in the same project the model-driven
     // bash tool does.
-    let bash = BashTool::new(Some(project_root));
+    let shell_env: Arc<dyn muta_contracts::ExecutionEnvironment> = Arc::new(
+        muta_agent::execution::WorkspaceExecutionEnvironment::new(project_root),
+    );
+    let bash = BashTool::with_env(shell_env);
     let tx_for_stream = tx.clone();
     let session_id_for_stream = session_id.clone();
     let call_id_for_stream = call_id.clone();

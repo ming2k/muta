@@ -19,7 +19,10 @@ use muta_agent::orchestration::{
     send_harness_state, start_interactive_round,
 };
 use muta_agent::{Agent, AgentIdentity, NoProvider, RoundLifecycle};
-use muta_contracts::{AgentResponse, BtwAsideSummary, LoopStatus, ParentStatus, Provider, Tool};
+use muta_contracts::{
+    AgentResponse, BtwAsideSummary, LoopStatus, ParentStatus, Provider, Tool,
+    WorkspaceExecutionProfile, WorkspaceSandboxState,
+};
 use muta_persistence::config::Config;
 use muta_persistence::session::SessionStore;
 use muta_skills::SkillRegistry;
@@ -67,6 +70,7 @@ impl SideSession {
         skills: SkillRegistry,
         project_root: &std::path::Path,
         identity: AgentIdentity,
+        workspace_security: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
     ) -> Result<Self, String> {
         let (side_id, _parent_id) = primary.fork_to_side().await?;
         // Snapshot the inherited user-prompt count BEFORE any aside round can
@@ -89,11 +93,11 @@ impl SideSession {
         // explicit policy decision (ADR-0060).
         let side_provider: Arc<dyn Provider> =
             Arc::new(ProxyProvider::new(provider_holder.clone()));
-        let agent = Arc::new(
-            Agent::builder(side_provider, base_tools.to_vec(), identity)
-                .with_skills(skills)
-                .build(),
-        );
+        let mut agent = Agent::builder(side_provider, base_tools.to_vec(), identity)
+            .with_skills(skills)
+            .build();
+        agent.bind_workspace_security_handle(workspace_security);
+        let agent = Arc::new(agent);
         agent.set_thread_id(&side_id);
         agent.set_project_root(Some(project_root.to_path_buf()));
         // An aside is a quick aside; run it autopilot — without human
@@ -422,6 +426,9 @@ pub async fn start_active_turn(
     if refuse_if_no_provider(tx, &agent, &session_id) {
         return;
     }
+    if refuse_if_workspace_preflight(tx, &agent, &session_id) {
+        return;
+    }
 
     start_resolved_turn(
         principal, tx, config, agent, session, lifecycle, session_id, input,
@@ -497,6 +504,9 @@ pub async fn start_session_turn(
     // which promotes the dispatch item back to `Waiting` so the user can
     // recall or replay it once a real provider is configured.
     if refuse_if_no_provider(tx, &agent, &session_id) {
+        return false;
+    }
+    if refuse_if_workspace_preflight(tx, &agent, &session_id) {
         return false;
     }
 
@@ -601,11 +611,57 @@ pub(super) fn refuse_if_no_provider(
     true
 }
 
+/// The single entry gate for every model round and direct-shell command.
+/// Opening a path is not an authority decision, and a persisted Development
+/// profile is unusable when its physical sandbox cannot be enforced.
+pub(super) fn refuse_if_workspace_preflight(
+    tx: &mpsc::UnboundedSender<AgentResponse>,
+    agent: &Agent,
+    session_id: &str,
+) -> bool {
+    let security = agent.workspace_security();
+    if !workspace_preflight_fails(security.execution, security.sandbox) {
+        return false;
+    }
+    let _ = tx.send(round_response(
+        session_id,
+        RoundEvent::Error(
+            "Workspace preflight failed: execution authority is unknown or its physical sandbox \
+             is unavailable. Opening a directory and enabling autopilot grant nothing. Run \
+             `/workspace restricted` or establish the sandbox and select `/workspace development` \
+             before starting work."
+                .to_string(),
+        ),
+    ));
+    send_harness_state(tx, session_id, agent, LoopStatus::Idle);
+    true
+}
+
+fn workspace_preflight_fails(
+    execution: WorkspaceExecutionProfile,
+    sandbox: WorkspaceSandboxState,
+) -> bool {
+    execution == WorkspaceExecutionProfile::Unknown
+        || (execution == WorkspaceExecutionProfile::Development
+            && sandbox == WorkspaceSandboxState::Unavailable)
+}
+
 use muta_contracts::RoundEvent;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_preflight_is_explicit_and_fail_closed() {
+        use WorkspaceExecutionProfile::{Development, Restricted, Unknown};
+        use WorkspaceSandboxState::{Enforced, Unavailable};
+
+        assert!(workspace_preflight_fails(Unknown, Enforced));
+        assert!(workspace_preflight_fails(Development, Unavailable));
+        assert!(!workspace_preflight_fails(Development, Enforced));
+        assert!(!workspace_preflight_fails(Restricted, Unavailable));
+    }
 
     /// A minimal `SideSession` for registry-mechanics tests: no fork, no
     /// provider — the registry only moves these around.
