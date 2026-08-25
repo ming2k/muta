@@ -499,15 +499,13 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 AgentNotice::new(
                     NoticeKind::ReviewAlert,
                     NoticeSeverity::Warning,
-                    "Workspace authority has not been configured",
+                    "Workspace trust unconfigured",
                     NoticeSource::Harness,
                 )
                 .with_surface(NoticeSurface::Banner)
                 .with_body(
-                    "Opening a directory does not grant execution authority. Run \
-                     `/workspace restricted` for read-oriented work or `/workspace development` \
-                     to authorise ordinary development inside this workspace. Autopilot does not \
-                     change this decision.",
+                    "This workspace has no persisted trust decision. Run `/trust` to authorize \
+                     development in this project, or `/trust readonly` for read-oriented analysis.",
                 ),
             ),
         ));
@@ -520,15 +518,14 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             RoundEvent::Notice(
                 AgentNotice::new(
                     NoticeKind::ReviewAlert,
-                    NoticeSeverity::Error,
+                    NoticeSeverity::Info,
                     "Workspace sandbox is unavailable",
                     NoticeSource::Harness,
                 )
                 .with_surface(NoticeSurface::Banner)
                 .with_body(
-                    "The persisted development authority cannot be enforced on this host. \
-                     Shell execution will fail closed; install/enable bubblewrap on Linux or \
-                     choose `/workspace restricted`.",
+                    "Development execution is running with host authority. Shell commands execute \
+                     directly in the workspace directory without physical sandbox containment.",
                 ),
             ),
         ));

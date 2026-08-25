@@ -68,7 +68,11 @@ model of one agent round.
    gate the flag controls) from the broader *expressed* posture
    (no confirmations, no questions), and the contexts where the flag is
    forced on. The autonomous counterpart to user questions, read as a pair.
-10. [Skills](skills.md) — on-demand domain expertise: tool-based discovery,
+10. [Security and trust architecture](security-and-trust.md) — the three
+   orthogonal domains (Authority & Trust `/trust`, Interaction Posture `/autopilot`,
+   and Execution Runtime/Sandbox), two-axis authority model, and content-bound
+   extension attestation.
+11. [Skills](skills.md) — on-demand domain expertise: tool-based discovery,
    lazy body loading, the source/priority cascade, and explicit versus
    implicit invocation. The reference for the extension surface that adds
    instructions rather than tools.

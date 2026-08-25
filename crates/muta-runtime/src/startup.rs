@@ -370,6 +370,21 @@ define_builtin_commands! {
         intent_keywords: ["init", "scaffold", "setup", "bootstrap", "create-config"],
         category: Project,
     },
+    Trust = "/trust" : {
+        summary: "Trust workspace for development and manage project extensions",
+        description: "Authorize development in this workspace, trust project extensions (MCP, hooks, skills), or set restricted mode.",
+        usage: ["/trust", "/trust [workspace|extensions|all|readonly|status|revoke]"],
+        examples: [
+            ("/trust", "Trust workspace and its project extensions"),
+            ("/trust workspace", "Trust workspace execution only"),
+            ("/trust extensions", "Trust project MCP servers and hooks"),
+            ("/trust readonly", "Set workspace to restricted read-only mode"),
+            ("/trust status", "Show workspace trust and security status"),
+            ("/trust revoke", "Revoke trust decision for this workspace"),
+        ],
+        intent_keywords: ["trust", "untrust", "authorize", "workspace-trust", "security", "permission"],
+        category: Project,
+    },
     Workspace = "/workspace" : {
         summary: "Inspect or set workspace execution authority",
         description: "Show workspace security state, choose restricted or development execution authority, or reset the decision.",
@@ -456,6 +471,7 @@ impl BuiltinCmd {
             // config-scoped, so it now lives under `/settings reload`; the bare
             // old spelling keeps working.
             "/reload" => Some(BuiltinCmd::Settings),
+            "/untrust" => Some(BuiltinCmd::Trust),
             _ => None,
         }
     }

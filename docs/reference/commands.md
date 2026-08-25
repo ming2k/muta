@@ -31,6 +31,7 @@ Project and user-defined commands are covered under
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/init [path]` | Initialize a `.muta/` config tree |
+| `/trust` | Trust workspace for development and manage project extensions |
 | `/workspace` | Inspect or set workspace execution authority |
 | `/extensions` | Inspect or trust project-authored extensions |
 | `/skills [list\|reload]` | List or reload available skills |

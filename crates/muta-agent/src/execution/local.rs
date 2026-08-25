@@ -368,7 +368,11 @@ impl ExecutionEnvironment for WorkspaceExecutionEnvironment {
     }
 
     fn shell_isolation(&self) -> ShellIsolation {
-        ShellIsolation::Workspace
+        if workspace_sandbox_available() {
+            ShellIsolation::Workspace
+        } else {
+            ShellIsolation::Host
+        }
     }
 }
 
@@ -401,7 +405,14 @@ mod workspace_tests {
             env.fs().read(&outside).await,
             Err(FsError::PermissionDenied(_))
         ));
-        assert_eq!(env.shell_isolation(), ShellIsolation::Workspace);
+        assert_eq!(
+            env.shell_isolation(),
+            if workspace_sandbox_available() {
+                ShellIsolation::Workspace
+            } else {
+                ShellIsolation::Host
+            }
+        );
     }
 
     #[cfg(unix)]

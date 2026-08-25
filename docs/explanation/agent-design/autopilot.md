@@ -37,19 +37,16 @@ explicit profiles:
 
 - `restricted` is read-oriented. Each side effect needs a narrow explicit
   grant.
-- `development` pre-authorizes ordinary work inside the physical workspace
-  sandbox.
+- `development` pre-authorizes ordinary development operations.
 
 No agent round or direct-shell command can start while the profile is `unknown`,
-whether autopilot is on or off. It fails before the provider or process launch
-and points to `/workspace restricted` and `/workspace development`. A persisted
-`development` profile also fails preflight when the host cannot enforce the
-required sandbox.
+whether autopilot is on or off. Preflight fails before provider or process launch
+and guides the operator to `/trust` (for full development) or `/trust readonly`.
 
 Project-authored MCP servers, hooks, skills, and commands use a separate
-content-bound extension decision. `/extensions trust` does not select a
-workspace execution profile, and `/workspace development` does not load
-project extensions.
+content-bound extension decision. `/trust workspace` authorizes execution
+while leaving project extensions quarantined, while `/trust` (or `/trust all`)
+attests and loads both. See [Security and trust architecture](security-and-trust.md).
 
 ## Non-interactive surfaces
 

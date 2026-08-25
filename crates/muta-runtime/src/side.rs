@@ -612,8 +612,8 @@ pub(super) fn refuse_if_no_provider(
 }
 
 /// The single entry gate for every model round and direct-shell command.
-/// Opening a path is not an authority decision, and a persisted Development
-/// profile is unusable when its physical sandbox cannot be enforced.
+/// Opening a path is not an authority decision; preflight requires an explicit
+/// execution profile before starting work.
 pub(super) fn refuse_if_workspace_preflight(
     tx: &mpsc::UnboundedSender<AgentResponse>,
     agent: &Agent,
@@ -626,10 +626,8 @@ pub(super) fn refuse_if_workspace_preflight(
     let _ = tx.send(round_response(
         session_id,
         RoundEvent::Error(
-            "Workspace preflight failed: execution authority is unknown or its physical sandbox \
-             is unavailable. Opening a directory and enabling autopilot grant nothing. Run \
-             `/workspace restricted` or establish the sandbox and select `/workspace development` \
-             before starting work."
+            "Workspace preflight: this workspace has not been trusted yet. \
+             Run `/trust` to authorize development, or `/trust readonly` for read-oriented analysis."
                 .to_string(),
         ),
     ));
@@ -639,11 +637,9 @@ pub(super) fn refuse_if_workspace_preflight(
 
 fn workspace_preflight_fails(
     execution: WorkspaceExecutionProfile,
-    sandbox: WorkspaceSandboxState,
+    _sandbox: WorkspaceSandboxState,
 ) -> bool {
     execution == WorkspaceExecutionProfile::Unknown
-        || (execution == WorkspaceExecutionProfile::Development
-            && sandbox == WorkspaceSandboxState::Unavailable)
 }
 
 use muta_contracts::RoundEvent;
@@ -658,9 +654,11 @@ mod tests {
         use WorkspaceSandboxState::{Enforced, Unavailable};
 
         assert!(workspace_preflight_fails(Unknown, Enforced));
-        assert!(workspace_preflight_fails(Development, Unavailable));
+        assert!(workspace_preflight_fails(Unknown, Unavailable));
+        assert!(!workspace_preflight_fails(Development, Unavailable));
         assert!(!workspace_preflight_fails(Development, Enforced));
         assert!(!workspace_preflight_fails(Restricted, Unavailable));
+        assert!(!workspace_preflight_fails(Restricted, Enforced));
     }
 
     /// A minimal `SideSession` for registry-mechanics tests: no fork, no
