@@ -55,7 +55,7 @@ pub mod layout;
 pub mod text;
 pub mod widgets;
 
-pub use cell::{Cell, Color, Modifier, Style};
+pub use cell::{Cell, Color, CompactSymbol, Modifier, Style};
 pub use diff::{Draw, DrawCmd};
 pub use flex::{AlignItem, Basis, Flex, FlexDirection, FlexItem, Justify, SolvedFlex};
 pub use frame::{CursorState, Frame, Terminal, TestTerminal, Widget};

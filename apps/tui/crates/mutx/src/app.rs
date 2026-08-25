@@ -474,6 +474,10 @@ pub struct App {
     /// moves the box (and the caret with it), so the flush must not write a
     /// coordinate the next frame corrects.
     pub(crate) last_input_rows: usize,
+    /// Wall-clock instant of the last user key press or input edit. Used by
+    /// the event loop to quiesce background animation redraws while active
+    /// composition / typing is in progress.
+    pub last_key_press: std::time::Instant,
     /// Whether the terminal cursor should be moved to match `cursor_position`
     /// before the next frame, eliminating the one-frame IME lag. Set by
     /// [`App::set_cursor`] (the single write site for `cursor_position`) and

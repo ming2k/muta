@@ -1804,120 +1804,16 @@ fn auto_dispatch_ready_round(app: &mut App) {
     }
 }
 
-/// Loop stage: cursor ownership & IME anchor — sync the terminal cursor
-/// (position immediately after caret-moving input, visibility only on a
-/// state transition) from `App::caret_owner` / `App::caret_visible`.
-/// Extracted verbatim from `run_app_loop`.
+/// Loop stage: cursor ownership & IME anchor — consume the cursor sync flag.
+/// All physical cursor positioning, shielding during diff execution, and
+/// visibility transitions are handled atomically by `Terminal::commit_frame`
+/// inside the synchronized frame envelope.
 fn sync_caret_and_cursor(
     app: &mut App,
-    terminal: &mut Terminal<std::io::Stdout>,
-    displayed_transcript_changed: bool,
+    _terminal: &mut Terminal<std::io::Stdout>,
+    _displayed_transcript_changed: bool,
 ) {
-    // ── Cursor ownership & IME anchor ───────────────────────────────────
-    // The terminal cursor is what the host terminal's IME anchors its
-    // composition window to. `App::caret_owner` / `App::caret_visible` are
-    // the single source of truth for which surface holds it and whether it
-    // is visible; every cursor decision below derives from them. No site
-    // re-derives visibility from raw fields — that is what previously let
-    // the cursor stay visible (and the IME anchored to a stale coordinate)
-    // on states that own no caret at all: a focused transcript step (e.g.
-    // clicking a disclosure mid-composition), an envoy zoom, or a
-    // read-only / decision modal.
-    let caret_owner = app.caret_owner();
-    let caret_visible = app.caret_visible();
-
-    // Immediate cursor sync (IME correctness): the IME samples the cursor
-    // the instant a keystroke arrives — *before* the next frame is
-    // rendered. If we only reposition as a per-frame side effect of
-    // drawing, there is a one-frame window in which the caret's logical
-    // and physical positions disagree, so the IME window drifts. Whenever
-    // input handling moved the caret, sync the backend's cursor *now*, in
-    // the same iteration, using the last-known composer rect (refreshed
-    // every draw). This closes the lag window to zero; the coordinates
-    // come from the same pure function the draw path uses, so the
-    // immediate value and the rendered value can never diverge.
-    //
-    // Only the composer's caret is repositioned here, and only when it is
-    // actually visible (a selection hides it). A caret-owning modal places
-    // its own cursor via the draw closure's `set_cursor_position`, so a
-    // pending flag set while the composer didn't own the caret is consumed
-    // without action (it is stale by definition once ownership returns —
-    // the next real keystroke re-arms it).
-    //
-    // Geometry gate (caret anti-drift): the flush places the caret against
-    // `last_input_rect` — the rect the *previous* frame measured. That
-    // approximation is exact only while the composer's geometry is stable.
-    // When it is not (a wrap boundary crossed this keystroke, a paste, a
-    // resize, or a streaming round moving the footer bars underneath),
-    // flushing anyway writes the caret to a coordinate the very next
-    // `commit_frame` corrects — the two-step visible jump reported as the
-    // caret "drifting"/bouncing. `input_geometry_is_clean` re-measures the
-    // composer's row count and checks the terminal size; the transcript
-    // gate covers the footer-bar movers (activity/todo/queue), which always
-    // arrive with a forced redraw in this same iteration. In every gated
-    // case the full draw is the sole writer of the caret coordinate, inside
-    // one synchronized frame. The IME stays honest too: its anchor is that
-    // frame's `MoveTo`, which lands within a few milliseconds at most.
-    if app.cursor_sync_pending {
-        app.cursor_sync_pending = false;
-        // Compute once, flush what was computed: the probe *is* the result.
-        // A throwaway scroll copy absorbs the clamp side effect; the flush
-        // may only fire when that clamp is a no-op (the caret's row is
-        // already on screen). A flush that moved `input_scroll` would park
-        // the caret on a row still showing the pre-scroll text — the slice
-        // isn't repainted until the next frame, so the caret would visibly
-        // sit on the wrong line mid-keystroke.
-        let geometry_clean =
-            !displayed_transcript_changed && app.input_geometry_is_clean(terminal.size());
-        let mut probe_scroll = app.input_scroll;
-        let probed = geometry_clean.then(|| {
-            view::cursor_screen_pos(
-                app.last_input_rect,
-                &app.input,
-                app.byte_cursor(),
-                &mut probe_scroll,
-            )
-        });
-        let flush_safe = probed.is_some_and(|_| probe_scroll == app.input_scroll);
-        if caret_visible
-            && caret_owner == CaretOwner::Composer
-            && flush_safe
-            && let Some((x, y)) = probed.flatten()
-        {
-            // Inside a DEC synchronized-update envelope: the `MoveTo` and the
-            // visibility byte present as one atomic unit, never interleaved
-            // with a concurrently-committing frame (the seam that read as
-            // caret jitter on terminals with mode-2026 support; the markers
-            // are a no-op elsewhere).
-            let _ = terminal.backend().begin_sync_update();
-            let _ = terminal.backend().show_cursor_at(x, y);
-            let _ = terminal.backend().end_sync_update();
-        }
-    }
-
-    // Hide/show is a state transition, not a per-frame guess: emit the
-    // escape codes only when the desired visibility differs from what we
-    // last told the terminal, so there is no per-frame flicker. Resolving
-    // it here — at the same moment we (re)position — means the IME never
-    // samples a hide↔show edge at a coordinate that no longer matches a
-    // visible caret.
-    if caret_visible != app.cursor_visible {
-        // The visibility edge is a two-byte sequence (`?25h`/`?25l`); it is
-        // emitted inside its own synchronized-update envelope so it can never
-        // interleave with a concurrently-committing frame on the same stdout.
-        // `Terminal::show_cursor`/`hide_cursor` route through the backend's
-        // dedup path and flush themselves; the envelope markers around them
-        // make that flush atomic on mode-2026 terminals and are a no-op
-        // elsewhere.
-        let _ = terminal.backend().begin_sync_update();
-        if caret_visible {
-            let _ = terminal.show_cursor();
-        } else {
-            let _ = terminal.hide_cursor();
-        }
-        let _ = terminal.backend().end_sync_update();
-        app.cursor_visible = caret_visible;
-    }
+    app.cursor_sync_pending = false;
 }
 
 pub(super) async fn run_app_loop(
@@ -2074,15 +1970,22 @@ pub(super) async fn run_app_loop(
             || app.effort_ignition_epoch.is_some()
             || empty_state_showing
             || copy_pending.load(Ordering::SeqCst) > 0;
+        // While user is actively typing or composing, quiesce background
+        // micro-animations (100ms spinner/breathing ticks) to eliminate
+        // unnecessary redraw churn and candidate box vibration.
+        let is_typing_active =
+            app.last_key_press.elapsed() < std::time::Duration::from_millis(150);
+        let animation_draw = animating && !is_typing_active;
+
         // `swap` consumes the listener's signal exactly once. Folded in: input
         // handled last iteration, background clipboard results this one, and one
         // trailing frame after animation stops (`was_animating`) so the spinner
         // and expiring toasts are actually cleared from the screen.
         let needs_draw = frame_dirty
-            || animating
+            || animation_draw
             || was_animating
             || runtime.dirty.swap(false, Ordering::AcqRel);
-        was_animating = animating;
+        was_animating = animation_draw;
 
         // The breathing indicator's phase is derived from wall-clock time at
         // the draw site (see `spinner_epoch`), not advanced per frame: the loop
@@ -2254,10 +2157,8 @@ pub(super) async fn run_app_loop(
                 }
             };
             events_drained = true;
-            // Any input this iteration means the next frame must redraw (input
-            // is drained here, at the end of the iteration, but rendered at the
-            // start of the next one).
             input_redraw_pending = true;
+            app.last_key_press = std::time::Instant::now();
             // The Ctrl+R history modal's search sub-layer borrows the input line
             // as its fuzzy query, so a literal `/foo` query must NOT trigger the
             // slash completion popup (or `@path` mentions); browse mode keeps the

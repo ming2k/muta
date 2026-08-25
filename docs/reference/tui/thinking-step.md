@@ -29,8 +29,15 @@ marker needs to change between streaming and finished.
 
 | State | Format |
 |-------|--------|
-| Streaming | `Thinking · {tokens} tokens` (duration omitted) |
+| Streaming | `Thinking · …` / `Thinking · ~{bucket} tokens` (duration omitted) |
 | Completed | `Thinking · {duration} · {tokens} tokens` |
+
+While the trace streams the token count is quantized to a bucket
+(`0, 25, 50, 100, 200, 350, 500, 750, 1000, 1500, 2000`) and shown with a
+`~` prefix. The streaming summary repaints on every render heartbeat, and an
+exact count would dirty the row for nearly every delta; bucketing makes the
+label change O(log n) times over a trace instead of O(tokens). A finished
+trace reports the exact count.
 
 ## Expanded
 

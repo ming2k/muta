@@ -143,11 +143,6 @@ impl<W: io::Write> Terminal<W> {
         self.pending_clear = true;
     }
 
-    fn hidden_cursor_parking_pos(&self) -> (u16, u16) {
-        let (w, h) = self.back.size();
-        (w.saturating_sub(1), h.saturating_sub(1))
-    }
-
     fn render_frame<F>(&mut self, render: F)
     where
         F: FnOnce(&mut Frame<'_>),
@@ -167,27 +162,9 @@ impl<W: io::Write> Terminal<W> {
     }
 
     fn commit(&mut self) -> io::Result<()> {
-        // A logical frame can contain thousands of small cursor/style/text
-        // writes (an expanded edit diff is the common case). `flush()` only
-        // controls when bytes leave this process; stdout may still drain in
-        // multiple chunks and let the terminal paint a half-updated screen.
-        // DEC synchronized-update mode keeps the previous frame visible until
-        // the matching end marker, so every supported terminal presents this
-        // commit atomically. Unsupported terminals ignore the private mode.
-        //
-        // Queue the begin marker before `invalidate`: that path deliberately
-        // flushes an SGR reset on resize, and it must remain inside the same
-        // synchronized frame. Always attempt the end marker even when drawing
-        // fails so a write error cannot unnecessarily leave the terminal in a
-        // suspended-update state.
-        use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
-
-        self.backend.writer().queue(BeginSynchronizedUpdate)?;
+        self.backend.begin_sync_update()?;
         let commit_result = self.commit_frame();
-        let end_result = (|| {
-            self.backend.writer().queue(EndSynchronizedUpdate)?;
-            self.backend.writer().flush()
-        })();
+        let end_result = self.backend.end_sync_update();
         commit_result.and(end_result)
     }
 
@@ -206,15 +183,24 @@ impl<W: io::Write> Terminal<W> {
         }
 
         let cmd: DrawCmd = diff::diff(&self.back, &mut self.front);
+
+        // ── Cursor Shielding ────────────────────────────────────────────────
+        // Hide the physical cursor before emitting cell drawing commands so
+        // that neither the host terminal emulator nor the OS IME samples
+        // intermediate/transient cursor coordinates while rendering cells.
+        if !cmd.draws.is_empty() {
+            self.backend.hide_cursor()?;
+        }
+
         self.backend.render(&cmd)?;
         diff::promote_scrolled(&mut self.back, &mut self.front, &cmd);
 
-        // Apply cursor state through the backend so its cursor tracker stays
-        // aligned with the real terminal before the next diff render.
+        // ── Single Atomic Cursor Placement ──────────────────────────────────
+        // Only at the very end of the frame is the hardware cursor positioned
+        // at its final desired screen coordinate in a single atomic step.
         match self.cursor {
             CursorState::Hidden => {
-                let (x, y) = self.hidden_cursor_parking_pos();
-                self.backend.hide_cursor_at(x, y)?;
+                self.backend.hide_cursor()?;
             }
             CursorState::Visible(x, y) => {
                 self.backend.show_cursor_at(x, y)?;
@@ -288,8 +274,7 @@ impl<W: io::Write> Terminal<W> {
 
     /// Hide the cursor.
     pub fn hide_cursor(&mut self) -> io::Result<()> {
-        let (x, y) = self.hidden_cursor_parking_pos();
-        self.backend.hide_cursor_at(x, y)?;
+        self.backend.hide_cursor()?;
         self.backend.writer().flush()?;
         Ok(())
     }

@@ -153,24 +153,6 @@ impl<W: Write> Backend<W> {
     /// marker *without* flushing, so it reaches the terminal in the same
     /// ordered stream as (and ahead of) everything written until the matching
     /// [`Self::end_sync_update`].
-    ///
-    /// This is the primitive for the app's *out-of-band* cursor writes — the
-    /// input-driven immediate caret flush. Without it, those bytes reached
-    /// the terminal uncoordinated with the frame's own writes: a frame
-    /// committing between the flush's `MoveTo` and its repaint could present
-    /// the caret at a coordinate whose surrounding cells still showed the
-    /// previous frame — the visual seam users perceive as caret jitter.
-    /// Terminals without mode-2026 support ignore the markers (both the
-    /// begin emitted here and the matching end).
-    ///
-    /// Presentation semantics are order-based, not flush-based: the terminal
-    /// defers rendering from the moment it *receives* the begin marker until
-    /// it receives the end marker, so intermediate flushes inside the
-    /// envelope cannot split it — only the byte order matters, and a single
-    /// writer preserves it. Flushing the begin marker alone would add a
-    /// syscall and present an empty envelope for no benefit (and a crash
-    /// between begin and end leaves the terminal suspended only until its
-    /// mode-2026 timeout, typically tens of milliseconds).
     pub fn begin_sync_update(&mut self) -> io::Result<()> {
         use crossterm::terminal::BeginSynchronizedUpdate;
         self.out.queue(BeginSynchronizedUpdate).map(|_| ())
@@ -212,7 +194,7 @@ impl<W: Write> Backend<W> {
                         if reaches_bottom_right {
                             self.out.queue(DisableLineWrap)?;
                         }
-                        self.out.queue(crossterm::style::Print(sym.clone()))?;
+                        self.out.queue(crossterm::style::Print(sym.as_str()))?;
                         if reaches_bottom_right {
                             self.out.queue(EnableLineWrap)?;
                         }
@@ -239,8 +221,9 @@ impl<W: Write> Backend<W> {
                         if reaches_bottom_right {
                             self.out.queue(DisableLineWrap)?;
                         }
-                        for _ in 0..*width {
-                            self.out.queue(crossterm::style::Print(" "))?;
+                        if *width > 0 {
+                            let spaces = " ".repeat(*width as usize);
+                            self.out.queue(crossterm::style::Print(spaces))?;
                         }
                         if reaches_bottom_right {
                             self.out.queue(EnableLineWrap)?;
@@ -532,7 +515,7 @@ mod tests {
                 x: 0,
                 y: 0,
                 style: Style::default(),
-                cells: vec![("A".to_string(), 1)],
+                cells: vec![("A".into(), 1)],
             }],
         };
         let second = DrawCmd {
@@ -546,7 +529,7 @@ mod tests {
                 x: 1,
                 y: 0,
                 style: Style::default(),
-                cells: vec![("B".to_string(), 1)],
+                cells: vec![("B".into(), 1)],
             }],
         };
 

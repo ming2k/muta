@@ -1988,6 +1988,7 @@ pub async fn run_tui(
         last_input_rect: mutx_engine::Rect::default(),
         last_frame_area: mutx_engine::Rect::default(),
         last_input_rows: 1,
+        last_key_press: std::time::Instant::now(),
         cursor_sync_pending: false,
         cursor_visible: true,
         session_scroll: 0,

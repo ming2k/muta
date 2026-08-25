@@ -46,7 +46,7 @@ pub enum Draw {
         /// `(symbol, width)` pairs. Wide-glyph continuation cells are omitted
         /// from this list (the head glyph paints both columns); the backend
         /// advances the cursor by each symbol's width.
-        cells: Vec<(String, u8)>,
+        cells: Vec<(crate::cell::CompactSymbol, u8)>,
     },
     /// Clear from `(x, y)` to the end of that row with `style`. On BCE
     /// terminals the backend emits `clr_eol`; without BCE it paints `width`
@@ -298,7 +298,7 @@ fn diff_row(draws: &mut Vec<Draw>, back: &Grid, front: &Grid, y: u16, start: u16
     // flushes the current run and starts a new one.
     let mut run_x = None;
     let mut run_style = Style::RESET;
-    let mut run_cells: Vec<(String, u8)> = Vec::new();
+    let mut run_cells: Vec<(crate::cell::CompactSymbol, u8)> = Vec::new();
 
     let mut x = start;
     while x < w {
@@ -375,7 +375,7 @@ fn flush_run(
     draws: &mut Vec<Draw>,
     run_x: &mut Option<u16>,
     run_style: &mut Style,
-    run_cells: &mut Vec<(String, u8)>,
+    run_cells: &mut Vec<(crate::cell::CompactSymbol, u8)>,
     y: u16,
 ) {
     if let Some(x) = run_x.take()
@@ -674,7 +674,7 @@ mod tests {
             Draw::Cells { x, y, cells, .. } => {
                 assert_eq!(*x, 1);
                 assert_eq!(*y, 0);
-                assert_eq!(cells, &vec![("B".to_string(), 1)]);
+                assert_eq!(cells, &vec![("B".into(), 1)]);
             }
             other => panic!("expected Cells, got {other:?}"),
         }
@@ -714,8 +714,8 @@ mod tests {
         assert_eq!(cmd.draws.len(), 1);
         match &cmd.draws[0] {
             Draw::Cells { cells, .. } => {
-                assert_eq!(cells[0], ("😀".to_string(), 2));
-                assert_eq!(cells[1], ("a".to_string(), 1));
+                assert_eq!(cells[0], ("😀".into(), 2));
+                assert_eq!(cells[1], ("a".into(), 1));
                 assert_eq!(cells.len(), 2);
             }
             other => panic!("expected Cells, got {other:?}"),

@@ -176,14 +176,14 @@ impl Grid {
         // If we are overwriting the right half of a wide character, clear its head.
         if x > 0 && self.content[idx].is_wide_continuation() {
             let left_idx = self.index_of(x - 1, y);
-            self.content[left_idx].symbol = " ".to_string();
+            self.content[left_idx].symbol = " ".into();
             self.content[left_idx].width = 1;
             self.mark(x - 1, y);
         }
         // If we are overwriting a wide character's head, clear its trailing continuation.
         if self.content[idx].width >= 2 && x + 1 < self.width {
             let right_idx = self.index_of(x + 1, y);
-            self.content[right_idx].symbol = " ".to_string();
+            self.content[right_idx].symbol = " ".into();
             self.content[right_idx].width = 1;
             self.mark(x + 1, y);
         }
@@ -256,7 +256,7 @@ impl Grid {
                 cell_style.bg = existing.bg;
             }
             let head = Cell {
-                symbol: grapheme.to_string(),
+                symbol: grapheme.into(),
                 width: w,
                 fg: cell_style.fg,
                 bg: cell_style.bg,
@@ -266,13 +266,13 @@ impl Grid {
 
             if cx > 0 && self.content[head_idx].is_wide_continuation() {
                 let left_idx = self.index_of(cx - 1, cy);
-                self.content[left_idx].symbol = " ".to_string();
+                self.content[left_idx].symbol = " ".into();
                 self.content[left_idx].width = 1;
                 self.mark(cx - 1, cy);
             }
             if self.content[head_idx].width >= 2 && cx + 1 < self.width {
                 let right_idx = self.index_of(cx + 1, cy);
-                self.content[right_idx].symbol = " ".to_string();
+                self.content[right_idx].symbol = " ".into();
                 self.content[right_idx].width = 1;
                 self.mark(cx + 1, cy);
             }
@@ -285,7 +285,7 @@ impl Grid {
                 let trail_idx = self.index_of(cx + 1, cy);
                 if self.content[trail_idx].width >= 2 && cx + 2 < self.width {
                     let right_idx = self.index_of(cx + 2, cy);
-                    self.content[right_idx].symbol = " ".to_string();
+                    self.content[right_idx].symbol = " ".into();
                     self.content[right_idx].width = 1;
                     self.mark(cx + 2, cy);
                 }
@@ -313,7 +313,7 @@ impl Grid {
                 let left_idx = self.index_of(col_start, row);
                 if self.content[left_idx].is_wide_continuation() {
                     let head_idx = self.index_of(col_start - 1, row);
-                    self.content[head_idx].symbol = " ".to_string();
+                    self.content[head_idx].symbol = " ".into();
                     self.content[head_idx].width = 1;
                     self.mark(col_start - 1, row);
                 }
@@ -322,7 +322,7 @@ impl Grid {
                 let right_idx = self.index_of(col_end - 1, row);
                 if self.content[right_idx].width >= 2 && col_end < self.width {
                     let trail_idx = self.index_of(col_end, row);
-                    self.content[trail_idx].symbol = " ".to_string();
+                    self.content[trail_idx].symbol = " ".into();
                     self.content[trail_idx].width = 1;
                     self.mark(col_end, row);
                 }
@@ -347,7 +347,7 @@ impl Grid {
             let start_idx = self.index_of(start_x, y);
             if self.content[start_idx].is_wide_continuation() {
                 let head_idx = self.index_of(start_x - 1, y);
-                self.content[head_idx].symbol = " ".to_string();
+                self.content[head_idx].symbol = " ".into();
                 self.content[head_idx].width = 1;
                 self.mark(start_x - 1, y);
             }

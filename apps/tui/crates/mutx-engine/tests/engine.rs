@@ -88,7 +88,7 @@ fn wide_glyph_trailing_column_carries_background_not_reset() {
         diff::Draw::Cells { cells, .. } => cells.clone(),
         _ => panic!(),
     };
-    assert_eq!(emitted_cells, vec![("😀".to_string(), 2)]);
+    assert_eq!(emitted_cells, vec![("😀".into(), 2)]);
 }
 
 #[test]
@@ -386,7 +386,7 @@ fn back_row(back: &Grid, y: u16) -> Vec<String> {
             if cell.is_wide_continuation() {
                 String::new()
             } else {
-                cell.symbol.clone()
+                cell.symbol.to_string()
             }
         })
         .collect()
@@ -501,7 +501,7 @@ fn invalidate_emits_real_sgr_reset() {
             x: 0,
             y: 0,
             style: Style::default().add_modifier(mutx_engine::Modifier::BOLD),
-            cells: vec![("X".to_string(), 1)],
+            cells: vec![("X".into(), 1)],
         }],
     };
     let mut buf = Vec::new();
@@ -541,7 +541,7 @@ fn resize_then_repaint_does_not_inherit_stale_bold() {
             x: 0,
             y: 0,
             style: Style::default().add_modifier(mutx_engine::Modifier::BOLD),
-            cells: vec![("X".to_string(), 1)],
+            cells: vec![("X".into(), 1)],
         }],
     };
     let plain_cmd = DrawCmd {
@@ -551,7 +551,7 @@ fn resize_then_repaint_does_not_inherit_stale_bold() {
             x: 0,
             y: 0,
             style: Style::default(),
-            cells: vec![("Y".to_string(), 1)],
+            cells: vec![("Y".into(), 1)],
         }],
     };
 

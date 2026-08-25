@@ -241,9 +241,149 @@ impl Style {
 /// repaints that column on its own. This is the property ratatui's buffer
 /// cannot provide (it `reset()`s the trailing cell to `Color::Reset`), and the
 /// reason this engine exists.
+/// An inline-first compact string buffer for terminal cell symbols.
+///
+/// Stores grapheme clusters up to 22 bytes inline without heap allocation,
+/// covering ASCII, CJK glyphs, emoji modifiers, and common ZWJ sequences.
+/// Falls back to `Box<str>` only for unusually long multi-codepoint sequences.
+#[derive(Clone, Eq, Hash)]
+pub enum CompactSymbol {
+    Inline { buf: [u8; 22], len: u8 },
+    Heap(Box<str>),
+}
+
+impl CompactSymbol {
+    pub const fn new() -> Self {
+        Self::Inline {
+            buf: [0; 22],
+            len: 0,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Inline { buf, len } => {
+                let bytes = &buf[..*len as usize];
+                // Safety: CompactSymbol is only constructed from valid UTF-8 strings.
+                unsafe { std::str::from_utf8_unchecked(bytes) }
+            }
+            Self::Heap(s) => s.as_ref(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        match self {
+            Self::Inline { len, .. } => *len = 0,
+            Self::Heap(_) => {
+                *self = Self::new();
+            }
+        }
+    }
+
+    pub fn push_str(&mut self, s: &str) {
+        let current = self.as_str();
+        let total_len = current.len() + s.len();
+        if total_len <= 22 {
+            let mut buf = [0u8; 22];
+            let cur_bytes = current.as_bytes();
+            buf[..cur_bytes.len()].copy_from_slice(cur_bytes);
+            buf[cur_bytes.len()..total_len].copy_from_slice(s.as_bytes());
+            *self = Self::Inline {
+                buf,
+                len: total_len as u8,
+            };
+        } else {
+            let mut next = String::with_capacity(total_len);
+            next.push_str(current);
+            next.push_str(s);
+            *self = Self::Heap(next.into_boxed_str());
+        }
+    }
+}
+
+impl std::ops::Deref for CompactSymbol {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for CompactSymbol {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::borrow::Borrow<str> for CompactSymbol {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for CompactSymbol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Debug for CompactSymbol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl From<&str> for CompactSymbol {
+    fn from(s: &str) -> Self {
+        let bytes = s.as_bytes();
+        if bytes.len() <= 22 {
+            let mut buf = [0u8; 22];
+            buf[..bytes.len()].copy_from_slice(bytes);
+            Self::Inline {
+                buf,
+                len: bytes.len() as u8,
+            }
+        } else {
+            Self::Heap(s.into())
+        }
+    }
+}
+
+impl From<String> for CompactSymbol {
+    fn from(s: String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
+impl From<&String> for CompactSymbol {
+    fn from(s: &String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
+impl From<char> for CompactSymbol {
+    fn from(c: char) -> Self {
+        let mut buf = [0u8; 22];
+        let len = c.encode_utf8(&mut buf[..4]).len() as u8;
+        Self::Inline { buf, len }
+    }
+}
+
+impl Default for CompactSymbol {
+    fn default() -> Self {
+        Self::from(" ")
+    }
+}
+
+impl<T: AsRef<str> + ?Sized> PartialEq<T> for CompactSymbol {
+    fn eq(&self, other: &T) -> bool {
+        self.as_str() == other.as_ref()
+    }
+}
+
+/// A single character on the grid: its grapheme cluster (symbol), display width, and style.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
-    pub symbol: String,
+    pub symbol: CompactSymbol,
     pub width: u8,
     pub style: Style,
     /// Foreground color (mirrors `style.fg` for ratatui `cell.fg` compatibility).
@@ -257,7 +397,7 @@ impl Cell {
     /// grid is filled with and what `clr_eol`/`clr_eos` conceptually write.
     pub fn blank() -> Self {
         Cell {
-            symbol: " ".to_string(),
+            symbol: CompactSymbol::from(" "),
             width: 1,
             style: Style::RESET,
             fg: Color::Reset,
@@ -269,7 +409,7 @@ impl Cell {
     /// surface color (the app-bg fill, a panel background).
     pub fn blank_styled(style: Style) -> Self {
         Cell {
-            symbol: " ".to_string(),
+            symbol: CompactSymbol::from(" "),
             width: 1,
             fg: style.fg,
             bg: style.bg,
@@ -282,7 +422,7 @@ impl Cell {
     /// background so the column can never ghost.
     pub fn wide_continuation(head_style: Style) -> Self {
         Cell {
-            symbol: " ".to_string(),
+            symbol: CompactSymbol::from(" "),
             width: 0,
             fg: Color::Reset,
             bg: head_style.bg,
@@ -294,10 +434,21 @@ impl Cell {
     }
 
     /// A narrow (width-1) glyph with a style.
-    pub fn narrow(symbol: impl Into<String>, style: Style) -> Self {
+    pub fn narrow(symbol: impl Into<CompactSymbol>, style: Style) -> Self {
         Cell {
             symbol: symbol.into(),
             width: 1,
+            fg: style.fg,
+            bg: style.bg,
+            style,
+        }
+    }
+
+    /// A wide (width-2) glyph with a style.
+    pub fn wide(symbol: impl Into<CompactSymbol>, style: Style) -> Self {
+        Cell {
+            symbol: symbol.into(),
+            width: 2,
             fg: style.fg,
             bg: style.bg,
             style,
