@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-08-25
+
+### Added
+
+- **Antigravity Dynamic Model Discovery**:
+  - Implemented dynamic model discovery endpoint for Antigravity OAuth via `/v1internal:fetchAvailableModels`.
+  - Automatic filtering of deprecated, internal helper (`chat_*`, `tab_*`), and legacy 3.6 flash models.
+  - Wire name normalization routing `gemini-3.7-flash` to canonical wire identifier `gemini-3.7-flash-tiered`.
+- **Configurable `hidden_models`**:
+  - Added `hidden_models` configuration option to `Config` supporting exact and glob pattern filtering across model pickers.
+
+### Changed
+
+- **Provider and Model Picker UI Polish**:
+  - Refined models modal and provider overlay styling with clean row layout, aligned labels, and circle node effort sliders.
+
 ## [0.33.0] - 2026-08-25
 
 ### Changed
@@ -4695,7 +4711,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.33.0...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.33.1...HEAD
+[0.33.1]: https://github.com/ming2k/muta/compare/v0.33.0...v0.33.1
 [0.33.0]: https://github.com/ming2k/muta/compare/v0.32.2...v0.33.0
 [0.32.2]: https://github.com/ming2k/muta/compare/v0.32.1...v0.32.2
 [0.32.1]: https://github.com/ming2k/muta/compare/v0.32.0...v0.32.1
