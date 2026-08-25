@@ -504,10 +504,38 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 )
                 .with_surface(NoticeSurface::Banner)
                 .with_body(
-                    "This workspace has no persisted trust decision. Run `/trust` to authorize \
-                     development in this project, or `/trust readonly` for read-oriented analysis.",
+                    "This workspace has no persisted trust decision. Choose an option below or run \
+                     `/trust` to authorize development in this project.",
                 ),
             ),
+        ));
+        let _ = resp_tx.send(round_response(
+            &session.id().await,
+            RoundEvent::UserQuestionRequest(muta_contracts::UserQuestionRequest {
+                id: format!("trust-{}", session.id().await),
+                questions: vec![muta_contracts::UserQuestion {
+                    header: Some("Workspace Trust".to_string()),
+                    question: format!("Trust this workspace?\n{}", project_root.display()),
+                    options: vec![
+                        muta_contracts::UserQuestionOption {
+                            label: "Trust & Continue".to_string(),
+                            description: Some(
+                                "Allow full editing, tests, and command execution in this directory"
+                                    .to_string(),
+                            ),
+                        },
+                        muta_contracts::UserQuestionOption {
+                            label: "Read-only Review".to_string(),
+                            description: Some(
+                                "Inspect and analyze codebase safely without writing or executing commands"
+                                    .to_string(),
+                            ),
+                        },
+                    ],
+                    multi_select: false,
+                }],
+                origin: None,
+            }),
         ));
     }
     if security_snapshot.execution == WorkspaceExecutionProfile::Development

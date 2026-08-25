@@ -88,15 +88,60 @@ pub async fn reply(
 /// `AgentRequest::UserQuestionReply` — mirror the permission arm: a
 /// `parent_call_id` targets the envoy; otherwise try the primary, then a
 /// `/btw` side agent (ADR-0017).
+#[allow(clippy::too_many_arguments)]
 pub async fn reply_question(
     agent: &Agent,
     envoy_registry: &Arc<EnvoyRegistry>,
     side: &Arc<AsyncRwLock<SideRegistry>>,
+    workspace_security: &Arc<muta_persistence::workspace_security::WorkspaceSecurityStore>,
+    project_root: &std::path::Path,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    session_id: &str,
     request_id: String,
     answers: Vec<Vec<String>>,
     parent_call_id: Option<String>,
 ) {
+    if request_id.starts_with("trust-") {
+        let chosen = answers
+            .first()
+            .and_then(|row| row.first())
+            .map(|s| s.as_str())
+            .unwrap_or("Read-only Review");
+
+        let msg = if chosen.contains("Trust") {
+            let _ = workspace_security.set_execution(
+                project_root,
+                muta_contracts::WorkspaceExecutionProfile::Development,
+            );
+            let _ = workspace_security.trust_extensions(project_root);
+            "✓ Workspace trusted for development. Decision persisted."
+        } else {
+            let _ = workspace_security.set_execution(
+                project_root,
+                muta_contracts::WorkspaceExecutionProfile::Restricted,
+            );
+            "✓ Workspace set to restricted read-only mode. Decision persisted."
+        };
+
+        let snapshot = workspace_security.snapshot(project_root);
+        agent.set_workspace_security(snapshot);
+        let _ = resp_tx.send(muta_agent::orchestration::round_response(
+            session_id,
+            muta_contracts::RoundEvent::Notice(
+                muta_contracts::AgentNotice::new(
+                    muta_contracts::NoticeKind::ReviewAlert,
+                    muta_contracts::NoticeSeverity::Info,
+                    "Workspace trust decision recorded",
+                    muta_contracts::NoticeSource::Harness,
+                )
+                .with_surface(muta_contracts::NoticeSurface::Toast)
+                .with_body(msg),
+            ),
+        ));
+        send_harness_state(resp_tx, session_id, agent, LoopStatus::Idle);
+        return;
+    }
+
     let resolved = if let Some(parent) = &parent_call_id {
         envoy_registry
             .get(parent)

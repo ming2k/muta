@@ -344,11 +344,15 @@ impl SessionDriver {
                     answers,
                     parent_call_id,
                 } => {
+                    let sess_id = session.id().await;
                     crate::handlers_permission::reply_question(
                         &agent,
                         &envoy_registry,
                         &side,
+                        &workspace_security,
+                        &project_root_for_side,
                         &resp_tx,
+                        &sess_id,
                         request_id,
                         answers,
                         parent_call_id,
