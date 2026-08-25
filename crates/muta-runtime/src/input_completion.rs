@@ -77,12 +77,20 @@ impl InputCompletionEngine {
                     .alias(command_name)
                     .map(|alias| current.replacen(command_name, &alias.target, 1))
                     .unwrap_or_else(|| current.clone());
-                return spec
-                    .usage
-                    .iter()
-                    .filter(|usage| usage.contains(' ') && !usage.contains('<'))
-                    .filter(|usage| usage.to_lowercase().starts_with(&canonical_input))
-                    .map(|usage| slash_item(usage, &spec.summary, replace_end, spec, false))
+
+                let mut candidates = Vec::new();
+                for usage in &spec.usage {
+                    for expanded in expand_usage_options(usage) {
+                        if !candidates.contains(&expanded) {
+                            candidates.push(expanded);
+                        }
+                    }
+                }
+
+                return candidates
+                    .into_iter()
+                    .filter(|cand| cand.to_lowercase().starts_with(&canonical_input))
+                    .map(|cand| slash_item(&cand, &spec.summary, replace_end, spec, false))
                     .collect();
             }
         }
@@ -503,6 +511,68 @@ fn sort_path_completions(items: &mut [InputCompletion]) {
     });
 }
 
+/// Expand a usage signature (e.g. `"/trust [workspace|extensions|all]"` or
+/// `"/debug trace on|off"`) into concrete runnable subcommand completion candidates.
+/// Strips placeholder arguments like `<id>` and expands option sets like `a|b|c`
+/// or `[a|b|c]`.
+pub(crate) fn expand_usage_options(usage: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    for word in usage.split_whitespace() {
+        // Skip positional placeholder arguments like `<query>` or `<id>`
+        if word.starts_with('<') && word.ends_with('>') {
+            continue;
+        }
+        // Skip optional single placeholder arguments like `[path]` or `[topic]`
+        if word.starts_with('[') && word.ends_with(']') && !word.contains('|') {
+            continue;
+        }
+        words.push(word);
+    }
+
+    if words.len() <= 1 {
+        return Vec::new();
+    }
+
+    let mut current_expansions = vec![String::new()];
+
+    for word in words {
+        let cleaned = if (word.starts_with('[') && word.ends_with(']'))
+            || (word.starts_with('(') && word.ends_with(')'))
+        {
+            if word.contains('|') {
+                &word[1..word.len() - 1]
+            } else {
+                word
+            }
+        } else {
+            word
+        };
+
+        let variants: Vec<&str> = if cleaned.contains('|') {
+            cleaned.split('|').filter(|s| !s.is_empty()).collect()
+        } else {
+            vec![word]
+        };
+
+        let mut next_expansions = Vec::new();
+        for prefix in &current_expansions {
+            for variant in &variants {
+                if prefix.is_empty() {
+                    next_expansions.push(variant.to_string());
+                } else {
+                    next_expansions.push(format!("{prefix} {variant}"));
+                }
+            }
+        }
+        current_expansions = next_expansions;
+    }
+
+    current_expansions
+        .into_iter()
+        .filter(|s| s.contains(' '))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,6 +600,137 @@ mod tests {
             items.first().map(|item| item.label.as_str()),
             Some("/settings")
         );
+    }
+
+    #[tokio::test]
+    async fn slash_subcommand_options_expand_and_filter() {
+        let engine = InputCompletionEngine::new(catalog(), PathBuf::from("."));
+
+        // /extensions with space offers all 3 options
+        let AgentResponse::InputCompletions { items, .. } =
+            engine.complete(10, "/extensions ".into(), 12).await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "/extensions status",
+                "/extensions trust",
+                "/extensions untrust"
+            ]
+        );
+
+        // /extensions t filters to /extensions trust
+        let AgentResponse::InputCompletions { items, .. } =
+            engine.complete(11, "/extensions t".into(), 13).await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["/extensions trust"]);
+
+        // /trust offers all 6 options
+        let AgentResponse::InputCompletions { items, .. } =
+            engine.complete(12, "/trust ".into(), 7).await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "/trust workspace",
+                "/trust extensions",
+                "/trust all",
+                "/trust readonly",
+                "/trust status",
+                "/trust revoke"
+            ]
+        );
+
+        // /trust w filters to /trust workspace
+        let AgentResponse::InputCompletions { items, .. } =
+            engine.complete(13, "/trust w".into(), 8).await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["/trust workspace"]);
+
+        // /debug trace offers on and off
+        let AgentResponse::InputCompletions { items, .. } =
+            engine.complete(14, "/debug trace ".into(), 13).await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["/debug trace on", "/debug trace off"]);
+
+        // /debug trace of filters to /debug trace off
+        let AgentResponse::InputCompletions { items, .. } =
+            engine.complete(15, "/debug trace of".into(), 15).await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["/debug trace off"]);
+
+        // /principal offers 4 roles
+        let AgentResponse::InputCompletions { items, .. } =
+            engine.complete(16, "/principal ".into(), 11).await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "/principal code",
+                "/principal architect",
+                "/principal reviewer",
+                "/principal security"
+            ]
+        );
+    }
+
+    #[test]
+    fn expand_usage_options_handles_bracketed_and_raw_pipes() {
+        assert_eq!(
+            expand_usage_options("/trust [workspace|extensions|all|readonly|status|revoke]"),
+            vec![
+                "/trust workspace",
+                "/trust extensions",
+                "/trust all",
+                "/trust readonly",
+                "/trust status",
+                "/trust revoke"
+            ]
+        );
+        assert_eq!(
+            expand_usage_options("/debug trace [on|off]"),
+            vec!["/debug trace on", "/debug trace off"]
+        );
+        assert_eq!(
+            expand_usage_options("/debug trace on|off"),
+            vec!["/debug trace on", "/debug trace off"]
+        );
+        assert_eq!(
+            expand_usage_options("/extensions [status|trust|untrust]"),
+            vec![
+                "/extensions status",
+                "/extensions trust",
+                "/extensions untrust"
+            ]
+        );
+        assert_eq!(
+            expand_usage_options("/repeat cancel <id>"),
+            vec!["/repeat cancel"]
+        );
+        assert_eq!(expand_usage_options("/repeat <cron> <prompt>"), Vec::<String>::new());
+        assert_eq!(expand_usage_options("/init [path]"), Vec::<String>::new());
+        assert_eq!(expand_usage_options("/models"), Vec::<String>::new());
     }
 
     #[tokio::test]

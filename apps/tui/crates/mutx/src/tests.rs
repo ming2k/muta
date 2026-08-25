@@ -1897,6 +1897,57 @@ fn completions_autopilot_subcommand_offers_on_off() {
     assert!(app.completions().is_empty());
 }
 
+#[test]
+fn completions_extensions_and_trust_subcommands_expand_options() {
+    let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
+
+    // /extensions <space> offers all discrete subcommands
+    app.input = "/extensions ".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    assert_eq!(app.completion_kind(), CompletionKind::Slash);
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        vec![
+            "/extensions status",
+            "/extensions trust",
+            "/extensions untrust"
+        ]
+    );
+
+    // Typing prefix narrows candidate
+    app.input = "/extensions tr".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, vec!["/extensions trust"]);
+
+    // /trust <space> offers all 6 discrete subcommands
+    app.input = "/trust ".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        vec![
+            "/trust workspace",
+            "/trust extensions",
+            "/trust all",
+            "/trust readonly",
+            "/trust status",
+            "/trust revoke"
+        ]
+    );
+
+    // /trust w narrows to /trust workspace
+    app.input = "/trust w".to_string();
+    app.cursor_position = app.input.chars().count();
+    let completions = app.completions();
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, vec!["/trust workspace"]);
+}
+
 /// The official OpenAI template (Name / Token) seeds OpenAI text models directly.
 fn openai_template() -> &'static crate::providers::ProviderTemplate {
     crate::PROVIDER_TEMPLATES

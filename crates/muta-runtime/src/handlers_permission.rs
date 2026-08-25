@@ -106,21 +106,29 @@ pub async fn reply_question(
             .first()
             .and_then(|row| row.first())
             .map(|s| s.as_str())
-            .unwrap_or("Read-only Review");
+            .unwrap_or("Read-only");
 
-        let msg = if chosen.contains("Trust") {
+        let msg = if chosen.contains("Full Development") || (chosen.contains("Trust") && !chosen.contains("Workspace Only")) {
             let _ = workspace_security.set_execution(
                 project_root,
                 muta_contracts::WorkspaceExecutionProfile::Development,
             );
             let _ = workspace_security.trust_extensions(project_root);
-            "✓ Workspace trusted for development. Decision persisted."
+            "✓ Workspace and project extensions trusted for development. Decision persisted."
+        } else if chosen.contains("Workspace Only") {
+            let _ = workspace_security.set_execution(
+                project_root,
+                muta_contracts::WorkspaceExecutionProfile::Development,
+            );
+            let _ = workspace_security.untrust_extensions(project_root);
+            "✓ Workspace trusted for development (project extensions quarantined). Decision persisted."
         } else {
             let _ = workspace_security.set_execution(
                 project_root,
                 muta_contracts::WorkspaceExecutionProfile::Restricted,
             );
-            "✓ Workspace set to restricted read-only mode. Decision persisted."
+            let _ = workspace_security.untrust_extensions(project_root);
+            "✓ Workspace set to restricted read-only mode with strict sandbox. Decision persisted."
         };
 
         let snapshot = workspace_security.snapshot(project_root);

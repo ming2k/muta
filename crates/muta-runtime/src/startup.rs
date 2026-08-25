@@ -253,7 +253,7 @@ define_builtin_commands! {
     Principal = "/principal" : {
         summary: "Switch principal agent persona and role",
         description: "Switch between principal persona roles (code, architect, reviewer, security) to adjust persona tone, focus, and capability boundaries.",
-        usage: ["/principal", "/principal <role>"],
+        usage: ["/principal", "/principal [code|architect|reviewer|security]"],
         examples: [("/principal architect", "Switch to system design & analysis focus"), ("/principal reviewer", "Read-only code review mode")],
         intent_keywords: ["principal", "role", "persona", "mode", "identity", "architect", "reviewer", "security", "switch-role"],
         category: Principal,
@@ -385,18 +385,10 @@ define_builtin_commands! {
         intent_keywords: ["trust", "untrust", "authorize", "workspace-trust", "security", "permission"],
         category: Project,
     },
-    Workspace = "/workspace" : {
-        summary: "Inspect or set workspace execution authority",
-        description: "Show workspace security state, choose restricted or development execution authority, or reset the decision.",
-        usage: ["/workspace", "/workspace restricted|development|reset"],
-        examples: [("/workspace", "Show workspace security state"), ("/workspace development", "Authorise ordinary development in this workspace")],
-        intent_keywords: ["workspace", "authority", "restricted", "development", "grant"],
-        category: Project,
-    },
     Extensions = "/extensions" : {
         summary: "Inspect or trust project-authored extensions",
         description: "Manage content-bound trust for project MCP servers, hooks, skills, and slash commands independently from execution authority.",
-        usage: ["/extensions", "/extensions trust|untrust"],
+        usage: ["/extensions", "/extensions [status|trust|untrust]"],
         examples: [("/extensions", "Show extension trust state"), ("/extensions trust", "Trust and load the exact current contribution content")],
         intent_keywords: ["extensions", "trust", "untrust", "mcp", "hooks", "project-skills"],
         category: Project,
@@ -412,7 +404,7 @@ define_builtin_commands! {
     Debug = "/debug" : {
         summary: "Debug tools (tracing & preview)",
         description: "Developer tools: toggle network round-trip tracing with '/debug trace on|off' or dry-run next request body with '/debug preview'.",
-        usage: ["/debug trace on|off", "/debug preview"],
+        usage: ["/debug trace [on|off]", "/debug preview"],
         examples: [("/debug trace on", "Enable request tracing"), ("/debug preview", "Dry run next LLM request payload")],
         intent_keywords: ["debug", "trace", "log", "dry-run", "inspect", "troubleshoot"],
         category: Debug,

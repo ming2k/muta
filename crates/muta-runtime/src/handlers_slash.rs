@@ -1683,17 +1683,29 @@ pub async fn dispatch(
                 "status" => {
                     let snapshot = runtime_workspace_security(workspace_security, project_root_for_side);
                     agent.set_workspace_security(snapshot.clone());
+                    let runtime_mode = match snapshot.execution {
+                        WorkspaceExecutionProfile::Development => {
+                            "Host Native (Full Toolchains & Cache Active)"
+                        }
+                        WorkspaceExecutionProfile::Restricted | WorkspaceExecutionProfile::Unknown => {
+                            if snapshot.sandbox == muta_contracts::WorkspaceSandboxState::Enforced {
+                                "Physical Sandbox (Bubblewrap Enforced, Network Disabled)"
+                            } else {
+                                "Host (Physical Sandbox Unavailable)"
+                            }
+                        }
+                    };
                     let message = format!(
                         "Workspace Trust & Security Status:\n\
                          • Root: {}\n\
                          • Execution Authority: {}\n\
                          • Project Extensions: {}\n\
-                         • Sandbox State: {}\n\
+                         • Runtime Environment: {}\n\
                          • Autopilot: {} (interaction only)",
                         snapshot.root,
                         snapshot.execution.as_str(),
                         snapshot.extensions.as_str(),
-                        snapshot.sandbox.as_str(),
+                        runtime_mode,
                         if agent.get_autopilot() { "on" } else { "off" },
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message)).await;
@@ -1710,45 +1722,6 @@ pub async fn dispatch(
                     .await;
                 }
             }
-        }
-        Some(BuiltinCmd::Workspace) => {
-            use muta_contracts::WorkspaceExecutionProfile;
-            let sub = parts.get(1).copied().unwrap_or("status");
-            let requested = match sub {
-                "status" => None,
-                "trust" | "dev" | "development" => Some(WorkspaceExecutionProfile::Development),
-                "restrict" | "restricted" | "readonly" => Some(WorkspaceExecutionProfile::Restricted),
-                "reset" => Some(WorkspaceExecutionProfile::Unknown),
-                _ => {
-                    record_error(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        "Usage: /workspace [status|trust|restrict|development|restricted|reset]",
-                    )
-                    .await;
-                    return;
-                }
-            };
-            if let Some(profile) = requested
-                && let Err(error) = workspace_security.set_execution(project_root_for_side, profile)
-            {
-                record_error(session, resp_tx, name, args, error).await;
-                return;
-            }
-            let snapshot = runtime_workspace_security(workspace_security, project_root_for_side);
-            agent.set_workspace_security(snapshot.clone());
-            let message = format!(
-                "Workspace: {}\nExecution authority: {}\nProject extensions: {}\nSandbox: {}\nAutopilot: {} (interaction only)",
-                snapshot.root,
-                snapshot.execution.as_str(),
-                snapshot.extensions.as_str(),
-                snapshot.sandbox.as_str(),
-                if agent.get_autopilot() { "on" } else { "off" },
-            );
-            record_command(session, resp_tx, name, args, CommandResult::Text(message)).await;
-            send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
         }
         Some(BuiltinCmd::Extensions) => {
             let sub = parts.get(1).copied().unwrap_or("status");

@@ -3679,7 +3679,7 @@ impl Agent {
                     return ToolOutput::Text(format!(
                         "[authority required] Tool '{}' is not authorised for scope '{}'. \
                          Autopilot controls interaction only and cannot create grants. \
-                         Run `/workspace development` to authorise ordinary workspace work, \
+                         Run `/trust workspace` to authorise ordinary workspace work, \
                          or add a narrow permission rule.",
                         request.tool, request.scope
                     ));

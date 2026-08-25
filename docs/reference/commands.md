@@ -32,7 +32,6 @@ Project and user-defined commands are covered under
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/init [path]` | Initialize a `.muta/` config tree |
 | `/trust` | Trust workspace for development and manage project extensions |
-| `/workspace` | Inspect or set workspace execution authority |
 | `/extensions` | Inspect or trust project-authored extensions |
 | `/skills [list\|reload]` | List or reload available skills |
 | `/skill <name>` | Load a skill by name |
@@ -262,27 +261,6 @@ recalling earlier decisions inside one long session; cross-session recall is
 | Form | Effect |
 |------|--------|
 | `/init [path]` | Initialize a `.muta/` config tree; `path` defaults to `.` |
-
-### `/workspace`
-
-| Form | Effect |
-|------|--------|
-| `/workspace` or `/workspace status` | Show the canonical workspace identity, execution profile, extension state, physical sandbox state, and interaction posture |
-| `/workspace restricted` | Select the read-oriented profile; each side effect still needs an explicit authority rule |
-| `/workspace development` | Pre-authorize ordinary development inside the physically enforced workspace sandbox |
-| `/workspace reset` | Remove the workspace execution decision and return to `unknown` |
-
-Opening a directory grants no execution authority. The initial `unknown`
-profile is visible in harness state and as a retained startup banner. An
-agent round or direct `!shell` command in `unknown` fails preflight before a
-provider or process launch, whether autopilot is on or off. The
-`development` profile is accepted only when the runtime can enforce its
-workspace sandbox; it never means host-level shell access. Package-manager
-installs are ordinary development actions inside that sandbox. Package-manager
-executables must exist in the admitted system runtime; binaries and shims under
-the user's home directory are intentionally not mounted. Destructive,
-publishing, infrastructure, and pipe-to-shell commands remain governed by
-the bash action policy.
 
 ### `/extensions`
 

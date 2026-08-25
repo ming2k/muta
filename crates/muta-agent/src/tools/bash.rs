@@ -431,7 +431,7 @@ fn workspace_sandbox_shell(
         command,
         workspace_root,
         muta_platform::workspace_sandbox::WorkspaceAccess::ReadWrite,
-        muta_platform::workspace_sandbox::NetworkAccess::Enabled,
+        muta_platform::workspace_sandbox::NetworkAccess::Disabled,
     )
 }
 

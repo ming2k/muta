@@ -375,6 +375,9 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let websearch_shared = Arc::new(muta_contracts::SharedWebSearchConfig::new(
         config.websearch.clone(),
     ));
+    let execution_env = Arc::new(
+        muta_agent::execution::WorkspaceExecutionEnvironment::new(project_root.clone()),
+    );
     let tool_ctx = {
         let mut builder = ToolContextBuilder::new();
         builder.provide(websearch_shared.clone());
@@ -382,10 +385,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         builder.provide(skills_registry.clone());
         builder.provide(embedding_store.clone());
         builder.provide(session.clone());
-        let execution_env: Arc<dyn muta_contracts::ExecutionEnvironment> = Arc::new(
-            muta_agent::execution::WorkspaceExecutionEnvironment::new(project_root.clone()),
-        );
-        builder.provide(execution_env);
+        builder.provide(execution_env.clone() as Arc<dyn muta_contracts::ExecutionEnvironment>);
         // The session's workspace root: every workspace-relative tool
         // operation (bash cwd, relative path resolution, search bases)
         // anchors here instead of the daemon process's cwd. Under the
@@ -445,6 +445,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // orthogonal scope axis.
     envoy_tool_handle.bind_variant_selection(agent.variant_selection_handle());
     envoy_tool_handle.bind_workspace_security(agent.workspace_security_handle());
+    execution_env.bind_security_handle(agent.workspace_security_handle());
     // Wire the per-project "always allow" allowlist so prior `Always`
     // approvals survive across sessions in this project. Best-effort: a
     // missing or unreadable permissions.json just means we re-prompt.
@@ -518,16 +519,23 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                     question: format!("Trust this workspace?\n{}", project_root.display()),
                     options: vec![
                         muta_contracts::UserQuestionOption {
-                            label: "Trust & Continue".to_string(),
+                            label: "Trust (Full Development & Extensions)".to_string(),
                             description: Some(
-                                "Allow full editing, tests, and command execution in this directory"
+                                "Allow full editing, tests, and command execution; load project extensions (MCP, hooks, skills)"
                                     .to_string(),
                             ),
                         },
                         muta_contracts::UserQuestionOption {
-                            label: "Read-only Review".to_string(),
+                            label: "Trust Workspace Only (Quarantine Extensions)".to_string(),
                             description: Some(
-                                "Inspect and analyze codebase safely without writing or executing commands"
+                                "Allow full editing, tests, and command execution, but keep project MCP servers, hooks, and skills quarantined"
+                                    .to_string(),
+                            ),
+                        },
+                        muta_contracts::UserQuestionOption {
+                            label: "Read-only (Strict Sandbox)".to_string(),
+                            description: Some(
+                                "Inspect and analyze codebase safely; commands require explicit individual approval in a strict network-disabled sandbox"
                                     .to_string(),
                             ),
                         },
