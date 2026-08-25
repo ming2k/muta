@@ -33,7 +33,7 @@ use crate::model::selection::{
 };
 use crate::versioned::{HeightInvalidation, TranscriptPatch, TranscriptUpdate, Versioned};
 use crate::view;
-use crate::{App, CaretOwner, Modal, ProviderDeleteChoice, SelectionEdge};
+use crate::{App, Modal, ProviderDeleteChoice, SelectionEdge};
 
 use tokio::sync::Mutex;
 

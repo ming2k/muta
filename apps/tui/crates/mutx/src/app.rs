@@ -1399,6 +1399,7 @@ impl App {
     /// update or a caret-ownership change: the loop suppresses the flush for
     /// the former (see `sync_caret_and_cursor`) and `caret_owner`/visibility
     /// already gate the latter, so no layout knowledge is duplicated here.
+    #[cfg(test)]
     pub(crate) fn input_geometry_is_clean(&self, terminal_size: (u16, u16)) -> bool {
         if self.last_input_rect.width == 0 || self.last_input_rows == 0 {
             return false;
@@ -1426,6 +1427,7 @@ impl App {
     /// [`crate::event_loop::render`] hands the transcript layout, extracted
     /// so the geometry probe measures the same string the renderer measured
     /// (masking included) instead of re-deriving from the raw buffer.
+    #[cfg(test)]
     pub(crate) fn displayed_input_with_cursor(&self) -> Option<(String, usize)> {
         if self.active_modal == Modal::ModelEditor && self.editor_field == 0 {
             const MASK_CHAR: &str = "•";

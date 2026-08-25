@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-08-25
+
+### Changed
+
+- **TUI engine rendering pipeline overhaul**:
+  - **Cursor Absolute Shielding**: Physical cursor is strictly hidden (`\x1b[?25l`) throughout cell diff and hardware scroll emission, and positioned/unhidden (`\x1b[?25h`) only at the end of the frame in a single atomic step inside the synchronized update envelope.
+  - **Single Pipeline Submission**: Eliminated out-of-band cursor sync and split-brain guessing, preventing caret bouncing and IME candidate jumping.
+  - **Typing / Composition Quiescence**: Background micro-animations (e.g. 100ms spinner/breathing ticks) are suspended during active typing/composition (150ms window), preventing 10Hz IME candidate box vibration.
+  - **Zero-Allocation `CompactSymbol`**: Replaced heap-allocated `String` in `Cell` and `Draw::Cells` with 22-byte stack-inlined `CompactSymbol`, eliminating memory allocation overhead during high-frequency diffing and screen rendering.
+  - **Batch `ClearEol`**: Optimized non-BCE ClearEol to emit batched spaces instead of queuing individual commands per cell.
+
 ## [0.32.2] - 2026-08-25
 
 ### Fixed
@@ -4684,7 +4695,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.32.2...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.33.0...HEAD
+[0.33.0]: https://github.com/ming2k/muta/compare/v0.32.2...v0.33.0
 [0.32.2]: https://github.com/ming2k/muta/compare/v0.32.1...v0.32.2
 [0.32.1]: https://github.com/ming2k/muta/compare/v0.32.0...v0.32.1
 [0.32.0]: https://github.com/ming2k/muta/releases/tag/v0.32.0
