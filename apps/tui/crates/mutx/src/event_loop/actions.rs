@@ -81,7 +81,7 @@ pub(super) async fn dispatch_action(
     // alive: any other action — navigation, prompt, focus toggle, Esc —
     // disarms it. The armed state lives exactly one keystroke.
     if app.host_kill_confirm.is_some()
-        && app.active_modal == Modal::Host
+        && app.active_modal() == Modal::Host
         && !matches!(
             action,
             input::InputAction::HostKillSelected | input::InputAction::None
@@ -135,7 +135,7 @@ pub(super) async fn dispatch_action(
             // and the key editor share one activation path (key-ready /
             // OAuth / key editor) via `activate_picked_model`.
             let key_ready = |app: &App, id: &str| app.key_status.get(id).copied().unwrap_or(true);
-            let target = if app.active_modal == Modal::Models {
+            let target = if app.active_modal() == Modal::Models {
                 let rows = app.models_flat_filtered();
                 rows.get(app.modal_index)
                     .or_else(|| rows.first())
@@ -149,27 +149,27 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::CustomProviderNextField => {
-            if app.active_modal == Modal::CustomProvider {
+            if app.active_modal() == Modal::CustomProvider {
                 app.cycle_custom_field(true);
             }
         }
         input::InputAction::CustomProviderPrevField => {
-            if app.active_modal == Modal::CustomProvider {
+            if app.active_modal() == Modal::CustomProvider {
                 app.cycle_custom_field(false);
             }
         }
         input::InputAction::MoveCustomSuggestion { forward } => {
-            if app.active_modal == Modal::CustomProvider {
+            if app.active_modal() == Modal::CustomProvider {
                 app.move_custom_suggestion(forward);
             }
         }
         input::InputAction::MoveProviderTemplate { forward } => {
-            if app.active_modal == Modal::ProviderTemplate {
+            if app.active_modal() == Modal::ProviderTemplate {
                 app.move_template_choice(forward);
             }
         }
         input::InputAction::SelectProviderTemplate => {
-            if app.active_modal == Modal::ProviderTemplate
+            if app.active_modal() == Modal::ProviderTemplate
                 && let Some(template) = crate::PROVIDER_TEMPLATES.get(app.template_choice)
             {
                 if template.oauth_first() {
@@ -187,7 +187,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::CancelOauthPending => {
-            if app.active_modal == Modal::OauthPending {
+            if app.active_modal() == Modal::OauthPending {
                 app.awaiting_oauth_add = false;
                 app.oauth_pending_url.clear();
                 app.oauth_pending_user_code.clear();
@@ -197,7 +197,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::CycleOauthSelection => {
-            if app.active_modal == Modal::OauthPending {
+            if app.active_modal() == Modal::OauthPending {
                 app.cycle_oauth_selection();
             }
         }
@@ -231,10 +231,10 @@ pub(super) async fn dispatch_action(
         input::InputAction::CancelProviderTemplate => {
             // Return to the Connections list the chooser was opened
             // from; the chat draft stays parked in stashed_input.
-            if app.active_modal == Modal::ProviderTemplate {
+            if app.active_modal() == Modal::ProviderTemplate {
                 app.input.clear();
                 app.set_cursor(0);
-                app.active_modal = Modal::Connections;
+                app.pop_transient_surface();
                 app.model_search = false;
                 app.model_scroll = 0;
                 app.model_modal_follow = true;
@@ -268,12 +268,12 @@ pub(super) async fn dispatch_action(
         input::InputAction::CancelCustomProvider => {
             // Return to the Connections list the editor was opened
             // from; the chat draft stays parked in stashed_input.
-            if app.active_modal == Modal::CustomProvider {
+            if app.active_modal() == Modal::CustomProvider {
                 app.input.clear();
                 app.set_cursor(0);
                 app.custom_field = 0;
                 app.custom_edit_id = None;
-                app.active_modal = Modal::Connections;
+                app.pop_transient_surface();
                 app.model_search = false;
                 app.model_scroll = 0;
                 app.model_modal_follow = true;
@@ -288,7 +288,7 @@ pub(super) async fn dispatch_action(
             // line is already empty (held in `stashed_input`); typing now
             // builds the fuzzy query and re-ranks the active picker's
             // rows. Shared by the Connections and Models pickers.
-            if matches!(app.active_modal, Modal::Connections | Modal::Models) {
+            if matches!(app.active_modal(), Modal::Connections | Modal::Models) {
                 app.model_search = true;
                 app.modal_keymap_open = false;
                 app.modal_index = 0;
@@ -300,7 +300,7 @@ pub(super) async fn dispatch_action(
             // First Esc while searching: drop the query and return to the
             // full browse list. The chat draft stays parked in
             // `stashed_input` until the modal closes for real.
-            if matches!(app.active_modal, Modal::Connections | Modal::Models) {
+            if matches!(app.active_modal(), Modal::Connections | Modal::Models) {
                 app.model_search = false;
                 app.modal_keymap_open = false;
                 app.input.clear();
@@ -318,7 +318,7 @@ pub(super) async fn dispatch_action(
             // Favorite is model-level (ADR-0046), so the id is the
             // model wire id. Sending the request is enough; the backend
             // pushes a fresh snapshot that flips the ★ next frame.
-            if app.active_modal == Modal::Models {
+            if app.active_modal() == Modal::Models {
                 let ranked = app.models_flat_filtered();
                 if let Some(row) = ranked.get(app.modal_index).or_else(|| ranked.first()) {
                     let _ = app.tx.send(AgentRequest::ToggleFavorite {
@@ -420,113 +420,75 @@ pub(super) async fn dispatch_action(
             handle_esc_interrupt(app, false);
         }
         input::InputAction::OpenModels => {
-            // A retained view (ADR-0133 phase 3): the composer draft parks
-            // in the *view's own* slot (open_view does it), a reopen
-            // restores the retained cursor/scroll, and only the first open
-            // runs the land-on-current-selection ritual. Esc hides with the
-            // draft handed back.
-            let first = app.open_view(crate::views::ViewId::Models);
-            if first {
-                app.model_search = false;
-                app.model_modal_follow = true;
-                // Land the cursor on the live (provider, model) pair, so
-                // "open picker + Enter" re-activates the current selection.
-                let rows = app.models_flat_filtered();
-                app.modal_index = rows
-                    .iter()
-                    .position(|row| {
-                        row.provider_id == app.current_provider && row.model == app.current_model
-                    })
-                    .unwrap_or(0);
-                app.suggestion_index = None;
-            }
+            enter_view(
+                app,
+                crate::views::ViewId::Models,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::OpenConnections => {
-            // A retained view (ADR-0133 phase 3), same per-view-draft
-            // contract as `OpenModels`: only the first open runs the
-            // land-on-current-provider ritual.
-            let first = app.open_view(crate::views::ViewId::Connections);
-            if first {
-                app.model_search = false;
-                app.model_modal_follow = true;
-                // Land the cursor on the currently-active provider (falling
-                // back to the default), so "open picker + Enter"
-                // re-activates it.
-                let ranked = app.providers_filtered();
-                app.modal_index = ranked
-                    .iter()
-                    .position(|row| row.id == app.current_provider)
-                    .or_else(|| {
-                        ranked
-                            .iter()
-                            .position(|row| row.id == app.provider_picker.default_id)
-                    })
-                    .unwrap_or(0);
-                app.suggestion_index = None;
-            }
+            enter_view(
+                app,
+                crate::views::ViewId::Connections,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::OpenProviderTemplate => {
             // `a` in the Connections modal: open the add-provider
             // template chooser (the first step of adding a connection).
             // Only meaningful from Connections; ignored otherwise.
-            if app.active_modal == Modal::Connections {
+            if app.active_modal() == Modal::Connections {
                 app.open_provider_template_chooser();
             }
         }
         input::InputAction::RefreshProviderModels => {
-            if matches!(app.active_modal, Modal::Models | Modal::Connections) {
+            if matches!(app.active_modal(), Modal::Models | Modal::Connections) {
                 let _ = app.tx.send(AgentRequest::RefreshProviderModels {
                     user_initiated: true,
                 });
             }
         }
         input::InputAction::OpenHistory => {
-            // A retained view (ADR-0133 phase 3): the composer draft parks
-            // in the view's own slot; a reopen restores the retained
-            // cursor/scroll. The composer is permanently the filter while
-            // this panel is open (no browse/search distinction), so the
-            // latch is re-set on every open; the first open additionally
-            // focuses the newest entry.
-            let first = app.open_view(crate::views::ViewId::HistorySearch);
-            app.history_search = true;
-            if first {
-                app.history_clear_confirm = false;
-                // Rows are newest-first, so index 0 is the most-recent entry
-                // — focus the top so an immediate Enter re-inserts it.
-                app.modal_index = 0;
-                app.history_scroll = 0;
-                app.history_modal_follow = true;
-                app.history_preview = false;
-            }
+            enter_view(
+                app,
+                crate::views::ViewId::HistorySearch,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::HistoryInsert => {
             // Enter inside the Ctrl+R panel: pull the focused entry out
             // of `history_rows` (the filtered matches) and drop it into
             // the input box for further editing / sending. The message
             // is not shipped here — the user hits Enter again to send.
+            app.save_view_state(crate::views::ViewId::HistorySearch);
             let ranked = app.history_rows();
             let pick = ranked.get(app.modal_index).or_else(|| ranked.first());
-            if let Some((orig_idx, _)) = pick {
-                let original = *orig_idx;
-                let text = app.input_history[original].text.clone();
-                // Restore the attachments cached behind this entry (if
-                // any) so a re-send ships the real image / paste
-                // payloads rather than a bare chip label; with no
-                // cache the staged vectors are cleared.
-                app.restore_history_attachments(original);
-                // The inserted entry becomes the new draft: it is the
-                // newest *unsent* input, so ↓ past the newest history
-                // row restores it, never a stale remembered draft.
-                app.adopt_as_draft(
-                    text,
-                    app.pending_images.clone(),
-                    app.pending_text_pastes.clone(),
-                    crate::app::DraftAdoption::Replace,
-                );
-            }
+            let Some((orig_idx, _)) = pick else {
+                return ActionFlow::Handled;
+            };
+            let original = *orig_idx;
+            let text = app.input_history[original].text.clone();
+            // Restore the attachments cached behind this entry (if
+            // any) so a re-send ships the real image / paste
+            // payloads rather than a bare chip label; with no
+            // cache the staged vectors are cleared.
+            app.restore_history_attachments(original);
+            // The inserted entry becomes the new draft: it is the
+            // newest *unsent* input, so ↓ past the newest history
+            // row restores it, never a stale remembered draft.
+            app.adopt_as_draft(
+                text,
+                app.pending_images.clone(),
+                app.pending_text_pastes.clone(),
+                crate::app::DraftAdoption::Replace,
+            );
             // The selection replaces the in-progress draft, so the
-            // view's parked draft is dropped (not restored) — phase 3:
-            // per-view slot, not the global stash.
+            // view's parked chat draft is dropped (not restored). Its search
+            // query/index were saved before the composer replacement, so the
+            // view still resumes where it was on the next Ctrl+R.
             if let Some(state) = app.views.states_mut(&crate::views::ViewId::HistorySearch) {
                 state.draft = None;
             }
@@ -539,7 +501,7 @@ pub(super) async fn dispatch_action(
             // popup until the next real edit.
             app.completion_dismissed = true;
             app.modal_index = 0;
-            app.active_modal = Modal::None;
+            app.show_chat_surface();
         }
         input::InputAction::HistoryTogglePreview => {
             // Tab inside the Ctrl+R modal: flip between the fuzzy list
@@ -584,56 +546,37 @@ pub(super) async fn dispatch_action(
             app.history_clear_confirm = false;
         }
         input::InputAction::OpenHelp => {
-            // Help is a retained view (ADR-0133): first open initialises,
-            // every later open restores the retained scroll — no reset.
-            app.open_view(crate::views::ViewId::Help);
+            enter_view(app, crate::views::ViewId::Help, runtime, viewed_session_id);
         }
         input::InputAction::OpenPermissions => {
-            // The permissions manager modal. Reached via the
-            // `/permissions` slash command (intercepted locally, never
-            // sent to the backend). A retained view (ADR-0133): the
-            // session-context query runs on first open only; a reopen
-            // restores the retained scroll/selection. `/permissions clear`
-            // still goes to the backend via SendSlash.
-            if app.open_view(crate::views::ViewId::Permissions) {
-                let _ = app.tx.send(AgentRequest::QuerySessionContext);
-            }
+            enter_view(
+                app,
+                crate::views::ViewId::Permissions,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::OpenTools => {
-            // The tools manager modal. Reached via `/tools`
-            // (intercepted locally). A retained view (ADR-0133): the
-            // session-context query runs on first open only.
-            if app.open_view(crate::views::ViewId::Tools) {
-                let _ = app.tx.send(AgentRequest::QuerySessionContext);
-            }
+            enter_view(app, crate::views::ViewId::Tools, runtime, viewed_session_id);
         }
         input::InputAction::OpenUsage => {
-            // The usage-statistics overlay (`/usage`, ADR-0122). Reached via
-            // the local `/usage` interception. A retained view (ADR-0133):
-            // the `QueryUsageStats` round-trip runs on first open; until the
-            // reply lands the overlay renders a loading placeholder, and a
-            // reopen restores the retained scroll over the loaded report.
-            if app.open_view(crate::views::ViewId::UsageStats) {
-                app.usage_stats = None;
-                let _ = app
-                    .tx
-                    .send(AgentRequest::QueryUsageStats { event_cap: 200 });
-            }
+            enter_view(
+                app,
+                crate::views::ViewId::UsageStats,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::OpenMcp => {
-            // The MCP manager modal. Reached via `/mcp` (intercepted
-            // locally). A retained view (ADR-0133): the session-context
-            // query runs on first open only.
-            if app.open_view(crate::views::ViewId::Mcp) {
-                let _ = app.tx.send(AgentRequest::QuerySessionContext);
-            }
+            enter_view(app, crate::views::ViewId::Mcp, runtime, viewed_session_id);
         }
         input::InputAction::OpenSkills => {
-            // The skills modal. Reached via `/skills` (intercepted
-            // locally). A retained view (ADR-0133): the session-context
-            // query runs on first open only; detail expansions
-            // (`skills_expanded`) live on App and persist across hides.
-            app.open_view(crate::views::ViewId::Skills);
+            enter_view(
+                app,
+                crate::views::ViewId::Skills,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::SkillsToggleDetail => {
             // Toggle the detail block of the selected skill row. Re-pressing
@@ -654,28 +597,15 @@ pub(super) async fn dispatch_action(
             let _ = app.tx.send(AgentRequest::QuerySessionContext);
         }
         input::InputAction::OpenConfig => {
-            // Full-screen Settings View (`/config`): dual-pane configuration
-            // center. A retained view (ADR-0133): the open ritual (pane
-            // reset, current-scheme positioning) runs on first open only;
-            // a reopen keeps the category/pane the user left. Closing in the
-            // custom-colour editor still discards its transactional preview
-            // (see `dismiss_surface`'s Config guard below).
-            if app.open_view(crate::views::ViewId::Config) {
-                app.config_focus = crate::overlays::ConfigFocus::Categories;
-                app.config_category = 0;
-                app.config_detail_index = Theme::color_scheme_index(&app.color_scheme);
-                app.config_custom_editing = false;
-                app.config_scroll = 0;
-                app.config_detail_scroll = 0;
-                app.websearch_editing = None;
-            }
-            // Refresh the Web Search pane's snapshot from the authoritative
-            // harness state on every open (cheap request; keeps a stale view
-            // from reading as current after an out-of-band config edit).
-            let _ = app.tx.send(AgentRequest::QueryWebSearchConfig);
+            enter_view(
+                app,
+                crate::views::ViewId::Config,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::ConfigFocusToggle => {
-            if app.active_modal == Modal::Config {
+            if app.active_modal() == Modal::Config {
                 app.config_focus = match app.config_focus {
                     crate::overlays::ConfigFocus::Categories => {
                         crate::overlays::ConfigFocus::Detail
@@ -687,7 +617,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::ConfigActivate => {
-            if app.active_modal == Modal::Config {
+            if app.active_modal() == Modal::Config {
                 match app.config_focus {
                     crate::overlays::ConfigFocus::Categories => {
                         app.config_focus = crate::overlays::ConfigFocus::Detail;
@@ -912,7 +842,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::ConfigBack => {
-            if app.active_modal == Modal::Config {
+            if app.active_modal() == Modal::Config {
                 if app.websearch_editing.is_some() {
                     // Cancel the web-search field edit: restore browse mode
                     // and hand the composer row back unchanged.
@@ -990,22 +920,22 @@ pub(super) async fn dispatch_action(
             // where it is the configured-server list. When empty (still
             // loading / none), Up/Down scrolls the body directly so the
             // other content stays reachable.
-            let list_len = if app.active_modal == Modal::Mcp {
+            let list_len = if app.active_modal() == Modal::Mcp {
                 app.session_context
                     .as_ref()
                     .map(|s| s.mcp.len())
                     .unwrap_or(0)
-            } else if app.active_modal == Modal::Skills {
+            } else if app.active_modal() == Modal::Skills {
                 app.session_context
                     .as_ref()
                     .map(|s| s.skills.len())
                     .unwrap_or(0)
-            } else if app.active_modal == Modal::Queue {
+            } else if app.active_modal() == Modal::Queue {
                 app.pending_dispatch
                     .iter()
                     .filter(|item| item.session_id == viewed_session_id)
                     .count()
-            } else if app.active_modal == Modal::Btw {
+            } else if app.active_modal() == Modal::Btw {
                 app.btw_list.len()
             } else {
                 app.session_tools_len()
@@ -1021,14 +951,14 @@ pub(super) async fn dispatch_action(
                 // The queue modal tracks its own follow flag so it can
                 // be scrolled independently of the shared session
                 // scroll the other list modals reuse.
-                if app.active_modal == Modal::Queue || app.active_modal == Modal::Btw {
+                if app.active_modal() == Modal::Queue || app.active_modal() == Modal::Btw {
                     app.queue_modal_follow = true;
                 } else {
                     app.session_modal_follow = true;
                 }
-            } else if app.active_modal == Modal::Queue {
+            } else if app.active_modal() == Modal::Queue {
                 // Empty queue: Up/Down is inert.
-            } else if app.active_modal == Modal::Btw {
+            } else if app.active_modal() == Modal::Btw {
                 // Empty asides list: Up/Down is inert.
             } else {
                 app.session_scroll = if forward {
@@ -1052,7 +982,7 @@ pub(super) async fn dispatch_action(
                     .min(app.sessions_overview.len().saturating_sub(1)),
             ) {
                 let id = session.id.clone();
-                app.active_modal = Modal::None;
+                app.hide_active_view();
                 app.modal_index = 0;
                 // A session was chosen from the startup picker, so a
                 // real conversation now backs the view: subsequent
@@ -1091,7 +1021,7 @@ pub(super) async fn dispatch_action(
                     app.switch_to_target = Some(row.id.clone());
                     app.should_quit.store(true, Ordering::SeqCst);
                 }
-                app.active_modal = Modal::None;
+                app.hide_active_view();
                 app.modal_index = 0;
                 app.host_prompting = false;
             }
@@ -1175,7 +1105,7 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::CreateNewSession => {
             app.startup_overlay = crate::StartupOverlay::None;
-            app.active_modal = Modal::None;
+            app.hide_active_view();
             let _ = app.tx.send(AgentRequest::SlashCommand("/new".to_string()));
         }
         input::InputAction::OpenSessionInfo => {
@@ -1204,7 +1134,7 @@ pub(super) async fn dispatch_action(
             // page (or close it). Not a nested modal.
             app.modal_keymap_open = !app.modal_keymap_open;
             // Reset the body scroll so the keymap starts at the top.
-            match app.active_modal {
+            match app.active_modal() {
                 Modal::Connections | Modal::Models => {
                     app.model_scroll = 0;
                     app.model_modal_follow = true;
@@ -1229,7 +1159,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::TokenReportActivate => {
-            if app.active_modal == Modal::TokenReport && !app.token_report_detail {
+            if app.active_modal() == Modal::TokenReport && !app.token_report_detail {
                 let has_turns = app
                     .token_source_report(viewed_session_id)
                     .map(|report| view::token_report_round_count(&report) > 0)
@@ -1352,7 +1282,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::CtrlC => {
-            return commands::handle_ctrl_c(app, copy_tx, copy_pending);
+            return commands::handle_ctrl_c(app, viewed_session_id, copy_tx, copy_pending);
         }
         input::InputAction::OpenTodos => {
             // Ctrl+T opens the Todos modal — the agent's live task
@@ -1361,10 +1291,7 @@ pub(super) async fn dispatch_action(
             // Activity view pinned to the Todos section, exactly
             // like clicking the todo bar. A retained view (ADR-0133):
             // reopen restores the retained scroll.
-            app.open_view(crate::views::ViewId::Todos);
-            app.selection = SelectionState::None;
-            app.focused_target = None;
-            app.drag.cancel();
+            enter_view(app, crate::views::ViewId::Todos, runtime, viewed_session_id);
         }
         input::InputAction::OpenQueue => {
             // F2 opens the queue overview — the full outbox list that
@@ -1378,12 +1305,7 @@ pub(super) async fn dispatch_action(
             // matching resume is the view's exit hook (hide). A
             // persistent user block is a different thing (`F3` /
             // Ctrl+P), unaffected here.
-            app.open_view(crate::views::ViewId::Queue);
-            app.selection = SelectionState::None;
-            app.focused_target = None;
-            app.drag.cancel();
-            app.block_queue(viewed_session_id);
-            app.queue_exit_session = Some(viewed_session_id.to_string());
+            enter_view(app, crate::views::ViewId::Queue, runtime, viewed_session_id);
         }
         input::InputAction::FocusNextTarget => {
             // Ctrl+↓ (or ↓ while focused): advance to the next step.
@@ -1517,14 +1439,13 @@ pub(super) async fn dispatch_action(
             // list and pop the modal once the rows land. The open signal is
             // consumed by the loop's sync stage, so a slow harness reply
             // simply opens with the last known rows and refreshes in place.
-            let _ = app.tx.send(AgentRequest::QueryBtwList);
-            runtime.open_btw.store(true, Ordering::SeqCst);
+            enter_view(app, crate::views::ViewId::Btw, runtime, viewed_session_id);
         }
         input::InputAction::ViewSwitcherFilter { ch } => {
-            // Phase 5 (ADR-0133): the filter is the switcher's own query,
+            // ADR-0139: the filter is the switcher's own query,
             // narrowed live; the row cursor re-anchors to the top of the
             // filtered set.
-            if app.active_modal == Modal::ViewSwitcher {
+            if app.active_modal() == Modal::ViewSwitcher {
                 app.view_switcher_query.push(ch);
                 app.modal_index = 0;
                 app.session_scroll = 0;
@@ -1532,7 +1453,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::ViewSwitcherBackspace => {
-            if app.active_modal == Modal::ViewSwitcher {
+            if app.active_modal() == Modal::ViewSwitcher {
                 app.view_switcher_query.pop();
                 app.modal_index = 0;
                 app.session_scroll = 0;
@@ -1540,40 +1461,16 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::ViewSwitcherToggle => {
-            // Ctrl+L (ADR-0133): the global view quick switcher. A toggle —
+            // Ctrl+L (ADR-0139): the global view quick switcher. A toggle —
             // a second Ctrl+L while it is up cancels back to the surface it
             // was opened over, exactly like Esc (nothing changed). The
             // switcher is a transient chooser, never a retained view, so it
             // does not touch the ViewRegistry on open/close; only Enter
             // (`ViewSwitchActivate`) performs a switch.
-            if app.active_modal == Modal::ViewSwitcher {
-                app.active_modal = app.view_switcher_return;
-                app.modal_keymap_open = false;
-                app.modal_index = 0;
-            } else {
-                // Not over a request-driven sheet: those (Permission /
-                // Question / InputInjection) own the keyboard until they are
-                // answered, and their decisions must not be switchable away
-                // from. The binding is Gate::Always so it reaches this arm
-                // everywhere; the sheet check keeps the semantics honest.
-                if matches!(
-                    app.active_modal,
-                    Modal::Permission | Modal::Question | Modal::InputInjection
-                ) {
-                    return ActionFlow::Handled;
-                }
-                app.view_switcher_return = app.active_modal;
-                // Park the origin browse view's live cursor/scroll in the
-                // registry *before* the switcher borrows `modal_index` and
-                // the shared session-scroll slot (ADR-0133): the cancel path
-                // (`dismiss_surface` → `open_view`) restores from there, so
-                // the switcher's row cursor must never leak into it.
-                if let Ok(origin) = crate::views::ViewId::try_from(app.active_modal)
-                    && app.active_modal != Modal::ViewSwitcher
-                {
-                    app.save_view_state(origin);
-                }
-                app.active_modal = Modal::ViewSwitcher;
+            if app.active_modal() == Modal::ViewSwitcher {
+                app.dismiss_surface();
+            } else if app.can_open_view_switcher() {
+                app.push_transient_surface(Modal::ViewSwitcher);
                 app.modal_keymap_open = false;
                 app.modal_index = 0;
                 app.view_switcher_query.clear();
@@ -1586,32 +1483,42 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::ViewSwitchActivate => {
-            // Quick switcher Enter (ADR-0133): switch to the highlighted
+            // Quick switcher Enter (ADR-0139): switch to the highlighted
             // view. A browse-view origin hides (state retained); a
-            // non-view origin (chat, an unmigrated surface) just loses
-            // focus to the target. First open of a view runs its data-side
-            // effects exactly as its own open action would.
-            if app.active_modal != Modal::ViewSwitcher {
+            // chat origin just loses focus to the target. Every activation
+            // runs the target's ordinary initialization/refresh transaction.
+            if app.active_modal() != Modal::ViewSwitcher {
                 return ActionFlow::Handled;
             }
             let rows = app.views.switcher_rows_filtered(&app.view_switcher_query);
             let Some(target) = rows.get(app.modal_index).copied() else {
                 return ActionFlow::Handled;
             };
-            let origin = app.view_switcher_return;
-            app.view_switcher_return = Modal::None;
             // The switcher must not leak its own selection state into the
             // target view: reset the cursor before opening so the registry's
             // restore (not the switcher's row index) wins.
             app.modal_index = 0;
-            if let Ok(origin_view) = crate::views::ViewId::try_from(origin) {
-                app.save_view_state(origin_view);
-                app.views.hide(origin_view);
+            app.pop_transient_surface();
+            enter_view(app, target, runtime, viewed_session_id);
+        }
+        input::InputAction::ViewCloseSelected => {
+            if app.active_modal() != Modal::ViewSwitcher {
+                return ActionFlow::Handled;
             }
-            let first = app.open_view(target);
-            if first {
-                dispatch_first_open_effects(app, target, runtime);
+            let rows = app.views.switcher_rows_filtered(&app.view_switcher_query);
+            let Some(target) = rows.get(app.modal_index).copied() else {
+                return ActionFlow::Handled;
+            };
+            if app.transient_return_view() == Some(target) {
+                app.pop_transient_surface();
+                app.close_view(target);
+                app.push_transient_surface(Modal::ViewSwitcher);
+            } else {
+                app.close_view(target);
             }
+            let remaining = app.views.switcher_rows_filtered(&app.view_switcher_query);
+            app.modal_index = app.modal_index.min(remaining.len().saturating_sub(1));
+            app.session_modal_follow = true;
         }
         input::InputAction::BtwFocusSelected => {
             // Asides modal Enter (ADR-0103 §5): jump back into the selected
@@ -1619,7 +1526,7 @@ pub(super) async fn dispatch_action(
             // full transcript back-fill; the modal closes on arrival.
             if let Some(row) = app.btw_list.get(app.modal_index) {
                 let side_id = row.id.clone();
-                app.active_modal = Modal::None;
+                app.hide_active_view();
                 app.modal_keymap_open = false;
                 let _ = app.tx.send(AgentRequest::FocusSide { side_id });
             }
@@ -1651,9 +1558,9 @@ pub(super) async fn dispatch_action(
             let _ = c;
             // The custom-provider filter field re-ranks its suggestion
             // list as the query changes.
-            if app.active_modal == Modal::CustomProvider {
+            if app.active_modal() == Modal::CustomProvider {
                 app.on_custom_filter_changed();
-            } else if app.active_modal == Modal::Config
+            } else if app.active_modal() == Modal::Config
                 && app.config_custom_editing
                 && Theme::set_custom_color_value(
                     &mut app.custom_color_draft,
@@ -1680,9 +1587,9 @@ pub(super) async fn dispatch_action(
             app.reconcile_attachments();
         }
         input::InputAction::Backspace => {
-            if app.active_modal == Modal::CustomProvider {
+            if app.active_modal() == Modal::CustomProvider {
                 app.on_custom_filter_changed();
-            } else if app.active_modal == Modal::Config
+            } else if app.active_modal() == Modal::Config
                 && app.config_custom_editing
                 && Theme::set_custom_color_value(
                     &mut app.custom_color_draft,
@@ -1711,9 +1618,9 @@ pub(super) async fn dispatch_action(
             // only keeps the completion latch, focus ownership, and staged
             // attachments consistent with the new buffer (a chip-aware
             // forward delete may have orphaned a staged entry).
-            if app.active_modal == Modal::CustomProvider {
+            if app.active_modal() == Modal::CustomProvider {
                 app.on_custom_filter_changed();
-            } else if app.active_modal == Modal::Config
+            } else if app.active_modal() == Modal::Config
                 && app.config_custom_editing
                 && Theme::set_custom_color_value(
                     &mut app.custom_color_draft,
@@ -1853,8 +1760,7 @@ pub(super) async fn dispatch_action(
             // composer and closes the modal. Closing resumes the
             // auto-block the modal set on open.
             let idx = app.modal_index;
-            app.active_modal = Modal::None;
-            app.resume_queue(viewed_session_id);
+            app.hide_active_view();
             match app.recall_queued_at(viewed_session_id, idx) {
                 Some(crate::app::RecallQueued::Restored(dispatch)) => {
                     // The item left the queue, so a pointer at it (or at a
@@ -1882,7 +1788,7 @@ pub(super) async fn dispatch_action(
             // item outright. The queue is auto-blocked on open, so the
             // index can't drift under us. Clamp the selection to the
             // now-shorter list.
-            if app.active_modal == Modal::Queue {
+            if app.active_modal() == Modal::Queue {
                 let idx = app.modal_index;
                 let removed = app.remove_queued_at(viewed_session_id, idx);
                 // A pointer at the deleted item would dangle; dissolve it
@@ -1910,7 +1816,7 @@ pub(super) async fn dispatch_action(
             // toward the front (next to pop) or the tail. Clamp at the
             // session slice boundaries so it can't escape into another
             // session's items.
-            if app.active_modal == Modal::Queue {
+            if app.active_modal() == Modal::Queue {
                 let idx = app.modal_index;
                 app.move_queued(viewed_session_id, idx, delta);
                 // Follow the moved item if it changed position.
@@ -1935,7 +1841,7 @@ pub(super) async fn dispatch_action(
             modals::handle_modal_down(app, viewed_session_id);
         }
         input::InputAction::QuestionUp => {
-            if app.active_modal == Modal::Question
+            if app.active_modal() == Modal::Question
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(qm.update(crate::question_model::QuestionAction::Up).0);
@@ -1945,7 +1851,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::QuestionDown => {
-            if app.active_modal == Modal::Question
+            if app.active_modal() == Modal::Question
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(qm.update(crate::question_model::QuestionAction::Down).0);
@@ -1953,14 +1859,14 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::QuestionToggle => {
-            if app.active_modal == Modal::Question
+            if app.active_modal() == Modal::Question
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(qm.update(crate::question_model::QuestionAction::Toggle).0);
             }
         }
         input::InputAction::QuestionSelect(n) => {
-            if app.active_modal == Modal::Question
+            if app.active_modal() == Modal::Question
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(
@@ -1972,7 +1878,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::QuestionSubmit => {
-            if app.active_modal == Modal::Question
+            if app.active_modal() == Modal::Question
                 && let Some(qm) = app.question.take()
             {
                 let (qm, effects) = qm.update(crate::question_model::QuestionAction::Submit);
@@ -1985,7 +1891,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::QuestionPrevious => {
-            if app.active_modal == Modal::Question
+            if app.active_modal() == Modal::Question
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(qm.update(crate::question_model::QuestionAction::Previous).0);
@@ -1994,7 +1900,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::QuestionCancel => {
-            if app.active_modal == Modal::Question
+            if app.active_modal() == Modal::Question
                 && let Some(qm) = app.question.take()
             {
                 let (_qm, effects) = qm.update(crate::question_model::QuestionAction::Cancel);
@@ -2004,7 +1910,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::InputSubmit => {
-            if app.active_modal == Modal::InputInjection {
+            if app.active_modal() == Modal::InputInjection {
                 let text = std::mem::take(&mut app.input);
                 if let Some(req) = app.pending_input.take() {
                     // Drain the matching front so the per-frame sync
@@ -2017,29 +1923,46 @@ pub(super) async fn dispatch_action(
                         parent_call_id,
                     });
                 }
-                app.restore_input_draft();
-                app.active_modal = Modal::None;
+                let next = runtime.pending_input.lock().await.front().cloned();
+                if let Some(next) = next {
+                    app.pending_input = Some(next);
+                    app.input.clear();
+                    app.set_cursor(0);
+                } else {
+                    app.restore_input_draft();
+                    app.pop_transient_surface();
+                }
             }
         }
         input::InputAction::InputCancel => {
-            if app.active_modal == Modal::InputInjection
+            if app.active_modal() == Modal::InputInjection
                 && let Some(req) = app.pending_input.take()
             {
                 // Empty reply = cancel → the command runs with closed
                 // stdin and fails fast with a non-interactive remedy.
-                runtime.pending_input.lock().await.pop_front();
+                let next = {
+                    let mut queue = runtime.pending_input.lock().await;
+                    queue.pop_front();
+                    queue.front().cloned()
+                };
                 let parent_call_id = runtime.envoy_question_parent.lock().await.remove(&req.id);
                 let _ = app.tx.send(AgentRequest::InputReply {
                     request_id: req.id.clone(),
                     text: String::new(),
                     parent_call_id,
                 });
-                app.restore_input_draft();
-                app.active_modal = Modal::None;
+                if let Some(next) = next {
+                    app.pending_input = Some(next);
+                    app.input.clear();
+                    app.set_cursor(0);
+                } else {
+                    app.restore_input_draft();
+                    app.pop_transient_surface();
+                }
             }
         }
         input::InputAction::QuestionInsertChar(c) => {
-            if app.active_modal == Modal::Question
+            if app.active_modal() == Modal::Question
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(
@@ -2054,7 +1977,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::QuestionBackspace => {
-            if app.active_modal == Modal::Question
+            if app.active_modal() == Modal::Question
                 && let Some(qm) = app.question.take()
             {
                 app.question = Some(
@@ -2075,7 +1998,7 @@ pub(super) async fn dispatch_action(
             let queued: Vec<PermissionRequest> =
                 runtime.pending_permission.lock().await.drain(..).collect();
             app.pending_permission = None;
-            app.active_modal = Modal::None;
+            app.pop_transient_surface();
             app.modal_index = 0;
             app.permission_confirm_always = false;
             app.permission_show_details = false;
@@ -2115,57 +2038,174 @@ pub(super) async fn dispatch_action(
     ActionFlow::Handled
 }
 
-/// Data-side open effects for a browse view's **first** open only
-/// (ADR-0133). Retention means a reopen must not re-run these — the view's
-/// place in the MRU is unchanged and its data refresh path is its own
-/// (e.g. Btw refreshes via the harness push; UsageStats re-queries only on
-/// first open, which the report's own freshness lifetime covers). Kept as
-/// one function so the switcher's Enter path and each surface's dedicated
-/// open action share exactly one definition of "what opening this view
-/// kicks off".
-pub(crate) fn dispatch_first_open_effects(
+/// The sole retained-view entry transaction. It focuses/restores the view,
+/// runs one-time initialization, then applies the view's refresh-on-show and
+/// enter-hook policy. Dedicated shortcuts, mouse targets, backend open signals
+/// and the quick switcher all route here.
+pub(super) fn enter_view(
     app: &mut App,
     id: crate::views::ViewId,
     runtime: &UiRuntime,
-) {
-    match id {
-        crate::views::ViewId::Permissions
-        | crate::views::ViewId::Tools
-        | crate::views::ViewId::Mcp
-        | crate::views::ViewId::Skills => {
-            // These surfaces read the session-context snapshot: kick one
-            // query so the list populates.
-            let _ = app.tx.send(AgentRequest::QuerySessionContext);
+    viewed_session_id: &str,
+) -> bool {
+    use crate::views::ViewId;
+
+    let first = app.open_view(id);
+    app.selection = SelectionState::None;
+    app.focused_target = None;
+    app.drag.cancel();
+
+    if first {
+        match id {
+            ViewId::Models => {
+                app.model_search = false;
+                app.model_modal_follow = true;
+                let rows = app.models_flat_filtered();
+                app.modal_index = rows
+                    .iter()
+                    .position(|row| {
+                        row.provider_id == app.current_provider && row.model == app.current_model
+                    })
+                    .unwrap_or(0);
+                app.suggestion_index = None;
+            }
+            ViewId::Connections => {
+                app.model_search = false;
+                app.model_modal_follow = true;
+                let ranked = app.providers_filtered();
+                app.modal_index = ranked
+                    .iter()
+                    .position(|row| row.id == app.current_provider)
+                    .or_else(|| {
+                        ranked
+                            .iter()
+                            .position(|row| row.id == app.provider_picker.default_id)
+                    })
+                    .unwrap_or(0);
+                app.suggestion_index = None;
+            }
+            ViewId::HistorySearch => {
+                app.history_clear_confirm = false;
+                app.modal_index = 0;
+                app.history_scroll = 0;
+                app.history_modal_follow = true;
+                app.history_preview = false;
+            }
+            ViewId::Config => {
+                app.config_focus = crate::overlays::ConfigFocus::Categories;
+                app.config_category = 0;
+                app.config_detail_index = Theme::color_scheme_index(&app.color_scheme);
+                app.config_custom_editing = false;
+                app.config_scroll = 0;
+                app.config_detail_scroll = 0;
+                app.websearch_editing = None;
+            }
+            ViewId::Host => {
+                app.host_modal_follow = true;
+                app.host_focus = crate::overlays::DashboardFocus::Detail;
+                app.host_console_log.clear();
+            }
+            _ => {}
         }
-        crate::views::ViewId::UsageStats => {
-            // The durable cross-session store: fetch on first open (the
-            // reply replaces the placeholder). Reopens keep the loaded
-            // report — its scroll position is the thing retention protects.
+    }
+
+    if id == ViewId::HistorySearch {
+        app.history_search = true;
+    }
+    if id == ViewId::Queue {
+        app.block_queue(viewed_session_id);
+        app.queue_exit_session = Some(viewed_session_id.to_string());
+    }
+    if id == ViewId::Host {
+        app.host_kill_confirm = None;
+        app.host_kill_confirm_id = None;
+    }
+
+    let request = match id {
+        ViewId::Permissions | ViewId::Tools | ViewId::Mcp | ViewId::Skills => {
+            Some(AgentRequest::QuerySessionContext)
+        }
+        ViewId::UsageStats => {
             app.usage_stats = None;
-            let _ = app
-                .tx
-                .send(AgentRequest::QueryUsageStats { event_cap: 200 });
+            Some(AgentRequest::QueryUsageStats { event_cap: 200 })
         }
-        crate::views::ViewId::Btw => {
-            // Ask the harness for a fresh asides list; the rows land via the
-            // listener and refresh in place.
-            let _ = app.tx.send(AgentRequest::QueryBtwList);
+        ViewId::TokenReport if app.token_ledger.is_none() => {
+            app.token_report = None;
+            Some(AgentRequest::QueryTokenUsage {
+                session_id: viewed_session_id.to_string(),
+            })
         }
-        // Pure-client surfaces — no data fetch on open.
-        crate::views::ViewId::Help
-        | crate::views::ViewId::Activity
-        | crate::views::ViewId::Todos
-        | crate::views::ViewId::TokenReport
-        | crate::views::ViewId::Config
-        | crate::views::ViewId::Models
-        | crate::views::ViewId::Connections
-        | crate::views::ViewId::HistorySearch
-        | crate::views::ViewId::Queue
-        | crate::views::ViewId::Host
-        | crate::views::ViewId::Sessions
-        | crate::views::ViewId::Tree => {
-            let _ = runtime; // no runtime-side effects for these views
-        }
+        ViewId::Btw => Some(AgentRequest::QueryBtwList),
+        ViewId::Config => Some(AgentRequest::QueryWebSearchConfig),
+        ViewId::Sessions => Some(AgentRequest::QuerySessionsOverview),
+        ViewId::Tree => Some(AgentRequest::QuerySessionTree),
+        _ => None,
+    };
+    if let Some(request) = request
+        && app.tx.send(request).is_err()
+    {
+        show_local_toast(
+            app,
+            format!("Could not refresh {}: backend disconnected.", id.label()),
+            true,
+            std::time::Duration::from_millis(3200),
+        );
+    }
+
+    let _ = runtime;
+    first
+}
+
+#[cfg(test)]
+mod view_entry_tests {
+    use super::*;
+
+    #[test]
+    fn every_show_refreshes_remote_view_data() {
+        let mut app = crate::tests::new_app_for_relay_tests();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        app.tx = tx;
+        let runtime = UiRuntime::minimal_for_test();
+
+        assert!(enter_view(&mut app, crate::views::ViewId::Tree, &runtime, "s1"));
+        assert!(matches!(rx.try_recv(), Ok(AgentRequest::QuerySessionTree)));
+        app.dismiss_surface();
+        assert!(!enter_view(
+            &mut app,
+            crate::views::ViewId::Tree,
+            &runtime,
+            "s1"
+        ));
+        assert!(matches!(rx.try_recv(), Ok(AgentRequest::QuerySessionTree)));
+    }
+
+    #[test]
+    fn sessions_and_skills_have_complete_query_paths() {
+        let mut app = crate::tests::new_app_for_relay_tests();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        app.tx = tx;
+        let runtime = UiRuntime::minimal_for_test();
+
+        enter_view(
+            &mut app,
+            crate::views::ViewId::Sessions,
+            &runtime,
+            "s1",
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AgentRequest::QuerySessionsOverview)
+        ));
+        enter_view(
+            &mut app,
+            crate::views::ViewId::Skills,
+            &runtime,
+            "s1",
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AgentRequest::QuerySessionContext)
+        ));
     }
 }
 

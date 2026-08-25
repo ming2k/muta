@@ -117,6 +117,21 @@ pub async fn detail(
     }
 }
 
+/// Return a fresh sessions-picker snapshot without prescribing whether the
+/// requesting frontend should display it.
+pub async fn overview(session: &Arc<SessionStore>, resp_tx: &mpsc::UnboundedSender<AgentResponse>) {
+    let _ = resp_tx.send(AgentResponse::SessionsOverview(
+        build_sessions_overview(session).await,
+    ));
+}
+
+/// Return the current session DAG without prescribing frontend navigation.
+pub async fn tree(session: &Arc<SessionStore>, resp_tx: &mpsc::UnboundedSender<AgentResponse>) {
+    let session_id = session.id().await;
+    let tree = session.tree().await;
+    let _ = resp_tx.send(AgentResponse::SessionTreeSnapshot { session_id, tree });
+}
+
 /// `AgentRequest::QueryTokenUsage` — snapshot the server-side token-source
 /// ledger for one session and reply with
 /// [`AgentResponse::TokenUsageReport`]. Attached frontends hold no local
@@ -480,5 +495,42 @@ mod tests {
             panic!("expected an error reply for an unknown id");
         };
         assert_eq!(error, "No session matches 'deadbeef'.");
+    }
+
+    #[tokio::test]
+    async fn overview_query_returns_data_without_a_navigation_signal() {
+        let (_dir, store) = store_with_prompt().await;
+        let (resp_tx, mut resp_rx) = mpsc::unbounded_channel();
+
+        overview(&store, &resp_tx).await;
+
+        let Some(AgentResponse::SessionsOverview(items)) = resp_rx.recv().await else {
+            panic!("expected a sessions-overview snapshot");
+        };
+        assert!(!items.is_empty());
+        assert!(resp_rx.try_recv().is_err(), "query must not navigate");
+    }
+
+    #[tokio::test]
+    async fn tree_query_returns_the_current_dag_without_navigation() {
+        let (_dir, store) = store_with_prompt().await;
+        let (resp_tx, mut resp_rx) = mpsc::unbounded_channel();
+        let expected = store.tree().await;
+
+        tree(&store, &resp_tx).await;
+
+        let Some(AgentResponse::SessionTreeSnapshot {
+            session_id,
+            tree: snapshot,
+        }) = resp_rx.recv().await
+        else {
+            panic!("expected a session-tree snapshot");
+        };
+        assert_eq!(session_id, store.id().await);
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        assert!(resp_rx.try_recv().is_err(), "query must not navigate");
     }
 }

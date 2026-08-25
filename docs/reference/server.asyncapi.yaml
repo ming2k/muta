@@ -475,6 +475,78 @@ components:
         active:
           type: boolean
       additionalProperties: false
+    SessionTree:
+      description: Replacement snapshot of the current session conversation DAG.
+      type: object
+      required: [entries, root_id, active_leaf_id, named_branches]
+      properties:
+        entries:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/SessionEntry' }
+        root_id: { type: [string, 'null'] }
+        active_leaf_id: { type: [string, 'null'] }
+        named_branches:
+          type: object
+          additionalProperties: { type: string }
+      additionalProperties: false
+    SessionEntry:
+      description: One flattened node in the session conversation DAG.
+      oneOf:
+        - $ref: '#/components/schemas/SessionMessageEntry'
+        - $ref: '#/components/schemas/SessionCompactionEntry'
+        - $ref: '#/components/schemas/SessionBranchSummaryEntry'
+        - $ref: '#/components/schemas/SessionCustomEntry'
+      discriminator:
+        propertyName: type
+    SessionMessageEntry:
+      type: object
+      required: [id, parent_id, timestamp, type, message]
+      properties:
+        id: { type: string }
+        parent_id: { type: [string, 'null'] }
+        timestamp: { type: integer, minimum: 0 }
+        type: { const: message }
+        message: { $ref: '#/components/schemas/Message' }
+      additionalProperties: false
+    SessionCompactionEntry:
+      type: object
+      required: [id, parent_id, timestamp, type, summary, first_kept_entry_id, tokens_before, read_files, modified_files]
+      properties:
+        id: { type: string }
+        parent_id: { type: [string, 'null'] }
+        timestamp: { type: integer, minimum: 0 }
+        type: { const: compaction }
+        summary: { type: string }
+        first_kept_entry_id: { type: string }
+        tokens_before: { type: integer, minimum: 0 }
+        read_files: { type: array, items: { type: string } }
+        modified_files: { type: array, items: { type: string } }
+      additionalProperties: false
+    SessionBranchSummaryEntry:
+      type: object
+      required: [id, parent_id, timestamp, type, summary, from_id, read_files, modified_files]
+      properties:
+        id: { type: string }
+        parent_id: { type: [string, 'null'] }
+        timestamp: { type: integer, minimum: 0 }
+        type: { const: branch_summary }
+        summary: { type: string }
+        from_id: { type: string }
+        read_files: { type: array, items: { type: string } }
+        modified_files: { type: array, items: { type: string } }
+      additionalProperties: false
+    SessionCustomEntry:
+      type: object
+      required: [id, parent_id, timestamp, type, custom_type, content, display]
+      properties:
+        id: { type: string }
+        parent_id: { type: [string, 'null'] }
+        timestamp: { type: integer, minimum: 0 }
+        type: { const: custom }
+        custom_type: { type: string }
+        content: { type: string }
+        display: { type: [string, 'null'] }
+      additionalProperties: false
     MonitoredSession:
       description: |
         One control-panel row (ADR-0093/0095). `hosting` is always
@@ -682,6 +754,8 @@ components:
         - $ref: '#/components/schemas/RequestSetDefaultModel'
         - $ref: '#/components/schemas/RequestDeleteSession'
         - $ref: '#/components/schemas/RequestRenameSession'
+        - $ref: '#/components/schemas/RequestQuerySessionsOverview'
+        - $ref: '#/components/schemas/RequestQuerySessionTree'
         - $ref: '#/components/schemas/RequestQuerySessionContext'
         - $ref: '#/components/schemas/RequestRevokePermission'
         - $ref: '#/components/schemas/RequestClearAllPermissions'
@@ -946,6 +1020,16 @@ components:
       required: [QuerySessionContext]
       properties: { QuerySessionContext: { type: 'null' } }
       additionalProperties: false
+    RequestQuerySessionsOverview:
+      type: object
+      required: [QuerySessionsOverview]
+      properties: { QuerySessionsOverview: { type: 'null' } }
+      additionalProperties: false
+    RequestQuerySessionTree:
+      type: object
+      required: [QuerySessionTree]
+      properties: { QuerySessionTree: { type: 'null' } }
+      additionalProperties: false
     RequestRevokePermission:
       type: object
       required: [RevokePermission]
@@ -1092,6 +1176,9 @@ components:
         - $ref: '#/components/schemas/ResponseConversationCleared'
         - $ref: '#/components/schemas/ResponseConversationReplaced'
         - $ref: '#/components/schemas/ResponseSessionsOverview'
+        - $ref: '#/components/schemas/ResponseOpenSessionsPanel'
+        - $ref: '#/components/schemas/ResponseSessionTreeSnapshot'
+        - $ref: '#/components/schemas/ResponseOpenTreePanel'
         - $ref: '#/components/schemas/ResponseError'
         - $ref: '#/components/schemas/ResponseExit'
         - $ref: '#/components/schemas/ResponseProviderSwitched'
@@ -1196,6 +1283,28 @@ components:
       required: [SessionsOverview]
       properties:
         SessionsOverview: { type: array, items: { $ref: '#/components/schemas/SessionOverview' } }
+      additionalProperties: false
+    ResponseOpenSessionsPanel:
+      type: object
+      required: [OpenSessionsPanel]
+      properties: { OpenSessionsPanel: { type: 'null' } }
+      additionalProperties: false
+    ResponseSessionTreeSnapshot:
+      type: object
+      required: [SessionTreeSnapshot]
+      properties:
+        SessionTreeSnapshot:
+          type: object
+          required: [session_id, tree]
+          properties:
+            session_id: { type: string }
+            tree: { $ref: '#/components/schemas/SessionTree' }
+          additionalProperties: false
+      additionalProperties: false
+    ResponseOpenTreePanel:
+      type: object
+      required: [OpenTreePanel]
+      properties: { OpenTreePanel: { type: 'null' } }
       additionalProperties: false
     ResponseError:
       type: object

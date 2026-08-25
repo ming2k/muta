@@ -1,6 +1,6 @@
 # 0133. Views as retained, buffer-like surfaces with one shared lifecycle and a global quick switcher
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0139
 - **Date:** 2026-08-22
 
 > **Implementation status.** All phases are implemented.

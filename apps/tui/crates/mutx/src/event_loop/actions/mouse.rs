@@ -2,10 +2,6 @@
 //! block select, right-click, and hover affordance. Extracted verbatim from
 //! the corresponding arms of `dispatch_action`'s match.
 
-use std::sync::atomic::Ordering;
-
-use muta_contracts::AgentRequest;
-
 use crate::input;
 use crate::interaction::{self, ClickTarget};
 use crate::model::document::{NoticeSeverity, TranscriptMessage};
@@ -41,7 +37,7 @@ pub(super) async fn handle_selection_start(
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
-    } else if app.active_modal == Modal::OauthPending {
+    } else if app.active_modal() == Modal::OauthPending {
         if let Some(cursor) = app.layout_map.cursor_at(x, y) {
             app.drag.start(cursor);
             app.selection = SelectionState::start_range(cursor);
@@ -50,7 +46,7 @@ pub(super) async fn handle_selection_start(
             app.drag.cancel();
         }
         app.focused_target = None;
-    } else if app.active_modal == Modal::Question {
+    } else if app.active_modal() == Modal::Question {
         if let Some(hit) = app.modal_hit_map.question_option_at(x, y)
             && let Some(qm) = app.question.take()
         {
@@ -65,7 +61,7 @@ pub(super) async fn handle_selection_start(
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
-    } else if app.active_modal == Modal::Permission
+    } else if app.active_modal() == Modal::Permission
         && let Some(hit) = app.modal_hit_map.permission_action_at(x, y)
     {
         app.modal_index = hit.action_index;
@@ -73,7 +69,7 @@ pub(super) async fn handle_selection_start(
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
-    } else if app.active_modal == Modal::Permission
+    } else if app.active_modal() == Modal::Permission
         && let Some(cursor) = app
             .layout_map
             .cursor_at(x, y)
@@ -84,13 +80,13 @@ pub(super) async fn handle_selection_start(
         // payload can be copied while deciding. Buttons above stay
         // keyboard-driven; presses on the sheet's chrome are inert as before.
         app.drag.begin_range(&mut app.selection, cursor);
-    } else if app.active_modal == Modal::Permission
+    } else if app.active_modal() == Modal::Permission
         && app.modal_hit_map.permission_sheet_contains(x, y)
     {
         app.selection = SelectionState::None;
         app.focused_target = None;
         app.drag.cancel();
-    } else if app.active_modal.dismissable_by_outside_click() {
+    } else if app.active_modal().dismissable_by_outside_click() {
         // Selectable modal documents (the `render_selectable_body` family
         // register their rows under `MODAL_DOC_MSG_IDX`): a press that lands
         // on registered text arms a drag-select instead of being a dead
@@ -145,34 +141,13 @@ pub(super) async fn handle_selection_start(
                 // parent view, not out to chat / quit — so the
                 // hierarchy is consistent between Esc and outside-
                 // click.
-                if app.pop_sublayer() {
-                    // A drill-in sub-layer was open: one step back to the
-                    // parent view (the exact same pop Esc performs).
-                } else {
-                    // Retained browse views hide with state saved; the
-                    // quick switcher cancels to its origin (ADR-0133).
-                    // Mirrors the Esc path exactly.
-                    if !app.dismiss_surface() {
-                        // Queue's exit hook in `hide_active_view` (via
-                        // dismiss_surface) releases its open-time
-                        // auto-block, mirroring Esc (ADR-0133 phase 4).
-                        app.active_modal = Modal::None;
-                    }
-                    // `neene resume` (no id): the startup picker has
-                    // no conversation behind it, so a click-outside
-                    // (mirroring Esc) quits instead of landing in an
-                    // empty chat.
-                    if app.startup_overlay == crate::StartupOverlay::SessionsPicker {
-                        tracing::info!(reason = "startup_picker_cancelled", "app exiting");
-                        app.should_quit.store(true, Ordering::SeqCst);
-                    }
-                }
+                super::modals::handle_close_modal(app, viewed_session_id);
             }
             app.selection = SelectionState::None;
             app.focused_target = None;
             app.drag.cancel();
         }
-    } else if app.active_modal == Modal::None
+    } else if app.active_modal() == Modal::None
         && app.todos_rect.is_some_and(|r| {
             // Todo bar: open the Activity modal on the Todos
             // section directly. Checked before the activity-bar
@@ -187,22 +162,21 @@ pub(super) async fn handle_selection_start(
         // Activity modal on top of an in-progress decision.
         // A retained view (ADR-0133): reopen restores the scroll the user
         // left; only the first open initialises.
-        app.open_view(crate::views::ViewId::Todos);
-        app.selection = SelectionState::None;
-        app.focused_target = None;
-        app.drag.cancel();
-    } else if app.active_modal == Modal::None
+        super::enter_view(app, crate::views::ViewId::Todos, runtime, viewed_session_id);
+    } else if app.active_modal() == Modal::None
         && app
             .activity_rect
             .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
     {
         // A retained view (ADR-0133): reopen restores the scroll the user
         // left; only the first open initialises.
-        app.open_view(crate::views::ViewId::Activity);
-        app.selection = SelectionState::None;
-        app.focused_target = None;
-        app.drag.cancel();
-    } else if app.active_modal == Modal::None
+        super::enter_view(
+            app,
+            crate::views::ViewId::Activity,
+            runtime,
+            viewed_session_id,
+        );
+    } else if app.active_modal() == Modal::None
         && app
             .queue_rect
             .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
@@ -211,13 +185,8 @@ pub(super) async fn handle_selection_start(
         // the full Queue view. Retained (ADR-0133): cursor/scroll
         // survive hide; the auto-block runs on every entry (an editing
         // safety latch, mirrored by the hide-time resume).
-        app.open_view(crate::views::ViewId::Queue);
-        app.selection = SelectionState::None;
-        app.focused_target = None;
-        app.drag.cancel();
-        app.block_queue(viewed_session_id);
-        app.queue_exit_session = Some(viewed_session_id.to_string());
-    } else if app.active_modal == Modal::None
+        super::enter_view(app, crate::views::ViewId::Queue, runtime, viewed_session_id);
+    } else if app.active_modal() == Modal::None
         && app
             .hint_context_rect
             .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
@@ -232,15 +201,12 @@ pub(super) async fn handle_selection_start(
         // first open initialises. The attach-mode report fetch stays tied to
         // the ledger being absent — it is a data-lifecycle concern, not an
         // open ritual, so it runs whenever the report is missing.
-        app.open_view(crate::views::ViewId::TokenReport);
-        if app.token_ledger.is_none() {
-            let _ = app.tx.send(AgentRequest::QueryTokenUsage {
-                session_id: viewed_session_id.to_string(),
-            });
-        }
-        app.selection = SelectionState::None;
-        app.focused_target = None;
-        app.drag.cancel();
+        super::enter_view(
+            app,
+            crate::views::ViewId::TokenReport,
+            runtime,
+            viewed_session_id,
+        );
     } else if app.sticky_rect.is_some_and(|r| {
         // Sticky pinned step header: collapse it on click.
         r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height

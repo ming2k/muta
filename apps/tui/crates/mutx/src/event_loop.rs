@@ -362,10 +362,6 @@ pub(super) struct UiRuntime {
     /// activity bar.
     pub session_chrome:
         Arc<std::sync::Mutex<std::collections::HashMap<String, crate::app::SessionChrome>>>,
-    /// One-shot request to open the asides modal (ADR-0103 §5): armed by F5 /
-    /// `/btw list`, consumed by the loop. Kept separate from the rows so a
-    /// refresh of the list (registry mutation) never re-pops the modal.
-    pub open_btw: Arc<AtomicBool>,
     /// Console receipts from the dashboard's dispatched control verbs
     /// (ADR-0097 §3): spawned one-shot control tasks push the daemon's
     /// answer here; the loop drains it into [`App::host_console_log`]
@@ -410,6 +406,8 @@ pub(super) struct UiRuntime {
     /// [`muta_contracts::AgentResponse::SessionDetail`] and read into [`App::session_detail`]
     /// for the session-info sub-view.
     pub session_detail: Arc<Mutex<Option<muta_contracts::SessionDetail>>>,
+    /// Latest session DAG fetched on demand for the Tree view.
+    pub session_tree: Arc<Mutex<Option<muta_contracts::SessionTree>>>,
     /// Latest token-source report fetched from the harness for the viewed
     /// session (attach mode: the ledger is daemon-side). Written by the
     /// listener from [`muta_contracts::AgentResponse::TokenUsageReport`] and read into
@@ -423,6 +421,8 @@ pub(super) struct UiRuntime {
     /// survives session cleanup.
     pub usage_stats: Arc<Mutex<Option<muta_contracts::usage_stats::UsageStatsReport>>>,
     pub open_sessions: Arc<AtomicBool>,
+    /// Presentation signal for the backend-owned `/tree` command.
+    pub open_tree: Arc<AtomicBool>,
     /// Live daemon monitor snapshot for the `/host` control panel
     /// (ADR-0096), maintained by a dedicated monitor client task.
     pub host_sessions: Arc<Mutex<Vec<muta_contracts::MonitoredSession>>>,
@@ -509,7 +509,6 @@ impl UiRuntime {
             side_view_signal: Arc::new(Mutex::new(None)),
             btw_list: Arc::new(Mutex::new(Vec::new())),
             session_chrome: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            open_btw: Arc::new(AtomicBool::new(false)),
             host_console_signal: Arc::new(Mutex::new(VecDeque::new())),
             viewed_session_id: Arc::new(Mutex::new(None)),
             live_session_id: Arc::new(Mutex::new(String::new())),
@@ -519,9 +518,11 @@ impl UiRuntime {
             sessions_overview: Arc::new(Mutex::new(Vec::new())),
             sessions_overview_rev: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_detail: Arc::new(Mutex::new(None)),
+            session_tree: Arc::new(Mutex::new(None)),
             token_report: Arc::new(Mutex::new(None)),
             usage_stats: Arc::new(Mutex::new(None)),
             open_sessions: Arc::new(AtomicBool::new(false)),
+            open_tree: Arc::new(AtomicBool::new(false)),
             host_sessions: Arc::new(Mutex::new(Vec::new())),
             host_sessions_rev: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             open_host: Arc::new(AtomicBool::new(false)),
@@ -765,7 +766,7 @@ pub(crate) fn probe_input_selection_relay(
 fn probe_delete_overlay(app: &mut App, event: &Event) -> Option<input::InputAction> {
     use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 
-    if app.pending_provider_delete.is_none() || app.active_modal != Modal::Connections {
+    if app.pending_provider_delete.is_none() || app.active_modal() != Modal::Connections {
         return None;
     }
 
@@ -888,7 +889,7 @@ fn activate_picked_model(app: &mut App, id: String, model: String, key_ready: bo
         // No key configured: open the key editor prefilled with this model so
         // the user can enter a key before activating. Esc returns to the
         // picker the editor was opened from (phase 3: the nav stack).
-        app.views.push_nav(app.active_modal);
+        app.push_transient_surface(Modal::ModelEditor);
         app.editor_target = Some(id);
         app.editor_field = 0;
         app.editor_key.clear();
@@ -900,7 +901,6 @@ fn activate_picked_model(app: &mut App, id: String, model: String, key_ready: bo
         app.input.clear();
         app.set_cursor(0);
         app.model_search = false;
-        app.active_modal = Modal::ModelEditor;
     }
 }
 
@@ -981,7 +981,7 @@ async fn handle_permission_submit(app: &mut App, runtime: &UiRuntime) {
                 });
             }
             app.pending_permission = None;
-            app.active_modal = Modal::None;
+            app.pop_transient_surface();
         } else {
             // Drop the request we just answered and surface the next one (if
             // any) so the sheet hands off without flashing the composer for a
@@ -991,7 +991,7 @@ async fn handle_permission_submit(app: &mut App, runtime: &UiRuntime) {
             app.pending_permission = queue.front().cloned();
             drop(queue);
             if app.pending_permission.is_none() {
-                app.active_modal = Modal::None;
+                app.pop_transient_surface();
             }
         }
         app.modal_index = 0;
@@ -1203,16 +1203,22 @@ async fn sync_runtime_state(
     app.key_status = runtime.key_status.lock().await.clone();
     app.websearch_config = runtime.websearch_config.lock().await.clone();
     app.provider_picker = runtime.provider_picker.lock().await.clone();
-    if app.pending_permission.is_some() && app.active_modal == Modal::None {
-        app.active_modal = Modal::Permission;
+    let request_sheet_open = |modal: Modal| {
+        matches!(
+            modal,
+            Modal::Permission | Modal::Question | Modal::InputInjection
+        )
+    };
+    if app.pending_permission.is_some() && !request_sheet_open(app.active_modal()) {
+        app.push_transient_surface(Modal::Permission);
         app.modal_index = 0;
         app.permission_scroll = 0;
         app.permission_show_details = false;
         // A permission prompt is urgent: clear any focused transcript
         // step so the next keypress decides the sheet, not the step.
         app.focused_target = None;
-    } else if app.pending_permission.is_none() && app.active_modal == Modal::Permission {
-        app.active_modal = Modal::None;
+    } else if app.pending_permission.is_none() && app.active_modal() == Modal::Permission {
+        app.pop_transient_surface();
         app.modal_index = 0;
         app.permission_confirm_always = false;
         app.permission_scroll = 0;
@@ -1237,16 +1243,20 @@ async fn sync_runtime_state(
                 app.question = Some(crate::question_model::QuestionModel::open(req));
                 app.question_scroll = 0;
                 app.question_modal_follow = true;
-                app.active_modal = Modal::Question;
                 app.modal_index = 0;
                 app.focused_target = None;
             } else {
                 app.question = None;
-                if app.active_modal == Modal::Question {
-                    app.active_modal = Modal::None;
+                if app.active_modal() == Modal::Question {
+                    app.pop_transient_surface();
                     app.modal_index = 0;
                 }
             }
+        }
+        if app.question.is_some() && !request_sheet_open(app.active_modal()) {
+            app.push_transient_surface(Modal::Question);
+            app.modal_index = 0;
+            app.focused_target = None;
         }
     }
     // Input-injection modal (L3.5 β): mirror the pending-input queue
@@ -1261,21 +1271,26 @@ async fn sync_runtime_state(
         };
         if !matches_front {
             if let Some(req) = front {
-                // Park the composer draft so Enter submits the injected
-                // input, not a chat message (mirrors Provider/ModelEditor).
-                app.park_input_draft();
                 app.pending_input = Some(req);
-                app.active_modal = Modal::InputInjection;
                 app.modal_index = 0;
                 app.focused_target = None;
             } else {
                 app.pending_input = None;
-                if app.active_modal == Modal::InputInjection {
-                    app.active_modal = Modal::None;
-                    app.modal_index = 0;
+                if app.active_modal() == Modal::InputInjection {
                     app.restore_input_draft();
+                    app.pop_transient_surface();
+                    app.modal_index = 0;
                 }
             }
+        }
+        if app.pending_input.is_some() && !request_sheet_open(app.active_modal()) {
+            // Park the foreground's input before the injection sheet borrows
+            // the composer; the pop path restores it, then returns to the
+            // exact parent surface.
+            app.park_input_draft();
+            app.push_transient_surface(Modal::InputInjection);
+            app.modal_index = 0;
+            app.focused_target = None;
         }
     }
     // Sessions picker: refresh rows and open the modal on request.
@@ -1290,14 +1305,26 @@ async fn sync_runtime_state(
             *sessions_overview_rev_seen = rev;
         }
     }
-    if runtime.open_sessions.swap(false, Ordering::SeqCst) && app.active_modal != Modal::Permission
-    {
-        // A retained view (ADR-0133 phase 4): first open initialises; when
+    let can_apply_backend_navigation = app.can_accept_navigation_signal();
+    let view_session_id = app.current_session_id.clone();
+    if can_apply_backend_navigation && runtime.open_sessions.swap(false, Ordering::SeqCst) {
+        // A retained view (ADR-0139): first show initializes; when
         // the picker is already up this signal is just a data refresh —
         // `open_view` is a same-view re-focus that does not reset, so the
         // cursor never snaps back on a delete (the refresh-while-open
         // regression this branch used to guard with an `opening` flag).
-        app.open_view(crate::views::ViewId::Sessions);
+        actions::enter_view(
+            app,
+            crate::views::ViewId::Sessions,
+            runtime,
+            &view_session_id,
+        );
+    }
+    if let Some(tree) = runtime.session_tree.lock().await.take() {
+        app.session_tree = tree;
+    }
+    if can_apply_backend_navigation && runtime.open_tree.swap(false, Ordering::SeqCst) {
+        actions::enter_view(app, crate::views::ViewId::Tree, runtime, &view_session_id);
     }
     // Mirror the daemon monitor snapshot for the `/host` panel.
     {
@@ -1316,35 +1343,13 @@ async fn sync_runtime_state(
             app.host_console_log.push(line);
         }
     }
-    if runtime.open_host.swap(false, Ordering::SeqCst) && app.active_modal != Modal::Permission {
-        // A retained view (ADR-0133 phase 4): the dock selection, focus
+    if can_apply_backend_navigation && runtime.open_host.swap(false, Ordering::SeqCst) {
+        // A retained view (ADR-0139): the dock selection, focus
         // pane, and detail scroll survive hide. First open runs the
         // entry-state ritual once; the cockpit log now lives for the
         // *view's* lifetime (cleared on first open, retained across
         // hide) — it is a session at the controls, not history.
-        let first = app.open_view(crate::views::ViewId::Host);
-        if first {
-            app.host_modal_follow = true;
-            // Default focus is the console/input region (ADR-0097
-            // §3): typing lands there; the dock is entered with Tab.
-            app.host_focus = crate::overlays::DashboardFocus::Detail;
-            app.host_console_log.clear();
-        }
-        // Kill-confirm is a one-keystroke armed state (never carried).
-        app.host_kill_confirm = None;
-        app.host_kill_confirm_id = None;
-    }
-    // `/btw` asides modal (ADR-0103 §5): F5 / `/btw list` arms `open_btw`;
-    // the loop consumes it once rows have arrived (the F5 handler also sends
-    // `QueryBtwList`, so a stale-armed flag simply opens with the last known
-    // rows — the harness refresh lands in place without re-popping).
-    if runtime.open_btw.swap(false, Ordering::SeqCst) && app.active_modal != Modal::Permission {
-        // A retained view (ADR-0133): first open initialises (and the
-        // F5/`/btw list` action that armed this signal already sent
-        // `QueryBtwList`, so rows land via the listener); a reopen — e.g.
-        // F5 while the list is up — keeps the retained selection/scroll and
-        // the harness push refreshes the rows in place.
-        app.open_view(crate::views::ViewId::Btw);
+        actions::enter_view(app, crate::views::ViewId::Host, runtime, &view_session_id);
     }
     // Mirror the on-demand session detail (info sub-view) when the
     // listener has a fresh one. Replacing `None` with `None` is a
@@ -1374,7 +1379,7 @@ async fn sync_runtime_state(
                     app.oauth_pending_user_code = user_code;
                     app.oauth_pending_message = message;
                     app.oauth_pending_error = None;
-                    app.active_modal = Modal::OauthPending;
+                    app.replace_transient_surface(Modal::OauthPending);
                 }
             }
             OauthAddSignal::Done => {
@@ -1385,7 +1390,7 @@ async fn sync_runtime_state(
             OauthAddSignal::Failed { message } => {
                 if app.awaiting_oauth_add {
                     app.oauth_pending_error = Some(message);
-                    app.active_modal = Modal::OauthPending;
+                    app.replace_transient_surface(Modal::OauthPending);
                 }
             }
         }
@@ -2166,7 +2171,7 @@ pub(super) async fn run_app_loop(
             // commit: the user just finished a completion, so the popup should
             // stay hidden until the next edit.
             let suppress_completions =
-                app.active_modal == Modal::HistorySearch || app.completion_dismissed;
+                app.active_modal() == Modal::HistorySearch || app.completion_dismissed;
             // Pre-compute completion data to avoid borrow conflicts with process_event.
             let completions = if suppress_completions {
                 Vec::new()
@@ -2205,7 +2210,7 @@ pub(super) async fn run_app_loop(
             // apart from "no menu applies at all". Every other consumer of
             // the kind already consults the latch, so suppressing here would
             // only have hidden the dismissed-but-recoverable state.
-            let completion_kind = if app.active_modal == Modal::HistorySearch {
+            let completion_kind = if app.active_modal() == Modal::HistorySearch {
                 crate::CompletionKind::None
             } else {
                 app.completion_kind()
@@ -2229,7 +2234,7 @@ pub(super) async fn run_app_loop(
             // …) open with an empty composer and are excluded by the predicate.
             let modal_cmd_history = (!app.input.is_empty())
                 .then(|| app.input.clone())
-                .filter(|_| matches!(app.active_modal, Modal::None));
+                .filter(|_| matches!(app.active_modal(), Modal::None));
             // The provider-delete confirm overlay is a sub-layer over the
             // stage-1 Connections list: when it is open it owns every key, so
             // probe the raw event before the general input mapper and skip
@@ -2258,6 +2263,7 @@ pub(super) async fn run_app_loop(
             );
 
             let has_trigger_text = app.completion_trigger_text_present();
+            let active_modal = app.active_modal();
             let action = if let Some(overlay_action) = probe_delete_overlay(app, &event) {
                 overlay_action
             } else if let Some(relay) = probe_input_selection_relay(app, &event) {
@@ -2279,7 +2285,7 @@ pub(super) async fn run_app_loop(
                     &mut app.input,
                     &mut app.cursor_position,
                     input::InputContext {
-                        active_modal: app.active_modal,
+                        active_modal,
                         session_info_detail: app.session_info_detail,
                         is_responding: app.running_sessions.contains(&viewed_session_id),
                         completion_kind,
@@ -2301,9 +2307,9 @@ pub(super) async fn run_app_loop(
                         history_searching: app.history_search,
                         model_searching: app.model_search,
                         modal_keymap_open: app.modal_keymap_open,
-                        custom_provider_field: (app.active_modal == Modal::CustomProvider)
+                        custom_provider_field: (active_modal == Modal::CustomProvider)
                             .then_some(app.custom_field),
-                        editor_field: (app.active_modal == Modal::ModelEditor)
+                        editor_field: (active_modal == Modal::ModelEditor)
                             .then_some(app.editor_field),
                         question_other_highlighted: app
                             .question
@@ -2770,7 +2776,7 @@ pub(super) fn display_status(
 /// removes the settled request from the TUI queue. The per-frame queue sync
 /// then opens the next queued question or closes the modal.
 mod question_effects {
-    use super::{AgentRequest, App, Modal, UiRuntime};
+    use super::{AgentRequest, App, UiRuntime};
 
     pub(super) async fn apply(
         effects: &[crate::question_model::QuestionEffect],
@@ -2819,7 +2825,7 @@ mod question_effects {
                     // the very next render (same frame) consistent.
                     if queue.is_empty() {
                         app.question = None;
-                        app.active_modal = Modal::None;
+                        app.pop_transient_surface();
                         app.modal_index = 0;
                     }
                 }

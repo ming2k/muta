@@ -17,7 +17,7 @@ use super::ActionFlow;
 
 /// Loop stage (input dispatch): the `SubmitCustomProvider` arm.
 pub(super) fn handle_submit_custom_provider(app: &mut App) {
-    if app.active_modal == Modal::CustomProvider {
+    if app.active_modal() == Modal::CustomProvider {
         // Commit the focused text field's live value first.
         app.stash_custom_field();
         let name = app.custom_name.trim().to_string();
@@ -43,7 +43,6 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
                 // Phase 3 (ADR-0133): the chain ends at chat. Pop the nav
                 // frame (the picker this editor was opened over) and hand
                 // the composer draft back from that view's per-view slot.
-                app.views.pop_nav();
                 app.restore_chat_after_editor_chain();
                 app.custom_field = 0;
                 app.custom_edit_id = None;
@@ -78,7 +77,6 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
                     template_id: app.custom_template_id.take(),
                     client_identity: None,
                 });
-                app.views.pop_nav();
                 app.restore_chat_after_editor_chain();
                 app.custom_field = 0;
             }
@@ -88,7 +86,7 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
 
 /// Loop stage (input dispatch): the `OpenModelEditor` arm.
 pub(super) fn handle_open_model_editor(app: &mut App) {
-    if app.active_modal == Modal::Models {
+    if app.active_modal() == Modal::Models {
         // `e` on a flat model row. The per-model settings popup
         // opens for any model that exposes effort and/or a
         // separate thinking switch.
@@ -99,7 +97,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
             let is_builtin = !app.provider_is_custom(&row.provider_id);
             // Phase 3 (ADR-0133): the picker that opened this editor goes on
             // the navigation stack; its Esc/submit pops back to it.
-            app.views.push_nav(Modal::Models);
+            app.push_transient_surface(Modal::ModelEditor);
             app.editor_target = Some(row.provider_id.clone());
             app.editor_model = row.model.clone();
             app.editor_model_settings_only = true;
@@ -126,9 +124,8 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
             app.input = app.editor_effort.clone();
             app.set_cursor_end();
             app.model_search = false;
-            app.active_modal = Modal::ModelEditor;
         }
-    } else if app.active_modal == Modal::Connections {
+    } else if app.active_modal() == Modal::Connections {
         // `e` in the Connections list. A built-in provider opens
         // the API-key editor (only its auth changes; the model is
         // chosen from the Models picker). A user-defined provider
@@ -142,7 +139,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
             .map(|row| (row.id.clone(), row.model.clone(), row.builtin));
         if let Some((id, model, builtin)) = target {
             if builtin {
-                app.views.push_nav(Modal::Connections);
+                app.push_transient_surface(Modal::ModelEditor);
                 app.editor_target = Some(id);
                 app.editor_field = 0;
                 app.editor_key.clear();
@@ -155,7 +152,6 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
                 app.input.clear();
                 app.set_cursor(0);
                 app.model_search = false;
-                app.active_modal = Modal::ModelEditor;
             } else {
                 // Pre-fill the edit form from the snapshot row.
                 let row = app
@@ -176,7 +172,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
 
 /// Loop stage (input dispatch): the `SubmitModelEditor` arm.
 pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
-    if app.active_modal == Modal::ModelEditor
+    if app.active_modal() == Modal::ModelEditor
         && let Some(id) = app.editor_target.clone()
     {
         let model = if app.editor_model.trim().is_empty() {
@@ -224,7 +220,7 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
             app.editor_thinking_available = false;
             app.model_search = false;
             app.model_modal_follow = true;
-            app.active_modal = app.views.pop_nav();
+            app.pop_transient_surface();
             arm_effort_ignition_if_max(app);
             return ActionFlow::NextEvent;
         }
@@ -248,7 +244,6 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
         // Close to chat: the chain ends here (phase 3, ADR-0133). Pop the
         // nav frame (the picker the editor was opened over) and hand the
         // composer draft back from that view's per-view slot.
-        app.views.pop_nav();
         app.restore_chat_after_editor_chain();
         app.editor_target = None;
         app.editor_model_settings_only = false;
@@ -271,7 +266,7 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
     if app.pop_sublayer() {
         // Sub-layer closed; the parent view keeps the surface.
     } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal == Modal::Sessions
+        && app.active_modal() == Modal::Sessions
     {
         // `mutx attach` (no id) opened the picker at startup
         // instead of loading any session: there is no real
@@ -281,7 +276,7 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
         tracing::info!(reason = "startup_picker_cancelled", "app exiting");
         app.should_quit.store(true, Ordering::SeqCst);
     } else if app.startup_overlay == crate::StartupOverlay::Dashboard
-        && app.active_modal == Modal::Host
+        && app.active_modal() == Modal::Host
     {
         // `mutx dashboard` opened the dashboard over a carrier
         // session the user never asked to converse with: Esc
@@ -290,7 +285,7 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
         tracing::info!(reason = "startup_dashboard_cancelled", "app exiting");
         app.should_quit.store(true, Ordering::SeqCst);
     } else {
-        // Retained browse views hide instead of closing (ADR-0133), and the
+        // Retained browse views hide instead of closing (ADR-0139), and the
         // quick switcher cancels back to its origin surface — both via the
         // shared dismiss verb. State saved / origin restored, surface
         // dismissed; the next open restores exactly where the user was.
@@ -303,11 +298,10 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
         // and the custom-provider editor instead step back to
         // the picker they were opened from, so a key entry is
         // recoverable with Esc.
-        let mut return_to: Option<Modal> = None;
         // HistorySearch / Connections / Models no longer need branches here:
         // `dismiss_surface` (checked above) hides them with the per-view
-        // draft handed back (ADR-0133 phase 3).
-        if app.active_modal == Modal::ModelEditor {
+        // draft handed back (ADR-0139).
+        if app.active_modal() == Modal::ModelEditor {
             // Cancel the editor: discard its fields and return to
             // the picker it was opened from in browse mode. The
             // original chat draft stays in stashed_input for when
@@ -319,8 +313,8 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
             app.set_cursor(0);
             app.model_search = false;
             app.model_modal_follow = true;
-            return_to = Some(app.views.pop_nav());
-        } else if app.active_modal == Modal::CustomProvider {
+            app.pop_transient_surface();
+        } else if app.active_modal() == Modal::CustomProvider {
             // Same as Esc: discard the editor fields and step back
             // to the Connections list; the chat draft stays parked
             // in stashed_input.
@@ -330,8 +324,8 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
             app.model_search = false;
             app.model_modal_follow = true;
             app.modal_index = 0;
-            return_to = Some(app.views.pop_nav());
-        } else if app.active_modal == Modal::Config && app.config_custom_editing {
+            app.pop_transient_surface();
+        } else if app.active_modal() == Modal::Config && app.config_custom_editing {
             // Click-outside closes the settings stack. Discard
             // the transactional custom preview before leaving.
             app.theme = Theme::from_color_scheme(&app.color_scheme, &app.custom_color_scheme);
@@ -342,15 +336,17 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
         }
         // Queue's exit hook (the open-time auto-block release) now lives in
         // `hide_active_view` — every hide path releases it, not just this
-        // one (ADR-0133 phase 4).
+        // one (ADR-0139).
         app.modal_keymap_open = false;
-        app.active_modal = return_to.unwrap_or(Modal::None);
+        if !matches!(app.active_modal(), Modal::Models | Modal::Connections) {
+            app.show_chat_surface();
+        }
     }
 }
 
 /// Loop stage (input dispatch): the `ModalUp` arm (per-modal ↑ navigation).
 pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
-    match app.active_modal {
+    match app.active_modal() {
         Modal::Connections | Modal::Models => {
             // Walk the fuzzy-filtered rows of the *active picker*
             // (providers in Connections, flat (provider, model)
@@ -534,7 +530,7 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
 
 /// Loop stage (input dispatch): the `ModalDown` arm (per-modal ↓ navigation).
 pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
-    match app.active_modal {
+    match app.active_modal() {
         Modal::Connections | Modal::Models => {
             let count = app.picker_row_count().max(1);
             app.modal_index = (app.modal_index + 1) % count;

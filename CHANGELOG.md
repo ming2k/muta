@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added explicit session-list and session-tree snapshot requests plus separate
+  TUI presentation signals, making both views refreshable without navigation
+  side effects.
+
+### Changed
+
+- Replaced the TUI's split modal/navigation state with one exact surface
+  router and a complete retained-view lifecycle across shortcuts, mouse entry,
+  the quick switcher, request sheets, and workflow editors. Views now refresh
+  backend-owned data on every show, preserve MRU state when hidden, and can be
+  explicitly closed with `Del` in the switcher without deleting backend data.
+
+### Fixed
+
+- Preserved the distinct Activity and Todos identities, exact parent return
+  after transient sheets, Queue exit hooks on every switch path, and separate
+  picker filters from parked chat drafts.
+
 ## [0.33.1] - 2026-08-25
 
 ### Added

@@ -288,4 +288,63 @@ mod tests {
             other => panic!("expected Select, got {other:?}"),
         }
     }
+
+    #[test]
+    fn session_view_queries_and_open_signals_keep_data_and_navigation_distinct() {
+        let cases = [
+            (
+                Wire::Request {
+                    request: crate::AgentRequest::QuerySessionsOverview,
+                },
+                serde_json::json!({"type": "Request", "QuerySessionsOverview": null}),
+            ),
+            (
+                Wire::Request {
+                    request: crate::AgentRequest::QuerySessionTree,
+                },
+                serde_json::json!({"type": "Request", "QuerySessionTree": null}),
+            ),
+            (
+                Wire::Response {
+                    response: crate::AgentResponse::OpenSessionsPanel,
+                },
+                serde_json::json!({"type": "Response", "OpenSessionsPanel": null}),
+            ),
+            (
+                Wire::Response {
+                    response: crate::AgentResponse::OpenTreePanel,
+                },
+                serde_json::json!({"type": "Response", "OpenTreePanel": null}),
+            ),
+        ];
+
+        for (frame, expected) in cases {
+            let encoded = serde_json::to_value(frame).unwrap();
+            assert_eq!(encoded, expected);
+            let _: Wire = serde_json::from_value(encoded).unwrap();
+        }
+
+        let snapshot = serde_json::to_value(Wire::Response {
+            response: crate::AgentResponse::SessionTreeSnapshot {
+                session_id: "session-a".to_string(),
+                tree: crate::SessionTree::default(),
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            snapshot,
+            serde_json::json!({
+                "type": "Response",
+                "SessionTreeSnapshot": {
+                    "session_id": "session-a",
+                    "tree": {
+                        "entries": {},
+                        "root_id": null,
+                        "active_leaf_id": null,
+                        "named_branches": {}
+                    }
+                }
+            })
+        );
+    }
 }

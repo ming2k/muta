@@ -108,23 +108,39 @@ for the transcript; the per-modal overlays (`draw_models_modal`,
 (`HintBarView`, `ActivityModalView`, `CustomEditorView`, …) the same way.
 The shell calls the view and never the reverse.
 
-## Shared discriminants — why `modal` lives in the view layer
+## Surface routing and shared presentation discriminants
 
 `Modal`, `Recess`, and `ActivityTab` are fieldless enums that *name* things
 without owning state:
 
-- `Modal` — which overlay is open. The view layer needs it for modal geometry
-  (`modal_area`) and per-modal rendering; the shell needs it as state.
+- `Modal` — which overlay presentation to draw and which modal input map to
+  use. It is a projection, never durable navigation identity: Activity and
+  Todos intentionally project to the same modal.
 - `Recess` — how the live surface recedes behind a modal (float / dim /
   takeover). The view layer's recess pass and the shell's footer-collapse
   decision both key off it.
 - `ActivityTab` — which section the Activity modal shows.
 
-Because both layers share them and dependencies point downward, they live in
-the lower layer (`tui::modal`) and the shell re-exports them. Same
-reasoning for `completion::{Completion, CompletionKind}`: the render code draws
-them, so the *types* live in the view layer while the *matching logic* stays in
-the shell as an `impl App`.
+The shell owns exact navigation separately in `views.rs`. `SurfaceRouter` is
+the sole authority for the active `Surface` (`Chat`, `View(ViewId)`, or
+`Transient(Modal)`) and the transient return stack; `ViewRegistry` owns lazy
+view state and MRU order. Render code receives only the router's `Modal`
+projection. Lifecycle code operates on `ViewId`, so it never attempts the
+lossy inverse mapping from a modal back to a view.
+
+All entry paths converge on the event loop's `enter_view` transaction. It
+runs first-create initialization, refresh-on-show backend queries, and
+enter/exit hooks consistently for shortcuts, mouse actions, switcher actions,
+and backend presentation signals. Snapshot responses update data only;
+separate open signals navigate. Request sheets and workflow editors push/pop
+through the router, while drill-ins remain state owned by their parent view.
+See [ADR-0139](../../adr/0139-unified-tui-surface-router-and-view-lifecycle.md).
+
+Because presentation types are shared by both layers and dependencies point
+downward, they live in the lower layer (`tui::modal`) and the shell re-exports
+them. The same reasoning applies to
+`completion::{Completion, CompletionKind}`: render code draws them, while
+matching logic remains in the shell as an `impl App`.
 
 ## Component reuse inside the view layer
 

@@ -346,6 +346,8 @@ pub async fn run_tui(
         None::<muta_contracts::SessionDetail>,
     ));
     let session_detail_clone = session_detail.clone();
+    let session_tree = Arc::new(tokio::sync::Mutex::new(None::<muta_contracts::SessionTree>));
+    let session_tree_clone = session_tree.clone();
     // Token-source report fetched on demand from the harness when the
     // context-usage modal opens in attach mode (the ledger is daemon-side
     // there). Mirrors the `session_detail` on-demand pattern.
@@ -370,6 +372,8 @@ pub async fn run_tui(
     let live_session_id_clone = live_session_id.clone();
     let open_sessions = Arc::new(AtomicBool::new(false));
     let open_sessions_clone = open_sessions.clone();
+    let open_tree = Arc::new(AtomicBool::new(false));
+    let open_tree_clone = open_tree.clone();
     // `/host` daemon control panel (ADR-0096): a live monitor snapshot the TUI
     // maintains client-side (separate from the session attach stream).
     let host_sessions = Arc::new(Mutex::new(Vec::<muta_contracts::MonitoredSession>::new()));
@@ -412,8 +416,8 @@ pub async fn run_tui(
     let parent_status_clone = parent_status.clone();
     let side_view_signal = Arc::new(Mutex::new(None::<event_loop::SideViewSignal>));
     let side_view_signal_clone = side_view_signal.clone();
-    // The asides list (ADR-0103 §5). The modal-open signal lives in
-    // `UiRuntime::open_btw` — armed by F5 / `/btw list` on the loop side.
+    // The asides list (ADR-0103 §5). Navigation is local; a reply only
+    // replaces rows and never re-opens a hidden view.
     let btw_list = Arc::new(Mutex::new(Vec::<muta_contracts::BtwAsideSummary>::new()));
     let btw_list_clone = btw_list.clone();
     // View-scoped chrome (ADR-0103 fix): per-session activity / responding /
@@ -1700,9 +1704,7 @@ pub async fn run_tui(
                 }
                 AgentResponse::BtwList(rows) => {
                     // ADR-0103 §5: the asides list. Mirrored into the loop's
-                    // `App::btw_list` each frame; the loop also reads the
-                    // `open_btw` signal armed by F5 / `/btw list` to pop the
-                    // modal once the fresh rows land. The list is also the
+                    // `App::btw_list` each frame. The list is also the
                     // routing-truth source: ids absent from it no longer have
                     // a live aside, so their events stop routing to the side
                     // buffer.
@@ -1732,6 +1734,7 @@ pub async fn run_tui(
                     // post-switch id so session-scoped client state follows.
                     *live_session_id_clone.lock().await = session_id.clone();
                     *token_report_clone.lock().await = None;
+                    *session_tree_clone.lock().await = None;
                 }
                 AgentResponse::ConversationReplaced {
                     session_id,
@@ -1758,13 +1761,28 @@ pub async fn run_tui(
                     // the previous session's cached report.
                     *live_session_id_clone.lock().await = session_id.clone();
                     *token_report_clone.lock().await = None;
+                    *session_tree_clone.lock().await = None;
                 }
                 AgentResponse::SessionsOverview(sessions) => {
                     *sessions_overview_clone.lock().await = sessions;
                     // Bump the revision so the loop's per-iteration mirror can
                     // skip the deep clone when the overview is unchanged.
                     sessions_overview_rev_clone.fetch_add(1, std::sync::atomic::Ordering::Release);
+                }
+                AgentResponse::OpenSessionsPanel => {
                     open_sessions_clone.store(true, Ordering::SeqCst);
+                }
+                AgentResponse::SessionTreeSnapshot { session_id, tree } => {
+                    // A tree query is session-scoped. Reject a response that
+                    // raced a primary-session switch; the switch arms its own
+                    // refresh when the Tree view is next shown.
+                    let live = live_session_id_clone.lock().await.clone();
+                    if live == session_id {
+                        *session_tree_clone.lock().await = Some(tree);
+                    }
+                }
+                AgentResponse::OpenTreePanel => {
+                    open_tree_clone.store(true, Ordering::SeqCst);
                 }
                 AgentResponse::OpenHostPanel => {
                     open_host_clone.store(true, Ordering::SeqCst);
@@ -1926,7 +1944,11 @@ pub async fn run_tui(
 
     let mut app = App {
         views: crate::views::ViewRegistry::new(),
-        view_switcher_return: Modal::None,
+        surfaces: if startup_overlay == StartupOverlay::SessionsPicker {
+            crate::views::SurfaceRouter::with_view(crate::views::ViewId::Sessions)
+        } else {
+            crate::views::SurfaceRouter::new()
+        },
         queue_exit_session: None,
         view_switcher_query: String::new(),
         input: String::new(),
@@ -1982,11 +2004,6 @@ pub async fn run_tui(
         completion_request_id: 0,
         cursor_position: 0,
         input_scroll: 0,
-        active_modal: if startup_overlay == StartupOverlay::SessionsPicker {
-            Modal::Sessions
-        } else {
-            Modal::None
-        },
         modal_index: 0,
         last_input_rect: mutx_engine::Rect::default(),
         last_frame_area: mutx_engine::Rect::default(),
@@ -2168,7 +2185,9 @@ pub async fn run_tui(
         logo: load_user_logo(),
     };
 
-    let open_btw = Arc::new(AtomicBool::new(false));
+    if startup_overlay == StartupOverlay::SessionsPicker {
+        app.views.open(crate::views::ViewId::Sessions);
+    }
 
     // Run app
     let res = event_loop::run_app_loop(
@@ -2196,7 +2215,6 @@ pub async fn run_tui(
             side_view_signal,
             btw_list,
             session_chrome,
-            open_btw,
             host_console_signal,
             viewed_session_id,
             live_session_id,
@@ -2205,10 +2223,12 @@ pub async fn run_tui(
             sessions_overview,
             sessions_overview_rev,
             session_detail,
+            session_tree,
             token_report,
             usage_stats,
             websearch_config,
             open_sessions,
+            open_tree,
             host_sessions,
             host_sessions_rev,
             open_host,

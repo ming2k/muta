@@ -97,34 +97,52 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
   (arm, then exit) instead of closing; with text staged in the dashboard's
   inline `p` / `n` prompt the chain is clear → arm → quit.
 
-**Retained views (ADR-0133).** Nearly every surface is now a *retained
-view*: dismissing one (Esc, outside click, Ctrl+C — one shared dismiss
-verb) saves its scroll, selection, and follow state to a per-view registry,
-and reopening restores exactly where the user was. The old reset-on-open
-ritual is gone; data-refresh queries run on a view's first open only.
-Retained: Help, Activity/Todos, Tools, MCP, Skills, Permissions, Usage
-stats, Context report, `/btw` asides, Settings, the Models and Connections
-pickers, input history (Ctrl+R), the Queue overview, the session dashboard,
-and the sessions picker. The pickers additionally park the composer draft
-in per-view slots (a draft parked for Models is never clobbered by one
-parked for history). Switching sessions forgets retained state (it belongs
-to the conversation).
+### Surface and view lifecycle
 
-**Picker→editor navigation (ADR-0133).** The model editor, the
-provider-template chooser, the custom-provider editor, and the OAuth sheet
-return through a bounded navigation stack to the surface that opened them
-— no hard-coded destinations. Queue's open-time outbox auto-block is
-paired with a release on *every* leave path. Drill-in sub-layers (the
-dashboard's preview and inline prompt, the sessions info view, the context
-report's turn breakdown) step back one level per Esc through the same
-shared pop the outside-click path uses.
+`Modal` is a rendering/input discriminant, not navigation identity. The
+authoritative foreground is one exact `Surface`: chat, `View(ViewId)`, or a
+transient modal. This distinction matters because Activity and Todos share
+the same renderer while remaining different destinations.
 
-**`Ctrl+L` — the global view switcher.** Open over any surface (a
-transient chooser, itself never retained): open views first in MRU order,
-then every other view as discovery. Typing filters the list fuzzily against
-each view's name and entry point; `Enter` switches — hiding the origin with
-its state saved — and `Esc` cancels back untouched, restoring the origin's
-cursor from the registry.
+A **view** is a stable, directly focusable place with retained navigation
+state and the complete create/show/hide/switch/close lifecycle. The 18 views
+are Help, Activity, Todos, Tools, MCP, Skills, Permissions, Usage statistics,
+Context report, Asides, Settings, Models, Connections, History, Queue,
+Session dashboard, Sessions, and Session tree. Chat is the root surface;
+request sheets, the quick switcher, child editors, drill-ins, toasts, and
+completion menus are not views.
+
+The lifecycle defined by [ADR-0139](../../adr/0139-unified-tui-surface-router-and-view-lifecycle.md)
+is:
+
+- first show lazily creates retained UI state;
+- every show restores selection/scroll/filter and refreshes backend-owned
+  data;
+- hide returns to chat without removing state or MRU membership;
+- switch runs the origin's exit hook and the destination's normal show path;
+- close removes that view's retained state and volatile UI payload;
+- changing the viewed session closes all session-scoped views and payloads.
+
+Models, Connections, and History keep the parked chat draft separately from
+their own filter query. Queue's outbox block/resume pair and all cleanup hooks
+run on every leave path, including shortcuts, mouse actions, quick switching,
+Esc, Ctrl+C, and outside click.
+
+Transient workflows use the same bounded return stack. Model/provider/OAuth
+editors and Permission, Question, and Input Injection sheets push over the
+exact current surface and return to it when settled. A request sheet therefore
+cannot collapse an interrupted Todos view into Activity or chat. Drill-in
+sub-layers remain state owned by their parent view and pop before the parent
+can be hidden.
+
+**`Ctrl+L` — the global view switcher.** Open from chat or a suspendable view;
+transactional children, request sheets, and active drill-ins block it. Open
+views appear first in MRU order, followed by every other view for discovery.
+Typing filters by name and entry point; `Enter` switches through the normal
+lifecycle, `Esc` returns to the exact origin, and `Del` closes the highlighted
+TUI view state. Closing a view never deletes a session, provider, aside, or
+other backend resource.
+
 **Click-outside-to-dismiss.** Read-only / info modals — Help, Tool-step
 detail, Tools, Sessions, Permissions, Activity, History, and the two pickers
 (Models, Connections) — close when the user clicks outside their panel,

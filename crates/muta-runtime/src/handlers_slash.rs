@@ -987,6 +987,7 @@ pub async fn dispatch(
                         let _ = resp_tx.send(AgentResponse::SessionsOverview(
                             build_sessions_overview(session).await,
                         ));
+                        let _ = resp_tx.send(AgentResponse::OpenSessionsPanel);
                     }
                 },
             }
@@ -996,6 +997,11 @@ pub async fn dispatch(
         }
         Some(BuiltinCmd::Tree) => {
             let tree = session.tree().await;
+            let _ = resp_tx.send(AgentResponse::SessionTreeSnapshot {
+                session_id: session.id().await,
+                tree: tree.clone(),
+            });
+            let _ = resp_tx.send(AgentResponse::OpenTreePanel);
             record_ack(
                 session,
                 name,

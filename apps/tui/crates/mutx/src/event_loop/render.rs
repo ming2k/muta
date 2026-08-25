@@ -19,7 +19,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     let mut layout_map = LayoutMap::new();
 
     if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal == Modal::Sessions
+        && app.active_modal() == Modal::Sessions
     {
         // `mutx attach` (no id): initial launch opens ONLY the sessions picker
         // on a clean background. Do not open/render the chat interface, empty state,
@@ -60,7 +60,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         footer: true,
                     },
                 ));
-        app.modal_rect = if app.active_modal.dismissable_by_outside_click() {
+        app.modal_rect = if app.active_modal().dismissable_by_outside_click() {
             Some(drawn_modal_rect)
         } else {
             None
@@ -98,7 +98,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // guarantees. Mapping the char-indexed caret through the same mask
     // keeps every consumer operating on one coherent string.
     let (masked_input, masked_byte_cursor) =
-        if app.active_modal == Modal::ModelEditor && app.editor_field == 0 {
+        if app.active_modal() == Modal::ModelEditor && app.editor_field == 0 {
             // Mask the API key everywhere it could be rendered (the editor
             // field itself, and any layout pass that inspects the input).
             let mask = "•".repeat(app.input.chars().count());
@@ -128,7 +128,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // their own field, so the composer is suppressed for them (its rect
     // stays as recessed surface) — no duplicate field, and no
     // masked-cursor panic in the editor.
-    let recess = app.active_modal.recess();
+    let recess = app.active_modal().recess();
     let chrome_hidden = recess == Recess::Takeover;
 
     // When zoomed into an Envoy, render its child messages and
@@ -214,7 +214,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // Suppress the hover affordance whenever a full-overlay modal is
     // open so no stale highlight bleeds through. The permission sheet
     // keeps the transcript interactive, so it is exempted.
-    let chrome_interactive = matches!(app.active_modal, Modal::None | Modal::Permission);
+    let chrome_interactive = matches!(app.active_modal(), Modal::None | Modal::Permission);
 
     // Project the viewed session's outbox into the small view the
     // persistent queue bar renders. Dispatch order (front pops
@@ -305,7 +305,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // mutable borrow of `app.input_scroll`.
     // The permission sheet takes over the hint line as well as the
     // input box, so suppress the hint bar while it is open.
-    if !chrome_hidden && hint_rect.height > 0 && app.active_modal != Modal::Permission {
+    if !chrome_hidden && hint_rect.height > 0 && app.active_modal() != Modal::Permission {
         // Resolve the active model's effective reasoning effort for
         // the hint bar's `◆ {effort}` tag. Reads the same per-model
         // channel info the `/models` picker uses
@@ -370,7 +370,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // surface the next keypress will land on. A pending permission
     // request replaces the composer with the inline permission sheet.
     if !chrome_hidden {
-        if app.active_modal == Modal::Permission {
+        if app.active_modal() == Modal::Permission {
             if let Some(request) = app.pending_permission.as_ref() {
                 // Extend the slot down by the composer/hint gap plus
                 // the hint-line height so the sheet also covers
@@ -398,7 +398,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 app.permission_scroll = app.permission_scroll.min(app.permission_max_scroll);
             }
         } else if matches!(
-            app.active_modal,
+            app.active_modal(),
             Modal::Connections | Modal::Models | Modal::ModelEditor | Modal::CustomProvider
         ) {
             // These modals borrow the input line as their own field
@@ -539,7 +539,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // composer paints it bold + accent), the popup has nothing left
     // to offer, and ↑/↓ keep walking history instead of cycling a
     // single pinned row.
-    if app.active_modal == Modal::None
+    if app.active_modal() == Modal::None
         && !app.completion_dismissed
         && app.completion_kind() != CompletionKind::None
     {
@@ -587,8 +587,8 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // backgrounds are blended (codex's text-safe `Canvas::tint`).
     if !chrome_hidden && let Some(epoch) = app.effort_ignition_epoch {
         let elapsed_ms = epoch.elapsed().as_millis();
-        let hint_row =
-            (hint_rect.height > 0 && app.active_modal != Modal::Permission).then_some(hint_rect.y);
+        let hint_row = (hint_rect.height > 0 && app.active_modal() != Modal::Permission)
+            .then_some(hint_rect.y);
         crate::effort_ignition::paint_ignition_bands(f, input_rect, hint_row, elapsed_ms);
     }
 
@@ -608,7 +608,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     let mut dashboard_list_body_height: Option<u16> = None;
 
     // Modals
-    let drawn_modal_rect = match app.active_modal {
+    let drawn_modal_rect = match app.active_modal() {
         Modal::Connections => {
             let providers = app.providers_filtered();
             Some(view::draw_connections_modal(
@@ -1076,7 +1076,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             app.tree_modal_follow,
             &app.theme,
         )),
-        // Global view quick switcher (ADR-0133, Ctrl+L): open views first
+        // Global view quick switcher (ADR-0139, Ctrl+L): open views first
         // in MRU order, then the rest as discovery. Renders from the view
         // registry; Enter switches via `ViewSwitchActivate`.
         Modal::ViewSwitcher => {
@@ -1088,7 +1088,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 &app.view_switcher_query,
                 app.modal_index,
                 &open_ids,
-                app.view_switcher_return,
+                app.transient_return_view(),
                 &mut app.session_scroll,
                 app.session_modal_follow,
                 &app.theme,
@@ -1104,7 +1104,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // overpaints its own dimmed backdrop + centered panel, leaving
     // the list visible (dimmed) behind it. Only present while a
     // deletion is staged from `Shift+D`.
-    if app.active_modal == Modal::Connections
+    if app.active_modal() == Modal::Connections
         && let Some(ref pending_id) = app.pending_provider_delete
     {
         let provider_name = app
@@ -1191,7 +1191,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // dismissable) so a click on the backdrop outside it can close it.
     // The rect comes from the renderer that just painted the panel, so
     // dynamic-height modals and click hit-tests cannot drift apart.
-    app.modal_rect = if app.active_modal.dismissable_by_outside_click() {
+    app.modal_rect = if app.active_modal().dismissable_by_outside_click() {
         drawn_modal_rect
     } else {
         None

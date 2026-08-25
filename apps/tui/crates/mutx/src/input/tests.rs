@@ -4419,6 +4419,26 @@ fn delete_key_inert_outside_free_text() {
 }
 
 #[test]
+fn delete_key_closes_selected_view_in_switcher() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    assert_eq!(
+        process_event(
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::Modal::ViewSwitcher,
+                ..Default::default()
+            },
+            &mut drag,
+        ),
+        InputAction::ViewCloseSelected
+    );
+}
+
+#[test]
 fn host_prompt_delete_key_removes_forward_char() {
     // The /host dashboard's inline prompt borrows the composer line; Del
     // there deletes forward too (the branch swallows the key and returns

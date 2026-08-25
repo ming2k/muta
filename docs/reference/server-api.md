@@ -486,6 +486,17 @@ tool, cached permission, skill, and MCP state. Mutation requests such as
 `ToggleTool`, `ToggleMcpServer`, and `RevokePermission` are followed by a fresh
 `SessionContext` snapshot.
 
+Session navigation data follows the same snapshot rule. Send
+`{ "type": "Request", "QuerySessionsOverview": null }` for the session-list
+rows or `{ "type": "Request", "QuerySessionTree": null }` for the current
+session DAG. The corresponding `SessionsOverview` and `SessionTreeSnapshot`
+responses replace client data and never open UI. `SessionTreeSnapshot` carries
+the source `session_id`; clients must discard it if that session is no longer
+current. A bare `/sessions` or `/tree` slash command emits a separate
+`OpenSessionsPanel` or `OpenTreePanel` response after its snapshot, so
+presentation intent is explicit and background refresh cannot cause
+navigation.
+
 The complete request and response variant inventory, field requirements, enum
 values, and examples are in the AsyncAPI contract.
 

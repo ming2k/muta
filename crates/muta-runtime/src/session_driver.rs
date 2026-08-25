@@ -573,6 +573,19 @@ impl SessionDriver {
                         crate::handlers_session::detail(&session, &resp_tx, id).await;
                     });
                 }
+                AgentRequest::QuerySessionsOverview => {
+                    let session = session.clone();
+                    let resp_tx = resp_tx.clone();
+                    tokio::spawn(async move {
+                        crate::handlers_session::overview(&session, &resp_tx).await;
+                    });
+                }
+                AgentRequest::QuerySessionTree => {
+                    // Keep id + tree capture ordered with session-switch
+                    // requests handled by this driver, so the tagged snapshot
+                    // can never pair one session's id with another's DAG.
+                    crate::handlers_session::tree(&session, &resp_tx).await;
+                }
                 AgentRequest::QueryTokenUsage { session_id } => {
                     crate::handlers_session::token_usage(&token_ledger, &resp_tx, session_id);
                 }

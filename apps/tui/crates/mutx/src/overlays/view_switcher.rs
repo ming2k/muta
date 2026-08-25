@@ -1,11 +1,12 @@
-//! Global view quick switcher (ADR-0133, `Ctrl+L`).
+//! Global view quick switcher (ADR-0139, `Ctrl+L`).
 //!
 //! A centered picker over every browse surface — open views first in MRU
 //! order, then the not-yet-opened ones so the list doubles as discovery.
 //! `Enter` switches: the current view is hidden (state retained in the
 //! [`ViewRegistry`](crate::views::ViewRegistry)) and the target's retained
 //! scroll/index is restored — the same "leave and come back, nothing lost"
-//! contract sessions have. `Esc` closes with nothing changed.
+//! contract sessions have. `Esc` closes with nothing changed; `Del` closes
+//! the selected view's TUI state without deleting backend data.
 //!
 //! The switcher itself is not a retained view: it is a transient chooser
 //! *over* views, so it never enters its own registry.
@@ -39,7 +40,7 @@ pub(crate) fn draw_view_switcher(
     query: &str,
     modal_index: usize,
     open_ids: &[ViewId],
-    active: crate::modal::Modal,
+    active: Option<ViewId>,
     scroll: &mut usize,
     follow_selection: bool,
     theme: &Theme,
@@ -84,7 +85,7 @@ pub(crate) fn draw_view_switcher(
                 selected_line = Some(body.len());
             }
             let is_open = open_ids.contains(id);
-            let is_here = id.modal() == active && active != crate::modal::Modal::None;
+            let is_here = Some(*id) == active;
             // Badge: `here` (the surface the switcher was opened over) is
             // the state that matters most, then `open` (in the MRU order,
             // i.e. conceptually mounted), else quiet blank space.
@@ -131,6 +132,7 @@ pub(crate) fn draw_view_switcher(
             item_footer_hints: &[
                 FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
                 FooterHint::primary(keyvocab::ENTER, "switch"),
+                FooterHint::always("Del", "close view"),
                 FooterHint::always(keyvocab::ESC, "close"),
             ],
             empty_footer_hints: &[FooterHint::always(keyvocab::ESC, "close")],

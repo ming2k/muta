@@ -160,7 +160,7 @@ pub enum Modal {
     InputInjection,
     /// Session DAG tree viewer (`/tree`).
     Tree,
-    /// Global view quick switcher (ADR-0133, `Ctrl+L`): a centered picker
+    /// Global view quick switcher (ADR-0139, `Ctrl+L`): a centered picker
     /// over every browse surface — open views first in MRU order, then the
     /// rest as discovery. `Enter` switches (hides the current view, focus
     /// moves, retained scroll/index restored); `Esc` closes with nothing
@@ -219,8 +219,8 @@ impl Modal {
     /// (Help, Session, Sessions, Activity) and for the history
     /// modal and the Connections/Models pickers: their filter query is
     /// ephemeral and the real composer draft is safely parked in
-    /// `stashed_input`, so an outside click closes them and restores the draft
-    /// (the per-view draft is handed back on dismiss, ADR-0133) — exactly like
+    /// their per-view state, so an outside click closes them and restores the
+    /// parked draft (ADR-0139) — exactly like
     /// Esc. Entry modals that
     /// hold precious in-progress input (ModelEditor, Question) and the
     /// permission sheet stay open so an accidental click never discards an API

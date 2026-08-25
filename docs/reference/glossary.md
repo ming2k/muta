@@ -109,6 +109,15 @@ before the round runs.
 | **`@principal:` mention** | Runtime role switch: `@principal:architect` (code / architect / reviewer / security) switches the active principal role for the round — same effect as `/principal <role>`. [Slash commands](commands.md#principal) |
 | **`@path` mention** | TUI completion trigger only: typing `@` opens path completion; the `@` is dropped on accept. Not an injection form. [Input box](tui/input-box.md) |
 
+## TUI surfaces
+
+| Term | Definition |
+|------|------------|
+| **surface** | The TUI's exact foreground navigation unit: chat, a retained `View(ViewId)`, or a `Transient(Modal)`. `SurfaceRouter` is the sole owner of the active surface and transient return stack. [ADR-0139](../adr/0139-unified-tui-surface-router-and-view-lifecycle.md) |
+| **view** | A stable, directly focusable TUI place with an exact `ViewId`, retained navigation state, MRU presence, and complete create/show/hide/switch/close semantics. A shared renderer does not merge identities: Activity and Todos are separate views. [TUI modals and lifecycle](tui/modals.md#surface-and-view-lifecycle) |
+| **transient surface** | A request sheet, quick switcher, or transactional editor that temporarily pushes over a parent surface and pops back to that exact parent. It is not retained or listed as a view. [ADR-0139](../adr/0139-unified-tui-surface-router-and-view-lifecycle.md) |
+| **modal** | A presentation/input discriminant for an overlay. `Modal` determines rendering, recess, and input dispatch, but is not navigation identity and cannot be inverted into a `ViewId`. [TUI architecture](tui/architecture.md#surface-routing-and-shared-presentation-discriminants) |
+
 ## Context projection
 
 | Term | Definition |

@@ -1574,7 +1574,7 @@ fn history_modal_is_click_dismissable_and_restores_draft() {
     );
     assert!(!app.history_search);
     assert!(!app.history_preview);
-    assert_eq!(app.active_modal, crate::Modal::None);
+    assert_eq!(app.active_modal(), crate::Modal::None);
 }
 
 /// Build a minimal `App` scoped to a tempdir project so we can exercise
@@ -1610,7 +1610,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
     let cwd = tmp.path().to_path_buf();
     let app = App {
         views: crate::views::ViewRegistry::new(),
-        view_switcher_return: Modal::None,
+        surfaces: crate::views::SurfaceRouter::new(),
         queue_exit_session: None,
         view_switcher_query: String::new(),
         input: String::new(),
@@ -1666,7 +1666,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         completion_request_id: 0,
         cursor_position: 0,
         input_scroll: 0,
-        active_modal: Modal::None,
         modal_index: 0,
         last_input_rect: mutx_engine::Rect::default(),
         last_frame_area: mutx_engine::Rect::default(),
@@ -1932,7 +1931,7 @@ fn antigravity_template() -> &'static crate::providers::ProviderTemplate {
 fn add_provider_row_opens_the_template_chooser() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_provider_template_chooser();
-    assert!(app.active_modal == Modal::ProviderTemplate);
+    assert!(app.active_modal() == Modal::ProviderTemplate);
     assert_eq!(app.template_choice, 0);
     // `↑/↓` wrap across the template list.
     let n = crate::PROVIDER_TEMPLATES.len();
@@ -1947,7 +1946,7 @@ fn custom_provider_editor_opens_empty_on_name_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.custom_name = "stale".to_string();
     app.open_custom_provider_editor(openai_template());
-    assert!(app.active_modal == Modal::CustomProvider);
+    assert!(app.active_modal() == Modal::CustomProvider);
     assert_eq!(app.custom_field, 0, "opens on the Name field");
     assert!(app.custom_name.is_empty(), "buffers reset on open");
     assert!(
@@ -2104,7 +2103,7 @@ fn picker_connections_count_matches_provider_rows_no_add_row() {
     // row, so `picker_row_count()` for Connections equals the provider count
     // exactly (no +1).
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::Connections;
+    app.set_active_modal_for_test(Modal::Connections);
     // Seed a few snapshot rows so providers_filtered() renders the full list
     // (the picker is snapshot-driven).
     let row = |id: &str| muta_contracts::ProviderPickerRow {
@@ -2139,7 +2138,7 @@ fn picker_connections_count_matches_provider_rows_no_add_row() {
 #[test]
 fn delete_provider_stages_overlay_without_deleting() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::Connections;
+    app.set_active_modal_for_test(Modal::Connections);
     let custom = |id: &str| muta_contracts::ProviderPickerRow {
         id: id.to_string(),
         name: id.to_string(),
@@ -2182,7 +2181,7 @@ fn delete_provider_stages_overlay_without_deleting() {
 #[test]
 fn delete_provider_ignores_builtin() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::Connections;
+    app.set_active_modal_for_test(Modal::Connections);
     let builtin = |id: &str| muta_contracts::ProviderPickerRow {
         id: id.to_string(),
         name: id.to_string(),
@@ -3788,7 +3787,7 @@ fn modal_paste_splices_text_inline_stripping_newlines() {
     // matching the single-line semantics the modal already enforces. No
     // chip is inserted and no attachment is staged.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::ModelEditor;
+    app.set_active_modal_for_test(Modal::ModelEditor);
     app.editor_field = 0;
     app.input = "sk-".to_string();
     app.cursor_position = app.input.chars().count();
@@ -3816,7 +3815,7 @@ fn modal_paste_inserts_at_cursor_not_at_end() {
     // an existing field inserts between the surrounding characters rather
     // than appending.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::ModelEditor;
+    app.set_active_modal_for_test(Modal::ModelEditor);
     app.editor_field = 1;
     app.input = "gpt-4omini".to_string();
     app.cursor_position = "gpt-4o".chars().count();
@@ -3841,7 +3840,7 @@ fn modal_paste_applies_to_provider_picker_and_history_search() {
     // query paste the same way as the editor.
     for modal in [Modal::Models, Modal::HistorySearch] {
         let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-        app.active_modal = modal;
+        app.set_active_modal_for_test(modal);
         app.input = String::new();
         app.cursor_position = 0;
 
@@ -3865,7 +3864,7 @@ fn modal_paste_drops_image_with_failure_toast() {
     // is dropped with a failure toast rather than silently lost or staged
     // as an attachment.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::ModelEditor;
+    app.set_active_modal_for_test(Modal::ModelEditor);
     app.input = String::new();
     app.cursor_position = 0;
 
@@ -3895,7 +3894,7 @@ fn composer_paste_still_chips_large_text_on_main_prompt() {
     // `[Pasted text #N +M lines]` chip and stages the full text, so the
     // modal-aware branching did not regress the composer behaviour.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::None;
+    app.set_active_modal_for_test(Modal::None);
     app.input = String::new();
     app.cursor_position = 0;
     let big = format!("line\n{}", "x".repeat(2048));
@@ -3918,7 +3917,7 @@ fn paste_in_readonly_modal_is_dropped_silently() {
     // Read-only / non-text modals (Help, Sessions, Permission, ...) drop a
     // paste silently — no insertion, no toast, no attachment.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::Help;
+    app.set_active_modal_for_test(Modal::Help);
     app.input = String::new();
     app.cursor_position = 0;
 
@@ -3940,7 +3939,7 @@ fn composer_image_paste_rejected_when_model_lacks_vision() {
     // When the current model doesn't support vision, pasting an image on
     // the main prompt should show a failure toast and leave no attachment.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::None;
+    app.set_active_modal_for_test(Modal::None);
     app.current_model = "glm-5.2".to_string(); // vision: false
     app.input = String::new();
     app.cursor_position = 0;
@@ -3974,7 +3973,7 @@ fn composer_image_paste_accepted_when_model_has_vision() {
     // When the current model supports vision, pasting an image on the main
     // prompt should stage the attachment and insert an `[Image #N]` chip.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = Modal::None;
+    app.set_active_modal_for_test(Modal::None);
     app.current_model = "gpt-4o".to_string(); // vision: true
     app.input = String::new();
     app.cursor_position = 0;
@@ -4080,7 +4079,7 @@ fn caret_owner_modal_for_caret_modals() {
         Modal::CustomProvider,
         Modal::InputInjection,
     ] {
-        app.active_modal = modal;
+        app.set_active_modal_for_test(modal);
         assert_eq!(
             app.caret_owner(),
             CaretOwner::Modal,
@@ -4110,7 +4109,7 @@ fn caret_owner_none_for_read_only_and_decision_modals() {
         Modal::Permission,
         Modal::Config,
     ] {
-        app.active_modal = modal;
+        app.set_active_modal_for_test(modal);
         assert_eq!(
             app.caret_owner(),
             CaretOwner::None,
@@ -4156,7 +4155,7 @@ fn caret_owner_question_owns_caret_only_on_other() {
     };
     // Open: highlight on row 0 (a real option) → no caret, cursor hidden.
     let model = QuestionModel::open(req);
-    app.active_modal = Modal::Question;
+    app.set_active_modal_for_test(Modal::Question);
     app.question = Some(model.clone());
     assert_eq!(
         app.caret_owner(),
@@ -4274,7 +4273,7 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
     app.question_modal_follow = true;
 
     // List modals return a follow-flag; clearing it must hit the right field.
-    app.active_modal = Modal::Queue;
+    app.set_active_modal_for_test(Modal::Queue);
     {
         let (scroll, follow) = app.modal_scroll_field().expect("queue scrolls");
         *scroll = 5;
@@ -4288,7 +4287,7 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
         "queue follow cleared through helper"
     );
 
-    app.active_modal = Modal::Tools;
+    app.set_active_modal_for_test(Modal::Tools);
     {
         let (_, follow) = app.modal_scroll_field().expect("tools scrolls");
         if let Some(f) = follow {
@@ -4300,7 +4299,7 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
         "tools reuses session follow flag"
     );
 
-    app.active_modal = Modal::Sessions;
+    app.set_active_modal_for_test(Modal::Sessions);
     {
         let (_, follow) = app.modal_scroll_field().expect("sessions scrolls");
         assert!(follow.is_some(), "sessions shares the session follow flag");
@@ -4313,14 +4312,14 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
         Modal::Permissions,
         Modal::Config,
     ] {
-        app.active_modal = m;
+        app.set_active_modal_for_test(m);
         let (s, f) = app.modal_scroll_field().expect("{m:?} scrolls");
         assert!(f.is_none(), "{m:?} has no selection-follow flag");
         // Mutating must hit a distinct field per modal (not all the same slot).
         *s = 7;
     }
     assert_eq!(app.help_scroll, 7);
-    app.active_modal = Modal::Activity;
+    app.set_active_modal_for_test(Modal::Activity);
     if let Some((s, _)) = app.modal_scroll_field() {
         *s = 9;
     }
@@ -4335,7 +4334,7 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
         Modal::ModelEditor,
         Modal::InputInjection,
     ] {
-        app.active_modal = m;
+        app.set_active_modal_for_test(m);
         assert!(
             app.modal_scroll_field().is_none(),
             "{m:?} must not scroll its own body"
@@ -4395,10 +4394,10 @@ fn startup_picker_flag_governs_sessions_modal_quit_and_resets_on_open() {
     // Simulate the startup path (`mutx attach` with no id): the picker
     // opens and `startup_overlay` is armed. Closing it must quit.
     app.startup_overlay = crate::StartupOverlay::SessionsPicker;
-    app.active_modal = Modal::Sessions;
+    app.set_active_modal_for_test(Modal::Sessions);
     assert!(
         app.startup_overlay == crate::StartupOverlay::SessionsPicker
-            && app.active_modal == Modal::Sessions
+            && app.active_modal() == Modal::Sessions
     );
     // The quit gate is `should_quit`; it is still clear until a close happens.
     assert!(!app.should_quit.load(Ordering::SeqCst));
@@ -4406,7 +4405,7 @@ fn startup_picker_flag_governs_sessions_modal_quit_and_resets_on_open() {
     // Open a session from the picker: the overlay clears so a later `/sessions`
     // modal behaves as a normal transient overlay.
     app.startup_overlay = crate::StartupOverlay::None;
-    app.active_modal = Modal::None;
+    app.set_active_modal_for_test(Modal::None);
     assert_eq!(
         app.startup_overlay,
         crate::StartupOverlay::None,
@@ -4440,7 +4439,7 @@ fn sessions_picker_delete_keeps_cursor_on_the_same_line() {
     app.sessions_overview = (0..5)
         .map(|i| overview_row(&format!("s{i}")))
         .collect::<Vec<_>>();
-    app.active_modal = Modal::Sessions;
+    app.set_active_modal_for_test(Modal::Sessions);
 
     // Delete the row at index 2 (mid-list). The cursor must stay at 2 — now
     // pointing at "s3", which slid into the freed slot.
@@ -4482,14 +4481,14 @@ fn sessions_picker_data_refresh_does_not_reset_cursor_when_already_open() {
     app.sessions_overview = (0..5)
         .map(|i| overview_row(&format!("s{i}")))
         .collect::<Vec<_>>();
-    app.active_modal = Modal::Sessions;
+    app.set_active_modal_for_test(Modal::Sessions);
     app.modal_index = 3;
     app.session_scroll = 2;
 
     // Simulate the refresh path (open_sessions signal + fresh overview) with
     // the modal ALREADY open: cursor and scroll must be preserved.
-    let opening = app.active_modal != Modal::Sessions; // false
-    app.active_modal = Modal::Sessions;
+    let opening = app.active_modal() != Modal::Sessions; // false
+    app.set_active_modal_for_test(Modal::Sessions);
     if opening {
         app.modal_index = 0;
         app.session_scroll = 0;
@@ -4500,9 +4499,9 @@ fn sessions_picker_data_refresh_does_not_reset_cursor_when_already_open() {
 
     // Now simulate opening from a different modal (the genuine-open case):
     // cursor and scroll reset to the top.
-    app.active_modal = Modal::None;
-    let opening = app.active_modal != Modal::Sessions; // true
-    app.active_modal = Modal::Sessions;
+    app.set_active_modal_for_test(Modal::None);
+    let opening = app.active_modal() != Modal::Sessions; // true
+    app.set_active_modal_for_test(Modal::Sessions);
     if opening {
         app.modal_index = 0;
         app.session_scroll = 0;
@@ -4573,7 +4572,7 @@ fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
     // gate AND the info drill-in are active. Esc must back out to the list,
     // NOT quit.
     app.startup_overlay = crate::StartupOverlay::SessionsPicker;
-    app.active_modal = Modal::Sessions;
+    app.set_active_modal_for_test(Modal::Sessions);
     app.session_info_detail = true;
     app.session_detail = Some(muta_contracts::SessionDetail {
         id: "x".to_string(),
@@ -4582,13 +4581,13 @@ fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
     // Mirror the CloseModal arm's ordering (deepest level wins).
-    let quit = if app.active_modal == Modal::Sessions && app.session_info_detail {
+    let quit = if app.active_modal() == Modal::Sessions && app.session_info_detail {
         app.session_info_detail = false;
         app.session_detail = None;
         app.session_info_scroll = 0;
         false
     } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal == Modal::Sessions
+        && app.active_modal() == Modal::Sessions
     {
         app.should_quit.store(true, Ordering::SeqCst);
         true
@@ -4607,10 +4606,10 @@ fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
 
     // Now the list is showing (still at startup). A second Esc DOES quit, since
     // there is no deeper sub-view left.
-    let quit = if app.active_modal == Modal::Sessions && app.session_info_detail {
+    let quit = if app.active_modal() == Modal::Sessions && app.session_info_detail {
         false
     } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal == Modal::Sessions
+        && app.active_modal() == Modal::Sessions
     {
         app.should_quit.store(true, Ordering::SeqCst);
         true
@@ -4633,18 +4632,18 @@ fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.startup_overlay = crate::StartupOverlay::SessionsPicker;
-    app.active_modal = Modal::Sessions;
+    app.set_active_modal_for_test(Modal::Sessions);
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
     // Mirror the CtrlC arm: startup_overlay + Sessions → quit (not modal-close).
     // (Selection copy is skipped — no selection in a modal.)
     let quit = if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal == Modal::Sessions
+        && app.active_modal() == Modal::Sessions
     {
         app.should_quit.store(true, Ordering::SeqCst);
         true
-    } else if app.active_modal != Modal::None && app.active_modal != Modal::Permission {
-        app.active_modal = Modal::None;
+    } else if app.active_modal() != Modal::None && app.active_modal() != Modal::Permission {
+        app.set_active_modal_for_test(Modal::None);
         false
     } else {
         false
@@ -4656,7 +4655,7 @@ fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
     );
     // The modal was NOT merely closed (which is what created the empty-session
     // trap): should_quit is set, so the loop exits.
-    assert_ne!(app.active_modal, Modal::None, "quit path wins over close");
+    assert_ne!(app.active_modal(), Modal::None, "quit path wins over close");
 }
 
 /// `mutx dashboard` opens the session dashboard (`Modal::Host`) over a
@@ -4678,7 +4677,7 @@ fn esc_at_startup_dashboard_quits_instead_of_dropping_to_carrier_chat() {
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.startup_overlay = crate::StartupOverlay::Dashboard;
-    app.active_modal = Modal::Host;
+    app.set_active_modal_for_test(Modal::Host);
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
     // Esc from the dashboard itself (no preview/prompt sub-layer open).
@@ -4688,7 +4687,7 @@ fn esc_at_startup_dashboard_quits_instead_of_dropping_to_carrier_chat() {
         "Esc from the startup dashboard quits the TUI"
     );
     assert_eq!(
-        app.active_modal,
+        app.active_modal(),
         Modal::Host,
         "quit path never demotes the dashboard to a conversation"
     );
@@ -4700,24 +4699,24 @@ fn ctrl_c_at_startup_dashboard_arms_then_quits_never_opens_chat() {
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.startup_overlay = crate::StartupOverlay::Dashboard;
-    app.active_modal = Modal::Host;
+    app.set_active_modal_for_test(Modal::Host);
     let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
     let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     // First Ctrl+C: arms the quit window, dashboard stays open.
-    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(app.ctrl_c_armed(), "first Ctrl+C arms the quit window");
-    assert_eq!(app.active_modal, Modal::Host, "dashboard stays open");
+    assert_eq!(app.active_modal(), Modal::Host, "dashboard stays open");
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
     // Second Ctrl+C inside the window: quit, not a drop into the chat.
-    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(
         app.should_quit.load(Ordering::SeqCst),
         "double Ctrl+C exits the whole TUI"
     );
     assert_eq!(
-        app.active_modal,
+        app.active_modal(),
         Modal::Host,
         "the exit never demotes the dashboard to the conversation"
     );
@@ -4729,18 +4728,18 @@ fn ctrl_c_at_startup_dashboard_after_window_expires_rearms_not_opens_chat() {
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.startup_overlay = crate::StartupOverlay::Dashboard;
-    app.active_modal = Modal::Host;
+    app.set_active_modal_for_test(Modal::Host);
     let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
     let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     // First press arms; simulate the window lapsing (wall-clock deadline).
-    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     app.arm_ctrl_c(Some(std::time::Instant::now()));
 
     // A press after the deadline re-arms instead of closing the dashboard.
-    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(app.ctrl_c_armed(), "the lapsed window re-arms");
-    assert_eq!(app.active_modal, Modal::Host);
+    assert_eq!(app.active_modal(), Modal::Host);
     assert!(!app.should_quit.load(Ordering::SeqCst));
 }
 
@@ -4756,7 +4755,7 @@ fn ctrl_c_at_in_session_dashboard_double_press_ends_session() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     app.tx = tx;
     app.startup_overlay = crate::StartupOverlay::None;
-    app.active_modal = Modal::Host;
+    app.set_active_modal_for_test(Modal::Host);
     let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
     let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
@@ -4764,8 +4763,8 @@ fn ctrl_c_at_in_session_dashboard_double_press_ends_session() {
     // consumed and `EndSession` was sent (the Exit arm is the only path that
     // sends it), while `should_quit` stays clear — the startup flavour never
     // runs in-session.
-    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
-    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(
         matches!(rx.try_recv(), Ok(AgentRequest::EndSession)),
         "double Ctrl+C declares the session end like the conversation path"
@@ -4782,7 +4781,7 @@ fn ctrl_c_at_dashboard_inline_prompt_clears_text_before_arming() {
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.startup_overlay = crate::StartupOverlay::Dashboard;
-    app.active_modal = Modal::Host;
+    app.set_active_modal_for_test(Modal::Host);
     app.host_prompting = true;
     app.host_prompt_new = true;
     app.input = "refactor the parser".to_string();
@@ -4790,16 +4789,16 @@ fn ctrl_c_at_dashboard_inline_prompt_clears_text_before_arming() {
     let (copy_tx, _copy_rx) = mpsc::unbounded_channel();
     let copy_pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(app.input.is_empty(), "the staged task text is cleared");
     assert!(app.ctrl_c_armed(), "clearing arms the quit window");
-    assert_eq!(app.active_modal, Modal::Host, "the dashboard stays open");
+    assert_eq!(app.active_modal(), Modal::Host, "the dashboard stays open");
     assert!(app.host_prompting, "the prompt itself stays mounted");
 
     // Second press (input now empty) quits.
-    super::event_loop::handle_ctrl_c(&mut app, &copy_tx, &copy_pending);
+    super::event_loop::handle_ctrl_c(&mut app, "test-session", &copy_tx, &copy_pending);
     assert!(app.should_quit.load(Ordering::SeqCst));
-    assert_eq!(app.active_modal, Modal::Host);
+    assert_eq!(app.active_modal(), Modal::Host);
 }
 
 /// The double-Esc interrupt confirmation is a real wall-clock window, not a
@@ -5554,7 +5553,7 @@ fn console_host_rows(app: &mut App) {
         fork_kind: muta_contracts::SessionForkKind::Trunk,
     };
     app.host_sessions = vec![row("aaa", 100), row("bbb", 200)];
-    app.active_modal = Modal::Host;
+    app.set_active_modal_for_test(Modal::Host);
     // Selection on the first creation-order entry = `#1`.
     app.modal_index = 0;
 }
@@ -5700,14 +5699,14 @@ fn browse_view_reopen_restores_scroll_and_selection() {
     // refactor every open reset them to 0.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     assert!(app.open_view(crate::views::ViewId::Help));
-    assert_eq!(app.active_modal, Modal::Help);
+    assert_eq!(app.active_modal(), Modal::Help);
     assert_eq!(app.modal_index, 0);
 
     // The user scrolls and selects, then hides (Esc → dismiss_surface).
     app.help_scroll = 42;
     app.modal_index = 3;
     assert!(app.dismiss_surface());
-    assert_eq!(app.active_modal, Modal::None);
+    assert_eq!(app.active_modal(), Modal::None);
 
     // Reopen: first-open returned false and the retained state is back.
     assert!(!app.open_view(crate::views::ViewId::Help));
@@ -5737,12 +5736,28 @@ fn browse_view_state_is_per_view() {
 }
 
 #[test]
+fn view_follow_mode_is_restored_per_view() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_view(crate::views::ViewId::Tools);
+    app.session_modal_follow = false;
+
+    app.open_view(crate::views::ViewId::Mcp);
+    app.session_modal_follow = true;
+
+    app.open_view(crate::views::ViewId::Tools);
+    assert!(
+        !app.session_modal_follow,
+        "shared live fields must restore the selected view's retained mode"
+    );
+}
+
+#[test]
 fn todos_and_activity_are_separate_places() {
     // Two view ids share the Activity modal but keep their own tab —
     // switching between them lands on the section the id names.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_view(crate::views::ViewId::Todos);
-    assert_eq!(app.active_modal, Modal::Activity);
+    assert_eq!(app.active_modal(), Modal::Activity);
     assert_eq!(app.activity_tab, ActivityTab::Todos);
     assert!(app.dismiss_surface());
 
@@ -5773,20 +5788,16 @@ fn view_switcher_restore_roundtrip() {
     app.open_view(crate::views::ViewId::Help);
     app.modal_index = 4;
 
-    // Open the switcher over Help the way `ViewSwitcherToggle` does: park
-    // the origin's live cursor first, then borrow the selection slot.
-    app.view_switcher_return = app.active_modal;
-    if let Ok(origin) = crate::views::ViewId::try_from(app.active_modal) {
-        app.save_view_state(origin);
-    }
-    app.active_modal = Modal::ViewSwitcher;
+    // Open the transient switcher over Help; the router preserves the exact
+    // parent and the push snapshots its shared cursor/scroll projection.
+    app.push_transient_surface(Modal::ViewSwitcher);
     app.modal_index = 0;
 
     // Esc (the shared dismiss verb) cancels back to Help — and restores
     // Help's own cursor from the registry (the switcher's row cursor must
     // not leak into the restored surface).
     assert!(app.dismiss_surface());
-    assert_eq!(app.active_modal, Modal::Help);
+    assert_eq!(app.active_modal(), Modal::Help);
     assert_eq!(
         app.modal_index, 4,
         "Help's selection restored, not the switcher's row cursor"
@@ -5806,13 +5817,13 @@ fn config_view_reopen_keeps_pane_and_category() {
     // detail → categories → hide) ends in the shared dismiss verb.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     assert!(app.open_view(crate::views::ViewId::Config));
-    assert_eq!(app.active_modal, Modal::Config);
+    assert_eq!(app.active_modal(), Modal::Config);
 
     // The user walks into a category and the Detail pane, then hides.
     app.config_category = 2;
     app.config_focus = crate::overlays::ConfigFocus::Detail;
     assert!(app.dismiss_surface());
-    assert_eq!(app.active_modal, Modal::None);
+    assert_eq!(app.active_modal(), Modal::None);
 
     // Reopen: not a first open, and the pane/category survived.
     assert!(!app.open_view(crate::views::ViewId::Config));
@@ -5825,30 +5836,27 @@ fn config_view_reopen_keeps_pane_and_category() {
 }
 
 // ---------------------------------------------------------------------------
-// ADR-0133 phases 3-5: navigation stack, per-view drafts, queue hook,
+// Unified surface router: transient stack, per-view drafts, queue hook,
 // sub-layer pop, switcher filter.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn model_editor_esc_pops_back_to_its_picker() {
-    // The nav stack replaces `editor_return_to`: an editor opened from
+    // The surface stack replaces `editor_return_to`: an editor opened from
     // Models returns to Models; one opened from Connections returns to
     // Connections — the same editor, two parents, no hard-coding.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    // From Models: the editor's close path is `active_modal = pop_nav()`.
     app.open_view(crate::views::ViewId::Models);
-    app.views.push_nav(crate::Modal::Models);
-    app.active_modal = crate::Modal::ModelEditor;
-    app.active_modal = app.views.pop_nav();
-    assert_eq!(app.active_modal, crate::Modal::Models, "pops to Models");
+    app.push_transient_surface(crate::Modal::ModelEditor);
+    app.pop_transient_surface();
+    assert_eq!(app.active_modal(), crate::Modal::Models, "pops to Models");
 
     // From Connections: the same editor, a different pushed parent.
     app.open_view(crate::views::ViewId::Connections);
-    app.views.push_nav(crate::Modal::Connections);
-    app.active_modal = crate::Modal::ModelEditor;
-    app.active_modal = app.views.pop_nav();
+    app.push_transient_surface(crate::Modal::ModelEditor);
+    app.pop_transient_surface();
     assert_eq!(
-        app.active_modal,
+        app.active_modal(),
         crate::Modal::Connections,
         "pops to Connections"
     );
@@ -5876,6 +5884,89 @@ fn per_view_drafts_do_not_clobber_each_other() {
 }
 
 #[test]
+fn switching_picker_view_preserves_query_and_chat_draft_separately() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "unsent chat".to_string();
+    app.open_view(crate::views::ViewId::Models);
+    app.model_search = true;
+    app.input = "claude".to_string();
+
+    app.open_view(crate::views::ViewId::Help);
+    assert_eq!(
+        app.input, "unsent chat",
+        "switch restores the chat composer"
+    );
+
+    app.open_view(crate::views::ViewId::Models);
+    assert_eq!(
+        app.input, "claude",
+        "picker query is retained independently"
+    );
+    assert!(app.model_search, "the search sub-layer is retained too");
+    assert!(app.dismiss_surface());
+    assert_eq!(app.input, "unsent chat");
+}
+
+#[test]
+fn transient_sheet_returns_to_exact_todos_view() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_view(crate::views::ViewId::Todos);
+    app.push_transient_surface(Modal::Question);
+    assert_eq!(app.pop_transient_surface(), Modal::Activity);
+    assert_eq!(app.active_view(), Some(crate::views::ViewId::Todos));
+    assert_eq!(app.activity_tab, ActivityTab::Todos);
+}
+
+#[test]
+fn backend_navigation_waits_for_transient_and_drill_in_surfaces() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    assert!(app.can_accept_navigation_signal(), "chat is safe");
+
+    app.open_view(crate::views::ViewId::Models);
+    app.push_transient_surface(Modal::ModelEditor);
+    assert!(
+        !app.can_accept_navigation_signal(),
+        "an editor must not be preempted"
+    );
+    app.pop_transient_surface();
+    assert!(app.can_accept_navigation_signal());
+
+    app.open_view(crate::views::ViewId::Config);
+    app.config_focus = crate::overlays::ConfigFocus::Detail;
+    assert!(
+        !app.can_accept_navigation_signal(),
+        "a parent-owned drill-in must finish or pop first"
+    );
+}
+
+#[test]
+fn explicit_view_close_discards_retained_state_and_payload() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_view(crate::views::ViewId::UsageStats);
+    app.usage_stats_scroll = 17;
+    app.close_view(crate::views::ViewId::UsageStats);
+
+    assert!(!app.views.is_open(crate::views::ViewId::UsageStats));
+    assert_eq!(app.active_modal(), Modal::None);
+    assert_eq!(app.usage_stats_scroll, 0);
+    assert!(app.open_view(crate::views::ViewId::UsageStats));
+}
+
+#[test]
+fn switching_away_from_queue_runs_exit_hook() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let sid = "queue-session";
+    app.open_view(crate::views::ViewId::Queue);
+    app.block_queue(sid);
+    app.queue_exit_session = Some(sid.to_string());
+
+    app.open_view(crate::views::ViewId::Help);
+
+    assert!(!app.is_queue_blocked(sid));
+    assert!(app.queue_exit_session.is_none());
+}
+
+#[test]
 fn switcher_enter_hides_origin_and_restores_target_state() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     // Target retains state.
@@ -5887,12 +5978,8 @@ fn switcher_enter_hides_origin_and_restores_target_state() {
     app.open_view(crate::views::ViewId::Tools);
     app.modal_index = 1;
 
-    // Open the switcher over Tools (the Toggle arm's park + borrow).
-    app.view_switcher_return = app.active_modal;
-    if let Ok(origin) = crate::views::ViewId::try_from(app.active_modal) {
-        app.save_view_state(origin);
-    }
-    app.active_modal = crate::Modal::ViewSwitcher;
+    // Open the switcher over Tools (the Toggle arm's push + borrow).
+    app.push_transient_surface(crate::Modal::ViewSwitcher);
     app.modal_index = 0;
 
     // The switcher's rows put open views first; with only Tools open the
@@ -5906,20 +5993,15 @@ fn switcher_enter_hides_origin_and_restores_target_state() {
 
     // Enter (the Activate arm's core, minus the async runtime plumbing).
     let target = rows[help_row];
-    let origin = app.view_switcher_return;
-    app.view_switcher_return = crate::Modal::None;
     app.modal_index = 0;
-    if let Ok(origin_view) = crate::views::ViewId::try_from(origin) {
-        app.save_view_state(origin_view);
-        app.views.hide(origin_view);
-    }
+    app.pop_transient_surface();
     let first = app.open_view(target);
     assert!(!first, "Help was opened before — not a first open");
-    assert_eq!(app.active_modal, crate::Modal::Help);
+    assert_eq!(app.active_modal(), crate::Modal::Help);
     assert_eq!(app.modal_index, 2, "Help's retained selection restored");
     assert!(
-        !app.views.is_open(crate::views::ViewId::Tools),
-        "origin hidden"
+        app.views.is_open(crate::views::ViewId::Tools),
+        "hidden origin remains an initialized MRU buffer"
     );
 }
 
@@ -5945,16 +6027,20 @@ fn pop_sublayer_steps_back_one_level_at_a_time() {
     // The shared one-step-back (phase 4): Esc's deepest-first chain and the
     // outside-click mirror both route through here.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.active_modal = crate::Modal::TokenReport;
+    app.set_active_modal_for_test(crate::Modal::TokenReport);
     app.token_report_detail = true;
     assert!(app.pop_sublayer());
     assert!(!app.token_report_detail, "drill-in closed");
-    assert_eq!(app.active_modal, crate::Modal::TokenReport, "view stays up");
+    assert_eq!(
+        app.active_modal(),
+        crate::Modal::TokenReport,
+        "view stays up"
+    );
     assert!(!app.pop_sublayer(), "no sub-layer left");
 
     // Host: preview is the deepest layer (painted over the prompting
     // state), so it pops first; prompting next; then the view itself.
-    app.active_modal = crate::Modal::Host;
+    app.set_active_modal_for_test(crate::Modal::Host);
     app.host_preview = Some("transcript".to_string());
     app.host_prompting = true;
     assert!(app.pop_sublayer());

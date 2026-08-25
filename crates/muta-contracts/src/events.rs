@@ -222,6 +222,12 @@ pub enum AgentRequest {
     QuerySessionDetail {
         id: String,
     },
+    /// Request the current sessions-picker rows without changing frontend
+    /// navigation. The reply is [`AgentResponse::SessionsOverview`].
+    QuerySessionsOverview,
+    /// Request the current session DAG without changing frontend navigation.
+    /// The reply is [`AgentResponse::SessionTreeSnapshot`].
+    QuerySessionTree,
     /// Request the token-source report (per-round / per-turn request usage,
     /// reported vs. estimated) for one session. The harness replies with
     /// [`AgentResponse::TokenUsageReport`] carrying a snapshot of its
@@ -596,8 +602,19 @@ pub enum AgentResponse {
         #[serde(default)]
         round_interrupts: Vec<RoundInterrupt>,
     },
-    /// Replace the sessions picker contents (and open the picker).
+    /// Replace the sessions picker contents. Data responses never navigate;
+    /// slash-command presentation is signalled separately.
     SessionsOverview(Vec<SessionOverview>),
+    /// Presentation signal for bare `/sessions` / `/session list`.
+    OpenSessionsPanel,
+    /// Replace the session-tree view's data without changing navigation. The
+    /// session id lets a frontend reject a reply that raced a session switch.
+    SessionTreeSnapshot {
+        session_id: String,
+        tree: crate::SessionTree,
+    },
+    /// Presentation signal for `/tree`.
+    OpenTreePanel,
     /// Open the session dashboard (`/dashboard`, formerly `/host`; ADR-0096).
     /// The TUI renders the monitor stream it maintains independently; this is
     /// only the open signal, carrying no data.

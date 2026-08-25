@@ -47,7 +47,7 @@ pub(super) async fn handle_send_chat(
     // here — Enter in `Modal::HistorySearch` emits the dedicated
     // `HistoryInsert` action so the chosen entry lands in the
     // input box for editing instead of being sent immediately.
-    app.active_modal = Modal::None;
+    app.show_chat_surface();
     app.suggestion_index = None;
     app.input_scroll = 0;
 
@@ -306,6 +306,7 @@ pub(crate) async fn handle_send_slash(
 /// selection, close overlay, clear input, armed double-press quit).
 pub(crate) fn handle_ctrl_c(
     app: &mut App,
+    viewed_session_id: &str,
     copy_tx: &mpsc::UnboundedSender<Result<clipboard::CopyOutcome, String>>,
     copy_pending: &Arc<AtomicUsize>,
 ) -> ActionFlow {
@@ -317,13 +318,13 @@ pub(crate) fn handle_ctrl_c(
         app.drag.cell_info.as_ref(),
     ) {
         clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
-    } else if app.active_modal == Modal::HistorySearch {
+    } else if app.active_modal() == Modal::HistorySearch {
         // Cancel the history modal via the shared dismiss verb: the
         // per-view draft is handed back and the sub-flags cleared
-        // (ADR-0133 phase 3).
+        // (ADR-0139).
         app.dismiss_surface();
     } else if app.startup_overlay == crate::StartupOverlay::SessionsPicker
-        && app.active_modal == Modal::Sessions
+        && app.active_modal() == Modal::Sessions
     {
         // `mutx attach` (no id) opened the picker at startup:
         // there is no conversation behind it, so Ctrl+C — like
@@ -334,7 +335,7 @@ pub(crate) fn handle_ctrl_c(
         // as an empty-session file).
         tracing::info!(reason = "startup_picker_cancelled", "app exiting");
         app.should_quit.store(true, Ordering::SeqCst);
-    } else if app.active_modal == Modal::OauthPending {
+    } else if app.active_modal() == Modal::OauthPending {
         let text = if !app.oauth_pending_url.is_empty() {
             app.oauth_pending_url.clone()
         } else if !app.oauth_pending_user_code.is_empty() {
@@ -351,7 +352,7 @@ pub(crate) fn handle_ctrl_c(
                 std::time::Duration::from_millis(2000),
             );
         }
-    } else if app.active_modal == Modal::Host {
+    } else if app.active_modal() == Modal::Host {
         // The session dashboard owns Ctrl+C: it is a first-class
         // screen, not a transient modal, so Ctrl+C never closes
         // it into the conversation behind it. The gesture is the
@@ -397,13 +398,11 @@ pub(crate) fn handle_ctrl_c(
                 std::time::Instant::now() + std::time::Duration::from_secs(2),
             ));
         }
-    } else if app.active_modal != Modal::None && app.active_modal != Modal::Permission {
-        // Ctrl+C over a surface is the same dismiss as Esc (ADR-0133):
+    } else if app.active_modal() != Modal::None && app.active_modal() != Modal::Permission {
+        // Ctrl+C over a surface is the same dismiss as Esc (ADR-0139):
         // retained browse views hide with state saved, the quick switcher
         // cancels to its origin, everything else falls to plain close.
-        if !app.dismiss_surface() {
-            app.active_modal = Modal::None;
-        }
+        super::modals::handle_close_modal(app, viewed_session_id);
     } else if app.in_side_view {
         // `/btw` aside view: Ctrl+C detaches back to the primary
         // transcript (ADR-0103 §2) — the aside keeps running, so

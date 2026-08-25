@@ -62,7 +62,7 @@ pub(super) fn spawn_clipboard_paste(tx: &mpsc::UnboundedSender<ClipboardRead>) {
 /// `insert_newline` being a no-op in modals) and skips the chip / attachment
 /// machinery entirely. Other modals drop the paste silently.
 pub(super) fn apply_clipboard_paste(app: &mut App, read: ClipboardRead) {
-    match app.active_modal {
+    match app.active_modal() {
         Modal::None => apply_composer_paste(app, read),
         Modal::HistorySearch
         | Modal::Models

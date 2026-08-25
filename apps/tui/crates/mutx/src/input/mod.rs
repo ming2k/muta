@@ -672,7 +672,7 @@ pub enum InputAction {
     ExitSideView,
     /// Open the `/btw` asides list modal (ADR-0103 §5). Mapped from F5.
     OpenBtwList,
-    /// Open the global view quick switcher (ADR-0133, `Ctrl+L`). A transient
+    /// Open the global view quick switcher (ADR-0139, `Ctrl+L`). A transient
     /// chooser over every browse surface: open views first in MRU order,
     /// then the rest as discovery. Esc closes it with nothing changed.
     ViewSwitcherToggle,
@@ -683,11 +683,14 @@ pub enum InputAction {
     },
     /// Drop the last character from the switcher's filter (Backspace).
     ViewSwitcherBackspace,
-    /// Switch to the view highlighted in the quick switcher (ADR-0133,
+    /// Switch to the view highlighted in the quick switcher (ADR-0139,
     /// Enter). Hides the current browse view (state retained in the
     /// `ViewRegistry`) and focuses the target with its retained
     /// scroll/index restored.
     ViewSwitchActivate,
+    /// Explicitly close the selected retained view and discard its UI state.
+    /// Delete never removes the underlying session or backend resource.
+    ViewCloseSelected,
     /// Jump into the aside highlighted in the asides modal (ADR-0103 §5).
     BtwFocusSelected,
     /// Close + discard the aside highlighted in the asides modal
@@ -2183,7 +2186,11 @@ pub fn process_event(
                 // keystroke, mirroring the chip-aware Backspace. The caret
                 // does not move (forward delete only shortens the text).
                 KeyCode::Delete => {
-                    if edits_input_field(&context) && *cursor_position < input.chars().count() {
+                    if context.active_modal == super::Modal::ViewSwitcher {
+                        return InputAction::ViewCloseSelected;
+                    } else if edits_input_field(&context)
+                        && *cursor_position < input.chars().count()
+                    {
                         let byte_cursor = input
                             .char_indices()
                             .map(|(i, _)| i)
