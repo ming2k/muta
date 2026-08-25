@@ -7,25 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-08-25
+
 ### Added
 
-- Added explicit session-list and session-tree snapshot requests plus separate
-  TUI presentation signals, making both views refreshable without navigation
-  side effects.
-
-### Changed
-
-- Replaced the TUI's split modal/navigation state with one exact surface
-  router and a complete retained-view lifecycle across shortcuts, mouse entry,
-  the quick switcher, request sheets, and workflow editors. Views now refresh
-  backend-owned data on every show, preserve MRU state when hidden, and can be
-  explicitly closed with `Del` in the switcher without deleting backend data.
+- **Unified TUI Surface Router and Retained-View Lifecycle (ADR 0139)**:
+  - Replaced the TUI's split modal/navigation state with one exact surface router and a complete retained-view lifecycle across shortcuts, mouse entry, the quick switcher, request sheets, and workflow editors.
+  - Views refresh backend-owned data on every show, preserve MRU state when hidden, and can be explicitly closed with `Del` in the switcher without deleting backend data.
+  - Added explicit session-list and session-tree snapshot requests plus separate TUI presentation signals, making both views refreshable without navigation side effects.
+- **Subagent Actor Runtime & Execution Isolation**:
+  - Actor subsystem with supervisor, mailbox, handles, and lifecycle events in `muta-contracts` & `muta-agent`.
+  - Isolated worktree manager for subagent execution isolation.
+- **Syntax Defense Guard & Observation Folding**:
+  - Pre-execution syntax defense guard for edit and write tools.
+  - Heuristic compaction evaluation and observation folding with budget token tracking utilities.
+- **Session DAG Tree Rollback & Slash Commands**:
+  - Implemented `/diff` and `/undo` slash commands with session DAG tree rollback.
+- **Server-Side KV Cache Alignment (ADR 0137)**:
+  - Dynamic prompt zoning and KV cache alignment for Anthropic and Google protocols.
+- **Session Tree Branching & Split Compaction (ADR 0138)**:
+  - Session tree branching, subagent isolation, split compaction with file tracking, and session tree overlay in Mutx TUI.
+- **Agent Tools Enhancement**:
+  - Added `find` tool and enhanced agent tools (`bash`, `grep`, `read`, `edit`, `envoy`, `catalog_picker`).
 
 ### Fixed
 
-- Preserved the distinct Activity and Todos identities, exact parent return
-  after transient sheets, Queue exit hooks on every switch path, and separate
-  picker filters from parked chat drafts.
+- Preserved the distinct Activity and Todos identities, exact parent return after transient sheets, Queue exit hooks on every switch path, and separate picker filters from parked chat drafts.
 
 ## [0.33.1] - 2026-08-25
 
@@ -4731,7 +4738,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.33.1...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.34.0...HEAD
+[0.34.0]: https://github.com/ming2k/muta/compare/v0.33.1...v0.34.0
 [0.33.1]: https://github.com/ming2k/muta/compare/v0.33.0...v0.33.1
 [0.33.0]: https://github.com/ming2k/muta/compare/v0.32.2...v0.33.0
 [0.32.2]: https://github.com/ming2k/muta/compare/v0.32.1...v0.32.2
