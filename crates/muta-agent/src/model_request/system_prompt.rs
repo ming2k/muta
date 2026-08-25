@@ -39,6 +39,8 @@ pub struct SystemPromptContext {
     /// approves every side-effecting tool, so the prompt tells the model no
     /// human is reachable and it must decide and act on its own authority.
     pub autopilot: bool,
+    /// Available skills formatted as XML metadata for progressive disclosure.
+    pub available_skills: String,
 }
 
 impl SystemPromptContext {

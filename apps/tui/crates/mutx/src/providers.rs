@@ -381,7 +381,10 @@ pub fn model_context_window(model: &str) -> usize {
 /// equivalent): a single (provider, model) pair drawn from anywhere in the
 /// snapshot. Built by [`models_flat_filtered_from`]; the picker browses,
 /// searches, and activates these directly — there is no drill-in stage.
+#[derive(Clone, Debug)]
 pub struct RankedModel {
+    /// The section this row belongs to (Favorites, Recent, or All).
+    pub section: ModelSection,
     /// Canonical id of the provider serving this model (its snapshot row id).
     pub provider_id: String,
     /// Wire model id to activate. This is also the rendered label and the
@@ -404,9 +407,7 @@ pub struct RankedModel {
     pub favorite: bool,
     /// Unix epoch ms of this model's last activation (`None` = never used).
     /// A model with usage history sorts into the **Recent** section
-    /// (most-recently-used first). `Some(_)` outranks recency `None`, but a
-    /// favorite always wins over recency — favorites are a pinned intent,
-    /// recency is an emergent signal.
+    /// (most-recently-used first).
     pub last_used_ms: Option<u64>,
     /// The fuzzy match against the model id, or `None` in browse mode (empty
     /// query) — and also when the row was included because its PROVIDER name
@@ -415,18 +416,9 @@ pub struct RankedModel {
 }
 
 impl RankedModel {
-    /// The row's list section. The flat Models picker renders three sections
-    /// in a fixed order — Favorites, Recent, All models — and this key is the
-    /// single source of truth for which one a row belongs to (see
-    /// [`models_flat_filtered_from`] for the precedence rules).
+    /// The row's list section.
     pub fn section(&self) -> ModelSection {
-        if self.favorite {
-            ModelSection::Favorites
-        } else if self.last_used_ms.is_some() {
-            ModelSection::Recent
-        } else {
-            ModelSection::All
-        }
+        self.section
     }
 }
 
@@ -548,24 +540,13 @@ pub fn providers_filtered_from(
     rows
 }
 
-/// Build the **flat Models** rows: one [`RankedModel`] per (provider, model)
-/// pair across the entire snapshot — the daily-driver switch surface, with no
-/// drill-in.
-///
-/// **Ordering is three-sectioned** (the picker renders one dim section-label
-/// row between the groups; see [`ModelSection`]):
+/// Build the **flat Models** rows: [`RankedModel`] rows sectioned into three labeled groups:
 ///
 /// 1. **Favorites** — ★-marked models (ADR-0046), ASCII by model id;
 /// 2. **Recent** — models with usage history, most recently used first
 ///    (recency-desc, ASCII id as the tiebreaker);
-/// 3. **All models** — everything else, ASCII by model id (provider label as
-///    the stable tiebreaker for the same id served by multiple instances).
-///
-/// Precedence is favorite > recent > rest: a favorite is a pinned user intent
-/// and always wins over the emergent recency signal. The currently-active
-/// (provider, model) pair is *not* pinned to the top of the list any more —
-/// it keeps its natural section position and is identified by its `●` glyph
-/// (and the modal's open-on-current cursor placement) instead.
+/// 3. **All models** — ALL available models across ready providers (including favorites
+///    and recent models), ASCII by model id (provider label as the stable tiebreaker).
 ///
 /// Fuzzy filtering matches `query` against the model **id** (the rendered
 /// label — the picker is id-first: upstream discovery only guarantees the
@@ -582,7 +563,7 @@ pub fn models_flat_filtered_from(
     query: &str,
 ) -> Vec<RankedModel> {
     let _ = (current_provider, current_model);
-    let mut rows: Vec<RankedModel> = Vec::new();
+    let mut candidates: Vec<RankedModel> = Vec::new();
     for prow in &picker.rows {
         // Daily-driver model picker only shows models from ready/authenticated connections.
         if !prow.key_ready {
@@ -613,7 +594,8 @@ pub fn models_flat_filtered_from(
                     None => continue,
                 }
             };
-            rows.push(RankedModel {
+            candidates.push(RankedModel {
+                section: ModelSection::All,
                 provider_id: prow.id.clone(),
                 model: model.clone(),
                 provider_label: prow.name.clone(),
@@ -625,29 +607,60 @@ pub fn models_flat_filtered_from(
             });
         }
     }
-    // Three-section ordering:
-    //   section — favorites > recent > rest;
-    //   inside Favorites/All — ASCII model id, then provider label as the
-    //     stable tiebreaker for the same id served by multiple instances;
-    //   inside Recent — recency desc, then the same ASCII tiebreak.
-    rows.sort_by(|a, b| {
-        a.section()
-            .cmp(&b.section())
-            .then_with(|| {
-                // Only the Recent section keys on recency; the other two have
-                // `None` recency or ignore it, where `None > Some` would be
-                // the wrong direction, so equalize to keep ASCII order.
-                let (a_used, b_used) = match (a.section(), b.section()) {
-                    (ModelSection::Recent, ModelSection::Recent) => {
-                        (a.last_used_ms.unwrap_or(0), b.last_used_ms.unwrap_or(0))
-                    }
-                    _ => (0, 0),
-                };
-                b_used.cmp(&a_used)
-            })
+
+    // 1. Favorites section: starred models, sorted by ASCII model id then provider label.
+    let mut favorites: Vec<RankedModel> = candidates
+        .iter()
+        .filter(|r| r.favorite)
+        .cloned()
+        .map(|mut r| {
+            r.section = ModelSection::Favorites;
+            r
+        })
+        .collect();
+    favorites.sort_by(|a, b| {
+        a.model
+            .cmp(&b.model)
+            .then_with(|| a.provider_label.cmp(&b.provider_label))
+    });
+
+    // 2. Recent section: models with usage history, sorted by recency desc, then ASCII model id, then provider label.
+    let mut recent: Vec<RankedModel> = candidates
+        .iter()
+        .filter(|r| r.last_used_ms.is_some())
+        .cloned()
+        .map(|mut r| {
+            r.section = ModelSection::Recent;
+            r
+        })
+        .collect();
+    recent.sort_by(|a, b| {
+        let a_used = a.last_used_ms.unwrap_or(0);
+        let b_used = b.last_used_ms.unwrap_or(0);
+        b_used
+            .cmp(&a_used)
             .then_with(|| a.model.cmp(&b.model))
             .then_with(|| a.provider_label.cmp(&b.provider_label))
     });
+
+    // 3. All models section: contains EVERY candidate model across ready providers.
+    let mut all: Vec<RankedModel> = candidates
+        .into_iter()
+        .map(|mut r| {
+            r.section = ModelSection::All;
+            r
+        })
+        .collect();
+    all.sort_by(|a, b| {
+        a.model
+            .cmp(&b.model)
+            .then_with(|| a.provider_label.cmp(&b.provider_label))
+    });
+
+    let mut rows = Vec::with_capacity(favorites.len() + recent.len() + all.len());
+    rows.extend(favorites);
+    rows.extend(recent);
+    rows.extend(all);
     rows
 }
 
@@ -808,9 +821,9 @@ mod tests {
     #[test]
     fn flat_sections_favorites_then_recent_then_all() {
         // Three-section ordering: Favorites lead, Recent (usage history,
-        // most-recent-first) follow, everything else trails in ASCII order.
+        // most-recent-first) follow, All models contains all candidate models in ASCII order.
         // The current pair no longer pins to the top — it keeps its natural
-        // section position.
+        // section position in ALL MODELS.
         let snapshot = sectioned();
         let rows = models_flat_filtered_from(&snapshot, "my-relay", "glm-5.2", "");
 
@@ -820,7 +833,7 @@ mod tests {
         let mut first_all = sections.len();
         for (i, s) in sections.iter().enumerate() {
             match s {
-                ModelSection::Favorites if i < 2 => {}
+                ModelSection::Favorites if i < 1 => {}
                 ModelSection::Recent if (1..3).contains(&i) => {}
                 ModelSection::All => {
                     first_all = first_all.min(i);
@@ -828,23 +841,35 @@ mod tests {
                 _ => panic!("unexpected section {s:?} at index {i}: {sections:?}"),
             }
         }
-        assert!(first_all >= 3, "ALL MODELS starts after both lead sections");
+        assert_eq!(first_all, 3, "ALL MODELS starts after both lead sections");
 
         // Favorites section: exactly the starred model, first.
         assert!(rows[0].favorite);
         assert_eq!(rows[0].model, "claude-sonnet-5");
+        assert_eq!(rows[0].section(), ModelSection::Favorites);
 
         // Recent section: glm-5.1 (t=2000) before gpt-4o (t=1000).
         assert_eq!(rows[1].model, "glm-5.1", "most recent first");
         assert_eq!(rows[2].model, "gpt-4o");
         assert_eq!(rows[1].last_used_ms, Some(2_000));
         assert_eq!(rows[2].last_used_ms, Some(1_000));
+        assert_eq!(rows[1].section(), ModelSection::Recent);
+        assert_eq!(rows[2].section(), ModelSection::Recent);
 
-        // All models: plain ASCII, current pair included at its natural spot.
+        // All models: plain ASCII, containing ALL 9 models (including favorites, recent, and current pair).
+        assert_eq!(rows[first_all..].len(), 9);
+        assert!(
+            rows[first_all..]
+                .iter()
+                .all(|r| r.section() == ModelSection::All)
+        );
         let rest: Vec<&str> = rows[first_all..].iter().map(|r| r.model.as_str()).collect();
         let mut sorted = rest.clone();
         sorted.sort();
         assert_eq!(rest, sorted);
+        assert!(rest.contains(&"claude-sonnet-5"));
+        assert!(rest.contains(&"glm-5.1"));
+        assert!(rest.contains(&"gpt-4o"));
     }
 
     #[test]
@@ -864,10 +889,18 @@ mod tests {
                 .collect();
         }
         let rows = models_flat_filtered_from(&snapshot, "", "", "");
-        // Every model is recent → the whole list is the RECENT section, and
-        // with one shared timestamp the order is pure ASCII.
-        assert!(rows.iter().all(|r| r.section() == ModelSection::Recent));
-        let ids: Vec<&str> = rows.iter().map(|r| r.model.as_str()).collect();
+        // Every model is recent → RECENT section contains all models, and ALL MODELS section contains all models.
+        let recent_rows: Vec<&RankedModel> = rows
+            .iter()
+            .filter(|r| r.section() == ModelSection::Recent)
+            .collect();
+        let all_rows: Vec<&RankedModel> = rows
+            .iter()
+            .filter(|r| r.section() == ModelSection::All)
+            .collect();
+        assert_eq!(recent_rows.len(), 9);
+        assert_eq!(all_rows.len(), 9);
+        let ids: Vec<&str> = recent_rows.iter().map(|r| r.model.as_str()).collect();
         let mut sorted = ids.clone();
         sorted.sort();
         assert_eq!(ids, sorted);
@@ -1229,7 +1262,7 @@ mod tests {
         // Favorite is model-level (ADR-0046): a starred model sorts into the
         // leading section of the flat list wherever it is served. Give one
         // anthropic model recency and favorite another: the favorited model
-        // leads the whole list regardless of the recency signal.
+        // leads in FAVORITES, the used model is in RECENT, and ALL MODELS contains all 8 models.
         let mut snapshot = sample();
         let anthropic = snapshot
             .rows
@@ -1242,13 +1275,15 @@ mod tests {
         used.last_used_ms = Some(100);
         anthropic.model_info = vec![starred, used];
         let rows = models_flat_filtered_from(&snapshot, "", "", "");
-        // The favorited model leads the whole flat list.
+        // The favorited model leads the FAVORITES section.
         assert!(rows[0].favorite);
         assert_eq!(rows[0].model, "claude-sonnet-5");
-        // The used-but-unstarred model leads the RECENT section.
+        assert_eq!(rows[0].section(), ModelSection::Favorites);
+        // The used model is in the RECENT section.
         assert_eq!(rows[1].model, "claude-fable-5");
         assert_eq!(rows[1].section(), ModelSection::Recent);
-        // Everything from the third row on is the plain ALL MODELS section.
+        // Everything from the third row on is the ALL MODELS section (all 9 models).
+        assert_eq!(rows[2..].len(), 9);
         assert!(rows[2..].iter().all(|r| r.section() == ModelSection::All));
         let rest: Vec<&str> = rows[2..].iter().map(|r| r.model.as_str()).collect();
         let mut sorted = rest.clone();

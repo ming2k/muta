@@ -469,6 +469,7 @@ mod tests {
                 ],
                 multi_select: false,
             }],
+            origin: None,
         }
     }
 
@@ -495,6 +496,7 @@ mod tests {
                 ],
                 multi_select: true,
             }],
+            origin: None,
         }
     }
 
@@ -527,6 +529,7 @@ mod tests {
                     multi_select: false,
                 },
             ],
+            origin: None,
         }
     }
 

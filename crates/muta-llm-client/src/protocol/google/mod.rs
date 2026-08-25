@@ -207,7 +207,18 @@ impl GoogleProvider {
                         if let Some(signature) = parsed.text_thought_signature {
                             *text_thought_signature
                                 .lock()
-                                .unwrap_or_else(|e| e.into_inner()) = Some(signature);
+                                .unwrap_or_else(|e| e.into_inner()) = Some(signature.clone());
+                            let mut guard =
+                                thought_signatures.lock().unwrap_or_else(|e| e.into_inner());
+                            for event in &parsed.events {
+                                if let ProviderStreamEvent::ToolCallDelta { id: Some(id), .. } =
+                                    event
+                                {
+                                    guard
+                                        .entry(id.clone())
+                                        .or_insert_with(|| Value::String(signature.clone()));
+                                }
+                            }
                         }
                         parsed
                             .events
@@ -704,7 +715,10 @@ mod tests {
             )
             .with_project_id("proj-1");
             let (_, _, body) = p.prepare_request(ModelRequest::new(Vec::new()), false, false);
-            assert_eq!(body["model"], expected, "model id must match expected wire id");
+            assert_eq!(
+                body["model"], expected,
+                "model id must match expected wire id"
+            );
         }
     }
 

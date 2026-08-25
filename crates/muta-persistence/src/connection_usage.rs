@@ -118,6 +118,59 @@ impl ConnectionUsage {
             .map_err(|e| format!("could not persist usage store: {e}"))
     }
 
+    /// Remove a connection and its associated last_model pointer.
+    pub fn remove_connection(&mut self, id: &str) {
+        self.connections.remove(id);
+        self.last_models.remove(id);
+    }
+
+    /// Remove a model from usage telemetry and any last_model pointers targeting it.
+    pub fn remove_model(&mut self, model: &str) {
+        self.models.remove(model);
+        self.last_models.retain(|_, m| m != model);
+    }
+
+    /// Prune stale connections, models, and connection-model pairs. Returns whether any entry was removed.
+    pub fn prune(
+        &mut self,
+        mut is_valid_connection: impl FnMut(&str) -> bool,
+        mut is_valid_model: impl FnMut(&str) -> bool,
+        mut is_valid_pair: impl FnMut(&str, &str) -> bool,
+    ) -> bool {
+        let mut changed = false;
+        let prev_conn_len = self.connections.len();
+        self.connections.retain(|id, _| is_valid_connection(id));
+        if self.connections.len() != prev_conn_len {
+            changed = true;
+        }
+
+        let prev_models_len = self.models.len();
+        self.models.retain(|m, _| is_valid_model(m));
+        if self.models.len() != prev_models_len {
+            changed = true;
+        }
+
+        let prev_last_len = self.last_models.len();
+        self.last_models
+            .retain(|conn_id, m| is_valid_connection(conn_id) && is_valid_pair(conn_id, m));
+        if self.last_models.len() != prev_last_len {
+            changed = true;
+        }
+
+        changed
+    }
+
+    /// Persist this usage state directly and atomically to disk without resurrecting pruned entries.
+    pub fn save_exact(&self) -> Result<(), String> {
+        let path = paths::get().connection_usage_file();
+        let _lock = crate::fsutil::FileLock::acquire(&path)
+            .map_err(|e| format!("could not lock usage file: {e}"))?;
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("could not serialize usage store: {e}"))?;
+        crate::fsutil::atomic_write_bytes(&path, json.as_bytes())
+            .map_err(|e| format!("could not persist usage store: {e}"))
+    }
+
     /// Recency (epoch ms) of connection `id`, or `0` if never activated.
     pub fn recency_of(&self, id: &str) -> u64 {
         self.connections.get(id).map_or(0, |e| e.last_used_ms)

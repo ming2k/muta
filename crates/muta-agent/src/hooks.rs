@@ -664,6 +664,7 @@ mod tests {
             scope: "command".into(),
             elevation: false,
             one_off: false,
+            origin: None,
         };
         reg.run_permission_request(&request, "s", None).await;
         assert_eq!(
@@ -692,6 +693,7 @@ mod tests {
             scope: "command".into(),
             elevation: false,
             one_off: false,
+            origin: None,
         };
         let edit_req = muta_contracts::PermissionRequest {
             id: "p2".into(),
@@ -702,6 +704,7 @@ mod tests {
             scope: "path".into(),
             elevation: false,
             one_off: false,
+            origin: None,
         };
         reg.run_permission_request(&bash_req, "s", None).await;
         reg.run_permission_request(&edit_req, "s", None).await;
@@ -733,6 +736,7 @@ mod tests {
                 }],
                 multi_select: false,
             }],
+            origin: None,
         };
         reg.run_user_question(&request, "s", None).await;
         assert_eq!(

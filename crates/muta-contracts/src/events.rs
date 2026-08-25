@@ -1714,6 +1714,10 @@ pub struct PermissionRequest {
     /// "Always" is honoured) for ordinary broker prompts.
     #[serde(default)]
     pub one_off: bool,
+    /// Origin label identifying which subagent/envoy produced this request (ADR-0138).
+    /// `None` for top-level principal calls; e.g. `Some("envoy #a1b2 · mcp_specialist")`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 /// One option offered to the user inside an `ask_user` question.
@@ -1749,6 +1753,9 @@ pub struct UserQuestion {
 pub struct UserQuestionRequest {
     pub id: String,
     pub questions: Vec<UserQuestion>,
+    /// Origin label identifying which subagent/envoy produced this request (ADR-0138).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 /// Reply sent from the TUI back to the agent after the user answers.

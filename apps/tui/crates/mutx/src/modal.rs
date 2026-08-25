@@ -158,6 +158,8 @@ pub enum Modal {
     /// `Esc` cancels (→ empty reply → command runs with closed stdin and fails
     /// fast with a non-interactive remedy hint).
     InputInjection,
+    /// Session DAG tree viewer (`/tree`).
+    Tree,
     /// Global view quick switcher (ADR-0133, `Ctrl+L`): a centered picker
     /// over every browse surface — open views first in MRU order, then the
     /// rest as discovery. `Enter` switches (hides the current view, focus
@@ -245,6 +247,7 @@ impl Modal {
                 | Modal::TokenReport
                 | Modal::UsageStats
                 | Modal::Btw
+                | Modal::Tree
                 | Modal::ViewSwitcher
         )
     }

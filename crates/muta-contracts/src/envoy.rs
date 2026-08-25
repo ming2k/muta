@@ -259,6 +259,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "read_text",
     "read_image",
     "grep",
+    "find",
     "glob",
     "list_dir",
     "webfetch",
@@ -369,6 +370,7 @@ const QUANT_ANALYSIS_TOOLS: &[&str] = &[
     "read_text",
     "read_image",
     "grep",
+    "find",
     "glob",
     "list_dir",
     "webfetch",
@@ -425,6 +427,7 @@ const CODING_TOOLS: &[&str] = &[
     "read_text",
     "read_image",
     "grep",
+    "find",
     "glob",
     "list_dir",
     "webfetch",
@@ -487,6 +490,26 @@ of turns, then answer.",
     tool_policy: ToolPolicy {
         allowed_tools: Some(CODING_TOOLS),
         allow_user_interaction: true,
+        write_paths: &[],
+        command_allowlist: &[],
+    },
+    variant_pins: &[],
+    autopilot: true,
+    allow_model_stdin: false,
+};
+
+/// The MCP specialist envoy role for running external and dynamic MCP tools in an isolated sandbox (ADR-0138).
+pub const MCP_SPECIALIST: EnvoyProfile = EnvoyProfile {
+    name: "mcp_specialist",
+    system_prompt: "\
+You are a specialized integration envoy. Your mission is to execute tasks \
+using external and specialized MCP tools (such as database queries, GitHub operations, \
+or third-party API integrations) in an isolated sandbox. Focus on calling the necessary tools, \
+analyzing the raw outputs, and returning a concise, high-signal summary of the results \
+to the principal agent. Never output giant raw payloads if a clear summary answers the question.",
+    tool_policy: ToolPolicy {
+        allowed_tools: None, // Admits full dynamic/MCP toolset
+        allow_user_interaction: false,
         write_paths: &[],
         command_allowlist: &[],
     },
@@ -771,5 +794,25 @@ mod tests {
     fn code_profile_runs_autopilot() {
         use crate::CODE;
         assert!(CODE.autopilot);
+    }
+
+    #[test]
+    fn mcp_specialist_profile_admits_dynamic_tools_and_excludes_recursion() {
+        use crate::MCP_SPECIALIST;
+        assert!(MCP_SPECIALIST.autopilot);
+        // Dynamic / external tools admitted
+        assert!(
+            MCP_SPECIALIST
+                .tool_policy
+                .admits(&make("mcp__postgres__query"))
+        );
+        assert!(MCP_SPECIALIST.tool_policy.admits(&make("read_text")));
+        // Recursion and control-flow strictly forbidden
+        assert!(
+            !MCP_SPECIALIST
+                .tool_policy
+                .admits(&with_spawn(make("read_text")))
+        );
+        assert!(!MCP_SPECIALIST.tool_policy.admits(&make_control()));
     }
 }

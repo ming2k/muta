@@ -256,14 +256,36 @@ impl SystemPromptSection for WebUntrustedContentGuidance {
     }
 }
 
+/// Guidance and metadata for available skills (progressive disclosure).
+/// Injected when skills are present and a file reading tool is admitted.
+struct SkillsGuidance;
+
+impl SystemPromptSection for SkillsGuidance {
+    fn id(&self) -> &'static str {
+        "system.skills"
+    }
+    fn rank(&self) -> u32 {
+        60
+    }
+    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
+        !ctx.available_skills.is_empty()
+            && ctx
+                .tool_names
+                .iter()
+                .any(|name| name == "read_text" || name == "read_file")
+    }
+    fn render(&self, ctx: &SystemPromptContext) -> Option<String> {
+        if ctx.available_skills.is_empty() {
+            None
+        } else {
+            Some(ctx.available_skills.clone())
+        }
+    }
+}
+
 /// Build the registry with the default system-prompt sections, in rank
 /// order. Called by [`crate::Agent::builder`]; an embedding may add, reorder, or
 /// disable sections on [`crate::AgentBuilder`] before freezing the agent.
-///
-/// Note: skills are deliberately *not* injected into the system prompt. The
-/// model discovers them lazily via the `list_skills` tool and loads bodies on
-/// demand via `use_skill`. Injecting a catalog up front bloats every turn for
-/// a benefit the tools already cover.
 pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     let mut registry = SystemPromptRegistry::new();
     registry.register(IdentityPreamble);
@@ -275,5 +297,6 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(DelegationGuidance);
     registry.register(FileEditingGuidance);
     registry.register(WebUntrustedContentGuidance);
+    registry.register(SkillsGuidance);
     registry
 }

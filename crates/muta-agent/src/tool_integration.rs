@@ -14,6 +14,5 @@ pub(crate) fn install_agent_owned_tools(
     round_counter: Arc<Mutex<u64>>,
 ) {
     let context = crate::tools::TodoToolContext::new(todos, round_counter);
-    toolset.upsert(Arc::new(crate::tools::TodoWriteTool::new(context.clone())));
-    toolset.upsert(Arc::new(crate::tools::TodoUpdateTool::new(context)));
+    toolset.upsert(Arc::new(crate::tools::TodoWriteTool::new(context)));
 }

@@ -2162,7 +2162,8 @@ pub(crate) fn dispatch_first_open_effects(
         | crate::views::ViewId::HistorySearch
         | crate::views::ViewId::Queue
         | crate::views::ViewId::Host
-        | crate::views::ViewId::Sessions => {
+        | crate::views::ViewId::Sessions
+        | crate::views::ViewId::Tree => {
             let _ = runtime; // no runtime-side effects for these views
         }
     }

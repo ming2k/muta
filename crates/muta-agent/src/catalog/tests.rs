@@ -594,14 +594,70 @@ fn antigravity_models_derivation_and_hidden_filter() {
     let mut config = Config::default();
     config.default_connection = "g11".to_string();
     config.default_model = Some("gemini-3.7-flash".to_string());
-    config.hidden_models = vec!["gemini-3.6-flash*".to_string(), "gemini-3-flash*".to_string()];
+    config.hidden_models = vec![
+        "gemini-3.6-flash*".to_string(),
+        "gemini-3-flash*".to_string(),
+    ];
 
     let usage = muta_persistence::connection_usage::ConnectionUsage::default();
     let picker = build_picker_state(&config, &usage);
-    let g11_row = picker.rows.iter().find(|r| r.id == "g11").expect("g11 in picker");
+    let g11_row = picker
+        .rows
+        .iter()
+        .find(|r| r.id == "g11")
+        .expect("g11 in picker");
 
     assert!(g11_row.models.contains(&"gemini-3.7-flash".to_string()));
-    assert!(!g11_row.models.iter().any(|m| m.starts_with("gemini-3.6-flash")));
-    assert!(!g11_row.models.iter().any(|m| m.starts_with("gemini-3-flash")));
+    assert!(
+        !g11_row
+            .models
+            .iter()
+            .any(|m| m.starts_with("gemini-3.6-flash"))
+    );
+    assert!(
+        !g11_row
+            .models
+            .iter()
+            .any(|m| m.starts_with("gemini-3-flash"))
+    );
 }
 
+#[test]
+fn prune_stale_models_prunes_favorites_and_usage_and_default_model() {
+    let _sandbox = sandboxed_paths();
+    let mut conn = instance("my-custom", None);
+    conn.models = vec!["model-a".to_string(), "model-b".to_string()];
+    let connections = Connections {
+        connections: vec![conn],
+    };
+    connections.save().unwrap();
+
+    let mut config = Config {
+        default_connection: "my-custom".to_string(),
+        default_model: Some("model-deleted".to_string()),
+        favorites: vec!["model-a".to_string(), "model-deleted".to_string()],
+        ..Default::default()
+    };
+
+    let mut usage = muta_persistence::connection_usage::ConnectionUsage::default();
+    usage.record("my-custom");
+    usage.record("deleted-connection");
+    usage.record_model("my-custom", "model-a");
+    usage.record_model("my-custom", "model-deleted");
+    usage.record_model("deleted-connection", "model-deleted");
+
+    let changed = super::prune_stale_models(&mut config, &mut usage);
+    assert!(changed);
+
+    // Favorites pruned of non-existent model
+    assert_eq!(config.favorites, vec!["model-a"]);
+    // default_model reset since it was deleted
+    assert_eq!(config.default_model, None);
+
+    // Usage pruned of deleted connection and deleted models
+    assert!(usage.recency_of("my-custom") > 0);
+    assert_eq!(usage.recency_of("deleted-connection"), 0);
+    assert!(usage.model_recency("model-a") > 0);
+    assert_eq!(usage.last_model_for("my-custom"), None);
+    assert_eq!(usage.last_model_for("deleted-connection"), None);
+}

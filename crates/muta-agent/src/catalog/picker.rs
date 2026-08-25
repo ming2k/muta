@@ -129,6 +129,87 @@ pub fn build_picker_state(config: &Config, usage: &ConnectionUsage) -> ProviderP
     ProviderPickerSnapshot { default_id, rows }
 }
 
+/// Prune model ids and connection entries from `config` (favorites, default_model)
+/// and `usage` (recency, last_models) that are no longer served by any known connection.
+pub fn prune_stale_models(config: &mut Config, usage: &mut ConnectionUsage) -> bool {
+    let stores = Stores::load();
+    let valid_connection_ids: std::collections::HashSet<String> = stores
+        .connections
+        .connections
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
+
+    let mut connection_models_map: std::collections::HashMap<
+        String,
+        std::collections::HashSet<String>,
+    > = std::collections::HashMap::new();
+    let mut all_valid_models: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for conn in &stores.connections.connections {
+        let models = super::derive::route_models(conn, &stores.cache);
+        for m in &models {
+            all_valid_models.insert(m.clone());
+        }
+        connection_models_map.insert(conn.id.clone(), models.into_iter().collect());
+    }
+
+    let mut changed = false;
+
+    // Prune favorites: only retain models currently offered by at least one connection.
+    let prev_fav_len = config.favorites.len();
+    config
+        .favorites
+        .retain(|fav| all_valid_models.contains(fav));
+    if config.favorites.len() != prev_fav_len {
+        changed = true;
+        if let Err(error) = config.save_preserving_connection_selection() {
+            tracing::warn!(?error, "could not persist pruned favorites");
+        }
+    }
+
+    // Prune default_model if it is set to a model no longer offered by the default connection (or any connection).
+    if let Some(ref dm) = config.default_model {
+        let valid_for_default = connection_models_map
+            .get(&config.default_connection)
+            .map(|set| set.contains(dm))
+            .unwrap_or(false);
+        if !valid_for_default && !all_valid_models.contains(dm) {
+            config.default_model = None;
+            changed = true;
+            if let Err(error) = config.save_preserving_connection_selection() {
+                tracing::warn!(?error, "could not persist pruned default model");
+            }
+        }
+    }
+
+    // Prune connection usage telemetry.
+    let usage_changed = usage.prune(
+        |conn_id| valid_connection_ids.contains(conn_id),
+        |model_id| all_valid_models.contains(model_id),
+        |conn_id, model_id| {
+            connection_models_map
+                .get(conn_id)
+                .is_some_and(|set| set.contains(model_id))
+        },
+    );
+    if usage_changed {
+        changed = true;
+        if let Err(error) = usage.save_exact() {
+            tracing::warn!(?error, "could not persist pruned connection usage");
+        }
+    }
+
+    changed
+}
+
+/// Load on-disk config and usage, prune stale models, and persist if changed.
+pub fn prune_stale_models_on_disk() -> bool {
+    let mut config = Config::load();
+    let mut usage = ConnectionUsage::load();
+    prune_stale_models(&mut config, &mut usage)
+}
+
 pub(super) fn channel_protocol_and_base_url(channel: &Channel) -> (String, String) {
     match &channel.transport {
         Transport::OpenAi { base_url, .. } => ("openai".to_string(), base_url.clone()),
@@ -270,4 +351,3 @@ mod tests {
         assert!(!model_is_hidden("claude-sonnet-4-6", &hidden));
     }
 }
-

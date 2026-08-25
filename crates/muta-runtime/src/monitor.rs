@@ -410,6 +410,7 @@ mod tests {
                 scope: String::new(),
                 elevation: false,
                 one_off: false,
+                origin: None,
             },
         )));
         assert_eq!(t.row().status, SessionStatus::NeedsApproval);

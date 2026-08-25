@@ -12,12 +12,7 @@ use serde_json::json;
 
 use muta_contracts::{MAX_TODOS, TodoList, TodoStatus, Tool};
 
-const TODO_DESCRIPTION: &str = "Maintain the task list for the current work. Replace the whole list each call with the current \
-     set of concrete steps, in the order you intend to tackle them. At most one item may be \
-     in_progress. This list is the single source of truth shown in the activity bar and task \
-     panel and persisted across restarts, so keep it honest: add an item when you commit to a step, \
-     move it to in_progress when you start, and to completed the moment it is done. The returned \
-     list reflects the reconciled state (items keep their identity when you resend the same content).";
+const TODO_DESCRIPTION: &str = "Update the task list. Provide the full array of items ({content, status: 'pending'|'in_progress'|'completed'|'cancelled'}). At most one item in_progress.";
 
 /// Shared handle injected into the todo tools so they mutate the live state
 /// owned by the agent that dispatches them.

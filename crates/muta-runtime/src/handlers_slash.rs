@@ -994,6 +994,20 @@ pub async fn dispatch(
         Some(BuiltinCmd::Fork) => {
             fork_current_session(lifecycle, agent, session, side, resp_tx, name, args).await;
         }
+        Some(BuiltinCmd::Tree) => {
+            let tree = session.tree().await;
+            record_ack(
+                session,
+                name,
+                args,
+                &format!(
+                    "Session DAG Tree has {} nodes and {} branch leaves.",
+                    tree.entries.len(),
+                    tree.leaves().len()
+                ),
+            )
+            .await;
+        }
         Some(BuiltinCmd::Dashboard) => {
             record_invocation(session, name, args).await;
             // The session dashboard renders the monitor stream the TUI

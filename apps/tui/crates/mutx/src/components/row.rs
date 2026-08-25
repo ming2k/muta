@@ -114,7 +114,10 @@ enum Anchor {
     Fixed,
     /// Anchored so the group's first column sits at a proportional fraction
     /// of `body_width` (`body_width * numerator / denominator`).
-    Ratio { numerator: usize, denominator: usize },
+    Ratio {
+        numerator: usize,
+        denominator: usize,
+    },
     /// Right-aligned to the trailing edge.
     Trailing,
 }
@@ -337,7 +340,11 @@ impl ListRow {
         // exceeds body_width (the fixed block wins the left half).
         let ratio_start = if let Some((_, num, den)) = ratio_group {
             let target = (self.body_width * num) / den.max(1);
-            target.min(self.body_width.saturating_sub(ratio_w).max(fixed_w + GUTTER))
+            target.min(
+                self.body_width
+                    .saturating_sub(ratio_w)
+                    .max(fixed_w + GUTTER),
+            )
         } else {
             0
         };

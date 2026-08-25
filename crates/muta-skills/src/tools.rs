@@ -122,20 +122,8 @@ fn list_skill_files(root: &std::path::Path) -> String {
     }
 }
 
-// --- Self-registration -----------------------------------------------------
-//
-// The skill tools share one live registry, cloned out of the build context as
-// `Arc<SkillRegistry>`. They decline (return `None`) when no registry was
-// provided, so a context that isn't skill-aware simply gets no skill tools.
-
-muta_contracts::register_tool!(UseSkillFactory => |ctx| {
-    let registry = ctx.shared::<SkillRegistry>()?;
-    UseSkillTool { registry }
-});
-muta_contracts::register_tool!(ListSkillsFactory => |ctx| {
-    let registry = ctx.shared::<SkillRegistry>()?;
-    ListSkillsTool { registry }
-});
+// --- Tools available for programmatic invocation / tests ---
+// Note: Skills are now progressively disclosed in the system prompt metadata and read via standard file tools.
 
 #[cfg(test)]
 mod tests {

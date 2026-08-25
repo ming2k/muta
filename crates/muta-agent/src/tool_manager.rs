@@ -160,19 +160,21 @@ impl ToolManager {
     }
 
     /// The live tool set the model may see this turn: `installed` minus the
-    /// disabled mask (user + hook-scoped), minus `ask_user` when autopilot.
+    /// disabled mask (user + hook-scoped).
     ///
-    /// This is the per-turn schema authority (kimi's `loopTools` getter). It
-    /// is **cheap**: the only per-call work is the classification + filter
-    /// pass; the resolved/dynamic storage is not recomputed.
-    pub(crate) fn loop_tools(&self, autopilot: bool) -> Vec<Arc<dyn Tool>> {
-        self.installed()
+    /// Preserves a stable, deterministic tool schema across autopilot transitions
+    /// (ADR-0137) to prevent KV-cache invalidation. Autopilot restrictions on `ask_user`
+    /// are enforced at execution time via PermissionPolicy Gate 6 (Runtime Gating).
+    pub(crate) fn loop_tools(&self, _autopilot: bool) -> Vec<Arc<dyn Tool>> {
+        let mut tools: Vec<Arc<dyn Tool>> = self
+            .installed()
             .into_iter()
             .filter(|s| s.tool.is_available())
             .filter(|s| !self.is_name_disabled(s.tool.name()))
-            .filter(|s| !(autopilot && s.tool.name() == "ask_user"))
             .map(|s| s.tool)
-            .collect()
+            .collect();
+        tools.sort_by(|a, b| a.name().cmp(b.name()));
+        tools
     }
 
     /// Look up a tool by name for dispatch. Returns the tool and its source.
@@ -324,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn loop_tools_filters_disabled_and_autopilot_ask_user() {
+    fn loop_tools_filters_disabled_and_preserves_stable_schema() {
         let m = manager(
             vec![StubTool::new("bash"), StubTool::new("ask_user")],
             vec![],
@@ -335,9 +337,14 @@ mod tests {
         let names: Vec<&str> = live.iter().map(|t| t.name()).collect();
         assert_eq!(names, vec!["ask_user"], "bash disabled; ask_user kept");
 
-        // Autopilot drops ask_user too.
+        // Autopilot keeps ask_user in schema (Runtime Gating via PermissionPolicy Gate 6) for KV-cache stability.
         let live_autopilot = m.loop_tools(true);
-        assert!(live_autopilot.is_empty(), "autopilot must reclaim ask_user");
+        let names_ap: Vec<&str> = live_autopilot.iter().map(|t| t.name()).collect();
+        assert_eq!(
+            names_ap,
+            vec!["ask_user"],
+            "autopilot preserves schema for prompt cache"
+        );
     }
 
     #[test]

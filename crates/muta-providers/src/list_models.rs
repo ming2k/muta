@@ -592,9 +592,8 @@ fn parse_google_models(json: &Value) -> Vec<DiscoveredModel> {
                 let methods = entry
                     .get("supportedGenerationMethods")
                     .and_then(Value::as_array);
-                let is_text = methods.is_none_or(|arr| {
-                    arr.iter().any(|m| m.as_str() == Some("generateContent"))
-                });
+                let is_text = methods
+                    .is_none_or(|arr| arr.iter().any(|m| m.as_str() == Some("generateContent")));
                 if !is_text {
                     return None;
                 }
@@ -812,9 +811,18 @@ mod tests {
         assert!(got.contains(&"gemini-3.7-flash-tiered".to_string()));
         assert!(got.contains(&"gemini-3.7-flash".to_string()));
         assert!(got.contains(&"gemini-pro-agent".to_string()));
-        assert!(!got.contains(&"gemini-3.6-flash-high".to_string()), "3.6 flash must be suppressed");
-        assert!(!got.contains(&"gemini-3.1-pro-high".to_string()), "deprecated model must be suppressed");
-        assert!(!got.contains(&"chat_20706".to_string()), "internal helper model must be suppressed");
+        assert!(
+            !got.contains(&"gemini-3.6-flash-high".to_string()),
+            "3.6 flash must be suppressed"
+        );
+        assert!(
+            !got.contains(&"gemini-3.1-pro-high".to_string()),
+            "deprecated model must be suppressed"
+        );
+        assert!(
+            !got.contains(&"chat_20706".to_string()),
+            "internal helper model must be suppressed"
+        );
     }
 
     #[test]

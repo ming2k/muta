@@ -282,6 +282,14 @@ define_builtin_commands! {
         intent_keywords: ["fork", "branch", "clone", "duplicate", "split", "copy-session"],
         category: Session,
     },
+    Tree = "/tree" : {
+        summary: "Visual DAG session tree and branch navigation",
+        description: "Open the interactive session DAG tree viewer to inspect conversation branches, jump between nodes, and fork new branches.",
+        usage: ["/tree"],
+        examples: [("/tree", "Open interactive DAG session tree")],
+        intent_keywords: ["tree", "dag", "branch", "branches", "lineage", "timeline", "history-tree", "checkout"],
+        category: Session,
+    },
     Dashboard = "/dashboard" : {
         summary: "Session daemon control dashboard",
         description: "Open the full-screen session dashboard to monitor live daemon sessions, view activity, inspect logs, and manage connections.",

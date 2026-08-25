@@ -198,6 +198,7 @@ pub fn presenter_for(name: &str) -> &'static dyn ToolPresenter {
         "grep" => &grep::GrepPresenter,
         "glob" => &grep::GlobPresenter,
         "list_dir" => &grep::ListDirPresenter,
+        "find" => &grep::FindPresenter,
         "webfetch" => &web::WebFetchPresenter,
         "websearch" => &web::WebSearchPresenter,
         "todo" => &meta::TodoPresenter,

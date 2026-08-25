@@ -118,13 +118,10 @@ fn registry_collects_all_self_registered_tools() {
         "write_file",
         "edit_file",
         "grep",
-        "glob",
-        "list_dir",
+        "find",
         "ask_user",
         "webfetch",
         "websearch",
-        "use_skill",
-        "list_skills",
     ] {
         assert!(
             names.contains(expected),

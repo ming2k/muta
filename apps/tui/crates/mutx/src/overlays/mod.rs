@@ -32,6 +32,7 @@ pub mod skills;
 pub mod toast;
 pub mod token_report;
 pub mod tools;
+pub mod tree;
 pub mod usage_stats;
 pub mod view_switcher;
 
@@ -66,6 +67,7 @@ pub use skills::draw_skills_modal;
 pub use toast::{draw_armed_toast, draw_copy_toast, draw_notice_toast};
 pub use token_report::{ContextUsageView, draw_token_report_modal, token_report_round_count};
 pub use tools::draw_tools_modal;
+pub use tree::draw_tree_modal;
 pub use usage_stats::draw_usage_stats_modal;
 // The view quick switcher (ADR-0133) is consumed crate-internally by the
 // render dispatch (`event_loop::render`), so it stays crate-visible.

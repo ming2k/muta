@@ -16,9 +16,7 @@ impl Tool for AskUserTool {
     }
 
     fn description(&self) -> &str {
-        "Ask the user multiple-choice questions to clarify preferences, resolve ambiguity, or decide between trade-offs. \
-         Provide 2-4 labeled options per question. Put the recommended option first and suffix its label with '(Recommended)'. \
-         The user can always choose 'Other' and type a free-form answer."
+        "Ask the user structured questions to resolve ambiguity or choose trade-offs."
     }
 
     fn parameters(&self) -> serde_json::Value {

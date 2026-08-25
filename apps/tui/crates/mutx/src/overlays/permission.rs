@@ -61,15 +61,22 @@ pub fn draw_question_modal(
         } else {
             "Question".to_string()
         };
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                title,
+        let mut spans = Vec::new();
+        if let Some(origin) = &request.origin {
+            spans.push(Span::styled(
+                format!("[{}] ", origin),
                 Style::default()
-                    .fg(theme.brand())
+                    .fg(theme.info())
                     .add_modifier(Modifier::BOLD),
-            ))),
-            h,
-        );
+            ));
+        }
+        spans.push(Span::styled(
+            title,
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(Modifier::BOLD),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)), h);
     }
 
     let mut body_lines: Vec<Line> = Vec::new();
@@ -357,12 +364,21 @@ pub fn draw_permission_sheet(
     } else {
         request.label.clone()
     };
-    let mut header = vec![Span::styled(
+    let mut header = Vec::new();
+    if let Some(origin) = &request.origin {
+        header.push(Span::styled(
+            format!("[{}] ", origin),
+            Style::default()
+                .fg(theme.info())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    header.push(Span::styled(
         label,
         Style::default()
             .fg(theme.brand())
             .add_modifier(Modifier::BOLD),
-    )];
+    ));
     // #10: an elevation prompt (out-of-scope target) is flagged ⚠ so the
     // operator understands they are authorising access *beyond* the configured
     // boundary, not a routine in-scope call. Rendered in the error colour.
@@ -707,6 +723,7 @@ mod tests {
                 ],
                 multi_select: false,
             }],
+            origin: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 24);
         let mut hit_map = ModalHitMap::new();
@@ -742,6 +759,7 @@ mod tests {
             scope: "*".into(),
             elevation: false,
             one_off: false,
+            origin: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 24);
         let mut hit_map = ModalHitMap::new();
@@ -830,6 +848,7 @@ mod tests {
             scope: "ls | head".into(),
             elevation: false,
             one_off: false,
+            origin: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(30, 24);
         let mut hit_map = ModalHitMap::new();
@@ -872,6 +891,7 @@ mod tests {
             scope: "ls | head".into(),
             elevation: false,
             one_off: false,
+            origin: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(14, 24);
         let mut hit_map = ModalHitMap::new();

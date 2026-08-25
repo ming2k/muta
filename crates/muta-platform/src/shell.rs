@@ -38,3 +38,26 @@ pub fn native_shell(script: &str) -> Command {
         command
     }
 }
+
+/// Build a long-running persistent native shell command that reads commands from stdin.
+pub fn persistent_shell_command() -> Command {
+    #[cfg(unix)]
+    {
+        let mut command = Command::new("sh");
+        command.arg("-s");
+        command
+    }
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("powershell.exe");
+        command
+            .arg("-NoLogo")
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg("-");
+        command
+    }
+}

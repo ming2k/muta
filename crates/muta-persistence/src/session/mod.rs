@@ -34,7 +34,8 @@ use tokio::sync::Mutex;
 /// `config.toml` or affect other concurrent sessions.
 /// C11 added `round_interrupts` (durable round-interrupt records): a
 /// structural no-op — legacy snapshots load with an empty list.
-const CURRENT_SCHEMA_VERSION: u32 = 11;
+/// C12 added `tree` (native incremental DAG session tree).
+const CURRENT_SCHEMA_VERSION: u32 = 12;
 
 /// A session-scoped provider + model pin (C6). When present it overrides the
 /// global `config.default_provider` / `config.default_model` for this session
@@ -199,6 +200,9 @@ struct SessionData {
     /// (stored checksums stay valid).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     autopilot: bool,
+    /// Native DAG session tree (Schema v12).
+    #[serde(default)]
+    tree: muta_contracts::SessionTree,
 }
 
 impl Default for SessionData {
@@ -229,6 +233,7 @@ impl Default for SessionData {
             round_interrupts: Vec::new(),
             retry_pending: None,
             autopilot: false,
+            tree: muta_contracts::SessionTree::default(),
         }
     }
 }
@@ -1813,6 +1818,40 @@ impl SessionStore {
             }),
             persist_gate: Mutex::new(()),
         })
+    }
+
+    /// Read the full DAG session tree.
+    pub async fn tree(&self) -> muta_contracts::SessionTree {
+        let state = self.state.lock().await;
+        state.data.tree.clone()
+    }
+
+    /// Insert an entry directly into the session tree and persist snapshot.
+    pub async fn insert_tree_entry(
+        &self,
+        entry: muta_contracts::SessionEntry,
+    ) -> Result<String, String> {
+        let mut state = self.state.lock().await;
+        let id = entry.id.clone();
+        state.data.tree.insert_entry(entry);
+        state.data.model_window = state.data.tree.get_context_messages(&id);
+        state.data.updated_at = unix_timestamp();
+        persist_to(&state.path, &state.data, &self.blob_store)?;
+        Ok(id)
+    }
+
+    /// Switch active leaf in the DAG session tree and update the active model window.
+    pub async fn switch_tree_leaf(&self, target_leaf_id: &str) -> Result<Vec<Message>, String> {
+        let mut state = self.state.lock().await;
+        if !state.data.tree.entries.contains_key(target_leaf_id) {
+            return Err(format!("Node '{target_leaf_id}' not found in session tree"));
+        }
+        state.data.tree.active_leaf_id = Some(target_leaf_id.to_string());
+        let messages = state.data.tree.get_context_messages(target_leaf_id);
+        state.data.model_window = messages.clone();
+        state.data.updated_at = unix_timestamp();
+        persist_to(&state.path, &state.data, &self.blob_store)?;
+        Ok(messages)
     }
 
     /// Switch this store to an existing session file by id (or 4+-char hex

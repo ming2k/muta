@@ -48,8 +48,45 @@ impl ModelRequestAssembler {
         let mut messages = window.to_vec();
         crate::agent::remove_empty_assistant_messages(&mut messages);
         messages.retain(|message| message.role != Role::System && !message.is_command_echo());
+        compact_historical_tool_outputs(&mut messages, 6);
         messages.insert(0, self.system_prompt_registry.build_message(context));
         muta_contracts::ModelRequest::with_tools(messages, tools)
+    }
+}
+
+/// Compact bulky tool outputs in older historical turns (older than `recent_preserve_count` messages from the end).
+/// Recent turns are preserved in full fidelity. Older bulky tool outputs (>1200 chars / >25 lines)
+/// are trimmed to a representative prefix and summary, mirroring agy's `ShrinkTrajectoryToMinimalSteps`.
+pub(crate) fn compact_historical_tool_outputs(
+    messages: &mut [Message],
+    recent_preserve_count: usize,
+) {
+    let total = messages.len();
+    if total <= recent_preserve_count {
+        return;
+    }
+    let threshold = total.saturating_sub(recent_preserve_count);
+    for (i, msg) in messages.iter_mut().enumerate() {
+        if i >= threshold {
+            break;
+        }
+        if msg.role == Role::Tool && msg.content.len() > 1200 {
+            let lines: Vec<&str> = msg.content.lines().collect();
+            if lines.len() > 25 {
+                let kept = lines[..15].join("\n");
+                msg.content = format!(
+                    "{}\n\n[... Previous turn output compacted ({} lines omitted) to preserve context & cache performance ...]",
+                    kept,
+                    lines.len() - 15
+                );
+            } else if msg.content.len() > 1200 {
+                let prefix: String = msg.content.chars().take(800).collect();
+                msg.content = format!(
+                    "{}\n\n[... Previous turn output compacted to preserve context & cache performance ...]",
+                    prefix
+                );
+            }
+        }
     }
 }
 
@@ -114,5 +151,37 @@ mod tests {
         );
         assert_eq!(request.tool_specs.len(), 1);
         assert_eq!(request.tool_specs[0].name, "inspect");
+    }
+
+    #[test]
+    fn test_compact_historical_tool_outputs() {
+        let big_tool_content = (0..50)
+            .map(|i| format!("line {i}: some large output data"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut messages = vec![
+            Message::new(Role::User, "q1"),
+            Message::new(Role::Assistant, "calling tool"),
+            Message::new(Role::Tool, big_tool_content.clone()),
+            Message::new(Role::Assistant, "answered q1"),
+            Message::new(Role::User, "q2"),
+            Message::new(Role::Assistant, "calling tool 2"),
+            Message::new(Role::Tool, big_tool_content.clone()),
+            Message::new(Role::Assistant, "answered q2"),
+        ];
+
+        // Preserve last 4 messages, compact older ones
+        compact_historical_tool_outputs(&mut messages, 4);
+
+        // First tool message should be compacted
+        assert!(
+            messages[2]
+                .content
+                .contains("[... Previous turn output compacted")
+        );
+        assert!(messages[2].content.starts_with("line 0:"));
+
+        // Second tool message (in the recent 4 messages) should be untouched
+        assert_eq!(messages[6].content, big_tool_content);
     }
 }

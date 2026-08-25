@@ -101,6 +101,8 @@ pub use execution::{
     ToolMiddleware,
 };
 pub mod session_title;
+pub mod session_tree;
+pub use session_tree::{SessionEntry, SessionEntryId, SessionEntryKind, SessionTree};
 pub mod skills_config;
 pub mod tool_registry;
 pub mod web_config;
@@ -112,7 +114,9 @@ pub use catalog::{Channel, ProviderEntry, Transport};
 pub use channel_auth::{ChannelAuth, LoginMethod};
 pub use doom_guard_config::DoomGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink};
-pub use envoy::{CODE, EXPLORE, EnvoyProfile, INTERACTIVE, QUANT, TITLE, ToolPolicy};
+pub use envoy::{
+    CODE, EXPLORE, EnvoyProfile, INTERACTIVE, MCP_SPECIALIST, QUANT, TITLE, ToolPolicy,
+};
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,
     ConnectionPickerRow, ConnectionPickerSnapshot, ContextTokenSnapshot, ContextTokenSource,

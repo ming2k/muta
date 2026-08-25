@@ -75,7 +75,7 @@ impl Agent {
         // whatever schemas the primary agent used on its preceding turn.
         let response = match tokio::time::timeout(
             TITLE_CALL_TIMEOUT,
-            self.provider.chat(ModelRequest::new(messages)),
+            self.provider.chat(ModelRequest::ephemeral(messages)),
         )
         .await
         {

@@ -172,6 +172,7 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
             | super::Modal::UsageStats
             | super::Modal::Host
             | super::Modal::Btw
+            | super::Modal::Tree
     )
 }
 
@@ -208,6 +209,7 @@ fn scrolls_own_body(modal: super::Modal) -> bool {
             | super::Modal::Connections
             | super::Modal::Models
             | super::Modal::Question
+            | super::Modal::Tree
             | super::Modal::ViewSwitcher
     )
 }
@@ -1473,6 +1475,7 @@ pub fn process_event(
                         super::Modal::Mcp => InputAction::CloseModal,
                         super::Modal::Skills => InputAction::SkillsToggleDetail,
                         super::Modal::Permissions => InputAction::CloseModal,
+                        super::Modal::Tree => InputAction::CloseModal,
                         super::Modal::Queue => InputAction::RecallQueuedSelected,
                         super::Modal::Btw => InputAction::BtwFocusSelected,
                         // Quick switcher: Enter switches to the highlighted
@@ -2331,6 +2334,7 @@ pub fn process_event(
                         super::Modal::ViewSwitcher => InputAction::ModalUp,
                         super::Modal::Permissions => InputAction::ModalUp,
                         super::Modal::Config => InputAction::ModalUp,
+                        super::Modal::Tree => InputAction::ModalUp,
                         super::Modal::ProviderTemplate => {
                             InputAction::MoveProviderTemplate { forward: false }
                         }
@@ -2413,6 +2417,7 @@ pub fn process_event(
                         super::Modal::ViewSwitcher => InputAction::ModalDown,
                         super::Modal::Permissions => InputAction::ModalDown,
                         super::Modal::Config => InputAction::ModalDown,
+                        super::Modal::Tree => InputAction::ModalDown,
                         super::Modal::ProviderTemplate => {
                             InputAction::MoveProviderTemplate { forward: true }
                         }

@@ -20,6 +20,7 @@ fn body_input<'a>(provider: &'a AnthropicMessagesProvider, stream: bool) -> Body
         tool_specs: None,
         max_tokens: provider.max_tokens,
         thinking: provider.thinking,
+        ephemeral: false,
     }
 }
 
@@ -124,6 +125,7 @@ fn request_body_includes_tools_in_anthropic_shape() {
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
+            ephemeral: false,
         },
     );
     let tool = &body["tools"][0];
@@ -188,6 +190,7 @@ fn cache_breakpoints_hit_all_four_zones() {
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
+            ephemeral: false,
         },
     );
     assert_eq!(body["tools"][0]["cache_control"]["type"], "ephemeral");
@@ -200,6 +203,33 @@ fn cache_breakpoints_hit_all_four_zones() {
     let earlier = &msgs[0]["content"][0];
     assert!(earlier.get("cache_control").is_none());
     assert_eq!(count_cache_breakpoints(&body), 4);
+}
+
+#[test]
+fn ephemeral_request_disables_cache_breakpoints() {
+    let provider =
+        AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(DummyTool)];
+    let request = muta_contracts::ModelRequest::with_tools(
+        vec![
+            Message::new(Role::System, "you are a coding agent"),
+            Message::new(Role::User, "compact context summary"),
+        ],
+        &tools,
+    );
+    let (messages, tool_specs) = request.into_parts();
+    let body = request::body(
+        messages,
+        BodyInput {
+            model: &provider.endpoint.model,
+            stream: false,
+            tool_specs: Some(&tool_specs),
+            max_tokens: provider.max_tokens,
+            thinking: provider.thinking,
+            ephemeral: true,
+        },
+    );
+    assert_eq!(count_cache_breakpoints(&body), 0);
 }
 
 #[test]
@@ -225,6 +255,7 @@ fn cache_breakpoints_never_exceed_four_cap() {
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
+            ephemeral: false,
         },
     );
     assert!(

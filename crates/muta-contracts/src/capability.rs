@@ -79,6 +79,11 @@ pub struct ModelRequest {
     /// adapters translate these into their own wire format.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_specs: Vec<ToolSpec>,
+    /// Whether this is a one-off ephemeral request (e.g. title generation, summarization compaction).
+    /// When true, provider protocol encoders should avoid writing prompt cache breakpoints
+    /// to prevent polluting the persistent session KV-cache.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral: bool,
 }
 
 impl ModelRequest {
@@ -87,17 +92,38 @@ impl ModelRequest {
         Self {
             messages,
             tool_specs: Vec::new(),
+            ephemeral: false,
         }
     }
 
-    /// Build a request and snapshot the supplied tool declarations atomically.
-    pub fn with_tools(messages: Vec<Message>, tools: &[Arc<dyn Tool>]) -> Self {
+    /// Build an ephemeral request without tools (e.g. title generation, compaction).
+    pub fn ephemeral(messages: Vec<Message>) -> Self {
         Self {
             messages,
-            tool_specs: tools
-                .iter()
-                .map(|t| ToolSpec::from_tool(t.as_ref()))
-                .collect(),
+            tool_specs: Vec::new(),
+            ephemeral: true,
+        }
+    }
+
+    /// Set the ephemeral flag on the request.
+    pub fn with_ephemeral(mut self, ephemeral: bool) -> Self {
+        self.ephemeral = ephemeral;
+        self
+    }
+
+    /// Build a request and snapshot the supplied tool declarations atomically.
+    /// Tool specifications are sorted deterministically by name to guarantee
+    /// static prefix alignment for LLM prompt / KV-cache reuse across turns.
+    pub fn with_tools(messages: Vec<Message>, tools: &[Arc<dyn Tool>]) -> Self {
+        let mut tool_specs: Vec<ToolSpec> = tools
+            .iter()
+            .map(|t| ToolSpec::from_tool(t.as_ref()))
+            .collect();
+        tool_specs.sort_by(|a, b| a.name.cmp(&b.name));
+        Self {
+            messages,
+            tool_specs,
+            ephemeral: false,
         }
     }
 

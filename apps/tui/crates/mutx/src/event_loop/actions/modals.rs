@@ -505,6 +505,17 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
             app.btw_scroll = app.btw_scroll.saturating_sub(1);
             app.btw_modal_follow = false;
         }
+        Modal::Tree => {
+            let count = crate::overlays::tree::flatten_tree(&app.session_tree).len();
+            app.modal_index = if count == 0 {
+                0
+            } else if app.modal_index == 0 {
+                count - 1
+            } else {
+                app.modal_index - 1
+            };
+            app.tree_modal_follow = true;
+        }
         Modal::Help
         | Modal::Question
         | Modal::ModelEditor
@@ -632,6 +643,13 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
             // SessionSelect path.
             app.btw_scroll = app.btw_scroll.saturating_add(1);
             app.btw_modal_follow = false;
+        }
+        Modal::Tree => {
+            let count = crate::overlays::tree::flatten_tree(&app.session_tree)
+                .len()
+                .max(1);
+            app.modal_index = (app.modal_index + 1) % count;
+            app.tree_modal_follow = true;
         }
         Modal::Help
         | Modal::Question

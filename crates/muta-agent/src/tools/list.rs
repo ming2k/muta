@@ -151,6 +151,7 @@ impl Tool for ListDirTool {
         })
     }
 }
+
 muta_contracts::register_tool!(ListDirFactory => |ctx| ListDirTool {
     root: workspace_base(ctx),
     env: Some(execution_environment(ctx)),

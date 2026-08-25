@@ -39,6 +39,7 @@ fn fixtures() -> Vec<UserQuestionRequest> {
                 ],
                 multi_select: false,
             }],
+            origin: None,
         },
         // Fixture 1: multi-select (checkbox), three options with
         // descriptions. None selected by default; Space toggles each on/off.
@@ -65,6 +66,7 @@ fn fixtures() -> Vec<UserQuestionRequest> {
                 ],
                 multi_select: true,
             }],
+            origin: Some("envoy #b4e1 · explore".into()),
         },
     ]
 }

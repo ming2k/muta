@@ -22,6 +22,46 @@ pub fn format_skill_list(skills: &[Skill]) -> String {
     lines.join("\n")
 }
 
+/// Format available skills as a lean XML block for system prompt progressive disclosure.
+/// The model inspects this metadata and reads the full SKILL.md on demand using read tools.
+pub fn format_skills_for_prompt(skills: &[Skill]) -> String {
+    let visible: Vec<&Skill> = skills
+        .iter()
+        .filter(|s| s.enabled && s.allows_implicit_invocation())
+        .collect();
+    if visible.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\nThe following skills provide specialized instructions for specific tasks.\n\
+         Read the full skill file using file reading tools when the task matches its description.\n\n\
+         <available_skills>\n",
+    );
+    for skill in visible {
+        out.push_str("  <skill>\n");
+        out.push_str(&format!("    <name>{}</name>\n", escape_xml(&skill.name)));
+        out.push_str(&format!(
+            "    <description>{}</description>\n",
+            escape_xml(&skill.description)
+        ));
+        out.push_str(&format!(
+            "    <location>{}</location>\n",
+            escape_xml(&skill.source.to_string_lossy())
+        ));
+        out.push_str("  </skill>\n");
+    }
+    out.push_str("</available_skills>");
+    out
+}
+
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 /// Resolve which skills a piece of text is referring to.
 ///
 /// Matches only explicit intent:

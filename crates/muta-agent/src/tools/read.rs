@@ -13,13 +13,11 @@ use crate::tools::helpers::{
 #[allow(dead_code)] // fields drive the derived schema; call parsing migrates next
 #[derive(ToolSchema)]
 struct ReadArgs {
-    #[tool(desc = "Absolute or relative path to the file")]
+    #[tool(desc = "Path to the file")]
     path: String,
-    #[tool(desc = "1-based line to start reading from (default 1)")]
+    #[tool(desc = "1-based line number to start reading from (default 1)")]
     offset: Option<i64>,
-    #[tool(
-        desc = "Maximum number of lines to read (default: to EOF / until the byte budget is hit)"
-    )]
+    #[tool(desc = "Maximum number of lines to read")]
     limit: Option<i64>,
 }
 
@@ -54,14 +52,7 @@ impl Tool for ReadTextTool {
         "read_text"
     }
     fn description(&self) -> &str {
-        "Read a text file. `path` is required. Each line is prefixed with its \
-         line number. Supports `offset` (1-based start line) and `limit` (max \
-         lines to read). Output is paginated (~50 KB per page); large reads \
-         return the first chunk and indicate the next `offset` to continue.\n\
-         \n\
-         - Use `grep` first to find specific content in large files.\n\
-         - To inspect multiple scattered lines, make a single read encompassing the entire range.\n\
-         - Do not use this tool for directories (use `list_dir`) or binary files."
+        "Read a text file with line numbers. Supports offset (1-based start line) and limit (max lines). Large files are paginated."
     }
     fn parameters(&self) -> serde_json::Value {
         // Schema derived from the typed `ReadArgs` struct — no hand-written

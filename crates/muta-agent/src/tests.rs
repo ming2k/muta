@@ -200,7 +200,6 @@ fn agent_installs_its_stateful_todo_tools() {
         .map(|tool| tool.name().to_string())
         .collect::<std::collections::HashSet<_>>();
     assert!(names.contains("todo"));
-    assert!(names.contains("todo_update"));
 }
 
 #[test]
@@ -239,7 +238,6 @@ fn agent_builder_accepts_additional_tools() {
         .collect::<std::collections::HashSet<_>>();
     assert!(names.contains("write_test"));
     assert!(names.contains("todo"));
-    assert!(names.contains("todo_update"));
 }
 
 #[test]
@@ -2230,10 +2228,10 @@ async fn autopilot_reclaims_ask_user_and_short_circuits_stale_calls() {
 }
 
 #[tokio::test]
-async fn autopilot_hides_ask_user_from_the_advertised_toolset() {
-    // Under autopilot, ask_user's schema must be dropped so the model cannot
-    // name it in the first place. `ModelRequest` snapshots the visible set, so
-    // asserting it is absent from that set is the model-facing truth.
+async fn autopilot_preserves_schema_and_intercepts_ask_user_at_runtime() {
+    // Under ADR-0137, tool schemas remain invariant across autopilot transitions to
+    // maximize KV-cache reuse. Autopilot restrictions on ask_user are enforced at
+    // execution time via PermissionPolicy Gate 6 rather than mutating the schema.
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![text_turn("ok")])),
         vec![Arc::new(crate::tools::AskUserTool)],
@@ -2246,8 +2244,8 @@ async fn autopilot_hides_ask_user_from_the_advertised_toolset() {
     let visible_after = agent.visible_tools();
     let names_after: Vec<&str> = visible_after.iter().map(|t| t.name()).collect();
     assert!(
-        !names_after.contains(&"ask_user"),
-        "ask_user should be reclaimed under autopilot, got {names_after:?}"
+        names_after.contains(&"ask_user"),
+        "ask_user schema is preserved under autopilot for KV-cache stability, got {names_after:?}"
     );
 }
 

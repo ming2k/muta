@@ -635,9 +635,7 @@ fn model_list_body(
                     } else {
                         theme.info()
                     };
-                    list_row = list_row.group(
-                        RowGroup::trailing().text(tag, tag_fg, 0),
-                    );
+                    list_row = list_row.group(RowGroup::trailing().text(tag, tag_fg, 0));
                 }
                 body.push(list_row.finish());
             }
@@ -781,7 +779,9 @@ fn slider_label_layout(
             break; // cramped — fall through to the thinned form below
         }
         let node_x = lo_pad + col;
-        let start = node_x.saturating_sub(w / 2).min(body_width.saturating_sub(w));
+        let start = node_x
+            .saturating_sub(w / 2)
+            .min(body_width.saturating_sub(w));
         if let Some(end) = prev_end
             && start < end + EFFORT_LABEL_MIN_GAP
         {
@@ -806,7 +806,9 @@ fn slider_label_layout(
             continue;
         }
         let node_x = lo_pad + col;
-        let desired = node_x.saturating_sub(w / 2).min(body_width.saturating_sub(w));
+        let desired = node_x
+            .saturating_sub(w / 2)
+            .min(body_width.saturating_sub(w));
         let start = match prev_end {
             Some(end) if desired < end + EFFORT_LABEL_MIN_GAP => {
                 if !must {
@@ -2034,7 +2036,11 @@ mod tests {
         let openai = levels(&["none", "minimal", "low", "medium", "high", "xhigh"]);
         assert_eq!(effort_block_rows(&openai), 6, "6-tier → slider rows");
         // An unknown ladder collapses to the value row + blank + caption.
-        assert_eq!(effort_block_rows(&[]), 3, "empty ladder → value + blank + caption");
+        assert_eq!(
+            effort_block_rows(&[]),
+            3,
+            "empty ladder → value + blank + caption"
+        );
     }
 
     #[test]
@@ -2316,7 +2322,7 @@ mod tests {
         let picker = sectioned_snapshot();
         let ranked =
             crate::providers::models_flat_filtered_from(&picker, "openai", "gpt-5.5", query);
-        let mut terminal = mutx_engine::TestTerminal::new(72, 24);
+        let mut terminal = mutx_engine::TestTerminal::new(72, 28);
         terminal.draw(|f| {
             let mut lm = crate::model::layout::LayoutMap::new();
             let mut scroll = 0;
@@ -2392,7 +2398,7 @@ mod tests {
         // Walking the cursor across the section boundaries must keep the
         // brand fill on a MODEL row, never on a label or spacer row: the
         // follow logic maps modal_index through the interleaved geometry.
-        for idx in 0..5 {
+        for idx in 0..9 {
             let text = render_models_modal(idx, "", false);
             // Every index still paints its model somewhere — the invariant
             // checked here is that the modal renders without panicking and
@@ -2407,7 +2413,10 @@ mod tests {
     fn models_modal_row_omits_leading_dot_and_trailing_diamond() {
         let text = render_models_modal(0, "", false);
         for line in text.lines() {
-            if line.contains("gpt-5.5") || line.contains("claude-sonnet-5") || line.contains("gemini-3-pro") {
+            if line.contains("gpt-5.5")
+                || line.contains("claude-sonnet-5")
+                || line.contains("gemini-3-pro")
+            {
                 assert!(!line.contains('●'), "no leading dot on row: {line:?}");
                 assert!(!line.contains('★'), "no leading star on row: {line:?}");
                 assert!(!line.contains('◆'), "no diamond glyph on row: {line:?}");

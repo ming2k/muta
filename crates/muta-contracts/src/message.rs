@@ -265,7 +265,7 @@ pub struct Message {
 /// [`Message::children`] on the same `Tool`-role result message. Captures
 /// information that the live event stream knows but the bare transcript
 /// cannot reconstruct on resume.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, ts_rs::TS)]
 // Every `Option` field here skips serialization when `None`, so the key is
 // absent on the wire (never an explicit `null`).
 #[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
@@ -309,7 +309,7 @@ pub struct EnvoyMeta {
 }
 
 /// An inline image attached to a message.
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ImagePart {
     /// MIME type, e.g. `"image/png"`.
@@ -507,12 +507,26 @@ impl Message {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
+}
+
+impl ToolCall {
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            arguments: arguments.into(),
+        }
+    }
 }
 
 #[cfg(test)]

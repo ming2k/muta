@@ -48,6 +48,12 @@ for approval before it executes, just like a top-level call. Do not use it \
 for trivial edits you can make directly, and once it is running, leave the \
 scope to it (do not redo its work in parallel).";
 
+/// Description of the MCP-specialist dispatch tool (bound to the [`muta_contracts::MCP_SPECIALIST`] profile).
+pub const ENVOY_MCP_TOOL_DESCRIPTION: &str = "\
+Delegate a specialized integration task (e.g. database operations, external API calls, \
+or third-party MCP tool interactions) to a dedicated envoy. The envoy runs in an isolated \
+sandbox with access to dynamic/MCP tools and returns a high-signal summary of the results.";
+
 /// Retry settings for an envoy subagent, inherited from the session's provider retry configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EnvoyRetryConfig {
@@ -212,6 +218,22 @@ impl EnvoyTool {
             profile,
             "envoy",
             ENVOY_TOOL_DESCRIPTION,
+            registry,
+        )
+    }
+
+    /// Build an MCP-specialist dispatch tool for running dynamic/MCP integrations in an isolated sandbox.
+    pub fn mcp_specialist(
+        provider: Arc<dyn muta_contracts::Provider>,
+        toolset: muta_contracts::ToolSet,
+        registry: Arc<EnvoyRegistry>,
+    ) -> Self {
+        Self::named_with_registry(
+            provider,
+            toolset,
+            &muta_contracts::MCP_SPECIALIST,
+            "envoy_mcp",
+            ENVOY_MCP_TOOL_DESCRIPTION,
             registry,
         )
     }
@@ -659,6 +681,13 @@ impl EnvoyTool {
         let hidden_chain = !muta_contracts::model_by_id(&self.provider.model())
             .map(|model| model.thinking.chain_disclosed())
             .unwrap_or(true);
+        let short_id = call_id
+            .map(|id| {
+                let clean = id.trim_start_matches("call_");
+                &clean[..clean.len().min(6)]
+            })
+            .unwrap_or("subagent");
+        let origin_label = format!("envoy #{} · {}", short_id, self.profile.name);
         let mut round = envoy.begin_streaming_round();
         let mut attempt: usize = 0;
         let result = loop {
@@ -670,7 +699,13 @@ impl EnvoyTool {
                     {
                         position = (*round, *turn);
                     }
-                    Self::forward_event(event, position, hidden_chain, &mut on_event)
+                    Self::forward_event(
+                        event,
+                        position,
+                        hidden_chain,
+                        Some(&origin_label),
+                        &mut on_event,
+                    )
                 })
                 .await;
             match run {
@@ -827,6 +862,7 @@ impl EnvoyTool {
         event: muta_contracts::AgentEvent,
         position: (u64, usize),
         hidden_chain: bool,
+        origin: Option<&str>,
         on_event: &mut dyn FnMut(muta_contracts::EnvoyEvent),
     ) {
         match event {
@@ -907,22 +943,19 @@ impl EnvoyTool {
                     duration_ms,
                 });
             }
-            // Full-duplex (ADR-0029): a permission broker request from the
-            // child now travels *up* as a EnvoyEvent so the parent harness
-            // can surface it to the user. The reply travels back *down* via
-            // the registry → handle → `reply_permission`, which resolves the
-            // child's parked oneshot directly (no inbox drain needed). The
-            // built-in profiles still suppress this in practice via
-            // `autopilot` + excluding `requires_user` tools, so reaching
-            // here means either a future interactive profile is in use, or a
-            // policy leak — forwarding (not dropping) is correct in both cases.
-            muta_contracts::AgentEvent::PermissionRequest(request) => {
+            // Full-duplex (ADR-0029 / ADR-0138): a permission broker request from the
+            // child travels *up* stamped with the child's short hash and profile origin.
+            muta_contracts::AgentEvent::PermissionRequest(mut request) => {
+                if request.origin.is_none() {
+                    request.origin = origin.map(str::to_string);
+                }
                 on_event(muta_contracts::EnvoyEvent::PermissionRequest(request));
             }
-            // Same full-duplex contract as the permission arm above. Reaching
-            // here means an `ask_user` tool was admitted (the profile allows
-            // user interaction) and the child is parked awaiting answers.
-            muta_contracts::AgentEvent::UserQuestionRequest(request) => {
+            // Same full-duplex contract as the permission arm above.
+            muta_contracts::AgentEvent::UserQuestionRequest(mut request) => {
+                if request.origin.is_none() {
+                    request.origin = origin.map(str::to_string);
+                }
                 on_event(muta_contracts::EnvoyEvent::UserQuestionRequest(request));
             }
             // L3.5 β: an interactive `bash` inside the envoy needs operator
@@ -1506,7 +1539,7 @@ mod tests {
         );
         let shared = explore.registry();
         let code = EnvoyTool::named_with_registry(
-            provider,
+            provider.clone(),
             muta_contracts::ToolSet::default(),
             &muta_contracts::CODE,
             "envoy_code",
@@ -1522,5 +1555,8 @@ mod tests {
         // The two tools are distinct capabilities (different names) so they
         // coexist in a parent toolset without one shadowing the other.
         assert_ne!(explore.name(), code.name());
+
+        let mcp = EnvoyTool::mcp_specialist(provider, muta_contracts::ToolSet::default(), shared);
+        assert_eq!(mcp.name(), "envoy_mcp");
     }
 }

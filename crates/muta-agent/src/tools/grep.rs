@@ -51,9 +51,7 @@ impl Tool for GrepTool {
         "grep"
     }
     fn description(&self) -> &str {
-        "Search for a regex pattern in files using ripgrep. Returns matches \
-         in `path:line:content` format. Set `context` to include N surrounding \
-         lines per match (default 0); read the file directly when you need more."
+        "Search file contents for a regex pattern. Returns matches in path:line:content format."
     }
     fn parameters(&self) -> serde_json::Value {
         json!({
@@ -109,31 +107,41 @@ impl Tool for GrepTool {
         // via `kill_on_drop`-equivalent: we explicitly `start_kill` first so a
         // wedged rg does not linger.
         let run = async {
-            let output = cmd
-                .output()
-                .await
-                .map_err(|e| format!("Failed to run rg: {}. Is ripgrep installed?", e))?;
-            Ok::<_, String>(output)
-        };
-        let output = match timeout(GREP_TIMEOUT, run).await {
-            Ok(result) => result?,
-            Err(_) => {
-                return Err(format!(
-                    "grep timed out after {} seconds",
-                    GREP_TIMEOUT.as_secs()
-                ));
+            let res = cmd.output().await;
+            match res {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    if stdout.is_empty() {
+                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        if !stderr.is_empty() && output.status.code() != Some(1) {
+                            return Err(format!("rg error: {}", stderr));
+                        }
+                        return Ok("No matches found.".to_string());
+                    }
+                    Ok::<_, String>(cap_output(&stdout))
+                }
+                Err(_) => {
+                    // Fast in-process native fallback when `rg` is not on PATH
+                    let root_clone = search_root.clone();
+                    let pattern_owned = pattern.to_string();
+                    let ext_owned = ext.map(|s| s.to_string());
+                    let ctx_val = context as usize;
+                    tokio::task::spawn_blocking(move || {
+                        native_grep(&root_clone, &pattern_owned, ext_owned.as_deref(), ctx_val)
+                    })
+                    .await
+                    .map_err(|e| format!("Native grep task panicked: {}", e))?
+                }
             }
         };
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        if stdout.is_empty() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            if !stderr.is_empty() {
-                return Err(format!("rg error: {}", stderr));
-            }
-            return Ok("No matches found.".to_string());
+        match timeout(GREP_TIMEOUT, run).await {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "grep timed out after {} seconds",
+                GREP_TIMEOUT.as_secs()
+            )),
         }
-        Ok(cap_output(&stdout))
     }
 
     async fn call_structured(&self, arguments: &str) -> Result<muta_contracts::ToolOutput, String> {
@@ -180,6 +188,120 @@ fn cap_output(stdout: &str) -> String {
     out
 }
 
+/// In-process native regex / literal search engine.
+/// Traverses the directory using `walkdir`, prunes ignored directories,
+/// and matches lines against `regex::Regex` with support for context lines
+/// and bounded line/byte limits. Runs at zero subprocess cost.
+fn native_grep(
+    search_root: &std::path::Path,
+    pattern: &str,
+    ext: Option<&str>,
+    context: usize,
+) -> Result<String, String> {
+    let re = regex::Regex::new(pattern).map_err(|e| format!("Invalid regex: {}", e))?;
+    let mut matches = Vec::new();
+    let mut total_lines = 0;
+    let mut total_bytes = 0;
+    let mut truncated = false;
+
+    let walker = walkdir::WalkDir::new(search_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            if let Some(name) = e.file_name().to_str() {
+                if crate::tools::helpers::IGNORED_DIRS.contains(&name) {
+                    return false;
+                }
+            }
+            true
+        });
+
+    for entry in walker.filter_map(Result::ok) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let file_path = entry.path();
+        if let Some(e) = ext {
+            if file_path.extension().and_then(|x| x.to_str()) != Some(e) {
+                continue;
+            }
+        }
+
+        if let Ok(metadata) = entry.metadata() {
+            if metadata.len() > 10 * 1024 * 1024 {
+                // skip huge files > 10MB
+                continue;
+            }
+        }
+
+        let content = match std::fs::read_to_string(file_path) {
+            Ok(c) => c,
+            Err(_) => continue, // skip binary or non-UTF-8 files
+        };
+
+        let file_lines: Vec<&str> = content.lines().collect();
+        let display_path = file_path
+            .strip_prefix(search_root)
+            .unwrap_or(file_path)
+            .display()
+            .to_string();
+
+        let mut file_matches = 0;
+        for (idx, line) in file_lines.iter().enumerate() {
+            if re.is_match(line) {
+                file_matches += 1;
+                if file_matches > 50 {
+                    break;
+                }
+
+                let start_idx = idx.saturating_sub(context);
+                let end_idx = (idx + context + 1).min(file_lines.len());
+
+                if context == 0 {
+                    let formatted = format!("{}:{}:{}", display_path, idx + 1, line);
+                    total_bytes += formatted.len() + 1;
+                    total_lines += 1;
+                    matches.push(formatted);
+                } else {
+                    for ctx_i in start_idx..end_idx {
+                        let sep = if ctx_i == idx { ":" } else { "-" };
+                        let formatted = format!(
+                            "{}{}{}{}{}",
+                            display_path,
+                            sep,
+                            ctx_i + 1,
+                            sep,
+                            file_lines[ctx_i]
+                        );
+                        total_bytes += formatted.len() + 1;
+                        total_lines += 1;
+                        matches.push(formatted);
+                    }
+                }
+
+                if total_lines >= GREP_MAX_LINES || total_bytes >= GREP_MAX_BYTES {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
+
+        if truncated {
+            break;
+        }
+    }
+
+    if matches.is_empty() {
+        return Ok("No matches found.".to_string());
+    }
+
+    let mut result = matches.join("\n");
+    if truncated {
+        result.push_str("\n\n[Output truncated — narrow your pattern, path, or `ext`.]");
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +330,18 @@ mod tests {
         let capped = cap_output(&line);
         assert!(capped.len() <= GREP_MAX_BYTES + 64);
         assert!(capped.contains("[Output truncated"));
+    }
+
+    #[test]
+    fn native_grep_finds_pattern_in_temp_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        std::fs::write(&file_path, "fn hello_world() {\n    println!(\"hi\");\n}\n").unwrap();
+
+        let result = native_grep(temp_dir.path(), "hello_world", Some("rs"), 0).unwrap();
+        assert!(result.contains("test.rs:1:fn hello_world() {"));
+
+        let not_found = native_grep(temp_dir.path(), "non_existent_symbol", None, 0).unwrap();
+        assert_eq!(not_found, "No matches found.");
     }
 }

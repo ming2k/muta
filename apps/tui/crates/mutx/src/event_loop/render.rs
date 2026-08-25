@@ -1068,6 +1068,14 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             &app.selection,
             &mut layout_map,
         )),
+        Modal::Tree => Some(view::draw_tree_modal(
+            f,
+            &app.session_tree,
+            app.modal_index,
+            &mut app.tree_scroll,
+            app.tree_modal_follow,
+            &app.theme,
+        )),
         // Global view quick switcher (ADR-0133, Ctrl+L): open views first
         // in MRU order, then the rest as discovery. Renders from the view
         // registry; Enter switches via `ViewSwitchActivate`.

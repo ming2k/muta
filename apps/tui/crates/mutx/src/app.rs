@@ -498,6 +498,12 @@ pub struct App {
     /// user scrolls manually (wheel / page keys) so they can browse freely, and
     /// re-set the moment they navigate again.
     pub session_modal_follow: bool,
+    /// Session DAG tree representation for `/tree` visualization.
+    pub session_tree: muta_contracts::SessionTree,
+    /// Scroll offset for the `/tree` modal body.
+    pub tree_scroll: usize,
+    /// Auto-follow selection in `/tree` modal.
+    pub tree_modal_follow: bool,
     /// `true` while the sessions picker is drilled into the session-info
     /// sub-view (`i`). The detail body renders from [`Self::session_detail`];
     /// Esc backs out to the list (mirrors the TokenReport drill-in).
@@ -1577,6 +1583,7 @@ impl App {
                 &mut self.question_scroll,
                 Some(&mut self.question_modal_follow),
             )),
+            Modal::Tree => Some((&mut self.tree_scroll, Some(&mut self.tree_modal_follow))),
             // Permission drives its own body via PermissionDetailsUp/Down (and
             // the transcript behind it scrolls when no step is focused); the
             // caret-owning text editors have no body scroll. None => the
@@ -2405,6 +2412,7 @@ impl App {
                 crate::overlays::DashboardFocus::Detail => self.host_detail_scroll,
             },
             crate::views::ViewId::Sessions => self.session_scroll,
+            crate::views::ViewId::Tree => self.tree_scroll,
             // Config: no single slot (see doc above); the saved state is not
             // used for it.
             crate::views::ViewId::Config => 0,
@@ -2436,6 +2444,7 @@ impl App {
                 crate::overlays::DashboardFocus::Detail => self.host_detail_scroll = scroll,
             },
             crate::views::ViewId::Sessions => self.session_scroll = scroll,
+            crate::views::ViewId::Tree => self.tree_scroll = scroll,
             // Config: no single slot; retention is field-native (see
             // `view_scroll`).
             crate::views::ViewId::Config => {}
@@ -2455,6 +2464,7 @@ impl App {
             crate::views::ViewId::Queue => self.queue_modal_follow,
             crate::views::ViewId::Host => self.host_modal_follow,
             crate::views::ViewId::Sessions => self.session_modal_follow,
+            crate::views::ViewId::Tree => self.tree_modal_follow,
             // These surfaces don't track a follow flag (plain scroll bodies).
             _ => true,
         }

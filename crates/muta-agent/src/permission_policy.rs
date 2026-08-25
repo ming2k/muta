@@ -422,6 +422,7 @@ impl PermissionPolicy for BashPolicy {
                         scope: command.clone(),
                         elevation: false,
                         one_off: true,
+                        origin: None,
                     },
                     // A well-formed rule that is never persisted: `one_off`
                     // short-circuits persistence in the caller. Carried only to
@@ -502,6 +503,7 @@ impl PermissionPolicy for BrokerPolicy {
                 scope: rule.scope.clone(),
                 elevation,
                 one_off: false,
+                origin: None,
             },
             rule,
         }

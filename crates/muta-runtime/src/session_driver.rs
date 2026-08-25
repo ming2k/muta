@@ -274,6 +274,7 @@ impl SessionDriver {
                 tracing::warn!(?error, "could not persist provider/model usage telemetry");
             }
         }
+        catalog::prune_stale_models(&mut config, &mut provider_usage);
         // Push the initial model-picker snapshot (default id + per-model
         // favorite / key-ready / last-used) so the picker is ready the moment
         // the user opens it.
@@ -464,7 +465,7 @@ impl SessionDriver {
                     crate::handlers_provider::remove_model(
                         &mut config,
                         &resp_tx,
-                        &provider_usage,
+                        &mut provider_usage,
                         provider_id,
                         model,
                     )

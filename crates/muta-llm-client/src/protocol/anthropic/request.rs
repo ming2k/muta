@@ -40,6 +40,7 @@ pub struct BodyInput<'a> {
     pub tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
     pub max_tokens: u32,
     pub thinking: ThinkingConfig,
+    pub ephemeral: bool,
 }
 
 /// Build the `/messages` request body from the harness message list.
@@ -62,6 +63,7 @@ pub fn body_with_capabilities(
         tool_specs,
         max_tokens,
         thinking,
+        ephemeral,
     } = input;
 
     let tool_specs = tool_specs.map(|specs| {
@@ -129,7 +131,9 @@ pub fn body_with_capabilities(
         "stream": stream,
     });
 
-    stamp_caching_breakpoints(&mut body, &tool_specs, &system_text);
+    if !ephemeral {
+        stamp_caching_breakpoints(&mut body, &tool_specs, &system_text);
+    }
     stamp_thinking(&mut body, capabilities, max_tokens, thinking);
     body
 }

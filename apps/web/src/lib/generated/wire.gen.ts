@@ -698,7 +698,12 @@ elevation: boolean,
  * `[bash_policy.rules] action = "allow"` override. `false` (i.e.
  * "Always" is honoured) for ordinary broker prompts.
  */
-one_off: boolean, };
+one_off: boolean, 
+/**
+ * Origin label identifying which subagent/envoy produced this request (ADR-0138).
+ * `None` for top-level principal calls; e.g. `Some("envoy #a1b2 · mcp_specialist")`.
+ */
+origin?: string | null, };
 
 export type ProviderModelInfo = { 
 /**
@@ -1227,7 +1232,11 @@ export type UserQuestionOption = { label: string, description?: string, };
 /**
  * Request sent from the agent to the TUI when the model calls `ask_user`.
  */
-export type UserQuestionRequest = { id: string, questions: Array<UserQuestion>, };
+export type UserQuestionRequest = { id: string, questions: Array<UserQuestion>, 
+/**
+ * Origin label identifying which subagent/envoy produced this request (ADR-0138).
+ */
+origin?: string | null, };
 
 /**
  * A partial update to the `[websearch]` table. Every field is optional:

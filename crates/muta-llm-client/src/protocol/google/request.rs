@@ -250,10 +250,16 @@ fn user_parts(message: Message) -> Vec<Value> {
 
 fn assistant_parts(message: Message, call_names: &mut HashMap<String, String>) -> Vec<Value> {
     let thought_signatures = thought_signatures_by_call(&message);
-    let text_thought_signature = text_thought_signature(&message);
+    let text_thought_sig = text_thought_signature(&message);
+    let fallback_signature = thought_signatures
+        .values()
+        .next()
+        .cloned()
+        .or_else(|| text_thought_sig.clone());
+
     let mut parts =
         text_and_image_parts(message.content, message.images.unwrap_or_default(), false);
-    if let Some(signature) = text_thought_signature
+    if let Some(signature) = &text_thought_sig
         && let Some(part) = parts
             .iter_mut()
             .find(|part| part.get("text").and_then(Value::as_str).is_some())
@@ -271,7 +277,11 @@ fn assistant_parts(message: Message, call_names: &mut HashMap<String, String>) -
                 function_call["id"] = json!(call.id);
             }
             let mut part = json!({ "functionCall": function_call });
-            if let Some(signature) = thought_signatures.get(&call.id) {
+            let sig = thought_signatures
+                .get(&call.id)
+                .or_else(|| thought_signatures.get(&call.name))
+                .or_else(|| fallback_signature.as_ref());
+            if let Some(signature) = sig {
                 part["thoughtSignature"] = json!(signature);
             }
             parts.push(part);

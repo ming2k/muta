@@ -222,6 +222,7 @@ impl Provider for AnthropicMessagesProvider {
     }
 
     async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
+        let ephemeral = request.ephemeral;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -231,6 +232,7 @@ impl Provider for AnthropicMessagesProvider {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
+                ephemeral,
             },
             &self.capabilities,
         );
@@ -256,6 +258,7 @@ impl Provider for AnthropicMessagesProvider {
         &self,
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+        let ephemeral = request.ephemeral;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -265,6 +268,7 @@ impl Provider for AnthropicMessagesProvider {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
+                ephemeral,
             },
             &self.capabilities,
         );
@@ -285,6 +289,7 @@ impl Provider for AnthropicMessagesProvider {
         &self,
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
+        let ephemeral = request.ephemeral;
         let (messages, tool_specs) = request.into_parts();
         let body = request::body_with_capabilities(
             messages,
@@ -294,6 +299,7 @@ impl Provider for AnthropicMessagesProvider {
                 tool_specs: (!tool_specs.is_empty()).then_some(tool_specs.as_slice()),
                 max_tokens: self.max_tokens,
                 thinking: self.thinking,
+                ephemeral,
             },
             &self.capabilities,
         );

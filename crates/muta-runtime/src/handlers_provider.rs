@@ -228,6 +228,7 @@ pub async fn add(
         let outcome = catalog::discover_provider_models().await;
         if outcome.changed {
             catalog::sync_fitted_model_registry();
+            catalog::prune_stale_models_on_disk();
         }
         for (failed_provider, message) in &outcome.failures {
             let _ = resp_tx.send(AgentResponse::ConnectStatus(
@@ -304,6 +305,7 @@ pub async fn edit(
     if connections.save().is_err() {
         tracing::warn!("edit: could not persist connection");
     }
+    catalog::prune_stale_models(config, provider_usage);
     // Only rebuild the live provider when editing the active one (so a new
     // endpoint/key takes effect); editing an inactive provider just refreshes
     // the persisted state + the picker snapshot without switching.
@@ -338,7 +340,7 @@ pub async fn edit(
 pub async fn remove_model(
     config: &mut Config,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &ConnectionUsage,
+    provider_usage: &mut ConnectionUsage,
     provider_id: String,
     model: String,
 ) {
@@ -353,15 +355,7 @@ pub async fn remove_model(
             tracing::warn!("remove_model: could not persist connection");
         }
     }
-    if config.default_model.as_deref() == Some(model.as_str()) {
-        config.default_model = None;
-    }
-    // Favorite is model-level (ADR-0046): a removed model's star is pruned so
-    // the picker never references a model that is no longer served.
-    config.favorites.retain(|fav| *fav != model);
-    if let Err(error) = config.save_preserving_connection_selection() {
-        tracing::warn!(?error, "could not persist removed connection model");
-    }
+    catalog::prune_stale_models(config, provider_usage);
     let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
         config,
         provider_usage,
@@ -524,12 +518,7 @@ pub async fn delete(
     let Some(deleted) = connections.remove(&id) else {
         return;
     };
-    // Prune the deleted connection's model ids from favorites (model-level) so
-    // the picker never references a model that is no longer served.
-    let deleted_models = catalog::route_models(&deleted, &DiscoveryCache::load());
-    config
-        .favorites
-        .retain(|fav| !deleted_models.iter().any(|m| m == fav));
+    let _ = deleted;
     if connections.save().is_err() {
         tracing::warn!("delete: could not persist connection store");
     }
@@ -554,6 +543,7 @@ pub async fn delete(
     if routes.save().is_err() {
         tracing::warn!("delete: could not persist route settings");
     }
+    catalog::prune_stale_models(config, provider_usage);
 
     let was_active = config.default_connection == id;
     if was_active {
@@ -719,6 +709,7 @@ pub async fn connect(
     if outcome.changed {
         catalog::sync_fitted_model_registry();
     }
+    catalog::prune_stale_models(config, provider_usage);
     for (failed_provider, message) in &outcome.failures {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
             muta_contracts::ConnectStatus::DiscoveryWarning {
@@ -1160,6 +1151,7 @@ pub async fn refresh_models(
     if outcome.changed {
         catalog::sync_fitted_model_registry();
     }
+    catalog::prune_stale_models(config, provider_usage);
 
     for (failed_provider, message) in &outcome.failures {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(

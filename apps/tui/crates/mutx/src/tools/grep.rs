@@ -43,3 +43,21 @@ impl ToolPresenter for ListDirPresenter {
         ResultKind::Listing
     }
 }
+
+pub struct FindPresenter;
+
+impl ToolPresenter for FindPresenter {
+    fn summary(&self, view: &ToolView) -> String {
+        let pattern = view.str("pattern").unwrap_or("*");
+        let path = view.str("path").unwrap_or(".");
+        if path == "." {
+            format!("Find {}", pattern)
+        } else {
+            format!("Find {} in {}", pattern, path)
+        }
+    }
+
+    fn result_kind(&self) -> ResultKind {
+        ResultKind::Listing
+    }
+}

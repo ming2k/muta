@@ -1627,6 +1627,9 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         saved_primary_chrome: None,
         btw_scroll: 0,
         btw_modal_follow: true,
+        session_tree: muta_contracts::SessionTree::default(),
+        tree_scroll: 0,
+        tree_modal_follow: true,
         scroll: 0,
         follow_bottom: true,
         content_lines: 0,
@@ -4149,6 +4152,7 @@ fn caret_owner_question_owns_caret_only_on_other() {
             ],
             multi_select: false,
         }],
+        origin: None,
     };
     // Open: highlight on row 0 (a real option) → no caret, cursor hidden.
     let model = QuestionModel::open(req);

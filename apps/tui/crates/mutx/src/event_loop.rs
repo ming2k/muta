@@ -827,9 +827,10 @@ fn probe_delete_overlay(app: &mut App, event: &Event) -> Option<input::InputActi
 
 /// The active model's effective reasoning effort, resolved the same way the
 /// hint bar resolves it (per-protocol gating included — ADR-0046): Anthropic
-/// effort counts only while thinking is opted in, OpenAI effort whenever the
-/// channel reports one, Google never. Shared by the hint-bar render and the
-/// effort-ignition triggers so both agree on whether `max` is live.
+/// effort counts only while thinking is opted in, all other protocols (OpenAI,
+/// Google, etc.) whenever the channel reports an effort level. Shared by the
+/// hint-bar render and the effort-ignition triggers so both agree on whether
+/// `max` is live.
 fn effective_reasoning_effort(app: &App) -> Option<&str> {
     app.provider_picker
         .rows
@@ -839,8 +840,7 @@ fn effective_reasoning_effort(app: &App) -> Option<&str> {
         .and_then(|m| {
             let show = match m.protocol.as_str() {
                 "anthropic" => m.thinking == Some(true),
-                "openai" => m.effort.is_some(),
-                _ => false,
+                _ => m.effort.is_some(),
             };
             if show { m.effort.as_deref() } else { None }
         })
@@ -1973,8 +1973,7 @@ pub(super) async fn run_app_loop(
         // While user is actively typing or composing, quiesce background
         // micro-animations (100ms spinner/breathing ticks) to eliminate
         // unnecessary redraw churn and candidate box vibration.
-        let is_typing_active =
-            app.last_key_press.elapsed() < std::time::Duration::from_millis(150);
+        let is_typing_active = app.last_key_press.elapsed() < std::time::Duration::from_millis(150);
         let animation_draw = animating && !is_typing_active;
 
         // `swap` consumes the listener's signal exactly once. Folded in: input
@@ -2406,7 +2405,7 @@ pub(super) async fn run_app_loop(
 
 pub(super) fn tool_activity_status(name: &str) -> &'static str {
     match name {
-        "read_text" | "read_image" | "list_dir" | "use_skill" => "exploring",
+        "read_text" | "read_image" | "list_dir" | "find" | "glob" | "use_skill" => "exploring",
         "grep" => "searching codebase",
         "write_file" | "edit_file" => "making edits",
         "bash" => "running command",
@@ -2450,8 +2449,7 @@ pub(super) async fn picker_effort(
         .and_then(|m| {
             let show = match m.protocol.as_str() {
                 "anthropic" => m.thinking == Some(true),
-                "openai" => m.effort.is_some(),
-                _ => false,
+                _ => m.effort.is_some(),
             };
             show.then(|| m.effort.clone()).flatten()
         })

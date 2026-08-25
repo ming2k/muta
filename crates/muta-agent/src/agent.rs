@@ -1069,9 +1069,16 @@ impl Agent {
 
     /// Snapshot the live state available to declarative system-prompt policy.
     fn system_prompt_context(&self, tools: &[Arc<dyn Tool>]) -> crate::SystemPromptContext {
-        let tool_names = tools.iter().map(|tool| tool.name().to_string()).collect();
+        let mut tool_names: Vec<String> =
+            tools.iter().map(|tool| tool.name().to_string()).collect();
+        tool_names.sort();
         let model_guidance = muta_contracts::resolve_model(&self.provider.model()).model_guidance;
         let provider_guidance = self.provider.prompt_hints().system_guidance;
+
+        let available_skills = {
+            let list = self.skills_registry.lock().list();
+            muta_skills::render::format_skills_for_prompt(&list)
+        };
 
         crate::SystemPromptContext {
             identity_preamble: self
@@ -1083,6 +1090,7 @@ impl Agent {
             model_guidance,
             provider_guidance,
             autopilot: self.get_autopilot(),
+            available_skills,
         }
     }
 
@@ -2221,12 +2229,9 @@ impl Agent {
     /// in-memory hook-scoped mask). Used at the schema-build choke points so a
     /// disabled tool's definition never reaches the provider.
     pub(crate) fn visible_tools(&self) -> Vec<Arc<dyn Tool>> {
-        // Delegate to the ToolManager's per-turn schema authority
-        // (kimi-code's `loopTools`): `installed` minus both disable masks,
-        // minus `ask_user` under autopilot — no human is reachable to answer,
-        // so admitting it would only deadlock a round. The dispatch guard
-        // also short-circuits any stale call (a name carried over from an
-        // earlier turn's tool list) — see `execute_tool`.
+        // Delegate to the ToolManager's schema authority.
+        // Under ADR-0137, tool schemas remain deterministic and invariant to maximize
+        // KV-cache reuse. Autopilot restrictions are enforced at runtime via PermissionPolicy.
         self.tool_manager.loop_tools(self.get_autopilot())
     }
 
@@ -3453,6 +3458,7 @@ impl Agent {
         let request = UserQuestionRequest {
             id: format!("ask_user_{}", uuid::Uuid::new_v4()),
             questions,
+            origin: None,
         };
         let (sender, receiver) = oneshot::channel();
         self.ask_user

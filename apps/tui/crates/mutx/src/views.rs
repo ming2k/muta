@@ -63,6 +63,8 @@ pub(crate) enum ViewId {
     Host,
     /// The sessions picker (`/sessions`). Phase 4: retained.
     Sessions,
+    /// The session DAG tree viewer (`/tree`).
+    Tree,
 }
 
 impl ViewId {
@@ -88,13 +90,14 @@ impl ViewId {
             ViewId::Queue => Modal::Queue,
             ViewId::Host => Modal::Host,
             ViewId::Sessions => Modal::Sessions,
+            ViewId::Tree => Modal::Tree,
         }
     }
 
     /// Every view id, in quick-switcher display order: reference surfaces
     /// first (Help, Activity, Todos), then manager lists, then reports,
     /// then the pickers, then the full-screen surfaces.
-    pub(crate) const ALL: [ViewId; 17] = [
+    pub(crate) const ALL: [ViewId; 18] = [
         ViewId::Help,
         ViewId::Activity,
         ViewId::Todos,
@@ -112,6 +115,7 @@ impl ViewId {
         ViewId::Queue,
         ViewId::Host,
         ViewId::Sessions,
+        ViewId::Tree,
     ];
 
     /// The label shown in the quick switcher and used for fuzzy matching.
@@ -134,6 +138,7 @@ impl ViewId {
             ViewId::Queue => "Queue (outbox)",
             ViewId::Host => "Session dashboard",
             ViewId::Sessions => "Sessions",
+            ViewId::Tree => "Session tree",
         }
     }
 
@@ -158,6 +163,7 @@ impl ViewId {
             ViewId::Queue => "Ctrl+Q / queue bar",
             ViewId::Host => "/dashboard",
             ViewId::Sessions => "/sessions",
+            ViewId::Tree => "/tree",
         }
     }
 }
@@ -185,6 +191,7 @@ impl TryFrom<Modal> for ViewId {
             Modal::Queue => Ok(ViewId::Queue),
             Modal::Host => Ok(ViewId::Host),
             Modal::Sessions => Ok(ViewId::Sessions),
+            Modal::Tree => Ok(ViewId::Tree),
             _ => Err(()),
         }
     }

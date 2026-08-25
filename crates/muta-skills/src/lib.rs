@@ -39,7 +39,7 @@ pub use catalog::SkillCatalog;
 pub use discovery::ShadowedSkill;
 pub use metadata::{Skill, SkillDependency, SkillPolicy, SkillScope};
 pub use muta_contracts::SkillsConfig;
-pub use render::resolve_mentions;
+pub use render::{format_skills_for_prompt, resolve_mentions};
 pub use tools::{ListSkillsTool, UseSkillTool};
 
 use discovery::{DiscoveryResult, discover_all};

@@ -30,6 +30,7 @@ fn fixtures() -> Vec<PermissionRequest> {
             scope: "*".into(),
             elevation: false,
             one_off: false,
+            origin: None,
         },
         PermissionRequest {
             id: "p2".into(),
@@ -40,6 +41,7 @@ fn fixtures() -> Vec<PermissionRequest> {
             scope: "src/main.rs".into(),
             elevation: false,
             one_off: false,
+            origin: Some("envoy #9f8a · code".into()),
         },
         PermissionRequest {
             // An out-of-scope elevation: the broker surfaces this ⚠ prompt so
@@ -53,6 +55,7 @@ fn fixtures() -> Vec<PermissionRequest> {
             scope: "/etc/hosts".into(),
             elevation: true,
             one_off: false,
+            origin: Some("envoy #c3d4 · mcp_specialist".into()),
         },
         PermissionRequest {
             // A one-off dangerous-command confirm: the bash policy matched a
@@ -66,6 +69,7 @@ fn fixtures() -> Vec<PermissionRequest> {
             scope: "git reset --hard HEAD~1".into(),
             elevation: false,
             one_off: true,
+            origin: None,
         },
     ]
 }

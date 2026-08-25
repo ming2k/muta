@@ -3367,6 +3367,7 @@ mod tests {
                 scope: "workspace".into(),
                 elevation: false,
                 one_off: false,
+                origin: None,
             },
         ));
         let peek = task.envoy_status_line().unwrap();

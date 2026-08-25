@@ -119,6 +119,7 @@ impl Tool for GlobTool {
         }
     }
 }
+
 muta_contracts::register_tool!(GlobFactory => |ctx| GlobTool {
     root: workspace_base(ctx),
     env: Some(execution_environment(ctx)),
