@@ -775,6 +775,10 @@ pub struct Config {
     /// flat list wherever it is served.
     #[serde(default)]
     pub favorites: Vec<String>,
+    /// Model ids or glob patterns (e.g. `"gemini-3.6-flash*"`) to hide from
+    /// model pickers across all connections.
+    #[serde(default)]
+    pub hidden_models: Vec<String>,
     /// Skill configuration (`[skills]` table).
     #[serde(default)]
     pub skills: SkillsConfig,
@@ -953,6 +957,7 @@ impl Default for Config {
             connection_retry_max_ms: 10_000,
             default_model: None,
             favorites: Vec::new(),
+            hidden_models: Vec::new(),
             skills: SkillsConfig::default(),
             permissions: PermissionConfig::default(),
             bash_policy: BashPolicyConfig::default(),

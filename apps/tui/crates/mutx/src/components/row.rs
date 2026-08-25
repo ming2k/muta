@@ -64,9 +64,7 @@
 //!
 //! let style = choice_style(ChoiceTone::Filled, is_selected, theme);
 //! let row = ListRow::new(style, body_width)
-//!     // Fixed: status glyphs, tight together.
-//!     .group(RowGroup::fixed().glyph("●", theme.ok(), 0).glyph("★", theme.warn(), 1))
-//!     // Fixed: the primary identity (model name), right after the glyphs.
+//!     // Fixed: the primary identity (model name), starting after the gutter.
 //!     .group(RowGroup::fixed().text("gpt-4o", style.fg, 0))
 //!     // Midpoint: the SECOND column (provider) starts at the horizontal
 //!     // center, cleanly separating the two columns across the row width.
@@ -109,15 +107,14 @@ pub(crate) const GUTTER: usize = 1;
 pub(crate) const GROUP_GAP: usize = 2;
 
 /// Where a column-anchored group aligns within the row width.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum Anchor {
     /// Left-aligned, in source order (the default).
     #[default]
     Fixed,
-    /// Anchored so the group's first column sits at the row's horizontal
-    /// midpoint (`body_width / 2`). Used for the SECOND column of a
-    /// two-column row to spread the columns across the width.
-    Midpoint,
+    /// Anchored so the group's first column sits at a proportional fraction
+    /// of `body_width` (`body_width * numerator / denominator`).
+    Ratio { numerator: usize, denominator: usize },
     /// Right-aligned to the trailing edge.
     Trailing,
 }
@@ -164,15 +161,24 @@ impl RowGroup {
         }
     }
 
-    /// A group anchored at the row's horizontal midpoint (`body_width / 2`).
-    /// Use for the SECOND column of a two-column row so the two columns spread
-    /// across the width and read as distinct columns. The group is left-aligned
-    /// *from the midpoint* (its atoms render in source order starting there).
-    pub(crate) fn midpoint() -> Self {
+    /// A group anchored at a proportional ratio across the row width
+    /// (`body_width * numerator / denominator`).
+    /// Use to allocate custom column weights (e.g. 60% or 65% for primary
+    /// identity columns) while preserving crisp tabular alignment across rows.
+    pub(crate) fn ratio(numerator: usize, denominator: usize) -> Self {
         Self {
             atoms: Vec::new(),
-            anchor: Anchor::Midpoint,
+            anchor: Anchor::Ratio {
+                numerator,
+                denominator: denominator.max(1),
+            },
         }
+    }
+
+    /// A group anchored at the row's horizontal midpoint (`body_width / 2`).
+    /// A convenience shorthand for [`Self::ratio(1, 2)`].
+    pub(crate) fn midpoint() -> Self {
+        Self::ratio(1, 2)
     }
 
     /// A right-aligned group, pinned to the row's trailing edge. Use for a
@@ -289,14 +295,14 @@ impl ListRow {
     /// edge-to-edge, starting with the [`GUTTER`] indent.
     pub(crate) fn finish(self) -> Line<'static> {
         let bg = self.style.bg;
-        let midpoint = self.body_width / 2;
 
         // Split groups by anchor and measure each block. Fixed groups consume
-        // width left-to-right from the gutter; the midpoint group reserves a
-        // column range at the center; trailing groups reserve the right edge.
+        // width left-to-right from the gutter; a ratio group reserves a
+        // column range starting at its proportional position; trailing groups
+        // reserve the right edge.
         let mut fixed_w = 0usize;
         let mut fixed_count = 0usize;
-        let mut midpoint_group: Option<&RowGroup> = None;
+        let mut ratio_group: Option<(&RowGroup, usize, usize)> = None;
         let mut trailing_w = 0usize;
         let mut trailing_count = 0usize;
         for g in &self.groups {
@@ -308,10 +314,12 @@ impl ListRow {
                     fixed_w += g.width();
                     fixed_count += 1;
                 }
-                Anchor::Midpoint => {
-                    // Keep the last midpoint group if (erroneously) more than
-                    // one was added; the center has room for one column.
-                    midpoint_group = Some(g);
+                Anchor::Ratio {
+                    numerator,
+                    denominator,
+                } => {
+                    // Keep the last ratio group if more than one was added.
+                    ratio_group = Some((g, numerator, denominator));
                 }
                 Anchor::Trailing => {
                     if trailing_count > 0 {
@@ -323,12 +331,13 @@ impl ListRow {
             }
         }
 
-        let mid_w = midpoint_group.map(|g| g.width()).unwrap_or(0);
-        // The midpoint group occupies [midpoint, midpoint + mid_w). It may
+        let ratio_w = ratio_group.map(|(g, _, _)| g.width()).unwrap_or(0);
+        // The ratio group occupies [ratio_start, ratio_start + ratio_w). It may
         // overlap the fixed block on a very narrow row; clamp so the row never
         // exceeds body_width (the fixed block wins the left half).
-        let mid_start = if midpoint_group.is_some() {
-            midpoint.min(self.body_width.saturating_sub(mid_w).max(fixed_w + GUTTER))
+        let ratio_start = if let Some((_, num, den)) = ratio_group {
+            let target = (self.body_width * num) / den.max(1);
+            target.min(self.body_width.saturating_sub(ratio_w).max(fixed_w + GUTTER))
         } else {
             0
         };
@@ -359,11 +368,11 @@ impl ListRow {
             emitted_fixed += 1;
         }
 
-        // Pad up to the midpoint group's start, then render it.
-        if let Some(g) = midpoint_group {
-            if col < mid_start {
-                spans.push(pad(mid_start - col, bg));
-                col = mid_start;
+        // Pad up to the ratio group's start, then render it.
+        if let Some((g, _, _)) = ratio_group {
+            if col < ratio_start {
+                spans.push(pad(ratio_start - col, bg));
+                col = ratio_start;
             }
             render_atoms(&mut spans, &g.atoms, bg);
             col += g.width();
@@ -535,6 +544,33 @@ mod tests {
             provider_col,
             Some(body_width / 2),
             "second column starts at the midpoint"
+        );
+    }
+
+    #[test]
+    fn ratio_column_starts_at_proportional_position() {
+        let theme = Theme::default();
+        let style = choice_style(ChoiceTone::Filled, false, &theme);
+        let body_width = 50;
+        let line = ListRow::new(style, body_width)
+            .group(RowGroup::fixed().text("gpt-4o", style.fg, 0))
+            .group(RowGroup::ratio(3, 5).text("OpenAI", style.dim, 0))
+            .finish();
+        assert_eq!(line_width(&line), body_width, "row fills body_width");
+
+        let mut col = 0usize;
+        let mut provider_col: Option<usize> = None;
+        for span in &line.spans {
+            let content: &str = span.content.as_ref();
+            if content == "OpenAI" {
+                provider_col = Some(col);
+            }
+            col += content.width();
+        }
+        assert_eq!(
+            provider_col,
+            Some((body_width * 3) / 5),
+            "ratio column starts at 3/5 width (30)"
         );
     }
 

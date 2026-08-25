@@ -11,6 +11,24 @@ use muta_contracts::{
 use muta_persistence::config::Config;
 use muta_persistence::connection_usage::ConnectionUsage;
 
+/// Whether a model id matches any pattern in `hidden_patterns` (case-insensitive glob or exact match).
+pub fn model_is_hidden(model: &str, hidden_patterns: &[String]) -> bool {
+    let model_lower = model.to_ascii_lowercase();
+    hidden_patterns.iter().any(|pattern| {
+        let pat = pattern.trim().to_ascii_lowercase();
+        if pat.is_empty() {
+            return false;
+        }
+        if pat.contains('*') || pat.contains('?') {
+            glob::Pattern::new(&pat)
+                .map(|p| p.matches(&model_lower))
+                .unwrap_or(false)
+        } else {
+            pat == model_lower
+        }
+    })
+}
+
 pub(super) fn active_model_id_for_entry(
     config: &Config,
     entry: &ProviderEntry,
@@ -25,7 +43,15 @@ pub(super) fn active_model_id_for_entry(
             usage
                 .last_model_for(&entry.id)
                 .filter(|m| entry.offers_model(m))
+                .filter(|m| !model_is_hidden(m, &config.hidden_models))
                 .map(|m| m.to_string())
+        })
+        .or_else(|| {
+            entry
+                .channels
+                .iter()
+                .find(|c| !model_is_hidden(&c.model, &config.hidden_models))
+                .map(|channel| channel.model.clone())
         })
         .or_else(|| entry.default_channel().map(|channel| channel.model.clone()))
 }
@@ -47,9 +73,19 @@ pub fn build_picker_state(config: &Config, usage: &ConnectionUsage) -> ProviderP
                 .map(channel_protocol_and_base_url)
                 .unwrap_or_default();
             let model = active_model_id_for_entry(config, entry, usage).unwrap_or_default();
-            let model_info = entry
+            let visible_channels: Vec<_> = entry
                 .channels
                 .iter()
+                .filter(|c| !model_is_hidden(&c.model, &config.hidden_models))
+                .collect();
+            let channels_to_show = if visible_channels.is_empty() {
+                entry.channels.iter().collect::<Vec<_>>()
+            } else {
+                visible_channels
+            };
+            let model_info = channels_to_show
+                .iter()
+                .copied()
                 .map(channel_model_info)
                 .map(|mut info| {
                     // Favorite is model-level (ADR-0046): a starred
@@ -77,7 +113,7 @@ pub fn build_picker_state(config: &Config, usage: &ConnectionUsage) -> ProviderP
                 id: entry.id.clone(),
                 name: entry.name.clone(),
                 model,
-                models: entry.channels.iter().map(|c| c.model.clone()).collect(),
+                models: channels_to_show.iter().map(|c| c.model.clone()).collect(),
                 model_info,
                 builtin: entry.builtin,
                 protocol,
@@ -209,3 +245,29 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_is_hidden_matches_exact_and_glob_case_insensitively() {
+        let hidden = vec![
+            "gemini-3.6-flash*".to_string(),
+            "chat_*".to_string(),
+            "deprecated-model".to_string(),
+        ];
+
+        assert!(model_is_hidden("gemini-3.6-flash-high", &hidden));
+        assert!(model_is_hidden("GEMINI-3.6-FLASH-LOW", &hidden));
+        assert!(model_is_hidden("gemini-3.6-flash", &hidden));
+        assert!(model_is_hidden("chat_20706", &hidden));
+        assert!(model_is_hidden("deprecated-model", &hidden));
+
+        assert!(!model_is_hidden("gemini-3.7-flash", &hidden));
+        assert!(!model_is_hidden("gemini-3.7-flash-tiered", &hidden));
+        assert!(!model_is_hidden("gemini-pro-agent", &hidden));
+        assert!(!model_is_hidden("claude-sonnet-4-6", &hidden));
+    }
+}
+

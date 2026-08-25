@@ -3,7 +3,7 @@
 //! custom-provider editor modals.
 
 use mutx_engine::{
-    Frame, Paragraph, Rect, {Line, Span}, {Modifier, Style},
+    Alignment, Frame, Paragraph, Rect, {Line, Span}, {Modifier, Style},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -513,17 +513,13 @@ fn connections_empty_body(theme: &Theme) -> Vec<Line<'static>> {
 /// - the section's selectable rows.
 ///
 /// Each selectable row is a two-column layout spread across the width:
-/// - a status group (fixed): the `●` current-state dot and the `★` favorite
-///   star;
-/// - column 1 (fixed): the model's wire id (bold, fuzzy-highlighted in
+/// - column 1 (fixed, 60% weight): the model's wire id (bold, fuzzy-highlighted in
 ///   search) — id-first policy, never a curated display name;
-/// - column 2 (midpoint): the provider label (dim), anchored at the horizontal
-///   center so identical model ids served by different instances stay cleanly
-///   separated as a second column — no `·`;
-/// - an optional trailing reasoning tag (`◆ think on`), right-pinned.
+/// - column 2 (proportional ratio 3/5): the provider label (dim), anchored so
+///   identical model ids served by different instances stay cleanly separated;
+/// - an optional trailing reasoning tag (`think on`), right-pinned.
 ///
-/// The row fills the full `body_width` edge-to-edge. Favorite is model-level
-/// (ADR-0046).
+/// The row fills the full `body_width` edge-to-edge.
 ///
 /// Returns the body lines plus `row_line`: the body-line index of each
 /// selectable row. The caller uses that map to translate the modal's
@@ -532,8 +528,8 @@ fn connections_empty_body(theme: &Theme) -> Vec<Line<'static>> {
 /// ↑/↓ can never stop on them.
 fn model_list_body(
     models: &[RankedModel],
-    current_provider: &str,
-    current_model: &str,
+    _current_provider: &str,
+    _current_model: &str,
     modal_index: usize,
     theme: &Theme,
     body_width: usize,
@@ -573,25 +569,8 @@ fn model_list_body(
             }
             ModelBodyLine::Row(row) => {
                 let rm = &models[row];
-                let is_current = rm.provider_id == current_provider && rm.model == current_model;
                 let is_selected = row == modal_index;
                 let style = choice_style(ChoiceTone::Filled, is_selected, theme);
-
-                // Status group (fixed): the two independent state glyphs. The
-                // current-state dot borrows the `ok` tone (green = active);
-                // the favorite star borrows `warn` when set, else stays
-                // muted/blank.
-                let status = RowGroup::fixed()
-                    .glyph(
-                        if is_current { "●" } else { " " },
-                        if is_current { theme.ok() } else { style.dim },
-                        0,
-                    )
-                    .glyph(
-                        if rm.favorite { "★" } else { " " },
-                        if rm.favorite { theme.warn() } else { style.dim },
-                        1,
-                    );
 
                 // The reasoning tag. ADR-0046: reasoning is opt-in, so a model only
                 // shows a tag when reasoning is actually engaged, then with its
@@ -608,15 +587,10 @@ fn model_list_body(
                     _ => String::new(),
                 };
 
-                // Column 1 (model id) is capped to the left half so it never runs
-                // into the midpoint provider column. Reserve the status group width,
-                // its gutter + following GROUP_GAP, and the trailing tag if any.
-                let status_w = 4; // dot + gap + star
-                let tag_w = if tag.is_empty() { 0 } else { tag.width() + 2 }; // glyph + gap
-                let name_budget = (body_width / 2)
-                    .saturating_sub(GUTTER + status_w + GROUP_GAP)
-                    .saturating_sub(tag_w)
-                    .max(1);
+                // Column 1 (model id) is allocated a generous 60% (3/5) proportional
+                // share of the row width (minus gutter and slack), so long model wire IDs
+                // have ample breathing room while preserving crisp columnar alignment.
+                let name_budget = ((body_width * 3) / 5).saturating_sub(GUTTER + 1).max(1);
                 // Id-first policy: the row label IS the wire id (never a curated
                 // display name), so every row reads the same kind of label.
                 let name = truncate_ellipsis(&rm.model, name_budget);
@@ -646,12 +620,12 @@ fn model_list_body(
                     );
                 }
 
-                // Column 2 (midpoint): the provider label, anchored at the horizontal
-                // center so the two columns spread across the width.
+                // Column 2 (proportional ratio 3/5): the provider label, anchored at
+                // 60% across the row width so the primary identity column receives
+                // dominant space without crowding the provider.
                 let mut list_row = ListRow::new(style, body_width)
-                    .group(status)
                     .group(identity)
-                    .group(RowGroup::midpoint().text(rm.provider_label.as_str(), style.dim, 0));
+                    .group(RowGroup::ratio(3, 5).text(rm.provider_label.as_str(), style.dim, 0));
 
                 // Optional trailing reasoning tag, right-pinned and info-toned. On a
                 // brand-filled selected row it lifts to the contrast foreground.
@@ -662,9 +636,7 @@ fn model_list_body(
                         theme.info()
                     };
                     list_row = list_row.group(
-                        RowGroup::trailing()
-                            .glyph("◆", tag_fg, 0)
-                            .text(tag, tag_fg, 1),
+                        RowGroup::trailing().text(tag, tag_fg, 0),
                     );
                 }
                 body.push(list_row.finish());
@@ -729,11 +701,10 @@ fn match_set(m: Option<&crate::fuzzy::FuzzyMatch>) -> std::collections::HashSet<
 /// speed/depth trade-off reads before any tier name does.
 const EFFORT_SCALE_ENDS: (&str, &str) = ("Faster", "Smarter");
 
-/// The slider track's glyphs: T-shaped endpoints, a cross per adjustable rung
-/// between them, and the filled marker sitting squarely on the selected node.
-const TRACK_LEFT: char = '├';
-const TRACK_RIGHT: char = '┤';
-const TRACK_NODE: char = '┼';
+/// The slider track's glyphs: hollow circles for unselected rungs, and a solid
+/// marker for the active selection. Both glyphs share the same font bounding box
+/// and vertical centerline, eliminating jitter and visual height mismatch.
+const TRACK_NODE: char = '○';
 const TRACK_MARKER: char = '●';
 
 /// Minimum gap between two neighbouring tier labels under the track —
@@ -775,36 +746,42 @@ fn slider_node_columns(n: usize, track_w: usize) -> Vec<usize> {
         .collect()
 }
 
-/// Left edge of every tier label under a track of `track_w` cells. A wide
-/// body labels every rung verbatim — each centered on its node, clamped into
-/// the track. Where neighbours would sit closer than [`EFFORT_LABEL_MIN_GAP`]
-/// the layout **thins** rather than overlapping or switching shape: the two
-/// ends anchor the scale, the selected rung always names the value, and an
-/// interior rung keeps its label only while it fits (its node stays on the
-/// track either way). `None` when there is nothing to lay out (unknown
+/// Left edge of every tier label within the modal body of `body_width` cells.
+/// Each rung's label is centered directly on its node's column in the body.
+/// Where neighbours would sit closer than [`EFFORT_LABEL_MIN_GAP`] the layout
+/// **thins** rather than overlapping: the two ends anchor the scale, the
+/// selected rung always names the value, and interior rungs keep their label
+/// only while they fit. `None` when there is nothing to lay out (unknown
 /// ladder) — the caller shows the bare value row.
 fn slider_label_layout(
     levels: &[String],
     current: &str,
-    track_w: usize,
+    body_width: usize,
 ) -> Option<Vec<Option<usize>>> {
     let n = levels.len();
-    if n == 0 || track_w == 0 {
+    if n == 0 || body_width == 0 {
+        return None;
+    }
+    let track_w = slider_track_width(body_width);
+    if track_w == 0 {
         return None;
     }
     let columns = slider_node_columns(n, track_w);
+    let (lo, _) = EFFORT_SCALE_ENDS;
+    let lo_pad = lo.width() + 1;
     let sel_idx = levels.iter().position(|l| l == current);
     let width = |i: usize| levels[i].as_str().width();
 
-    // Wide form: every rung labeled verbatim, none overlapping.
+    // Wide form: every rung labeled verbatim, centered directly under its node.
     let mut positions: Vec<Option<usize>> = Vec::with_capacity(n);
     let mut prev_end: Option<usize> = None;
     for (i, &col) in columns.iter().enumerate() {
         let w = width(i);
-        if w > track_w {
+        if w > body_width {
             break; // cramped — fall through to the thinned form below
         }
-        let start = col.saturating_sub(w / 2).min(track_w - w);
+        let node_x = lo_pad + col;
+        let start = node_x.saturating_sub(w / 2).min(body_width.saturating_sub(w));
         if let Some(end) = prev_end
             && start < end + EFFORT_LABEL_MIN_GAP
         {
@@ -824,25 +801,21 @@ fn slider_label_layout(
     for (i, &col) in columns.iter().enumerate() {
         let w = width(i);
         let must = i == 0 || i + 1 == n || Some(i) == sel_idx;
-        if w > track_w {
-            positions.push(None); // a label wider than the track cannot render
+        if w > body_width {
+            positions.push(None);
             continue;
         }
-        // The last rung sits flush against the right endpoint.
-        let desired = if i + 1 == n {
-            track_w - w
-        } else {
-            col.saturating_sub(w / 2).min(track_w - w)
-        };
+        let node_x = lo_pad + col;
+        let desired = node_x.saturating_sub(w / 2).min(body_width.saturating_sub(w));
         let start = match prev_end {
             Some(end) if desired < end + EFFORT_LABEL_MIN_GAP => {
                 if !must {
-                    positions.push(None); // thin this rung out
+                    positions.push(None); // thin this interior rung out
                     continue;
                 }
                 let pushed = end + 1; // squeeze to a single-space gap
-                if pushed + w > track_w {
-                    positions.push(None); // not even a squeeze fits
+                if pushed + w > body_width {
+                    positions.push(None);
                     continue;
                 }
                 pushed
@@ -856,21 +829,21 @@ fn slider_label_layout(
 }
 
 /// The number of rows the effort block occupies. The selector is always the
-/// slider — four rows: the `Effort` label, the track, the tier labels, and
-/// the caption. An unknown ladder collapses to two rows: the bare value row
-/// plus the caption.
+/// slider — six rows: the `Effort` title, blank row, the track, the tier
+/// labels, blank row, and the centered caption. An unknown ladder collapses to
+/// three rows: the bare value row, blank row, plus the caption.
 pub(crate) fn effort_block_rows(levels: &[String]) -> u16 {
-    if levels.is_empty() { 2 } else { 4 }
+    if levels.is_empty() { 3 } else { 6 }
 }
 
 /// Build the effort block's line(s). The form is always the `Faster ⇄ Smarter`
 /// node slider — the `Effort` label on its own row, a track whose per-tier
-/// nodes (T endpoints, cross rungs) carry the marker on the selected one, the
-/// tier labels under their nodes (a cramped interior rung's label thins out;
-/// ends and the selected rung always stay), and the caption. An unknown
-/// ladder (empty `levels`) shows the bare `Effort` value row plus the caption
-/// — never a second selector shape. `focused` highlights the selected tier in
-/// the brand tone (and, for `max`, the ignition accent).
+/// nodes carry the marker on the selected one, the tier labels centered under
+/// their nodes (a cramped interior rung's label thins out; ends and the selected
+/// rung always stay), and the centered caption. An unknown ladder (empty
+/// `levels`) shows the bare `Effort` value row plus the caption. `focused`
+/// highlights the selected tier in the brand tone (and, for `max`, the
+/// ignition accent).
 fn effort_block_lines(
     current: &str,
     levels: &[String],
@@ -878,16 +851,13 @@ fn effort_block_lines(
     focused: bool,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let label = format!(" {:<8}", "Effort");
-    // The caption always gets its own row; zero width hides it entirely. It
-    // hangs off the body's left edge — the label owns its own row, so there
-    // is no label column to clear.
     let caption = truncate_ellipsis(effort_caption(current), body_width);
     let caption_row = || {
         Line::from(Span::styled(
             caption.to_string(),
             Style::default().fg(theme.muted()),
         ))
+        .alignment(Alignment::Center)
     };
     // The selected tier reads in the brand tone while focused; `max` always
     // takes the warning tone so the top rung reads as the ignition tier it is
@@ -902,30 +872,30 @@ fn effort_block_lines(
 
     // Unknown ladder: the slider cannot lay out, so the block degrades to
     // the `Effort` row plus the caption — never to a second selector shape.
-    let Some(positions) = slider_label_layout(levels, current, slider_track_width(body_width))
-    else {
-        let mut lines = vec![Line::from(vec![
-            Span::styled(
-                label,
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                current.to_string(),
-                Style::default()
-                    .fg(selected_fg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])];
-        lines.push(caption_row());
-        return lines;
+    let Some(positions) = slider_label_layout(levels, current, body_width) else {
+        return vec![
+            Line::from(vec![
+                Span::styled(
+                    "Effort  ".to_string(),
+                    Style::default()
+                        .fg(theme.brand())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    current.to_string(),
+                    Style::default()
+                        .fg(selected_fg)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::default(),
+            caption_row(),
+        ];
     };
 
-    // The slider: a `Faster ├─┼─●─┼─┤ Smarter` track row — T endpoints, one
-    // cross node per adjustable rung, the marker replacing the selected node —
-    // with the tier labels under their nodes (a cramped interior rung's label
-    // thins out; its node stays) and the caption row beneath.
+    // The slider: a `Faster ○─○─●─○ Smarter` track row — hollow circles for
+    // rungs, the filled marker replacing the selected node — with the tier
+    // labels centered under their nodes and the centered caption row beneath.
     let (lo, hi) = EFFORT_SCALE_ENDS;
     let track_w = slider_track_width(body_width);
     let columns = slider_node_columns(levels.len(), track_w);
@@ -935,12 +905,9 @@ fn effort_block_lines(
         .fg(selected_fg)
         .add_modifier(Modifier::BOLD);
 
-    let last = columns.len() - 1;
     let track: Vec<char> = (0..track_w)
         .map(|col| match columns.iter().position(|&c| c == col) {
             Some(i) if i == sel_idx => TRACK_MARKER,
-            Some(0) => TRACK_LEFT,
-            Some(i) if i == last => TRACK_RIGHT,
             Some(_) => TRACK_NODE,
             None => '─',
         })
@@ -956,11 +923,13 @@ fn effort_block_lines(
         Span::styled(format!(" {hi}"), track_style),
     ]);
 
-    let mut label_spans = vec![Span::raw(" ".repeat(lo.width() + 1))];
+    let mut label_spans: Vec<Span<'static>> = Vec::new();
     let mut x = 0;
     for (i, level) in levels.iter().enumerate() {
         if let Some(start) = positions[i] {
-            label_spans.push(Span::raw(" ".repeat(start.saturating_sub(x))));
+            if start > x {
+                label_spans.push(Span::raw(" ".repeat(start - x)));
+            }
             let style = if i == sel_idx {
                 Style::default()
                     .fg(selected_fg)
@@ -973,18 +942,19 @@ fn effort_block_lines(
         }
     }
 
-    let mut lines = vec![
+    vec![
         Line::from(Span::styled(
-            label,
+            "Effort",
             Style::default()
                 .fg(theme.brand())
                 .add_modifier(Modifier::BOLD),
         )),
+        Line::default(),
         track_row,
         Line::from(label_spans),
-    ];
-    lines.push(caption_row());
-    lines
+        Line::default(),
+        caption_row(),
+    ]
 }
 
 /// Draw the provider key editor: a single **API key** field. The model is chosen
@@ -1051,7 +1021,7 @@ pub fn draw_model_editor(
     let mut api_key_off: usize = 0;
     let mut body: Vec<Line> = Vec::new();
     if show_key {
-        let label = format!(" {:<8}", "API key");
+        let label = format!("{:<8}", "API key");
         let label_w = label.width();
         let field_w = body_width.saturating_sub(label_w);
         let key_off;
@@ -1096,7 +1066,7 @@ pub fn draw_model_editor(
     // boolean reads as `[x]`/`[ ]` and toggles with Space (a non-text field,
     // so no caret while focused). Orthogonal to effort.
     if let Some(on) = thinking {
-        let label = format!(" {:<8}", "Thinking");
+        let label = format!("{:<8}", "Thinking");
         let box_style = Style::default()
             .fg(if focused_field == 2 {
                 theme.brand()
@@ -1143,7 +1113,7 @@ pub fn draw_model_editor(
     // thinking row is a toggle, so neither shows a caret — a parked cursor on
     // a non-text field reads as "type here" and jitters as the value cycles.
     if show_key && focused_field == 0 {
-        let prefix = format!(" {:<8}", "API key");
+        let prefix = format!("{:<8}", "API key");
         // Subtract the field's viewport offset so the caret tracks the visible
         // (scrolled) text, and clamp it to stay inside the body rect.
         let caret_col = caret_column(input, cursor_position);
@@ -1833,10 +1803,10 @@ mod tests {
 
     #[test]
     fn effort_selector_renders_as_a_node_slider_when_wide() {
-        // Wide enough: the `Effort` label owns its row, then a
-        // `Faster ⇄ Smarter` track with a node per tier — T endpoints, cross
-        // rungs — and the marker sitting squarely on the selected node; every
-        // tier labeled underneath in ascending depth.
+        // Wide enough: the `Effort` label owns its row, then a blank row, a
+        // `Faster ⇄ Smarter` track with a circle node per tier and the marker
+        // sitting squarely on the selected node; every tier labeled underneath
+        // centered on its node in ascending depth.
         let full = levels(&["low", "medium", "high", "xhigh", "max"]);
         let text = render_settings_editor(120, 24, Some("high"), &full, None);
         let rows: Vec<&str> = text.lines().collect();
@@ -1851,16 +1821,14 @@ mod tests {
             rows[label_idx]
         );
 
-        let track_row = rows[label_idx + 1];
+        let track_row = rows[label_idx + 2];
         assert!(track_row.contains("Faster"), "scale start: {track_row:?}");
         assert!(track_row.contains("Smarter"), "scale end: {track_row:?}");
-        assert!(track_row.contains('├'), "left T endpoint: {track_row:?}");
-        assert!(track_row.contains('┤'), "right T endpoint: {track_row:?}");
-        // 5 tiers, 2 endpoints, the middle node selected → 2 visible crosses.
+        // 5 tiers: 4 unselected circles + 1 selected circle marker.
         assert_eq!(
-            track_row.chars().filter(|&c| c == '┼').count(),
-            2,
-            "cross nodes for the unselected rungs: {track_row:?}"
+            track_row.chars().filter(|&c| c == '○').count(),
+            4,
+            "circle nodes for the unselected rungs: {track_row:?}"
         );
         assert!(
             track_row.contains('●'),
@@ -1872,7 +1840,7 @@ mod tests {
             "no carousel chevrons: {track_row:?}"
         );
 
-        let labels_row = rows[label_idx + 2];
+        let labels_row = rows[label_idx + 3];
         for tier in ["low", "medium", "high", "xhigh", "max"] {
             assert!(labels_row.contains(tier), "missing tier: {labels_row:?}");
         }
@@ -1881,8 +1849,7 @@ mod tests {
         let max = labels_row.find("max").unwrap();
         assert!(low < max, "ladder must ascend left→right: {labels_row:?}");
         // The marker lands exactly on the selected node: same column as the
-        // tier label's center. (Box glyphs are multi-byte — compare char
-        // columns, not byte offsets.)
+        // tier label's center.
         let marker = track_row.chars().position(|c| c == '●').unwrap();
         let high = labels_row.find("high").unwrap();
         assert_eq!(
@@ -1890,17 +1857,26 @@ mod tests {
             high + "high".len() / 2,
             "marker centered on the selected node: {track_row:?} vs {labels_row:?}"
         );
-        // The endpoints are nodes too: the clamped end labels sit flush
-        // against them — `low` starts at `├`, `max` ends at `┤`.
-        let left = track_row.chars().position(|c| c == '├').unwrap();
+        // Endpoints are also centered directly under their node columns.
+        let left_node = track_row.chars().position(|c| c == '○').unwrap();
         let low_col = labels_row.find("low").unwrap();
-        assert_eq!(left, low_col, "low flush against the left endpoint");
-        let right = track_row.chars().position(|c| c == '┤').unwrap();
+        assert_eq!(
+            left_node,
+            low_col + "low".len() / 2,
+            "low centered under the left endpoint node"
+        );
+        let right_node = track_row
+            .chars()
+            .enumerate()
+            .filter(|(_, c)| *c == '○')
+            .last()
+            .map(|(i, _)| i)
+            .unwrap();
         let max_col = labels_row.rfind("max").unwrap();
         assert_eq!(
-            right,
-            max_col + "max".len() - 1,
-            "max flush against the right endpoint"
+            right_node,
+            max_col + "max".len() / 2,
+            "max centered under the right endpoint node"
         );
     }
 
@@ -1937,11 +1913,10 @@ mod tests {
             labels_row.contains("high"),
             "selected rung labeled: {labels_row:?}"
         );
-        // Every rung keeps its node on the track: 5 tiers = 2 T endpoints +
-        // 2 interior crosses + the marker.
+        // Every rung keeps its node on the track: 5 tiers = 4 circles + 1 marker.
         let nodes = track_row
             .chars()
-            .filter(|&c| matches!(c, '├' | '┤' | '┼' | '●'))
+            .filter(|&c| matches!(c, '○' | '●'))
             .count();
         assert_eq!(nodes, 5, "a node per rung: {track_row:?}");
     }
@@ -2050,16 +2025,16 @@ mod tests {
     #[test]
     fn effort_block_row_count_depends_only_on_the_ladder() {
         // The selector is the slider at every width, so the block's row count
-        // is width-independent by construction — four rows for a known ladder
-        // (label + track + tier labels + caption), two for an unknown one
-        // (value row + caption). Nothing can flip between two shapes as the
+        // is width-independent by construction — six rows for a known ladder
+        // (label + blank + track + tier labels + blank + caption), three for an unknown one
+        // (value row + blank + caption). Nothing can flip between two shapes as the
         // user cycles or resizes.
         let common = levels(&["low", "medium", "high"]);
-        assert_eq!(effort_block_rows(&common), 4, "3-tier → slider rows");
+        assert_eq!(effort_block_rows(&common), 6, "3-tier → slider rows");
         let openai = levels(&["none", "minimal", "low", "medium", "high", "xhigh"]);
-        assert_eq!(effort_block_rows(&openai), 4, "6-tier → slider rows");
-        // An unknown ladder collapses to the value row + caption.
-        assert_eq!(effort_block_rows(&[]), 2, "empty ladder → value + caption");
+        assert_eq!(effort_block_rows(&openai), 6, "6-tier → slider rows");
+        // An unknown ladder collapses to the value row + blank + caption.
+        assert_eq!(effort_block_rows(&[]), 3, "empty ladder → value + blank + caption");
     }
 
     #[test]
@@ -2425,6 +2400,18 @@ mod tests {
             assert!(text.contains("FAVORITES"), "labels stable at idx {idx}");
             assert!(text.contains("RECENT"));
             assert!(text.contains("ALL MODELS"));
+        }
+    }
+
+    #[test]
+    fn models_modal_row_omits_leading_dot_and_trailing_diamond() {
+        let text = render_models_modal(0, "", false);
+        for line in text.lines() {
+            if line.contains("gpt-5.5") || line.contains("claude-sonnet-5") || line.contains("gemini-3-pro") {
+                assert!(!line.contains('●'), "no leading dot on row: {line:?}");
+                assert!(!line.contains('★'), "no leading star on row: {line:?}");
+                assert!(!line.contains('◆'), "no diamond glyph on row: {line:?}");
+            }
         }
     }
 

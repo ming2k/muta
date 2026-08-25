@@ -580,3 +580,28 @@ fn catalog_builds_from_the_state_store_only() {
     // A config without any provider info still derives from the store.
     let _empty = build_catalog();
 }
+
+#[test]
+fn antigravity_models_derivation_and_hidden_filter() {
+    let _sandbox = sandboxed_paths();
+    let mut conn = instance("g11", Some("antigravity-oauth"));
+    conn.auth = muta_contracts::ChannelAuth::AntigravityOAuth;
+    let connections = Connections {
+        connections: vec![conn],
+    };
+    connections.save().unwrap();
+
+    let mut config = Config::default();
+    config.default_connection = "g11".to_string();
+    config.default_model = Some("gemini-3.7-flash".to_string());
+    config.hidden_models = vec!["gemini-3.6-flash*".to_string(), "gemini-3-flash*".to_string()];
+
+    let usage = muta_persistence::connection_usage::ConnectionUsage::default();
+    let picker = build_picker_state(&config, &usage);
+    let g11_row = picker.rows.iter().find(|r| r.id == "g11").expect("g11 in picker");
+
+    assert!(g11_row.models.contains(&"gemini-3.7-flash".to_string()));
+    assert!(!g11_row.models.iter().any(|m| m.starts_with("gemini-3.6-flash")));
+    assert!(!g11_row.models.iter().any(|m| m.starts_with("gemini-3-flash")));
+}
+

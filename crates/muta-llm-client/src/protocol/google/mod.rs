@@ -386,18 +386,19 @@ impl GoogleProvider {
                 );
             }
 
-            // Model identity passes through verbatim. The catalog advertises
-            // exactly the ids the upstream serves, and silently remapping one
-            // id onto another here would misattribute billing/quotas and make
-            // capability metadata (context window, thinking support, effort
-            // ladder) describe a different model than the one that answers.
-            // If an upstream rejects an advertised id, the 404 clarifier makes
-            // that a loud, actionable error instead of a hidden downgrade.
+            // Normalize model names for Antigravity backend: Antigravity routes 3.7 Flash
+            // through its tiered wire identifier `gemini-3.7-flash-tiered`.
+            let wire_model = if self.endpoint.model == "gemini-3.7-flash" {
+                "gemini-3.7-flash-tiered"
+            } else {
+                self.endpoint.model.as_str()
+            };
+
             let wrapped_body = serde_json::json!({
                 "project": project,
                 "requestId": uuid::Uuid::new_v4().to_string(),
                 "userAgent": self.endpoint.user_agent,
-                "model": self.endpoint.model,
+                "model": wire_model,
                 "request": raw_body
             });
 
@@ -671,11 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_envelope_passes_model_id_through_verbatim() {
-        // Model identity is never remapped: the id the catalog advertises is
-        // the id on the wire, so billing, quotas, and capability metadata all
-        // describe the model that actually answers. A silent 3.7→3.6-style
-        // downgrade here would misattribute every one of those.
+    fn antigravity_envelope_normalizes_gemini_37_flash_wire_name() {
         let p = GoogleProvider::with_base_url_and_user_agent(
             "k".to_string(),
             "gemini-3.7-flash".to_string(),
@@ -684,23 +681,20 @@ mod tests {
         )
         .with_project_id("proj-1");
         let (_, _, body) = p.prepare_request(ModelRequest::new(Vec::new()), true, false);
-        assert_eq!(body["model"], "gemini-3.7-flash");
+        assert_eq!(body["model"], "gemini-3.7-flash-tiered");
         assert!(body["request"].is_object());
     }
 
     #[test]
-    fn antigravity_envelope_no_model_remap_for_any_gemini_id() {
-        // Exhaustive over the ids the antigravity template serves today: none
-        // of them may be rewritten on the wire.
-        for id in [
-            "gemini-3.7-flash",
-            "gemini-3.7-flash-high",
-            "gemini-3.7-flash-medium",
-            "gemini-3.7-flash-low",
-            "gemini-3.6-flash-high",
-            "gemini-3.6-flash-medium",
-            "gemini-3.6-flash-low",
-            "gemini-3.1-pro-high",
+    fn antigravity_envelope_preserves_canonical_antigravity_wire_ids() {
+        for (id, expected) in [
+            ("gemini-3.7-flash-tiered", "gemini-3.7-flash-tiered"),
+            ("gemini-pro-agent", "gemini-pro-agent"),
+            ("gemini-3.1-pro-low", "gemini-3.1-pro-low"),
+            ("gemini-3.1-flash-lite", "gemini-3.1-flash-lite"),
+            ("gemini-2.5-flash", "gemini-2.5-flash"),
+            ("claude-sonnet-4-6", "claude-sonnet-4-6"),
+            ("claude-opus-4-6-thinking", "claude-opus-4-6-thinking"),
         ] {
             let p = GoogleProvider::with_base_url_and_user_agent(
                 "k".to_string(),
@@ -710,7 +704,7 @@ mod tests {
             )
             .with_project_id("proj-1");
             let (_, _, body) = p.prepare_request(ModelRequest::new(Vec::new()), false, false);
-            assert_eq!(body["model"], id, "model id must pass through verbatim");
+            assert_eq!(body["model"], expected, "model id must match expected wire id");
         }
     }
 

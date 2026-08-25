@@ -10,28 +10,33 @@ use super::ProviderTemplateSpec;
 /// Models served by Google Antigravity OAuth (Google One AI Premium / Pro).
 pub const ANTIGRAVITY_OAUTH_MODELS: &[&str] = &[
     "gemini-3.7-flash",
-    "gemini-3.7-flash-high",
-    "gemini-3.7-flash-medium",
-    "gemini-3.7-flash-low",
-    "gemini-3.6-flash-high",
-    "gemini-3.6-flash-medium",
-    "gemini-3.6-flash-low",
+    "gemini-3.7-flash-tiered",
+    "gemini-pro-agent",
+    "gemini-3.1-pro-low",
+    "gemini-3.1-flash-lite",
     "gemini-3-flash-agent",
     "gemini-3-flash",
     "gemini-3.5-flash-low",
-    "gemini-3.1-pro-high",
-    "gemini-3.1-pro-low",
-    "gemini-pro-agent",
     "gemini-2.5-flash",
     "gemini-2.5-flash-thinking",
     "gemini-2.5-pro",
-    "gemini-3.1-flash-lite",
 ];
 
 /// Baseline capability metadata for the models this provider serves.
 pub const MODELS: &[Model] = &[
     Model {
         id: "gemini-3.7-flash",
+        family: "google",
+        context_window: 1_000_000,
+        thinking: ThinkingSupport::ReasoningContent,
+        tool_call: true,
+        vision: true,
+        format: WireFormat::Google,
+        model_guidance: "",
+        effort_levels: EFFORT_GEMINI_LEVEL,
+    },
+    Model {
+        id: "gemini-3.7-flash-tiered",
         family: "google",
         context_window: 1_000_000,
         thinking: ThinkingSupport::ReasoningContent,
@@ -227,7 +232,7 @@ pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     base_url: "https://daily-cloudcode-pa.googleapis.com",
     user_agent: Some(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT),
     protocol: "google",
-    discovery: false,
+    discovery: true,
     fitting: false,
     models: ANTIGRAVITY_OAUTH_MODELS,
 };

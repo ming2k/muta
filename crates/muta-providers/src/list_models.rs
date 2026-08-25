@@ -275,9 +275,9 @@ pub fn models_endpoint_for(
             .unwrap_or(trimmed),
         DiscoveryProtocol::Google => {
             if trimmed.contains("cloudcode-pa.googleapis.com") {
-                return Err(ModelListError::BadEndpoint(
-                    "Google Antigravity endpoint does not provide a /models route (models are fixed by subscription)".to_string(),
-                ));
+                let base = trimmed.strip_suffix("/v1internal").unwrap_or(trimmed);
+                let base = base.strip_suffix('/').unwrap_or(base);
+                return Ok(format!("{base}/v1internal:fetchAvailableModels"));
             }
             trimmed.strip_suffix('/').unwrap_or(trimmed)
         }
@@ -342,17 +342,31 @@ pub async fn list_models(
             builder.send().await.map_err(ModelListError::Http)?
         }
         DiscoveryProtocol::Google => {
-            // Google auth: the key is a query param, never a header. A keyless
-            // request omits it entirely (Google rejects keyless, but a relay
-            // might not require it).
-            let mut builder = client.get(&endpoint);
-            if !req.api_key.expose_secret().trim().is_empty() {
-                builder = builder.query(&[("key", req.api_key.expose_secret())]);
+            if req.base_url.contains("cloudcode-pa.googleapis.com") {
+                let mut builder = client
+                    .post(&endpoint)
+                    .header("x-goog-api-client", "gl-go/1.23.2 gdcl/0.1")
+                    .json(&serde_json::json!({ "project": "" }));
+                if !req.api_key.expose_secret().trim().is_empty() {
+                    builder = builder.bearer_auth(req.api_key.expose_secret());
+                }
+                for (name, value) in req.extra_headers {
+                    builder = builder.header(*name, *value);
+                }
+                builder.send().await.map_err(ModelListError::Http)?
+            } else {
+                // Google auth: the key is a query param, never a header. A keyless
+                // request omits it entirely (Google rejects keyless, but a relay
+                // might not require it).
+                let mut builder = client.get(&endpoint);
+                if !req.api_key.expose_secret().trim().is_empty() {
+                    builder = builder.query(&[("key", req.api_key.expose_secret())]);
+                }
+                for (name, value) in req.extra_headers {
+                    builder = builder.header(*name, *value);
+                }
+                builder.send().await.map_err(ModelListError::Http)?
             }
-            for (name, value) in req.extra_headers {
-                builder = builder.header(*name, *value);
-            }
-            builder.send().await.map_err(ModelListError::Http)?
         }
     };
 
@@ -564,37 +578,115 @@ fn copilot_endpoint(value: Option<&Value>) -> Option<RemoteModelEndpoint> {
 }
 
 /// Extract Google `models[]`, keeping only `generateContent`-capable text
-/// models and stripping the `models/` name prefix to a bare id. The Google
-/// shape advertises no per-model capability fields muta consumes, so the
-/// entries carry ids only.
+/// models and stripping the `models/` name prefix to a bare id. Also supports
+/// the Google Antigravity `fetchAvailableModels` shape.
 fn parse_google_models(json: &Value) -> Vec<DiscoveredModel> {
-    let Some(models) = json.get("models").and_then(Value::as_array) else {
-        return Vec::new();
-    };
-    models
-        .iter()
-        .filter_map(|entry| {
-            // Only keep text-generation models. A Google model entry advertises
-            // its capabilities via `supportedGenerationMethods`; entries that
-            // list `generateContent` are the chat/text models an agent uses.
-            // Embeddings/embedding-only and image/video models are excluded.
-            let methods = entry
-                .get("supportedGenerationMethods")
-                .and_then(Value::as_array);
-            let is_text =
-                methods.is_none_or(|arr| arr.iter().any(|m| m.as_str() == Some("generateContent")));
-            if !is_text {
-                return None;
-            }
-            entry
-                .get("name")
-                .and_then(Value::as_str)
-                .map(|name| DiscoveredModel {
-                    id: name.strip_prefix("models/").unwrap_or(name).to_string(),
-                    ..DiscoveredModel::default()
-                })
-        })
-        .collect()
+    if let Some(models) = json.get("models").and_then(Value::as_array) {
+        return models
+            .iter()
+            .filter_map(|entry| {
+                // Only keep text-generation models. A Google model entry advertises
+                // its capabilities via `supportedGenerationMethods`; entries that
+                // list `generateContent` are the chat/text models an agent uses.
+                // Embeddings/embedding-only and image/video models are excluded.
+                let methods = entry
+                    .get("supportedGenerationMethods")
+                    .and_then(Value::as_array);
+                let is_text = methods.is_none_or(|arr| {
+                    arr.iter().any(|m| m.as_str() == Some("generateContent"))
+                });
+                if !is_text {
+                    return None;
+                }
+                entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(|name| DiscoveredModel {
+                        id: name.strip_prefix("models/").unwrap_or(name).to_string(),
+                        ..DiscoveredModel::default()
+                    })
+            })
+            .collect();
+    }
+
+    if let Some(models_map) = json.get("models").and_then(Value::as_object) {
+        return parse_antigravity_models_map(models_map, json);
+    }
+
+    Vec::new()
+}
+
+fn parse_antigravity_models_map(
+    models_map: &serde_json::Map<String, Value>,
+    root: &Value,
+) -> Vec<DiscoveredModel> {
+    let deprecated_map = root.get("deprecatedModelIds").and_then(Value::as_object);
+    let mut out = Vec::new();
+    let mut saw_flash_tiered = false;
+
+    for (model_id, mdata) in models_map {
+        // Suppress 3.6 flash models, internal chat/tab helpers, embeddings, image models, deprecated models
+        if model_id.starts_with("gemini-3.6-flash")
+            || model_id.starts_with("chat_")
+            || model_id.starts_with("tab_")
+            || model_id.starts_with("models/")
+            || model_id.contains("image")
+            || deprecated_map.is_some_and(|dep| dep.contains_key(model_id))
+        {
+            continue;
+        }
+
+        if model_id == "gemini-3.7-flash-tiered" {
+            saw_flash_tiered = true;
+        }
+
+        let context_window = mdata
+            .get("maxTokens")
+            .and_then(Value::as_u64)
+            .map(|v| v as usize);
+        let max_output_tokens = mdata
+            .get("maxOutputTokens")
+            .and_then(Value::as_u64)
+            .map(|v| v as u32);
+        let reasoning = mdata
+            .get("supportsThinking")
+            .and_then(Value::as_bool)
+            .or(Some(true));
+        let vision = mdata.get("supportsImages").and_then(Value::as_bool);
+
+        out.push(DiscoveredModel {
+            id: model_id.clone(),
+            picker_enabled: Some(true),
+            endpoint: None,
+            family: Some("google".to_string()),
+            context_window,
+            max_output_tokens,
+            reasoning,
+            thinking: Some(ThinkingSupport::ReasoningContent),
+            tool_call: Some(true),
+            vision,
+            effort_levels: None,
+        });
+    }
+
+    // Expose standard user-friendly "gemini-3.7-flash" alias when 3.7 flash tiered is supported
+    if saw_flash_tiered {
+        out.push(DiscoveredModel {
+            id: "gemini-3.7-flash".to_string(),
+            picker_enabled: Some(true),
+            endpoint: None,
+            family: Some("google".to_string()),
+            context_window: Some(1_000_000),
+            max_output_tokens: Some(64_000),
+            reasoning: Some(true),
+            thinking: Some(ThinkingSupport::ReasoningContent),
+            tool_call: Some(true),
+            vision: Some(true),
+            effort_levels: None,
+        });
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -680,14 +772,49 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_endpoint_rejects_models_discovery() {
-        assert!(matches!(
+    fn antigravity_endpoint_derives_fetch_available_models_endpoint() {
+        assert_eq!(
             models_endpoint_for(
                 DiscoveryProtocol::Google,
                 "https://cloudcode-pa.googleapis.com"
-            ),
-            Err(ModelListError::BadEndpoint(_))
-        ));
+            )
+            .unwrap(),
+            "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+        );
+        assert_eq!(
+            models_endpoint_for(
+                DiscoveryProtocol::Google,
+                "https://daily-cloudcode-pa.googleapis.com/v1internal"
+            )
+            .unwrap(),
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+        );
+    }
+
+    #[test]
+    fn parses_antigravity_models_filtering_3_6_and_deprecated() {
+        let json = serde_json::json!({
+            "models": {
+                "gemini-3.7-flash-tiered": { "maxTokens": 1000000, "supportsThinking": true },
+                "gemini-3.6-flash-high": { "maxTokens": 1000000, "supportsThinking": true },
+                "gemini-pro-agent": { "maxTokens": 1000000, "supportsThinking": true },
+                "gemini-3.1-pro-high": { "maxTokens": 1000000, "supportsThinking": true },
+                "chat_20706": { "maxTokens": 16000 }
+            },
+            "deprecatedModelIds": {
+                "gemini-3.1-pro-high": { "newModelId": "gemini-pro-agent" }
+            }
+        });
+        let got: Vec<String> = parse_models(DiscoveryProtocol::Google, &json)
+            .into_iter()
+            .map(|model| model.id)
+            .collect();
+        assert!(got.contains(&"gemini-3.7-flash-tiered".to_string()));
+        assert!(got.contains(&"gemini-3.7-flash".to_string()));
+        assert!(got.contains(&"gemini-pro-agent".to_string()));
+        assert!(!got.contains(&"gemini-3.6-flash-high".to_string()), "3.6 flash must be suppressed");
+        assert!(!got.contains(&"gemini-3.1-pro-high".to_string()), "deprecated model must be suppressed");
+        assert!(!got.contains(&"chat_20706".to_string()), "internal helper model must be suppressed");
     }
 
     #[test]
