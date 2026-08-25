@@ -5,7 +5,7 @@
 //! owns the pure projection from a live conversation window to one immutable
 //! [`muta_contracts::ModelRequest`].
 
-mod policies;
+pub mod policies;
 pub(crate) mod system_prompt;
 
 pub(crate) use policies::default_system_prompt_registry;

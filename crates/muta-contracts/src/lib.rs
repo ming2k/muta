@@ -76,7 +76,11 @@ pub mod mcp;
 pub mod model;
 pub mod todos;
 pub use todos::{MAX_TODOS, TodoId, TodoItem, TodoList, TodoStatus};
+pub mod actor;
 pub mod envoy;
+pub use actor::{
+    ActorEnvelope, ActorEvent, ActorId, ActorMessage, ActorRole, ActorState, WorktreeMode,
+};
 pub mod history;
 pub use history::{HISTORY_CAP, HistoryEntry, merge_history};
 pub mod identity;

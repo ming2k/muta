@@ -22,9 +22,12 @@ mod helpers;
 mod list;
 mod read;
 mod read_image;
+pub mod syntax_guard;
 mod todo;
 mod web;
 mod write;
+
+pub use syntax_guard::{SyntaxCheckResult, verify_syntax};
 
 // Re-export every tool struct at the module root so existing consumers
 // (`crate::tools::ReadTextTool`, etc.) keep resolving unchanged.

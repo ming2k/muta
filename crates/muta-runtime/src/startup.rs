@@ -290,6 +290,22 @@ define_builtin_commands! {
         intent_keywords: ["tree", "dag", "branch", "branches", "lineage", "timeline", "history-tree", "checkout"],
         category: Session,
     },
+    Diff = "/diff" : {
+        summary: "View workspace modifications made in this session",
+        description: "Inspect the aggregated git-aware diff of all file modifications and creations produced across the current conversation branch.",
+        usage: ["/diff"],
+        examples: [("/diff", "View workspace file changes")],
+        intent_keywords: ["diff", "changes", "modified", "patch", "git-diff", "review-changes"],
+        category: Session,
+    },
+    Undo = "/undo" : {
+        summary: "Undo the last conversation turn and file changes",
+        description: "Revert the most recent assistant turn, jumping back one step in the DAG session tree and discarding uncommitted modifications.",
+        usage: ["/undo"],
+        examples: [("/undo", "Undo last turn")],
+        intent_keywords: ["undo", "revert", "rollback", "back", "pop", "discard-turn"],
+        category: Session,
+    },
     Dashboard = "/dashboard" : {
         summary: "Session daemon control dashboard",
         description: "Open the full-screen session dashboard to monitor live daemon sessions, view activity, inspect logs, and manage connections.",

@@ -178,6 +178,11 @@ impl SessionTree {
         self.entries.get(id)
     }
 
+    /// Return the active leaf ID if set.
+    pub fn active_leaf(&self) -> Option<SessionEntryId> {
+        self.active_leaf_id.clone()
+    }
+
     /// Get all entries forming the linear branch from the root down to `leaf_id`.
     /// Returned entries are in chronological root-to-leaf order.
     pub fn get_branch(&self, leaf_id: &str) -> Vec<SessionEntry> {

@@ -1008,6 +1008,44 @@ pub async fn dispatch(
             )
             .await;
         }
+        Some(BuiltinCmd::Diff) => {
+            record_ack(
+                session,
+                name,
+                args,
+                "Workspace diff tracking is active on the current conversation branch.",
+            )
+            .await;
+        }
+        Some(BuiltinCmd::Undo) => {
+            let tree = session.tree().await;
+            if let Some(current_leaf) = tree.active_leaf()
+                && let Some(parent_id) = tree
+                    .entries
+                    .get(&current_leaf)
+                    .and_then(|e| e.parent_id.clone())
+            {
+                let _ = session.switch_tree_leaf(&parent_id).await;
+                record_ack(
+                    session,
+                    name,
+                    args,
+                    &format!(
+                        "Rolled back active conversation branch to parent node {}.",
+                        parent_id
+                    ),
+                )
+                .await;
+            } else {
+                record_ack(
+                    session,
+                    name,
+                    args,
+                    "Cannot undo: already at the root of the conversation tree.",
+                )
+                .await;
+            }
+        }
         Some(BuiltinCmd::Dashboard) => {
             record_invocation(session, name, args).await;
             // The session dashboard renders the monitor stream the TUI

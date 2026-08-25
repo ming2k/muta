@@ -69,6 +69,16 @@ impl Tool for WriteFileTool {
             .unwrap_or_else(|| env_from_root(&self.root));
         let resolved = resolve_workspace_path(&self.root, path);
 
+        // Syntax defense guard: verify syntactic integrity before committing changes to disk.
+        if let super::syntax_guard::SyntaxCheckResult::Invalid(err) =
+            super::syntax_guard::verify_syntax(&resolved, content)
+        {
+            return Err(format!(
+                "Syntax check failed for '{}': {err}. The file was NOT written. Please fix the syntax error and try again.",
+                path
+            ));
+        }
+
         // Write atomically (temp file + fsync + rename) so an interrupted write
         // never leaves a half-written, corrupt file in place of the original.
         env.fs()

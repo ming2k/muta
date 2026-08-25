@@ -233,6 +233,16 @@ impl Tool for EditFileTool {
             }
         };
 
+        // Syntax defense guard: verify syntactic integrity before committing changes to disk.
+        if let super::syntax_guard::SyntaxCheckResult::Invalid(err) =
+            super::syntax_guard::verify_syntax(&resolved, &edit.new_content)
+        {
+            return Err(format!(
+                "Syntax check failed for '{}': {err}. The edit was NOT applied. Please fix the syntax error and re-apply.",
+                path
+            ));
+        }
+
         // Atomically commit the new content (temp file + fsync + rename) so an
         // interrupted edit never corrupts the file in place.
         env.fs()

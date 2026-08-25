@@ -129,7 +129,9 @@ const ENVOY_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5)
 pub mod agent;
 pub use agent::{Agent, AgentBuilder, RequestTokenEstimate, RoundOutcome};
 
+pub mod actor;
 mod bash_policy;
+pub mod budget;
 pub mod catalog;
 pub mod compaction;
 pub mod context_projection;
@@ -162,9 +164,11 @@ mod tool_integration;
 mod tool_manager;
 mod tool_scheduler;
 pub mod tools;
+pub mod worktree;
 
 pub use context_projection::ContextProjectionGate;
 pub use envoy_tool::{EnvoyRegistry, EnvoyTool};
+pub use model_request::policies::subagent_system_prompt_registry;
 pub use model_request::system_prompt::{
     SystemPromptContext, SystemPromptRegistry, SystemPromptRegistryError, SystemPromptSection,
 };

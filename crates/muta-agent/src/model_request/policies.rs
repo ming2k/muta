@@ -283,6 +283,49 @@ impl SystemPromptSection for SkillsGuidance {
     }
 }
 
+/// Specialized, hyper-compact system prompt section for an autonomous subagent role.
+struct SubagentRoleGuidance {
+    role: muta_contracts::ActorRole,
+}
+
+impl SystemPromptSection for SubagentRoleGuidance {
+    fn id(&self) -> &'static str {
+        "system.subagent_role"
+    }
+    fn rank(&self) -> u32 {
+        15
+    }
+    fn is_active(&self, _ctx: &SystemPromptContext) -> bool {
+        true
+    }
+    fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
+        let text = match &self.role {
+            muta_contracts::ActorRole::Principal => return None,
+            muta_contracts::ActorRole::Research => {
+                "You are an autonomous Research Subagent. Your goal is to thoroughly inspect, find, and analyze code, documentation, and architecture, then return a concise, high-signal, structured answer. You are read-only: do not propose file edits directly."
+            }
+            muta_contracts::ActorRole::CodeReview => {
+                "You are a specialized Code Review Subagent. Your goal is to inspect changed files, verify correctness, edge cases, type safety, and architectural consistency. Provide actionable feedback with exact file and line references."
+            }
+            muta_contracts::ActorRole::Coder => {
+                "You are an autonomous Implementation Subagent executing in an isolated workspace. Implement the requested changes cleanly, maintain codebase idioms, verify your edits, and return a comprehensive technical summary of modified files and verification results."
+            }
+            muta_contracts::ActorRole::Planner => {
+                "You are a Strategic Planning Subagent. Decompose complex objectives into clear, dependency-ordered, verifiable milestones. Be realistic, thorough, and explicit about constraints."
+            }
+            muta_contracts::ActorRole::McpSpecialist => {
+                "You are a Specialized Integration Subagent with access to dynamic MCP tools. Execute necessary API/tool interactions, handle errors gracefully, and summarize outputs succinctly."
+            }
+            muta_contracts::ActorRole::Custom(name) => {
+                return Some(format!(
+                    "You are a specialized autonomous subagent assigned to role: {name}. Focus strictly on your assigned task and provide a concise, high-signal final answer."
+                ));
+            }
+        };
+        Some(text.to_string())
+    }
+}
+
 /// Build the registry with the default system-prompt sections, in rank
 /// order. Called by [`crate::Agent::builder`]; an embedding may add, reorder, or
 /// disable sections on [`crate::AgentBuilder`] before freezing the agent.
@@ -298,5 +341,16 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(FileEditingGuidance);
     registry.register(WebUntrustedContentGuidance);
     registry.register(SkillsGuidance);
+    registry
+}
+
+/// Build a specialized, minimal system prompt registry for a subagent role.
+pub fn subagent_system_prompt_registry(role: &muta_contracts::ActorRole) -> SystemPromptRegistry {
+    let mut registry = SystemPromptRegistry::new();
+    registry.register(IdentityPreamble);
+    registry.register(SubagentRoleGuidance { role: role.clone() });
+    registry.register(ToneGuidance);
+    registry.register(ModelGuidance);
+    registry.register(FileEditingGuidance);
     registry
 }
