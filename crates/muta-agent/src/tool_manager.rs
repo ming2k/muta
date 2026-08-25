@@ -168,6 +168,7 @@ impl ToolManager {
     pub(crate) fn loop_tools(&self, autopilot: bool) -> Vec<Arc<dyn Tool>> {
         self.installed()
             .into_iter()
+            .filter(|s| s.tool.is_available())
             .filter(|s| !self.is_name_disabled(s.tool.name()))
             .filter(|s| !(autopilot && s.tool.name() == "ask_user"))
             .map(|s| s.tool)
@@ -178,7 +179,10 @@ impl ToolManager {
     /// Mirrors the historical "resolved first, dynamic fallback" lookup, now
     /// extended with the user bucket in between (builtin > user > mcp).
     pub(crate) fn find(&self, name: &str) -> Option<SourcedTool> {
-        self.installed().into_iter().find(|s| s.tool.name() == name)
+        self.installed()
+            .into_iter()
+            .filter(|s| s.tool.is_available())
+            .find(|s| s.tool.name() == name)
     }
 
     /// Is `name` disabled by *either* mask? Name-level and uniform across all
@@ -211,11 +215,19 @@ mod tests {
     /// Minimal tool stub for classification tests.
     struct StubTool {
         name: String,
+        available: bool,
     }
     impl StubTool {
         fn new(name: &str) -> Arc<Self> {
             Arc::new(Self {
                 name: name.to_string(),
+                available: true,
+            })
+        }
+        fn unavailable(name: &str) -> Arc<Self> {
+            Arc::new(Self {
+                name: name.to_string(),
+                available: false,
             })
         }
     }
@@ -223,6 +235,9 @@ mod tests {
     impl Tool for StubTool {
         fn name(&self) -> &str {
             &self.name
+        }
+        fn is_available(&self) -> bool {
+            self.available
         }
         fn description(&self) -> &str {
             "stub"
@@ -336,5 +351,29 @@ mod tests {
         assert_eq!(m.find("bash").unwrap().source, ToolSource::Builtin);
         assert_eq!(m.find("mcp__s__t").unwrap().source, ToolSource::Mcp);
         assert!(m.find("nope").is_none());
+    }
+
+    #[test]
+    fn loop_tools_and_find_filter_unavailable_tools() {
+        let m = manager(
+            vec![
+                StubTool::new("active_builtin"),
+                StubTool::unavailable("inactive_builtin"),
+            ],
+            vec![
+                StubTool::new("mcp__srv__active"),
+                StubTool::unavailable("mcp__srv__inactive"),
+            ],
+            vec![],
+            vec![],
+        );
+        let live = m.loop_tools(false);
+        let names: Vec<&str> = live.iter().map(|t| t.name()).collect();
+        assert_eq!(names, vec!["active_builtin", "mcp__srv__active"]);
+
+        assert!(m.find("active_builtin").is_some());
+        assert!(m.find("inactive_builtin").is_none());
+        assert!(m.find("mcp__srv__active").is_some());
+        assert!(m.find("mcp__srv__inactive").is_none());
     }
 }

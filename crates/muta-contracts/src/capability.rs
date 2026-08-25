@@ -296,6 +296,13 @@ pub trait Tool: Send + Sync {
         "default"
     }
 
+    /// Whether this tool is currently available/configured and should be admitted to
+    /// model requests. Returning `false` hides the tool definition from prompts (saving
+    /// tool schema tokens) and prevents model dispatch.
+    fn is_available(&self) -> bool {
+        true
+    }
+
     /// Whether executing this tool may block awaiting a live human decision
     /// (e.g. `ask_user`, an approval-gated mode switch). Non-interactive
     /// execution contexts — envoys spawned for autonomous research — have

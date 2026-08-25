@@ -79,7 +79,30 @@ pub(super) const KNOWN_PROVIDERS: &[&str] = &[
     "searxng",
     "tavily",
     "bocha",
+    "none",
+    "(none)",
+    "disabled",
 ];
+
+#[derive(Clone)]
+struct DisabledSearchProvider;
+
+#[async_trait]
+impl SearchProvider for DisabledSearchProvider {
+    fn name(&self) -> &'static str {
+        "disabled"
+    }
+    async fn search(
+        &self,
+        _client: &reqwest::Client,
+        _query: &str,
+    ) -> Result<ProviderOutput, String> {
+        Err("websearch is disabled in configuration".to_string())
+    }
+    fn clone_box(&self) -> Box<dyn SearchProvider> {
+        Box::new(self.clone())
+    }
+}
 
 /// Build a provider by its config name. Unknown names fall back to Exa (the
 /// default) rather than erroring at construction time, so a typo never leaves
@@ -90,6 +113,10 @@ pub(super) const KNOWN_PROVIDERS: &[&str] = &[
 /// boundary: the `pub(crate)` provider structs hold plain `String`s and never
 /// derive `Debug`, so the plaintext cannot leak through formatting.
 pub(crate) fn build_provider(cfg: &WebSearchConfig, name: &str) -> Box<dyn SearchProvider> {
+    let trimmed = name.trim();
+    if trimmed == "none" || trimmed == "(none)" || trimmed == "disabled" {
+        return Box::new(DisabledSearchProvider);
+    }
     if !KNOWN_PROVIDERS.contains(&name) {
         tracing::warn!(
             backend = name,

@@ -158,9 +158,10 @@ impl CarouselPage {
 /// the guidance line beneath, while still reading as a logo at a glance
 /// rather than competing with the transcript that will replace it.
 const BUILTIN_LOGO: &[&str] = &[
-    " _ _  ___ ___ _ _  ___ ___ ",
-    "| ' \\/ -_) -_) ' \\/ -_) -_|",
-    "|_||_\\___\\___|_||_\\___\\___|",
+    "            _        ",
+    "  _ __ _  _| |_ __ _ ",
+    " | '  \\ || |  _/ _` |",
+    " |_|_|_\\_,_|\\__\\__,_|",
 ];
 
 /// Parse a raw logo file into a display-safe line vector, enforcing the

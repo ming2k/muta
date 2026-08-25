@@ -4,7 +4,7 @@
 
 use crate::modal::Recess;
 use mutx_engine::{
-    Constraint, Direction, Frame, Layout, Line, Margin, Modifier, Rect,
+    Alignment, Constraint, Direction, Frame, Layout, Line, Margin, Modifier, Rect,
     {Block as RtBlock, Clear, Paragraph}, {Color, Span, Style},
 };
 
@@ -444,16 +444,26 @@ fn dim_surface(frame: &mut Frame, theme: &Theme) {
     // dimming its surface with the rest of the transcript.
     let code_fg_factor = (factor + 0.25).min(1.0);
     let buffer = frame.buffer_mut();
-    for cell in buffer.content.iter_mut() {
-        let fg_factor = if cell.fg == theme.code_text() {
-            code_fg_factor
-        } else {
-            factor
-        };
-        cell.fg = scale_color(cell.fg, fg_factor);
-        cell.bg = scale_color(cell.bg, factor);
-        cell.style.fg = cell.fg;
-        cell.style.bg = cell.bg;
+    let (w, h) = buffer.size();
+    for y in 0..h {
+        for x in 0..w {
+            let cell = &mut buffer.content[(y as usize) * (w as usize) + x as usize];
+            let fg_factor = if cell.fg == theme.code_text() {
+                code_fg_factor
+            } else {
+                factor
+            };
+            cell.fg = scale_color(cell.fg, fg_factor);
+            cell.bg = scale_color(cell.bg, factor);
+            cell.style.fg = cell.fg;
+            cell.style.bg = cell.bg;
+        }
+        // In-place mutation bypasses the write-marks-dirty contract
+        // (`Grid::mark`); today a full-screen background fill already dirties
+        // every row earlier in the frame, so the dim repaints correctly — but
+        // that is a coupling, not a contract. Mark the row explicitly so the
+        // diff stays honest even if the fill is ever scoped narrower.
+        buffer.mark(0, y);
     }
 }
 
@@ -817,6 +827,29 @@ pub(crate) fn render_body(
     draw_scrollbar(frame, body_rect, *scroll, max_scroll, theme);
 }
 
+/// Render a block of lines vertically and horizontally centered in `body_rect`.
+///
+/// Used by empty-state modal bodies (e.g. Connections and Models pickers when no
+/// items exist) to place guidance copy in the visual center of the modal frame
+/// rather than pinned to the top-left corner.
+pub(crate) fn render_centered_body(frame: &mut Frame, body_rect: Rect, lines: Vec<Line<'static>>) {
+    if body_rect.height == 0 || body_rect.width == 0 || lines.is_empty() {
+        return;
+    }
+    let slack = body_rect.height.saturating_sub(lines.len() as u16) / 2;
+    let top = body_rect.y + slack;
+    let para = Paragraph::new(lines).alignment(Alignment::Center);
+    frame.render_widget(
+        para,
+        Rect::new(
+            body_rect.x,
+            top,
+            body_rect.width,
+            body_rect.height.saturating_sub(slack),
+        ),
+    );
+}
+
 /// The number of context rows kept above and below a followed selection before
 /// the viewport begins to scroll. Keeps `↑/↓` movement from pinning the
 /// highlight to the last visible line. Pass this as `render_body`'s
@@ -859,11 +892,13 @@ pub(crate) fn draw_scrollbar(
         let cell = cell_at_index(buf, buf_area, track_x, track_top);
         cell.set_symbol("▲");
         cell.set_fg(theme.dim());
+        buf.mark(track_x, track_top);
     }
     if more_below {
         let cell = cell_at_index(buf, buf_area, track_x, track_top + track - 1);
         cell.set_symbol("▼");
         cell.set_fg(theme.dim());
+        buf.mark(track_x, track_top + track - 1);
     }
 
     // Thumb position within the open track (between the two caps).
@@ -884,6 +919,10 @@ pub(crate) fn draw_scrollbar(
             let cell = cell_at_index(buf, buf_area, track_x, y);
             cell.set_symbol(" ");
             cell.set_bg(theme.muted());
+            // Same dirty-tracking honesty as the caps: the thumb is written
+            // in place, so the row must be re-marked or a stale thumb can
+            // linger when the row was otherwise clean.
+            buf.mark(track_x, y);
         }
     }
 }

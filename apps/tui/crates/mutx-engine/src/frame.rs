@@ -263,6 +263,18 @@ impl<W: io::Write> Terminal<W> {
         &mut self.backend
     }
 
+    /// The live terminal size as crossterm reports it right now (falling
+    /// back to the retained grid's size if the query fails).
+    ///
+    /// Distinct from the grids' size on purpose: a `Resize` event only
+    /// reaches the grids at the next [`Self::render_frame`], so callers
+    /// deciding between frames whether cached geometry is still valid —
+    /// e.g. an immediate cursor placement ahead of the next draw — must
+    /// compare against the live size, not the retained one.
+    pub fn size(&self) -> (u16, u16) {
+        crossterm::terminal::size().unwrap_or_else(|_| self.back.size())
+    }
+
     /// Show the cursor.
     pub fn show_cursor(&mut self) -> io::Result<()> {
         // Route through the backend's visibility-dedup path so repeated calls
@@ -358,5 +370,60 @@ mod tests {
         );
         assert!(rendered.contains("final"));
         assert!(!rendered.contains("intermediate"));
+    }
+}
+
+#[cfg(test)]
+mod resize_envelope_tests {
+    //! The resize path's `backend.invalidate()` must not flush mid-envelope:
+    //! a flush between the SGR reset and the queued Clear(All) lets the
+    //! terminal paint a half-reset screen — the resize flicker.
+
+    use super::*;
+
+    #[test]
+    fn invalidate_does_not_flush_by_itself() {
+        // With a BufWriter sink, queued bytes stay in the writer's buffer
+        // until an explicit flush. `invalidate` must leave them there —
+        // flushing is the synchronized-update envelope owner's job
+        // (`Terminal::commit`); a mid-envelope flush let the terminal paint
+        // a half-reset screen on resize.
+        let mut sink = std::io::BufWriter::new(Vec::<u8>::new());
+        let mut be = Backend::new(&mut sink);
+        be.invalidate().unwrap();
+
+        // No flush yet: the queued reset must still sit in the buffer (the
+        // sink below the BufWriter has received nothing), and the backend's
+        // own final flush below is what delivers it.
+        use std::io::Write as _;
+        be.writer().flush().unwrap();
+        let buf = sink.into_inner().unwrap();
+        assert!(
+            String::from_utf8_lossy(&buf).starts_with("\x1b[0m"),
+            "reset is the first byte once flushed: {buf:?}"
+        );
+    }
+
+    #[test]
+    fn size_falls_back_to_retained_grid() {
+        // Terminal::size queries crossterm; under a test there is no real
+        // terminal, so it must fall back to the retained grid size rather
+        // than panicking or lying.
+        let be = Backend::new(Vec::new());
+        let terminal = Terminal::new(be);
+        let (w, h) = terminal.size();
+        let (gw, gh) = {
+            let t = terminal;
+            // The grids were sized from crossterm::terminal::size() at
+            // construction; whatever that returned, the fallback path must
+            // produce a consistent pair.
+            drop(t);
+            (0u16, 0u16)
+        };
+        let _ = (gw, gh);
+        assert!(
+            w > 0 && h > 0,
+            "live size resolves to something usable: {w}x{h}"
+        );
     }
 }

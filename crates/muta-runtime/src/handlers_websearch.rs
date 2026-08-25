@@ -46,10 +46,13 @@ const KNOWN_BACKENDS: &[&str] = &[
     "searxng",
     "tavily",
     "bocha",
+    "none",
+    "(none)",
+    "disabled",
 ];
 
 /// Known reader names accepted by `[websearch] reader`.
-const KNOWN_READERS: &[&str] = &["builtin", "jina"];
+const KNOWN_READERS: &[&str] = &["builtin", "jina", "none", "(none)", "disabled"];
 
 fn validate_backend(label: &str, name: &str) -> Result<(), String> {
     if KNOWN_BACKENDS.contains(&name) {

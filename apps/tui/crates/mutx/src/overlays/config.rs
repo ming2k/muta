@@ -72,7 +72,7 @@ impl ConfigCategory {
             ConfigCategory::Appearance => "Appearance",
             ConfigCategory::Transcript => "Transcript",
             ConfigCategory::Behavior => "Behavior",
-            ConfigCategory::WebSearch => "Web Search",
+            ConfigCategory::WebSearch => "Web Tools",
             ConfigCategory::System => "System & Info",
         }
     }
@@ -82,7 +82,7 @@ impl ConfigCategory {
             ConfigCategory::Appearance => "Themes, palette swatches & custom colors",
             ConfigCategory::Transcript => "Turn bands, auto-scroll & disclosures",
             ConfigCategory::Behavior => "Click-outside dismiss & interaction rules",
-            ConfigCategory::WebSearch => "Search backend, reader & API keys",
+            ConfigCategory::WebSearch => "Search providers, page reader & API keys",
             ConfigCategory::System => "Config file paths, runtime & daemon info",
         }
     }
@@ -808,16 +808,20 @@ fn draw_behavior_detail(
     );
 }
 
-// 4. Web Search Detail Pane
+// 4. Web Tools Detail Pane
 //
 // Row indices here must stay in sync with the activate handler in
 // `event_loop/actions.rs` (`InputAction::ConfigActivate`, category 3):
-//   0 Primary Backend   — Enter cycles exa→parallel→duckduckgo→searxng→tavily→bocha
+//   0 Primary Backend   — Enter cycles exa→parallel→duckduckgo→searxng→tavily→bocha→none
 //   1 Fallback Backend  — Enter cycles the same list plus "(none)"
-//   2 Reader            — Enter cycles builtin→jina
-//   3 Timeout           — Enter +5s (shift: −5s)
-//   4 SearXNG URL       — Enter starts/stops inline editing (composer row)
-//   5..9 API keys       — Enter starts/stops inline editing; empty submit clears
+//   2 SearXNG URL       — Enter starts/stops inline editing (composer row)
+//   3 Exa API Key       — Enter starts/stops inline editing; empty submit clears
+//   4 Parallel API Key  — Enter starts/stops inline editing; empty submit clears
+//   5 Tavily API Key    — Enter starts/stops inline editing; empty submit clears
+//   6 Bocha API Key     — Enter starts/stops inline editing; empty submit clears
+//   7 Page Reader       — Enter cycles builtin→jina→none
+//   8 Jina Reader Key   — Enter starts/stops inline editing; empty submit clears
+//   9 Timeout           — Enter +5s (min 5s)
 const WEBSEARCH_BACKENDS: &[(&str, &str)] = &[
     ("exa", "hosted MCP, anonymous by default (default)"),
     ("parallel", "hosted MCP, anonymous by default"),
@@ -825,6 +829,7 @@ const WEBSEARCH_BACKENDS: &[(&str, &str)] = &[
     ("searxng", "self-hosted, keyless, needs a URL"),
     ("tavily", "hosted, needs a Tavily key"),
     ("bocha", "hosted AI search, needs a key; China-direct"),
+    ("none", "disabled — tool is excluded from model requests"),
 ];
 
 /// Cycle a backend id through the known list (unknown → exa). Shared by the
@@ -836,6 +841,15 @@ pub fn cycle_websearch_backend(current: &str) -> &'static str {
         None => 0,
     };
     WEBSEARCH_BACKENDS[next].0
+}
+
+/// Cycle a reader id through builtin → jina → none.
+pub fn cycle_reader(current: &str) -> &'static str {
+    match current.trim() {
+        "builtin" => "jina",
+        "jina" => "none",
+        _ => "builtin",
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -851,7 +865,7 @@ fn draw_websearch_detail(
 
     let Some(ws) = props.websearch else {
         lines.push(Line::from(Span::styled(
-            "Loading web-search configuration…",
+            "Loading web tools configuration…",
             Style::default().fg(props.theme.muted()),
         )));
         render_scrollable(frame, body, lines, props.detail_scroll, None, props.theme);
@@ -859,7 +873,7 @@ fn draw_websearch_detail(
     };
 
     lines.push(Line::from(Span::styled(
-        "websearch/webfetch backends. Changes apply live and persist to config.toml.",
+        "websearch & webfetch backends. Changes apply live and persist to config.toml.",
         Style::default().fg(props.theme.muted()),
     )));
     lines.push(Line::from(""));
@@ -876,9 +890,7 @@ fn draw_websearch_detail(
         ws.searxng_url
             .as_deref()
             .map(|u| format!("JSON endpoint: {u}"))
-            .unwrap_or_else(|| {
-                "JSON endpoint not set — searxng will error at call time".to_string()
-            })
+            .unwrap_or_else(|| "JSON endpoint not set — searxng will be inactive".to_string())
     } else {
         "only used when a backend is searxng".to_string()
     };
@@ -891,35 +903,41 @@ fn draw_websearch_detail(
         }
     };
 
+    let primary_desc = if ws.provider == "none" || ws.provider == "disabled" {
+        "disabled — websearch is excluded from model requests".to_string()
+    } else if ws.provider == "tavily" && !ws.tavily_api_key_set {
+        "inactive — Tavily API key required to enable tool".to_string()
+    } else if ws.provider == "bocha" && !ws.bocha_api_key_set {
+        "inactive — Bocha API key required to enable tool".to_string()
+    } else if ws.provider == "searxng" && ws.searxng_url.as_deref().unwrap_or("").is_empty() {
+        "inactive — SearXNG JSON endpoint required to enable tool".to_string()
+    } else {
+        backend_desc(&ws.provider).to_string()
+    };
+
+    let reader_desc = if ws.reader == "none" || ws.reader == "disabled" {
+        "disabled — webfetch is excluded from model requests".to_string()
+    } else if ws.reader == "jina" {
+        "r.jina.ai: JS rendering + readability extraction".to_string()
+    } else {
+        "direct fetch + local HTML stripping (no JS)".to_string()
+    };
+
     let items: Vec<(String, String, String)> = vec![
+        // ── 1. Web Search (Breadth) ──
         (
             "Primary Backend".to_string(),
             ws.provider.clone(),
-            backend_desc(&ws.provider).to_string(),
+            primary_desc,
         ),
         (
             "Fallback Backend".to_string(),
-            if ws.fallback.trim().is_empty() {
+            if ws.fallback.trim().is_empty() || ws.fallback == "none" {
                 "(none)".to_string()
             } else {
                 ws.fallback.clone()
             },
             "tried automatically when the primary fails".to_string(),
-        ),
-        (
-            "Page Reader".to_string(),
-            ws.reader.clone(),
-            if ws.reader == "jina" {
-                "r.jina.ai: JS rendering + readability extraction"
-            } else {
-                "direct fetch + local HTML stripping (no JS)"
-            }
-            .to_string(),
-        ),
-        (
-            "Timeout".to_string(),
-            format!("{} s", ws.timeout_secs),
-            "per-request timeout for both tools".to_string(),
         ),
         (
             "SearXNG URL".to_string(),
@@ -946,15 +964,49 @@ fn draw_websearch_detail(
             key_row(ws.bocha_api_key_set),
             "required when the backend is bocha".to_string(),
         ),
+        // ── 2. Web Fetch (Depth) ──
+        ("Page Reader".to_string(), ws.reader.clone(), reader_desc),
         (
             "Jina Reader Key".to_string(),
             key_row(ws.jina_api_key_set),
             "optional — raises the reader rate limit".to_string(),
         ),
+        // ── 3. Shared Network & Timeout ──
+        (
+            "Timeout".to_string(),
+            format!("{} s", ws.timeout_secs),
+            "per-request timeout for both tools".to_string(),
+        ),
     ];
 
     let editing_field = props.websearch_editing_field();
     for (i, (label, val, desc)) in items.iter().enumerate() {
+        if i == 0 {
+            lines.push(Line::from(Span::styled(
+                "── 1. Web Search (Breadth) ───────────────────────────",
+                Style::default()
+                    .fg(props.theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+        } else if i == 7 {
+            lines.push(Line::from(Span::styled(
+                "── 2. Web Fetch (Depth) ───────────────────────────────",
+                Style::default()
+                    .fg(props.theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+        } else if i == 9 {
+            lines.push(Line::from(Span::styled(
+                "── 3. Shared Network & Timeout ───────────────────────",
+                Style::default()
+                    .fg(props.theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+        }
+
         let is_sel = i == props.detail_index;
         if is_sel {
             selected_line = Some(lines.len());
@@ -976,7 +1028,7 @@ fn draw_websearch_detail(
 
         let shown: String = if editing_this {
             props.input.to_string()
-        } else if i == 4 && val.is_empty() {
+        } else if i == 2 && val.is_empty() {
             "(not set)".to_string()
         } else {
             val.clone()

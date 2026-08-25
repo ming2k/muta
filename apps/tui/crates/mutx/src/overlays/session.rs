@@ -11,7 +11,7 @@ use crate::components::options::{ChoiceStyle, ChoiceTone, choice_style};
 use crate::primitives::{
     FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, breadcrumb_parts,
     draw_scrollbar, keymap_body_lines, keymap_page_footer_hints, keyvocab, modal_area, modal_frame,
-    modal_header, modal_header_parts, render_body, render_modal_footer,
+    modal_header, modal_header_parts, render_centered_body, render_modal_footer,
     render_modal_footer_with_more, resolve_scroll,
 };
 use crate::view::Theme;
@@ -158,29 +158,17 @@ pub fn draw_sessions_modal(
     let body_width = f.body.width as usize;
 
     if sessions.is_empty() {
-        // Empty-state: a spinner + hint. Rendered directly (no list body).
+        // Empty-state: a spinner + hint. Rendered centered directly (no list body).
         const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let spin = SPINNER_FRAMES[spinner_phase % SPINNER_FRAMES.len()];
-        let body = vec![
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
-                Span::styled(
-                    "Loading sessions / No previous sessions yet.",
-                    Style::default().fg(theme.muted()),
-                ),
-            ]),
-        ];
-        render_body(
-            frame,
-            f.body,
-            body,
-            scroll,
-            None,
-            SCROLL_EDGE_MARGIN,
-            false,
-            theme,
-        );
+        let body = vec![Line::from(vec![
+            Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
+            Span::styled(
+                "Loading sessions / No previous sessions yet.",
+                Style::default().fg(theme.muted()),
+            ),
+        ])];
+        render_centered_body(frame, f.body, body);
         if let Some(fo) = f.footer {
             render_modal_footer_with_more(frame, fo, &list_footer_hints, &list_extra, theme);
         }

@@ -149,6 +149,42 @@ impl<W: Write> Backend<W> {
         &mut self.out
     }
 
+    /// Open a DEC synchronized-update (mode 2026) envelope: queue the begin
+    /// marker *without* flushing, so it reaches the terminal in the same
+    /// ordered stream as (and ahead of) everything written until the matching
+    /// [`Self::end_sync_update`].
+    ///
+    /// This is the primitive for the app's *out-of-band* cursor writes — the
+    /// input-driven immediate caret flush. Without it, those bytes reached
+    /// the terminal uncoordinated with the frame's own writes: a frame
+    /// committing between the flush's `MoveTo` and its repaint could present
+    /// the caret at a coordinate whose surrounding cells still showed the
+    /// previous frame — the visual seam users perceive as caret jitter.
+    /// Terminals without mode-2026 support ignore the markers (both the
+    /// begin emitted here and the matching end).
+    ///
+    /// Presentation semantics are order-based, not flush-based: the terminal
+    /// defers rendering from the moment it *receives* the begin marker until
+    /// it receives the end marker, so intermediate flushes inside the
+    /// envelope cannot split it — only the byte order matters, and a single
+    /// writer preserves it. Flushing the begin marker alone would add a
+    /// syscall and present an empty envelope for no benefit (and a crash
+    /// between begin and end leaves the terminal suspended only until its
+    /// mode-2026 timeout, typically tens of milliseconds).
+    pub fn begin_sync_update(&mut self) -> io::Result<()> {
+        use crossterm::terminal::BeginSynchronizedUpdate;
+        self.out.queue(BeginSynchronizedUpdate).map(|_| ())
+    }
+
+    /// Close a synchronized-update envelope opened by
+    /// [`Self::begin_sync_update`], presenting everything written in between
+    /// atomically. This is the envelope's single flush point.
+    pub fn end_sync_update(&mut self) -> io::Result<()> {
+        use crossterm::terminal::EndSynchronizedUpdate;
+        self.out.queue(EndSynchronizedUpdate)?;
+        self.out.flush()
+    }
+
     /// Apply a diff's draw commands: move the cursor into place, set the
     /// style delta, and write each run's symbols. Returns the number of draw
     /// commands processed.
@@ -360,8 +396,14 @@ impl<W: Write> Backend<W> {
     /// the reset forces the real terminal back to RESET, keeping the tracker
     /// and the terminal honest with each other.
     pub fn invalidate(&mut self) -> io::Result<()> {
+        // Queued (not flushed): callers bracket this inside a synchronized-
+        // update envelope when one is open (see `Terminal::commit_frame`), so
+        // the reset reaches the terminal as part of the same atomic frame.
+        // Flushing here would split that envelope mid-frame and let the
+        // terminal paint a half-reset screen — the resize flicker this path
+        // exists to prevent. `Terminal::commit` still owns the single flush
+        // at the end of the envelope; direct callers (tests) flush manually.
         self.out.queue(SetAttribute(Attribute::Reset))?;
-        self.out.flush()?;
         self.cur = None;
         // The terminal's cursor visibility is also outside our control on a
         // resize/reattach (the real terminal may have been reset to its
@@ -615,6 +657,7 @@ mod tests {
             be.hide_cursor().unwrap(); // emit ?25l
             be.hide_cursor().unwrap(); // silent
             be.invalidate().unwrap();
+            let _ = be.writer().flush();
             be.hide_cursor().unwrap(); // must re-emit after invalidate
         }
 
@@ -706,5 +749,69 @@ mod tests {
         assert_eq!(Bce::for_term("dumb", Some("1")), Bce::Yes);
         // Garbage override falls back to the TERM-based decision.
         assert_eq!(Bce::for_term("xterm-256color", Some("maybe")), Bce::Yes);
+    }
+    /// The out-of-band sync-update primitives must bracket atomically: begin
+    /// queues without flushing, end queues + flushes, and the emitted bytes
+    /// are exactly `?2026h` … `?2026l`.
+    #[test]
+    fn sync_update_envelope_brackets_out_of_band_writes() {
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut be = Backend::new(&mut buf);
+            be.begin_sync_update().unwrap();
+            be.show_cursor_at(5, 7).unwrap();
+            be.end_sync_update().unwrap();
+        }
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.starts_with("\x1b[?2026h"), "envelope opens first: {s:?}");
+        assert!(s.ends_with("\x1b[?2026l"), "envelope closes last: {s:?}");
+        // `MoveTo(x=5, y=7)` is 1-based in the escape: row 8, column 6.
+        assert!(
+            s.contains("\x1b[?25h") && s.contains("\x1b[8;6H"),
+            "the out-of-band caret write sits inside the envelope: {s:?}"
+        );
+    }
+
+    /// Repeated envelopes must not re-open while one is conceptually live;
+    /// more importantly the *ordering* contract: every begin is followed by
+    /// its end before the next begin (a begin/begin/end sequence would
+    /// suspend updates past the intended window).
+    #[test]
+    fn sync_update_envelopes_never_nest() {
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut be = Backend::new(&mut buf);
+            for _ in 0..3 {
+                be.begin_sync_update().unwrap();
+                be.hide_cursor_at(0, 0).unwrap();
+                be.end_sync_update().unwrap();
+            }
+        }
+        let s = String::from_utf8(buf).unwrap();
+        let begins = s.matches("\x1b[?2026h").count();
+        let ends = s.matches("\x1b[?2026l").count();
+        assert_eq!(begins, 3, "one begin per envelope: {s:?}");
+        assert_eq!(ends, 3, "one end per envelope: {s:?}");
+        // No begin appears between another begin and its end, and none is
+        // left open: scan the marker occurrences in byte order and track
+        // depth.
+        let mut depth = 0i32;
+        let mut pos = 0usize;
+        let mut properly_nested = true;
+        while let Some(rel) = s[pos..].find("\x1b[?2026") {
+            let at = pos + rel;
+            let is_begin = s[at + 7..].starts_with('h');
+            if is_begin {
+                depth += 1;
+                if depth > 1 {
+                    properly_nested = false;
+                }
+            } else {
+                depth -= 1;
+            }
+            pos = at + 7;
+        }
+        assert!(properly_nested, "envelopes never nest: {s:?}");
+        assert_eq!(depth, 0, "every envelope closes: {s:?}");
     }
 }

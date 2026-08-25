@@ -18,8 +18,8 @@ use crate::primitives::{
     ContentModalSpec, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
     breadcrumb_parts, content_modal_area, content_modal_probe, hierarchical_breadcrumb,
     keymap_body_lines, keymap_page_footer_hints, keyvocab, modal_area, modal_chrome_rows,
-    modal_frame, modal_header, modal_header_parts, render_body, render_modal_footer,
-    render_modal_footer_with_more,
+    modal_frame, modal_header, modal_header_parts, render_body, render_centered_body,
+    render_modal_footer, render_modal_footer_with_more,
 };
 use crate::providers::{
     CustomField, ModelBodyLine, PROVIDER_TEMPLATES, ProviderTemplate, RankedModel, RankedProvider,
@@ -126,23 +126,30 @@ pub fn draw_connections_modal(
         draw_picker_search_row(frame, search_rect, query, theme);
     }
 
-    // Empty state: no provider instance exists. Show a centered hint that
-    // points the user at the `a` footer shortcut to add one (browse mode only
-    // — in search mode the standard "no matches" body applies).
+    // Empty state: no provider instance exists. Show a vertically and
+    // horizontally centered hint that points the user at the `a` footer
+    // shortcut to add one (browse mode only — in search mode the standard
+    // "no matches" body applies).
     if providers.is_empty() && !search {
         let body = connections_empty_body(theme);
-        render_body(
-            frame,
-            body_rect,
-            body,
-            scroll,
-            None,
-            SCROLL_EDGE_MARGIN,
-            false,
-            theme,
-        );
+        render_centered_body(frame, body_rect, body);
         if let Some(fo) = f.footer {
             render_modal_footer_with_more(frame, fo, hints, extra, theme);
+        }
+        return area;
+    }
+
+    if providers.is_empty() && search {
+        let body = search_empty_body(theme);
+        render_centered_body(frame, body_rect, body);
+        if let Some(fo) = f.footer {
+            render_modal_footer_with_more(frame, fo, hints, extra, theme);
+        }
+        if let Some(sr) = search_rect {
+            let prefix = " Search  › ".width() as u16;
+            let cursor_x = sr.x + prefix + caret_column(query, cursor_position);
+            let cursor_y = sr.y;
+            frame.set_cursor_position((cursor_x, cursor_y));
         }
         return area;
     }
@@ -285,6 +292,33 @@ pub fn draw_models_modal(
     let (search_rect, body_rect) = split_search_body(f.body, search);
     if let Some(search_rect) = search_rect {
         draw_picker_search_row(frame, search_rect, query, theme);
+    }
+
+    // Empty state: no model available. Show a vertically and horizontally
+    // centered hint prompting the user to add a connection in /connections
+    // (or press `a` to add), and indicating that fetched models will appear here.
+    if models.is_empty() && !search {
+        let body = models_empty_body(theme);
+        render_centered_body(frame, body_rect, body);
+        if let Some(fo) = f.footer {
+            render_modal_footer_with_more(frame, fo, hints, extra, theme);
+        }
+        return area;
+    }
+
+    if models.is_empty() && search {
+        let body = search_empty_body(theme);
+        render_centered_body(frame, body_rect, body);
+        if let Some(fo) = f.footer {
+            render_modal_footer_with_more(frame, fo, hints, extra, theme);
+        }
+        if let Some(sr) = search_rect {
+            let prefix = " Search  › ".width() as u16;
+            let cursor_x = sr.x + prefix + caret_column(query, cursor_position);
+            let cursor_y = sr.y;
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
+        return area;
     }
 
     // Flat model rows map 1:1 to `modal_index`. The body interleaves dim
@@ -444,20 +478,28 @@ fn provider_list_body(
 }
 
 /// The Connections empty-state body: shown when no provider instance exists.
-/// A centered hint that points the user at the `a` footer shortcut to add one.
+/// A vertically and horizontally centered hint that points the user at the `a`
+/// footer shortcut to add one.
 fn connections_empty_body(theme: &Theme) -> Vec<Line<'static>> {
     vec![
-        Line::from(""),
-        Line::from(""),
         Line::from(Span::styled(
-            " No connections yet",
+            "No connections yet",
             Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(Span::styled(
-            " Press a to add a provider connection",
-            Style::default().fg(theme.muted()),
-        )),
+        Line::from(vec![
+            Span::styled("Press ", Style::default().fg(theme.muted())),
+            Span::styled(
+                "a",
+                Style::default()
+                    .fg(theme.info())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " to add a provider connection",
+                Style::default().fg(theme.muted()),
+            ),
+        ]),
     ]
 }
 
@@ -499,7 +541,7 @@ fn model_list_body(
     use crate::components::options::{ChoiceTone, choice_style};
 
     if models.is_empty() {
-        return (empty_body(theme), Vec::new());
+        return (Vec::new(), Vec::new());
     }
     let (geometry, row_line) = models_body_lines(models);
     let mut body: Vec<Line> = Vec::with_capacity(geometry.len() + 3);
@@ -632,15 +674,47 @@ fn model_list_body(
     (body, row_line)
 }
 
-/// The "no matches" placeholder body shared by both pickers.
-fn empty_body(theme: &Theme) -> Vec<Line<'static>> {
+/// The Models empty-state body: shown when no model exists (no provider configured
+/// or no models returned). A vertically and horizontally centered hint that prompts
+/// the user to add a connection via `/connections` or press `a`, and explains that
+/// fetched models will appear here once connected.
+fn models_empty_body(theme: &Theme) -> Vec<Line<'static>> {
     vec![
-        Line::from(""),
         Line::from(Span::styled(
-            " (no matches — try a shorter or different query)",
+            "No models available",
+            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Add a connection via ", Style::default().fg(theme.muted())),
+            Span::styled(
+                "/connections",
+                Style::default()
+                    .fg(theme.info())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" (or press ", Style::default().fg(theme.muted())),
+            Span::styled(
+                "a",
+                Style::default()
+                    .fg(theme.info())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(")", Style::default().fg(theme.muted())),
+        ]),
+        Line::from(Span::styled(
+            "Configured models will appear here",
             Style::default().fg(theme.muted()),
         )),
     ]
+}
+
+/// The "no matches" placeholder body shared by both pickers during search.
+fn search_empty_body(theme: &Theme) -> Vec<Line<'static>> {
+    vec![Line::from(Span::styled(
+        "(no matches — try a shorter or different query)",
+        Style::default().fg(theme.muted()),
+    ))]
 }
 
 /// Char indices the fuzzy match highlights, as a set for O(1) per-char lookup.
@@ -2352,5 +2426,128 @@ mod tests {
             assert!(text.contains("RECENT"));
             assert!(text.contains("ALL MODELS"));
         }
+    }
+
+    #[test]
+    fn models_modal_empty_state_centered_copy_and_footer() {
+        let theme = Theme::default();
+        let mut terminal = mutx_engine::TestTerminal::new(72, 24);
+        terminal.draw(|f| {
+            let mut lm = crate::model::layout::LayoutMap::new();
+            let mut scroll = 0;
+            let selection = crate::model::selection::SelectionState::None;
+            draw_models_modal(
+                f,
+                &mut lm,
+                &[],
+                "",
+                "",
+                0,
+                "",
+                0,
+                &mut scroll,
+                false,
+                false,
+                false,
+                &theme,
+                &selection,
+            );
+        });
+        let text = buffer_text(&terminal);
+        assert!(text.contains("No models available"));
+        assert!(text.contains("Add a connection via /connections (or press a)"));
+        assert!(text.contains("Configured models will appear here"));
+        assert!(text.contains("add connection"));
+        assert!(text.contains("close"));
+    }
+
+    #[test]
+    fn models_modal_search_empty_state() {
+        let theme = Theme::default();
+        let mut terminal = mutx_engine::TestTerminal::new(72, 24);
+        terminal.draw(|f| {
+            let mut lm = crate::model::layout::LayoutMap::new();
+            let mut scroll = 0;
+            let selection = crate::model::selection::SelectionState::None;
+            draw_models_modal(
+                f,
+                &mut lm,
+                &[],
+                "",
+                "",
+                0,
+                "xyz",
+                3,
+                &mut scroll,
+                false,
+                true,
+                false,
+                &theme,
+                &selection,
+            );
+        });
+        let text = buffer_text(&terminal);
+        assert!(text.contains("(no matches — try a shorter or different query)"));
+        assert!(text.contains("clear search"));
+    }
+
+    #[test]
+    fn connections_modal_empty_state_centered_copy_and_footer() {
+        let theme = Theme::default();
+        let mut terminal = mutx_engine::TestTerminal::new(72, 24);
+        terminal.draw(|f| {
+            let mut lm = crate::model::layout::LayoutMap::new();
+            let mut scroll = 0;
+            let selection = crate::model::selection::SelectionState::None;
+            draw_connections_modal(
+                f,
+                &mut lm,
+                &[],
+                "",
+                0,
+                "",
+                0,
+                &mut scroll,
+                false,
+                false,
+                false,
+                &theme,
+                &selection,
+            );
+        });
+        let text = buffer_text(&terminal);
+        assert!(text.contains("No connections yet"));
+        assert!(text.contains("Press a to add a provider connection"));
+        assert!(text.contains("add"));
+        assert!(text.contains("close"));
+    }
+
+    #[test]
+    fn connections_modal_search_empty_state() {
+        let theme = Theme::default();
+        let mut terminal = mutx_engine::TestTerminal::new(72, 24);
+        terminal.draw(|f| {
+            let mut lm = crate::model::layout::LayoutMap::new();
+            let mut scroll = 0;
+            let selection = crate::model::selection::SelectionState::None;
+            draw_connections_modal(
+                f,
+                &mut lm,
+                &[],
+                "",
+                0,
+                "nonexistent",
+                11,
+                &mut scroll,
+                false,
+                true,
+                false,
+                &theme,
+                &selection,
+            );
+        });
+        let text = buffer_text(&terminal);
+        assert!(text.contains("(no matches — try a shorter or different query)"));
+        assert!(text.contains("clear search"));
     }
 }

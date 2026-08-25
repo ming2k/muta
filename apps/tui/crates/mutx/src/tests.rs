@@ -1666,6 +1666,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         active_modal: Modal::None,
         modal_index: 0,
         last_input_rect: mutx_engine::Rect::default(),
+        last_frame_area: mutx_engine::Rect::default(),
+        last_input_rows: 1,
         cursor_sync_pending: false,
         cursor_visible: true,
         session_scroll: 0,

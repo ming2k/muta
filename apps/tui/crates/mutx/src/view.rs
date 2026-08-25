@@ -352,9 +352,33 @@ pub struct EnvoyBarInfo {
 }
 
 /// Layout information returned by [`draw_transcript`].
+/// The text-column budget the transcript layout gives the input box for a
+/// full-width frame: the frame width minus the footer stack's horizontal
+/// insets (applied by `footer_stack::place` to the composer's rect) and the
+/// composer's own prompt prefix + right pad.
+///
+/// Single source of truth for this formula. The height reservation here and
+/// the app's between-frame geometry probe (`App::input_geometry_is_clean`)
+/// both resolve through it, so the probe re-measures exactly what the
+/// renderer measured — no derived-invariant coupling on the placed rect.
+pub(crate) fn composer_layout_text_width(frame_width: usize) -> usize {
+    frame_width
+        .saturating_sub(
+            (2 * FOOTER_H_INSET) as usize + COMPOSER_PROMPT_PREFIX_COLS + COMPOSER_RIGHT_PAD_COLS,
+        )
+        .max(1)
+}
+
 pub struct TranscriptRender {
     /// The input box area.
     pub input_rect: Rect,
+    /// Wrapped text-row count this frame reserved for the input box (the
+    /// same value that sized `input_rect.height`, derived from the —
+    /// possibly masked — text the renderer actually laid out). The app
+    /// records it alongside the rect so its between-frame geometry probe
+    /// compares against what the renderer measured, not a re-derivation
+    /// that could drift from the masking rules.
+    pub input_rows: usize,
     /// The hint-bar area pinned directly below the input box (zero-sized when
     /// hidden).
     pub hint_rect: Rect,
@@ -445,6 +469,7 @@ pub fn draw_transcript(
         draw_too_small_notice(frame, full, theme);
         return TranscriptRender {
             input_rect: Rect::default(),
+            input_rows: 0,
             hint_rect: Rect::default(),
             footer: PlacedFooter::default(),
             content_lines: 0,
@@ -582,11 +607,7 @@ pub fn draw_transcript(
     // transcript history always stays visible. The inner text width reserves the
     // footer insets, the `> ` prompt prefix, and the matching right pad so the
     // height calculation wraps at the same width the composer renders.
-    let input_text_width = (size.width as usize)
-        .saturating_sub(
-            (2 * FOOTER_H_INSET) as usize + COMPOSER_PROMPT_PREFIX_COLS + COMPOSER_RIGHT_PAD_COLS,
-        )
-        .max(1);
+    let input_text_width = composer_layout_text_width(size.width as usize);
     let input_wrapped_lines = composer::input_row_count(input, input_text_width, byte_cursor);
     let desired_input_height = input_wrapped_lines as u16 + COMPOSER_VERTICAL_CHROME_ROWS;
     let max_input_height = (size.height / COMPOSER_MAX_HEIGHT_DIVISOR).max(COMPOSER_MIN_HEIGHT);
@@ -884,6 +905,7 @@ pub fn draw_transcript(
 
     TranscriptRender {
         input_rect,
+        input_rows: input_wrapped_lines,
         hint_rect,
         footer: placed_footer,
         content_lines,

@@ -88,13 +88,29 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
 
     // Compute the displayed input text first so the transcript layout can
     // reserve the right height for a wrapping, growing input box.
-    let masked_input = if app.active_modal == Modal::ModelEditor && app.editor_field == 0 {
-        // Mask the API key everywhere it could be rendered (the editor
-        // field itself, and any layout pass that inspects the input).
-        "•".repeat(app.input.chars().count())
-    } else {
-        app.input.clone()
-    };
+    //
+    // The text and the caret's byte offset are masked *as a pair*: the view
+    // treats `byte_cursor` as an offset into `input` (the wrap engine maps
+    // it onto the wrapped grid, the height reservation synthesizes a
+    // trailing caret row from it). Pairing a masked string with the
+    // unmasked offset happened to work only because `•` is 3 bytes per
+    // char while the underlying text is 1–4 — an invariant nobody
+    // guarantees. Mapping the char-indexed caret through the same mask
+    // keeps every consumer operating on one coherent string.
+    let (masked_input, masked_byte_cursor) =
+        if app.active_modal == Modal::ModelEditor && app.editor_field == 0 {
+            // Mask the API key everywhere it could be rendered (the editor
+            // field itself, and any layout pass that inspects the input).
+            let mask = "•".repeat(app.input.chars().count());
+            // Byte offset of the caret inside the masked string: each char
+            // maps to exactly one `•`, so the caret's char index maps to
+            // `index * mask_char_len`.
+            const MASK_CHAR: &str = "•";
+            let caret_byte = MASK_CHAR.len() * app.cursor_position.min(mask.chars().count());
+            (mask, caret_byte)
+        } else {
+            (app.input.clone(), app.byte_cursor())
+        };
 
     // Modal recess policy (single source of truth: `Modal::recess`).
     // A terminal cannot alpha-blend, so a modal either floats, darkens
@@ -241,7 +257,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             // (SPINNER_PHASES steps); `breathing_color` wraps modulo.
             spinner_phase: (app.spinner_epoch.elapsed().as_millis() / 100) as usize,
             input: &masked_input,
-            byte_cursor: app.byte_cursor(),
+            byte_cursor: masked_byte_cursor,
             chrome_hidden,
             queue_bar: view::QueueBarView {
                 items: &queue_items,
@@ -501,7 +517,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // immediate cursor flush (which runs before this draw closure
     // re-runs) places the caret against the geometry the user is
     // actually looking at.
-    app.observe_input_rect(input_rect);
+    app.observe_input_rect(input_rect, f.area(), transcript_render.input_rows);
     match sticky {
         Some(info) => {
             app.sticky_step = Some(info.message_idx);

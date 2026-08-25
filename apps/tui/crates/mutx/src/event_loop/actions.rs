@@ -759,7 +759,7 @@ pub(super) async fn dispatch_action(
                                 app.click_outside_dismiss = !app.click_outside_dismiss;
                             }
                             3 => {
-                                // Web Search category. Row indices mirror
+                                // Web Tools category. Row indices mirror
                                 // `draw_websearch_detail`.
                                 let idx = app.config_detail_index;
                                 if let Some(field) = app.websearch_editing {
@@ -769,27 +769,27 @@ pub(super) async fn dispatch_action(
                                     app.input.clear();
                                     app.set_cursor(0);
                                     let update = match field {
-                                        4 => muta_contracts::WebSearchConfigUpdate {
+                                        2 => muta_contracts::WebSearchConfigUpdate {
                                             searxng_url: Some(draft),
                                             ..Default::default()
                                         },
-                                        5 => muta_contracts::WebSearchConfigUpdate {
+                                        3 => muta_contracts::WebSearchConfigUpdate {
                                             exa_api_key: Some(draft),
                                             ..Default::default()
                                         },
-                                        6 => muta_contracts::WebSearchConfigUpdate {
+                                        4 => muta_contracts::WebSearchConfigUpdate {
                                             parallel_api_key: Some(draft),
                                             ..Default::default()
                                         },
-                                        7 => muta_contracts::WebSearchConfigUpdate {
+                                        5 => muta_contracts::WebSearchConfigUpdate {
                                             tavily_api_key: Some(draft),
                                             ..Default::default()
                                         },
-                                        8 => muta_contracts::WebSearchConfigUpdate {
+                                        6 => muta_contracts::WebSearchConfigUpdate {
                                             bocha_api_key: Some(draft),
                                             ..Default::default()
                                         },
-                                        9 => muta_contracts::WebSearchConfigUpdate {
+                                        8 => muta_contracts::WebSearchConfigUpdate {
                                             jina_api_key: Some(draft),
                                             ..Default::default()
                                         },
@@ -800,7 +800,7 @@ pub(super) async fn dispatch_action(
                                     ));
                                 } else {
                                     match idx {
-                                        // Cycle the primary backend.
+                                        // 0: Cycle the primary backend (search).
                                         0 => {
                                             let next = app
                                                 .websearch_config
@@ -817,30 +817,29 @@ pub(super) async fn dispatch_action(
                                                 )),
                                             );
                                         }
-                                        // Cycle the fallback (wraps through
-                                        // "(none)" = disabled).
+                                        // 1: Cycle the fallback backend (search).
                                         1 => {
                                             let current = app
                                                 .websearch_config
                                                 .as_ref()
                                                 .map(|ws| ws.fallback.trim().to_string())
                                                 .unwrap_or_default();
-                                            let next = if current.is_empty() {
+                                            let next = if current.is_empty() || current == "none" {
                                                 "exa".to_string()
                                             } else {
                                                 let cycled =
                                                     crate::overlays::cycle_websearch_backend(
                                                         &current,
                                                     );
-                                                if cycled
-                                                    == app
-                                                        .websearch_config
-                                                        .as_ref()
-                                                        .map(|ws| ws.provider.as_str())
-                                                        .unwrap_or("")
+                                                if cycled == "none"
+                                                    || cycled
+                                                        == app
+                                                            .websearch_config
+                                                            .as_ref()
+                                                            .map(|ws| ws.provider.as_str())
+                                                            .unwrap_or("")
                                                 {
-                                                    // full cycle back to the
-                                                    // primary wraps to disabled
+                                                    // cycle to none wraps to disabled
                                                     String::new()
                                                 } else {
                                                     cycled.to_string()
@@ -855,18 +854,28 @@ pub(super) async fn dispatch_action(
                                                 )),
                                             );
                                         }
-                                        // Cycle the reader.
-                                        2 => {
+                                        // 2..=6 | 8: Text/Key fields: start editing.
+                                        2..=6 | 8 => {
+                                            app.websearch_editing = Some(idx);
+                                            let seed = match idx {
+                                                2 => app
+                                                    .websearch_config
+                                                    .as_ref()
+                                                    .and_then(|ws| ws.searxng_url.clone())
+                                                    .unwrap_or_default(),
+                                                _ => String::new(), // keys never echo
+                                            };
+                                            app.input = seed;
+                                            app.set_cursor_end();
+                                        }
+                                        // 7: Cycle the page reader (fetch).
+                                        7 => {
                                             let current = app
                                                 .websearch_config
                                                 .as_ref()
                                                 .map(|ws| ws.reader.as_str())
                                                 .unwrap_or("builtin");
-                                            let next = if current == "builtin" {
-                                                "jina"
-                                            } else {
-                                                "builtin"
-                                            };
+                                            let next = crate::overlays::cycle_reader(current);
                                             let _ = app.tx.send(
                                                 AgentRequest::UpdateWebSearchConfig(Box::new(
                                                     muta_contracts::WebSearchConfigUpdate {
@@ -876,8 +885,8 @@ pub(super) async fn dispatch_action(
                                                 )),
                                             );
                                         }
-                                        // Timeout +5s per press (min 5).
-                                        3 => {
+                                        // 9: Timeout +5s per press (min 5).
+                                        9 => {
                                             let current = app
                                                 .websearch_config
                                                 .as_ref()
@@ -891,21 +900,6 @@ pub(super) async fn dispatch_action(
                                                     },
                                                 )),
                                             );
-                                        }
-                                        // Text fields: start editing, seeded
-                                        // with the current value.
-                                        4..=9 => {
-                                            app.websearch_editing = Some(idx);
-                                            let seed = match idx {
-                                                4 => app
-                                                    .websearch_config
-                                                    .as_ref()
-                                                    .and_then(|ws| ws.searxng_url.clone())
-                                                    .unwrap_or_default(),
-                                                _ => String::new(), // keys never echo
-                                            };
-                                            app.input = seed;
-                                            app.set_cursor_end();
                                         }
                                         _ => {}
                                     }

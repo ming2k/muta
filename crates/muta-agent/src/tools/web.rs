@@ -436,6 +436,14 @@ impl Tool for WebFetchTool {
     fn name(&self) -> &str {
         "webfetch"
     }
+    fn is_available(&self) -> bool {
+        let snapshot = self.config.get();
+        let reader = snapshot.reader.trim();
+        !reader.is_empty()
+            && reader != "none"
+            && reader != "disabled"
+            && reader != "(none)"
+    }
     fn description(&self) -> &str {
         "Fetch the content of a web page or URL and return it as text. Use for reading \
          documentation, APIs, or any publicly accessible resource. HTML pages are converted to \
@@ -683,6 +691,35 @@ impl Tool for WebSearchTool {
     fn name(&self) -> &str {
         "websearch"
     }
+    fn is_available(&self) -> bool {
+        let snapshot = self.config.get();
+        let provider = snapshot.provider.trim();
+        if provider.is_empty()
+            || provider == "none"
+            || provider == "disabled"
+            || provider == "(none)"
+        {
+            return false;
+        }
+        match provider {
+            "tavily" => snapshot
+                .tavily_api_key
+                .as_ref()
+                .map(|k| !k.expose_secret().trim().is_empty())
+                .unwrap_or(false),
+            "bocha" => snapshot
+                .bocha_api_key
+                .as_ref()
+                .map(|k| !k.expose_secret().trim().is_empty())
+                .unwrap_or(false),
+            "searxng" => snapshot
+                .searxng_url
+                .as_ref()
+                .map(|u| !u.trim().is_empty())
+                .unwrap_or(false),
+            _ => true,
+        }
+    }
     fn description(&self) -> &str {
         // Leaked once per process: the description is queried per model
         // request, and `&'static str` is the trait's return type. Rebuilding
@@ -916,5 +953,60 @@ mod shared_config_tests {
         // Presence vs absence differ.
         c.bocha_api_key = None;
         assert_ne!(a.signature(), c.signature());
+    }
+
+    #[test]
+    fn websearch_and_webfetch_is_available_reflects_configuration() {
+        let shared = SharedWebSearchConfig::new(WebSearchConfig::default());
+        let search = WebSearchTool::with_shared_config(shared.clone());
+        let fetch = WebFetchTool::with_shared_config(shared.clone());
+
+        // Default: exa and builtin -> both available
+        assert!(search.is_available());
+        assert!(fetch.is_available());
+
+        // Disabled websearch
+        shared.set(WebSearchConfig {
+            provider: "none".to_string(),
+            ..WebSearchConfig::default()
+        });
+        assert!(!search.is_available());
+        assert!(fetch.is_available());
+
+        // Tavily without key -> not available; with key -> available
+        shared.set(WebSearchConfig {
+            provider: "tavily".to_string(),
+            tavily_api_key: None,
+            ..WebSearchConfig::default()
+        });
+        assert!(!search.is_available());
+        shared.set(WebSearchConfig {
+            provider: "tavily".to_string(),
+            tavily_api_key: Some(muta_contracts::SecretString::new("tvly-xxx")),
+            ..WebSearchConfig::default()
+        });
+        assert!(search.is_available());
+
+        // SearXNG without URL -> not available; with URL -> available
+        shared.set(WebSearchConfig {
+            provider: "searxng".to_string(),
+            searxng_url: None,
+            ..WebSearchConfig::default()
+        });
+        assert!(!search.is_available());
+        shared.set(WebSearchConfig {
+            provider: "searxng".to_string(),
+            searxng_url: Some("http://localhost:8080".to_string()),
+            ..WebSearchConfig::default()
+        });
+        assert!(search.is_available());
+
+        // Disabled webfetch
+        shared.set(WebSearchConfig {
+            reader: "none".to_string(),
+            ..WebSearchConfig::default()
+        });
+        assert!(search.is_available());
+        assert!(!fetch.is_available());
     }
 }

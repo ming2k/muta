@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every terminal write now sits inside a DEC synchronized-update
+  envelope — the out-of-band cursor paths included.** The engine gained
+  `Backend::begin_sync_update`/`end_sync_update` (queue-only begin, single
+  flush at end — presentation is order-based, so an intermediate flush could
+  only add a syscall and present an empty envelope). The input-driven
+  immediate caret flush and the caret show/hide visibility edge are now
+  bracketed by it, closing the last paths whose bytes could interleave with
+  a concurrently-committing frame on the same stdout — the residual seam
+  that read as caret jitter on mode-2026 terminals (no-op markers
+  elsewhere). Two engine tests lock the envelope contract: markers bracket
+  the out-of-band write, and envelopes never nest or dangle.
+- **Masked-input caret pairing is now structural, not incidental.**
+  Rendering the ModelEditor's API-key field as `•`s while handing the layout
+  the *unmasked* buffer's caret byte offset worked only by an arithmetic
+  accident (`•` is 3 bytes/char vs the raw text's 1–4). `App::
+  displayed_input_with_cursor` is now the single source of truth for the
+  (displayed text, caret offset) pair — masking the offset through the same
+  mask — and both the renderer and the between-frame geometry probe resolve
+  through it, so the two can never measure different strings. Four tests
+  lock the pairing (boundary safety, end-mapping, clamping included).
+- **The geometry probe measures the renderer's own numbers.** `TranscriptRender`
+  now reports `input_rows` — the exact wrapped-row count that sized the input
+  box this frame — and `App::observe_input_rect` records it instead of
+  re-deriving from the raw buffer. The probe's width is resolved through the
+  new `view::composer_layout_text_width` (the height reservation's own
+  formula), removing the derived-invariant coupling on the placed rect.
+  Together with the flush's single-compute restructure (the scroll probe's
+  result *is* the flushed coordinate — no second evaluation, no window for
+  the two to disagree), the flush's decision and its action are now one
+  computation.
+- **Caret anti-drift: the input-driven immediate cursor flush now defers to
+  the frame whenever the composer's geometry is provably in flux.** The
+  immediate flush (the 0.12.0 IME-anchor fix) placed the terminal cursor
+  against the *previous* frame's composer rect and wrote it outside the DEC
+  synchronized-update envelope. Whenever that rect was about to change — a
+  wrap boundary crossed by the keystroke, a paste, a history recall, a
+  resize, or a streaming round toggling the activity/todo/queue footer bars
+  underneath the box — the flush wrote one coordinate and the next
+  `commit_frame` corrected it, producing the two-step visible caret jump
+  reported as 反复漂移/闪烁 while typing. The flush is now gated by
+  `App::input_geometry_is_clean` (live terminal size unchanged + re-measured
+  wrapped-row count equal to what the last frame reserved), a scroll probe
+  (the flush must not move `input_scroll` ahead of the repaint, which parked
+  the caret on a still-unscrolled row), and the transcript-update gate. When
+  any gate trips, the committed frame — inside one synchronized update — is
+  the sole writer of the caret coordinate.
+- **The immediate flush is armed only by caret-moving input.**
+  `note_cursor_moved` fired after every `process_event`, including mouse
+  reports (one armed flush per motion report under mode-1002 drags) and
+  resizes, emitting out-of-envelope cursor writes on essentially every loop
+  iteration during pointer activity. Only `Key` and `Paste` events arm it
+  now; mouse-driven caret moves still arm it via `App::set_cursor` in the
+  selection handlers.
+- **Staged measurement frames no longer poison the flush's geometry cache.**
+  A staged (byte-less) layout pass ran the full `observe_input_rect`
+  bookkeeping; when the settle logic then discarded the staged grid and
+  redrew at a corrected scroll offset, the next iteration's flush used a rect
+  no committed frame had ever published. The pre-stage snapshot is now
+  restored on the discard path and kept on the commit path.
+- **Resize no longer flushes mid-synchronized-update envelope.**
+  `Backend::invalidate` queued an SGR reset and flushed it immediately;
+  inside `Terminal::commit`'s DEC-2026 envelope that split the frame in two
+  and let the terminal paint a half-reset screen. The reset is queued only —
+  the envelope's single closing flush delivers it atomically with the
+  `Clear(All)` that follows.
+- **`dim_surface` and the modal scrollbar keep the grid's dirty tracking
+  honest.** Both mutated cells in place through `buffer_mut`, bypassing
+  `Grid::mark`; correctness depended on the full-screen background fill
+  having dirtied every row earlier in the frame. They now mark the rows they
+  touch explicitly (defensive; no behavior change today).
+- Engine: added `Terminal::size()` — the live terminal size with a
+  retained-grid fallback — for callers deciding between frames whether
+  cached geometry is still valid.
+
 ## [0.32.1] - 2026-08-24
 
 ### Changed
