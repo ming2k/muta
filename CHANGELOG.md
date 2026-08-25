@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.2] - 2026-08-25
+
+### Added
+
+- Added `/trust` command (`/trust workspace`, `/trust extensions`, `/trust all`, `/trust readonly`, `/trust status`, `/trust revoke`) to manage workspace execution authority and project extensions.
+- Added comprehensive Security and Trust Architecture documentation detailing the three orthogonal domains (Authority, Posture, and Sandbox) and two-axis authority model.
+
+### Changed
+
+- Updated preflight check to require explicit workspace trust while gracefully falling back to host execution authority when physical bubblewrap sandbox containment is unavailable.
+
 ## [0.34.1] - 2026-08-25
 
 ### Added
@@ -4764,7 +4775,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.34.1...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.34.2...HEAD
+[0.34.2]: https://github.com/ming2k/muta/compare/v0.34.1...v0.34.2
 [0.34.1]: https://github.com/ming2k/muta/compare/v0.34.0...v0.34.1
 [0.34.0]: https://github.com/ming2k/muta/compare/v0.33.1...v0.34.0
 [0.33.1]: https://github.com/ming2k/muta/compare/v0.33.0...v0.33.1
