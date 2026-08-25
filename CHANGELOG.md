@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.4] - 2026-08-25
+
+### Added
+
+- Added dynamic shell isolation transition based on workspace security handle: elevating to host native execution when explicitly trusted for development while strictly confining untrusted/restricted workspaces.
+- Added slash command syntax and option expansion for interactive auto-completion of subcommands and parameters (e.g. `/trust`, `/debug trace`, `/principal`).
+
+### Changed
+
+- Consolidated `/workspace` command into `/trust` (`/trust workspace`, `/trust extensions`, `/trust all`, `/trust readonly`, `/trust status`, `/trust revoke`) with enhanced runtime mode status.
+- Refined initial workspace trust interactive prompt options with clear descriptions for full development, workspace only, and restricted read-only mode.
+
 ## [0.34.3] - 2026-08-25
 
 ### Added
@@ -4782,7 +4794,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.34.3...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.34.4...HEAD
+[0.34.4]: https://github.com/ming2k/muta/compare/v0.34.3...v0.34.4
 [0.34.3]: https://github.com/ming2k/muta/compare/v0.34.2...v0.34.3
 [0.34.2]: https://github.com/ming2k/muta/compare/v0.34.1...v0.34.2
 [0.34.1]: https://github.com/ming2k/muta/compare/v0.34.0...v0.34.1
