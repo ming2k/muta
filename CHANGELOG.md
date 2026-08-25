@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.3] - 2026-08-25
+
+### Added
+
+- Added interactive workspace trust question prompt during session bootstrap when a workspace has no persisted trust decision.
+- Added session reply handler for workspace trust decisions to automatically persist development or restricted profile selections.
+
 ## [0.34.2] - 2026-08-25
 
 ### Added
@@ -4775,7 +4782,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.34.2...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.34.3...HEAD
+[0.34.3]: https://github.com/ming2k/muta/compare/v0.34.2...v0.34.3
 [0.34.2]: https://github.com/ming2k/muta/compare/v0.34.1...v0.34.2
 [0.34.1]: https://github.com/ming2k/muta/compare/v0.34.0...v0.34.1
 [0.34.0]: https://github.com/ming2k/muta/compare/v0.33.1...v0.34.0
