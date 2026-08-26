@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.5] - 2026-08-27
+
 ### Changed
 
 - **Doom guard relaxed (ADR-0148):** `[master.doom_guard] threshold` is a
@@ -4945,7 +4947,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.35.4...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.35.5...HEAD
+[0.35.5]: https://github.com/ming2k/muta/compare/v0.35.4...v0.35.5
 [0.35.4]: https://github.com/ming2k/muta/compare/v0.35.3...v0.35.4
 [0.35.3]: https://github.com/ming2k/muta/compare/v0.35.2...v0.35.3
 [0.35.2]: https://github.com/ming2k/muta/compare/v0.35.1...v0.35.2
