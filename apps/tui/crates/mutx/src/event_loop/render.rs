@@ -730,7 +730,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 .editor_model_settings_only
                 .then_some(app.editor_thinking)
                 .filter(|_| app.editor_thinking_available);
-            // Capability overrides (ADR-0080 layer 1): shown in the
+            // Capability overrides (ADR-0149 layer 1): shown in the
             // settings-only editor (fields 3/4), cycled with Space.
             let overrides = app
                 .editor_model_settings_only

@@ -165,7 +165,7 @@ pub enum AgentRequest {
         model: String,
         effort: Option<String>,
         thinking: Option<bool>,
-        /// Capability overrides (ADR-0080 layer 1): `None` keeps the stored
+        /// Capability overrides (ADR-0149 layer 1): `None` keeps the stored
         /// overrides untouched; `Some(record)` replaces them wholesale (an
         /// empty record clears them). Persisted per (instance, model) in the
         /// route-settings **state** store, never in config.
@@ -181,7 +181,7 @@ pub enum AgentRequest {
         model: String,
         effort: Option<String>,
         thinking: Option<bool>,
-        /// Capability overrides (ADR-0080 layer 1) — same semantics as
+        /// Capability overrides (ADR-0149 layer 1) — same semantics as
         /// [`AgentRequest::EditProviderModel::overrides`].
         overrides: Option<crate::model::CapabilityOverrides>,
     },

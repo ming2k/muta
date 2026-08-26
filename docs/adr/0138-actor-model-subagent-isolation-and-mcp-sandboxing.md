@@ -1,6 +1,6 @@
 # 0138. Actor-Model Subagent Isolation and MCP Sandboxing Architecture
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0144](0144-three-tier-agent-hierarchy-and-tool-pool.md)
 - **Date:** 2026-08-25
 
 ## Context

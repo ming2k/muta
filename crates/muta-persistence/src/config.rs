@@ -319,7 +319,7 @@ pub struct RouteSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<bool>,
     /// Explicit capability overrides -- the **top layer** of the capability
-    /// resolution order (ADR-0080). `None`/empty means "no opinion": the
+    /// resolution order (ADR-0149). `None`/empty means "no opinion": the
     /// effective capabilities fall through to remote metadata, then the
     /// static baseline. Unlike the derived `FittedModelInfo`, these are the
     /// user's own per-route choices and are never rebuilt from an endpoint.
@@ -330,7 +330,7 @@ pub struct RouteSettings {
 impl RouteSettings {
     /// Whether the entry carries any explicit knob. An entry with neither
     /// field set still opts the model in to thinking on Anthropic routes.
-    /// Capability overrides (ADR-0080 layer 1) count as a knob: a record that
+    /// Capability overrides (ADR-0149 layer 1) count as a knob: a record that
     /// only carries them must not be pruned as empty.
     pub fn is_empty(&self) -> bool {
         self.effort.is_none()

@@ -269,7 +269,7 @@ pub enum InputAction {
     /// Toggle extended thinking on/off (Space) on the Anthropic key editor's
     /// thinking field. Orthogonal to effort.
     ModelEditorThinkingToggle,
-    /// Cycle the vision capability override (ADR-0080 layer 1) tri-state:
+    /// Cycle the vision capability override (ADR-0149 layer 1) tri-state:
     /// inherit → force on → force off. Field 3 of the settings editor.
     ModelEditorVisionCycle,
     /// Cycle the tool-call capability override tri-state. Field 4.
@@ -2105,7 +2105,7 @@ pub fn process_event(
                     {
                         // Space on the key editor's non-text fields instead
                         // of inserting a space. Field 2 (thinking) is a binary
-                        // toggle; fields 3/4 (capability overrides, ADR-0080)
+                        // toggle; fields 3/4 (capability overrides, ADR-0149)
                         // are tri-state: inherit → force on → force off.
                         match context.editor_field {
                             Some(3) => InputAction::ModelEditorVisionCycle,

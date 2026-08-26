@@ -999,7 +999,7 @@ pub fn draw_model_editor(
     // a checkbox; toggled with Space by the caller.
     // `None` hides. Orthogonal to effort.
     thinking: Option<bool>,
-    // Capability overrides (ADR-0080 layer 1) currently held by the editor:
+    // Capability overrides (ADR-0149 layer 1) currently held by the editor:
     // `vision`/`tool_call` tri-states (`None` inherit, `Some(true)` force on,
     // `Some(false)` force off), cycled with Space at fields 3/4. `None` hides
     // the whole block (models whose editor was opened without it).

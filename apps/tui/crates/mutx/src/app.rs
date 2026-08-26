@@ -979,7 +979,7 @@ pub struct App {
     /// Toggled with Space when [`Self::editor_thinking_available`] is true;
     /// orthogonal to effort.
     pub editor_thinking: bool,
-    /// Capability-override tri-state for **vision** (ADR-0080 layer 1), shown
+    /// Capability-override tri-state for **vision** (ADR-0149 layer 1), shown
     /// in the per-model settings editor. Cycled with Space: `None` = inherit
     /// (no override) → `Some(true)` force on → `Some(false)` force off.
     pub editor_vision_override: Option<bool>,

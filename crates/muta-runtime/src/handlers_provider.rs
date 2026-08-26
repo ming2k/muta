@@ -413,7 +413,7 @@ pub async fn edit_model(
         }
         muta_contracts::catalog::Transport::Google { .. } => {}
     }
-    // Capability overrides (ADR-0080 layer 1): `None` keeps the stored
+    // Capability overrides (ADR-0149 layer 1): `None` keeps the stored
     // record untouched; `Some(record)` replaces it wholesale (empty clears).
     if let Some(record) = overrides {
         entry.capability_overrides = (!record.is_empty()).then_some(record);

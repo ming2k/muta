@@ -1,7 +1,7 @@
 # muta-runtime
 
 The session harness and daemon runtime between the orchestration crate
-(`muta-agent`) and the frontends (the `muta` TUI and the `apps/web`
+(`muta-agent`) and the frontends (the `mutx` TUI and the `apps/web`
 browser panel today).
 
 ## Why this crate exists
@@ -20,12 +20,12 @@ exposed here.
 
 ## Application-neutral
 
-This crate holds **no product name, mission, or principal profile** (ADR-0054).
-The embedding binary supplies an `AgentIdentity` to `Agent::new` and binds a
-`PrincipalProfile` via `apply_principal_profile`. `muta` keeps the coding
-identity; a future sibling binary would bring its own. The `/btw` side session
-reuses the primary agent's identity via `Agent::identity()` rather than naming a
-product here.
+This crate holds **no product name or mission** (ADR-0054). The embedding
+binary supplies an `AgentIdentity` to `Agent::new` and binds a
+`MasterPreset` via `apply_master_profile` (ADR-0144 tier vocabulary).
+`muta` keeps the coding identity; a future sibling binary would bring its
+own. The `/btw` side session reuses the primary agent's identity via
+`Agent::identity()` rather than naming a product here.
 
 ## What it provides
 

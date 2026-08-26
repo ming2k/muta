@@ -160,7 +160,7 @@ pub struct ModelCapabilities {
 }
 
 /// A user's explicit capability override for one (provider-instance, model)
-/// route -- the **top layer** of the capability resolution order (ADR-0080).
+/// route -- the **top layer** of the capability resolution order (ADR-0149).
 ///
 /// Every field is optional; `None` means "no opinion, fall through to the
 /// layer below". A present `Some(false)` is meaningful: it forces the
@@ -216,7 +216,7 @@ impl ModelCapabilities {
     /// Resolve effective capabilities for `model_id`, applying all explicitly
     /// advertised remote fields over the local baseline.
     ///
-    /// # Capability resolution order (ADR-0080)
+    /// # Capability resolution order (ADR-0149)
     ///
     /// This method implements the **lower two layers** of the canonical
     /// three-layer capability resolution order:
@@ -224,7 +224,7 @@ impl ModelCapabilities {
     /// ```text
     /// 1. user config     — `RouteSettings::capability_overrides`
     ///                      (per provider-instance + model id, applied last
-    ///                      by the catalog derivation, see ADR-0080)
+    ///                      by the catalog derivation, see ADR-0149)
     /// 2. remote metadata — the `remote` argument here: fields a trusted
     ///                      endpoint advertised (`fitting: true` templates)
     /// 3. local baseline  — the static registry entry for the model id
@@ -262,7 +262,7 @@ impl ModelCapabilities {
         }
     }
 
-    /// Apply the **top layer** of the capability resolution order (ADR-0080):
+    /// Apply the **top layer** of the capability resolution order (ADR-0149):
     /// stamp the user's explicit `CapabilityOverrides` onto the already-merged
     /// (baseline + remote) capabilities. Consumes `self` and returns the
     /// overridden copy. This is deliberately a separate step from
@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn user_overrides_win_over_remote_and_baseline() {
-        // ADR-0080: layer 1 (user) beats layer 2 (remote) beats layer 3
+        // ADR-0149: layer 1 (user) beats layer 2 (remote) beats layer 3
         // (baseline), field-wise; unset user knobs fall through.
         let remote = RemoteModelMetadata {
             vision: Some(true),

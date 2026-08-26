@@ -430,7 +430,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::ModelEditorVisionCycle => {
-            // Cycle the vision capability override (ADR-0080 layer 1):
+            // Cycle the vision capability override (ADR-0149 layer 1):
             // inherit → force on → force off → inherit.
             app.editor_vision_override = cycle_tri_state(app.editor_vision_override);
         }
@@ -2342,7 +2342,7 @@ pub(crate) mod host_test_shims {
     }
 }
 
-/// Cycle a capability-override tri-state (ADR-0080 layer 1): unset (inherit
+/// Cycle a capability-override tri-state (ADR-0149 layer 1): unset (inherit
 /// from the lower layers) → forced on → forced off → unset. Used by the
 /// settings editor's Space cycling on fields 3/4.
 fn cycle_tri_state(v: Option<bool>) -> Option<bool> {

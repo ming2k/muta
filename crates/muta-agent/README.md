@@ -1,6 +1,6 @@
 # muta-agent
 
-The orchestration layer between the pure domain (`muta-core`) and the
+The orchestration layer between the pure domain (`muta-contracts`) and the
 application services (`muta-persistence`) on one side, and the frontends on the
 other.
 
@@ -28,7 +28,7 @@ other.
   profiles.
 
 This crate owns behavior even when that behavior is implemented as pure code.
-Only contracts shared with independent layers stay in `muta-core` (ADR-0057),
+Only contracts shared with independent layers stay in `muta-contracts` (ADR-0057),
 including the atomic `ModelRequest` exchanged with providers (ADR-0061).
 The agent drives `muta-persistence` and `muta-providers` and consumes
 `muta-skills` through normal downward

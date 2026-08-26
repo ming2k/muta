@@ -3,7 +3,7 @@ import type { ThinkingSupport } from "./ThinkingSupport";
 
 /**
  * A user's explicit capability override for one (provider-instance, model)
- * route -- the **top layer** of the capability resolution order (ADR-0080).
+ * route -- the **top layer** of the capability resolution order (ADR-0149).
  *
  * Every field is optional; `None` means "no opinion, fall through to the
  * layer below". A present `Some(false)` is meaningful: it forces the

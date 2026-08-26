@@ -105,7 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   route-settings **state** store, never in . Submitting the
   editor sends the full record, so clearing both rows to "inherit" removes
   the stored overrides.
-- Three-layer model capability resolution, formalized as ADR-0080: user
+- Three-layer model capability resolution, formalized as ADR-0149: user
   `RouteSettings::capability_overrides` > remote `RemoteModelMetadata` >
   the static baseline registry. `CapabilityOverrides` (family, context
   window, max output tokens, thinking, tool call, vision — all optional,

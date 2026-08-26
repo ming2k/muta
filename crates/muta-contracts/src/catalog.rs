@@ -147,7 +147,7 @@ pub struct Channel {
     /// registry remains the fallback for omitted or offline data.
     pub remote: Option<crate::RemoteModelMetadata>,
     /// The user's explicit capability overrides for this route — the top
-    /// layer of the capability resolution order (ADR-0080), applied after
+    /// layer of the capability resolution order (ADR-0149), applied after
     /// the remote overlay in [`Channel::capabilities`]. `None` means the
     /// user has no opinion and the two lower layers decide.
     pub user_overrides: Option<crate::model::CapabilityOverrides>,

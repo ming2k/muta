@@ -103,7 +103,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
             app.editor_model_settings_only = true;
             app.editor_target_is_builtin = is_builtin;
             app.editor_key.clear();
-            // Load the stored capability overrides (ADR-0080 layer 1) so
+            // Load the stored capability overrides (ADR-0149 layer 1) so
             // the editor opens showing what is already forced, if anything.
             let stored = muta_persistence::route_settings::RouteSettingsStore::load()
                 .settings_for(&row.provider_id, &row.model)

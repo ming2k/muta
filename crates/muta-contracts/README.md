@@ -1,4 +1,4 @@
-# muta-core
+# muta-contracts
 
 Shared domain and wire contracts for the muta agent stack.
 
@@ -21,7 +21,7 @@ needed to prevent a dependency cycle. Pure agent behavior does not belong here
 merely because it performs no I/O; orchestration policy, prompt composition,
 and agent-owned runtime state live in [`muta-agent`](../muta-agent).
 
-Frontends and sibling services depend on `muta-core` for contracts and add
+Frontends and sibling services depend on `muta-contracts` for contracts and add
 their own behavior or I/O above it. Persistence belongs in
 [`muta-persistence`](../muta-persistence), provider transports in the AI SDK/provider
 crates, and orchestration in `muta-agent`.

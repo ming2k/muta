@@ -1,6 +1,6 @@
-# 0080. Three-layer model capability resolution order
+# 0149. Three-layer model capability resolution order
 
-- **Status:** Accepted
+- **Status:** Accepted (initially mis-numbered as ADR-0080 at adoption; renumbered to ADR-0149 on 2026-09-09 to clear the collision with the neenee → `neenee-cli` rename, which owns 0080)
 - **Date:** 2026-08-26
 
 ## Context
