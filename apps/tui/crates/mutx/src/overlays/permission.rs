@@ -767,6 +767,7 @@ mod tests {
             elevation: false,
             one_off: false,
             origin: None,
+            ..Default::default()
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 24);
         let mut hit_map = ModalHitMap::new();
@@ -856,6 +857,7 @@ mod tests {
             elevation: false,
             one_off: false,
             origin: None,
+            ..Default::default()
         };
         let mut terminal = mutx_engine::TestTerminal::new(30, 24);
         let mut hit_map = ModalHitMap::new();
@@ -899,6 +901,7 @@ mod tests {
             elevation: false,
             one_off: false,
             origin: None,
+            ..Default::default()
         };
         let mut terminal = mutx_engine::TestTerminal::new(14, 24);
         let mut hit_map = ModalHitMap::new();

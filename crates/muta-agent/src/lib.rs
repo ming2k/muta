@@ -147,6 +147,8 @@ pub mod inflight;
 pub use inflight::Inflight;
 mod dispatch_pipeline;
 pub mod runner_tool;
+pub mod master_slot;
+pub use master_slot::MasterSlot;
 mod hook_runner;
 pub mod loop_guard;
 mod model_request;

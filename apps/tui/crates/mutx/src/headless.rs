@@ -402,9 +402,11 @@ async fn handle_permission_request(
 
     let decision = match answer.as_str() {
         "y" | "yes" => PermissionDecision::Once,
+        "s" | "session" => PermissionDecision::Session,
         "a" | "always" => PermissionDecision::Always,
         _ => PermissionDecision::Reject,
     };
+
 
     let _ = tx.send(AgentRequest::PermissionReply {
         request_id: req.id,

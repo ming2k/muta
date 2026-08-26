@@ -181,6 +181,8 @@ pub struct RunnerTool {
     /// Entries are removed when the child's run ends, so a late
     /// `request_cancel` for a finished call degrades to a no-op.
     active_cancels: std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
+    /// Master preset delegation policy gating which runner presets may be dispatched.
+    parent_delegation: std::sync::Mutex<Option<muta_contracts::MasterPresetDelegation>>,
     /// The session's workspace root, captured at bootstrap so the child's
     /// operation scope resolves relative `write_paths` against the session's
     /// project — not the daemon process's cwd (ADR-0096). `None` falls back
@@ -188,6 +190,7 @@ pub struct RunnerTool {
     workspace_root: std::sync::Mutex<Option<std::path::PathBuf>>,
     retry_config: std::sync::Mutex<RunnerRetryConfig>,
 }
+
 
 #[derive(Clone)]
 struct RunnerAccountingContext {
@@ -273,6 +276,7 @@ impl RunnerTool {
             registry: Arc::new(RunnerRegistry::default()),
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
+            parent_delegation: std::sync::Mutex::new(None),
             workspace_root: std::sync::Mutex::new(None),
             retry_config: std::sync::Mutex::new(RunnerRetryConfig::default()),
         }
@@ -301,10 +305,20 @@ impl RunnerTool {
             registry,
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
+            parent_delegation: std::sync::Mutex::new(None),
             workspace_root: std::sync::Mutex::new(None),
             retry_config: std::sync::Mutex::new(RunnerRetryConfig::default()),
         }
     }
+
+    /// Bind the master preset delegation policy to enforce allowed runner profiles.
+    pub fn bind_master_delegation(&self, delegation: muta_contracts::MasterPresetDelegation) {
+        *self
+            .parent_delegation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(delegation);
+    }
+
 
     /// Pin the session's workspace root so spawned runners resolve relative
     /// `write_paths` (ADR-0028) against the session's project rather than the
@@ -422,11 +436,13 @@ impl Tool for RunnerTool {
             "type": "object",
             "properties": {
                 "description": { "type": "string", "description": "Short label for the sub-task (<=60 chars)" },
-                "prompt": { "type": "string", "description": "The full, self-contained instructions for the runner" }
+                "prompt": { "type": "string", "description": "The full, self-contained instructions for the runner" },
+                "preset": { "type": "string", "description": "Optional runner preset name ('explore', 'code', 'title', 'mcp_specialist'). Defaults to the bound role." }
             },
             "required": ["description", "prompt"]
         })
     }
+
 
     /// `task` spawns an runner; runner profiles exclude it to prevent
     /// unbounded recursion.
@@ -571,11 +587,26 @@ impl RunnerTool {
             return Err("'prompt' must not be empty.".to_string());
         }
 
+        let requested_preset = args.get("preset").and_then(|p| p.as_str()).unwrap_or(self.profile.name);
+        let profile = muta_contracts::RunnerPresetPool::find(requested_preset)
+            .unwrap_or(self.profile);
+
+        if let Some(delegation) = self.parent_delegation.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if !delegation.admits_runner(profile.name) {
+                return Err(format!(
+                    "Master preset '{}' does not admit runner preset '{}'. Admitted presets: {:?}",
+                    delegation.preset_id,
+                    profile.name,
+                    delegation.runner_presets
+                ));
+            }
+        }
+
         // Announce the bound profile name first so the parent harness / TUI
         // can label this runner by its role (explore / plan / verify / …)
         // rather than a generic "Runner". Emitted before the child runs.
         on_event(muta_contracts::RunnerEvent::Started {
-            profile: self.profile.name.to_string(),
+            profile: profile.name.to_string(),
         });
 
         // Resolve the pool for this runner: profile selection ⊓ model selection.
@@ -588,14 +619,13 @@ impl RunnerTool {
         let model = muta_contracts::resolve_model(&self.provider.model());
         let model_sel =
             muta_contracts::ToolSelection::unrestricted().with_variants(self.variant_snapshot());
-        let sub_tools = self
-            .profile
+        let sub_tools = profile
             .resolve_tools(&self.toolset, &model, &model_sel);
 
         // The runner's identity *is* its profile's system prompt — that is the
         // persona/mission framing for this role (e.g. RUNNER_EXPLORE's research
         // framing). `from_persona` injects it verbatim as the preamble.
-        let identity = crate::AgentIdentity::from_persona(self.profile.system_prompt);
+        let identity = crate::AgentIdentity::from_persona(profile.system_prompt);
         let mut runner = Agent::new(self.provider.clone(), sub_tools, identity);
         if let Some(handle) = self
             .parent_workspace_security
@@ -604,6 +634,7 @@ impl RunnerTool {
             .as_ref()
             .cloned()
         {
+
             runner.bind_workspace_security_handle(handle);
         }
         let runner = Arc::new(runner);
@@ -656,7 +687,7 @@ impl RunnerTool {
         // reply routed back down via the registry → handle →
         // `reply_permission` (the parked oneshot resolves directly, no inbox
         // drain needed).
-        runner.set_autopilot(self.profile.autopilot);
+        runner.set_autopilot(profile.autopilot);
         // ADR-0141: the child inherits the parent's human-channel posture
         // source. An interactive session's runners can ask the user through
         // the parent's channel (permission requests flow up via
@@ -679,7 +710,7 @@ impl RunnerTool {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        runner.set_operation_scope(self.profile.resolve_operation_scope(&cwd));
+        runner.set_operation_scope(profile.resolve_operation_scope(&cwd));
         // Runners are short-lived and read-only by profile, and session
         // review is on-demand (`/review`) with no automatic firing — so a
         // research runner never pays for a diagnostic and review can never
@@ -750,7 +781,8 @@ impl RunnerTool {
                 &clean[..clean.len().min(6)]
             })
             .unwrap_or("subagent");
-        let origin_label = format!("runner #{} · {}", short_id, self.profile.name);
+        let origin_label = format!("runner #{} · {}", short_id, profile.name);
+
         let mut round = runner.begin_streaming_round();
         let mut attempt: usize = 0;
         let result = loop {

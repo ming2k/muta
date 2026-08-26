@@ -64,6 +64,29 @@ impl Tool for BashTool {
     fn scope_target(&self, arguments: &str) -> muta_contracts::ScopeTarget {
         muta_contracts::ScopeTarget::Command(json_string(arguments, "command"))
     }
+    fn hazard_level(&self) -> muta_contracts::HazardLevel {
+        muta_contracts::HazardLevel::CommandExecution
+    }
+    fn permission_submission(&self, arguments: &str) -> Option<muta_contracts::ToolPermissionSubmission> {
+        let command = json_string(arguments, "command");
+        let first_word = command.split_whitespace().next().unwrap_or("sh");
+        Some(muta_contracts::ToolPermissionSubmission {
+            hazard_level: muta_contracts::HazardLevel::CommandExecution,
+            label: format!("Execute command: `{}`", if command.len() > 50 { format!("{}...", &command[..47]) } else { command.clone() }),
+            description: format!("Runs host shell command `{command}`. May modify system state or execute arbitrary binaries."),
+            scope: command.clone(),
+            payload: muta_contracts::ToolPermissionPayload::Command {
+                command: command.clone(),
+                cwd: None,
+                kill_spec: muta_contracts::ProcessKillSpec {
+                    command: first_word.to_string(),
+                    process_group_killable: true,
+                    pkill_target: format!("pkill -f '{first_word}'"),
+                    cwd: None,
+                },
+            },
+        })
+    }
     async fn call(&self, arguments: &str) -> Result<String, String> {
         self.call_structured(arguments).await.map(|o| o.to_text())
     }

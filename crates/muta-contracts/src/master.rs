@@ -117,6 +117,30 @@ impl MasterPreset {
         }
     }
 
+    /// Preset for standard developer master (native tools, full delegation).
+    pub fn developer() -> Self {
+        Self::with_identity(
+            "developer",
+            AgentIdentity::new(
+                "developer",
+                "an expert AI software engineer with native tool access",
+            ),
+        )
+    }
+
+    /// Preset for code analyst master (sandbox execution, contained delegation).
+    pub fn code_analyst() -> Self {
+        Self::with_identity(
+            "code_analyst",
+            AgentIdentity::new(
+                "code_analyst",
+                "a careful AI code analyst performing contained inspection and testing in sandbox",
+            ),
+        )
+        .with_selection(ToolSelection::only(MasterPresetDelegation::CODE_ANALYST_TOOLS.iter().copied()))
+    }
+
+
     /// Narrow the capability scope (the scope axis of ADR-0041). Builder-style.
     pub fn with_selection(mut self, selection: ToolSelection) -> Self {
         self.agent_selection = selection;

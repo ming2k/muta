@@ -48,6 +48,8 @@ impl PersistedPermissions {
 #[derive(Default)]
 struct PermissionState {
     always: HashSet<PermissionRule>,
+    /// Rules granted for the current session only (in-memory, not persisted).
+    session: HashSet<PermissionRule>,
     /// Rules the user has **explicitly revoked** (via `revoke_allowed` /
     /// `clear_allowed`), remembered so a later `seed_from_config` cannot
     /// silently re-grant them. Without this, a rule sourced from `[permissions]`
@@ -57,6 +59,7 @@ struct PermissionState {
     /// `add_always` removes from it, `revoke_allowed` adds to it. See #3.
     revoked: HashSet<PermissionRule>,
 }
+
 
 /// In-memory permission state: the "always allow" allowlist, the pending
 /// request channels, and the optional project root for on-disk persistence.
@@ -125,6 +128,35 @@ impl PermissionStore {
             })
     }
 
+    /// Check whether a rule is in the session allow set (granted for this session only).
+    pub fn is_session_allowed(&self, rule: &PermissionRule) -> bool {
+        let state = lock(&self.state);
+        state.session.contains(rule)
+            || state.session.contains(&PermissionRule {
+                tool: rule.tool.clone(),
+                scope: "*".to_string(),
+            })
+    }
+
+    /// Check whether a rule is allowed either permanently or for the current session.
+    pub fn is_allowed(&self, rule: &PermissionRule) -> bool {
+        self.is_session_allowed(rule) || self.is_always_allowed(rule)
+    }
+
+    /// Add a rule to the session-scoped allow set (in-memory only, not written to disk).
+    pub fn add_session(&self, rule: PermissionRule) {
+        let mut state = lock(&self.state);
+        state.session.insert(rule);
+    }
+
+    /// Clear all session-scoped grants.
+    #[allow(dead_code)]
+    pub fn clear_session(&self) {
+        let mut state = lock(&self.state);
+        state.session.clear();
+    }
+
+
     /// Add a rule to the "always allow" set and persist. Re-approving a rule
     /// also clears it from the `revoked` set (the user has reversed their
     /// earlier revocation), so a subsequent `seed_from_config` will re-grant
@@ -137,6 +169,7 @@ impl PermissionStore {
         }
         self.persist();
     }
+
 
     pub fn allowed_tools(&self) -> Vec<String> {
         let mut tools = lock(&self.state)

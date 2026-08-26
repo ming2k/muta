@@ -76,6 +76,8 @@ pub mod mcp;
 pub mod model;
 pub mod todos;
 pub use todos::{MAX_TODOS, TodoId, TodoItem, TodoList, TodoStatus};
+pub mod hazard;
+pub use hazard::*;
 pub mod master;
 pub mod mesh;
 pub mod runner;
@@ -125,7 +127,8 @@ pub use channel_auth::{ChannelAuth, LoginMethod};
 pub use doom_guard_config::DoomGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink};
 pub use runner::{
-    RUNNER_CODE, RUNNER_EXPLORE, RUNNER_MCP_SPECIALIST, RUNNER_TITLE, RunnerPreset, ToolPolicy,
+    RUNNER_CODE, RUNNER_EXPLORE, RUNNER_MCP_SPECIALIST, RUNNER_TITLE, RunnerPreset,
+    RunnerPresetPool, ToolPolicy,
 };
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,
@@ -172,8 +175,9 @@ pub use skills_config::SkillsConfig;
 pub use tokenizer::{StreamingCounter, Tokenizer, count_tokens, truncate_to_tokens};
 pub use tool_output::truncate_utf8;
 pub use tool_registry::{
-    Capability, ToolContext, ToolContextBuilder, ToolFactory, ToolScope, ToolSelection, ToolSet,
-    WorkspaceRoot, WorkspaceRoots, collect_toolset,
+    Capability, ToolCapabilityAudit, ToolContext, ToolContextBuilder, ToolDeclaration, ToolFactory,
+    ToolPool, ToolPoolSnapshot, ToolScope, ToolSelection, ToolSet, WorkspaceRoot, WorkspaceRoots,
+    collect_toolset,
 };
 pub mod wire;
 pub use web_config::{SharedWebSearchConfig, WebSearchConfig};

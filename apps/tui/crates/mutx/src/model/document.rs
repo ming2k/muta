@@ -3374,6 +3374,7 @@ mod tests {
                 elevation: false,
                 one_off: false,
                 origin: None,
+                ..Default::default()
             },
         ));
         let peek = task.runner_status_line().unwrap();

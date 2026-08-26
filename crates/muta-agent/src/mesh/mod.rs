@@ -28,6 +28,9 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+pub mod tools;
+pub use tools::{MeshListPeersTool, MeshSendTool};
+
 /// Error returned by the tracker for an unlawful or unaddressable send.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MeshError {
@@ -202,6 +205,19 @@ impl MeshTracker {
             .cloned()
             .collect()
     }
+
+    /// Addresses at one tier across all sessions (cross-session peer discovery).
+    pub fn peers_by_tier(&self, tier: AgentTier) -> Vec<MeshAddress> {
+        self.reap_cancelled();
+        self.entries
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|a| a.tier == tier)
+            .cloned()
+            .collect()
+    }
+
 
     /// Sweep entries whose token has fired.
     fn reap_cancelled(&self) {

@@ -146,6 +146,7 @@ pub struct PolicyContext<'a> {
     pub call_name: &'a str,
     pub arguments: &'a str,
     pub scope_target: ScopeTarget,
+    #[allow(dead_code)]
     pub workspace_execution: muta_contracts::WorkspaceExecutionProfile,
     pub operation_scope: muta_contracts::OperationScope,
     pub disabled: std::collections::HashSet<String>,
@@ -334,6 +335,8 @@ impl PermissionPolicy for ScopeGatePolicy {
                 elevation: true,
                 one_off: false,
                 origin: None,
+                hazard: None,
+                submission: None,
             },
             rule,
         }
@@ -411,6 +414,8 @@ impl PermissionPolicy for BashPolicy {
                         elevation: false,
                         one_off: true,
                         origin: None,
+                        hazard: Some(muta_contracts::hazard::HazardLevel::CommandExecution),
+                        submission: None,
                     },
                     // A well-formed rule that is never persisted: `one_off`
                     // short-circuits persistence in the caller. Carried only to
@@ -425,9 +430,15 @@ impl PermissionPolicy for BashPolicy {
     }
 }
 
-/// Gate 6: the authority broker. Explicit grants win. A Development workspace
-/// pre-authorises ordinary calls inside the operation scope. Otherwise the
-/// result is `MissingAuthority`; the caller decides whether it can ask a human.
+/// Gate 6: the authority broker and hazard-aware permission handler.
+///
+/// Treats tools as the direct object of evaluation.
+/// Safe tools with no mutating scope target pass automatically.
+/// Dangerous tools (file modification, command execution, etc.) check if their
+/// specific scope rule is admitted by the workspace PermissionStore (permanent or session).
+/// If not admitted, returns MissingAuthority with the structured ToolPermissionSubmission.
+///
+/// Decoupled from workspace trust / execution profiles.
 pub struct BrokerPolicy;
 #[async_trait]
 impl PermissionPolicy for BrokerPolicy {
@@ -435,35 +446,56 @@ impl PermissionPolicy for BrokerPolicy {
         "broker"
     }
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if matches!(ctx.scope_target, ScopeTarget::Unspecified) {
+        let submission = ctx.tool.permission_submission(ctx.arguments);
+        if submission.is_none() && matches!(ctx.scope_target, ScopeTarget::Unspecified) {
             return PolicyDecision::Pass;
         }
-        let rule = scope_target_to_rule(ctx.call_name, &ctx.scope_target);
-        if ctx.ctx.permissions().is_always_allowed(&rule) {
+
+        let rule = if let Some(sub) = &submission {
+            PermissionRule {
+                tool: ctx.call_name.to_string(),
+                scope: sub.scope.clone(),
+            }
+        } else {
+            scope_target_to_rule(ctx.call_name, &ctx.scope_target)
+        };
+
+        if ctx.ctx.permissions().is_allowed(&rule) {
             return PolicyDecision::Approve;
         }
-        if ctx.workspace_execution == muta_contracts::WorkspaceExecutionProfile::Development {
-            return PolicyDecision::Approve;
-        }
+
         // Direct policy tests may evaluate the broker without the preceding
         // scope gate, so retain the elevation bit from the declarative scope.
         let elevation = !ctx.operation_scope.allows(&ctx.scope_target);
+        let label = submission
+            .as_ref()
+            .map(|s| s.label.clone())
+            .unwrap_or_else(|| ctx.tool.permission_label());
+        let description = submission
+            .as_ref()
+            .map(|s| s.description.clone())
+            .unwrap_or_else(|| ctx.tool.permission_description());
+        let hazard = submission.as_ref().map(|s| s.hazard_level);
+
         PolicyDecision::MissingAuthority {
             request: muta_contracts::PermissionRequest {
                 id: String::new(), // caller fills the generated id
                 tool: ctx.call_name.to_string(),
-                label: ctx.tool.permission_label(),
-                description: ctx.tool.permission_description(),
+                label,
+                description,
                 arguments: ctx.arguments.to_string(),
                 scope: rule.scope.clone(),
                 elevation,
                 one_off: false,
                 origin: None,
+                hazard,
+                submission,
             },
             rule,
         }
     }
 }
+
 
 fn scope_target_to_rule(tool: &str, target: &ScopeTarget) -> PermissionRule {
     let scope = match target {
@@ -749,15 +781,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broker_development_profile_approves_ordinary_in_scope_call() {
+    async fn broker_approves_session_and_always_allowed_rules() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/workspace/file")),
         });
-        let ctxr = StubCtx {
-            perms: PermissionStore::new(),
-        };
-        let mut c = pctx(
+        let perms = PermissionStore::new();
+        perms.add_session(PermissionRule {
+            tool: "write_file".into(),
+            scope: "/workspace/file".into(),
+        });
+        let ctxr = StubCtx { perms };
+        let c = pctx(
             &tool,
             "write_file",
             "{}",
@@ -768,12 +803,12 @@ mod tests {
             ScopedToolDisable::default(),
             &ctxr,
         );
-        c.workspace_execution = muta_contracts::WorkspaceExecutionProfile::Development;
         assert!(matches!(
             BrokerPolicy.evaluate(&c).await,
             PolicyDecision::Approve
         ));
     }
+
 
     #[tokio::test]
     async fn broker_reports_missing_authority_when_not_allowed() {
@@ -1000,4 +1035,133 @@ mod tests {
             PolicyDecision::MissingAuthority { .. }
         ));
     }
+
+    struct SafeTool;
+    #[async_trait]
+    impl Tool for SafeTool {
+        fn name(&self) -> &str { "view_file" }
+        fn description(&self) -> &str { "View file content" }
+        fn parameters(&self) -> serde_json::Value { serde_json::json!({}) }
+        fn hazard_level(&self) -> muta_contracts::HazardLevel { muta_contracts::HazardLevel::Safe }
+        async fn call(&self, _args: &str) -> Result<String, String> { Ok("ok".into()) }
+    }
+
+    struct DangerousCommandTool;
+    #[async_trait]
+    impl Tool for DangerousCommandTool {
+        fn name(&self) -> &str { "bash" }
+        fn description(&self) -> &str { "Run shell command" }
+        fn parameters(&self) -> serde_json::Value { serde_json::json!({}) }
+        fn hazard_level(&self) -> muta_contracts::HazardLevel { muta_contracts::HazardLevel::CommandExecution }
+        fn scope_target(&self, args: &str) -> ScopeTarget { ScopeTarget::Command(args.to_string()) }
+        fn permission_submission(&self, args: &str) -> Option<muta_contracts::ToolPermissionSubmission> {
+            Some(muta_contracts::ToolPermissionSubmission {
+                hazard_level: muta_contracts::HazardLevel::CommandExecution,
+                label: format!("Execute command: `{args}`"),
+                description: format!("Runs host shell command `{args}`"),
+                scope: args.to_string(),
+                payload: muta_contracts::ToolPermissionPayload::Command {
+                    command: args.to_string(),
+                    cwd: None,
+                    kill_spec: muta_contracts::ProcessKillSpec {
+                        command: args.split_whitespace().next().unwrap_or("sh").to_string(),
+                        process_group_killable: true,
+                        pkill_target: format!("pkill -f '{args}'"),
+                        cwd: None,
+                    },
+                },
+            })
+        }
+        async fn call(&self, _args: &str) -> Result<String, String> { Ok("ok".into()) }
+    }
+
+    #[tokio::test]
+    async fn broker_passes_safe_tools_automatically() {
+        let tool: Arc<dyn Tool> = Arc::new(SafeTool);
+        let ctxr = StubCtx { perms: PermissionStore::new() };
+        let c = pctx(
+            &tool,
+            "view_file",
+            "{}",
+            ScopeTarget::Unspecified,
+            false,
+            muta_contracts::OperationScope::unrestricted(),
+            HashSet::new(),
+            ScopedToolDisable::default(),
+            &ctxr,
+        );
+        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::Pass));
+    }
+
+    #[tokio::test]
+    async fn broker_submits_hazard_and_kill_spec_for_dangerous_commands() {
+        let tool: Arc<dyn Tool> = Arc::new(DangerousCommandTool);
+        let ctxr = StubCtx { perms: PermissionStore::new() };
+        let mut c = pctx(
+            &tool,
+            "bash",
+            "cargo test",
+            ScopeTarget::Command("cargo test".to_string()),
+            false,
+            muta_contracts::OperationScope::unrestricted(),
+            HashSet::new(),
+            ScopedToolDisable::default(),
+            &ctxr,
+        );
+        // Even in Development trust profile, dangerous tools are NOT silently bypassed!
+        c.workspace_execution = muta_contracts::WorkspaceExecutionProfile::Development;
+
+        let decision = BrokerPolicy.evaluate(&c).await;
+        match decision {
+            PolicyDecision::MissingAuthority { request, .. } => {
+                assert_eq!(request.hazard, Some(muta_contracts::HazardLevel::CommandExecution));
+                assert!(request.submission.is_some());
+                let sub = request.submission.unwrap();
+                match sub.payload {
+                    muta_contracts::ToolPermissionPayload::Command { kill_spec, .. } => {
+                        assert!(kill_spec.process_group_killable);
+                        assert_eq!(kill_spec.pkill_target, "pkill -f 'cargo test'");
+                    }
+                    _ => panic!("Expected Command payload"),
+                }
+            }
+            other => panic!("Expected MissingAuthority, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn broker_honours_session_grant_lifespan() {
+        let tool: Arc<dyn Tool> = Arc::new(DangerousCommandTool);
+        let perms = PermissionStore::new();
+        let ctxr = StubCtx { perms };
+
+        let c = pctx(
+            &tool,
+            "bash",
+            "cargo build",
+            ScopeTarget::Command("cargo build".to_string()),
+            false,
+            muta_contracts::OperationScope::unrestricted(),
+            HashSet::new(),
+            ScopedToolDisable::default(),
+            &ctxr,
+        );
+
+        // Initially requires permission
+        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::MissingAuthority { .. }));
+
+        // Grant session permission
+        ctxr.permissions().add_session(PermissionRule {
+            tool: "bash".into(),
+            scope: "cargo build".into(),
+        });
+
+        // Now approved
+        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::Approve));
+
+        // After clearing session, requires permission again
+        ctxr.permissions().clear_session();
+        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::MissingAuthority { .. }));
+    }
 }
+

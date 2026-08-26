@@ -1195,6 +1195,7 @@ mod tests {
                 elevation: false,
                 one_off: false,
                 origin: None,
+                ..Default::default()
             };
             let rect = mutx_engine::Rect::new(0, 0, 60, 3);
             let mut hit_map = crate::model::layout::ModalHitMap::new();

@@ -411,6 +411,7 @@ mod tests {
                 elevation: false,
                 one_off: false,
                 origin: None,
+                ..Default::default()
             },
         )));
         assert_eq!(t.row().status, SessionStatus::NeedsApproval);

@@ -665,6 +665,7 @@ mod tests {
             elevation: false,
             one_off: false,
             origin: None,
+            ..Default::default()
         };
         reg.run_permission_request(&request, "s", None).await;
         assert_eq!(
@@ -694,6 +695,7 @@ mod tests {
             elevation: false,
             one_off: false,
             origin: None,
+            ..Default::default()
         };
         let edit_req = muta_contracts::PermissionRequest {
             id: "p2".into(),
@@ -705,6 +707,7 @@ mod tests {
             elevation: false,
             one_off: false,
             origin: None,
+            ..Default::default()
         };
         reg.run_permission_request(&bash_req, "s", None).await;
         reg.run_permission_request(&edit_req, "s", None).await;

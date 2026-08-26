@@ -1703,12 +1703,17 @@ pub enum AgentEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum PermissionDecision {
+    /// Allow this single invocation (one-off).
     Once,
+    /// Allow for the duration of the current session (in-memory).
+    Session,
+    /// Allow permanently for this workspace (persisted).
     Always,
+    /// Deny / reject this execution.
     Reject,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct PermissionRequest {
     pub id: String,
@@ -1744,7 +1749,14 @@ pub struct PermissionRequest {
     /// `None` for top-level principal calls; e.g. `Some("runner #a1b2 · mcp_specialist")`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// Threat / hazard level classification of this tool invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hazard: Option<crate::hazard::HazardLevel>,
+    /// Structured tool-specific payload submitted to the permission handler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission: Option<crate::hazard::ToolPermissionSubmission>,
 }
+
 
 /// One option offered to the user inside an `ask_user` question.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]

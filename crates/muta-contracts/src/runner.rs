@@ -421,6 +421,43 @@ to the principal agent. Never output giant raw payloads if a clear summary answe
     allow_model_stdin: false,
 };
 
+/// The pool of runner presets available for master delegation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RunnerPresetPool;
+
+impl RunnerPresetPool {
+    /// Static catalog of all built-in runner presets.
+    pub const ALL: &'static [&'static RunnerPreset] = &[
+        &RUNNER_EXPLORE,
+        &RUNNER_TITLE,
+        &RUNNER_CODE,
+        &RUNNER_MCP_SPECIALIST,
+    ];
+
+    /// Find a runner preset by name.
+    pub fn find(name: &str) -> Option<&'static RunnerPreset> {
+        Self::ALL.iter().copied().find(|p| p.name == name)
+    }
+
+    /// List all available preset names in the pool.
+    pub fn names() -> Vec<&'static str> {
+        Self::ALL.iter().map(|p| p.name).collect()
+    }
+
+    /// Filter runner presets admitted by a master's delegation policy.
+    pub fn admitted_for_master(
+        master_delegation: &crate::MasterPresetDelegation,
+    ) -> Vec<&'static RunnerPreset> {
+        Self::ALL
+            .iter()
+            .copied()
+            .filter(|p| master_delegation.admits_runner(p.name))
+            .collect()
+    }
+}
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,4 +702,29 @@ mod tests {
         );
         assert!(!RUNNER_MCP_SPECIALIST.tool_policy.admits(&make_control()));
     }
+
+    #[test]
+    fn runner_preset_pool_catalog_and_filtering() {
+        assert_eq!(RunnerPresetPool::ALL.len(), 4);
+        assert_eq!(
+            RunnerPresetPool::find("explore").map(|p| p.name),
+            Some("explore")
+        );
+        assert_eq!(
+            RunnerPresetPool::find("code").map(|p| p.name),
+            Some("code")
+        );
+        assert_eq!(RunnerPresetPool::find("nonexistent"), None);
+
+        let dev_delegation = crate::MASTER_DEVELOPER;
+        let dev_runners = RunnerPresetPool::admitted_for_master(&dev_delegation);
+        assert_eq!(dev_runners.len(), 4);
+
+        let analyst_delegation = crate::MASTER_CODE_ANALYST;
+        let analyst_runners = RunnerPresetPool::admitted_for_master(&analyst_delegation);
+        assert_eq!(analyst_runners.len(), 2);
+        let names: Vec<&str> = analyst_runners.iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["explore", "title"]);
+    }
 }
+

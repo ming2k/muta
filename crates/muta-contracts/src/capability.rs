@@ -479,7 +479,41 @@ pub trait Tool: Send + Sync {
         self.description().to_string()
     }
 
+    /// Threat / hazard classification of this tool.
+    ///
+    /// Read-only / inspection tools return `HazardLevel::Safe` (default).
+    /// Destructive or executing tools return their specific `HazardLevel`.
+    fn hazard_level(&self) -> crate::hazard::HazardLevel {
+        crate::hazard::HazardLevel::Safe
+    }
+
+    /// Build the tool-specific submission to the permission handler for a given set of arguments.
+    ///
+    /// Safe tools return `None` (no permission evaluation or prompt needed).
+    /// Dangerous tools (file modification, command execution) submit their structured
+    /// intent payload (file paths, command line + process kill spec).
+    fn permission_submission(&self, arguments: &str) -> Option<crate::hazard::ToolPermissionSubmission> {
+        if !self.hazard_level().requires_permission() {
+            return None;
+        }
+        Some(crate::hazard::ToolPermissionSubmission {
+            hazard_level: self.hazard_level(),
+            label: self.permission_label(),
+            description: self.permission_description(),
+            scope: match self.scope_target(arguments) {
+                crate::ScopeTarget::Command(c) => c,
+                crate::ScopeTarget::Path(p) => p.to_string_lossy().into_owned(),
+                crate::ScopeTarget::Unspecified => self.name().to_string(),
+            },
+            payload: crate::hazard::ToolPermissionPayload::Generic {
+                summary: format!("Execute tool '{}'", self.name()),
+                details: serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null),
+            },
+        })
+    }
+
     async fn call(&self, arguments: &str) -> Result<String, String>;
+
 
     /// Structured result. Default delegates to [`call`](Self::call), wrapping
     /// the text as [`ToolOutput::Text`]. Tools override this to return richer

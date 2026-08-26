@@ -3871,7 +3871,11 @@ impl Agent {
                 self.book_pause(parked_at.elapsed().as_millis() as u64);
                 match decision {
                     PermissionDecision::Once => {
-                        tracing::info!(tool = %tool.name(), decision = "once", "permission granted");
+                        tracing::info!(tool = %tool.name(), decision = "once", "permission granted for single invocation");
+                    }
+                    PermissionDecision::Session => {
+                        tracing::info!(tool = %tool.name(), decision = "session", "permission granted for current session");
+                        self.permissions.add_session(rule);
                     }
                     PermissionDecision::Always => {
                         if one_off {
@@ -3887,7 +3891,7 @@ impl Agent {
                                 "one-off permission granted (not persisted)"
                             );
                         } else {
-                            tracing::info!(tool = %tool.name(), decision = "always", "permission granted");
+                            tracing::info!(tool = %tool.name(), decision = "always", "permission granted permanently for workspace");
                             self.permissions.add_always(rule);
                         }
                     }
@@ -3898,6 +3902,7 @@ impl Agent {
                         };
                     }
                 }
+
             }
         }
 

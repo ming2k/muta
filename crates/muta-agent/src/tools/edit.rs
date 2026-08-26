@@ -190,6 +190,22 @@ impl Tool for EditFileTool {
     fn scope_target(&self, arguments: &str) -> muta_contracts::ScopeTarget {
         muta_contracts::ScopeTarget::Path(std::path::PathBuf::from(json_string(arguments, "path")))
     }
+    fn hazard_level(&self) -> muta_contracts::HazardLevel {
+        muta_contracts::HazardLevel::FileModification
+    }
+    fn permission_submission(&self, arguments: &str) -> Option<muta_contracts::ToolPermissionSubmission> {
+        let path = json_string(arguments, "path");
+        Some(muta_contracts::ToolPermissionSubmission {
+            hazard_level: muta_contracts::HazardLevel::FileModification,
+            label: format!("Edit file `{path}`"),
+            description: format!("Modifies content within file `{path}`."),
+            scope: path.clone(),
+            payload: muta_contracts::ToolPermissionPayload::FileEdit {
+                paths: vec![path],
+                operation: "edit_file".to_string(),
+            },
+        })
+    }
     async fn call(&self, arguments: &str) -> Result<String, String> {
         self.call_structured(arguments).await.map(|o| o.to_text())
     }

@@ -41,6 +41,23 @@ impl MeshAddress {
         Self { tier, session: session.into(), agent: agent.into() }
     }
 
+    /// Supervisor address for the daemon.
+    pub fn supervisor(agent_id: impl Into<String>) -> Self {
+        Self::new(AgentTier::Supervisor, "daemon", agent_id)
+    }
+
+    /// Master address for a given session.
+    pub fn master(session: impl Into<String>) -> Self {
+        let s = session.into();
+        Self::new(AgentTier::Master, s.clone(), s)
+    }
+
+    /// Runner address for a subordinate within a session.
+    pub fn runner(session: impl Into<String>, agent: impl Into<String>) -> Self {
+        Self::new(AgentTier::Runner, session, agent)
+    }
+
+
     /// The address of this agent's parent in the mesh (same session, one
     /// tier up). `None` for the supervisor — the root has no parent.
     pub fn parent(&self) -> Option<MeshAddress> {

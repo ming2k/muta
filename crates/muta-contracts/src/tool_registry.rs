@@ -651,6 +651,142 @@ impl ToolSelection {
     }
 }
 
+/// An agent's tool requirement declaration against the pool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolDeclaration {
+    /// Identifier or role of the declaring agent (e.g. "developer", "code_analyst", "explore", "supervisor").
+    pub agent_name: String,
+    /// Tier of the agent making the declaration.
+    pub tier: crate::AgentTier,
+    /// The capability name scope requested.
+    pub scope: ToolScope,
+}
+
+impl ToolDeclaration {
+    pub fn new(agent_name: impl Into<String>, tier: crate::AgentTier, scope: ToolScope) -> Self {
+        Self {
+            agent_name: agent_name.into(),
+            tier,
+            scope,
+        }
+    }
+}
+
+/// Audit snapshot of a capability's admission status for an agent against the pool.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolCapabilityAudit {
+    pub capability: String,
+    pub requested: bool,
+    pub admitted: bool,
+    pub active_variant: Option<String>,
+    pub reason: Option<String>,
+}
+
+/// Snapshot of the tool pool for auditing and inspection.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolPoolSnapshot {
+    pub capabilities: Vec<ToolCapabilityAudit>,
+}
+
+/// The session-wide or system-wide tool pool: freezes a capability set as the pool,
+/// against which agents declare their tool requirements and resolve concrete toolsets.
+#[derive(Clone, Default)]
+pub struct ToolPool {
+    toolset: ToolSet,
+    declarations: Arc<std::sync::RwLock<HashMap<String, ToolDeclaration>>>,
+}
+
+impl ToolPool {
+    /// Create a new tool pool wrapping a capability set.
+    pub fn new(toolset: ToolSet) -> Self {
+        Self {
+            toolset,
+            declarations: Arc::new(std::sync::RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Build a tool pool from an iterator of tools.
+    pub fn from_tools(tools: impl IntoIterator<Item = Arc<dyn Tool>>) -> Self {
+        Self::new(ToolSet::from_tools(tools))
+    }
+
+    /// Access the underlying capability set.
+    pub fn toolset(&self) -> &ToolSet {
+        &self.toolset
+    }
+
+    /// Insert a tool into the pool.
+    pub fn insert(&mut self, tool: Arc<dyn Tool>) {
+        self.toolset.insert(tool);
+    }
+
+    /// Upsert a tool in the pool.
+    pub fn upsert(&mut self, tool: Arc<dyn Tool>) -> Option<Arc<dyn Tool>> {
+        self.toolset.upsert(tool)
+    }
+
+    /// Record an agent's requirement declaration against the pool.
+    pub fn declare(&self, declaration: ToolDeclaration) {
+        self.declarations
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(declaration.agent_name.clone(), declaration);
+    }
+
+    /// Get an agent's recorded declaration if any.
+    pub fn get_declaration(&self, agent_name: &str) -> Option<ToolDeclaration> {
+        self.declarations
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(agent_name)
+            .cloned()
+    }
+
+    /// Resolve the pool to exactly one tool per surviving capability for an agent
+    /// of selection `agent` running on `model`, whose own capability limits and variant
+    /// preferences are `model_sel`.
+    pub fn resolve_for(
+        &self,
+        model: &Model,
+        agent: &ToolSelection,
+        model_sel: &ToolSelection,
+    ) -> Vec<Arc<dyn Tool>> {
+        self.toolset.resolve_for(model, agent, model_sel)
+    }
+
+    /// Produce an audit snapshot of the pool against an agent's selection.
+    pub fn snapshot(&self, agent: &ToolSelection, model: &Model) -> ToolPoolSnapshot {
+        let mut audits = Vec::new();
+        for (name, cap) in &self.toolset.capabilities {
+            let requested = agent.scope.admits(name);
+            let preferred_variant = agent.variants.get(name).map(String::as_str);
+            let usable_tool = cap.usable_variant_for(model, preferred_variant);
+            let admitted = requested && usable_tool.is_some();
+            let active_variant = if admitted {
+                usable_tool.map(|t| t.variant().to_string())
+            } else {
+                None
+            };
+            let reason = if !requested {
+                Some("Not requested by agent tool scope".to_string())
+            } else if usable_tool.is_none() {
+                Some("No variant usable on model (e.g. missing model capability)".to_string())
+            } else {
+                None
+            };
+            audits.push(ToolCapabilityAudit {
+                capability: name.clone(),
+                requested,
+                admitted,
+                active_variant,
+                reason,
+            });
+        }
+        ToolPoolSnapshot { capabilities: audits }
+    }
+}
+
+
 /// Register a self-contained tool at its definition site.
 ///
 /// Expands to a private factory unit struct implementing [`ToolFactory`] plus
@@ -1222,4 +1358,48 @@ mod tests {
         assert!(single.contains(Path::new("/proj/frontend/x")));
         assert!(!single.contains(Path::new("/proj/backend/x")));
     }
+
+    #[test]
+    fn tool_pool_declaration_and_resolution() {
+        let pool = ToolPool::from_tools(vec![
+            cap("read_text", "default", false),
+            cap("search_text", "default", false),
+            cap("write_file", "default", false),
+        ]);
+
+        let decl = ToolDeclaration::new(
+            "code_analyst",
+            crate::AgentTier::Master,
+            ToolScope::only(["read_text", "search_text"]),
+        );
+        pool.declare(decl.clone());
+
+        assert_eq!(pool.get_declaration("code_analyst"), Some(decl));
+        assert_eq!(pool.get_declaration("unknown"), None);
+
+        let agent = ToolSelection::only(["read_text", "search_text"]);
+        let resolved = pool.resolve_for(&model(true), &agent, &ToolSelection::unrestricted());
+        let names: Vec<&str> = resolved.iter().map(|t| t.name()).collect();
+        assert_eq!(names, vec!["read_text", "search_text"]);
+
+        let snapshot = pool.snapshot(&agent, &model(true));
+        assert_eq!(snapshot.capabilities.len(), 3);
+        let read_audit = snapshot
+            .capabilities
+            .iter()
+            .find(|c| c.capability == "read_text")
+            .unwrap();
+        assert!(read_audit.requested);
+        assert!(read_audit.admitted);
+        assert_eq!(read_audit.active_variant.as_deref(), Some("default"));
+
+        let write_audit = snapshot
+            .capabilities
+            .iter()
+            .find(|c| c.capability == "write_file")
+            .unwrap();
+        assert!(!write_audit.requested);
+        assert!(!write_audit.admitted);
+    }
 }
+

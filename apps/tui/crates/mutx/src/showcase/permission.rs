@@ -31,6 +31,9 @@ fn fixtures() -> Vec<PermissionRequest> {
             elevation: false,
             one_off: false,
             origin: None,
+            hazard: Some(muta_contracts::HazardLevel::CommandExecution),
+            submission: None,
+            ..Default::default()
         },
         PermissionRequest {
             id: "p2".into(),
@@ -42,6 +45,9 @@ fn fixtures() -> Vec<PermissionRequest> {
             elevation: false,
             one_off: false,
             origin: Some("runner #9f8a · code".into()),
+            hazard: Some(muta_contracts::HazardLevel::FileModification),
+            submission: None,
+            ..Default::default()
         },
         PermissionRequest {
             // An out-of-scope elevation: the broker surfaces this ⚠ prompt so
@@ -56,6 +62,9 @@ fn fixtures() -> Vec<PermissionRequest> {
             elevation: true,
             one_off: false,
             origin: Some("runner #c3d4 · mcp_specialist".into()),
+            hazard: Some(muta_contracts::HazardLevel::FileModification),
+            submission: None,
+            ..Default::default()
         },
         PermissionRequest {
             // A one-off dangerous-command confirm: the bash policy matched a
@@ -70,7 +79,11 @@ fn fixtures() -> Vec<PermissionRequest> {
             elevation: false,
             one_off: true,
             origin: None,
+            hazard: Some(muta_contracts::HazardLevel::CommandExecution),
+            submission: None,
+            ..Default::default()
         },
+
     ]
 }
 
