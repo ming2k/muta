@@ -20,6 +20,25 @@ use super::text_layout::{
     WrappedLine, block_selection_range, line_selection, padded_tail, wrap_text,
 };
 
+/// Render plumbing for the composer draw family: frame, target rect,
+/// theme, layout map, scroll state, and selection. Bundled so the three
+/// composer entry points and the shared impl take (view, text, flags)
+/// instead of threading eleven positional args.
+pub struct ComposerView<'a, 'f: 'a> {
+    pub frame: &'a mut Frame<'f>,
+    pub input_rect: Rect,
+    pub theme: &'a Theme,
+    pub layout_map: &'a mut LayoutMap,
+    pub input_scroll: &'a mut usize,
+    pub selection: &'a SelectionState,
+}
+
+/// The composer text being rendered plus its byte cursor.
+pub struct ComposerText<'a> {
+    pub input: &'a str,
+    pub byte_cursor: usize,
+}
+
 /// Special message_idx for the live input box in the layout map, so semantic
 /// selection / copy works on input text just like transcript messages.
 pub const INPUT_MSG_IDX: usize = usize::MAX - 2;
@@ -176,34 +195,37 @@ pub fn cursor_screen_pos(
 ///
 /// The elevated autopilot state is no longer signalled here; it lives on the
 /// state bar directly below the input, separate from composer state.
-#[allow(clippy::too_many_arguments)]
 pub fn draw_composer(
-    frame: &mut Frame,
-    input_rect: Rect,
-    input: &str,
-    byte_cursor: usize,
+    view: ComposerView<'_, '_>,
+    text: ComposerText<'_>,
     focused: bool,
     show_caret: bool,
-    theme: &Theme,
-    layout_map: &mut LayoutMap,
     record: bool,
-    input_scroll: &mut usize,
-    selection: &SelectionState,
     image_count: usize,
     paste_count: usize,
 ) {
-    draw_composer_impl(
+    let ComposerView {
         frame,
         input_rect,
-        input,
-        byte_cursor,
-        focused,
-        show_caret,
         theme,
         layout_map,
-        record,
         input_scroll,
         selection,
+    } = view;
+    let ComposerText { input, byte_cursor } = text;
+    draw_composer_impl(
+        ComposerView {
+            frame,
+            input_rect,
+            theme,
+            layout_map,
+            input_scroll,
+            selection,
+        },
+        ComposerText { input, byte_cursor },
+        focused,
+        show_caret,
+        record,
         None,
         image_count,
         paste_count,
@@ -216,35 +238,38 @@ pub fn draw_composer(
 /// color-only tint on the `›` prompt (the glyph never changes). Once the
 /// animation ends the caller passes no accent and the ordinary composer
 /// renders. See [`super::effort_ignition`].
-#[allow(clippy::too_many_arguments)]
 pub fn draw_composer_igniting(
-    frame: &mut Frame,
-    input_rect: Rect,
-    input: &str,
-    byte_cursor: usize,
+    view: ComposerView<'_, '_>,
+    text: ComposerText<'_>,
     focused: bool,
     show_caret: bool,
-    theme: &Theme,
-    layout_map: &mut LayoutMap,
     record: bool,
-    input_scroll: &mut usize,
-    selection: &SelectionState,
     image_count: usize,
     paste_count: usize,
     prompt_accent: (bool, Option<u128>),
 ) {
-    draw_composer_impl(
+    let ComposerView {
         frame,
         input_rect,
-        input,
-        byte_cursor,
-        focused,
-        show_caret,
         theme,
         layout_map,
-        record,
         input_scroll,
         selection,
+    } = view;
+    let ComposerText { input, byte_cursor } = text;
+    draw_composer_impl(
+        ComposerView {
+            frame,
+            input_rect,
+            theme,
+            layout_map,
+            input_scroll,
+            selection,
+        },
+        ComposerText { input, byte_cursor },
+        focused,
+        show_caret,
+        record,
         None,
         image_count,
         paste_count,
@@ -258,35 +283,38 @@ pub fn draw_composer_igniting(
 /// prose (and from an unmatched `/`-prefix, which stays in the normal text
 /// color). The length is clamped per wrapped row so the accent never bleeds
 /// into the argument text when the input wraps.
-#[allow(clippy::too_many_arguments)]
 pub fn draw_composer_highlighted(
-    frame: &mut Frame,
-    input_rect: Rect,
-    input: &str,
-    byte_cursor: usize,
+    view: ComposerView<'_, '_>,
+    text: ComposerText<'_>,
     focused: bool,
     show_caret: bool,
-    theme: &Theme,
-    layout_map: &mut LayoutMap,
     record: bool,
-    input_scroll: &mut usize,
-    selection: &SelectionState,
     highlight_len: usize,
     image_count: usize,
     paste_count: usize,
 ) {
-    draw_composer_impl(
+    let ComposerView {
         frame,
         input_rect,
-        input,
-        byte_cursor,
-        focused,
-        show_caret,
         theme,
         layout_map,
-        record,
         input_scroll,
         selection,
+    } = view;
+    let ComposerText { input, byte_cursor } = text;
+    draw_composer_impl(
+        ComposerView {
+            frame,
+            input_rect,
+            theme,
+            layout_map,
+            input_scroll,
+            selection,
+        },
+        ComposerText { input, byte_cursor },
+        focused,
+        show_caret,
+        record,
         Some(highlight_len),
         image_count,
         paste_count,
@@ -294,26 +322,26 @@ pub fn draw_composer_highlighted(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_composer_impl(
-    frame: &mut Frame,
-    input_rect: Rect,
-    input: &str,
-    byte_cursor: usize,
+    view: ComposerView<'_, '_>,
+    text: ComposerText<'_>,
     focused: bool,
     show_caret: bool,
-    theme: &Theme,
-    layout_map: &mut LayoutMap,
     record: bool,
-    input_scroll: &mut usize,
-    selection: &SelectionState,
     highlight_len: Option<usize>,
     image_count: usize,
     paste_count: usize,
-    // Effort-ignition prompt accent: `(effort_is_max, ignition_elapsed_ms)`.
-    // `None` (or `focused == false`) renders the standard `›` prompt.
     prompt_accent: Option<(bool, Option<u128>)>,
 ) {
+    let ComposerView {
+        frame,
+        input_rect,
+        theme,
+        layout_map,
+        input_scroll,
+        selection,
+    } = view;
+    let ComposerText { input, byte_cursor } = text;
     // The input box is a flat panel: each text row carries panel_bg and is
     // prefixed with `› ` on the first wrapped line / a two-space indent on
     // continuations. The top and bottom edges are full panel-bg padding rows,
@@ -480,13 +508,15 @@ fn draw_composer_impl(
                 hl_end,
                 &chip_ranges,
                 selected,
-                base_text,
-                accent_text,
-                chip_paste_style,
-                chip_image_style,
-                selected_bg,
-                chip_paste_fg,
-                chip_image_fg,
+                RunStyles {
+                    base: base_text,
+                    accent: accent_text,
+                    chip_paste: chip_paste_style,
+                    chip_image: chip_image_style,
+                    selected_bg,
+                    chip_paste_fg,
+                    chip_image_fg,
+                },
             );
             spans.push(Span::styled(
                 padded_tail(full_w, used),
@@ -547,13 +577,9 @@ fn draw_composer_impl(
 ///    `chip_image`), so paste chips and image chips read as distinct blocks.
 /// 3. The **command accent** (bold + brand color).
 /// 4. Plain base text.
-#[allow(clippy::too_many_arguments)]
-fn push_styled_runs(
-    spans: &mut Vec<Span<'static>>,
-    text: &str,
-    accent_len: Option<usize>,
-    chip_ranges: &[(usize, usize, ChipKind)],
-    selected: Option<(usize, usize)>,
+/// Style set for `push_styled_runs`: the base/accent text styles, the two
+/// chip styles, and the selection/chip foreground colors.
+struct RunStyles {
     base: Style,
     accent: Style,
     chip_paste: Style,
@@ -561,6 +587,15 @@ fn push_styled_runs(
     selected_bg: Color,
     chip_paste_fg: Color,
     chip_image_fg: Color,
+}
+
+fn push_styled_runs(
+    spans: &mut Vec<Span<'static>>,
+    text: &str,
+    accent_len: Option<usize>,
+    chip_ranges: &[(usize, usize, ChipKind)],
+    selected: Option<(usize, usize)>,
+    styles: RunStyles,
 ) {
     if text.is_empty() {
         return;
@@ -603,19 +638,19 @@ fn push_styled_runs(
         }
         let style = if is_selected(lo) {
             match chip_of(lo) {
-                Some(ChipKind::Paste) => Style::default().fg(chip_paste_fg).bg(selected_bg),
-                Some(ChipKind::Image) => Style::default().fg(chip_image_fg).bg(selected_bg),
-                None => base.bg(selected_bg),
+                Some(ChipKind::Paste) => Style::default().fg(styles.chip_paste_fg).bg(styles.selected_bg),
+                Some(ChipKind::Image) => Style::default().fg(styles.chip_image_fg).bg(styles.selected_bg),
+                None => styles.base.bg(styles.selected_bg),
             }
         } else if let Some(kind) = chip_of(lo) {
             match kind {
-                ChipKind::Paste => chip_paste,
-                ChipKind::Image => chip_image,
+                ChipKind::Paste => styles.chip_paste,
+                ChipKind::Image => styles.chip_image,
             }
         } else if in_accent(lo) {
-            accent
+            styles.accent
         } else {
-            base
+            styles.base
         };
         spans.push(Span::styled(text[lo..hi].to_string(), style));
     }

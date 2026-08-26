@@ -1,4 +1,5 @@
 use super::*;
+use crate::composer::{ComposerText, ComposerView};
 use crate::markdown_table::{build_table_render, shrink_column_widths};
 use crate::text_layout::wrap_text;
 use unicode_width::UnicodeWidthStr;
@@ -62,19 +63,23 @@ fn redesigned_components_render_without_panicking() {
                     },
                 );
                 draw_composer(
-                    f,
-                    Rect::new(0, 21, 80, 3),
-                    "hello",
-                    5,
-                    true,
-                    true,
-                    &theme,
-                    &mut LayoutMap::new(),
-                    true,
-                    &mut 0,
-                    &SelectionState::None,
-                    0,
-                    0,
+ComposerView {
+                    frame: f,
+                    input_rect: Rect::new(0, 21, 80, 3),
+                    theme: &theme,
+                    layout_map: &mut LayoutMap::new(),
+                    input_scroll: &mut 0,
+                    selection: &SelectionState::None,
+                },
+ComposerText {
+                    input: "hello",
+                    byte_cursor: 5,
+                },
+                true,
+                true,
+                true,
+                0,
+                0,
                 );
                 draw_completion_menu(
                     f,
@@ -1360,17 +1365,21 @@ fn draw_composer_records_region_for_empty_input() {
     let input_rect = Rect::new(0, 0, 30, 3);
     terminal.draw(|f| {
         draw_composer(
-            f,
-            input_rect,
-            "",
-            0,
+            ComposerView {
+                frame: f,
+                input_rect: input_rect,
+                theme: &theme,
+                layout_map: &mut layout_map,
+                input_scroll: &mut 0,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: "",
+                byte_cursor: 0,
+            },
             true,
             true,
-            &theme,
-            &mut layout_map,
             true,
-            &mut 0,
-            &SelectionState::None,
             0,
             0,
         );
@@ -1398,17 +1407,21 @@ fn draw_composer_wraps_and_positions_caret() {
     let input = "aaaa bbbb cccc dddd eeee";
     terminal.draw(|f| {
         draw_composer(
-            f,
-            Rect::new(0, 0, 20, 8),
-            input,
-            input.len(),
+            ComposerView {
+                frame: f,
+                input_rect: Rect::new(0, 0, 20, 8),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: input,
+                byte_cursor: input.len(),
+            },
             true,
             true,
-            &theme,
-            &mut LayoutMap::new(),
             true,
-            &mut 0,
-            &SelectionState::None,
             0,
             0,
         );
@@ -1433,17 +1446,21 @@ fn draw_composer_caret_flush_against_final_grapheme() {
         let mut terminal = mutx_engine::TestTerminal::new(20, 5);
         terminal.draw(|f| {
             draw_composer(
-                f,
-                Rect::new(0, 0, 20, 4),
-                input,
-                input.len(),
+                ComposerView {
+                    frame: f,
+                    input_rect: Rect::new(0, 0, 20, 4),
+                    theme: &theme,
+                    layout_map: &mut LayoutMap::new(),
+                    input_scroll: &mut 0,
+                    selection: &SelectionState::None,
+                },
+                ComposerText {
+                    input: input,
+                    byte_cursor: input.len(),
+                },
                 true,
                 true,
-                &theme,
-                &mut LayoutMap::new(),
                 false,
-                &mut 0,
-                &SelectionState::None,
                 0,
                 0,
             );
@@ -1475,17 +1492,21 @@ fn draw_composer_highlighted_accents_only_the_command_token() {
     let input = "/repeat every minute";
     terminal.draw(|f| {
         draw_composer_highlighted(
-            f,
-            Rect::new(0, 0, 30, 3),
-            input,
-            input.len(),
+            ComposerView {
+                frame: f,
+                input_rect: Rect::new(0, 0, 30, 3),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: input,
+                byte_cursor: input.len(),
+            },
             true,
             true,
-            &theme,
-            &mut LayoutMap::new(),
             false,
-            &mut 0,
-            &SelectionState::None,
             "/repeat".len(),
             0,
             0,
@@ -1523,19 +1544,23 @@ fn draw_composer_highlight_clamps_at_wrap_boundary() {
     let input = "/sessions abc";
     terminal.draw(|f| {
         draw_composer_highlighted(
-            f,
-            Rect::new(0, 0, 13, 5),
-            input,
-            input.len(),
+            ComposerView {
+                frame: f,
+                input_rect: Rect::new(0, 0, 13, 5),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: input,
+                byte_cursor: input.len(),
+            },
             true,
             true,
-            &theme,
-            &mut LayoutMap::new(),
             false,
-            &mut 0,
-            &SelectionState::None,
-            "/sessions".len(),
             0,
+            "/sessions".len(),
             0,
         );
     });
@@ -1568,17 +1593,21 @@ fn draw_composer_paints_paste_and_image_chips_distinctly() {
     let mut terminal = mutx_engine::TestTerminal::new(120, 5);
     terminal.draw(|f| {
         draw_composer(
-            f,
-            Rect::new(0, 0, 120, 3),
-            &input,
-            input.len(),
+            ComposerView {
+                frame: f,
+                input_rect: Rect::new(0, 0, 120, 3),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: &input,
+                byte_cursor: input.len(),
+            },
             true,
             true,
-            &theme,
-            &mut LayoutMap::new(),
             false,
-            &mut 0,
-            &SelectionState::None,
             1,
             1,
         );
@@ -1658,17 +1687,21 @@ fn draw_composer_leaves_orphan_chip_labels_as_plain_text() {
     let mut terminal = mutx_engine::TestTerminal::new(100, 5);
     terminal.draw(|f| {
         draw_composer(
-            f,
-            Rect::new(0, 0, 100, 3),
-            &input,
-            input.len(),
+            ComposerView {
+                frame: f,
+                input_rect: Rect::new(0, 0, 100, 3),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: &input,
+                byte_cursor: input.len(),
+            },
             true,
             true,
-            &theme,
-            &mut LayoutMap::new(),
             false,
-            &mut 0,
-            &SelectionState::None,
             0,
             0,
         );
@@ -1718,19 +1751,23 @@ fn draw_composer_colors_only_backed_chips_when_mixed() {
     let mut terminal = mutx_engine::TestTerminal::new(100, 5);
     terminal.draw(|f| {
         draw_composer(
-            f,
-            Rect::new(0, 0, 100, 3),
-            &input,
-            input.len(),
+            ComposerView {
+                frame: f,
+                input_rect: Rect::new(0, 0, 100, 3),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: &input,
+                byte_cursor: input.len(),
+            },
             true,
             true,
-            &theme,
-            &mut LayoutMap::new(),
             false,
-            &mut 0,
-            &SelectionState::None,
-            0, // image_count: no image payload staged
-            1, // paste_count: one paste payload staged
+            0, // image_count: no image payload staged,
+            1, // paste_count: one paste payload staged,
         );
     });
     let buf = terminal.buffer();
@@ -1791,17 +1828,21 @@ fn draw_composer_chip_keeps_identity_color_under_selection() {
     };
     terminal.draw(|f| {
         draw_composer(
-            f,
-            Rect::new(0, 0, 80, 3),
-            &input,
-            input.len(),
+            ComposerView {
+                frame: f,
+                input_rect: Rect::new(0, 0, 80, 3),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &selection,
+            },
+            ComposerText {
+                input: &input,
+                byte_cursor: input.len(),
+            },
             true,
             false,
-            &theme,
-            &mut LayoutMap::new(),
             false,
-            &mut 0,
-            &selection,
             0,
             1,
         );
@@ -1839,17 +1880,21 @@ fn draw_composer_chip_pill_continues_across_wrap() {
     let mut terminal = mutx_engine::TestTerminal::new(16, 6);
     terminal.draw(|f| {
         draw_composer(
-            f,
-            Rect::new(0, 0, 16, 5),
-            &input,
-            input.len(),
+            ComposerView {
+                frame: f,
+                input_rect: Rect::new(0, 0, 16, 5),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: &input,
+                byte_cursor: input.len(),
+            },
             true,
             true,
-            &theme,
-            &mut LayoutMap::new(),
             false,
-            &mut 0,
-            &SelectionState::None,
             1,
             0,
         );
@@ -1909,17 +1954,21 @@ fn cursor_screen_pos_matches_drawn_caret() {
         let mut terminal = mutx_engine::TestTerminal::new(24, 8);
         terminal.draw(|f| {
             draw_composer(
-                f,
-                rect,
-                input,
-                byte_cursor,
+                ComposerView {
+                    frame: f,
+                    input_rect: rect,
+                    theme: &theme,
+                    layout_map: &mut LayoutMap::new(),
+                    input_scroll: &mut 0,
+                    selection: &SelectionState::None,
+                },
+                ComposerText {
+                    input: input,
+                    byte_cursor: byte_cursor,
+                },
                 true,
                 true,
-                &theme,
-                &mut LayoutMap::new(),
                 false,
-                &mut 0,
-                &SelectionState::None,
                 0,
                 0,
             );
@@ -1990,17 +2039,21 @@ fn composer_cjk_selection_covers_full_width_glyphs() {
     let mut terminal = mutx_engine::TestTerminal::new(20, 5);
     terminal.draw(|f| {
         draw_composer(
-            f,
-            Rect::new(0, 0, 20, 4),
-            input,
-            input.len(),
+            ComposerView {
+                frame: f,
+                input_rect: Rect::new(0, 0, 20, 4),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &sel,
+            },
+            ComposerText {
+                input: input,
+                byte_cursor: input.len(),
+            },
             true,
             false,
-            &theme,
-            &mut LayoutMap::new(),
             false,
-            &mut 0,
-            &sel,
             0,
             0,
         );
@@ -2051,17 +2104,21 @@ fn composer_two_cjk_select_all_has_no_extra_glyph_or_tail_highlight() {
 
     terminal.draw(|f| {
         draw_composer(
-            f,
-            Rect::new(0, 0, 16, 4),
-            input,
-            input.len(),
+            ComposerView {
+                frame: f,
+                input_rect: Rect::new(0, 0, 16, 4),
+                theme: &theme,
+                layout_map: &mut LayoutMap::new(),
+                input_scroll: &mut 0,
+                selection: &sel,
+            },
+            ComposerText {
+                input: input,
+                byte_cursor: input.len(),
+            },
             true,
             false,
-            &theme,
-            &mut LayoutMap::new(),
             false,
-            &mut 0,
-            &sel,
             0,
             0,
         );
@@ -2123,17 +2180,21 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
     let mut rec = mutx_engine::TestTerminal::new(20, 5);
     rec.draw(|f| {
         draw_composer(
-            f,
-            rect,
-            input,
-            input.len(),
+            ComposerView {
+                frame: f,
+                input_rect: rect,
+                theme: &theme,
+                layout_map: &mut layout_map,
+                input_scroll: &mut 0,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: input,
+                byte_cursor: input.len(),
+            },
             true,
             false,
-            &theme,
-            &mut layout_map,
             true,
-            &mut 0,
-            &SelectionState::None,
             0,
             0,
         );
@@ -2151,17 +2212,21 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
         let mut t = mutx_engine::TestTerminal::new(20, 5);
         t.draw(|f| {
             draw_composer(
-                f,
-                rect,
-                input,
-                input.len(),
+                ComposerView {
+                    frame: f,
+                    input_rect: rect,
+                    theme: theme,
+                    layout_map: &mut LayoutMap::new(),
+                    input_scroll: &mut 0,
+                    selection: sel,
+                },
+                ComposerText {
+                    input: input,
+                    byte_cursor: input.len(),
+                },
                 true,
                 false,
-                theme,
-                &mut LayoutMap::new(),
                 false,
-                &mut 0,
-                sel,
                 0,
                 0,
             );
@@ -2272,17 +2337,21 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
         );
         let mut input_scroll = 0;
         draw_composer(
-            f,
-            render.input_rect,
-            &long_input,
-            0,
+            ComposerView {
+                frame: f,
+                input_rect: render.input_rect,
+                theme: &theme,
+                layout_map: &mut layout_map,
+                input_scroll: &mut input_scroll,
+                selection: &SelectionState::None,
+            },
+            ComposerText {
+                input: &long_input,
+                byte_cursor: 0,
+            },
             true,
             true,
-            &theme,
-            &mut layout_map,
             false,
-            &mut input_scroll,
-            &SelectionState::None,
             0,
             0,
         );
@@ -2387,17 +2456,21 @@ fn composer_focused_and_unfocused_panels_render_distinct_backgrounds() {
         let mut terminal = mutx_engine::TestTerminal::new(30, 5);
         terminal.draw(|f| {
             draw_composer(
-                f,
-                Rect::new(0, 0, 30, 3),
-                "hello",
-                5,
+                ComposerView {
+                    frame: f,
+                    input_rect: Rect::new(0, 0, 30, 3),
+                    theme: &theme,
+                    layout_map: &mut LayoutMap::new(),
+                    input_scroll: &mut 0,
+                    selection: &SelectionState::None,
+                },
+                ComposerText {
+                    input: "hello",
+                    byte_cursor: 5,
+                },
                 focused,
                 false,
-                &theme,
-                &mut LayoutMap::new(),
                 false,
-                &mut 0,
-                &SelectionState::None,
                 0,
                 0,
             );

@@ -13,6 +13,7 @@ use muta_contracts::{ProviderPickerRow, ProviderPickerSnapshot, SessionOverview}
 use muta_contracts::{TodoId, TodoItem, TodoList, TodoStatus};
 
 use crate::ActivityTab;
+use crate::composer::{ComposerText, ComposerView};
 use crate::fuzzy;
 use crate::model::layout::LayoutMap;
 use crate::showcase::common::{self, ShowAction};
@@ -834,17 +835,21 @@ pub fn effort_ignition() -> io::Result<()> {
             let mut layout_map = LayoutMap::new();
             let mut input_scroll = 0usize;
             draw_composer_igniting(
-                f,
-                composer_rect,
-                &s.draft,
-                s.draft.len(),
+                ComposerView {
+                    frame: f,
+                    input_rect: composer_rect,
+                    theme: &theme,
+                    layout_map: &mut layout_map,
+                    input_scroll: &mut input_scroll,
+                    selection: &SelectionState::None,
+                },
+                ComposerText {
+                    input: &s.draft,
+                    byte_cursor: s.draft.len(),
+                },
                 true,
                 false,
-                &theme,
-                &mut layout_map,
                 false,
-                &mut input_scroll,
-                &SelectionState::None,
                 0,
                 0,
                 (true, elapsed_ms),

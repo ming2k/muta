@@ -2,6 +2,7 @@
 //! `run_app_loop`'s `if needs_draw` stage (it was a ~1000-line closure).
 
 use crate::completion::{CompletionKind, completion_anchor_x, resolved_slash_command_len};
+use crate::composer::{ComposerText, ComposerView};
 use crate::model::document::TranscriptMessage;
 use crate::model::layout::LayoutMap;
 use crate::view;
@@ -441,54 +442,69 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let prompt_accent = app
                 .effort_ignition_epoch
                 .map(|epoch| (true, Some(epoch.elapsed().as_millis())));
+            let byte_cursor = app.byte_cursor();
+            let image_count = app.pending_images.len();
+            let paste_count = app.pending_text_pastes.len();
             match slash_len {
                 Some(len) => view::draw_composer_highlighted(
-                    f,
-                    input_rect,
-                    &app.input,
-                    app.byte_cursor(),
+                    ComposerView {
+                        frame: f,
+                        input_rect,
+                        theme: &app.theme,
+                        layout_map: &mut layout_map,
+                        input_scroll: &mut app.input_scroll,
+                        selection: &app.selection,
+                    },
+                    ComposerText {
+                        input: &app.input,
+                        byte_cursor,
+                    },
                     !step_focused,
                     show_caret,
-                    &app.theme,
-                    &mut layout_map,
                     true,
-                    &mut app.input_scroll,
-                    &app.selection,
                     len,
                     app.pending_images.len(),
                     app.pending_text_pastes.len(),
                 ),
                 None => match prompt_accent {
                     Some(accent) => view::draw_composer_igniting(
-                        f,
-                        input_rect,
-                        &app.input,
-                        app.byte_cursor(),
+                        ComposerView {
+                            frame: f,
+                            input_rect,
+                            theme: &app.theme,
+                            layout_map: &mut layout_map,
+                            input_scroll: &mut app.input_scroll,
+                            selection: &app.selection,
+                        },
+                        ComposerText {
+                            input: &app.input,
+                            byte_cursor,
+                        },
                         !step_focused,
                         show_caret,
-                        &app.theme,
-                        &mut layout_map,
                         true,
-                        &mut app.input_scroll,
-                        &app.selection,
-                        app.pending_images.len(),
-                        app.pending_text_pastes.len(),
+                        image_count,
+                        paste_count,
                         accent,
                     ),
                     None => view::draw_composer(
-                        f,
-                        input_rect,
-                        &app.input,
-                        app.byte_cursor(),
+                        ComposerView {
+                            frame: f,
+                            input_rect,
+                            theme: &app.theme,
+                            layout_map: &mut layout_map,
+                            input_scroll: &mut app.input_scroll,
+                            selection: &app.selection,
+                        },
+                        ComposerText {
+                            input: &app.input,
+                            byte_cursor,
+                        },
                         !step_focused,
                         show_caret,
-                        &app.theme,
-                        &mut layout_map,
                         true,
-                        &mut app.input_scroll,
-                        &app.selection,
-                        app.pending_images.len(),
-                        app.pending_text_pastes.len(),
+                        image_count,
+                        paste_count,
                     ),
                 },
             }
