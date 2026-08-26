@@ -432,8 +432,7 @@ pub(super) async fn dispatch_action(
         input::InputAction::ModelEditorVisionCycle => {
             // Cycle the vision capability override (ADR-0080 layer 1):
             // inherit → force on → force off → inherit.
-            app.editor_vision_override =
-                cycle_tri_state(app.editor_vision_override);
+            app.editor_vision_override = cycle_tri_state(app.editor_vision_override);
         }
         input::InputAction::ModelEditorToolCycle => {
             // Cycle the tool-call capability override, same tri-state.
@@ -852,7 +851,7 @@ pub(super) async fn dispatch_action(
                                                 .websearch_config
                                                 .as_ref()
                                                 .map(|ws| ws.reader.as_str())
-                                                .unwrap_or("builtin");
+                                                .unwrap_or("jina");
                                             let next = crate::overlays::cycle_reader(current);
                                             let _ = app.tx.send(
                                                 AgentRequest::UpdateWebSearchConfig(Box::new(
@@ -1996,7 +1995,8 @@ pub(super) async fn dispatch_action(
                     // Drain the matching front so the per-frame sync
                     // closes the modal and restores the composer draft.
                     runtime.pending_input.lock().await.pop_front();
-                    let parent_call_id = runtime.runner_question_parent.lock().await.remove(&req.id);
+                    let parent_call_id =
+                        runtime.runner_question_parent.lock().await.remove(&req.id);
                     let _ = app.tx.send(AgentRequest::InputReply {
                         request_id: req.id.clone(),
                         text,
@@ -2341,7 +2341,6 @@ pub(crate) mod host_test_shims {
         host::cancel_kill_confirm(app);
     }
 }
-
 
 /// Cycle a capability-override tri-state (ADR-0080 layer 1): unset (inherit
 /// from the lower layers) → forced on → forced off → unset. Used by the

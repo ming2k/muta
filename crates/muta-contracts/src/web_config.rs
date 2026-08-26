@@ -69,12 +69,11 @@ pub struct WebSearchConfig {
     /// Persisted in `credentials.toml [websearch]`, never in `config.toml`.
     #[serde(skip_serializing)]
     pub jina_api_key: Option<crate::SecretString>,
-    /// Page-content backend used by `webfetch` for HTML pages. One of:
-    /// `"builtin"` (default; direct fetch + local HTML stripping — zero
-    /// third-party dependency, but naive extraction that keeps boilerplate),
-    /// or `"jina"` (r.jina.ai Reader: server-side rendering including
-    /// JavaScript, readability-style extraction, Markdown output; sends the
-    /// URL to a third party and adds one network hop).
+    /// Page-content backend used by `webfetch` for HTML pages. Default is
+    /// `"jina"` (r.jina.ai Reader: server-side rendering including
+    /// JavaScript, readability-style extraction, Markdown output; anonymous
+    /// access works with generous rate limits, or configured via `jina_api_key`),
+    /// or `"disabled"` / `"none"` to disable webfetch.
     ///
     /// This is the "depth" half of the two-stage research pipeline
     /// (websearch = breadth, webfetch = depth); see ADR-0117.
@@ -110,7 +109,7 @@ impl Default for WebSearchConfig {
             tavily_api_key: None,
             bocha_api_key: None,
             jina_api_key: None,
-            reader: "builtin".to_string(),
+            reader: "jina".to_string(),
         }
     }
 }

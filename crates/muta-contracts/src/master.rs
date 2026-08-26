@@ -325,12 +325,13 @@ impl MasterPresetDelegation {
         "list_dir",
         "read_image",
         "search_text",
-        "execute_command",
+        "run_command",
         "edit_file",
         "write_file",
-        "webfetch",
-        "websearch",
-        "todo",
+        "fetch_url",
+        "search_web",
+        "write_todos",
+        "update_todo",
         "ask_user",
     ];
 
@@ -353,7 +354,7 @@ impl MasterPresetDelegation {
         if self.preset_id == "code_analyst" {
             selection
                 .variants
-                .insert("execute_command".to_string(), "workspace".to_string());
+                .insert("run_command".to_string(), "workspace".to_string());
         }
         selection
     }
@@ -393,7 +394,7 @@ impl MasterPreset {
                 Self::with_identity("architect", identity)
             }
             MasterPresetId::Reviewer => {
-                // Read-only inspection tools. `bash` is excluded: a reviewer
+                // Read-only inspection tools. `run_command` is excluded: a reviewer
                 // reports findings, it does not execute arbitrary commands.
                 let identity = AgentIdentity::new(
                     base.name.clone(),
@@ -406,9 +407,10 @@ impl MasterPreset {
                     "list_dir",
                     "read_image",
                     "search_text",
-                    "webfetch",
-                    "websearch",
-                    "todo",
+                    "fetch_url",
+                    "search_web",
+                    "write_todos",
+                    "update_todo",
                     "ask_user",
                 ]))
             }
@@ -440,10 +442,11 @@ impl MasterPreset {
                         "list_dir",
                         "read_image",
                         "search_text",
-                        "execute_command",
-                        "webfetch",
-                        "websearch",
-                        "todo",
+                        "run_command",
+                        "fetch_url",
+                        "search_web",
+                        "write_todos",
+                        "update_todo",
                         "ask_user",
                     ]))
                     .with_operation_scope(scope)
@@ -545,7 +548,7 @@ mod tests {
         };
         assert!(!names.contains("write_file"));
         assert!(!names.contains("edit_file"));
-        assert!(!names.contains("execute_command"));
+        assert!(!names.contains("run_command"));
         assert!(names.contains("read_text"));
     }
 
@@ -557,7 +560,7 @@ mod tests {
         let crate::ToolScope::Only(names) = &security.agent_selection.scope else {
             panic!("security must be scoped");
         };
-        assert!(names.contains("execute_command"));
+        assert!(names.contains("run_command"));
         let commands = security.operation_scope.commands.as_ref().unwrap();
         assert!(commands.allows("git log"));
         assert!(commands.allows("cargo audit"));

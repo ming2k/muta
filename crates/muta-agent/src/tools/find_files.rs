@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use muta_contracts::{ExecutionEnvironment, Tool, ToolAccesses, ToolOutput};
+use muta_tool_derive::ToolSchema;
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::tools::file_search::{
     build_file_walker, build_include_matcher, include_allows, resolve_search_root, search_limit,
@@ -28,20 +28,19 @@ impl FindFilesTool {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, ToolSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FindFilesArgs {
+    #[tool(desc = "Path globs relative to path; pass alternatives as separate array items (OR)")]
     patterns: Vec<String>,
-    #[serde(default = "default_path")]
-    path: String,
-    #[serde(default)]
-    exclude: Vec<String>,
+    #[tool(desc = "Directory to search; relative paths use the primary workspace (default '.')")]
+    path: Option<String>,
+    #[tool(desc = "Path globs to exclude from the result")]
+    exclude: Option<Vec<String>>,
+    #[tool(desc = "Optional maximum depth below path")]
     max_depth: Option<usize>,
+    #[tool(desc = "Maximum results (default 200)")]
     limit: Option<u64>,
-}
-
-fn default_path() -> String {
-    ".".to_string()
 }
 
 #[async_trait]
@@ -55,39 +54,7 @@ impl Tool for FindFilesTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "patterns": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "minItems": 1,
-                    "description": "Path globs relative to path; pass alternatives as separate array items (OR)"
-                },
-                "path": {
-                    "type": "string",
-                    "description": "Directory to search; relative paths use the primary workspace (default '.')"
-                },
-                "exclude": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Path globs to exclude from the result"
-                },
-                "max_depth": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Optional maximum depth below path"
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 1000,
-                    "description": "Maximum results (default 200)"
-                }
-            },
-            "required": ["patterns"],
-            "additionalProperties": false
-        })
+        FindFilesArgs::parameters_schema()
     }
 
     fn accesses(&self, arguments: &str) -> ToolAccesses {
@@ -104,22 +71,24 @@ impl Tool for FindFilesTool {
             return Err("'max_depth' must be at least 1".to_string());
         }
         let limit = search_limit(args.limit)?;
+        let path = args.path.as_deref().unwrap_or(".");
+        let exclude = args.exclude.unwrap_or_default();
         let workspace = self.env.workspace_root().to_path_buf();
-        let search_root = resolve_search_root(&workspace, self.env.additional_roots(), &args.path)?;
+        let search_root = resolve_search_root(&workspace, self.env.additional_roots(), path)?;
         let metadata = self
             .env
             .fs()
             .metadata(&search_root)
             .await
-            .map_err(|error| format!("Cannot search '{}': {error}", args.path))?;
+            .map_err(|error| format!("Cannot search '{path}': {error}"))?;
         if !metadata.is_dir {
-            return Err(format!("Search path is not a directory: {}", args.path));
+            return Err(format!("Search path is not a directory: {path}"));
         }
 
         // Include globs filter *after* the walker's project-ignore pruning, so
         // a whitelisting pattern (`*.log`) cannot resurrect a gitignored file.
-        let include = build_include_matcher(&search_root, &args.patterns, &args.exclude)?;
-        let walker = build_file_walker(&search_root, &args.exclude, args.max_depth)?.build();
+        let include = build_include_matcher(&search_root, &args.patterns, &exclude)?;
+        let walker = build_file_walker(&search_root, &exclude, args.max_depth)?.build();
         let output = tokio::task::spawn_blocking(move || {
             let mut results = Vec::new();
             let mut first_error = None;

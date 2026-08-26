@@ -760,7 +760,11 @@ mod tests {
         let mut router = SurfaceRouter::new();
         router.show_view(View::Runner);
         router.show_panel(PanelId::Models);
-        assert_eq!(router.active_view(), View::Runner, "view survives the panel");
+        assert_eq!(
+            router.active_view(),
+            View::Runner,
+            "view survives the panel"
+        );
         router.hide_panel();
         assert_eq!(router.active_view(), View::Runner);
         assert_eq!(router.active_panel(), None);

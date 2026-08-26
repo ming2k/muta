@@ -24,7 +24,6 @@
   ] as const;
 
   const READERS = [
-    { id: "builtin", label: "Built-in", desc: "direct fetch + local HTML stripping (no JS)" },
     { id: "jina", label: "Jina Reader", desc: "r.jina.ai · JS rendering + readability extraction" },
   ] as const;
 
@@ -145,8 +144,7 @@
         <section>
           <h4>Page reader <span class="tag">webfetch</span></h4>
           <p class="section-hint">
-            How <code>webfetch</code> converts HTML pages to text. Jina renders JavaScript and
-            extracts the main content; the built-in reader is zero-dependency but naive.
+            How <code>webfetch</code> converts HTML pages to text using Jina Reader (server-side JS rendering and readability extraction).
           </p>
           <div class="option-grid">
             {#each READERS as r (r.id)}

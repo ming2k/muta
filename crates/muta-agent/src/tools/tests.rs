@@ -71,9 +71,9 @@ mod tests {
     }
 
     #[test]
-    fn reader_field_parses_and_defaults_to_builtin() {
+    fn reader_field_parses_and_defaults_to_jina() {
         let cfg = WebSearchConfig::default();
-        assert_eq!(cfg.reader, "builtin");
+        assert_eq!(cfg.reader, "jina");
         assert!(cfg.jina_api_key.is_none());
 
         let toml = r#"

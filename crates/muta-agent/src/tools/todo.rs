@@ -61,7 +61,7 @@ impl TodoWriteTool {
 #[async_trait]
 impl Tool for TodoWriteTool {
     fn name(&self) -> &str {
-        "todo"
+        "write_todos"
     }
 
     fn description(&self) -> &str {
@@ -198,9 +198,9 @@ impl Tool for TodoWriteTool {
 }
 
 const TODO_UPDATE_DESCRIPTION: &str = "Surgically update the status of one or more existing todo items without re-sending the whole \
-     list. `key` is either a 1-based position as shown by the `todo` tool (\"1\", \"3\") or, when \
+     list. `key` is either a 1-based position as shown by the `write_todos` tool (\"1\", \"3\") or, when \
      not a valid position, a case-insensitive substring of the item content (all matches update). \
-     Prefer this over `todo` when you only want to mark progress on a single step.";
+     Prefer this over `write_todos` when you only want to mark progress on a single step.";
 
 /// Surgical update tool: change the status of items matched by position or
 /// content substring, leaving everything else untouched. Complements
@@ -219,7 +219,7 @@ impl TodoUpdateTool {
 #[async_trait]
 impl Tool for TodoUpdateTool {
     fn name(&self) -> &str {
-        "todo_update"
+        "update_todo"
     }
 
     fn description(&self) -> &str {
@@ -267,7 +267,7 @@ impl Tool for TodoUpdateTool {
         let mut list = self.context.todos();
         if list.is_empty() {
             return Ok(
-                "No todos to update. Use the `todo` tool to create the list first.".to_string(),
+                "No todos to update. Use the `write_todos` tool to create the list first.".to_string(),
             );
         }
         let changed = list.update(key, status, now, turn);

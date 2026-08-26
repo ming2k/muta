@@ -112,7 +112,7 @@ fn registry_collects_all_self_registered_tools() {
     let collected = collect_toolset(&ctx);
     let names: std::collections::HashSet<&str> = collected.capability_names().collect();
     for expected in [
-        "execute_command",
+        "run_command",
         "read_text",
         "read_image",
         "write_file",
@@ -120,8 +120,8 @@ fn registry_collects_all_self_registered_tools() {
         "search_text",
         "find_files",
         "ask_user",
-        "webfetch",
-        "websearch",
+        "fetch_url",
+        "search_web",
     ] {
         assert!(
             names.contains(expected),

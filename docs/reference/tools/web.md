@@ -44,8 +44,8 @@ HTML pages are converted to text by the configured **reader**:
 
 | `reader` | Behavior |
 |----------|----------|
-| `builtin` (default) | Direct fetch (SSRF-guarded, redirect-rechecked, body-capped) + local HTML stripping. Zero third-party dependency; naive extraction that keeps page boilerplate. Sends a browser User-Agent. |
-| `jina` | Delegate to `r.jina.ai`: server-side JavaScript rendering, readability-style main-content extraction, Markdown output. Handles SPA pages the builtin reader cannot. Anonymous use works at a modest rate limit; `jina_api_key` raises it. If the reader fails, `webfetch` falls back to the builtin path and annotates the result. |
+| `jina` (default) | Delegate to `r.jina.ai`: server-side JavaScript rendering, readability-style main-content extraction, Markdown output. Handles SPA pages and extracts clean content. Anonymous use works with generous rate limits; `jina_api_key` raises it. |
+| `disabled` / `none` | Disable `webfetch`. |
 
 ## `websearch`
 
@@ -76,7 +76,7 @@ not fail silently).
 [websearch]
 provider = "exa"          # breadth: exa | parallel | duckduckgo | searxng | tavily | bocha
 fallback = "parallel"     # tried when provider fails; "" disables
-reader = "builtin"        # depth:  builtin | jina
+reader = "jina"           # depth:   jina | disabled
 proxy = "socks5h://127.0.0.1:1080"  # applies to both tools
 timeout_secs = 20
 # keys, all optional unless the selected backend requires them:

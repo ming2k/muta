@@ -3722,7 +3722,7 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        if matches!(call.name.as_str(), "todo" | "todo_update") {
+        if matches!(call.name.as_str(), "write_todos" | "update_todo" | "todo" | "todo_update") {
             on_event(AgentEvent::TodosUpdated(self.todos()));
         }
     }

@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use muta_contracts::{ExecutionEnvironment, Tool, ToolAccesses};
+use muta_tool_derive::ToolSchema;
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::tools::file_search::{
-    MAX_SEARCH_LIMIT, resolve_search_root, search_limit, search_path_argument,
+    resolve_search_root, search_limit, search_path_argument,
 };
 use crate::tools::helpers::{WorkspaceBase, env_from_root, execution_environment};
 
@@ -27,16 +27,13 @@ impl ListDirTool {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, ToolSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ListDirArgs {
-    #[serde(default = "default_path")]
-    path: String,
+    #[tool(desc = "Directory to list; relative paths use the primary workspace (default '.')")]
+    path: Option<String>,
+    #[tool(desc = "Maximum entries (default 200)")]
     limit: Option<u64>,
-}
-
-fn default_path() -> String {
-    ".".to_string()
 }
 
 #[async_trait]
@@ -50,22 +47,7 @@ impl Tool for ListDirTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Directory to list; relative paths use the primary workspace (default '.')"
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": MAX_SEARCH_LIMIT,
-                    "description": "Maximum entries (default 200)"
-                }
-            },
-            "additionalProperties": false
-        })
+        ListDirArgs::parameters_schema()
     }
 
     fn accesses(&self, arguments: &str) -> ToolAccesses {
@@ -76,16 +58,17 @@ impl Tool for ListDirTool {
         let args: ListDirArgs = serde_json::from_str(arguments)
             .map_err(|error| format!("Invalid arguments: {error}"))?;
         let limit = search_limit(args.limit)?;
+        let path = args.path.as_deref().unwrap_or(".");
         let workspace = self.env.workspace_root();
-        let directory = resolve_search_root(workspace, self.env.additional_roots(), &args.path)?;
+        let directory = resolve_search_root(workspace, self.env.additional_roots(), path)?;
         let metadata = self
             .env
             .fs()
             .metadata(&directory)
             .await
-            .map_err(|error| format!("Cannot list '{}': {error}", args.path))?;
+            .map_err(|error| format!("Cannot list '{path}': {error}"))?;
         if !metadata.is_dir {
-            return Err(format!("List path is not a directory: {}", args.path));
+            return Err(format!("List path is not a directory: {path}"));
         }
 
         let mut entries = self
@@ -93,7 +76,7 @@ impl Tool for ListDirTool {
             .fs()
             .list_dir(&directory)
             .await
-            .map_err(|error| format!("Failed to read directory '{}': {error}", args.path))?
+            .map_err(|error| format!("Failed to read directory '{path}': {error}"))?
             .into_iter()
             .map(|entry| {
                 let suffix = if entry.is_dir { "/" } else { "" };

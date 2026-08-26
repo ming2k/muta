@@ -733,7 +733,7 @@ describe("DaemonStore wire protocol", () => {
         WebSearchConfigSnapshot: {
           provider: "exa",
           fallback: "parallel",
-          reader: "builtin",
+          reader: "jina",
           timeout_secs: 20,
           exa_api_key_set: false,
           parallel_api_key_set: false,

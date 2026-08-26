@@ -1102,7 +1102,7 @@ components:
       properties:
         provider: { type: string, enum: [exa, parallel, duckduckgo, ddg, searxng, tavily, bocha] }
         fallback: { type: string, description: 'Empty string disables the fallback.' }
-        reader: { type: string, enum: [builtin, jina] }
+        reader: { type: string, enum: [jina] }
         proxy: { type: string, description: 'Empty string clears it.' }
         timeout_secs: { type: integer, minimum: 1 }
         searxng_url: { type: string, description: 'Required when a backend is searxng; empty clears.' }

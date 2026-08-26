@@ -801,29 +801,24 @@ fn termination_footer(
     match term {
         T::Exited => None,
         T::IdleBlocked => Some((
-            "⏸ killed after ~10s with no output — the command was probably \
-             waiting for input the agent can't provide. If it wanted a \
-             password (sudo/gpg/pinentry), approve the inline prompt or use a \
-             non-interactive flag (--passphrase-file / SUDO_ASKPASS / `y | …`). \
-             Full-screen TUI tools (whiptail/dialog/pinentry-curses) read the \
-             terminal directly, not stdin, so they can't be fed here — give \
-             them a real terminal or a non-interactive equivalent."
+            "killed at the no-output limit — likely waiting for stdin input. \
+             Retry non-interactively: --passphrase-file / SUDO_ASKPASS / `y | …`."
                 .to_string(),
             warn_style,
         )),
         T::InteractiveBlocked => Some((
-            "⛔ interactive command not executed in autonomous mode — \
+            "interactive command not executed in autonomous mode — \
              pass the credential via a flag or env var and retry."
                 .to_string(),
             warn_style,
         )),
         T::Timeout => Some((
-            "⏱ timed out — the command was still running. Retry with a larger `timeout` \
-             if it is legitimately long."
+            "timed out — killed after the configured timeout. Retry with a \
+             larger `timeout` if it is legitimately long."
                 .to_string(),
             warn_style,
         )),
-        T::Cancelled => Some(("✗ command cancelled (interrupted).".to_string(), err_style)),
+        T::Cancelled => Some(("command cancelled (interrupted).".to_string(), err_style)),
     }
 }
 
@@ -1850,7 +1845,8 @@ pub fn draw_tool_step(
                 // output; others their block. A streaming or freshly-spawned command
                 // step renders its `$ cmd` and live streaming output.
                 let has_output = output.as_deref().is_some_and(|s| !s.is_empty());
-                let is_command = matches!(name.as_str(), "execute_command" | "bash");
+                let is_command =
+                    matches!(name.as_str(), "run_command" | "execute_command" | "bash");
                 let has_structured = structured.is_some();
                 if has_output || is_command || has_structured {
                     draw_tool_result(

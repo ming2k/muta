@@ -363,7 +363,7 @@ mod tests {
                 title: "Autopilot ON".to_string(),
             },
             CommandResult::PermissionList {
-                allowed: vec!["execute_command".to_string(), "edit_file".to_string()],
+                allowed: vec!["run_command".to_string(), "edit_file".to_string()],
             },
             CommandResult::Search {
                 query: "foo".to_string(),

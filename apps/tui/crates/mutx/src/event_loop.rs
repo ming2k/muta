@@ -301,6 +301,12 @@ pub(super) struct UiRuntime {
     pub pending_question: Arc<Mutex<VecDeque<UserQuestionRequest>>>,
     pub pending_input: Arc<Mutex<VecDeque<muta_contracts::InputRequest>>>,
     pub is_responding: Arc<AtomicBool>,
+    /// Trust gate latch: set once the synthesized gate question has
+    /// been answered or dismissed this run, so periodic `HarnessState`
+    /// snapshots cannot re-open it (nag guard). The daemon republishes the
+    /// harness snapshot after every `/trust` decision — and periodically —
+    /// and only a fresh process run re-arms the gate.
+    pub trust_gate_dismissed: Arc<AtomicBool>,
     /// Stage 3 redraw signal. The response listener sets this on every handled
     /// response (the only off-loop source of shared-state change), so the event
     /// loop can skip the per-frame draw entirely while nothing has changed —
@@ -490,6 +496,7 @@ impl UiRuntime {
             pending_question: Arc::new(Mutex::new(VecDeque::new())),
             pending_input: Arc::new(Mutex::new(VecDeque::new())),
             is_responding: Arc::new(AtomicBool::new(false)),
+            trust_gate_dismissed: Arc::new(AtomicBool::new(false)),
             dirty: Arc::new(AtomicBool::new(false)),
             dirty_notify: Arc::new(tokio::sync::Notify::new()),
             completion_signal: Arc::new(Mutex::new(None)),
@@ -2201,9 +2208,13 @@ pub(super) async fn run_app_loop(
             let history_searching = app.history_search;
             let model_searching = app.model_search;
             let modal_keymap_open = app.modal_keymap_open;
-            let custom_provider_field = (active_modal == Modal::CustomProvider).then_some(app.custom_field);
+            let custom_provider_field =
+                (active_modal == Modal::CustomProvider).then_some(app.custom_field);
             let editor_field = (active_modal == Modal::ModelEditor).then_some(app.editor_field);
-            let question_other_highlighted = app.question.as_ref().is_some_and(|q| q.is_other_highlighted());
+            let question_other_highlighted = app
+                .question
+                .as_ref()
+                .is_some_and(|q| q.is_other_highlighted());
             let history_clear_confirm = app.history_clear_confirm;
             let host_prompting = app.host_prompting;
             let config_custom_editing = app.config_custom_editing;
@@ -2344,10 +2355,13 @@ pub(super) async fn run_app_loop(
 
 pub(super) fn tool_activity_status(name: &str) -> &'static str {
     match name {
-        "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" => "exploring",
-        "search_text" => "searching codebase",
+        "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" | "fetch_url"
+        | "webfetch" => "exploring",
+        "search_text" | "search_web" | "websearch" => "searching codebase",
         "write_file" | "edit_file" => "making edits",
-        "execute_command" | "bash" => "running command",
+        "run_command" | "execute_command" | "bash" => "running command",
+        "write_todos" | "update_todo" | "todo" | "todo_update" => "updating tasks",
+        "spawn_runner" | "runner" | "runner_code" | "runner_mcp" => "running subagent",
         name if name.starts_with("mcp__") => "using MCP",
         _ => "using tool",
     }
@@ -2710,6 +2724,7 @@ pub(super) fn display_status(
 /// then opens the next queued question or closes the modal.
 mod question_effects {
     use super::{AgentRequest, App, UiRuntime};
+    use std::sync::atomic::Ordering;
 
     pub(super) async fn apply(
         effects: &[crate::question_model::QuestionEffect],
@@ -2722,6 +2737,22 @@ mod question_effects {
                     request_id,
                     answers,
                 } => {
+                    // Trust gate: the synthesized request never has
+                    // a parked round on the daemon. Answering it dispatches
+                    // the canonical `/trust …` command instead of a
+                    // UserQuestionReply, keeping persistence and the atomic
+                    // live reload in the one path that owns them.
+                    if request_id == crate::trust_gate::TRUST_GATE_REQUEST_ID {
+                        // Latch the answer so periodic HarnessState snapshots
+                        // do not re-open the gate this run (the /trust round
+                        // itself republishes the harness, and the refreshed
+                        // snapshot's aggregate already stops gating).
+                        runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
+                        if let Some(command) = crate::trust_gate::answer_to_command(answers) {
+                            let _ = app.tx.send(AgentRequest::SlashCommand(command));
+                        }
+                        continue;
+                    }
                     let parent_call_id = runtime
                         .runner_question_parent
                         .lock()
@@ -2734,6 +2765,13 @@ mod question_effects {
                     });
                 }
                 crate::question_model::QuestionEffect::Cancelled { request_id } => {
+                    // The trust gate has no daemon-side parked request to
+                    // cancel either; "cancel" *is* the keep-quarantined
+                    // decision and needs no wire traffic.
+                    if request_id == crate::trust_gate::TRUST_GATE_REQUEST_ID {
+                        runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
+                        continue;
+                    }
                     let parent_call_id = runtime
                         .runner_question_parent
                         .lock()

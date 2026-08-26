@@ -607,7 +607,7 @@ mod tests {
         // Two segments: label (4 cols) + separator (2) + value (9) = 15 cols,
         // so the row wraps at the 12-col body width.
         let rows = vec![SelectableRow::from_segments(vec![
-            RowSegment::styled("execute_command", mutx_engine::Style::default()),
+            RowSegment::styled("bash", mutx_engine::Style::default()),
             RowSegment::styled("  ", mutx_engine::Style::default()),
             RowSegment::styled("ls | head", mutx_engine::Style::default()),
         ])];

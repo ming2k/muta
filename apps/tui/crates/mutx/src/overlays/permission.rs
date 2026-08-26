@@ -849,8 +849,8 @@ mod tests {
     fn permission_sheet_wrapped_header_keeps_every_character() {
         let request = PermissionRequest {
             id: "p".into(),
-            tool: "execute_command".into(),
-            label: "execute_command".into(),
+            tool: "run_command".into(),
+            label: "bash".into(),
             description: "Run a command".into(),
             arguments: r#"{"command":"ls | head"}"#.into(),
             scope: "ls | head".into(),
@@ -893,8 +893,8 @@ mod tests {
     fn permission_sheet_wrapped_header_survives_wrap() {
         let request = PermissionRequest {
             id: "p".into(),
-            tool: "execute_command".into(),
-            label: "execute_command".into(),
+            tool: "run_command".into(),
+            label: "bash".into(),
             description: "Run a command".into(),
             arguments: r#"{"command":"ls | head"}"#.into(),
             scope: "ls | head".into(),
@@ -930,9 +930,7 @@ mod tests {
         let header: String = text
             .lines()
             .map(|l| l.trim_start_matches('┃').trim())
-            .filter(|l| {
-                l.starts_with("execute_command") || l.starts_with('|') || l.starts_with("head")
-            })
+            .filter(|l| l.starts_with("bash") || l.starts_with('|') || l.starts_with("head"))
             .flat_map(|l| l.chars().filter(|c| !c.is_whitespace()))
             .collect();
         assert_eq!(

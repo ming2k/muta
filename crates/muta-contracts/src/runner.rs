@@ -251,8 +251,8 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "find_files",
     "list_dir",
     "search_text",
-    "webfetch",
-    "websearch",
+    "fetch_url",
+    "search_web",
 ];
 
 /// The built-in read-only research role used by `task`.
@@ -311,12 +311,12 @@ the title in the same language as the conversation.",
 
 /// Tools a coding runner may use: the generic read-only inspection tools
 /// (shared with [`RUNNER_EXPLORE`]) plus the workspace-mutating tools —
-/// `execute_command` for
+/// `run_command` for
 /// running builds/tests/git, `edit_file` and `write_file` for code, and the
 /// `todo*` pair so a long delegation can track its own progress. Listed by
 /// name so adding a new side-effecting tool to the parent never silently
 /// widens this profile — the only tools a RUNNER_CODE runner can touch are the ones
-/// enumerated here. Recursion (`runner`) and control-flow escapes are excluded
+/// enumerated here. Recursion (`spawn_runner`) and control-flow escapes are excluded
 /// absolutely by [`ToolPolicy::admits_runtime`], independent of this list.
 const CODING_TOOLS: &[&str] = &[
     // Generic read-only inspection (shared with RUNNER_EXPLORE).
@@ -325,16 +325,16 @@ const CODING_TOOLS: &[&str] = &[
     "find_files",
     "list_dir",
     "search_text",
-    "webfetch",
-    "websearch",
+    "fetch_url",
+    "search_web",
     // Workspace mutation — the code-editing surface.
-    "execute_command",
+    "run_command",
     "edit_file",
     "write_file",
     // Self-contained task tracking (the runner's own todo list, not the
     // parent's).
-    "todo",
-    "todo_update",
+    "write_todos",
+    "update_todo",
 ];
 
 /// The coding runner role. Unlike [`RUNNER_EXPLORE`] (read-only, autonomous), this is
@@ -427,7 +427,11 @@ impl RunnerPresetPool {
 
     /// Find a runner preset by name.
     pub fn find(name: &str) -> Option<&'static RunnerPreset> {
-        Self::ALL.iter().copied().find(|p| p.name == name)
+        let normalized = match name {
+            "mcp" => "mcp_specialist",
+            other => other,
+        };
+        Self::ALL.iter().copied().find(|p| p.name == normalized)
     }
 
     /// List all available preset names in the pool.
@@ -644,10 +648,10 @@ mod tests {
     fn code_profile_admits_edit_surface_but_not_recursion_or_unlisted() {
         use crate::RUNNER_CODE;
         // Write/execute surface: admitted.
-        assert!(RUNNER_CODE.tool_policy.admits(&make("execute_command")));
+        assert!(RUNNER_CODE.tool_policy.admits(&make("run_command")));
         assert!(RUNNER_CODE.tool_policy.admits(&make("edit_file")));
         assert!(RUNNER_CODE.tool_policy.admits(&make("write_file")));
-        assert!(RUNNER_CODE.tool_policy.admits(&make("todo")));
+        assert!(RUNNER_CODE.tool_policy.admits(&make("write_todos")));
         // Shared read-only inspection: admitted.
         assert!(RUNNER_CODE.tool_policy.admits(&make("read_text")));
         assert!(RUNNER_CODE.tool_policy.admits(&make("search_text")));
@@ -659,7 +663,7 @@ mod tests {
         // Recursion and control-flow remain absolute.
         assert!(!RUNNER_CODE
             .tool_policy
-            .admits(&with_spawn(make("execute_command"))));
+            .admits(&with_spawn(make("run_command"))));
         assert!(!RUNNER_CODE.tool_policy.admits(&make_control()));
     }
 

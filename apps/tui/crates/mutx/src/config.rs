@@ -3,13 +3,13 @@
 //! Stored in `$XDG_CONFIG_HOME/mutx/config.toml` (and `$XDG_STATE_HOME/mutx/history.json`),
 //! cleanly decoupled from the core Muta daemon's configuration (ADR-0136).
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 
-use muta_contracts::ColorSchemeConfig;
 use crate::view::tools::presenter_for;
+use muta_contracts::ColorSchemeConfig;
 
 pub const THINKING_KEY: &str = "thinking";
 
@@ -121,7 +121,11 @@ pub fn tool_default_expanded(config: &TuiConfig, name: &str) -> bool {
         .get(name)
         // Read old Mutx configs without keeping `bash` in the current tool
         // vocabulary. The next save naturally writes only keys the user edits.
-        .or_else(|| (name == "execute_command").then(|| config.default_expanded.get("bash")).flatten())
+        .or_else(|| {
+            (name == "execute_command")
+                .then(|| config.default_expanded.get("bash"))
+                .flatten()
+        })
         .copied()
         .unwrap_or_else(|| presenter_for(name).default_expanded())
 }

@@ -54,10 +54,12 @@ const WS_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30)
 /// conventional dead-connection verdict.
 const WS_PEER_SILENCE_LIMIT: std::time::Duration = std::time::Duration::from_secs(90);
 
-/// Inform a newly attached client that project-authored assets remain
-/// quarantined. Trust mutation is intentionally available only through the
-/// canonical `/trust` command path, which also reloads every affected
-/// consumer atomically.
+/// Inform a newly attached client that previously trusted project-authored
+/// contributions have changed on disk and are quarantined pending review.
+/// Trust mutation is intentionally available only through the canonical
+/// `/trust` command path, which also reloads every affected consumer
+/// atomically. The never-trusted case is handled pre-view by the trust
+/// dialog fed from the attach-sync `HarnessState`.
 fn workspace_trust_notice(session_id: &str, project_root: &std::path::Path) -> AgentResponse {
     let round = |event: muta_contracts::RoundEvent| AgentResponse::Round {
         session_id: session_id.to_string(),
@@ -67,18 +69,17 @@ fn workspace_trust_notice(session_id: &str, project_root: &std::path::Path) -> A
             muta_contracts::AgentNotice::new(
                 muta_contracts::NoticeKind::ReviewAlert,
                 muta_contracts::NoticeSeverity::Warning,
-                "Workspace contributions unreviewed",
+                "Workspace contributions changed",
                 muta_contracts::NoticeSource::Harness,
             )
             .with_surface(muta_contracts::NoticeSurface::Banner)
             .with_body(format!(
-                "This workspace ({}) contains project-authored contributions (skills, MCP, hooks, AGENTS.md). \
-                 Run `/trust` to trust all domains, or `/trust mcp` / `/trust skills` for a narrow grant.",
+                "Previously trusted contributions in this workspace ({}) changed on disk and are quarantined until re-reviewed. \
+                 Run `/trust` to re-trust all domains, or `/trust mcp` / `/trust skills` for a narrow grant.",
                 project_root.display()
             )),
         ))
 }
-
 
 /// Whether `response` is an attach-time state-sync event: one of the
 /// startup emissions a client that attaches *after* the session began can
@@ -915,11 +916,18 @@ where
         // died unattended re-attaches with `autopilot: true` in this very
         // first snapshot — the badge paints immediately instead of waiting
         // for the next periodic `HarnessState`.
+        //
+        // `workspace_security` is the freshly attested per-domain state for
+        // the attaching project root: a client that lands in a
+        // never-trusted workspace learns it *in the pre-view attach sync*,
+        // so the trust dialog opens before the first frame becomes
+        // interactive — instead of a passive banner arriving after the
+        // user already started typing into the composer.
         let snapshot = muta_contracts::HarnessSnapshot {
             loop_status: muta_contracts::LoopStatus::Idle,
             round_counter: bound.session.round_counter().await,
             yolo: bound.session.yolo().await,
-            workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
+            workspace_security: bound.security.snapshot(bound.project_root()),
             retry_pending: bound.session.retry_pending().await.is_some(),
         };
         let frame = serde_json::to_string(&Wire::Response {
@@ -960,14 +968,25 @@ where
             .await
             .map_err(|e| format!("ws send: {e}"))?;
     }
-    // Surface quarantine after attach. This is a notice, not an alternate
-    // mutation path: `/trust` owns persistence and live reload.
+    // Surface trust posture after attach. Trust mutation is intentionally
+    // available only through the canonical `/trust` command path, which also
+    // reloads every affected consumer atomically.
+    //
+    // The attach flow splits by *why* the workspace is untrusted:
+    //
+    // - `Quarantined` (contributions present, never granted): the
+    //   pre-view `HarnessState` above already carried the security snapshot
+    //   through attach-sync, and an interactive client answers the trust
+    //   dialog *before* the composer takes input. A banner here would only
+    //   duplicate the dialog.
+    // - `Changed` (previously trusted content mutated, e.g. via git pull):
+    //   there is nothing to gate on — the user already made a trust
+    //   decision for this workspace — so a banner is the honest escalation.
     let snap = bound.security.snapshot(bound.project_root());
     if matches!(
-            snap.aggregate(),
-            muta_contracts::WorkspaceTrustState::Quarantined
-                | muta_contracts::WorkspaceTrustState::Changed
-        ) {
+        snap.aggregate(),
+        muta_contracts::WorkspaceTrustState::Changed
+    ) {
         let session_id = bound.session.id().await;
         let response = workspace_trust_notice(&session_id, bound.project_root());
         let text = serde_json::to_string(&Wire::Response { response })

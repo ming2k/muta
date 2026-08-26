@@ -167,15 +167,16 @@ pub fn draw_activity_bar(
 
     let row_width = rect.width as usize;
     let available_width = row_width;
-    let elapsed = round_started_at.map(|started| format!(" [{}]", format_elapsed(started.elapsed())));
+    let elapsed =
+        round_started_at.map(|started| format!(" [{}]", format_elapsed(started.elapsed())));
     let full_interrupt_width = UnicodeWidthStr::width("Esc Esc interrupt");
     let key_interrupt_width = UnicodeWidthStr::width("Esc Esc");
     let prefix_width = UnicodeWidthStr::width(" ● ");
     const MIN_STATUS_WIDTH: usize = 4;
     const MIN_TINY_STATUS_WIDTH: usize = 1;
     const SEGMENT_GAP: usize = 2;
-    let show_interrupt_words = available_width
-        >= prefix_width + SEGMENT_GAP + full_interrupt_width + MIN_STATUS_WIDTH;
+    let show_interrupt_words =
+        available_width >= prefix_width + SEGMENT_GAP + full_interrupt_width + MIN_STATUS_WIDTH;
     let show_interrupt_keys = show_interrupt_words
         || available_width
             >= prefix_width + SEGMENT_GAP + key_interrupt_width + MIN_TINY_STATUS_WIDTH;
@@ -190,15 +191,10 @@ pub fn draw_activity_bar(
     let elapsed_width = elapsed.as_deref().map(UnicodeWidthStr::width).unwrap_or(0);
     let show_elapsed = elapsed.is_some()
         && available_width
-            >= prefix_width
-                + MIN_STATUS_WIDTH
-                + elapsed_width
-                + interrupt_gap
-                + interrupt_width;
+            >= prefix_width + MIN_STATUS_WIDTH + elapsed_width + interrupt_gap + interrupt_width;
     let visible_elapsed_width = if show_elapsed { elapsed_width } else { 0 };
-    let status_width = available_width.saturating_sub(
-        prefix_width + visible_elapsed_width + interrupt_gap + interrupt_width,
-    );
+    let status_width = available_width
+        .saturating_sub(prefix_width + visible_elapsed_width + interrupt_gap + interrupt_width);
     let status = truncate_for_bar(status, status_width);
 
     let mut spans: Vec<Span> = Vec::new();
@@ -791,13 +787,23 @@ fn input_action_spans(
                 spans.push(Span::styled(" steer", hint_style));
                 spans.push(Span::styled("  ", hint_style));
                 spans.push(Span::styled(Key::TAB.display(), key_style));
-                spans.push(Span::styled(if compact { " follow-up" } else { " follow-up mode" }, hint_style));
+                spans.push(Span::styled(
+                    if compact {
+                        " follow-up"
+                    } else {
+                        " follow-up mode"
+                    },
+                    hint_style,
+                ));
             }
             crate::app::ComposerSendMode::FollowUp => {
                 spans.push(Span::styled(" follow-up", hint_style));
                 spans.push(Span::styled("  ", hint_style));
                 spans.push(Span::styled(Key::TAB.display(), key_style));
-                spans.push(Span::styled(if compact { " steer" } else { " steer mode" }, hint_style));
+                spans.push(Span::styled(
+                    if compact { " steer" } else { " steer mode" },
+                    hint_style,
+                ));
             }
         }
     } else if can_retry {
@@ -1963,7 +1969,10 @@ mod tests {
         let text = (0..buffer.area().width as usize)
             .map(|x| buffer.content[x].symbol().to_string())
             .collect::<String>();
-        assert!(text.contains("Enter steer  Tab follow-up mode"), "row was {text:?}");
+        assert!(
+            text.contains("Enter steer  Tab follow-up mode"),
+            "row was {text:?}"
+        );
     }
 
     #[test]

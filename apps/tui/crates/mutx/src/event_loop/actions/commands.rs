@@ -90,7 +90,8 @@ pub(super) async fn handle_send_chat(
             match app.composer_send_mode {
                 crate::app::ComposerSendMode::Steer => {
                     let expanded = composer_attachments::expand_paste_chips(&text, &text_pastes);
-                    let expanded = composer_attachments::strip_orphan_image_chips(&expanded, images.len());
+                    let expanded =
+                        composer_attachments::strip_orphan_image_chips(&expanded, images.len());
                     let id = app.new_insert_id();
                     app.record_input_history(text.clone(), images.clone(), text_pastes);
                     app.clear_history_draft();
@@ -203,8 +204,6 @@ pub(super) async fn handle_send_chat(
         }
     }
 }
-
-
 
 /// Loop stage (input dispatch): the `SendSlash` arm of the action match.
 /// `pub(crate)` so behavior-lock tests in `crate::tests` can drive it directly

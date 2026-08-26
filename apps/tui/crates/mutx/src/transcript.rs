@@ -474,7 +474,8 @@ fn transcript_from_core_inner(
                 {
                     transcript_message.round = Some(restored_round);
                 } else if transcript_message.role == Role::User
-                    && (transcript_message.origin == UserMessageOrigin::Steer || transcript_message.origin == UserMessageOrigin::FollowUp)
+                    && (transcript_message.origin == UserMessageOrigin::Steer
+                        || transcript_message.origin == UserMessageOrigin::FollowUp)
                 {
                     transcript_message.round = (restored_round > 0).then_some(restored_round);
                 }

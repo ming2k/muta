@@ -160,10 +160,7 @@ mod tests {
 
     #[test]
     fn command_summary_includes_executable_and_args() {
-        assert_eq!(
-            command_summary("cargo build"),
-            Some("cargo build".into())
-        );
+        assert_eq!(command_summary("cargo build"), Some("cargo build".into()));
         assert_eq!(
             command_summary("/opt/local/bin/muta-server --listen 8080"),
             Some("muta-server --listen 8080".into())

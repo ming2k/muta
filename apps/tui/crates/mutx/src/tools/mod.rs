@@ -15,13 +15,13 @@
 //! `*_for` entry points below instead of matching on tool names.
 
 mod ask_user;
-mod execute_command;
 mod diff;
 mod edit_file;
+mod execute_command;
 mod fallback;
 mod meta;
-mod read_text;
 mod read_image;
+mod read_text;
 mod search;
 mod web;
 
@@ -194,16 +194,14 @@ pub fn presenter_for(name: &str) -> &'static dyn ToolPresenter {
         "read_image" => &read_image::ReadImagePresenter,
         "edit_file" => &edit_file::EditPresenter,
         "write_file" => &edit_file::WritePresenter,
-        // `bash` is presentation-only compatibility for transcripts written
-        // before the capability was renamed; it is not registered as a tool.
-        "execute_command" | "bash" => &execute_command::ExecuteCommandPresenter,
+        "run_command" | "execute_command" | "bash" => &execute_command::ExecuteCommandPresenter,
         "find_files" => &search::FindFilesPresenter,
         "list_dir" => &search::ListDirPresenter,
         "search_text" => &search::SearchTextPresenter,
-        "webfetch" => &web::WebFetchPresenter,
-        "websearch" => &web::WebSearchPresenter,
-        "todo" => &meta::TodoPresenter,
-        "runner" | "runner_code" => &meta::RunnerPresenter,
+        "fetch_url" | "webfetch" => &web::WebFetchPresenter,
+        "search_web" | "websearch" => &web::WebSearchPresenter,
+        "write_todos" | "update_todo" | "todo" | "todo_update" => &meta::TodoPresenter,
+        "spawn_runner" | "runner" | "runner_code" | "runner_mcp" => &meta::RunnerPresenter,
         "use_skill" => &meta::UseSkillPresenter,
         _ => &fallback::FallbackPresenter,
     }

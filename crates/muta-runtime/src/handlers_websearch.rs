@@ -52,7 +52,7 @@ const KNOWN_BACKENDS: &[&str] = &[
 ];
 
 /// Known reader names accepted by `[websearch] reader`.
-const KNOWN_READERS: &[&str] = &["builtin", "jina", "none", "(none)", "disabled"];
+const KNOWN_READERS: &[&str] = &["jina", "none", "(none)", "disabled"];
 
 fn validate_backend(label: &str, name: &str) -> Result<(), String> {
     if KNOWN_BACKENDS.contains(&name) {
@@ -116,7 +116,7 @@ pub async fn update(
     {
         if !KNOWN_READERS.contains(&reader) {
             let _ = resp_tx.send(AgentResponse::Error(format!(
-                "Unknown reader '{reader}'. Known readers: builtin, jina."
+                "Unknown reader '{reader}'. Known readers: jina."
             )));
             return;
         }

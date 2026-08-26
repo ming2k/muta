@@ -215,7 +215,10 @@ pub(crate) fn draw_page_header(
                     | muta_contracts::ParentStatus::NeedsInput
                     | muta_contracts::ParentStatus::Failed
                     | muta_contracts::ParentStatus::Interrupted
-            ) => fill.fg(theme.warn()).add_modifier(Modifier::BOLD),
+            ) =>
+        {
+            fill.fg(theme.warn()).add_modifier(Modifier::BOLD)
+        }
         _ => fill.fg(theme.muted()),
     };
     // The session mode flag (`autopilot`) reads as a persistent safety state,
@@ -427,7 +430,12 @@ pub(crate) fn draw_page_header_hints(
 /// modal already own, not a property of *this* view — the same rule that
 /// keeps the head band's row 2 free of it. Content is horizontally centered
 /// with a minimum left margin.
-pub(crate) fn draw_runner_footer(frame: &mut Frame, rect: Rect, info: &RunnerBarInfo, theme: &Theme) {
+pub(crate) fn draw_runner_footer(
+    frame: &mut Frame,
+    rect: Rect,
+    info: &RunnerBarInfo,
+    theme: &Theme,
+) {
     if rect.height == 0 || (rect.width as usize) < STEP_MIN_WIDTH {
         return;
     }

@@ -4,7 +4,7 @@
 //! so that selection and copy operate on semantic units (blocks) rather than
 //! terminal grid characters.
 
-use muta_contracts::{RunnerEvent, Role};
+use muta_contracts::{Role, RunnerEvent};
 
 use crate::design::{COMMAND_CARD_LEAD_COLS, JOIN_ENUMERATE_COLS};
 use unicode_width::UnicodeWidthStr;
@@ -253,8 +253,7 @@ pub fn command_row_layout(
     // the budget subtracts them — but the time label is render-time state the
     // classifier cannot see, so the classifier subtracts only the fixed
     // chrome and the renderer's clamp guards the timestamp.
-    let used =
-        COMMAND_ROW_CHROME_COLS + invocation.width() + JOIN_ENUMERATE_COLS + text.width();
+    let used = COMMAND_ROW_CHROME_COLS + invocation.width() + JOIN_ENUMERATE_COLS + text.width();
     if used <= available_width {
         CommandRowLayout::Inline
     } else {
@@ -1749,15 +1748,11 @@ impl TranscriptMessage {
                 }
             },
             None => match record.reason {
-                muta_contracts::RoundInterruptReason::User => {
-                    "Cancelled via [Esc Esc]".to_string()
-                }
+                muta_contracts::RoundInterruptReason::User => "Cancelled via [Esc Esc]".to_string(),
                 muta_contracts::RoundInterruptReason::Superseded => {
                     "Superseded by new message".to_string()
                 }
-                muta_contracts::RoundInterruptReason::Terminated => {
-                    "Process exited".to_string()
-                }
+                muta_contracts::RoundInterruptReason::Terminated => "Process exited".to_string(),
             },
         };
         Self {
@@ -3270,9 +3265,11 @@ mod tests {
         );
         assert_eq!(task.runner_description(), "write the plan");
         assert_eq!(task.runner_role(), None);
-        assert!(task.push_runner_event(&muta_contracts::RunnerEvent::Started {
-            profile: "explore".to_string()
-        }));
+        assert!(
+            task.push_runner_event(&muta_contracts::RunnerEvent::Started {
+                profile: "explore".to_string()
+            })
+        );
         assert_eq!(task.runner_role().as_deref(), Some("explore"));
         assert_eq!(task.runner_description(), "write the plan");
         // The collapsed header carries only the description — the role is
@@ -3513,8 +3510,7 @@ mod tests {
         // interleaved output — not the all-stdout-then-all-stderr degraded
         // band the empty-`lines` fallback forced.
         use muta_contracts::{ToolStream, tool_output::ShellStream};
-        let mut step =
-            TranscriptMessage::tool_step("c", "execute_command", r#"{"command":"x"}"#);
+        let mut step = TranscriptMessage::tool_step("c", "execute_command", r#"{"command":"x"}"#);
         assert!(step.push_tool_stream("c", &ToolStream::Stdout("Compiling a\n".into())));
         assert!(step.push_tool_stream("c", &ToolStream::Stderr("warning: b\n".into())));
         assert!(step.push_tool_stream("c", &ToolStream::Stdout("Compiling c\n".into())));

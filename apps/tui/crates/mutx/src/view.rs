@@ -55,8 +55,8 @@ pub use crate::overlays::{
 };
 use crate::page_header;
 pub(crate) use crate::page_header::{
-    AsidesChip, BtwHead, PageHeader, PageHints, PageKind, SessionHead, draw_runner_footer,
-    draw_page_header, draw_page_header_hints,
+    AsidesChip, BtwHead, PageHeader, PageHints, PageKind, SessionHead, draw_page_header,
+    draw_page_header_hints, draw_runner_footer,
 };
 pub use crate::primitives::recess_backdrop;
 use crate::primitives::{VIEWPORT_BOTTOM_MARGIN, viewport_rect};

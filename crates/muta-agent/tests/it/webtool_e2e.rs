@@ -29,16 +29,8 @@ fn proxied_config() -> WebSearchConfig {
 
 #[tokio::test]
 #[ignore = "live network"]
-async fn builtin_and_jina_readers_work() {
-    let mut cfg = proxied_config();
-    cfg.reader = "builtin".into();
-    let builtin = WebFetchTool::with_config(cfg.clone());
-    let out = builtin
-        .call(r#"{"url":"https://example.com"}"#)
-        .await
-        .expect("builtin fetch");
-    assert!(out.contains("Example Domain"), "got: {out:.200}");
-
+async fn jina_reader_works() {
+    let cfg = proxied_config();
     let jina = WebFetchTool::with_config(cfg);
     let out = jina
         .call(r#"{"url":"https://example.com"}"#)

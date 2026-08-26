@@ -826,8 +826,6 @@ mod tests {
         assert_eq!(action, None);
     }
 
-
-
     #[test]
     fn f5_opens_the_btw_asides_from_top_level() {
         // F5 is the global binding for the `/btw` asides list (ADR-0103 §5).

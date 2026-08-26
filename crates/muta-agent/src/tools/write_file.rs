@@ -1,11 +1,20 @@
 use async_trait::async_trait;
 use muta_contracts::Tool;
-use serde_json::json;
+use muta_tool_derive::ToolSchema;
+use serde::Deserialize;
 
 use crate::tools::helpers::{
     WorkspaceBase, env_from_root, execution_environment, json_string, resolve_workspace_path,
     workspace_base,
 };
+
+#[derive(ToolSchema, Deserialize)]
+struct WriteFileArgs {
+    #[tool(desc = "Path to the file")]
+    path: String,
+    #[tool(desc = "Content to write")]
+    content: String,
+}
 
 /// Write content to a file (overwrites).
 ///
@@ -41,14 +50,7 @@ impl Tool for WriteFileTool {
         "Create a new file or overwrite an existing file with the given content."
     }
     fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Path to the file" },
-                "content": { "type": "string", "description": "Content to write" }
-            },
-            "required": ["path", "content"]
-        })
+        WriteFileArgs::parameters_schema()
     }
     fn scope_target(&self, arguments: &str) -> muta_contracts::ScopeTarget {
         muta_contracts::ScopeTarget::Path(std::path::PathBuf::from(json_string(arguments, "path")))
@@ -74,10 +76,10 @@ impl Tool for WriteFileTool {
     }
 
     async fn call_structured(&self, arguments: &str) -> Result<muta_contracts::ToolOutput, String> {
-        let args: serde_json::Value =
+        let args: WriteFileArgs =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
-        let path = args["path"].as_str().ok_or("Missing 'path'")?;
-        let content = args["content"].as_str().ok_or("Missing 'content'")?;
+        let path = &args.path;
+        let content = &args.content;
 
         let env = self
             .env

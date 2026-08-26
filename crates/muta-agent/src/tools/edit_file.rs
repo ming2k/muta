@@ -1,11 +1,22 @@
 use async_trait::async_trait;
 use muta_contracts::Tool;
-use serde_json::json;
+use muta_tool_derive::ToolSchema;
+use serde::Deserialize;
 
 use crate::tools::helpers::{
     WorkspaceBase, env_from_root, execution_environment, json_string, resolve_workspace_path,
     workspace_base,
 };
+
+#[derive(ToolSchema, Deserialize)]
+struct EditFileArgs {
+    #[tool(desc = "Path to the file")]
+    path: String,
+    #[tool(desc = "The exact text to replace; must be unique in the file")]
+    old_string: String,
+    #[tool(desc = "The replacement text")]
+    new_string: String,
+}
 
 /// Apply an edit to a file (safer than write_file — requires old_string match).
 ///
@@ -168,6 +179,97 @@ fn apply_unique_edit(
     }
 }
 
+/// Detailed diagnostic when `old_string` cannot be found in `content`.
+/// Provides actionable hints for whitespace mismatches, line divergence, or missing lines.
+fn diagnose_edit_failure(content: &str, old_str: &str, path: &str) -> String {
+    let old_lines: Vec<&str> = old_str.lines().collect();
+    let content_lines: Vec<&str> = content.lines().collect();
+
+    if old_lines.is_empty() {
+        return format!("Could not find old_string in '{path}': old_string is empty.");
+    }
+
+    // 1. Check if trailing-whitespace trimmed version matches
+    let trimmed_old: Vec<&str> = old_lines.iter().map(|l| l.trim_end()).collect();
+    let trimmed_content: Vec<&str> = content_lines.iter().map(|l| l.trim_end()).collect();
+    let mut ws_matches = 0usize;
+    let mut ws_match_line = 0usize;
+    if !trimmed_old.is_empty() && trimmed_old.len() <= trimmed_content.len() {
+        for i in 0..=trimmed_content.len() - trimmed_old.len() {
+            if trimmed_content[i..i + trimmed_old.len()] == trimmed_old[..] {
+                ws_matches += 1;
+                ws_match_line = i + 1;
+            }
+        }
+    }
+    if ws_matches == 1 {
+        return format!(
+            "Could not find exact match for `old_string` in '{path}', but found a match at line {ws_match_line} \
+             when ignoring trailing whitespace / line endings. Please check trailing whitespace or indentation around line {ws_match_line}."
+        );
+    }
+
+    // 2. First-line anchor search & divergence detection
+    let first_line = old_lines[0].trim_end();
+    if !first_line.is_empty() {
+        let candidate_starts: Vec<usize> = content_lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.trim_end() == first_line)
+            .map(|(idx, _)| idx)
+            .collect();
+
+        if candidate_starts.len() == 1 {
+            let start_idx = candidate_starts[0];
+            let mut match_count = 0usize;
+            while match_count < old_lines.len()
+                && start_idx + match_count < content_lines.len()
+                && content_lines[start_idx + match_count].trim_end()
+                    == old_lines[match_count].trim_end()
+            {
+                match_count += 1;
+            }
+            if match_count < old_lines.len() {
+                let diverge_old = old_lines[match_count];
+                let diverge_actual = if start_idx + match_count < content_lines.len() {
+                    content_lines[start_idx + match_count]
+                } else {
+                    "<end of file>"
+                };
+                return format!(
+                    "Could not find exact match for `old_string` in '{path}'. \
+                     Found matching start at line {} (first {} line{} matched), but diverged at line {}:\n\
+                     Expected: `{diverge_old}`\n\
+                     File has: `{diverge_actual}`\n\
+                     Please re-read '{path}' around line {} to get the latest content.",
+                    start_idx + 1,
+                    match_count,
+                    if match_count == 1 { "" } else { "s" },
+                    start_idx + match_count + 1,
+                    start_idx + 1
+                );
+            }
+        } else if candidate_starts.len() > 1 {
+            let lines_str = candidate_starts
+                .iter()
+                .take(5)
+                .map(|idx| (idx + 1).to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!(
+                "Could not find exact match for `old_string` in '{path}'. \
+                 The first line `{first_line}` appears multiple times (lines {lines_str}), \
+                 but subsequent lines did not match. Please provide more surrounding context or re-read '{path}'."
+            );
+        }
+    }
+
+    format!(
+        "Could not find exact match for `old_string` in '{path}' (0 matches found). \
+         The content of '{path}' may have changed. Please use `read_text` to inspect the latest file contents before editing."
+    )
+}
+
 #[async_trait]
 impl Tool for EditFileTool {
     fn name(&self) -> &str {
@@ -177,15 +279,7 @@ impl Tool for EditFileTool {
         "Replace a unique block of text (old_string) with new_string in an existing file. old_string must match exactly one location."
     }
     fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Path to the file" },
-                "old_string": { "type": "string", "description": "The exact text to replace; must be unique in the file" },
-                "new_string": { "type": "string", "description": "The replacement text" }
-            },
-            "required": ["path", "old_string", "new_string"]
-        })
+        EditFileArgs::parameters_schema()
     }
     fn scope_target(&self, arguments: &str) -> muta_contracts::ScopeTarget {
         muta_contracts::ScopeTarget::Path(std::path::PathBuf::from(json_string(arguments, "path")))
@@ -211,11 +305,11 @@ impl Tool for EditFileTool {
     }
 
     async fn call_structured(&self, arguments: &str) -> Result<muta_contracts::ToolOutput, String> {
-        let args: serde_json::Value =
+        let args: EditFileArgs =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
-        let path = args["path"].as_str().ok_or("Missing 'path'")?;
-        let old_str = args["old_string"].as_str().ok_or("Missing 'old_string'")?;
-        let new_str = args["new_string"].as_str().ok_or("Missing 'new_string'")?;
+        let path = &args.path;
+        let old_str = &args.old_string;
+        let new_str = &args.new_string;
         let env = self
             .env
             .clone()
@@ -240,10 +334,7 @@ impl Tool for EditFileTool {
                 match apply_unique_edit(&normalized_content, &normalized_old, new_str, path)? {
                     Some(e) => e,
                     None => {
-                        return Err(format!(
-                            "Could not find old_string in '{}'. The text may have changed or the match is ambiguous.",
-                            path
-                        ));
+                        return Err(diagnose_edit_failure(&content, old_str, path));
                     }
                 }
             }
@@ -382,5 +473,34 @@ mod tests {
         let content = "x KEEP x".to_string();
         let edit = apply_unique_edit(&content, "x", "Y", "f.txt").unwrap_err(); // ambiguous (2 occurrences) -> error
         assert!(edit.contains("2 places"));
+    }
+
+    #[test]
+    fn diagnose_edit_failure_detects_whitespace_mismatch() {
+        let content = "fn foo() {\n    let x = 1;  \n}\n";
+        let old = "    let x = 1;\n";
+        let diag = diagnose_edit_failure(content, old, "test.rs");
+        assert!(
+            diag.contains("when ignoring trailing whitespace"),
+            "diagnostic: {diag}"
+        );
+        assert!(diag.contains("line 2"));
+    }
+
+    #[test]
+    fn diagnose_edit_failure_detects_divergence() {
+        let content = "fn foo() {\n    let x = 1;\n    let y = 200;\n    let z = 3;\n}\n";
+        let old = "    let x = 1;\n    let y = 2;\n    let z = 3;";
+        let diag = diagnose_edit_failure(content, old, "test.rs");
+        assert!(diag.contains("diverged at line 3"), "diagnostic: {diag}");
+        assert!(diag.contains("let y = 200"));
+    }
+
+    #[test]
+    fn diagnose_edit_failure_reports_zero_matches() {
+        let content = "fn foo() {}\n";
+        let old = "fn bar() {}";
+        let diag = diagnose_edit_failure(content, old, "test.rs");
+        assert!(diag.contains("0 matches found"), "diagnostic: {diag}");
     }
 }

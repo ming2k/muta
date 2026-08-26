@@ -2,69 +2,60 @@
 //! half of the two-stage research pipeline (websearch = breadth, webfetch =
 //! depth; ADR-0117).
 //!
-//! A reader turns one URL into clean page text. The builtin reader is a
-//! direct fetch plus the local naive HTML stripping; the Jina reader
-//! delegates to `r.jina.ai`, which renders JavaScript and extracts the main
-//! content server-side. Adding a reader is one new module + one match arm in
-//! [`build_reader`]; `webfetch` and the other readers never change.
+//! A reader turns one URL into clean page text. The Jina reader delegates to
+//! `r.jina.ai`, which renders JavaScript and extracts the main content
+//! server-side as Markdown.
 //!
 //! SSRF note: readers receive only URLs that already passed
 //! [`crate::tools::ssrf::assert_public_url`]. The Jina reader sends the URL to
 //! a third party, so it must never be pointed at private addresses — the
 //! pre-check in `webfetch` enforces this before any reader runs.
 
-use super::web::html_to_text;
 use crate::tools::reader::jina::ReadPage;
-use crate::tools::web::guarded_get;
 
 pub mod jina;
 
-/// Which page-content backend `webfetch` uses. Unknown config names resolve
-/// to [`Reader::Builtin`] rather than erroring at construction time — same
-/// philosophy as [`crate::tools::search::build_provider`]: a typo never
-/// leaves the tool without a working backend.
+/// Which page-content backend `webfetch` uses.
 pub(crate) enum Reader {
-    Builtin,
     Jina(jina::JinaReader),
+    Disabled,
 }
 
 pub(crate) fn build_reader(cfg: &muta_contracts::WebSearchConfig) -> Reader {
-    match cfg.reader.trim() {
-        "jina" => Reader::Jina(jina::JinaReader {
-            api_key: cfg
-                .jina_api_key
-                .as_ref()
-                .map(|k| k.expose_secret().to_string()),
-        }),
-        _ => Reader::Builtin,
+    let name = cfg.reader.trim();
+    if name == "none" || name == "(none)" || name == "disabled" {
+        return Reader::Disabled;
     }
+    Reader::Jina(jina::JinaReader {
+        api_key: cfg
+            .jina_api_key
+            .as_ref()
+            .map(|k| k.expose_secret().to_string()),
+    })
 }
 
 impl Reader {
     pub(crate) fn name(&self) -> &'static str {
         match self {
-            Reader::Builtin => "builtin",
             Reader::Jina(_) => "jina",
+            Reader::Disabled => "disabled",
         }
     }
 
     /// Fetch one URL and return clean page text plus the content type of the
     /// underlying response. `raw` skips text extraction for non-HTML
-    /// content.
+    /// content when applicable.
     ///
-    /// Errors are surfaced verbatim to the model/user. The Jina reader
-    /// deliberately reports *its own* failure and lets the caller decide
-    /// whether to fall back to the builtin path rather than silently
-    /// masking a misconfigured third party.
+    /// Errors are surfaced verbatim to the model/user.
     pub(crate) async fn read(
         &self,
         client: &reqwest::Client,
         url: &str,
-        raw: bool,
+        _raw: bool,
     ) -> Result<ReaderOutput, String> {
         match self {
-            Reader::Builtin => builtin_read(client, url, raw).await,
             Reader::Jina(j) => j.read(client, url).await,
+            Reader::Disabled => Err("webfetch reader is disabled in configuration".to_string()),
         }
     }
 }
@@ -79,39 +70,29 @@ pub(crate) struct ReaderOutput {
     pub content_type: String,
 }
 
-async fn builtin_read(
-    client: &reqwest::Client,
-    url: &str,
-    raw: bool,
-) -> Result<ReaderOutput, String> {
-    let response = guarded_get(client, url, reqwest::header::HeaderMap::new()).await?;
-    let content_type = response
-        .headers
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let body = String::from_utf8_lossy(&response.body).to_string();
-    let text = if raw || !content_type.contains("html") {
-        body
-    } else {
-        html_to_text(&body)
-    };
-    Ok(ReaderOutput { text, content_type })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn build_reader_defaults_to_builtin_for_unknown_name() {
+    fn build_reader_defaults_to_jina_for_unknown_name() {
         let cfg = muta_contracts::WebSearchConfig::default();
-        assert_eq!(build_reader(&cfg).name(), "builtin");
+        assert_eq!(build_reader(&cfg).name(), "jina");
 
         let cfg: muta_contracts::WebSearchConfig =
             toml::from_str("reader = \"totally-bogus\"").expect("reader field parses");
-        assert_eq!(build_reader(&cfg).name(), "builtin");
+        assert_eq!(build_reader(&cfg).name(), "jina");
+    }
+
+    #[test]
+    fn build_reader_disables_when_configured() {
+        let cfg: muta_contracts::WebSearchConfig =
+            toml::from_str("reader = \"disabled\"").expect("reader field parses");
+        assert_eq!(build_reader(&cfg).name(), "disabled");
+
+        let cfg: muta_contracts::WebSearchConfig =
+            toml::from_str("reader = \"none\"").expect("reader field parses");
+        assert_eq!(build_reader(&cfg).name(), "disabled");
     }
 
     #[test]

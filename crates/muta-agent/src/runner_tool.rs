@@ -20,15 +20,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::{Agent, RunnerHandle};
 
-/// Description of the default (read-only, RUNNER_EXPLORE) `runner` dispatch tool,
-/// surfaced to the model. Kept as a `const` so a sibling write-capable tool
-/// can declare its own parallel description without duplicating this string.
+/// Description of the default `spawn_runner` dispatch tool, surfaced to the model.
 pub const RUNNER_TOOL_DESCRIPTION: &str = "\
-Launch a focused, read-only runner to research or explore part of the codebase \
-(or the web) and return a concise written answer. Use it to parallelize \
-investigation: finding where code lives, summarizing files, gathering \
-context. The runner cannot modify files — you perform any edits after \
-reviewing its findings.";
+Spawn an isolated Tier-2 Runner agent to perform a focused subtask in a separate \
+context window and return a consolidated summary. Set 'role' to 'explore' for read-only \
+research (default), 'code' for full implementation and testing, or 'mcp' for specialized \
+tool integrations.";
 
 /// Description of the write-capable `runner_code` dispatch tool (bound to the
 /// [`muta_contracts::RUNNER_CODE`] profile). Distinct from `RUNNER_TOOL_DESCRIPTION` so
@@ -204,22 +201,17 @@ impl RunnerTool {
     /// `toolset` should be the parent agent's full capability set; `profile`
     /// declares what the spawned runner may actually use (admission + variant
     /// pins + framing). The caller binds the role explicitly — `&RUNNER_EXPLORE` for
-    /// the `runner` tool.
+    /// the `spawn_runner` tool.
     pub fn new(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
         profile: &'static RunnerPreset,
     ) -> Self {
-        Self::named(provider, toolset, profile, "runner", RUNNER_TOOL_DESCRIPTION)
+        Self::named(provider, toolset, profile, "spawn_runner", RUNNER_TOOL_DESCRIPTION)
     }
 
     /// Like [`new`](Self::new) but shares an existing [`RunnerRegistry`] instead
-    /// of creating a fresh one. Used when a second dispatch tool (e.g. a
-    /// coding-profile `runner_code` alongside the read-only `runner`) needs its
-    /// children reachable from the *same* harness reply path: the driver holds
-    /// one `Arc<RunnerRegistry>`, and tool-call ids are globally unique, so two
-    /// dispatch tools lodging their children into one table never collide. See
-    /// ADR-0029.
+    /// of creating a fresh one.
     pub fn with_registry(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
@@ -230,7 +222,7 @@ impl RunnerTool {
             provider,
             toolset,
             profile,
-            "runner",
+            "spawn_runner",
             RUNNER_TOOL_DESCRIPTION,
             registry,
         )
@@ -439,7 +431,12 @@ impl Tool for RunnerTool {
             "properties": {
                 "description": { "type": "string", "description": "Short label for the sub-task (<=60 chars)" },
                 "prompt": { "type": "string", "description": "The full, self-contained instructions for the runner" },
-                "preset": { "type": "string", "description": "Optional runner preset name ('explore', 'code', 'title', 'mcp_specialist'). Defaults to the bound role." }
+                "role": {
+                    "type": "string",
+                    "enum": ["explore", "code", "mcp"],
+                    "description": "Optional runner role: 'explore' (default, read-only research), 'code' (coding, file edits, testing), or 'mcp' (specialized tool integration). Defaults to 'explore'."
+                },
+                "preset": { "type": "string", "description": "Legacy alias for role." }
             },
             "required": ["description", "prompt"]
         })
@@ -589,7 +586,11 @@ impl RunnerTool {
             return Err("'prompt' must not be empty.".to_string());
         }
 
-        let requested_preset = args.get("preset").and_then(|p| p.as_str()).unwrap_or(self.profile.name);
+        let requested_preset = args
+            .get("role")
+            .or_else(|| args.get("preset"))
+            .and_then(|p| p.as_str())
+            .unwrap_or(self.profile.name);
         let profile = muta_contracts::RunnerPresetPool::find(requested_preset)
             .unwrap_or(self.profile);
 
@@ -1613,11 +1614,11 @@ mod tests {
         let selected = muta_contracts::RUNNER_CODE.resolve_tools(&toolset, &model, &model_sel);
         let names: std::collections::HashSet<&str> = selected.iter().map(|t| t.name()).collect();
         assert!(names.contains("read_text"));
-        assert!(names.contains("execute_command"));
+        assert!(names.contains("run_command"));
         assert!(names.contains("write_file"));
         assert!(names.contains("edit_file"));
         assert!(!names.contains("runner_code"), "recursion must be excluded");
-        assert!(!names.contains("runner"));
+        assert!(!names.contains("spawn_runner"));
 
         // The tool surfaces under its own name.
         assert_eq!(runner_code_arc.name(), "runner_code");

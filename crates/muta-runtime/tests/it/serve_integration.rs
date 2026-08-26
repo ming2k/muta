@@ -71,7 +71,6 @@ async fn prehosted_with_catalog(
     );
     let base = idle_base(session.id().await);
 
-
     let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
         base,
         muta_contracts::SessionStatus::Idle,
@@ -1863,11 +1862,86 @@ async fn control_suspend_session_parks_a_contentful_session() {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace asset-trust attach notice.
+// Workspace asset-trust attach flow.
 // ---------------------------------------------------------------------------
 
+/// Shared harness for the trust attach tests: hosts one session over the
+/// given project root + security store, attaches an interactive client, and
+/// returns the WebSocket stream to read attach frames from — plus the server
+/// handle, which the caller must keep alive for the connection to be served.
+#[allow(clippy::type_complexity)]
+async fn attach_trust_workspace(
+    tmp: &tempfile::TempDir,
+    security_file: &std::path::Path,
+) -> (
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    serve::ServeHandle,
+) {
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
+    let security = Arc::new(
+        muta_persistence::workspace_security::WorkspaceSecurityStore::load_from(
+            security_file.to_path_buf(),
+        ),
+    );
+    let registry = Arc::new(SessionRegistry::prehost_only());
+    let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
+    let sync_buffer = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+    let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
+        idle_base(session.id().await),
+        muta_contracts::SessionStatus::Idle,
+    )));
+    registry
+        .host(HostedSession {
+            project_root: tmp.path().to_path_buf(),
+            human_channel: std::sync::Arc::new(
+                muta_contracts::human_request::HumanChannelAccountant::new(),
+            ),
+            security,
+            session,
+            req_tx,
+            events: bc_tx,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            tracker,
+            sync_buffer,
+            command_catalog: Default::default(),
+            created_at: std::time::Instant::now(),
+            last_activity: tokio::sync::Mutex::new(std::time::Instant::now()),
+            last_seen_tick: std::sync::atomic::AtomicU64::new(0),
+            activity_tick: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            agent_for_session_end: None,
+        })
+        .await;
+
+    let mut handle = serve::start_server(serve::ServeOptions::default(), registry);
+    let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    ws.send(WsMessage::Text(
+        serde_json::to_string(&Wire::Select {
+            version: None,
+            action: AttachAction::Attach(None),
+            project: Some(tmp.path().to_string_lossy().into_owned().into()),
+            posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
+            protocol: Some(muta_contracts::PROTOCOL_VERSION),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    (ws, handle)
+}
+
+/// A never-trusted workspace (contributions present, no persisted record)
+/// no longer receives the passive quarantine banner: the pre-view
+/// `HarnessState` attach-sync frame carries the real security snapshot so
+/// an interactive client can gate on it before the composer takes input.
+/// The banner is reserved for the `Changed` escalation.
 #[tokio::test]
-async fn unconfigured_workspace_pushes_trust_notice_on_attach() {
+async fn unconfigured_workspace_pushes_security_snapshot_on_attach() {
     let tmp = tempfile::tempdir().unwrap();
     let security_file = tmp.path().join("workspace_security.json");
     let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
@@ -1919,7 +1993,7 @@ async fn unconfigured_workspace_pushes_trust_notice_on_attach() {
         serde_json::to_string(&Wire::Select {
             version: None,
             action: AttachAction::Attach(None),
-            project: None,
+            project: Some(tmp.path().to_string_lossy().into_owned().into()),
             posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
             protocol: Some(muta_contracts::PROTOCOL_VERSION),
         })
@@ -1929,8 +2003,11 @@ async fn unconfigured_workspace_pushes_trust_notice_on_attach() {
     .await
     .unwrap();
 
-    // Welcome, then attach-sync snapshots and the quarantine banner.
-    let mut saw_notice = false;
+    // Welcome first, then the attach-sync HarnessState carrying the real
+    // security snapshot. No quarantine banner: the pre-view trust dialog
+    // owns the never-trusted case.
+    let mut saw_quarantined_snapshot = false;
+    let mut saw_banner = false;
     for _ in 0..12 {
         let raw = tokio::time::timeout(Duration::from_secs(2), ws.next())
             .await
@@ -1945,18 +2022,81 @@ async fn unconfigured_workspace_pushes_trust_notice_on_attach() {
             continue;
         };
         match event {
-            RoundEvent::Notice(n)
+            RoundEvent::HarnessState(snapshot) => {
+                if snapshot.workspace_security.rules
+                    == muta_contracts::WorkspaceTrustState::Quarantined
+                {
+                    saw_quarantined_snapshot = true;
+                }
+            }
+            RoundEvent::Notice(n) => {
                 if n.body
                     .as_deref()
-                    .is_some_and(|b| b.contains("contributions") || b.contains("trust")) =>
-            {
-                saw_notice = true
+                    .is_some_and(|b| b.contains("contributions") || b.contains("trust"))
+                {
+                    saw_banner = true;
+                }
             }
             _ => {}
         }
-        if saw_notice {
+        if saw_quarantined_snapshot && saw_banner {
             break;
         }
     }
-    assert!(saw_notice, "trust banner notice never pushed");
+    assert!(
+        saw_quarantined_snapshot,
+        "attach-sync HarnessState never carried the quarantined security snapshot"
+    );
+    assert!(
+        !saw_banner,
+        "never-trusted workspace must not receive the passive banner; the pre-view dialog owns it"
+    );
+    let _ = handle;
+}
+
+/// A previously trusted workspace whose contributions changed on disk keeps
+/// the banner escalation: the user already made a trust decision for this
+/// workspace once, so there is nothing to gate on — only to re-escalate.
+#[tokio::test]
+async fn changed_workspace_keeps_banner_escalation_on_attach() {
+    let tmp = tempfile::tempdir().unwrap();
+    let security_file = tmp.path().join("workspace_security.json");
+    // AGENTS.md written twice: once to hash for the trusted record, once
+    // (different content) so the digest no longer matches → `Changed`.
+    std::fs::write(tmp.path().join("AGENTS.md"), "project instructions").unwrap();
+    let security = muta_persistence::workspace_security::WorkspaceSecurityStore::load_from(
+        security_file.clone(),
+    );
+    security
+        .trust_domains(tmp.path(), &[muta_contracts::TrustDomain::Rules])
+        .unwrap();
+    std::fs::write(tmp.path().join("AGENTS.md"), "project instructions v2").unwrap();
+    let (mut ws, _server) = attach_trust_workspace(&tmp, &security_file).await;
+
+    let mut saw_banner = false;
+    for _ in 0..12 {
+        let raw = tokio::time::timeout(Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let frame = serde_json::from_str::<Wire>(raw.to_text().unwrap_or("")).unwrap();
+        let Wire::Response { response } = frame else {
+            continue;
+        };
+        let AgentResponse::Round { event, .. } = response else {
+            continue;
+        };
+        if let RoundEvent::Notice(n) = event {
+            if n.body
+                .as_deref()
+                .is_some_and(|b| b.contains("changed") || b.contains("trust"))
+                && n.kind == muta_contracts::NoticeKind::ReviewAlert
+            {
+                saw_banner = true;
+                break;
+            }
+        }
+    }
+    assert!(saw_banner, "changed-workspace banner never pushed");
 }

@@ -264,7 +264,7 @@ impl SystemPromptSection for WebUntrustedContentGuidance {
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         ctx.tool_names
             .iter()
-            .any(|name| name == "webfetch" || name == "websearch")
+            .any(|name| name == "fetch_url" || name == "search_web" || name == "webfetch" || name == "websearch")
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(WEB_UNTRUSTED))

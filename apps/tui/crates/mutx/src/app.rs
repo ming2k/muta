@@ -1908,7 +1908,11 @@ impl App {
     }
 
     /// Retrieve the content (text, images, text_pastes) of a queue pointer target.
-    pub fn queue_pointer_content(&self, session_id: &str, id: &str) -> Option<(String, Vec<ImagePart>, Vec<String>)> {
+    pub fn queue_pointer_content(
+        &self,
+        session_id: &str,
+        id: &str,
+    ) -> Option<(String, Vec<ImagePart>, Vec<String>)> {
         // Check transcript steer messages first
         for msg in self.messages.iter().chain(self.side_messages.iter()) {
             if msg.delivery == crate::model::document::DeliveryStatus::Queued
@@ -1921,8 +1925,18 @@ impl App {
         // Check pending_dispatch
         self.pending_dispatch
             .iter()
-            .find(|item| item.session_id == session_id && item.id == id && item.state == QueuedDispatchState::Waiting)
-            .map(|item| (item.text.clone(), item.images.clone(), item.text_pastes.clone()))
+            .find(|item| {
+                item.session_id == session_id
+                    && item.id == id
+                    && item.state == QueuedDispatchState::Waiting
+            })
+            .map(|item| {
+                (
+                    item.text.clone(),
+                    item.images.clone(),
+                    item.text_pastes.clone(),
+                )
+            })
     }
 
     /// Return a human-readable badge label when the queue pointer is armed.
@@ -1961,7 +1975,12 @@ impl App {
     }
 
     /// Load content into the composer as the pointer's projection.
-    fn load_queue_pointer_row(&mut self, text: String, images: Vec<ImagePart>, text_pastes: Vec<String>) {
+    fn load_queue_pointer_row(
+        &mut self,
+        text: String,
+        images: Vec<ImagePart>,
+        text_pastes: Vec<String>,
+    ) {
         self.input = text;
         self.pending_images = images;
         self.pending_text_pastes = text_pastes;
@@ -2009,7 +2028,8 @@ impl App {
             None => newest.clone(),
         };
         self.queue_pointer = Some(next_id.clone());
-        if let Some((text, images, text_pastes)) = self.queue_pointer_content(session_id, &next_id) {
+        if let Some((text, images, text_pastes)) = self.queue_pointer_content(session_id, &next_id)
+        {
             self.load_queue_pointer_row(text, images, text_pastes);
         }
         true
@@ -2030,7 +2050,9 @@ impl App {
             Some(p) if p + 1 < ids.len() => {
                 let next_id = ids[p + 1].clone();
                 self.queue_pointer = Some(next_id.clone());
-                if let Some((text, images, text_pastes)) = self.queue_pointer_content(session_id, &next_id) {
+                if let Some((text, images, text_pastes)) =
+                    self.queue_pointer_content(session_id, &next_id)
+                {
                     self.load_queue_pointer_row(text, images, text_pastes);
                 }
                 true
@@ -3525,10 +3547,7 @@ impl App {
                 self.prune_backfill_after_record(&refreshed.text);
                 if self.input_history_persist {
                     tokio::task::spawn_blocking(move || {
-                        let _ = crate::config::save_history(
-                            std::slice::from_ref(&refreshed),
-                            true,
-                        );
+                        let _ = crate::config::save_history(std::slice::from_ref(&refreshed), true);
                     });
                 }
                 return;
@@ -3537,10 +3556,7 @@ impl App {
             self.push_history(recorded.clone());
             if self.input_history_persist {
                 tokio::task::spawn_blocking(move || {
-                    let _ = crate::config::save_history(
-                        std::slice::from_ref(&recorded),
-                        true,
-                    );
+                    let _ = crate::config::save_history(std::slice::from_ref(&recorded), true);
                 });
             }
             return;
@@ -3569,10 +3585,7 @@ impl App {
         // persistence is disabled (tests).
         if self.input_history_persist {
             tokio::task::spawn_blocking(move || {
-                let _ = crate::config::save_history(
-                    std::slice::from_ref(&recorded),
-                    false,
-                );
+                let _ = crate::config::save_history(std::slice::from_ref(&recorded), false);
             });
         }
     }

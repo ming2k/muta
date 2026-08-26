@@ -31,7 +31,7 @@ works unchanged whether the session runs on the host or in the sandbox.
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
 | `command` | string | yes | — | Shell command line |
-| `timeout` | integer | no | `30` | Overall timeout in seconds; a command producing no output for 10s is still killed early as a blocked-command guard |
+| `timeout` | integer | no | `300` | Overall timeout in seconds; a command producing no output for `timeout/3` (min 5s, max 60s) is still killed early as a blocked-command guard |
 | `terminal_id` | string | no | — | Persistent terminal session identifier to reuse environment variables, cwd, and shell state across commands |
 | `run_persistent` | boolean | no | `false` | Run in a persistent terminal session |
 

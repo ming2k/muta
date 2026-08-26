@@ -3,15 +3,14 @@ use muta_contracts::Tool;
 use muta_tool_derive::ToolSchema;
 use serde_json::json;
 
+use serde::Deserialize;
+
 use crate::tools::helpers::{
     WorkspaceBase, env_from_root, execution_environment, resolve_workspace_path, workspace_base,
 };
 
-/// Typed parameters for [`ReadTextTool`]. Deriving `ToolSchema` generates the
-/// JSON Schema the model sees, eliminating hand-written-schema drift: the
-/// schema and this struct can never disagree.
-#[allow(dead_code)] // fields drive the derived schema; call parsing migrates next
-#[derive(ToolSchema)]
+/// Typed parameters for [`ReadTextTool`].
+#[derive(ToolSchema, Deserialize)]
 struct ReadArgs {
     #[tool(desc = "Path to the file")]
     path: String,
@@ -64,9 +63,9 @@ impl Tool for ReadTextTool {
     }
 
     async fn call_structured(&self, arguments: &str) -> Result<muta_contracts::ToolOutput, String> {
-        let args: serde_json::Value =
+        let args: ReadArgs =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
-        let path = args["path"].as_str().ok_or("Missing 'path'")?;
+        let path = &args.path;
         // Filesystem access goes through the workspace-resolved path; the
         // model-facing `path` text (errors, framing, display) stays exactly
         // what the model sent.
@@ -117,8 +116,8 @@ impl Tool for ReadTextTool {
         let content =
             String::from_utf8(bytes).map_err(|_| format!("File '{}' is not valid UTF-8", path))?;
 
-        let offset = args["offset"].as_u64().unwrap_or(1).max(1) as usize;
-        let limit = args["limit"].as_u64().unwrap_or(0) as usize;
+        let offset = args.offset.unwrap_or(1).max(1) as usize;
+        let limit = args.limit.unwrap_or(0).max(0) as usize;
 
         let lines: Vec<&str> = content.lines().collect();
         let total_lines = lines.len();

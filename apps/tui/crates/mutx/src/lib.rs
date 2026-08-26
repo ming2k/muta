@@ -43,6 +43,7 @@ pub mod question_model;
 pub mod step_interaction;
 mod terminal;
 mod transcript;
+pub mod trust_gate;
 mod versioned;
 
 // ── View layer (merged from the former `mutx-view` crate) ─────────────
@@ -320,6 +321,13 @@ pub async fn run_tui(
     let pending_permission_clone = pending_permission.clone();
     let pending_question = Arc::new(Mutex::new(VecDeque::<UserQuestionRequest>::new()));
     let pending_question_clone = pending_question.clone();
+    // Trust gate: whether the gate already got its answer this attach.
+    // The daemon republishes `HarnessState` periodically; without this
+    // latch a dismissed gate (Esc = keep quarantined) would re-open on the
+    // next snapshot and nag in a loop. Cleared only by a fresh run/attach,
+    // so a *new* workspace contact still gates exactly once.
+    let trust_gate_dismissed = Arc::new(AtomicBool::new(false));
+    let trust_gate_dismissed_clone = trust_gate_dismissed.clone();
     let pending_input = Arc::new(Mutex::new(VecDeque::<muta_contracts::InputRequest>::new()));
     let pending_input_clone = pending_input.clone();
     // Full-duplex (ADR-0029): side-tables recording which runner (by parent
@@ -1525,6 +1533,50 @@ pub async fn run_tui(
                                 }
                                 *round_count_clone.lock().await = round_counter;
                                 *harness_clone.lock().await = snapshot;
+                                // Trust gate: the security snapshot
+                                // riding this HarnessState decides whether
+                                // the primary session's workspace still
+                                // needs a first-contact trust decision.
+                                // Quarantined → ensure the synthesized gate
+                                // question is parked ahead of any real
+                                // ask_user (it is the modal the user must
+                                // answer before the composer takes input);
+                                // anything else → drain a stale gate so the
+                                // dialog cannot linger after the decision.
+                                // `trust_gate_dismissed` latches the
+                                // keep-quarantined answer so periodic
+                                // snapshots do not re-nag within one run.
+                                {
+                                    let mut queue = pending_question_clone.lock().await;
+                                    let gate_queued = queue.front().is_some_and(|req| {
+                                        req.id == crate::trust_gate::TRUST_GATE_REQUEST_ID
+                                    });
+                                    let gate_needed = !trust_gate_dismissed_clone
+                                        .load(Ordering::SeqCst)
+                                        && crate::trust_gate::gate_request(
+                                            &harness_clone.lock().await.workspace_security,
+                                        )
+                                        .is_some();
+                                    match (gate_queued, gate_needed) {
+                                        (false, true) => {
+                                            if let Some(req) = crate::trust_gate::gate_request(
+                                                &harness_clone.lock().await.workspace_security,
+                                            ) {
+                                                queue.push_front(req);
+                                                tracing::debug!(
+                                                    "mutx: workspace trust gate queued"
+                                                );
+                                            }
+                                        }
+                                        (true, false) => {
+                                            queue.retain(|req| {
+                                                req.id != crate::trust_gate::TRUST_GATE_REQUEST_ID
+                                            });
+                                            tracing::debug!("mutx: workspace trust gate cleared");
+                                        }
+                                        _ => {}
+                                    }
+                                }
                                 if running {
                                     // A new round resets the turn counter; it stays 0
                                     // until the first `TurnStarted` of the round lands.
@@ -2179,6 +2231,7 @@ pub async fn run_tui(
             pending_question,
             pending_input,
             is_responding,
+            trust_gate_dismissed,
             dirty,
             dirty_notify,
             completion_signal,

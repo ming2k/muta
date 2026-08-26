@@ -843,12 +843,11 @@ pub fn cycle_websearch_backend(current: &str) -> &'static str {
     WEBSEARCH_BACKENDS[next].0
 }
 
-/// Cycle a reader id through builtin → jina → none.
+/// Cycle a reader id through jina → none.
 pub fn cycle_reader(current: &str) -> &'static str {
     match current.trim() {
-        "builtin" => "jina",
         "jina" => "none",
-        _ => "builtin",
+        _ => "jina",
     }
 }
 

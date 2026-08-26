@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Shell execution: the idle watchdog's no-output budget now scales with the
+  caller's `timeout` (one third, clamped to [5s, 60s]) instead of a fixed 10s,
+  so an explicitly larger `timeout` grants proportionally more idle tolerance
+  for legitimately quiet commands (long sleeps, network waits, `--quiet`
+  builds). The default (30s → 10s) is unchanged.
+- Shell termination footers: the `IdleBlocked` and `Timeout` messages now lead
+  with the fact (killed at the no-output limit / timed out after the configured
+  timeout) and keep a single retry hint, instead of a long multi-clause
+  explanation of password prompts and TUI tools. The decorative leading
+  emoji (⏸/⛔/⏱/✗) are dropped — state is already carried by the warn/err
+  colour styles.
+
 ## [0.35.5] - 2026-08-27
 
 ### Changed

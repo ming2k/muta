@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use muta_contracts::{ExecutionEnvironment, Tool, ToolAccesses};
+use muta_tool_derive::ToolSchema;
 use serde::Deserialize;
-use serde_json::json;
 use std::time::{Duration, Instant};
 
 use crate::tools::file_search::{
@@ -33,25 +33,27 @@ impl SearchTextTool {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, ToolSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SearchTextArgs {
+    #[tool(desc = "Regex to search for, or exact text when literal is true")]
     query: String,
-    #[serde(default = "default_path")]
-    path: String,
-    #[serde(default)]
-    include: Vec<String>,
-    #[serde(default)]
-    exclude: Vec<String>,
-    #[serde(default)]
-    literal: bool,
-    #[serde(default)]
-    context: u64,
+    #[tool(
+        desc = "File or directory to search; relative paths use the primary workspace (default '.')"
+    )]
+    path: Option<String>,
+    #[tool(
+        desc = "File globs relative to path; pass alternatives as separate array items (OR)"
+    )]
+    include: Option<Vec<String>>,
+    #[tool(desc = "File globs to exclude from the search")]
+    exclude: Option<Vec<String>>,
+    #[tool(desc = "Treat query as exact text instead of regex (default false)")]
+    literal: Option<bool>,
+    #[tool(desc = "Context lines around each match (default 0)")]
+    context: Option<u64>,
+    #[tool(desc = "Maximum returned lines (default 200)")]
     limit: Option<u64>,
-}
-
-fn default_path() -> String {
-    ".".to_string()
 }
 
 #[async_trait]
@@ -65,47 +67,7 @@ impl Tool for SearchTextTool {
     }
 
     fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Regex to search for, or exact text when literal is true"
-                },
-                "path": {
-                    "type": "string",
-                    "description": "File or directory to search; relative paths use the primary workspace (default '.')"
-                },
-                "include": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "File globs relative to path; pass alternatives as separate array items (OR)"
-                },
-                "exclude": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "File globs to exclude from the search"
-                },
-                "literal": {
-                    "type": "boolean",
-                    "description": "Treat query as exact text instead of regex (default false)"
-                },
-                "context": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 10,
-                    "description": "Context lines around each match (default 0)"
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 1000,
-                    "description": "Maximum returned lines (default 200)"
-                }
-            },
-            "required": ["query"],
-            "additionalProperties": false
-        })
+        SearchTextArgs::parameters_schema()
     }
 
     fn accesses(&self, arguments: &str) -> ToolAccesses {
@@ -118,20 +80,21 @@ impl Tool for SearchTextTool {
         if args.query.is_empty() {
             return Err("'query' must not be empty".to_string());
         }
-        let context = args.context.min(10) as usize;
+        let context = args.context.unwrap_or(0).min(10) as usize;
         let limit = search_limit(args.limit)?;
+        let path = args.path.as_deref().unwrap_or(".");
         let workspace = self.env.workspace_root().to_path_buf();
-        let search_root = resolve_search_root(&workspace, self.env.additional_roots(), &args.path)?;
+        let search_root = resolve_search_root(&workspace, self.env.additional_roots(), path)?;
         self.env
             .fs()
             .metadata(&search_root)
             .await
-            .map_err(|error| format!("Cannot search '{}': {error}", args.path))?;
+            .map_err(|error| format!("Cannot search '{path}': {error}"))?;
 
         let query = args.query;
-        let include = args.include;
-        let exclude = args.exclude;
-        let literal = args.literal;
+        let include = args.include.unwrap_or_default();
+        let exclude = args.exclude.unwrap_or_default();
+        let literal = args.literal.unwrap_or(false);
         tokio::task::spawn_blocking(move || {
             native_search(
                 &workspace,

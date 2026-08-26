@@ -308,7 +308,10 @@ fn command_error_settles_pending_command_in_place() {
         detail: None,
     });
     assert!(settled);
-    assert_eq!(message.command_result_phase(), Some(CommandPhase::Completed));
+    assert_eq!(
+        message.command_result_phase(),
+        Some(CommandPhase::Completed)
+    );
     assert_eq!(
         message.command_result_text().as_deref(),
         Some("Error: Unknown /trust subcommand 'workspace'.")
@@ -435,7 +438,7 @@ fn command_result_message_expands_and_round_trips_display() {
         "permissions",
         "",
         Some(muta_contracts::CommandResult::PermissionList {
-            allowed: vec!["execute_command".to_string()],
+            allowed: vec!["run_command".to_string()],
         }),
     );
     assert_eq!(message.command_result_expanded(), Some(false));
@@ -445,7 +448,7 @@ fn command_result_message_expands_and_round_trips_display() {
     );
     assert_eq!(
         message.command_result_text().as_deref(),
-        Some("Always-allowed tools:\n- bash")
+        Some("Always-allowed tools:\n- run_command")
     );
     // The result body is the message's parsed blocks (non-empty here).
     assert!(!message.blocks.is_empty());
@@ -492,7 +495,7 @@ fn command_row_layout_classifies_by_result_shape() {
         "permissions",
         "",
         Some(muta_contracts::CommandResult::PermissionList {
-            allowed: vec!["execute_command".to_string(), "edit_file".to_string()],
+            allowed: vec!["run_command".to_string(), "edit_file".to_string()],
         }),
     );
     assert_eq!(
@@ -1816,9 +1819,10 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         editor_target_is_builtin: false,
         editor_effort: "high".to_string(),
         editor_thinking_available: false,
-                editor_thinking: true,
+        editor_thinking: true,
         editor_vision_override: None,
-        editor_tool_override: None, custom_field: 0,
+        editor_tool_override: None,
+        custom_field: 0,
         custom_fields: Vec::new(),
         custom_protocol_wire: String::new(),
         custom_models: Vec::new(),
@@ -2691,8 +2695,6 @@ fn queue_pointer_vanished_target_sends_as_new_message() {
     assert!(app.queue_pointer.is_none());
     assert_eq!(app.input, "edited", "the edit must survive the race");
 }
-
-
 
 #[test]
 fn recall_queued_restores_staged_images() {
