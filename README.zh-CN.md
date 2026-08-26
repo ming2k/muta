@@ -34,7 +34,7 @@
 curl -fsSL https://raw.githubusercontent.com/ming2k/muta/main/install.sh | bash
 ```
 
-> 可用 `MUTA_VERSION=0.35.3` 固定安装此版本，或用 `INSTALL_DIR=/usr/local/bin` 自定义安装目录。
+> 可用 `MUTA_VERSION=0.35.4` 固定安装此版本，或用 `INSTALL_DIR=/usr/local/bin` 自定义安装目录。
 
 Windows 用户可在 PowerShell 中执行：
 

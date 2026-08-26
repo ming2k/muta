@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.4] - 2026-08-26
+
+### Changed
+
+- Replaced autopilot posture with YOLO mode (`/yolo` / `--yolo` / `-y`), automatically approving tool permission requests while retaining destructive command guards.
+- Updated session persistence, contracts, runtime permission policies, and frontend indicators to reflect YOLO mode semantics.
+
 ## [0.35.3] - 2026-08-26
 
 ### Changed
@@ -4877,7 +4884,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.35.3...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.35.4...HEAD
+[0.35.4]: https://github.com/ming2k/muta/compare/v0.35.3...v0.35.4
 [0.35.3]: https://github.com/ming2k/muta/compare/v0.35.2...v0.35.3
 [0.35.2]: https://github.com/ming2k/muta/compare/v0.35.1...v0.35.2
 [0.35.1]: https://github.com/ming2k/muta/compare/v0.35.0...v0.35.1
