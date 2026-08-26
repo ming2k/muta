@@ -214,7 +214,7 @@ fn restored_user_insert_keeps_mid_round_origin_without_opening_a_turn() {
 
     let restored =
         transcript_messages_from_core(vec![first, inserted, second], &config::TuiConfig::default());
-    assert_eq!(restored[1].origin, UserMessageOrigin::Insert);
+    assert_eq!(restored[1].origin, UserMessageOrigin::Steer);
     assert_eq!(restored[1].round, Some(1));
     assert_eq!(restored[1].turn, None);
     assert_eq!(restored[2].round, Some(1));
@@ -1779,6 +1779,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
+        composer_send_mode: crate::app::ComposerSendMode::default(),
         queue_blocked_sessions: std::collections::HashSet::new(),
         naturally_completed_sessions: std::collections::HashSet::new(),
         idle_sessions: std::collections::HashSet::new(),
@@ -2723,7 +2724,7 @@ async fn insert_into_round_stages_a_transcript_entry_and_ships_images() {
     assert_eq!(entry.role, muta_contracts::Role::User);
     assert_eq!(entry.raw, "steer this");
     assert_eq!(entry.delivery, DeliveryStatus::Queued);
-    assert_eq!(entry.origin, UserMessageOrigin::Insert);
+    assert_eq!(entry.origin, UserMessageOrigin::Steer);
     assert!(
         entry.insert_id.is_some(),
         "the entry carries its correlation id"
@@ -2740,7 +2741,7 @@ async fn insert_into_round_stages_a_transcript_entry_and_ships_images() {
     // `Vec::new()` and dropped them) and carries the same correlation id.
     let sent = requests.try_recv().expect("the insert request was sent");
     match sent {
-        muta_contracts::AgentRequest::InsertUserInput { input, .. } => {
+        muta_contracts::AgentRequest::Steer { input, .. } => {
             assert_eq!(input.images.len(), 1, "staged images must ship");
             assert_eq!(input.images[0].data, "abc");
             assert_eq!(
@@ -2749,7 +2750,7 @@ async fn insert_into_round_stages_a_transcript_entry_and_ships_images() {
                 "the entry and the request share the correlation id"
             );
         }
-        other => panic!("expected InsertUserInput, got {other:?}"),
+        other => panic!("expected Steer, got {other:?}"),
     }
 }
 

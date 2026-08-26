@@ -729,13 +729,13 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
         let _ = context.tx.send(AgentResponse::PermissionsCleared);
         previous.cancel();
     }
-    for stale in context
+    let (stale_steer, stale_follow_up) = context
         .agent
-        .begin_user_input_round(context.session_id.clone(), generation)
-    {
+        .begin_session_queues(context.session_id.clone(), generation);
+    for stale in stale_steer.into_iter().chain(stale_follow_up) {
         let _ = context.tx.send(round_response(
             &context.session_id,
-            RoundEvent::UserInputUnavailable { input_id: stale.id },
+            RoundEvent::SteerUnavailable { input_id: stale.id },
         ));
     }
     let _ = context.tx.send(round_response(
@@ -792,10 +792,11 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
                 }
             }
         };
-        for pending in context.agent.close_user_input_round(generation) {
+        let (pending_steer, pending_follow_up) = context.agent.close_session_queues(generation);
+        for pending in pending_steer.into_iter().chain(pending_follow_up) {
             let _ = context.tx.send(round_response(
                 &context.session_id,
-                RoundEvent::UserInputUnavailable {
+                RoundEvent::SteerUnavailable {
                     input_id: pending.id,
                 },
             ));
@@ -1595,8 +1596,8 @@ pub fn relay_agent_event(
         AgentEvent::ContextTokens(snapshot) => {
             round_response(session_id, RoundEvent::ContextTokens(snapshot))
         }
-        AgentEvent::UserInputInserted(input) => {
-            round_response(session_id, RoundEvent::UserInputInserted(input))
+        AgentEvent::SteerAdmitted(input) => {
+            round_response(session_id, RoundEvent::SteerAdmitted(input))
         }
         AgentEvent::AssistantDelta { delta, start } => {
             if start {

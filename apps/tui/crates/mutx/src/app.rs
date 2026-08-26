@@ -40,9 +40,19 @@ pub enum QueuedDispatchState {
     /// Staged in the outbox, waiting for its turn (auto-drain or a recall /
     /// delete / reorder from the Queue modal).
     Waiting,
-    /// A fresh round is being started for this item (`ChatToSession` sent,
-    /// `NextRoundStarted` not yet received).
+    /// A fresh round is being started for this item (`FollowUp` sent,
+    /// `FollowUpStarted` not yet received).
     Dispatching,
+}
+
+/// Target queue mode for the live composer while a round is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ComposerSendMode {
+    /// Send as steering input at the next safe turn boundary.
+    #[default]
+    Steer,
+    /// Send as follow-up input when the agent finishes active work.
+    FollowUp,
 }
 
 /// A user message owned by the compact outbox (the **next-round** queue).
@@ -812,6 +822,8 @@ pub struct App {
     /// [`Self::queue_pointer`]). Every staged message waits for the running
     /// round to finish naturally before starting a new one (next-round only).
     pub pending_dispatch: VecDeque<QueuedDispatch>,
+    /// Target queue mode for the live composer while a round is running.
+    pub composer_send_mode: ComposerSendMode,
     /// Sessions whose outbox is hard-blocked by the user. While a session is
     /// blocked, no queued message auto-drains — not even after its round
     /// reaches natural completion and the harness goes idle. The queue modal
@@ -1868,20 +1880,76 @@ impl App {
     /// The ids of this session's waiting (next-round) items, front-of-queue
     /// first. `Dispatching` items are excluded: their round has already
     /// started, so editing them would be a lie.
-    fn queue_pointer_ids(&self, session_id: &str) -> Vec<String> {
-        self.pending_dispatch
-            .iter()
-            .filter(|item| {
-                item.session_id == session_id && item.state == QueuedDispatchState::Waiting
-            })
-            .map(|item| item.id.clone())
-            .collect()
+    /// The ids of this session's unconsumed items (pending steer messages in
+    /// transcript and waiting follow-up items in outbox), in timeline order
+    /// (older first, newer last).
+    pub fn queue_pointer_ids(&self, session_id: &str) -> Vec<String> {
+        let mut ids = Vec::new();
+        // 1. Pending steer messages staged in transcript (chronologically earlier in turn)
+        for msg in self.messages.iter().chain(self.side_messages.iter()) {
+            if msg.delivery == crate::model::document::DeliveryStatus::Queued
+                && msg.origin == crate::model::document::UserMessageOrigin::Steer
+            {
+                if let Some(id) = &msg.insert_id {
+                    ids.push(id.clone());
+                }
+            }
+        }
+        // 2. Waiting follow-up items in pending_dispatch
+        for item in self.pending_dispatch.iter() {
+            if item.session_id == session_id && item.state == QueuedDispatchState::Waiting {
+                ids.push(item.id.clone());
+            }
+        }
+        ids
     }
 
-    /// Resolve [`Self::queue_pointer`] to the live item it points at, if the
-    /// target still exists and still belongs to this session. A vanished
-    /// target (dispatched, deleted, recalled elsewhere) is `None` — callers
-    /// treat that as "the pointer is empty".
+    /// Retrieve the content (text, images, text_pastes) of a queue pointer target.
+    pub fn queue_pointer_content(&self, session_id: &str, id: &str) -> Option<(String, Vec<ImagePart>, Vec<String>)> {
+        // Check transcript steer messages first
+        for msg in self.messages.iter().chain(self.side_messages.iter()) {
+            if msg.delivery == crate::model::document::DeliveryStatus::Queued
+                && msg.origin == crate::model::document::UserMessageOrigin::Steer
+                && msg.insert_id.as_deref() == Some(id)
+            {
+                return Some((msg.raw.clone(), Vec::new(), Vec::new()));
+            }
+        }
+        // Check pending_dispatch
+        self.pending_dispatch
+            .iter()
+            .find(|item| item.session_id == session_id && item.id == id && item.state == QueuedDispatchState::Waiting)
+            .map(|item| (item.text.clone(), item.images.clone(), item.text_pastes.clone()))
+    }
+
+    /// Return a human-readable badge label when the queue pointer is armed.
+    /// Example: `[edit: steer #1]` or `[edit: follow-up #1]`.
+    pub fn queue_pointer_badge(&self, session_id: &str) -> Option<String> {
+        let id = self.queue_pointer.as_deref()?;
+        let mut steer_count = 0;
+        for msg in self.messages.iter().chain(self.side_messages.iter()) {
+            if msg.delivery == crate::model::document::DeliveryStatus::Queued
+                && msg.origin == crate::model::document::UserMessageOrigin::Steer
+            {
+                steer_count += 1;
+                if msg.insert_id.as_deref() == Some(id) {
+                    return Some(format!("[edit: steer #{steer_count}]"));
+                }
+            }
+        }
+        let mut followup_count = 0;
+        for item in self.pending_dispatch.iter() {
+            if item.session_id == session_id && item.state == QueuedDispatchState::Waiting {
+                followup_count += 1;
+                if item.id == id {
+                    return Some(format!("[edit: follow-up #{followup_count}]"));
+                }
+            }
+        }
+        None
+    }
+
+    /// Resolve [`Self::queue_pointer`] to the live follow-up item it points at, if any.
     pub fn queue_pointer_target(&self, session_id: &str) -> Option<&QueuedDispatch> {
         let id = self.queue_pointer.as_deref()?;
         self.pending_dispatch
@@ -1889,13 +1957,11 @@ impl App {
             .find(|item| item.session_id == session_id && item.id == id)
     }
 
-    /// Load a queue item's content into the composer as the pointer's
-    /// projection (text + attachments, cursor at the end, completion latch
-    /// held). Shared by the arm and the step so every landing is identical.
-    fn load_queue_pointer_row(&mut self, dispatch: &QueuedDispatch) {
-        self.input = dispatch.text.clone();
-        self.pending_images = dispatch.images.clone();
-        self.pending_text_pastes = dispatch.text_pastes.clone();
+    /// Load content into the composer as the pointer's projection.
+    fn load_queue_pointer_row(&mut self, text: String, images: Vec<ImagePart>, text_pastes: Vec<String>) {
+        self.input = text;
+        self.pending_images = images;
+        self.pending_text_pastes = text_pastes;
         self.set_cursor_end();
         self.suggestion_index = None;
         self.completion_dismissed = true;
@@ -1939,9 +2005,9 @@ impl App {
             Some(_) => self.queue_pointer.clone().unwrap_or_else(|| newest.clone()),
             None => newest.clone(),
         };
-        self.queue_pointer = Some(next_id);
-        if let Some(dispatch) = self.queue_pointer_target(session_id).cloned() {
-            self.load_queue_pointer_row(&dispatch);
+        self.queue_pointer = Some(next_id.clone());
+        if let Some((text, images, text_pastes)) = self.queue_pointer_content(session_id, &next_id) {
+            self.load_queue_pointer_row(text, images, text_pastes);
         }
         true
     }
@@ -1959,9 +2025,10 @@ impl App {
         let pos = ids.iter().position(|id| id == &cur);
         match pos {
             Some(p) if p + 1 < ids.len() => {
-                self.queue_pointer = Some(ids[p + 1].clone());
-                if let Some(dispatch) = self.queue_pointer_target(session_id).cloned() {
-                    self.load_queue_pointer_row(&dispatch);
+                let next_id = ids[p + 1].clone();
+                self.queue_pointer = Some(next_id.clone());
+                if let Some((text, images, text_pastes)) = self.queue_pointer_content(session_id, &next_id) {
+                    self.load_queue_pointer_row(text, images, text_pastes);
                 }
                 true
             }
@@ -2003,42 +2070,64 @@ impl App {
 
     /// Commit the composer's current content into the pointed-at queue item,
     /// **in place** — the queue's length and order are untouched; only the
-    /// item's content changes — and dissolve the pointer (the projection has
-    /// been written back; the content now lives in the item). Returns:
-    ///
-    /// - `Some(())` — the item was updated and the pointer dissolved;
-    /// - `None` — the pointer was not armed, or its target vanished while
-    ///   the user was editing (it shipped, was deleted, or was recalled). In
-    ///   the vanished case the pointer is dissolved **without** restoring
-    ///   the stashed draft, so the user's edited content stays in the
-    ///   composer and the caller sends it as a fresh message — the
-    ///   experience must not dead-end on a race.
+    /// item's content changes — and dissolve the pointer.
     pub fn commit_queue_pointer(&mut self, session_id: &str) -> Option<()> {
         let id = self.queue_pointer.clone()?;
         let text = self.input.clone();
         let images = self.pending_images.clone();
         let text_pastes = self.pending_text_pastes.clone();
-        let target = self.pending_dispatch.iter_mut().find(|item| {
-            item.session_id == session_id
-                && item.id == id
-                && item.state == QueuedDispatchState::Waiting
-        });
-        // Either way the pointer is spent; drop its stashed draft too (the
-        // projection either landed in the item, or the composer is about to
-        // ship as a fresh message — the stash is obsolete in both).
+
         self.queue_pointer = None;
         self.queue_pointer_draft.clear();
         self.queue_pointer_draft_images.clear();
         self.queue_pointer_draft_text_pastes.clear();
-        match target {
-            Some(item) => {
-                item.text = text;
-                item.images = images;
-                item.text_pastes = text_pastes;
-                Some(())
-            }
-            None => None,
+
+        // 1. Check if it is a pending follow-up in pending_dispatch
+        if let Some(item) = self.pending_dispatch.iter_mut().find(|item| {
+            item.session_id == session_id
+                && item.id == id
+                && item.state == QueuedDispatchState::Waiting
+        }) {
+            item.text = text;
+            item.images = images;
+            item.text_pastes = text_pastes;
+            return Some(());
         }
+
+        // 2. Check if it is a pending steer message in transcript
+        let steer_msg = self
+            .messages
+            .iter_mut()
+            .chain(self.side_messages.iter_mut())
+            .find(|m| {
+                m.insert_id.as_deref() == Some(&id)
+                    && m.delivery == crate::model::document::DeliveryStatus::Queued
+            });
+        if let Some(msg) = steer_msg {
+            msg.raw = text.clone();
+            msg.blocks = crate::model::document::parse_blocks_plain(&text);
+            let expanded = crate::composer_attachments::expand_paste_chips(&text, &text_pastes);
+            let expanded =
+                crate::composer_attachments::strip_orphan_image_chips(&expanded, images.len());
+            let sent_at_ms = msg.sent_at_ms;
+            let _ = self.tx.send(AgentRequest::CancelSteer {
+                session_id: session_id.to_string(),
+                input_id: id.clone(),
+            });
+            let _ = self.tx.send(AgentRequest::Steer {
+                session_id: session_id.to_string(),
+                input: muta_contracts::QueuedMessage {
+                    id: id.clone(),
+                    text: expanded,
+                    display_text: Some(text),
+                    images,
+                    sent_at_ms,
+                },
+            });
+            return Some(());
+        }
+
+        None
     }
 
     /// Stage a composed message as an in-flight mid-round steer (`Ctrl+O`).

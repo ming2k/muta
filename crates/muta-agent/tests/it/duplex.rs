@@ -69,7 +69,7 @@ async fn inject_user_message_lands_in_transcript() {
     ));
     let handle = agent.install_inbox();
 
-    assert!(handle.submit(AgentOp::InjectUserMessage("STEER-PAYLOAD-9f3a".to_string())));
+    assert!(handle.submit(AgentOp::Steer("STEER-PAYLOAD-9f3a".to_string())));
 
     let mut messages = vec![Message::new(Role::User, "begin")];
     let _ = agent

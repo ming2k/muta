@@ -300,8 +300,8 @@ fn static_tool_identity_shadows_a_dynamic_collision() {
     assert_ne!(todos[0].description(), "caller-owned shadow");
 }
 
-fn queued_user(id: &str, text: &str) -> muta_contracts::QueuedUserInput {
-    muta_contracts::QueuedUserInput {
+fn queued_user(id: &str, text: &str) -> muta_contracts::QueuedMessage {
+    muta_contracts::QueuedMessage {
         id: id.to_string(),
         text: text.to_string(),
         display_text: Some(text.to_string()),
@@ -311,27 +311,32 @@ fn queued_user(id: &str, text: &str) -> muta_contracts::QueuedUserInput {
 }
 
 #[test]
-fn user_input_queue_is_session_and_generation_scoped() {
+fn session_queues_are_session_and_generation_scoped() {
     let agent = agent();
-    assert!(agent.begin_user_input_round("session-a", 1).is_empty());
-    assert!(!agent.submit_user_input("session-b", queued_user("wrong", "no")));
-    assert!(agent.submit_user_input("session-a", queued_user("old", "keep me")));
+    let (stale_s, stale_f) = agent.begin_session_queues("session-a", 1);
+    assert!(stale_s.is_empty() && stale_f.is_empty());
+    assert!(!agent.steer("session-b", queued_user("wrong", "no")));
+    assert!(agent.steer("session-a", queued_user("old", "keep me")));
 
-    let stale = agent.begin_user_input_round("session-a", 2);
-    assert_eq!(stale.len(), 1);
-    assert_eq!(stale[0].id, "old");
-    assert!(agent.close_user_input_round(1).is_empty());
+    let (stale_s2, stale_f2) = agent.begin_session_queues("session-a", 2);
+    assert_eq!(stale_s2.len(), 1);
+    assert_eq!(stale_s2[0].id, "old");
+    assert!(stale_f2.is_empty());
+    let (c1_s, c1_f) = agent.close_session_queues(1);
+    assert!(c1_s.is_empty() && c1_f.is_empty());
 
-    assert!(agent.submit_user_input("session-a", queued_user("new", "hello")));
-    assert_eq!(agent.close_user_input_round(2)[0].id, "new");
-    assert!(!agent.submit_user_input("session-a", queued_user("late", "no")));
+    assert!(agent.steer("session-a", queued_user("new", "hello")));
+    let (c2_s, c2_f) = agent.close_session_queues(2);
+    assert_eq!(c2_s[0].id, "new");
+    assert!(c2_f.is_empty());
+    assert!(!agent.steer("session-a", queued_user("late", "no")));
 }
 
 #[tokio::test]
 async fn queued_user_input_is_admitted_as_visible_user_steer() {
     let agent = agent();
-    agent.begin_user_input_round("session-a", 1);
-    assert!(agent.submit_user_input("session-a", queued_user("insert-1", "more context")));
+    agent.begin_session_queues("session-a", 1);
+    assert!(agent.steer("session-a", queued_user("insert-1", "more context")));
     let mut messages = vec![Message::new(Role::User, "start")];
     let mut events = Vec::new();
 
@@ -344,7 +349,7 @@ async fn queued_user_input_is_admitted_as_visible_user_steer() {
 
     assert!(events.iter().any(|event| matches!(
         event,
-        AgentEvent::UserInputInserted(input) if input.id == "insert-1"
+        AgentEvent::SteerAdmitted(input) if input.id == "insert-1"
     )));
     assert!(messages.iter().any(|message| {
         message.role == Role::User
@@ -1624,8 +1629,8 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
                 format!("model-request turn={turn}")
             }
             AgentEvent::ContextTokens(_) => "context-tokens".to_string(),
-            AgentEvent::UserInputInserted(input) => {
-                format!("user-input-inserted {:?}", input.text)
+            AgentEvent::SteerAdmitted(input) => {
+                format!("steer-admitted {:?}", input.text)
             }
             AgentEvent::AssistantDelta { delta, start } => {
                 format!("assistant-delta start={start} {delta:?}")

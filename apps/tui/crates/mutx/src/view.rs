@@ -3441,7 +3441,7 @@ mod tests {
 
         let mut held = TranscriptMessage::new(muta_contracts::Role::User, "held steer");
         held.delivery = DeliveryStatus::HeldNextRound;
-        held.origin = crate::model::document::UserMessageOrigin::Insert;
+        held.origin = crate::model::document::UserMessageOrigin::Steer;
         let messages = vec![held];
 
         terminal.draw(|f| {

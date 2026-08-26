@@ -87,29 +87,55 @@ pub(super) async fn handle_send_chat(
 
     if !text.is_empty() || has_images {
         if app.running_sessions.contains(viewed_session_id) {
-            // Busy sends live in the fixed outbox, not the
-            // scrollback. A staged message always waits for the
-            // running round to finish naturally before starting a
-            // new one (next-round only). The mid-round insert
-            // path is the explicit `Ctrl+O` gesture below, not a
-            // busy Enter.
-            let id = uuid::Uuid::new_v4().to_string();
-            let queued_at_ms = now_epoch_ms();
-            app.pending_dispatch.push_back(crate::app::QueuedDispatch {
-                id: id.clone(),
-                session_id: viewed_session_id.to_string(),
-                state: crate::app::QueuedDispatchState::Waiting,
-                text: text.clone(),
-                queued_at_ms,
-                images: images.clone(),
-                text_pastes: text_pastes.clone(),
-            });
-            app.record_input_history(text.clone(), images.clone(), text_pastes.clone());
-            // The draft's content has been taken into the
-            // outbox — it is no longer the unsent slot.
-            app.clear_history_draft();
-            app.follow_bottom = true;
-            app.pin_summary_line = None;
+            match app.composer_send_mode {
+                crate::app::ComposerSendMode::Steer => {
+                    let expanded = composer_attachments::expand_paste_chips(&text, &text_pastes);
+                    let expanded = composer_attachments::strip_orphan_image_chips(&expanded, images.len());
+                    let id = app.new_insert_id();
+                    app.record_input_history(text.clone(), images.clone(), text_pastes);
+                    app.clear_history_draft();
+                    app.follow_bottom = true;
+                    app.pin_summary_line = None;
+                    let sent_at_ms = now_epoch_ms();
+                    let entry = TranscriptMessage::new(Role::User, text.clone())
+                        .with_origin(crate::model::document::UserMessageOrigin::Steer)
+                        .with_sent_at_ms(sent_at_ms)
+                        .with_insert_id(id.clone())
+                        .queued();
+                    if !app.in_side_view {
+                        runtime.messages.write().await.push(entry);
+                    } else {
+                        runtime.side_messages.write().await.push(entry);
+                    }
+                    let _ = app.tx.send(AgentRequest::Steer {
+                        session_id: viewed_session_id.to_string(),
+                        input: muta_contracts::QueuedMessage {
+                            id,
+                            text: expanded,
+                            display_text: Some(text),
+                            images,
+                            sent_at_ms: Some(sent_at_ms),
+                        },
+                    });
+                }
+                crate::app::ComposerSendMode::FollowUp => {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    let queued_at_ms = now_epoch_ms();
+                    app.pending_dispatch.push_back(crate::app::QueuedDispatch {
+                        id: id.clone(),
+                        session_id: viewed_session_id.to_string(),
+                        state: crate::app::QueuedDispatchState::Waiting,
+                        text: text.clone(),
+                        queued_at_ms,
+                        images: images.clone(),
+                        text_pastes: text_pastes.clone(),
+                    });
+                    app.record_input_history(text.clone(), images.clone(), text_pastes.clone());
+                    app.clear_history_draft();
+                    app.follow_bottom = true;
+                    app.pin_summary_line = None;
+                }
+            }
         } else {
             // Expand `[Pasted text #N +M lines]` chips into
             // their full staged text right before dispatch so
@@ -235,7 +261,7 @@ pub(crate) async fn handle_insert_into_round(
         // listener flips it to delivered on `UserInputInserted`.
         let sent_at_ms = now_epoch_ms();
         let entry = TranscriptMessage::new(Role::User, text.clone())
-            .with_origin(crate::model::document::UserMessageOrigin::Insert)
+            .with_origin(crate::model::document::UserMessageOrigin::Steer)
             .with_sent_at_ms(sent_at_ms)
             .with_insert_id(id.clone())
             .queued();
@@ -244,9 +270,9 @@ pub(crate) async fn handle_insert_into_round(
         } else {
             runtime.side_messages.write().await.push(entry);
         }
-        let _ = app.tx.send(AgentRequest::InsertUserInput {
+        let _ = app.tx.send(AgentRequest::Steer {
             session_id: viewed_session_id.to_string(),
-            input: muta_contracts::QueuedUserInput {
+            input: muta_contracts::QueuedMessage {
                 id,
                 text: expanded,
                 display_text: Some(text),

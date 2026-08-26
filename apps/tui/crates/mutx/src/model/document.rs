@@ -487,8 +487,10 @@ pub enum UserMessageOrigin {
     /// the only origin the Activity modal treats as the round's prompt.
     #[default]
     Chat,
-    /// Human input admitted at an inner boundary of an already-running round.
-    Insert,
+    /// Steering input admitted at an inner turn boundary of a running round.
+    Steer,
+    /// Follow-up input executed after the current round completes.
+    FollowUp,
     /// A slash command (`/review`, `/pursue …`, …). The harness handles these
     /// directly; the model never sees them as a prompt.
     Slash,
@@ -2081,7 +2083,7 @@ pub fn parse_blocks(text: &str) -> Vec<Block> {
 /// interpretation. The entire text becomes a single [`Block::Text`] so it
 /// renders as one continuous verbatim panel; line breaks are preserved by the
 /// renderer's wrapper rather than being collapsed by a markdown parser.
-fn parse_blocks_plain(text: &str) -> Vec<Block> {
+pub(crate) fn parse_blocks_plain(text: &str) -> Vec<Block> {
     if text.is_empty() {
         return Vec::new();
     }

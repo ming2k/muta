@@ -861,6 +861,8 @@ pub fn effort_ignition() -> io::Result<()> {
                     can_retry: false,
                     context_tokens: Some(12_400),
                     ignition_elapsed_ms: elapsed_ms,
+                    composer_send_mode: None,
+                    queue_editing_badge: None,
                 },
                 &theme,
             );

@@ -121,6 +121,12 @@ pub(super) async fn dispatch_action(
         input::InputAction::SendChat(text) => {
             commands::handle_send_chat(app, runtime, viewed_session_id, text).await;
         }
+        input::InputAction::ToggleComposerSendMode => {
+            app.composer_send_mode = match app.composer_send_mode {
+                crate::app::ComposerSendMode::Steer => crate::app::ComposerSendMode::FollowUp,
+                crate::app::ComposerSendMode::FollowUp => crate::app::ComposerSendMode::Steer,
+            };
+        }
         input::InputAction::InsertIntoRound => {
             commands::handle_insert_into_round(app, runtime, viewed_session_id).await;
         }

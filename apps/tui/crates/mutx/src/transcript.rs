@@ -91,7 +91,7 @@ pub(super) fn transcript_message_from_core(message: Message) -> Option<Transcrip
             if is_slash {
                 msg.origin = UserMessageOrigin::Slash;
             } else if is_insert {
-                msg.origin = UserMessageOrigin::Insert;
+                msg.origin = UserMessageOrigin::Steer;
             } else if msg
                 .raw
                 .strip_prefix('!')
@@ -474,7 +474,7 @@ fn transcript_from_core_inner(
                 {
                     transcript_message.round = Some(restored_round);
                 } else if transcript_message.role == Role::User
-                    && transcript_message.origin == UserMessageOrigin::Insert
+                    && (transcript_message.origin == UserMessageOrigin::Steer || transcript_message.origin == UserMessageOrigin::FollowUp)
                 {
                     transcript_message.round = (restored_round > 0).then_some(restored_round);
                 }

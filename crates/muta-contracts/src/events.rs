@@ -16,27 +16,26 @@ pub enum AgentRequest {
         #[ts(optional)]
         sent_at_ms: Option<u64>,
     },
-    /// Queue user-authored input into a round that is already running. The
-    /// target session is explicit so a frontend can keep composing in a side
-    /// view (or switch views) without accidentally steering the wrong agent.
-    /// The input is admitted atomically at the next safe turn boundary.
-    InsertUserInput {
+    /// Queue steering input into a round that is already running. The target
+    /// session is explicit so a frontend can keep composing in a side view
+    /// (or switch views) without accidentally steering the wrong agent. The
+    /// input is admitted atomically at the next safe turn boundary.
+    Steer {
         session_id: String,
-        input: QueuedUserInput,
+        input: QueuedMessage,
     },
-    /// Cancel a not-yet-admitted [`AgentRequest::InsertUserInput`]. The agent
-    /// linearizes cancellation against boundary admission: exactly one of
-    /// `UserInputInserted` or `UserInputCancelled` is emitted for the id.
-    CancelInsertedInput {
+    /// Cancel a not-yet-admitted [`AgentRequest::Steer`]. The agent linearizes
+    /// cancellation against boundary admission: exactly one of
+    /// `SteerAdmitted` or `SteerCancelled` is emitted for the id.
+    CancelSteer {
         session_id: String,
         input_id: String,
     },
-    /// Start a fresh round against an explicit live session. Ordinary compose
-    /// sends continue to use [`AgentRequest::Chat`]; outbox follow-ups use this
-    /// variant so their session affinity survives view changes.
-    ChatToSession {
+    /// Queue a follow-up message into an explicit live session to execute when
+    /// the active round finishes (or start an explicit session round).
+    FollowUp {
         session_id: String,
-        input: QueuedUserInput,
+        input: QueuedMessage,
     },
     SlashCommand(String),
     /// Ask the daemon to complete the composer input at `cursor`. Cursor and
@@ -479,7 +478,18 @@ impl From<&crate::WebSearchConfig> for WebSearchConfigView {
     }
 }
 
-/// User-authored input waiting to be inserted into a running round.
+/// Controls how many queued messages are injected when the agent reaches a queue drain point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum QueueMode {
+    /// Drain and inject only the oldest queued message, leaving the rest queued for later drain points.
+    #[default]
+    OneAtATime,
+    /// Drain and inject every queued message at that point.
+    All,
+}
+
+/// A queued user message waiting to be admitted as steering or follow-up.
 ///
 /// `text` is the provider-facing payload. `display_text` preserves compact
 /// attachment chips for the transcript when the provider-facing form expanded
@@ -487,7 +497,7 @@ impl From<&crate::WebSearchConfig> for WebSearchConfigView {
 /// makes admission/cancellation races deterministic.
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub struct QueuedUserInput {
+pub struct QueuedMessage {
     pub id: String,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1059,29 +1069,29 @@ pub enum RoundEvent {
     /// Current AI-visible context size for this session. Frontends must use
     /// this instead of estimating from the persisted/rendered transcript.
     ContextTokens(ContextTokenSnapshot),
-    /// A queued insert crossed the agent's safe turn boundary and is now part
+    /// A steering message crossed the agent's safe turn boundary and is now part
     /// of the live conversation (the agent persists that boundary before the
     /// provider observes it). Frontends append it to the transcript at this
     /// event, never when it was merely queued.
-    UserInputInserted(QueuedUserInput),
-    /// The addressed round stopped accepting inserts before this id could be
-    /// admitted. A frontend may safely retain it as a paused next-round item.
-    UserInputUnavailable {
+    SteerAdmitted(QueuedMessage),
+    /// The addressed round stopped accepting steering messages before this id
+    /// could be admitted. A frontend may safely retain it as a paused follow-up item.
+    SteerUnavailable {
         input_id: String,
     },
-    /// A pending insert was cancelled before admission.
-    UserInputCancelled {
+    /// A pending steering message was cancelled before admission.
+    SteerCancelled {
         input_id: String,
     },
     /// Cancellation lost the race with admission (or the id was unknown).
-    /// The subsequent inserted/unavailable event remains authoritative.
-    UserInputCancelFailed {
+    /// The subsequent admitted/unavailable event remains authoritative.
+    SteerCancelFailed {
         input_id: String,
     },
-    /// A next-round outbox item was accepted by its exact live session and a
-    /// fresh round was started. Like insertion, this is the transcript commit
-    /// point for frontends.
-    NextRoundStarted(QueuedUserInput),
+    /// A follow-up outbox item was accepted by its exact live session and a
+    /// fresh round was started. Like steering admission, this is the transcript
+    /// commit point for frontends.
+    FollowUpStarted(QueuedMessage),
     /// The user-driven round reached its natural, successful terminal path.
     /// Interruptions, blocked prompts, and errors deliberately emit no such
     /// event, so next-round outbox items pause instead of auto-running.
@@ -1621,9 +1631,9 @@ pub enum AgentOp {
     /// model request, as if the user typed it. Lets a parent (or, for a
     /// runner, the orchestrating agent) steer a running round with new
     /// information without restarting it. codex `inject_if_running` analogue.
-    InjectUserMessage(String),
+    Steer(String),
     /// Append a hidden (system-level) steering note — like
-    /// [`AgentOp::InjectUserMessage`] but recorded as a hidden user message so
+    /// [`AgentOp::Steer`] but recorded as a hidden user message so
     /// it informs the model without polluting the visible transcript. codex
     /// `InterAgentCommunication` analogue.
     InterAgentMessage { msg: String },
@@ -1652,8 +1662,8 @@ pub enum AgentEvent {
     /// Provider-reported context after a completed request. This supersedes the
     /// pre-request projection for that session until its context mutates again.
     ContextTokens(ContextTokenSnapshot),
-    /// A user-authored insert was atomically admitted at a safe turn boundary.
-    UserInputInserted(QueuedUserInput),
+    /// A steering message was atomically admitted at a safe turn boundary.
+    SteerAdmitted(QueuedMessage),
     AssistantDelta {
         delta: String,
         start: bool,

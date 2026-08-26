@@ -700,23 +700,23 @@ impl SessionDriver {
                     )
                     .await;
                 }
-                AgentRequest::InsertUserInput { session_id, input } => {
-                    crate::handlers_chat::insert_user_input(
+                AgentRequest::Steer { session_id, input } => {
+                    crate::handlers_chat::steer(
                         &side, &agent, &session, &resp_tx, session_id, input,
                     )
                     .await;
                 }
-                AgentRequest::CancelInsertedInput {
+                AgentRequest::CancelSteer {
                     session_id,
                     input_id,
                 } => {
-                    crate::handlers_chat::cancel_inserted_input(
+                    crate::handlers_chat::cancel_steer(
                         &side, &agent, &session, &resp_tx, session_id, input_id,
                     )
                     .await;
                 }
-                AgentRequest::ChatToSession { session_id, input } => {
-                    crate::handlers_chat::chat_to_session(
+                AgentRequest::FollowUp { session_id, input } => {
+                    crate::handlers_chat::follow_up(
                         &side, &agent, &session, &lifecycle, &resp_tx, &config, session_id, input,
                     )
                     .await;
@@ -854,9 +854,9 @@ fn round_owned_request(req: &AgentRequest) -> bool {
     matches!(
         req,
         AgentRequest::Chat { .. }
-            | AgentRequest::ChatToSession { .. }
-            | AgentRequest::InsertUserInput { .. }
-            | AgentRequest::CancelInsertedInput { .. }
+            | AgentRequest::FollowUp { .. }
+            | AgentRequest::Steer { .. }
+            | AgentRequest::CancelSteer { .. }
             | AgentRequest::ShellCommand { .. }
     )
 }
@@ -1004,9 +1004,9 @@ mod tests {
             images: vec![image()],
             sent_at_ms: Some(1),
         }));
-        assert!(round_owned_request(&AgentRequest::ChatToSession {
+        assert!(round_owned_request(&AgentRequest::FollowUp {
             session_id: "s".to_string(),
-            input: muta_contracts::QueuedUserInput {
+            input: muta_contracts::QueuedMessage {
                 id: "i".to_string(),
                 text: "hi".to_string(),
                 display_text: None,
@@ -1014,9 +1014,9 @@ mod tests {
                 sent_at_ms: None,
             },
         }));
-        assert!(round_owned_request(&AgentRequest::InsertUserInput {
+        assert!(round_owned_request(&AgentRequest::Steer {
             session_id: "s".to_string(),
-            input: muta_contracts::QueuedUserInput {
+            input: muta_contracts::QueuedMessage {
                 id: "i".to_string(),
                 text: "hi".to_string(),
                 display_text: None,
@@ -1024,7 +1024,7 @@ mod tests {
                 sent_at_ms: None,
             },
         }));
-        assert!(round_owned_request(&AgentRequest::CancelInsertedInput {
+        assert!(round_owned_request(&AgentRequest::CancelSteer {
             session_id: "s".to_string(),
             input_id: "i".to_string(),
         }));

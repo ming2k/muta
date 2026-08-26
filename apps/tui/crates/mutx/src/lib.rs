@@ -599,19 +599,11 @@ pub async fn run_tui(
                                 .await
                                 .insert(session_id.clone(), snapshot);
                         }
-                        RoundEvent::UserInputUnavailable { input_id } => {
-                            // The round closed before an insert (`Ctrl+O`)
-                            // could be admitted. Two owners exist for the
-                            // content: the transcript entry staged at insert
-                            // time (keyed by `insert_id`) and — only for the
-                            // legacy queue-owned path — the outbox item. The
-                            // entry flips to `⏸ Held`: the turn ended
+                        RoundEvent::SteerUnavailable { input_id } => {
+                            // The round closed before a steer could be admitted.
+                            // The entry flips to `HeldNextRound`: the turn ended
                             // (naturally or interrupted), so this message now
-                            // waits to ship as the *next* round's prompt. The
-                            // event loop re-queues it into the outbox under
-                            // the same id, which both drains the held entry
-                            // when its round starts and re-enables
-                            // pointer-based recall/edit.
+                            // waits to ship as the *next* round's prompt / follow-up.
                             {
                                 let mut msgs = buf.write().await;
                                 if let Some(entry) = msgs
@@ -629,18 +621,7 @@ pub async fn run_tui(
                                 },
                             );
                         }
-                        // The mid-round insert path is live via `Ctrl+O`
-                        // (InsertIntoRound): the steer is admitted at a safe
-                        // turn boundary, so this event settles the transcript
-                        // entry the loop already staged as `⏸ Queued` (found
-                        // by correlation id) instead of pushing a duplicate —
-                        // one entry per insert, from staging to delivery. The
-                        // entry keeps its `Insert` origin so it renders the
-                        // `↳ insert` provenance. The cancellation variants
-                        // stay unused by this frontend (nothing cancels a
-                        // pending insert today) and remain deliberate no-ops
-                        // rather than being masked by a catch-all.
-                        RoundEvent::UserInputInserted(input) => {
+                        RoundEvent::SteerAdmitted(input) => {
                             let input_id = input.id.clone();
                             let visible = input
                                 .display_text
@@ -650,10 +631,6 @@ pub async fn run_tui(
                                 let mut msgs = buf.write().await;
                                 // Find the newest staged entry with this
                                 // correlation id and settle it in place.
-                                // Fallback: if the correlating entry is gone
-                                // (rebuilt transcript, resumed session), push
-                                // a fresh one so the admitted steer is still
-                                // visible.
                                 let settled = msgs
                                     .iter_mut()
                                     .rev()
@@ -661,7 +638,7 @@ pub async fn run_tui(
                                     .map(|m| {
                                         m.delivery =
                                             crate::model::document::DeliveryStatus::Delivered;
-                                        m.origin = UserMessageOrigin::Insert;
+                                        m.origin = UserMessageOrigin::Steer;
                                         if m.sent_at_ms.is_none() {
                                             m.sent_at_ms = input.sent_at_ms;
                                         }
@@ -671,20 +648,20 @@ pub async fn run_tui(
                                 if !settled {
                                     let mut message = TranscriptMessage::new(Role::User, visible);
                                     message.sent_at_ms = input.sent_at_ms;
-                                    message.origin = UserMessageOrigin::Insert;
+                                    message.origin = UserMessageOrigin::Steer;
                                     msgs.push(message);
                                 }
                             }
                             outbox_signals_clone.lock().await.push_back(
-                                event_loop::OutboxSignal::Inserted {
+                                event_loop::OutboxSignal::SteerAdmitted {
                                     session_id,
                                     input_id,
                                 },
                             );
                         }
-                        RoundEvent::UserInputCancelled { .. } => {}
-                        RoundEvent::UserInputCancelFailed { .. } => {}
-                        RoundEvent::NextRoundStarted(input) => {
+                        RoundEvent::SteerCancelled { .. } => {}
+                        RoundEvent::SteerCancelFailed { .. } => {}
+                        RoundEvent::FollowUpStarted(input) => {
                             let input_id = input.id.clone();
                             let visible = input
                                 .display_text
@@ -692,12 +669,6 @@ pub async fn run_tui(
                                 .unwrap_or_else(|| input.text.clone());
                             {
                                 let mut msgs = buf.write().await;
-                                // A handed-back insert (`HeldNextRound`) now
-                                // ships as this round's prompt: settle its
-                                // held entry in place rather than pushing a
-                                // second copy. The entry keeps its `Insert`
-                                // origin so the `↳ insert` provenance stays
-                                // truthful about how the prompt arrived.
                                 let settled = msgs
                                     .iter_mut()
                                     .rev()
@@ -705,18 +676,19 @@ pub async fn run_tui(
                                     .map(|m| {
                                         m.delivery =
                                             crate::model::document::DeliveryStatus::Delivered;
-                                        m.origin = UserMessageOrigin::Insert;
+                                        m.origin = UserMessageOrigin::FollowUp;
                                         true
                                     })
                                     .unwrap_or(false);
                                 if !settled {
                                     let mut message = TranscriptMessage::new(Role::User, visible);
                                     message.sent_at_ms = input.sent_at_ms;
+                                    message.origin = UserMessageOrigin::FollowUp;
                                     msgs.push(message);
                                 }
                             }
                             outbox_signals_clone.lock().await.push_back(
-                                event_loop::OutboxSignal::NextRoundStarted {
+                                event_loop::OutboxSignal::FollowUpStarted {
                                     session_id,
                                     input_id,
                                 },
@@ -2110,6 +2082,7 @@ pub async fn run_tui(
         pending_images: Vec::new(),
         pending_text_pastes: Vec::new(),
         pending_dispatch: std::collections::VecDeque::new(),
+        composer_send_mode: crate::app::ComposerSendMode::default(),
         queue_blocked_sessions: std::collections::HashSet::new(),
         naturally_completed_sessions: std::collections::HashSet::new(),
         idle_sessions: std::collections::HashSet::new(),

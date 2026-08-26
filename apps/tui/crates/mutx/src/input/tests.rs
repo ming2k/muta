@@ -1442,10 +1442,7 @@ fn tab_in_compose_without_suggestions_is_noop() {
 
 #[test]
 fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
-    // The Tab toggle for the insert/next-round send target was removed — a
-    // busy Enter always queues for the next round. With no completion,
-    // modal, or focused target, Tab must fall through to a no-op and leave
-    // the draft untouched.
+    // While a round runs, Tab toggles between Steer and FollowUp queue target modes.
     let mut input = String::from("follow up");
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
@@ -1486,7 +1483,7 @@ fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
         },
         &mut drag,
     );
-    assert_eq!(action, InputAction::None);
+    assert_eq!(action, InputAction::ToggleComposerSendMode);
     assert_eq!(input, "follow up");
 }
 

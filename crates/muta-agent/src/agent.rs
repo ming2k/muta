@@ -264,12 +264,14 @@ pub struct Agent {
     /// reply must unblock a tool parked mid-round and cannot wait for the loop.
     inbox_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<AgentOp>>>,
     inbox_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<AgentOp>>>,
-    /// Human-authored inserts for the currently running master/side round.
+    /// Inbound steering and follow-up queues for the currently running master/side round.
     /// This is deliberately separate from the runner `AgentOp` inbox: submit,
     /// cancel, and boundary admission all take this one mutex, which gives the
     /// UI an exact answer in the cancellation-vs-admission race. `None` means
-    /// the round is not accepting inserts.
-    user_input_queue: std::sync::Mutex<Option<UserInputRound>>,
+    /// the round is not accepting queued messages.
+    session_queues: std::sync::Mutex<Option<SessionQueues>>,
+    steering_mode: std::sync::RwLock<muta_contracts::QueueMode>,
+    follow_up_mode: std::sync::RwLock<muta_contracts::QueueMode>,
     /// Cumulative milliseconds the current round has spent parked on a human
     /// decision (permission prompt or `ask_user`). Reset to 0 at the start of
     /// each user round and added to at every permission/ask_user `await`. Read
@@ -497,7 +499,7 @@ pub(crate) struct StreamingRoundState {
     inbox_rx: Option<mpsc::UnboundedReceiver<AgentOp>>,
     started_at: std::time::Instant,
     pending_request: Option<muta_contracts::ModelRequest>,
-    user_input_generation: Option<u64>,
+    session_queue_generation: Option<u64>,
 }
 
 impl StreamingRoundState {
@@ -510,10 +512,63 @@ impl StreamingRoundState {
     }
 }
 
-struct UserInputRound {
+/// A queue of pending messages controlled by a [`muta_contracts::QueueMode`].
+#[derive(Debug, Clone)]
+pub struct PendingMessageQueue {
+    messages: std::collections::VecDeque<muta_contracts::QueuedMessage>,
+    pub mode: muta_contracts::QueueMode,
+}
+
+impl PendingMessageQueue {
+    pub fn new(mode: muta_contracts::QueueMode) -> Self {
+        Self {
+            messages: std::collections::VecDeque::new(),
+            mode,
+        }
+    }
+
+    pub fn enqueue(&mut self, message: muta_contracts::QueuedMessage) {
+        self.messages.push_back(message);
+    }
+
+    pub fn has_items(&self) -> bool {
+        !self.messages.is_empty()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.messages.len()
+    }
+
+    pub fn drain(&mut self) -> Vec<muta_contracts::QueuedMessage> {
+        match self.mode {
+            muta_contracts::QueueMode::All => self.messages.drain(..).collect(),
+            muta_contracts::QueueMode::OneAtATime => self.messages.pop_front().into_iter().collect(),
+        }
+    }
+
+    pub fn drain_all(&mut self) -> Vec<muta_contracts::QueuedMessage> {
+        self.messages.drain(..).collect()
+    }
+
+    pub fn cancel(&mut self, input_id: &str) -> Option<muta_contracts::QueuedMessage> {
+        let position = self.messages.iter().position(|input| input.id == input_id)?;
+        self.messages.remove(position)
+    }
+
+    pub fn clear(&mut self) {
+        self.messages.clear();
+    }
+}
+
+struct SessionQueues {
     session_id: String,
     generation: u64,
-    queue: std::collections::VecDeque<muta_contracts::QueuedUserInput>,
+    steering: PendingMessageQueue,
+    follow_up: PendingMessageQueue,
 }
 
 /// Result of one tool-execution phase, returned by the cancellation-aware
@@ -968,7 +1023,9 @@ impl Agent {
             hooks: crate::hook_runner::HookRunner::new(),
             inbox_tx: std::sync::Mutex::new(None),
             inbox_rx: std::sync::Mutex::new(None),
-            user_input_queue: std::sync::Mutex::new(None),
+            session_queues: std::sync::Mutex::new(None),
+            steering_mode: std::sync::RwLock::new(muta_contracts::QueueMode::default()),
+            follow_up_mode: std::sync::RwLock::new(muta_contracts::QueueMode::default()),
             round_paused_ms: std::sync::atomic::AtomicU64::new(0),
             identity: std::sync::RwLock::new(identity),
             turn_persist: std::sync::Mutex::new(None),
@@ -1985,128 +2042,212 @@ impl Agent {
             .is_some_and(|tx| tx.send(op).is_ok())
     }
 
-    /// Open a fresh, cancellable user-input queue for one interactive round.
+    /// Steering mode currently configured on this agent.
+    pub fn steering_mode(&self) -> muta_contracts::QueueMode {
+        *self.steering_mode.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Set the steering mode.
+    pub fn set_steering_mode(&self, mode: muta_contracts::QueueMode) {
+        *self.steering_mode.write().unwrap_or_else(|e| e.into_inner()) = mode;
+    }
+
+    /// Follow-up mode currently configured on this agent.
+    pub fn follow_up_mode(&self) -> muta_contracts::QueueMode {
+        *self.follow_up_mode.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Set the follow-up mode.
+    pub fn set_follow_up_mode(&self, mode: muta_contracts::QueueMode) {
+        *self.follow_up_mode.write().unwrap_or_else(|e| e.into_inner()) = mode;
+    }
+
+    /// Open fresh, cancellable steering and follow-up queues for one interactive round.
     /// Any stale entries are returned to the caller so it can surface them as
     /// unavailable instead of silently carrying them into a different round.
-    pub fn begin_user_input_round(
+    pub fn begin_session_queues(
         &self,
         session_id: impl Into<String>,
         generation: u64,
-    ) -> Vec<muta_contracts::QueuedUserInput> {
-        self.user_input_queue
+    ) -> (Vec<muta_contracts::QueuedMessage>, Vec<muta_contracts::QueuedMessage>) {
+        let steering_mode = self.steering_mode();
+        let follow_up_mode = self.follow_up_mode();
+        let previous = self.session_queues
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .replace(UserInputRound {
+            .replace(SessionQueues {
                 session_id: session_id.into(),
                 generation,
-                queue: std::collections::VecDeque::new(),
-            })
-            .map(|round| round.queue)
-            .unwrap_or_default()
-            .into_iter()
-            .collect()
+                steering: PendingMessageQueue::new(steering_mode),
+                follow_up: PendingMessageQueue::new(follow_up_mode),
+            });
+        if let Some(mut prev) = previous {
+            (prev.steering.drain_all(), prev.follow_up.drain_all())
+        } else {
+            (Vec::new(), Vec::new())
+        }
     }
 
-    /// Queue human-authored input for the next safe turn boundary. Returns
+    /// Queue human-authored steering input for the next safe turn boundary. Returns
     /// `false` once the round has atomically closed its admission gate.
-    pub fn submit_user_input(
+    pub fn steer(
         &self,
         session_id: &str,
-        input: muta_contracts::QueuedUserInput,
+        input: muta_contracts::QueuedMessage,
     ) -> bool {
-        let mut queue = self
-            .user_input_queue
+        let mut queues = self
+            .session_queues
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let Some(round) = queue
+        let Some(open) = queues
             .as_mut()
-            .filter(|round| round.session_id == session_id)
+            .filter(|q| q.session_id == session_id)
         else {
             return false;
         };
-        round.queue.push_back(input);
+        open.steering.enqueue(input);
         true
     }
 
-    /// Cancel a queued insert. Taking the same mutex as boundary admission
+    /// Queue follow-up input to run when the agent finishes active work. Returns
+    /// `false` once the round has atomically closed its admission gate.
+    pub fn follow_up(
+        &self,
+        session_id: &str,
+        input: muta_contracts::QueuedMessage,
+    ) -> bool {
+        let mut queues = self
+            .session_queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(open) = queues
+            .as_mut()
+            .filter(|q| q.session_id == session_id)
+        else {
+            return false;
+        };
+        open.follow_up.enqueue(input);
+        true
+    }
+
+    /// Cancel a queued steer insert. Taking the same mutex as boundary admission
     /// makes the result definitive: `Some` means the input cannot be admitted;
     /// `None` means admission already won (or the id was unknown).
-    pub fn cancel_user_input(
+    pub fn cancel_steer(
         &self,
         session_id: &str,
         input_id: &str,
-    ) -> Option<muta_contracts::QueuedUserInput> {
-        let mut queue = self
-            .user_input_queue
+    ) -> Option<muta_contracts::QueuedMessage> {
+        let mut queues = self
+            .session_queues
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let round = queue
+        let open = queues
             .as_mut()
-            .filter(|round| round.session_id == session_id)?;
-        let position = round.queue.iter().position(|input| input.id == input_id)?;
-        round.queue.remove(position)
+            .filter(|q| q.session_id == session_id)?;
+        open.steering.cancel(input_id)
+    }
+
+    /// Cancel a queued follow-up insert.
+    pub fn cancel_follow_up(
+        &self,
+        session_id: &str,
+        input_id: &str,
+    ) -> Option<muta_contracts::QueuedMessage> {
+        let mut queues = self
+            .session_queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let open = queues
+            .as_mut()
+            .filter(|q| q.session_id == session_id)?;
+        open.follow_up.cancel(input_id)
+    }
+
+    /// Remove all queued steering messages for a session.
+    pub fn clear_steering_queue(&self, session_id: &str) {
+        let mut queues = self
+            .session_queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(open) = queues.as_mut().filter(|q| q.session_id == session_id) {
+            open.steering.clear();
+        }
+    }
+
+    /// Remove all queued follow-up messages for a session.
+    pub fn clear_follow_up_queue(&self, session_id: &str) {
+        let mut queues = self
+            .session_queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(open) = queues.as_mut().filter(|q| q.session_id == session_id) {
+            open.follow_up.clear();
+        }
+    }
+
+    /// Remove all queued messages for a session.
+    pub fn clear_all_queues(&self, session_id: &str) {
+        let mut queues = self
+            .session_queues
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(open) = queues.as_mut().filter(|q| q.session_id == session_id) {
+            open.steering.clear();
+            open.follow_up.clear();
+        }
     }
 
     /// Stop accepting inserts and return anything that never crossed a turn
     /// boundary. Used on interrupted/error/blocked terminal paths.
-    pub fn close_user_input_round(&self, generation: u64) -> Vec<muta_contracts::QueuedUserInput> {
-        let mut queue = self
-            .user_input_queue
+    pub fn close_session_queues(&self, generation: u64) -> (Vec<muta_contracts::QueuedMessage>, Vec<muta_contracts::QueuedMessage>) {
+        let mut queues = self
+            .session_queues
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if queue
+        if queues
             .as_ref()
-            .is_none_or(|round| round.generation != generation)
+            .is_none_or(|q| q.generation != generation)
         {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
-        queue
-            .take()
-            .map(|round| round.queue)
-            .unwrap_or_default()
-            .into_iter()
-            .collect()
+        if let Some(mut open) = queues.take() {
+            (open.steering.drain_all(), open.follow_up.drain_all())
+        } else {
+            (Vec::new(), Vec::new())
+        }
     }
 
-    fn user_input_generation(&self) -> Option<u64> {
-        self.user_input_queue
+    fn session_queue_generation(&self) -> Option<u64> {
+        self.session_queues
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .map(|round| round.generation)
+            .map(|q| q.generation)
     }
 
-    /// Admit every currently queued human input. When `close_if_empty` is
-    /// true, observing an empty queue also closes the round atomically so a
-    /// concurrent submit must fail and can be promoted to a next-round item.
-    fn admit_user_inputs<F>(
+    /// Admit currently queued steering messages at a turn boundary.
+    fn drain_steering<F>(
         &self,
         generation: Option<u64>,
         messages: &mut Vec<Message>,
-        close_if_empty: bool,
         on_event: &mut F,
     ) -> usize
     where
         F: FnMut(AgentEvent),
     {
         let inputs = {
-            let mut queue = self
-                .user_input_queue
+            let mut queues = self
+                .session_queues
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            let Some(open) = queue
+            let Some(open) = queues
                 .as_mut()
-                .filter(|round| Some(round.generation) == generation)
+                .filter(|q| Some(q.generation) == generation)
             else {
                 return 0;
             };
-            if open.queue.is_empty() {
-                if close_if_empty {
-                    *queue = None;
-                }
-                return 0;
-            }
-            open.queue.drain(..).collect::<Vec<_>>()
+            open.steering.drain()
         };
 
         let admitted = inputs.len();
@@ -2125,7 +2266,59 @@ impl Agent {
                 message = message.with_images(input.images.clone());
             }
             messages.push(message);
-            on_event(AgentEvent::UserInputInserted(input));
+            on_event(AgentEvent::SteerAdmitted(input));
+        }
+        admitted
+    }
+
+    /// Admit currently queued follow-up messages when the agent would otherwise stop.
+    fn drain_follow_up<F>(
+        &self,
+        generation: Option<u64>,
+        messages: &mut Vec<Message>,
+        close_if_empty: bool,
+        on_event: &mut F,
+    ) -> usize
+    where
+        F: FnMut(AgentEvent),
+    {
+        let inputs = {
+            let mut queues = self
+                .session_queues
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let Some(open) = queues
+                .as_mut()
+                .filter(|q| Some(q.generation) == generation)
+            else {
+                return 0;
+            };
+            if open.follow_up.is_empty() {
+                if close_if_empty {
+                    *queues = None;
+                }
+                return 0;
+            }
+            open.follow_up.drain()
+        };
+
+        let admitted = inputs.len();
+        for input in inputs {
+            let mut message = crate::conversation_context::visible_user(
+                InjectionKind::UserSteer,
+                input.text.clone(),
+            );
+            if let Some(display) = input.display_text.clone() {
+                message = message.with_display_content(display);
+            }
+            if let Some(sent_at_ms) = input.sent_at_ms {
+                message = message.with_sent_at_ms(sent_at_ms);
+            }
+            if !input.images.is_empty() {
+                message = message.with_images(input.images.clone());
+            }
+            messages.push(message);
+            on_event(AgentEvent::SteerAdmitted(input));
         }
         admitted
     }
@@ -2150,7 +2343,7 @@ impl Agent {
         let mut interrupted = false;
         while let Ok(op) = rx.try_recv() {
             match op {
-                AgentOp::InjectUserMessage(text) => {
+                AgentOp::Steer(text) => {
                     messages.push(crate::conversation_context::visible_user(
                         InjectionKind::RunnerSteer,
                         text,
@@ -2465,7 +2658,7 @@ impl Agent {
                 .take(),
             started_at: std::time::Instant::now(),
             pending_request: None,
-            user_input_generation: self.user_input_generation(),
+            session_queue_generation: self.session_queue_generation(),
         }
     }
 
@@ -2506,7 +2699,7 @@ impl Agent {
                 .take(),
             started_at: std::time::Instant::now(),
             pending_request: None,
-            user_input_generation: self.user_input_generation(),
+            session_queue_generation: self.session_queue_generation(),
         }
     }
 
@@ -2543,10 +2736,9 @@ impl Agent {
                 if !self.drain_inbox(&mut round.inbox_rx, messages) {
                     return Err(HarnessError::Interrupted);
                 }
-                if self.admit_user_inputs(
-                    round.user_input_generation,
+                if self.drain_steering(
+                    round.session_queue_generation,
                     messages,
-                    false,
                     &mut on_event,
                 ) > 0
                 {
@@ -2919,8 +3111,8 @@ impl Agent {
                 messages.push(crate::conversation_context::hidden_user(kind, prompt));
                 continue_round = true;
             }
-            let admitted = self.admit_user_inputs(
-                round.user_input_generation,
+            let admitted = self.drain_follow_up(
+                round.session_queue_generation,
                 messages,
                 !continue_round,
                 &mut on_event,

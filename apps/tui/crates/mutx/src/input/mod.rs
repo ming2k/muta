@@ -232,6 +232,8 @@ pub enum InputAction {
     Quit,
     /// Send a chat message.
     SendChat(String),
+    /// Toggle live composer queue target mode (Steer ↔ FollowUp) while a round runs.
+    ToggleComposerSendMode,
     /// Send a slash command.
     SendSlash(String),
     /// Activate the highlighted row of the **Models** picker: a flat
@@ -1645,6 +1647,10 @@ pub fn process_event(
                         InputAction::HostFocusToggle
                     } else if context.active_modal == super::Modal::OauthPending {
                         InputAction::CycleOauthSelection
+                    } else if context.is_responding && context.active_modal == super::Modal::None {
+                        // While a round runs, Tab toggles between Steer (turn-boundary injection)
+                        // and FollowUp (queued next-round dispatch).
+                        InputAction::ToggleComposerSendMode
                     } else {
                         // No completion open (or it was dismissed without a
                         // trigger left in the text) and no modal field to

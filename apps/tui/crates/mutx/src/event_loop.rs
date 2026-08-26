@@ -552,14 +552,14 @@ pub(super) enum OutboxSignal {
         session_id: String,
         input_id: String,
     },
-    NextRoundStarted {
+    FollowUpStarted {
         session_id: String,
         input_id: String,
     },
-    /// A mid-round steer (`InsertUserInput`, `Ctrl+O`) was admitted at a safe
+    /// A mid-round steer was admitted at a safe
     /// turn boundary; the transcript listener already appended the visible
     /// user message. The loop drops the shadow outbox item.
-    Inserted {
+    SteerAdmitted {
         session_id: String,
         input_id: String,
     },
@@ -1632,16 +1632,13 @@ async fn drain_outbox_signals(app: &mut App, runtime: &UiRuntime) {
     // this side owns only compact outbox and composer state.
     while let Some(signal) = runtime.outbox_signals.lock().await.pop_front() {
         match signal {
-            OutboxSignal::NextRoundStarted {
+            OutboxSignal::FollowUpStarted {
                 session_id,
                 input_id,
             } => {
                 app.remove_dispatch(&session_id, &input_id);
                 // The item left the outbox, so a queue pointer at it would
-                // dangle. Dissolve *without* restoring the stashed draft —
-                // the composer is either empty (the user was elsewhere) or
-                // holding an edit of this very item whose commit already
-                // raced; either way the draft must not clobber it.
+                // dangle. Dissolve *without* restoring the stashed draft.
                 if app.queue_pointer.is_some() {
                     app.queue_pointer = None;
                     app.queue_pointer_draft.clear();
@@ -1653,14 +1650,6 @@ async fn drain_outbox_signals(app: &mut App, runtime: &UiRuntime) {
                 session_id,
                 input_id,
             } => {
-                // The round closed before this content could ship. For an
-                // outbox item this is a plain re-queue (paused next-round
-                // entry). For a transcript-owned insert (`Ctrl+O`) the held
-                // entry stays in the transcript — it never leaves the
-                // conversation — and its content is re-queued here under the
-                // same id so the next-round lifecycle (auto-drain, pointer
-                // recall) takes over. Both transcript buffers are searched:
-                // an aside (`/btw`) insert stages into `side_messages`.
                 let held = app
                     .messages
                     .iter()
@@ -1673,15 +1662,10 @@ async fn drain_outbox_signals(app: &mut App, runtime: &UiRuntime) {
                     .map(|m| (m.raw.clone(), Vec::new(), Vec::new()));
                 app.requeue_dispatch(&session_id, &input_id, held);
             }
-            OutboxSignal::Inserted {
+            OutboxSignal::SteerAdmitted {
                 session_id,
                 input_id,
             } => {
-                // The steer crossed a safe turn boundary: the listener
-                // already settled the transcript entry (delivery flip). The
-                // insert is transcript-owned, so there is no outbox item to
-                // drop — the remove is a defensive no-op kept for the legacy
-                // shadow-item shape.
                 app.remove_dispatch(&session_id, &input_id);
             }
             OutboxSignal::RoundCompleted { session_id } => {
@@ -1798,9 +1782,9 @@ fn auto_dispatch_ready_round(app: &mut App) {
         app.naturally_completed_sessions.remove(&session_id);
         app.idle_sessions.remove(&session_id);
         app.running_sessions.insert(session_id.clone());
-        let _ = app.tx.send(AgentRequest::ChatToSession {
+        let _ = app.tx.send(AgentRequest::FollowUp {
             session_id,
-            input: muta_contracts::QueuedUserInput {
+            input: muta_contracts::QueuedMessage {
                 id: dispatch.id,
                 text: expanded_text,
                 display_text: Some(dispatch.text),
@@ -2210,6 +2194,26 @@ pub(super) async fn run_app_loop(
             // the latch clears via the InsertChar/Backspace passes).
             let has_trigger_text = app.completion_trigger_text_present();
             let active_modal = app.active_modal();
+            let session_info_detail = app.session_info_detail;
+            let is_responding = app.running_sessions.contains(&viewed_session_id);
+            let completion_dismissed = app.completion_dismissed;
+            let permission_confirm_always = app.permission_confirm_always;
+            let permission_show_details = app.permission_show_details;
+            let in_side_view = app.in_side_view;
+            let has_focused_target = app.focused_target.is_some();
+            let has_queued = !app.queue_pointer_ids(&viewed_session_id).is_empty();
+            let queue_pointer_armed = app.queue_pointer.is_some();
+            let history_searching = app.history_search;
+            let model_searching = app.model_search;
+            let modal_keymap_open = app.modal_keymap_open;
+            let custom_provider_field = (active_modal == Modal::CustomProvider).then_some(app.custom_field);
+            let editor_field = (active_modal == Modal::ModelEditor).then_some(app.editor_field);
+            let question_other_highlighted = app.question.as_ref().is_some_and(|q| q.is_other_highlighted());
+            let history_clear_confirm = app.history_clear_confirm;
+            let host_prompting = app.host_prompting;
+            let config_custom_editing = app.config_custom_editing;
+            let config_websearch_editing = app.websearch_editing.is_some();
+
             let action = if let Some(overlay_action) = probe_delete_overlay(app, &event) {
                 overlay_action
             } else if let Some(relay) = probe_input_selection_relay(app, &event) {
@@ -2232,39 +2236,31 @@ pub(super) async fn run_app_loop(
                     &mut app.cursor_position,
                     input::InputContext {
                         active_modal,
-                        session_info_detail: app.session_info_detail,
-                        is_responding: app.running_sessions.contains(&viewed_session_id),
+                        session_info_detail,
+                        is_responding,
                         completion_kind,
                         suggestion_count,
                         has_exact_suggestion,
                         suggestion_index,
-                        completion_dismissed: app.completion_dismissed,
+                        completion_dismissed,
                         has_trigger_text,
-                        permission_confirm_always: app.permission_confirm_always,
-                        permission_show_details: app.permission_show_details,
+                        permission_confirm_always,
+                        permission_show_details,
                         in_runner_view,
-                        in_side_view: app.in_side_view,
-                        has_focused_target: app.focused_target.is_some(),
-                        has_queued: app.pending_dispatch.iter().any(|item| {
-                            item.session_id == viewed_session_id
-                                && item.state == crate::app::QueuedDispatchState::Waiting
-                        }),
-                        queue_pointer_armed: app.queue_pointer.is_some(),
-                        history_searching: app.history_search,
-                        model_searching: app.model_search,
-                        modal_keymap_open: app.modal_keymap_open,
-                        custom_provider_field: (active_modal == Modal::CustomProvider)
-                            .then_some(app.custom_field),
-                        editor_field: (active_modal == Modal::ModelEditor)
-                            .then_some(app.editor_field),
-                        question_other_highlighted: app
-                            .question
-                            .as_ref()
-                            .is_some_and(|q| q.is_other_highlighted()),
-                        history_clear_confirm: app.history_clear_confirm,
-                        host_prompting: app.host_prompting,
-                        config_custom_editing: app.config_custom_editing,
-                        config_websearch_editing: app.websearch_editing.is_some(),
+                        in_side_view,
+                        has_focused_target,
+                        has_queued,
+                        queue_pointer_armed,
+                        history_searching,
+                        model_searching,
+                        modal_keymap_open,
+                        custom_provider_field,
+                        editor_field,
+                        question_other_highlighted,
+                        history_clear_confirm,
+                        host_prompting,
+                        config_custom_editing,
+                        config_websearch_editing,
                     },
                     &mut app.drag,
                 )

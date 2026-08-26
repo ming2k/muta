@@ -334,6 +334,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         // re-derived by scanning the transcript (an error notice can follow
         // a completed round, and a compaction can drop the notice entirely).
         let can_retry = !busy && viewed_chrome.can_retry;
+        let queue_editing_badge = app.queue_pointer_badge(viewed_session_id);
         app.hint_context_rect = view::draw_hint_bar(
             f,
             hint_rect,
@@ -349,6 +350,8 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 ignition_elapsed_ms: app
                     .effort_ignition_epoch
                     .map(|epoch| epoch.elapsed().as_millis()),
+                composer_send_mode: Some(app.composer_send_mode),
+                queue_editing_badge,
             },
             &app.theme,
         );

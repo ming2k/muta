@@ -8,7 +8,7 @@
 
 use muta_agent::orchestration::{RoundInput, round_response};
 use muta_agent::{Agent, RoundLifecycle};
-use muta_contracts::{AgentResponse, QueuedUserInput, RoundEvent};
+use muta_contracts::{AgentResponse, QueuedMessage, RoundEvent};
 use muta_persistence::{config::Config, session::SessionStore};
 use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
@@ -65,32 +65,32 @@ pub async fn chat(
     .await;
 }
 
-/// Queue an input into the exact live round named by `session_id`. Failure is
+/// Queue a steering input into the exact live round named by `session_id`. Failure is
 /// returned as a scoped event so the frontend can retain the text as a paused
-/// next-round item instead of dropping it.
-pub async fn insert_user_input(
+/// follow-up item instead of dropping it.
+pub async fn steer(
     side: &Arc<AsyncRwLock<SideRegistry>>,
     agent: &Arc<Agent>,
     session: &Arc<SessionStore>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     session_id: String,
-    input: QueuedUserInput,
+    input: QueuedMessage,
 ) {
     let accepted = match target_agent(side, agent, session, &session_id).await {
-        Some(target) => target.submit_user_input(&session_id, input.clone()),
+        Some(target) => target.steer(&session_id, input.clone()),
         None => false,
     };
     if !accepted {
         let _ = resp_tx.send(round_response(
             &session_id,
-            RoundEvent::UserInputUnavailable { input_id: input.id },
+            RoundEvent::SteerUnavailable { input_id: input.id },
         ));
     }
 }
 
-/// Cancel an insert if it has not crossed the agent boundary yet. The agent's
+/// Cancel a steering message if it has not crossed the agent boundary yet. The agent's
 /// queue mutex linearizes this against admission, so the response is final.
-pub async fn cancel_inserted_input(
+pub async fn cancel_steer(
     side: &Arc<AsyncRwLock<SideRegistry>>,
     agent: &Arc<Agent>,
     session: &Arc<SessionStore>,
@@ -99,22 +99,22 @@ pub async fn cancel_inserted_input(
     input_id: String,
 ) {
     let cancelled = match target_agent(side, agent, session, &session_id).await {
-        Some(target) => target.cancel_user_input(&session_id, &input_id).is_some(),
+        Some(target) => target.cancel_steer(&session_id, &input_id).is_some(),
         None => false,
     };
     let event = if cancelled {
-        RoundEvent::UserInputCancelled { input_id }
+        RoundEvent::SteerCancelled { input_id }
     } else {
-        RoundEvent::UserInputCancelFailed { input_id }
+        RoundEvent::SteerCancelFailed { input_id }
     };
     let _ = resp_tx.send(round_response(&session_id, event));
 }
 
 /// Dispatch a paused outbox item into a fresh round without consulting the
 /// frontend's current view. If its side session vanished, hand ownership back
-/// to the outbox through `UserInputUnavailable`.
+/// to the outbox through `SteerUnavailable`.
 #[allow(clippy::too_many_arguments)]
-pub async fn chat_to_session(
+pub async fn follow_up(
     side: &Arc<AsyncRwLock<SideRegistry>>,
     agent: &Arc<Agent>,
     session: &Arc<SessionStore>,
@@ -122,7 +122,7 @@ pub async fn chat_to_session(
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     config: &Config,
     session_id: String,
-    input: QueuedUserInput,
+    input: QueuedMessage,
 ) {
     let started = start_session_turn(
         &session_id,
@@ -145,12 +145,12 @@ pub async fn chat_to_session(
     if !started {
         let _ = resp_tx.send(round_response(
             &session_id,
-            RoundEvent::UserInputUnavailable { input_id: input.id },
+            RoundEvent::SteerUnavailable { input_id: input.id },
         ));
     } else {
         let _ = resp_tx.send(round_response(
             &session_id,
-            RoundEvent::NextRoundStarted(input),
+            RoundEvent::FollowUpStarted(input),
         ));
     }
 }

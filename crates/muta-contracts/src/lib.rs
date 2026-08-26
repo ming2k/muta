@@ -136,7 +136,7 @@ pub use events::{
     RunnerEvent, HarnessSnapshot, InputReply, InputRequest, LoopStatus, McpServerInfo, ModelInfo,
     NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface, ParentStatus, PermissionDecision,
     PermissionRequest, PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow,
-    ProviderPickerSnapshot, QueuedUserInput, RetryPoint, RoundEvent, RoundInterrupt,
+    ProviderPickerSnapshot, QueueMode, QueuedMessage, RetryPoint, RoundEvent, RoundInterrupt,
     RoundInterruptReason, RoundSummary, SessionContextSnapshot, SessionDetail, SessionForkKind,
     SessionOverview, SessionSnapshot, SkillInfo, ToolInfo, UserQuestion, UserQuestionOption,
     UserQuestionReply, UserQuestionRequest, WebSearchConfigUpdate, WebSearchConfigView,

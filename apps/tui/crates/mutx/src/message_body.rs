@@ -49,8 +49,11 @@ fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
     if is_queued {
         return String::new();
     }
-    if msg.origin == crate::model::document::UserMessageOrigin::Insert {
-        return "↳ insert".to_string();
+    if msg.origin == crate::model::document::UserMessageOrigin::Steer {
+        return "↳ steer".to_string();
+    }
+    if msg.origin == crate::model::document::UserMessageOrigin::FollowUp {
+        return "↳ follow-up".to_string();
     }
     if let Some(round) = msg.round {
         format!("round {}", round)
@@ -67,11 +70,13 @@ fn sent_header_meta(msg: &TranscriptMessage, is_queued: bool) -> String {
     // The trailing metadata after the anchor, drawn muted (grey, no bold).
     // Return only the chip text: `MetaStrip::detail` owns the separator between
     // visible chips. Queued messages render no meta — the anchor path emits
-    // their `⏸ Queued` marker instead.
+    // their `Queued` marker instead.
     if is_queued {
         return String::new();
     }
-    if msg.origin == crate::model::document::UserMessageOrigin::Insert {
+    if msg.origin == crate::model::document::UserMessageOrigin::Steer
+        || msg.origin == crate::model::document::UserMessageOrigin::FollowUp
+    {
         return match (msg.turn, msg.sent_at_ms) {
             (Some(turn), Some(sent_at_ms)) => {
                 format!("round {turn} · {}", sent_time_label(sent_at_ms))

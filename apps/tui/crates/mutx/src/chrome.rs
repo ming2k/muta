@@ -735,6 +735,26 @@ pub struct HintBarView<'a> {
     pub can_retry: bool,
     pub context_tokens: Option<usize>,
     pub ignition_elapsed_ms: Option<u128>,
+    pub composer_send_mode: Option<crate::app::ComposerSendMode>,
+    pub queue_editing_badge: Option<String>,
+}
+
+impl<'a> Default for HintBarView<'a> {
+    fn default() -> Self {
+        Self {
+            current_model: "",
+            model_available: true,
+            provider_name: None,
+            messages: &[],
+            reasoning_effort: None,
+            busy: false,
+            can_retry: false,
+            context_tokens: None,
+            ignition_elapsed_ms: None,
+            composer_send_mode: None,
+            queue_editing_badge: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -745,36 +765,41 @@ enum ActionDensity {
 }
 
 /// Build the left side of the bottom row as a short action sentence: send
-/// when idle, or queue when the agent is mid-round. When the previous turn failed
-/// and is eligible for retry, includes a `/retry` guidance affordance. The
-/// persistent queue bar carries the queue affordances (recall, expand), so this
-/// stays a pure "what will Enter do" surface.
+/// when idle, or steer/follow-up when the agent is mid-round.
 fn input_action_spans(
     busy: bool,
     can_retry: bool,
+    composer_send_mode: Option<crate::app::ComposerSendMode>,
+    queue_editing_badge: Option<&str>,
     density: ActionDensity,
     theme: &Theme,
     bg: Color,
 ) -> Vec<Span<'static>> {
-    // Route the keycap through the unified keycap style (brand + bold) so the
-    // "Enter" affordance matches every other keycap in the app — the activity
-    // bar's Esc-to-interrupt hint, the queue bar's Ctrl legend, the modal
-    // footers — instead of hand-rolling a divergent fg+bold combination here.
-    // The keycap style carries no background, so the surface tint is applied
-    // here once for the whole row.
     let key_style = keycap_style(theme).bg(bg);
     let hint_style = Style::default().fg(theme.muted()).bg(bg);
     let compact = matches!(density, ActionDensity::Compact | ActionDensity::Tiny);
     let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
 
-    if busy {
-        // The agent is mid-round: Enter stages the message in the queue (the
-        // queue bar below shows the staged item). The recall affordance lives
-        // in the queue bar's keycap legend rather than this sentence.
-        spans.push(Span::styled(
-            if compact { " queue" } else { " queue message" },
-            hint_style,
-        ));
+    if let Some(badge) = queue_editing_badge {
+        spans.push(Span::styled(format!(" {badge}"), hint_style));
+        spans.push(Span::styled(" · ", hint_style));
+        spans.push(Span::styled(Key::ESC.display(), key_style));
+        spans.push(Span::styled(" cancel", hint_style));
+    } else if busy {
+        match composer_send_mode.unwrap_or_default() {
+            crate::app::ComposerSendMode::Steer => {
+                spans.push(Span::styled(" steer", hint_style));
+                spans.push(Span::styled(" · ", hint_style));
+                spans.push(Span::styled(Key::TAB.display(), key_style));
+                spans.push(Span::styled(if compact { " follow-up" } else { " follow-up mode" }, hint_style));
+            }
+            crate::app::ComposerSendMode::FollowUp => {
+                spans.push(Span::styled(" follow-up", hint_style));
+                spans.push(Span::styled(" · ", hint_style));
+                spans.push(Span::styled(Key::TAB.display(), key_style));
+                spans.push(Span::styled(if compact { " steer" } else { " steer mode" }, hint_style));
+            }
+        }
     } else if can_retry {
         spans.push(Span::styled(" send", hint_style));
         spans.push(Span::styled(" · ", hint_style));
@@ -793,12 +818,6 @@ fn input_action_spans(
 /// action performed by the next Enter (left) plus the model name and
 /// context-usage info (right) that the old top header showed, collapsed onto
 /// one row so the transcript reclaims vertical space.
-///
-/// Layout: current input action on the left, right-aligned cluster of
-/// `model · reasoning · context-usage` on the right. Session-level state flags
-/// (such as `autopilot`) deliberately do **not** live here — they moved to the
-/// status bar directly below. On narrow terminals, the action sentence compacts
-/// first and ambient model metadata drops before the action.
 pub fn draw_hint_bar(
     frame: &mut Frame,
     rect: Rect,
@@ -815,17 +834,24 @@ pub fn draw_hint_bar(
         can_retry,
         context_tokens,
         ignition_elapsed_ms,
+        composer_send_mode,
+        queue_editing_badge,
     } = view;
 
     let bg = theme.surface();
     let full_w = rect.width as usize;
 
     // --- Left cluster: one sentence describing what the next Enter does.
-    // Keep product language here: users should not need to learn the internal
-    // round/turn distinction before sending. The queue affordances live in
-    // the persistent queue bar, not here.
     let mut action_density = ActionDensity::Full;
-    let mut zone_spans = input_action_spans(busy, can_retry, action_density, theme, bg);
+    let mut zone_spans = input_action_spans(
+        busy,
+        can_retry,
+        composer_send_mode,
+        queue_editing_badge.as_deref(),
+        action_density,
+        theme,
+        bg,
+    );
     let mut zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
 
     // --- Right cluster: model name and context bar.
@@ -948,7 +974,15 @@ pub fn draw_hint_bar(
     let mut right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Compact;
-        zone_spans = input_action_spans(busy, can_retry, action_density, theme, bg);
+        zone_spans = input_action_spans(
+            busy,
+            can_retry,
+            composer_send_mode,
+            queue_editing_badge.as_deref(),
+            action_density,
+            theme,
+            bg,
+        );
         zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
     }
     // Drop order under width pressure: the instance suffix first (pure
@@ -970,7 +1004,15 @@ pub fn draw_hint_bar(
     }
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Tiny;
-        zone_spans = input_action_spans(busy, can_retry, action_density, theme, bg);
+        zone_spans = input_action_spans(
+            busy,
+            can_retry,
+            composer_send_mode,
+            queue_editing_badge.as_deref(),
+            action_density,
+            theme,
+            bg,
+        );
         zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
     }
     if !fits(zone_pill_width, right_width) && show_model {
@@ -1741,10 +1783,7 @@ mod tests {
                         provider_name: Some("kimi-code"),
                         messages: &messages,
                         reasoning_effort: Some("max"),
-                        busy: false,
-                        can_retry: false,
-                        context_tokens: None,
-                        ignition_elapsed_ms: None,
+                        ..Default::default()
                     },
                     &Theme::default(),
                 );
@@ -1786,11 +1825,7 @@ mod tests {
                     model_available: true,
                     provider_name: Some("mock-instance"),
                     messages: &messages,
-                    reasoning_effort: None,
-                    busy: false,
-                    can_retry: false,
-                    context_tokens: None,
-                    ignition_elapsed_ms: None,
+                    ..Default::default()
                 },
                 &theme,
             );
@@ -1810,11 +1845,7 @@ mod tests {
                     model_available: false,
                     provider_name: Some("zai-code"),
                     messages: &[],
-                    reasoning_effort: None,
-                    busy: false,
-                    can_retry: false,
-                    context_tokens: None,
-                    ignition_elapsed_ms: None,
+                    ..Default::default()
                 },
                 &theme,
             );
@@ -1835,15 +1866,8 @@ mod tests {
             let mut captured = String::new();
             terminal.draw(|f| {
                 let view = HintBarView {
-                    current_model: "",
-                    model_available: true,
-                    provider_name: None,
-                    messages: &Vec::<TranscriptMessage>::new(),
-                    reasoning_effort: None,
                     busy,
-                    can_retry: false,
-                    context_tokens: None,
-                    ignition_elapsed_ms: None,
+                    ..Default::default()
                 };
                 draw_hint_bar(f, Rect::new(0, 0, 80, 1), view, &Theme::default());
             });
@@ -1858,7 +1882,7 @@ mod tests {
 
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         assert!(row_text(&mut terminal, false).contains("Enter send"));
-        assert!(row_text(&mut terminal, true).contains("Enter queue message"));
+        assert!(row_text(&mut terminal, true).contains("Enter steer"));
     }
 
     #[test]
@@ -1874,11 +1898,8 @@ mod tests {
                     model_available: true,
                     provider_name: None,
                     messages: &[],
-                    reasoning_effort: None,
-                    busy: false,
                     can_retry: true,
-                    context_tokens: None,
-                    ignition_elapsed_ms: None,
+                    ..Default::default()
                 },
                 &theme,
             );
@@ -1906,15 +1927,7 @@ mod tests {
                 frame,
                 Rect::new(0, 0, 80, 1),
                 HintBarView {
-                    current_model: "",
-                    model_available: true,
-                    provider_name: None,
-                    messages: &Vec::<TranscriptMessage>::new(),
-                    reasoning_effort: None,
-                    busy: false,
-                    can_retry: false,
-                    context_tokens: None,
-                    ignition_elapsed_ms: None,
+                    ..Default::default()
                 },
                 &theme,
             );
@@ -1941,9 +1954,7 @@ mod tests {
 
     #[test]
     fn hint_bar_busy_shows_queue_action() {
-        // When the agent is mid-round, Enter stages the message in the queue
-        // (the queue bar below shows the staged item). The queue affordances
-        // live in the queue bar, not this sentence.
+        // When the agent is mid-round, Enter steers by default
         let mut terminal = mutx_engine::TestTerminal::new(120, 1);
         terminal.draw(|frame| {
             draw_hint_bar(
@@ -1951,14 +1962,8 @@ mod tests {
                 Rect::new(0, 0, 120, 1),
                 HintBarView {
                     current_model: "mock",
-                    model_available: true,
-                    provider_name: None,
-                    messages: &[],
-                    reasoning_effort: None,
                     busy: true,
-                    can_retry: false,
-                    context_tokens: None,
-                    ignition_elapsed_ms: None,
+                    ..Default::default()
                 },
                 &Theme::default(),
             );
@@ -1967,11 +1972,7 @@ mod tests {
         let text = (0..buffer.area().width as usize)
             .map(|x| buffer.content[x].symbol().to_string())
             .collect::<String>();
-        assert!(text.contains("Enter queue message"), "row was {text:?}");
-        // Queue affordances live in the queue bar, not the hint bar.
-        assert!(!text.contains("waiting"));
-        assert!(!text.contains("edit latest"));
-        assert!(!text.contains("Tab"));
+        assert!(text.contains("Enter steer · Tab follow-up mode"), "row was {text:?}");
     }
 
     #[test]
@@ -1983,14 +1984,9 @@ mod tests {
                 Rect::new(0, 0, 36, 1),
                 HintBarView {
                     current_model: "mock",
-                    model_available: true,
-                    provider_name: None,
-                    messages: &[],
                     reasoning_effort: Some("high"),
                     busy: true,
-                    can_retry: false,
-                    context_tokens: None,
-                    ignition_elapsed_ms: None,
+                    ..Default::default()
                 },
                 &Theme::default(),
             );
@@ -2001,11 +1997,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        // The shorter busy action ("queue message" vs the old insert/next-round
-        // sentence) leaves room for the reasoning tag at this width.
-        assert!(text.contains("Enter queue"), "row was {text:?}");
-        // Queue counts no longer live in the hint bar.
-        assert!(!text.contains("waiting"), "row was {text:?}");
+        assert!(text.contains("Enter steer"), "row was {text:?}");
     }
 
     #[test]
@@ -2022,14 +2014,8 @@ mod tests {
                     Rect::new(0, 0, 80, 1),
                     HintBarView {
                         current_model: "mock",
-                        model_available: true,
-                        provider_name: None,
-                        messages: &Vec::<TranscriptMessage>::new(),
                         reasoning_effort: effort,
-                        busy: false,
-                        can_retry: false,
-                        context_tokens: None,
-                        ignition_elapsed_ms: None,
+                        ..Default::default()
                     },
                     &Theme::default(),
                 );
@@ -2069,14 +2055,8 @@ mod tests {
                     Rect::new(0, 0, 80, 1),
                     HintBarView {
                         current_model: "mock",
-                        model_available: true,
                         provider_name,
-                        messages: &Vec::<TranscriptMessage>::new(),
-                        reasoning_effort: None,
-                        busy: false,
-                        can_retry: false,
-                        context_tokens: None,
-                        ignition_elapsed_ms: None,
+                        ..Default::default()
                     },
                     &Theme::default(),
                 );
@@ -2117,14 +2097,9 @@ mod tests {
                 Rect::new(0, 0, 120, 1),
                 HintBarView {
                     current_model: "mock",
-                    model_available: true,
                     provider_name: Some("kimi-code"),
-                    messages: &Vec::<TranscriptMessage>::new(),
                     reasoning_effort: Some("max"),
-                    busy: false,
-                    can_retry: false,
-                    context_tokens: None,
-                    ignition_elapsed_ms: None,
+                    ..Default::default()
                 },
                 &Theme::default(),
             );
@@ -2159,14 +2134,11 @@ mod tests {
                     Rect::new(0, 0, 100, 1),
                     HintBarView {
                         current_model: "k3",
-                        model_available: true,
                         provider_name: Some("kimi-code"),
-                        messages: &Vec::<TranscriptMessage>::new(),
                         reasoning_effort: Some("max"),
-                        busy: false,
-                        can_retry: false,
                         context_tokens: Some(12_400),
                         ignition_elapsed_ms: elapsed_ms,
+                        ..Default::default()
                     },
                     &Theme::default(),
                 );
