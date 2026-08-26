@@ -124,7 +124,7 @@ pub use channel_auth::{ChannelAuth, LoginMethod};
 pub use doom_guard_config::DoomGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink};
 pub use envoy::{
-    CODE, EXPLORE, EnvoyProfile, INTERACTIVE, MCP_SPECIALIST, QUANT, TITLE, ToolPolicy,
+    CODE, EXPLORE, EnvoyProfile, MCP_SPECIALIST, TITLE, ToolPolicy,
 };
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,

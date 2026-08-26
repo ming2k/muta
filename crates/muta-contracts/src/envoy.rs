@@ -319,99 +319,6 @@ the title in the same language as the conversation.",
     allow_model_stdin: false,
 };
 
-/// The interactive envoy role (ADR-0029). The built-in roles
-/// ([`EXPLORE`]) are autonomous: `autopilot: true` and
-/// no `requires_user` tools, so they never block on a human. This role is the
-/// opposite shape — it is meant to run **under user supervision**: a `Write`
-/// ceiling admits the full tool ladder (read + execute + write),
-/// `allow_user_interaction` admits `ask_user`, and `autopilot: false` leaves
-/// the permission broker on, so every execute/write surfaces as a
-/// `EnvoyEvent::PermissionRequest` that round-trips through the parent
-/// harness ↔ TUI ↔ registry handle.
-///
-/// It is the "turn the duplex on" role: bind it to a dispatch tool to get a
-/// envoy whose tool calls and questions reach the user in real time and
-/// whose replies route back down. Left unbound by the built-in `envoy`
-/// tool (which stays `EXPLORE`) because forcing every research envoy to
-/// prompt would defeat the point of autonomous exploration — opting a
-/// specific dispatch tool into `INTERACTIVE` is a product-level decision.
-pub const INTERACTIVE: EnvoyProfile = EnvoyProfile {
-    name: "interactive",
-    system_prompt: "\
-You are an interactive envoy operating under user supervision. You may read \
-files, run commands, write files, and ask the user questions. Every command and \
-write you attempt is presented to the user for approval before it executes — \
-treat that as a real gate, not a rubber stamp: prefer the narrowest action that \
-answers the question, and batch only when genuinely related. When you need a \
-decision only the user can make (an ambiguous requirement, a choice between \
-approaches with different trade-offs), use ask_user rather than guessing. Keep \
-turns short and report concrete findings, then stop.",
-    tool_policy: ToolPolicy {
-        allowed_tools: None,
-        allow_user_interaction: true,
-        write_paths: &[],
-        command_allowlist: &[],
-    },
-    variant_pins: &[],
-    autopilot: false,
-    allow_model_stdin: false,
-};
-
-/// Tools a quant-analysis envoy may use: the read-only quant domain tools
-/// (market data, backtest, position review) plus the generic read-only
-/// inspection tools (so it can read strategy code, configs, logs). Crucially,
-/// this list excludes live-trading tools (`place_order`, `cancel_order`) and all coding
-/// write/edit tools — a quant *analyst* role observes and reasons, it does not
-/// trade or mutate the repo. Listed by name so adding a new tool to the parent
-/// never silently widens this profile.
-const QUANT_ANALYSIS_TOOLS: &[&str] = &[
-    // Generic read-only inspection (shared with EXPLORE).
-    "read_text",
-    "read_image",
-    "find_files",
-    "list_dir",
-    "search_text",
-    "webfetch",
-    "websearch",
-    // Quant domain — read-only.
-    "market_data",
-    "backtest",
-    "list_positions",
-];
-
-/// The quant-analysis envoy role. Read-only and non-interactive like
-/// [`EXPLORE`], but scoped to a quantitative-trading domain: it may pull
-/// market data, run backtests, and review open positions, but it cannot place
-/// live orders or modify any file. A quant agent that *should* trade binds a
-/// different profile (one that admits `place_order` / `cancel_order` under user
-/// supervision — the analogue of [`INTERACTIVE`] for the quant domain); this one is the
-/// "research before you risk capital" shape.
-///
-/// This profile exists precisely so the per-role tool-allocation requirement holds:
-/// a quant analyst never sees coding tools (`write_file`, `edit_file`, `bash`),
-/// and a coding agent never sees quant tools (`market_data`, `place_order`, `cancel_order`).
-/// The two domains are isolated by name at the profile layer, which is the
-/// single source of truth for what a bounded envoy may touch (ADR-0011).
-pub const QUANT: EnvoyProfile = EnvoyProfile {
-    name: "quant",
-    system_prompt: "\
-You are a quantitative-trading analysis envoy. Your job is to research and \
-evaluate trading strategies: pull market data, run backtests, and review open \
-positions. Report findings concisely with concrete numbers (returns, Sharpe, \
-drawdown, exposure). The toolset handed to you is the full set you are \
-permitted to use — work within it, do not request others. You are non-interactive: never ask a question; if data is missing, say \
-so. Run at most a handful of turns, then answer.",
-    tool_policy: ToolPolicy {
-        allowed_tools: Some(QUANT_ANALYSIS_TOOLS),
-        allow_user_interaction: false,
-        write_paths: &[],
-        command_allowlist: &[],
-    },
-    variant_pins: &[],
-    autopilot: true,
-    allow_model_stdin: false,
-};
-
 /// Tools a coding envoy may use: the generic read-only inspection tools
 /// (shared with [`EXPLORE`]) plus the workspace-mutating tools — `bash` for
 /// running builds/tests/git, `edit_file` and `write_file` for code, and the
@@ -463,8 +370,7 @@ const CODING_TOOLS: &[&str] = &[
 /// write/command user-approved); ADR-0087 reverses that to keep the
 /// delegation-as-authorization contract uniform across envoys.
 ///
-/// This is the second built-in profile with side effects (the first being the
-/// reserved [`INTERACTIVE`]), and the first that a dispatch tool can bind to
+/// This is the built-in profile with side effects that a dispatch tool can bind to
 /// for delegated *implementation* work. The read-only research contract of
 /// [`EXPLORE`] is untouched.
 pub const CODE: EnvoyProfile = EnvoyProfile {
@@ -690,61 +596,10 @@ mod tests {
         assert!(open.admits(&make("write_file")));
     }
 
-    /// INTERACTIVE (ADR-0029): `allowed_tools: None` admits every named tool,
-    /// `allow_user_interaction` admits ask_user, but recursion and control-flow
-    /// are still absolute. Its `autopilot: false` (asserted at runtime by the
-    /// duplex test) is what surfaces its calls as PermissionRequests.
+    /// EXPLORE (the research role) excludes unlisted tools (e.g. trading,
+    /// write/execute tools). Only explicit READ_ONLY_TOOLS are admitted.
     #[test]
-    fn interactive_admits_all_named_tools_but_not_recursion_or_control() {
-        use crate::INTERACTIVE;
-        assert!(INTERACTIVE.tool_policy.admits(&make("read_text")));
-        assert!(INTERACTIVE.tool_policy.admits(&make("bash")));
-        assert!(INTERACTIVE.tool_policy.admits(&make("write_file")));
-        assert!(INTERACTIVE.tool_policy.admits(&with_user(make("ask_user"))));
-        // Recursion and control-flow are still absolute.
-        assert!(
-            !INTERACTIVE
-                .tool_policy
-                .admits(&with_spawn(make("read_text")))
-        );
-        assert!(!INTERACTIVE.tool_policy.admits(&make_control()));
-    }
-
-    /// QUANT is the per-role isolation contract between the coding and
-    /// quant domains (the "separate tool allocation per role" requirement). It
-    /// admits the read-only quant tools and shared read-only inspection tools,
-    /// but excludes: live trading (place_order/cancel_order), every coding
-    /// write/edit tool, bash, and recursion/control. This test pins the domain boundary so a
-    /// future tool added to either domain cannot leak across it without an
-    /// explicit profile edit.
-    #[test]
-    fn quant_profile_isolates_domain_and_excludes_trading_and_coding() {
-        use crate::QUANT;
-        // Quant read-only domain tools: admitted.
-        assert!(QUANT.tool_policy.admits(&make("market_data")));
-        assert!(QUANT.tool_policy.admits(&make("backtest")));
-        assert!(QUANT.tool_policy.admits(&make("list_positions")));
-        // Shared read-only inspection: admitted.
-        assert!(QUANT.tool_policy.admits(&make("read_text")));
-        assert!(QUANT.tool_policy.admits(&make("search_text")));
-        // Live trading is NOT admitted — a quant analyst recommends, never
-        // trades. Trading needs a separate, user-supervised profile.
-        assert!(!QUANT.tool_policy.admits(&make("place_order")));
-        assert!(!QUANT.tool_policy.admits(&make("cancel_order")));
-        // Coding write/edit tools are NOT admitted — domain isolation.
-        assert!(!QUANT.tool_policy.admits(&make("write_file")));
-        assert!(!QUANT.tool_policy.admits(&make("edit_file")));
-        assert!(!QUANT.tool_policy.admits(&make("bash")));
-        // Recursion and control-flow remain absolute.
-        assert!(!QUANT.tool_policy.admits(&with_spawn(make("read_text"))));
-        assert!(!QUANT.tool_policy.admits(&make_control()));
-    }
-
-    /// The reciprocal of the domain boundary: EXPLORE (the coding agent's
-    /// research role) must not see quant tools either. Isolation is symmetric —
-    /// a coding agent's context never carries quant schemas, and vice versa.
-    #[test]
-    fn explore_profile_excludes_quant_tools() {
+    fn explore_profile_excludes_unlisted_tools() {
         assert!(!EXPLORE.tool_policy.admits(&make("market_data")));
         assert!(!EXPLORE.tool_policy.admits(&make("backtest")));
         assert!(!EXPLORE.tool_policy.admits(&make("place_order")));
@@ -755,10 +610,9 @@ mod tests {
     /// CODE is the write-capable coding role. It admits the full edit surface
     /// (bash, edit_file, write_file) and the shared read-only tools, but — like
     /// every envoy — it still excludes recursion and control-flow escapes
-    /// absolutely, and quant domain tools stay out (symmetric isolation with
-    /// the QUANT profile, mirroring `explore_profile_excludes_quant_tools`).
+    /// absolutely, and unlisted tools stay out.
     #[test]
-    fn code_profile_admits_edit_surface_but_not_recursion_or_quant() {
+    fn code_profile_admits_edit_surface_but_not_recursion_or_unlisted() {
         use crate::CODE;
         // Write/execute surface: admitted.
         assert!(CODE.tool_policy.admits(&make("bash")));
@@ -771,7 +625,6 @@ mod tests {
         // A non-whitelisted tool is excluded (name scope is real — adding a
         // new tool to the parent never silently widens CODE).
         assert!(!CODE.tool_policy.admits(&make("some_new_tool")));
-        // Quant domain tools are NOT admitted — domain isolation holds.
         assert!(!CODE.tool_policy.admits(&make("market_data")));
         assert!(!CODE.tool_policy.admits(&make("place_order")));
         // Recursion and control-flow remain absolute.

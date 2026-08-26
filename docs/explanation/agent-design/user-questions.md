@@ -121,9 +121,9 @@ requirements before or during a task. Inside an envoy it is gated by the
 profile's `allow_user_interaction` flag and the full-duplex channel
 ([ADR-0029](../../adr/0029-full-duplex-subagent-communication.md)): the default
 `EXPLORE` profile is non-interactive, so a read-only research envoy that
-needs clarification surfaces the request up to the main agent rather than
-calling `ask_user` directly; the `INTERACTIVE` profile opts in and the
-request/reply path works through the handle.
+needs clarification returns findings and assumptions in its written answer;
+the `CODE` profile opts in and its `ask_user` request/reply path works
+through the handle directly.
 
 ## Envoys
 

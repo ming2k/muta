@@ -74,14 +74,14 @@ vocabulary; the dispatch tools bind them by reference.
 | `EXPLORE` | `envoy` tool | `Read` | none | Pure read tools (`read_text`, `find_files`, `list_dir`, `search_text`, …) |
 | `CODE` | `envoy_code` tool | `Write` | none | Read tools + `bash`, `edit_file`, `write_file`, `todo*` — a full coding surface; runs on autopilot, so the delegation *is* the authorization |
 | `TITLE` | harness title generation | `Read` | none | No tools — a single `provider.chat()` call |
-| `INTERACTIVE` | (reserved, no dispatch tool yet) | `Read` | none | Pure read tools, with `ask_user` forwarded up |
+| `MCP_SPECIALIST` | `envoy_mcp` tool | `Read` | none | Dynamic MCP tools in an isolated sandbox |
 
 All are non-recursive (recursion is excluded absolutely, not per-profile
-— see [Tool admission](#tool-admission)). `EXPLORE` (the default `envoy` tool)
-and `CODE` (the `envoy_code` tool) are the two profiles reachable from a
-model tool call today; `TITLE` and `INTERACTIVE` are internal
-roles. (A fourth internal role, `REVIEW` — the retired `/review`
-diagnostic — has been removed.) `CODE` and `INTERACTIVE` opt into `allow_user_interaction: true` so an
+— see [Tool admission](#tool-admission)). `EXPLORE` (the default `envoy` tool),
+`CODE` (the `envoy_code` tool), and `MCP_SPECIALIST` (the `envoy_mcp` tool) are the
+profiles reachable from a model tool call today; `TITLE` is an internal
+role. (A prior internal role, `REVIEW` — the retired `/review`
+diagnostic — has been removed.) `CODE` opts into `allow_user_interaction: true` so an
 `ask_user` request surfaces to the parent through the full-duplex channel.
 Every built-in envoy runs `autopilot: true` — including `CODE`: the
 principal's act of calling `envoy_code` is the authorization for the
@@ -114,9 +114,7 @@ See [ADR-0087](../../adr/0087-code-envoy-runs-autopilot.md)
 ### Extending
 
 Adding a new role is a new profile constant plus a binding at the dispatch
-site — no orchestration surgery, no changes to the admission rule. An
-interactive role (one whose `ask_user` requests are forwarded to the user)
-already exists as `INTERACTIVE`; a future dispatch tool can bind it. The
+site — no orchestration surgery, no changes to the admission rule. The
 full-duplex channel ([ADR-0029](#full-duplex)) already carries the request
 and reply path. The profile primitive was introduced in
 [ADR-0011](../../adr/0011-subagent-profiles.md) and extended with the tier
@@ -190,11 +188,9 @@ onto an inbox drained at the next tool-turn boundary, so it can never
 interrupt a side effect mid-flight; **request/reply** resolves a parked oneshot
 immediately, since the child is already waiting on it.
 
-The built-in profiles other than `INTERACTIVE` stay non-interactive, so in
-practice no nested request is surfaced today and the child's
-`set_autopilot(true)` is a transitional gate rather than a load-bearing
-deadlock fix. The `INTERACTIVE` profile opts into `allow_user_interaction`, so
-its `ask_user` request/reply path works through the handle directly.
+The `EXPLORE` and `TITLE` profiles stay non-interactive, while `CODE` opts
+into `allow_user_interaction`, so its `ask_user` request/reply path works through
+the handle directly.
 
 ## Runtime
 

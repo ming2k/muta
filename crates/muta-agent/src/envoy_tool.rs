@@ -634,8 +634,7 @@ impl EnvoyTool {
         // root was captured) and set it on the child. All built-in profiles
         // (EXPLORE/TITLE: empty `write_paths`) resolve to
         // `WriteScope::None`, consistent with their admission (no write tools
-        // admitted anyway). The INTERACTIVE role carries an unrestricted
-        // scope via its `Write` ceiling.
+        // admitted anyway).
         let cwd = self
             .workspace_root
             .lock()

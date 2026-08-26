@@ -12,9 +12,7 @@
 //! and `EnvoyTool` binds it.
 //!
 //! That asymmetry meant adding a principal instance (a new binary, a new
-//! persona) duplicated assembly logic instead of binding a profile, and left
-//! the `QUANT` envoy profile semantically homeless (the quant *product* is a
-//! principal, but the quant *role description* lived on the envoy side).
+//! persona) duplicated assembly logic instead of binding a profile.
 //!
 //! `PrincipalProfile` closes the gap: a principal role is a value the embedding
 //! binds via `Agent::apply_principal_profile` (re-exported
