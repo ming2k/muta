@@ -72,7 +72,7 @@ vocabulary; the dispatch tools bind them by reference.
 | Profile | Bound by | Ceiling | Write grant | Gets |
 |---------|----------|---------|-------------|------|
 | `EXPLORE` | `envoy` tool | `Read` | none | Pure read tools (`read_text`, `find_files`, `list_dir`, `search_text`, …) |
-| `CODE` | `envoy_code` tool | `Write` | none | Read tools + `bash`, `edit_file`, `write_file`, `todo*` — a full coding surface; runs on autopilot, so the delegation *is* the authorization |
+| `CODE` | `envoy_code` tool | `Write` | none | Read tools + `execute_command`, `edit_file`, `write_file`, `todo*` — a full coding surface; runs on autopilot, so the delegation *is* the authorization |
 | `TITLE` | harness title generation | `Read` | none | No tools — a single `provider.chat()` call |
 | `MCP_SPECIALIST` | `envoy_mcp` tool | `Read` | none | Dynamic MCP tools in an isolated sandbox |
 
@@ -95,7 +95,7 @@ accountable for the result. See
 ### Why a `Read` ceiling (and the one exception)
 
 The research role is pure inspection, no side effects. A researcher should not
-run commands — an exploration envoy with `bash` could mutate the workspace
+run commands — an exploration envoy with `execute_command` could mutate the workspace
 or run arbitrary commands, which is wrong for "go find things and report
 back". Every built-in *research* profile therefore carries a `Read` ceiling.
 The `Read < Execute < Write` tier split (ADR-0012) and the decoupled `write_paths`
@@ -103,7 +103,7 @@ grant (ADR-0028) remain available for a future command-running or
 scoped-write role, but no built-in profile exercises them today.
 
 The one exception is `CODE`: a coding envoy needs the full edit surface
-(`bash` + `edit_file` + `write_file`), so it admits those tools by name. Like
+(`execute_command` + `edit_file` + `write_file`), so it admits those tools by name. Like
 every other built-in envoy it runs **autopilot** — the delegation is the
 authorization, so the user does not re-approve each nested write/command; the
 principal reviews the envoy's handoff instead. Admission says *whether* a
@@ -136,7 +136,7 @@ admitted by a non-empty `write_paths` grant; the other two axes are gates:
 
 | Axis | Rule |
 |------|------|
-| Filesystem access | Admitted when the tool's tier is at or below the ceiling — every built-in profile has a `Read` ceiling, so it drops `bash`/`Write` |
+| Filesystem access | Admitted when the tool's tier is at or below the ceiling — every built-in profile has a `Read` ceiling, so it drops `execute_command`/`Write` |
 | Scoped write | A `Write` tool below the ceiling is admitted when `write_paths` is non-empty (then scoped at runtime). No built-in profile sets `write_paths` today. `Execute` is never granted this way |
 | Needs a human | Excluded unless the profile opts in — `ask_user` and any future approval-gated tool |
 | Spawns an envoy | Always excluded, in *every* profile — this is what prevents recursion |

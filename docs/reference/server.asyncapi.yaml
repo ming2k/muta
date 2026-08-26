@@ -295,7 +295,7 @@ components:
             turn: 1
             output_tokens: 512
             elapsed_ms: 83000
-            current_tool: bash
+            current_tool: execute_command
             activity: waiting for model
             context_tokens: 48200
             note: null
@@ -606,21 +606,6 @@ components:
           description: >
             Absolute workspace path this session belongs to (ADR-0096). Empty
             for producers that predate the field.
-        wip:
-          allOf:
-            - $ref: '#/components/schemas/WipStatus'
-          nullable: true
-      additionalProperties: false
-    WipStatus:
-      description: A session's declared work-in-progress (ADR-0097 §5).
-      type: object
-      required: [paths, summary]
-      properties:
-        paths:
-          type: array
-          items: { type: string }
-        summary:
-          type: string
       additionalProperties: false
     MonitorEnvelope:
       description: |
@@ -1615,7 +1600,7 @@ components:
         one_off:
           type: boolean
           description: >
-            True when `Always` is not honoured (bash-policy confirm gate);
+            True when `Always` is not honoured (the command-policy confirm gate);
             clients should suppress the always-allow option.
       additionalProperties: false
     UserQuestionRequest:

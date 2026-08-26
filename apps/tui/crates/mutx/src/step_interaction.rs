@@ -87,8 +87,8 @@ pub fn summary_at(cursor: &SemanticCursor) -> Option<(usize, StepKind)> {
 ///   point and must be visible without an extra click.
 /// - **Cancelled** → collapsed: an aborted call reads as inert.
 /// - **Ok** → the per-tool default (`density` Comfortable mode, else the
-///   tool's `[tui.default_expanded]` entry): `edit_file` shows its diff,
-///   `bash`/`read_text` stay collapsed, etc.
+///   tool's `[tui.default_expanded]` entry): `edit_file` shows its diff;
+///   `bash`/`read_text` and the rest stay collapsed.
 pub fn default_tool_expanded(
     status: ToolStepStatus,
     name: &str,
@@ -150,10 +150,11 @@ mod tests {
     #[test]
     fn tool_running_follows_per_tool_default_failures_expand() {
         let cfg = config(&[]);
-        // bash and edit_file default expanded
-        assert!(default_tool_expanded(
+        // execute_command collapses even while running (live output would
+        // otherwise dominate the transcript); failures still force-expand.
+        assert!(!default_tool_expanded(
             ToolStepStatus::Running,
-            "bash",
+            "execute_command",
             &cfg,
             false
         ));
@@ -171,13 +172,13 @@ mod tests {
         ));
         assert!(default_tool_expanded(
             ToolStepStatus::Denied,
-            "bash",
+            "execute_command",
             &cfg,
             false
         ));
         assert!(!default_tool_expanded(
             ToolStepStatus::Cancelled,
-            "bash",
+            "execute_command",
             &cfg,
             false
         ));
@@ -192,9 +193,10 @@ mod tests {
             &cfg,
             false
         ));
-        assert!(default_tool_expanded(
+        // execute_command collapses on success too; only failures expand it.
+        assert!(!default_tool_expanded(
             ToolStepStatus::Ok,
-            "bash",
+            "execute_command",
             &cfg,
             false
         ));

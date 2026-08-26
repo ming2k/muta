@@ -44,11 +44,14 @@ pub const THINKING_KEY: &str = "thinking";
 /// # turning the master itself autopilot.
 /// # skip_interactive_input = false
 ///
-/// # Doom-loop guard (variant-loop defense). On by default (ADR-0113 §5);
-/// opt out here. See [`DoomGuardConfig`]. The historical `nudge` key
-/// spelling still loads; saves write `doom_guard`.
+/// # Doom-loop guard (variant-loop defense). On by default; one
+/// same-signature re-run is tolerated before a block (ADR-0148). Opt out
+/// here, or restore the strict first-repeat block with `threshold = 2`.
+/// See [`DoomGuardConfig`]. The historical `nudge` key spelling still
+/// loads; saves write `doom_guard`.
 /// # [master.doom_guard]
 /// # enabled = false
+/// # threshold = 2
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -95,8 +98,10 @@ pub struct MasterConfig {
     #[serde(default)]
     pub ask_user_fallback: muta_contracts::human_request::AutonomousFallbackPolicy,
     /// Doom-loop guard configuration (`muta_agent::doom_guard`). Default
-    /// **enabled** (`window: 16`, ADR-0113 §5) — opt out via
-    /// `[master.doom_guard] enabled = false`. See [`DoomGuardConfig`]
+    /// **enabled** (`window: 16`, `threshold: 3` — ADR-0113 §5 flipped it
+    /// on, ADR-0148 relaxed the trip point) — opt out via
+    /// `[master.doom_guard] enabled = false`, or restore the strict
+    /// first-repeat block with `threshold = 2`. See [`DoomGuardConfig`]
     /// for the per-field semantics.
     #[serde(default, alias = "nudge")]
     pub doom_guard: DoomGuardConfig,
@@ -114,7 +119,7 @@ pub struct MasterConfig {
 ///
 /// ```toml
 /// [[permissions.allow]]
-/// tool = "bash"
+/// tool = "execute_command"
 /// scope = "*"
 ///
 /// [[permissions.allow]]
@@ -234,7 +239,7 @@ pub enum BashPolicyActionConfig {
 /// One declarative permission rule from `[permissions]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRuleConfig {
-    /// Tool name (e.g. `"bash"`, `"read_text"`, `"mcp__fs__read"`).
+    /// Tool name (e.g. `"execute_command"`, `"read_text"`, `"mcp__fs__read"`).
     pub tool: String,
     /// Permission scope. `"*"` matches every call to the tool. Any other value
     /// must match the call's scope *exactly* (e.g. a full path, or the exact
@@ -313,13 +318,27 @@ pub struct RouteSettings {
     /// to reason with depth only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<bool>,
+    /// Explicit capability overrides -- the **top layer** of the capability
+    /// resolution order (ADR-0080). `None`/empty means "no opinion": the
+    /// effective capabilities fall through to remote metadata, then the
+    /// static baseline. Unlike the derived `FittedModelInfo`, these are the
+    /// user's own per-route choices and are never rebuilt from an endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_overrides: Option<muta_contracts::CapabilityOverrides>,
 }
 
 impl RouteSettings {
     /// Whether the entry carries any explicit knob. An entry with neither
     /// field set still opts the model in to thinking on Anthropic routes.
+    /// Capability overrides (ADR-0080 layer 1) count as a knob: a record that
+    /// only carries them must not be pruned as empty.
     pub fn is_empty(&self) -> bool {
-        self.effort.is_none() && self.thinking.is_none()
+        self.effort.is_none()
+            && self.thinking.is_none()
+            && self
+                .capability_overrides
+                .as_ref()
+                .is_none_or(muta_contracts::CapabilityOverrides::is_empty)
     }
 }
 
@@ -697,8 +716,8 @@ impl Default for DaemonConfig {
 ///
 /// ```toml
 /// [tool_variants."glm-5.2"]       # model id (quoted: has dots)
-/// read_text = "terse"            # capability = variant id
-/// bash      = "strict"
+/// read_text        = "terse"    # capability = variant id
+/// execute_command  = "workspace"
 /// ```
 ///
 /// Capabilities and models not listed use their default variant.
@@ -1369,7 +1388,7 @@ mod tests {
         let toml_src = r#"
             [tool_variants."kimi-k2.7-code"]
             read_text = "terse"
-            bash = "strict"
+            execute_command = "workspace"
 
             [tool_variants."glm-5.2"]
             read_text = "verbose"
@@ -1379,13 +1398,16 @@ mod tests {
         // Known model → its map; unlisted capability within a known model → absent.
         let kimi = cfg.tool_variants.for_model("kimi-k2.7-code");
         assert_eq!(kimi.get("read_text").map(String::as_str), Some("terse"));
-        assert_eq!(kimi.get("bash").map(String::as_str), Some("strict"));
+        assert_eq!(
+            kimi.get("execute_command").map(String::as_str),
+            Some("workspace")
+        );
         assert!(kimi.get("grep").is_none());
 
         // A different model gets its own independent map.
         let glm = cfg.tool_variants.for_model("glm-5.2");
         assert_eq!(glm.get("read_text").map(String::as_str), Some("verbose"));
-        assert!(glm.get("bash").is_none());
+        assert!(glm.get("execute_command").is_none());
 
         // Unknown model → empty (but borrowable without an Option).
         assert!(cfg.tool_variants.for_model("does-not-exist").is_empty());
@@ -1602,16 +1624,19 @@ name = "DeepSeek"
         let bare = RouteSettings {
             effort: None,
             thinking: None,
+            capability_overrides: None,
         };
         assert!(bare.is_empty());
         let with_effort = RouteSettings {
             effort: Some("high".to_string()),
             thinking: None,
+            capability_overrides: None,
         };
         assert!(!with_effort.is_empty());
         let with_thinking = RouteSettings {
             effort: None,
             thinking: Some(false),
+            capability_overrides: None,
         };
         assert!(!with_thinking.is_empty());
     }

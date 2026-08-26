@@ -15,12 +15,12 @@
 //! `*_for` entry points below instead of matching on tool names.
 
 mod ask_user;
-mod bash;
+mod execute_command;
 mod diff;
-mod edit;
+mod edit_file;
 mod fallback;
 mod meta;
-mod read;
+mod read_text;
 mod read_image;
 mod search;
 mod web;
@@ -111,7 +111,7 @@ pub enum ResultKind {
     /// `path:line:match` search-result rendering.
     Matches,
     /// Shell output with `$ command` framing and exit/section markers.
-    Bash,
+    Command,
     /// A red/green line diff derived from a structured patch result. Legacy
     /// restored sessions may fall back to the original tool arguments.
     Diff,
@@ -125,7 +125,7 @@ pub enum ArgLayout {
     /// `Read path`, `Search "query" in path`). Edit/write also use this: the path
     /// is in the header and the content is in the diff.
     None,
-    /// A single wrapped command string (bash), shown under an `Arguments`
+    /// A single wrapped command string, shown under an `Arguments`
     /// label without the `key:` prefix.
     Command,
     /// Flat `key: value` lines. Used for unknown / MCP tools whose generic
@@ -190,11 +190,13 @@ pub trait ToolPresenter {
 pub fn presenter_for(name: &str) -> &'static dyn ToolPresenter {
     match name {
         "ask_user" => &ask_user::AskUserPresenter,
-        "read_text" => &read::ReadPresenter,
+        "read_text" => &read_text::ReadPresenter,
         "read_image" => &read_image::ReadImagePresenter,
-        "edit_file" => &edit::EditPresenter,
-        "write_file" => &edit::WritePresenter,
-        "bash" => &bash::BashPresenter,
+        "edit_file" => &edit_file::EditPresenter,
+        "write_file" => &edit_file::WritePresenter,
+        // `bash` is presentation-only compatibility for transcripts written
+        // before the capability was renamed; it is not registered as a tool.
+        "execute_command" | "bash" => &execute_command::ExecuteCommandPresenter,
         "find_files" => &search::FindFilesPresenter,
         "list_dir" => &search::ListDirPresenter,
         "search_text" => &search::SearchTextPresenter,
@@ -290,9 +292,12 @@ mod tests {
     }
 
     #[test]
-    fn bash_summary_includes_executable_and_args() {
+    fn execute_command_summary_includes_executable_and_args() {
         assert_eq!(
-            summary("bash", serde_json::json!({"command": "cargo build\nmore"})),
+            summary(
+                "execute_command",
+                serde_json::json!({"command": "cargo build\nmore"})
+            ),
             "Run cargo build"
         );
     }
@@ -312,7 +317,7 @@ mod tests {
 
     #[test]
     fn non_object_arguments_truncate_raw() {
-        assert_eq!(summary_for("bash", "not json", None), "not json");
+        assert_eq!(summary_for("execute_command", "not json", None), "not json");
     }
 
     #[test]

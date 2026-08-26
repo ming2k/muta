@@ -103,6 +103,13 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
             app.editor_model_settings_only = true;
             app.editor_target_is_builtin = is_builtin;
             app.editor_key.clear();
+            // Load the stored capability overrides (ADR-0080 layer 1) so
+            // the editor opens showing what is already forced, if anything.
+            let stored = muta_persistence::route_settings::RouteSettingsStore::load()
+                .settings_for(&row.provider_id, &row.model)
+                .and_then(|r| r.capability_overrides.clone());
+            app.editor_vision_override = stored.as_ref().and_then(|o| o.vision);
+            app.editor_tool_override = stored.as_ref().and_then(|o| o.tool_call);
             // Default the effort to the model's own configured
             // value, else `medium` clamped onto the model's
             // ladder — a ladder without `medium` (e.g. Kimi
@@ -148,6 +155,8 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
                 app.editor_target_is_builtin = false;
                 app.editor_effort = "high".to_string();
                 app.editor_thinking_available = false;
+                app.editor_vision_override = None;
+                app.editor_tool_override = None;
                 app.editor_thinking = true;
                 app.input.clear();
                 app.set_cursor(0);
@@ -217,6 +226,11 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
                     model,
                     effort: Some(effort),
                     thinking: app.editor_thinking_available.then_some(app.editor_thinking),
+                    overrides: Some(muta_contracts::CapabilityOverrides {
+                        vision: app.editor_vision_override,
+                        tool_call: app.editor_tool_override,
+                        ..Default::default()
+                    }),
                 });
             } else {
                 let _ = app.tx.send(AgentRequest::EditProviderModel {
@@ -224,6 +238,11 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
                     model,
                     effort: Some(effort),
                     thinking: app.editor_thinking_available.then_some(app.editor_thinking),
+                    overrides: Some(muta_contracts::CapabilityOverrides {
+                        vision: app.editor_vision_override,
+                        tool_call: app.editor_tool_override,
+                        ..Default::default()
+                    }),
                 });
             }
             app.input.clear();
@@ -232,6 +251,8 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
             app.editor_model_settings_only = false;
             app.editor_target_is_builtin = false;
             app.editor_thinking_available = false;
+            app.editor_vision_override = None;
+            app.editor_tool_override = None;
             app.model_search = false;
             app.model_modal_follow = true;
             app.pop_transient_surface();

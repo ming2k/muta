@@ -364,6 +364,7 @@ fn channel_model_info_effort_ladders_survive() {
         api_key: "".into(),
         model: "gemini-3.7-flash".to_string(),
         remote: None,
+        user_overrides: None,
     };
     let info = channel_model_info(&gemini37);
     assert_eq!(info.protocol, "google");

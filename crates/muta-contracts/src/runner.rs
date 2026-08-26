@@ -63,7 +63,7 @@ pub struct ToolPolicy {
     /// ADR-0028.
     pub write_paths: &'static [&'static str],
     /// Declarative command grant: program-name prefixes an runner under this
-    /// policy may run via `bash`. Empty (the default) means "no command
+    /// policy may run via `execute_command`. Empty (the default) means "no command
     /// constraint" — any command is allowed up to the broker. Set to e.g.
     /// `&["git", "cargo"]` to restrict the runner to those programs. Resolved
     /// at spawn by [`RunnerPreset::resolve_operation_scope`] into a
@@ -141,7 +141,7 @@ pub struct RunnerPreset {
     /// permissions without human intervention.
     pub yolo: bool,
     /// Whether an runner spawned under this profile may have the **model**
-    /// supply stdin bytes for a `bash` call it emits (the opt-in automatic-
+    /// supply stdin bytes for an `execute_command` call it emits (the opt-in automatic-
     /// flow path). Default `false` for every built-in profile: autonomous
     /// runners run non-interactively (the L1 hard floor + L2 idle watchdog
     /// keep them from hanging); a profile aimed at automated CI/batch flows
@@ -310,7 +310,8 @@ the title in the same language as the conversation.",
 };
 
 /// Tools a coding runner may use: the generic read-only inspection tools
-/// (shared with [`RUNNER_EXPLORE`]) plus the workspace-mutating tools — `bash` for
+/// (shared with [`RUNNER_EXPLORE`]) plus the workspace-mutating tools —
+/// `execute_command` for
 /// running builds/tests/git, `edit_file` and `write_file` for code, and the
 /// `todo*` pair so a long delegation can track its own progress. Listed by
 /// name so adding a new side-effecting tool to the parent never silently
@@ -327,7 +328,7 @@ const CODING_TOOLS: &[&str] = &[
     "webfetch",
     "websearch",
     // Workspace mutation — the code-editing surface.
-    "bash",
+    "execute_command",
     "edit_file",
     "write_file",
     // Self-contained task tracking (the runner's own todo list, not the
@@ -531,8 +532,8 @@ mod tests {
         // write_file is not in READ_ONLY_TOOLS — a research explorer must not
         // mutate files.
         assert!(!RUNNER_EXPLORE.tool_policy.admits(&make("write_file")));
-        // bash is also not whitelisted.
-        assert!(!RUNNER_EXPLORE.tool_policy.admits(&make("bash")));
+        // Command execution is also not whitelisted.
+        assert!(!RUNNER_EXPLORE.tool_policy.admits(&make("execute_command")));
     }
 
     #[test]
@@ -563,7 +564,7 @@ mod tests {
             command_allowlist: &[],
         };
         assert!(!permissive.admits(&with_spawn(make("read_text"))));
-        assert!(permissive.admits(&make("bash")));
+        assert!(permissive.admits(&make("execute_command")));
     }
 
     #[test]
@@ -596,12 +597,12 @@ mod tests {
 
     #[test]
     fn resolve_tools_applies_scope_and_runtime_rules() {
-        // `search_text` is whitelisted → admitted. `bash` is not whitelisted → dropped
+        // `search_text` is whitelisted; command execution is dropped
         // by scope. `read_text` is whitelisted *but spawns an runner* → dropped
         // by the runtime recursion rule despite passing the name scope.
         let toolset = ToolSet::from_tools(vec![
             Arc::new(make("search_text")) as Arc<dyn Tool>,
-            Arc::new(make("bash")) as Arc<dyn Tool>,
+            Arc::new(make("execute_command")) as Arc<dyn Tool>,
             Arc::new(with_spawn(make("read_text"))) as Arc<dyn Tool>,
         ]);
         let selected =
@@ -619,7 +620,7 @@ mod tests {
             command_allowlist: &[],
         };
         assert!(open.admits(&make("read_text")));
-        assert!(open.admits(&make("bash")));
+        assert!(open.admits(&make("execute_command")));
         assert!(open.admits(&make("write_file")));
     }
 
@@ -635,14 +636,15 @@ mod tests {
     }
 
     /// RUNNER_CODE is the write-capable coding role. It admits the full edit surface
-    /// (bash, edit_file, write_file) and the shared read-only tools, but — like
+    /// (`execute_command`, `edit_file`, `write_file`) and the shared read-only
+    /// tools, but — like
     /// every runner — it still excludes recursion and control-flow escapes
     /// absolutely, and unlisted tools stay out.
     #[test]
     fn code_profile_admits_edit_surface_but_not_recursion_or_unlisted() {
         use crate::RUNNER_CODE;
         // Write/execute surface: admitted.
-        assert!(RUNNER_CODE.tool_policy.admits(&make("bash")));
+        assert!(RUNNER_CODE.tool_policy.admits(&make("execute_command")));
         assert!(RUNNER_CODE.tool_policy.admits(&make("edit_file")));
         assert!(RUNNER_CODE.tool_policy.admits(&make("write_file")));
         assert!(RUNNER_CODE.tool_policy.admits(&make("todo")));
@@ -655,7 +657,9 @@ mod tests {
         assert!(!RUNNER_CODE.tool_policy.admits(&make("market_data")));
         assert!(!RUNNER_CODE.tool_policy.admits(&make("place_order")));
         // Recursion and control-flow remain absolute.
-        assert!(!RUNNER_CODE.tool_policy.admits(&with_spawn(make("bash"))));
+        assert!(!RUNNER_CODE
+            .tool_policy
+            .admits(&with_spawn(make("execute_command"))));
         assert!(!RUNNER_CODE.tool_policy.admits(&make_control()));
     }
 
@@ -717,4 +721,3 @@ mod tests {
         assert_eq!(names, vec!["explore", "title"]);
     }
 }
-

@@ -1,7 +1,18 @@
 # 0126. Queue affordances: Ctrl-row bindings, transcript-owned inserts, and a non-destructive queue pointer
 
-- **Status:** Accepted
+- **Status:** Accepted (partially superseded: the `Ctrl+O` insert affordance is removed)
 - **Date:** 2026-08-20
+
+> **Partial supersession note (2026-08-26):** the `Ctrl+O` mid-round insert
+> keybinding and its queue-bar legend slot are removed — the affordance had no
+> scene that `Enter`-staging plus the queue pointer does not already cover, so
+> the binding and its legend entry were deleted. The transcript-owned insert
+> *mechanism* survives unchanged: a busy `Enter` still steers into the running
+> round via `ComposerSendMode::Steer` (`DeliveryStatus::Queued` entry,
+> `insert_id` correlation, `HeldNextRound` settlement), so the decision record
+> below remains accurate for everything except the dedicated `Ctrl+O` binding
+> and the queue-bar legend text. `Ctrl+Q` (expand) and `Ctrl+P`
+> (block/resume) keep their Ctrl-row bindings as decided here.
 
 ## Context
 

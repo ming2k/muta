@@ -696,7 +696,7 @@ mod tests {
         let reg = registry_of(vec![Arc::new(StubHook {
             kind: HookEventKind::TurnStart,
             outcome: HookOutcome::ScopeTools {
-                disable: vec!["bash".to_string(), "edit_file".to_string()],
+                disable: vec!["execute_command".to_string(), "edit_file".to_string()],
                 restore_at: RestorePoint::TurnEnd,
             },
         })]);
@@ -705,7 +705,7 @@ mod tests {
         assert_eq!(
             side.scoped_disables,
             vec![
-                ("bash".to_string(), RestorePoint::TurnEnd),
+                ("execute_command".to_string(), RestorePoint::TurnEnd),
                 ("edit_file".to_string(), RestorePoint::TurnEnd),
             ]
         );
@@ -750,7 +750,7 @@ mod tests {
         })]);
         let request = muta_contracts::PermissionRequest {
             id: "permission_x".into(),
-            tool: "bash".into(),
+            tool: "execute_command".into(),
             label: "Run command".into(),
             description: "rm -rf /tmp/x".into(),
             arguments: "{}".into(),
@@ -769,18 +769,18 @@ mod tests {
     }
 
     /// The `PermissionRequest` matcher targets the tool seeking approval, so a
-    /// `bash`-only notification hook does not fire for an `edit_file` request.
+    /// `execute_command`-only notification hook does not fire for an `edit_file` request.
     #[tokio::test]
     async fn permission_request_matcher_targets_tool() {
         let fires = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let reg = registry_of(vec![Arc::new(RecordingHook {
             kind: HookEventKind::PermissionRequest,
-            matcher: Some("bash".into()),
+            matcher: Some("execute_command".into()),
             fires: fires.clone(),
         })]);
         let bash_req = muta_contracts::PermissionRequest {
             id: "p1".into(),
-            tool: "bash".into(),
+            tool: "execute_command".into(),
             label: "".into(),
             description: "".into(),
             arguments: "".into(),

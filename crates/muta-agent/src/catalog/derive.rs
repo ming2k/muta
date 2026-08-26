@@ -175,6 +175,9 @@ pub fn derive_channel(
         api_key,
         model: model.to_string(),
         remote,
+        user_overrides: route_settings
+            .and_then(|r| r.capability_overrides.clone())
+            .filter(|o| !o.is_empty()),
     }
 }
 

@@ -2,9 +2,9 @@
 //!
 //! A [`MetaStrip`] is a horizontal rail made of small replaceable [`MetaChip`]s:
 //! anchors (`round 61`, `turn 61`), status chips (`⏸ Queued`), and muted
-//! details (`GLM-5.2`, `19:46`).  It centralizes the repeated two-tone
-//! "anchor · detail · time" treatment used by assistant turn headers and sent
-//! user-message headers.
+//! details (`GLM-5.2`) and an optional right-aligned time (`19:46`). It
+//! centralizes the repeated two-tone metadata treatment used by assistant
+//! turn headers and sent user-message headers.
 
 use std::borrow::Cow;
 
@@ -61,6 +61,7 @@ impl<'a> MetaChip<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MetaStrip<'a> {
     chips: Vec<MetaChip<'a>>,
+    trailing: Option<MetaChip<'a>>,
     separator: Cow<'a, str>,
     left_pad_cols: usize,
     fill_bg: Option<Color>,
@@ -76,9 +77,9 @@ impl<'a> MetaStrip<'a> {
     pub(crate) fn new() -> Self {
         Self {
             chips: Vec::new(),
-            // R1: every trailing chip is a state/measure/attribute of the
-            // anchor — the one sanctioned use of the middle dot.
-            separator: Cow::Borrowed(crate::design::JOIN_MODIFY),
+            trailing: None,
+            // R2 enumeration: metadata chips are separated by plain whitespace.
+            separator: Cow::Borrowed("  "),
             left_pad_cols: 0,
             fill_bg: None,
         }
@@ -98,7 +99,7 @@ impl<'a> MetaStrip<'a> {
         self
     }
 
-    /// Override the inter-chip separator (defaults to [`crate::design::JOIN_MODIFY`]).
+    /// Override the inter-chip separator (defaults to two spaces).
     pub(crate) fn separator(mut self, sep: impl Into<Cow<'a, str>>) -> Self {
         self.separator = sep.into();
         self
@@ -128,13 +129,25 @@ impl<'a> MetaStrip<'a> {
         self.chip(text, tone)
     }
 
-    /// Add muted trailing metadata. A ` · ` separator is inserted only when a
+    /// Add muted trailing metadata. The separator is inserted only when a
     /// previous visible chip already exists, so detail-only strips degrade
     /// cleanly (`Sent`, not ` · Sent`).
     pub(crate) fn detail(mut self, text: impl Into<Cow<'a, str>>) -> Self {
         let text = text.into();
         if !text.as_ref().is_empty() {
             self.chips.push(MetaChip::new(text, MetaTone::Muted, true));
+        }
+        self
+    }
+
+    /// Add secondary metadata pinned to the right edge when it fits. This is
+    /// intended for timestamps: time is scan context, not another member of
+    /// the left-hand identity cluster. At narrow widths it falls back to the
+    /// normal inter-chip separator instead of hiding information.
+    pub(crate) fn trailing_detail(mut self, text: impl Into<Cow<'a, str>>) -> Self {
+        let text = text.into();
+        if !text.as_ref().is_empty() {
+            self.trailing = Some(MetaChip::new(text, MetaTone::Muted, true));
         }
         self
     }
@@ -150,7 +163,7 @@ impl<'a> MetaStrip<'a> {
             .fill_bg
             .map(|bg| Style::default().bg(bg))
             .unwrap_or_default();
-        let mut spans = Vec::with_capacity(self.chips.len().saturating_mul(2) + 2);
+        let mut spans = Vec::with_capacity(self.chips.len().saturating_mul(2) + 4);
         let mut used = 0usize;
         let mut rendered_any = false;
 
@@ -172,6 +185,28 @@ impl<'a> MetaStrip<'a> {
             rendered_any = true;
         }
 
+        if let Some(chip) = self.trailing {
+            let trailing_width = chip.text.as_ref().width();
+            let separator_width = if chip.separated && rendered_any {
+                self.separator.as_ref().width()
+            } else {
+                0
+            };
+            if rendered_any && used + separator_width + trailing_width <= full_width {
+                let gap = full_width.saturating_sub(used + trailing_width);
+                spans.push(Span::styled(" ".repeat(gap), fill_style));
+                used += gap;
+            } else if chip.separated && rendered_any {
+                spans.push(Span::styled(
+                    self.separator.to_string(),
+                    MetaTone::Muted.style(theme),
+                ));
+                used += separator_width;
+            }
+            used += trailing_width;
+            spans.push(Span::styled(chip.text, chip.tone.style(theme)));
+        }
+
         if self.fill_bg.is_some() {
             spans.push(Span::styled(padded_tail(full_width, used), fill_style));
         }
@@ -185,7 +220,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_separator_uses_join_modify() {
+    fn default_separator_uses_whitespace() {
         let theme = Theme::default();
         let strip = MetaStrip::new()
             .lead("> ", MetaTone::Accent)
@@ -194,20 +229,34 @@ mod tests {
             .detail("detail 2");
         let line = strip.into_line(80, &theme);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "> turn 1 · detail 1 · detail 2");
+        assert_eq!(text, "> turn 1  detail 1  detail 2");
     }
 
     #[test]
-    fn custom_whitespace_separator_joins_with_spaces() {
+    fn custom_separator_joins_with_custom_string() {
         let theme = Theme::default();
         let strip = MetaStrip::new()
-            .separator("  ")
+            .separator(" | ")
             .lead("> ", MetaTone::Accent)
             .anchor("turn 13")
             .detail("glm-5.3 xhigh")
             .detail("13:51");
         let line = strip.into_line(80, &theme);
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "> turn 13  glm-5.3 xhigh  13:51");
+        assert_eq!(text, "> turn 13 | glm-5.3 xhigh | 13:51");
+    }
+
+    #[test]
+    fn trailing_detail_is_right_aligned() {
+        let theme = Theme::default();
+        let strip = MetaStrip::new()
+            .anchor("turn 13")
+            .detail("glm-5.3 (xhigh)")
+            .trailing_detail("13:51");
+        let line = strip.into_line(40, &theme);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text.width(), 40);
+        assert!(text.starts_with("turn 13  glm-5.3 (xhigh)"));
+        assert!(text.ends_with("13:51"));
     }
 }

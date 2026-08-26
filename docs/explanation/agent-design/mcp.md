@@ -14,7 +14,7 @@ per-tool parameter surface, see
 
 ## Why MCP support
 
-Built-in tools cover the common cases — file access, search, bash, web. MCP
+Built-in tools cover the common cases — file access, search, execute_command, web. MCP
 lets a project add capabilities without forking muta: a database query tool,
 a private API client, a custom linter. The integration is deliberately narrow:
 

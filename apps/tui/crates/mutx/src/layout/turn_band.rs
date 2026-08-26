@@ -1,5 +1,5 @@
 //! The turn-band transcript layout: each tool-bearing ReAct turn is grouped into
-//! a labelled band with a header row (`> turn N  model [effort]  HH:MM`), so history reads
+//! a labelled band with a header row (`> turn N  model (effort)  HH:MM`), so history reads
 //! as discrete model-request chunks instead of one flush stream.
 //!
 //! ## Grouping model
@@ -19,13 +19,13 @@
 //!
 //! ```text
 //! > turn 2  sonnet
-//! > turn 3  glm-5.3 xhigh          (channel exposing a reasoning effort)
+//! > turn 3  glm-5.3 (xhigh)        (channel exposing a reasoning effort)
 //! ```
 //!
 //! rendered in an info-tone bold for the `> turn N` anchor and muted for the
 //! rest (model info, send time), using foreground color only — no background
 //! band. Model and reasoning depth form a single identity component
-//! (`glm-5.3 xhigh`), and components on the header row are separated entirely
+//! (`glm-5.3 (xhigh)`), and components on the header row are separated entirely
 //! by spatial distance (two columns of whitespace, R2 enumeration) without `·`.
 //! The effort detail appears only when the turn actually ran with one
 //! (thinking-gated per protocol), so non-reasoning channels keep the shorter
@@ -92,7 +92,7 @@ impl TranscriptLayout for TurnBand {
     }
 }
 
-/// Paint the turn header row: `> turn N  model [effort]  HH:MM`,
+/// Paint the turn header row: `> turn N  model (effort)  HH:MM`,
 /// info-tone bold anchor with muted metadata, no background band. Components
 /// are separated by spatial distance (R2 enumeration whitespace, no `·`), and
 /// model + effort form a single identity component. The caller inserts the
@@ -121,8 +121,8 @@ fn draw_turn_header(stream: &mut Stream<'_, '_>, turn: u64, msg: &TranscriptMess
         .lead(lead, MetaTone::Accent)
         .anchor(format!("turn {}", turn));
 
-    // Model and reasoning effort form a single identity component: `model effort`
-    // (e.g. `glm-5.3 xhigh`). Absent for non-reasoning channels — nothing to claim.
+    // Model and reasoning effort form a single identity component: `model (effort)`
+    // (e.g. `glm-5.3 (xhigh)`). Absent for non-reasoning channels — nothing to claim.
     let model = msg.model.as_deref().filter(|m| !m.is_empty());
     let effort = msg
         .effort
@@ -130,7 +130,7 @@ fn draw_turn_header(stream: &mut Stream<'_, '_>, turn: u64, msg: &TranscriptMess
         .filter(|e| !e.is_empty() && !e.eq_ignore_ascii_case("none"));
 
     let model_info = match (model, effort) {
-        (Some(m), Some(e)) => Some(format!("{m} {e}")),
+        (Some(m), Some(e)) => Some(format!("{m} ({e})")),
         (Some(m), None) => Some(m.to_string()),
         (None, Some(e)) => Some(e.to_string()),
         (None, None) => None,
@@ -140,7 +140,7 @@ fn draw_turn_header(stream: &mut Stream<'_, '_>, turn: u64, msg: &TranscriptMess
         strip = strip.detail(info);
     }
     if let Some(sent_at_ms) = msg.sent_at_ms {
-        strip = strip.detail(sent_time_label(sent_at_ms));
+        strip = strip.trailing_detail(sent_time_label(sent_at_ms));
     }
 
     let rect = Rect::new(band.x, stream.current_y, band.width, 1);

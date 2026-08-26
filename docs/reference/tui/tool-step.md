@@ -1,6 +1,6 @@
 # Tool step
 
-An [expandable step](expandable-step.md) for a tool call (`read_text`, `bash`,
+An [expandable step](expandable-step.md) for a tool call (`read_text`, `execute_command`,
 `edit_file`, …). It renders flat on the app background — no band, no section
 labels — like a [thinking step](thinking-step.md). The header alone summarizes
 the call (tool + key arguments + duration); expanding reveals the tool-specific
@@ -43,13 +43,13 @@ distinct panel against the app background.
 ### Content rendering (per tool)
 
 Dispatch is by `result_kind`, so structured output gets a purpose-built
-renderer instead of a generic code block. `bash` additionally prefixes its
-block with a `$ command` line, so an expanded bash step reads like a terminal
+renderer instead of a generic code block. `execute_command` additionally prefixes its
+block with a `$ command` line, so an expanded execute_command step reads like a terminal
 session.
 
 | Tool | Renderer | Notes |
 |------|----------|-------|
-| `bash` | `draw_bash_content` | A `$ command` prompt line, then the captured lines in **arrival order** — stdout and stderr interleaved exactly as the process wrote them, each coloured by source stream (stderr in `error_fg`) — then an `exit N` / `[output truncated]` footer, all one `code_bg` block. Carriage returns are collapsed (only the text after the last `\r` on a line survives). The ordered view comes from the structured `Shell::lines` field (available while streaming); legacy/restored payloads with only flat `stdout`/`stderr` fall back to the all-stdout-then-all-stderr bands. Command comes from the structured `Shell` payload, falling back to the parsed arguments. Long output is **middle-folded** (see [Long output folding](#long-output-folding)). |
+| `execute_command` | `draw_execute_command_content` | A `$ command` prompt line, then the captured lines in **arrival order** — stdout and stderr interleaved exactly as the process wrote them, each coloured by source stream (stderr in `error_fg`) — then an `exit N` / `[output truncated]` footer, all one `code_bg` block. The `exit N` row is always painted when the code is known — `exit 0` is included, dimmed, so an expanded step closes with a diagnostic fact even on success. Carriage returns are collapsed (only the text after the last `\r` on a line survives). The ordered view comes from the structured `Shell::lines` field (available while streaming); legacy/restored payloads with only flat `stdout`/`stderr` fall back to the all-stdout-then-all-stderr bands. Command comes from the structured `Shell` payload, falling back to the parsed arguments. Long output is **middle-folded** (see [Long output folding](#long-output-folding)). |
 | `find_files`, `list_dir` | `draw_listing_content` | One entry per row, no gutter, on `code_bg`. Directories (entries ending in `/`) in `info`, files in `code_fg`. |
 | `search_text` | `draw_matches_content` | Matches grouped under a bold `heading_fg` file-path header; each match shown as `{lineno}  {content}` with the line-number column aligned and dimmed. |
 | `edit_file`, `write_file` | `draw_diff_content` | A real `similar`-based unified diff: line-number gutter, `+`/`-` sign column, and intra-line word highlight on the changed spans, on `code_bg`. |
@@ -82,7 +82,7 @@ running — no luminance sweep.)
 
 ### Long output folding
 
-An expanded `bash` step can emit hundreds of stdout/stderr lines, which would
+An expanded `execute_command` step can emit hundreds of stdout/stderr lines, which would
 bury the trailing "events" — the `exit N` line, the `[output truncated]`
 marker, and the themed termination footer (timeout / blocked / cancelled) —
 far below the fold. To keep those events visible, the structured `Shell`
@@ -140,7 +140,7 @@ header via `draw_expandable_step_header` (from
 `apps/tui/crates/mutx/src/disclosure/mod.rs`). Expanded content dispatched by
 `draw_tool_result` to `draw_listing_content`, `draw_matches_content`,
 `draw_bash_content` (which renders the `$ command` line + the structured
-`Shell` payload), `draw_diff_content`, or `draw_code_content`. The bash command
+`Shell` payload), `draw_diff_content`, or `draw_code_content`. The execute_command command
 is resolved by `bash_command_for`. Presenters (summary / `result_kind` /
 `arg_layout`) live in `apps/tui/crates/mutx/src/tools/`. The structured
 payload comes from `ToolOutput`

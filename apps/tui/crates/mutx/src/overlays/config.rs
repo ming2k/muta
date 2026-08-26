@@ -225,7 +225,7 @@ fn draw_header(
     let ws_text = if workspace.is_empty() {
         String::new()
     } else {
-        format!(" · {workspace}")
+        format!("  {workspace}")
     };
 
     let cat_title = category.title();
@@ -561,7 +561,7 @@ fn draw_appearance_detail(
         Span::raw("  "),
         Span::styled("◆", Style::default().fg(active_theme.brand())),
         Span::styled(
-            " turn 1 · claude-3-7-sonnet · 15:30".to_string(),
+            " turn 1  claude-3-7-sonnet                         15:30".to_string(),
             Style::default().fg(active_theme.muted()),
         ),
     ]));

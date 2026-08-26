@@ -149,12 +149,6 @@ pub struct MonitoredSession {
     /// metadata, not conversation.
     #[serde(default)]
     pub project_root: String,
-    /// The session's declared work-in-progress (ADR-0097 §5), when it has
-    /// registered one: the paths it is mid-edit on plus a one-line summary.
-    /// Coordination metadata, not conversation; absent (`None`) means "no
-    /// declared WIP", which is what a consumer needs to answer `check_wip`.
-    #[serde(default)]
-    pub wip: Option<WipStatus>,
     /// Lineage (ADR-0103 fork surfacing): the parent session this one was
     /// forked from, when it is a branch. `None` on a trunk. The dashboard
     /// groups by trunk: one main card per conversation, its branches
@@ -166,64 +160,6 @@ pub struct MonitoredSession {
     /// field.
     #[serde(default)]
     pub fork_kind: SessionForkKind,
-}
-
-/// A session's declared work-in-progress (ADR-0097 §5): the paths it is
-/// mid-edit on plus a one-line summary, so peers in the same workspace can
-/// avoid colliding verification.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub struct WipStatus {
-    /// Paths the session is actively editing (as declared; workspace-relative
-    /// or absolute, normalized at comparison time).
-    pub paths: Vec<String>,
-    /// One-line description of the in-flight work (e.g. "refactoring the
-    /// retry loop — tree doesn't build").
-    pub summary: String,
-}
-
-/// One overlapping WIP found by a `check_wip` query (ADR-0097 §5).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WipConflict {
-    /// Session id holding the conflicting WIP.
-    pub session: String,
-    /// The WIP's declared paths.
-    pub paths: Vec<String>,
-    /// The WIP's one-line summary.
-    pub summary: String,
-    /// The subset of `paths` that overlaps the query's paths (empty when the
-    /// query named no paths — the conflict is then whole-workspace).
-    pub overlap: Vec<String>,
-}
-
-/// What a `check_wip` verdict advises the asking session to do (ADR-0097 §5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WipAdvice {
-    /// No conflicting WIP — proceed, including whole-tree verification.
-    Proceed,
-    /// Conflicting WIP exists — narrow to non-overlapping paths and skip
-    /// global verification (no full test suite / no direct run).
-    ProceedScoped,
-    /// A conflicting WIP directly overlaps what the session is about to do —
-    /// wait or ask the human rather than plough ahead.
-    Defer,
-}
-
-impl WipAdvice {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Proceed => "proceed",
-            Self::ProceedScoped => "proceed_scoped",
-            Self::Defer => "defer",
-        }
-    }
-}
-
-impl std::fmt::Display for WipAdvice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
 }
 
 impl MonitoredSession {
@@ -247,7 +183,6 @@ impl MonitoredSession {
             context_tokens: None,
             note: None,
             project_root: String::new(),
-            wip: None,
             parent_id: None,
             fork_kind: SessionForkKind::default(),
         }
@@ -392,12 +327,11 @@ mod tests {
                 turn: Some(1),
                 output_tokens: 512,
                 elapsed_ms: 9_000,
-                current_tool: Some("bash".into()),
+                current_tool: Some("execute_command".into()),
                 activity: Some("running bash".into()),
                 context_tokens: Some(48_000),
                 note: None,
                 project_root: "/tmp/proj".into(),
-                wip: None,
                 parent_id: None,
                 fork_kind: SessionForkKind::Trunk,
             }],

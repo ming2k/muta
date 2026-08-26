@@ -23,8 +23,8 @@ fn fixtures() -> Vec<PermissionRequest> {
     vec![
         PermissionRequest {
             id: "p1".into(),
-            tool: "bash".into(),
-            label: "bash".into(),
+            tool: "execute_command".into(),
+            label: "execute_command".into(),
             description: "Run a shell command".into(),
             arguments: r#"{"command":"cargo test --package mutx"}"#.into(),
             scope: "*".into(),
@@ -44,7 +44,7 @@ fn fixtures() -> Vec<PermissionRequest> {
             scope: "src/main.rs".into(),
             elevation: false,
             one_off: false,
-            origin: Some("runner #9f8a · code".into()),
+            origin: Some("runner #9f8a (code)".into()),
             hazard: Some(muta_contracts::HazardLevel::FileModification),
             submission: None,
             ..Default::default()
@@ -55,13 +55,13 @@ fn fixtures() -> Vec<PermissionRequest> {
             // call beyond the configured OperationScope.
             id: "p3".into(),
             tool: "mcp__fs__write_file".into(),
-            label: "mcp: fs · write_file".into(),
+            label: "mcp: fs › write_file".into(),
             description: "MCP tool: write_file (filesystem server)".into(),
             arguments: r#"{"path":"/etc/hosts","content":"127.0.0.1 localhost\n"}"#.into(),
             scope: "/etc/hosts".into(),
             elevation: true,
             one_off: false,
-            origin: Some("runner #c3d4 · mcp_specialist".into()),
+            origin: Some("runner #c3d4 (mcp_specialist)".into()),
             hazard: Some(muta_contracts::HazardLevel::FileModification),
             submission: None,
             ..Default::default()
@@ -71,7 +71,7 @@ fn fixtures() -> Vec<PermissionRequest> {
             // Confirm rule (e.g. `git reset --hard`). `Always` is honoured for
             // this one call but not persisted; the TUI de-emphasises the option.
             id: "p4".into(),
-            tool: "bash".into(),
+            tool: "execute_command".into(),
             label: "Dangerous bash command".into(),
             description: "Bash policy requires one-off confirmation before running this command.\n\nRule: git reset hard (built-in)\nReason: git reset --hard discards uncommitted working tree changes.\n\nA broad bash allowlist entry does not bypass this safety check.".into(),
             arguments: r#"{"command":"git reset --hard HEAD~1"}"#.into(),
@@ -122,7 +122,7 @@ pub fn run() -> io::Result<()> {
                 "normal"
             };
             let title = format!(
-                " permission sheet · fixture {}/{} ({mode})  Tab=next  q/Ctrl+C=quit",
+                " permission sheet  fixture {}/{} ({mode})  Tab=next  q/Ctrl+C=quit",
                 s.idx + 1,
                 s.fx.len(),
             );

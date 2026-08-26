@@ -1621,7 +1621,7 @@ pub async fn run_tui(
                                     raw_msg
                                 } else {
                                     format!(
-                                        "Exhausted {} retry attempts · {}",
+                                        "Exhausted {} retry attempts — {}",
                                         retry.attempt, raw_msg
                                     )
                                 }
@@ -2122,6 +2122,8 @@ pub async fn run_tui(
         editor_effort: "high".to_string(),
         editor_thinking_available: false,
         editor_thinking: true,
+        editor_vision_override: None,
+        editor_tool_override: None,
         custom_field: 0,
         custom_fields: Vec::new(),
         custom_protocol_wire: String::new(),
@@ -2382,7 +2384,7 @@ fn describe_todos_change(prev: Option<&TodoList>, new: Option<&TodoList>) -> Opt
     let done = new.count(muta_contracts::TodoStatus::Completed);
     let total = new.items.len();
     let Some(prev) = prev.filter(|l| !l.items.is_empty()) else {
-        return Some(format!("tasks started · {done}/{total}"));
+        return Some(format!("tasks started ({done}/{total})"));
     };
     // Count status transitions across the items present in both snapshots.
     // Newly added items (no positional counterpart) do not read as a status
@@ -2399,9 +2401,9 @@ fn describe_todos_change(prev: Option<&TodoList>, new: Option<&TodoList>) -> Opt
     // One compact line: progress tally plus — only when something actually
     // moved — how many steps changed this turn.
     if changed > 0 {
-        Some(format!("tasks · {done}/{total} · {changed} updated"))
+        Some(format!("tasks ({done}/{total}, {changed} updated)"))
     } else {
-        Some(format!("tasks · {done}/{total}"))
+        Some(format!("tasks ({done}/{total})"))
     }
 }
 
@@ -2440,7 +2442,7 @@ mod describe_todos_change_tests {
         // No previous list → the "started" line, counting completed (0/3).
         assert_eq!(
             describe_todos_change(None, Some(&new)),
-            Some("tasks started · 0/3".to_string())
+            Some("tasks started (0/3)".to_string())
         );
     }
 
@@ -2464,7 +2466,7 @@ mod describe_todos_change_tests {
         ]);
         assert_eq!(
             describe_todos_change(Some(&prev), Some(&new)),
-            Some("tasks · 3/5 · 5 updated".to_string())
+            Some("tasks (3/5, 5 updated)".to_string())
         );
     }
 
@@ -2477,7 +2479,7 @@ mod describe_todos_change_tests {
         let new = list(&[item(1, TodoStatus::Pending), item(2, TodoStatus::Completed)]);
         assert_eq!(
             describe_todos_change(Some(&prev), Some(&new)),
-            Some("tasks · 1/2 · 1 updated".to_string())
+            Some("tasks (1/2, 1 updated)".to_string())
         );
     }
 
@@ -2502,7 +2504,7 @@ mod describe_todos_change_tests {
         ]);
         assert_eq!(
             describe_todos_change(Some(&prev), Some(&new)),
-            Some("tasks · 0/3".to_string())
+            Some("tasks (0/3)".to_string())
         );
     }
 

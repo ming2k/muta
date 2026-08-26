@@ -142,7 +142,7 @@ Two adjacent boundaries are tempting and both are wrong:
 
 What about "any time before the first turn completes"? Reversibility ends
 before that: the first turn may commit an assistant message with tool calls
-into history, and tools may have executed real side effects (a bash command
+into history, and tools may have executed real side effects (an execute_command invocation
 ran, a file was written). Unsending the user message past that point would
 have to discard committed history and disavow real-world effects — the
 conversation would no longer be self-consistent. The `streamed_text` /

@@ -119,6 +119,9 @@ pub fn tool_default_expanded(config: &TuiConfig, name: &str) -> bool {
     config
         .default_expanded
         .get(name)
+        // Read old Mutx configs without keeping `bash` in the current tool
+        // vocabulary. The next save naturally writes only keys the user edits.
+        .or_else(|| (name == "execute_command").then(|| config.default_expanded.get("bash")).flatten())
         .copied()
         .unwrap_or_else(|| presenter_for(name).default_expanded())
 }
@@ -233,18 +236,22 @@ mod tests {
     #[test]
     fn unlisted_tool_falls_back_to_presenter_default() {
         let cfg = TuiConfig::default();
-        // edit_file and bash have built-in default of expanded.
+        // edit_file has a built-in default of expanded; execute_command and
+        // read_text collapse (their summaries carry the outcome).
         assert!(tool_default_expanded(&cfg, "edit_file"));
-        assert!(tool_default_expanded(&cfg, "bash"));
-        // read_text collapses by default.
+        assert!(!tool_default_expanded(&cfg, "execute_command"));
         assert!(!tool_default_expanded(&cfg, "read_text"));
     }
 
     #[test]
     fn explicit_override_wins_over_presenter_default() {
-        let cfg = config(&[("edit_file", false), ("bash", false), ("read_text", true)]);
+        let cfg = config(&[
+            ("edit_file", false),
+            ("execute_command", false),
+            ("read_text", true),
+        ]);
         assert!(!tool_default_expanded(&cfg, "edit_file"));
-        assert!(!tool_default_expanded(&cfg, "bash"));
+        assert!(!tool_default_expanded(&cfg, "execute_command"));
         assert!(tool_default_expanded(&cfg, "read_text"));
         // Still falls back for unlisted tools.
         assert!(!tool_default_expanded(&cfg, "search_text"));
@@ -262,14 +269,20 @@ mod tests {
         let toml = r#"
 [default_expanded]
 edit_file = true
-bash = true
+execute_command = true
 thinking = true
 "#;
         let cfg: TuiConfig = toml::from_str(toml).expect("parses");
         assert!(tool_default_expanded(&cfg, "edit_file"));
-        assert!(tool_default_expanded(&cfg, "bash"));
+        assert!(tool_default_expanded(&cfg, "execute_command"));
         assert!(!tool_default_expanded(&cfg, "read_text"));
         assert!(thinking_default_expanded(&cfg));
+    }
+
+    #[test]
+    fn legacy_bash_expand_key_applies_to_execute_command() {
+        let cfg = config(&[("bash", false)]);
+        assert!(!tool_default_expanded(&cfg, "execute_command"));
     }
 
     #[test]

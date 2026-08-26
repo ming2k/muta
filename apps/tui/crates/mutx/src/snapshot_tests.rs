@@ -248,9 +248,9 @@ fn read_text_with_offset_numbers_from_start_line() {
 }
 
 #[test]
-fn bash_expanded_renders_markers_and_output() {
+fn execute_command_expanded_renders_markers_and_output() {
     let m = tool_step(
-        "bash",
+        "execute_command",
         r#"{"command":"cargo test"}"#,
         Some("running 3 tests\n.\n.\n.\ntest result: ok. 3 passed\nSTDOUT:\nbuilt ok\nExit 0\n"),
         true,
@@ -259,13 +259,13 @@ fn bash_expanded_renders_markers_and_output() {
 }
 
 #[test]
-fn bash_expanded_renders_structured_shell() {
+fn execute_command_expanded_renders_structured_shell() {
     // Structured Shell: stdout and stderr render as separate color bands and a
     // non-zero exit produces an `exit N` footer (the failure is also reflected
-    // in the header status glyph). This is the path bash takes in production
+    // in the header status glyph). This is the command path in production
     // post-ADR-0001; the marker-sniffing test above covers the legacy fallback.
     let m = tool_step_structured(
-        "bash",
+        "execute_command",
         r#"{"command":"cargo test"}"#,
         muta_contracts::ToolOutput::Shell {
             command: "cargo test".into(),
@@ -282,7 +282,7 @@ fn bash_expanded_renders_structured_shell() {
 }
 
 #[test]
-fn bash_expanded_preserves_stdout_stderr_interleaving() {
+fn execute_command_expanded_preserves_stdout_stderr_interleaving() {
     // Regression for the "all-stdout-then-all-stderr" reorder symptom: when
     // `lines` is populated, the renderer must emit them in arrival order, not
     // bucketed by stream. Here a stderr line sits *between* two stdout lines,
@@ -290,7 +290,7 @@ fn bash_expanded_preserves_stdout_stderr_interleaving() {
     // `Compiling c` — not pinned to the bottom.
     use muta_contracts::tool_output::{ShellLine, ShellStream};
     let m = tool_step_structured(
-        "bash",
+        "execute_command",
         r#"{"command":"cargo build"}"#,
         muta_contracts::ToolOutput::Shell {
             command: "cargo build".into(),
@@ -320,17 +320,17 @@ fn bash_expanded_preserves_stdout_stderr_interleaving() {
 }
 
 #[test]
-fn bash_expanded_folds_long_output_keeping_tail_events() {
+fn execute_command_expanded_folds_long_output_keeping_tail_events() {
     // A long stdout (well past HEAD + TAIL + 1 = 7 lines) folds its middle
     // into a single `⋯ N lines hidden` row, while the head, the tail, and the
     // trailing `exit 1` event footer all stay visible. This is the fix for the
-    // "verbose stdout buries the exit code" symptom on an expanded bash step.
+    // "verbose stdout buries the exit code" symptom on an expanded command step.
     let stdout = (1..=20)
         .map(|i| format!("line {i}"))
         .collect::<Vec<_>>()
         .join("\n");
     let m = tool_step_structured(
-        "bash",
+        "execute_command",
         r#"{"command":"cargo build"}"#,
         muta_contracts::ToolOutput::Shell {
             command: "cargo build".into(),
@@ -430,12 +430,12 @@ fn list_dir_expanded_renders_listing() {
 }
 
 #[test]
-fn bash_running_streams_live_preview() {
-    // A long-running bash command mid-stream: status is still Running (header
+fn execute_command_running_streams_live_preview() {
+    // A long-running command mid-stream: status is still Running (header
     // shows a steady `info` accent) but partial stdout already shows under the
     // header via the structured Shell, instead of freezing on a spinner.
     let m = tool_step_streaming(
-        "bash",
+        "execute_command",
         r#"{"command":"cargo build"}"#,
         muta_contracts::ToolOutput::Shell {
             command: "cargo build".into(),
@@ -760,10 +760,10 @@ fn user_message_before_tool_step_has_single_separator_row() {
     );
 }
 
-/// The metadata component owns separators, so a sent user header with both a
-/// round and timestamp renders exactly one separator between the two chips.
+/// A sent user header with both a round and timestamp renders clean whitespace
+/// separation between the two chips instead of middle dot delimiters.
 #[test]
-fn sent_user_header_has_one_metadata_separator() {
+fn sent_user_header_has_clean_metadata_separator() {
     let message = TranscriptMessage::new(Role::User, "inspect files")
         .with_round(5)
         .with_sent_at_ms(1_700_000_000_000);
@@ -776,12 +776,16 @@ fn sent_user_header_has_one_metadata_separator() {
 
     assert_eq!(
         header.matches('·').count(),
-        1,
-        "round and timestamp should have one separator:\n{grid}"
+        0,
+        "round and timestamp should not have middle dot separator:\n{grid}"
+    );
+    assert!(
+        header.contains("round 5  "),
+        "round and timestamp should have whitespace separator:\n{grid}"
     );
 }
 
-/// ADR-0111: command entries render a generic header (`⌘ command · HH:MM`)
+/// ADR-0111: command entries render a generic header with a right-aligned time
 /// followed directly by their invocation and unfolded result body.
 #[test]
 fn command_entries_render_header_and_direct_body_without_folding() {
@@ -793,7 +797,7 @@ fn command_entries_render_header_and_direct_body_without_folding() {
             "permissions",
             "",
             Some(muta_contracts::CommandResult::PermissionList {
-                allowed: vec!["bash".to_string()],
+                allowed: vec!["execute_command".to_string()],
             }),
         ),
     ];
@@ -1079,7 +1083,7 @@ fn reasoning_trace_spacing_has_internal_gaps_and_single_trailing_separator() {
     let rows: Vec<&str> = grid.lines().collect();
     let summary_idx = rows
         .iter()
-        .position(|row| row.contains("Thinking ·"))
+        .position(|row| row.contains("Thinking"))
         .expect("reasoning summary must render");
     let first_idx = rows
         .iter()
@@ -1265,7 +1269,7 @@ fn same_turn_segments_have_gaps_but_parallel_tools_stay_flush() {
         .expect("turn header must render");
     let thinking_idx = rows
         .iter()
-        .position(|row| row.contains("Thinking ·"))
+        .position(|row| row.contains("Thinking"))
         .expect("thinking summary must render");
     let tool_idx: Vec<usize> = rows
         .iter()

@@ -358,7 +358,7 @@ impl std::fmt::Display for ScopeTargetDisplay<'_> {
     }
 }
 
-/// Gate 5: bash command policy. A **complete** gate — every bash outcome,
+/// Gate 5: command policy. A **complete** gate — every command outcome,
 /// including the interactive confirm, is decided here.
 pub struct BashPolicy;
 #[async_trait]
@@ -367,7 +367,7 @@ impl PermissionPolicy for BashPolicy {
         "bash-policy"
     }
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if !matches!(ctx.call_name, "bash" | "sandbox_bash") {
+        if ctx.call_name != "execute_command" {
             return PolicyDecision::Pass;
         }
         let command = match &ctx.scope_target {
@@ -386,11 +386,11 @@ impl PermissionPolicy for BashPolicy {
                     PolicyDecision::MissingAuthority {
                         request: muta_contracts::PermissionRequest {
                             id: String::new(),
-                            tool: "bash".to_string(),
-                            label: "Dangerous bash command".to_string(),
+                            tool: "execute_command".to_string(),
+                            label: "Dangerous command".to_string(),
                             description: format!(
-                                "Bash policy requires one-off confirmation before running this \
-                                 command.\n\nRule: {}{}\nReason: {}\n\nA broad bash allowlist entry \
+                                "Command policy requires one-off confirmation before running this \
+                                 command.\n\nRule: {}{}\nReason: {}\n\nA broad command allowlist entry \
                                  does not bypass this safety check.",
                                 match_.name,
                                 if match_.builtin { " (built-in)" } else { "" },
@@ -405,7 +405,7 @@ impl PermissionPolicy for BashPolicy {
                             submission: None,
                         },
                         rule: PermissionRule {
-                            tool: "bash".to_string(),
+                            tool: "execute_command".to_string(),
                             scope: command,
                         },
                     }
@@ -606,10 +606,10 @@ mod tests {
     #[tokio::test]
     async fn disabled_policy_denies() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
-            name: "bash".into(),
+            name: "execute_command".into(),
             target: ScopeTarget::Command("ls".into()),
         });
-        let disabled: HashSet<String> = ["bash".to_string()].into_iter().collect();
+        let disabled: HashSet<String> = ["execute_command".to_string()].into_iter().collect();
         let scoped = ScopedToolDisable::default();
         let op = muta_contracts::OperationScope::unrestricted();
         let ctxr = StubCtx {
@@ -617,7 +617,7 @@ mod tests {
         };
         let c = pctx(
             &tool,
-            "bash",
+            "execute_command",
             "{}",
             ScopeTarget::Unspecified,
             false,
@@ -1103,7 +1103,7 @@ mod tests {
     struct DangerousCommandTool;
     #[async_trait]
     impl Tool for DangerousCommandTool {
-        fn name(&self) -> &str { "bash" }
+        fn name(&self) -> &str { "execute_command" }
         fn description(&self) -> &str { "Run shell command" }
         fn parameters(&self) -> serde_json::Value { serde_json::json!({}) }
         fn hazard_level(&self) -> muta_contracts::HazardLevel { muta_contracts::HazardLevel::CommandExecution }
@@ -1154,7 +1154,7 @@ mod tests {
         let c = pctx(
 
             &tool,
-            "bash",
+            "execute_command",
             "cargo test",
             ScopeTarget::Command("cargo test".to_string()),
             false,
@@ -1192,7 +1192,7 @@ mod tests {
 
         let c = pctx(
             &tool,
-            "bash",
+            "execute_command",
             "cargo build",
             ScopeTarget::Command("cargo build".to_string()),
             false,
@@ -1207,7 +1207,7 @@ mod tests {
 
         // Grant session permission
         ctxr.permissions().add_session(PermissionRule {
-            tool: "bash".into(),
+            tool: "execute_command".into(),
             scope: "cargo build".into(),
         });
 

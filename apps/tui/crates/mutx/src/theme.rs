@@ -672,8 +672,8 @@ impl Theme {
     }
 
     // ── Attachment chips ──
-    // Paste chips (`[Pasted text #N +M lines · size]`) and image chips
-    // (`[Image #N · size]`) are the composer's identifiers for staged
+    // Paste chips (`[Pasted text #N +M lines (size)]`) and image chips
+    // (`[Image #N (size)]`) are the composer's identifiers for staged
     // attachments. Each kind gets its own foreground + tinted band so pasted
     // blocks read as distinct typed objects inside the live input — the blue
     // marks "text block", the amber marks "image block". Both derive from

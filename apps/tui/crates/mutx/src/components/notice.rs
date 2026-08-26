@@ -81,9 +81,9 @@ pub fn parse_notice_content(raw: &str) -> NoticeContent {
     }
 }
 
-/// Build the one-row header of a notification entry: `! notification · 21:39`.
+/// Build the one-row header of a notification entry: label left, time right.
 /// The lead glyph (`! `, `▲ `, `ℹ `) and `notification` label are rendered in the
-/// severity indicator tone (BOLD), followed by the optional muted trailing timestamp ` · HH:MM`.
+/// severity indicator tone (BOLD), followed by an optional right-aligned time.
 fn notice_header_line(
     lead_symbol: &str,
     severity_tone: Color,
@@ -104,12 +104,15 @@ fn notice_header_line(
             .add_modifier(Modifier::BOLD),
     ));
 
-    // Trailing timestamp: ` · HH:MM` in muted color.
+    // Trailing timestamp: right-aligned in muted color.
     if let Some(time) = time_label {
-        let time_span = format!(" · {time}");
-        let budget = full_width.saturating_sub(used);
-        if time_span.width() <= budget {
-            spans.push(Span::styled(time_span, Style::default().fg(muted)));
+        let time_width = time.width();
+        if used + 2 + time_width <= full_width {
+            spans.push(Span::styled(
+                " ".repeat(full_width - used - time_width),
+                Style::default(),
+            ));
+            spans.push(Span::styled(time.to_string(), Style::default().fg(muted)));
         }
     }
 
@@ -276,11 +279,11 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
 
     #[test]
     fn parses_retry_exhausted_json_error() {
-        let raw = r#"Exhausted 30 retry attempts · Google HTTP 429 Too Many Requests: {"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED"}}"#;
+        let raw = r#"Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests: {"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED"}}"#;
         let parsed = parse_notice_content(raw);
         assert_eq!(
             parsed.header,
-            "Exhausted 30 retry attempts · Google HTTP 429 Too Many Requests"
+            "Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests"
         );
         assert!(parsed.detail.is_some());
         let detail = parsed.detail.unwrap();

@@ -361,12 +361,11 @@ mod tests {
             turn: Some(1),
             output_tokens: 1_240,
             elapsed_ms: 83_000,
-            current_tool: Some("bash".into()),
+            current_tool: Some("execute_command".into()),
             activity: Some("waiting for model".into()),
             context_tokens: Some(48_200),
             note: None,
             project_root: "/tmp/project".into(),
-            wip: None,
             parent_id: None,
             fork_kind: SessionForkKind::default(),
         }
@@ -393,7 +392,7 @@ mod tests {
         assert!(text.contains("abcdef12"), "{text}");
         assert!(text.contains("running"), "{text}");
         assert!(text.contains("3 › 1"), "{text}");
-        assert!(text.contains("tool bash"), "{text}");
+        assert!(text.contains("tool execute_command"), "{text}");
         assert!(text.contains("1m23s"), "{text}");
         assert!(text.contains("ctx 48.2k"), "{text}");
     }

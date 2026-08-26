@@ -7,9 +7,10 @@
 //! *event* in the stream, not as harness chatter:
 //!
 //! ```text
-//! ▲ interrupted · 21:39          ← header: warn tone + BOLD, muted time tail
+//! ▲ interrupted              21:39 ← header: warn tone + BOLD, muted time tail
 //!                                ← 1 blank row (TURN_HEADER_BODY_GAP_ROWS)
-//!   round 3 · Esc Esc            ← body, indent TRANSCRIPT_BODY_LEADING_INDENT
+//!   Round 3 — cancelled via [Esc Esc]
+//!                                   body, indent TRANSCRIPT_BODY_LEADING_INDENT
 //! ```
 //!
 //! The severity tone is `theme.warn()` — the same user-intervention tone the
@@ -27,8 +28,8 @@ use unicode_width::UnicodeWidthStr;
 use super::Theme;
 
 /// Build the one-row header of a round-interrupt entry:
-/// `▲ interrupted · 21:39`. The glyph + label render in the warn tone
-/// (BOLD), followed by the muted trailing timestamp ` · HH:MM` — the same
+/// `▲ interrupted  21:39`. The glyph + label render in the warn tone
+/// (BOLD), followed by the muted trailing timestamp — the same
 /// three-part skeleton as `notice_header_line` / `command_header_line`.
 fn round_interrupt_header_line(
     warn: mutx_engine::Color,
@@ -47,12 +48,15 @@ fn round_interrupt_header_line(
         Style::default().fg(warn).add_modifier(Modifier::BOLD),
     ));
 
-    // Trailing timestamp: ` · HH:MM` in muted color.
+    // Trailing timestamp: right-aligned in muted color.
     if let Some(time) = time_label {
-        let time_span = format!(" · {time}");
-        let budget = full_width.saturating_sub(used);
-        if time_span.width() <= budget {
-            spans.push(Span::styled(time_span, Style::default().fg(muted)));
+        let time_width = time.width();
+        if used + 2 + time_width <= full_width {
+            spans.push(Span::styled(
+                " ".repeat(full_width - used - time_width),
+                Style::default(),
+            ));
+            spans.push(Span::styled(time.to_string(), Style::default().fg(muted)));
         }
     }
 
@@ -62,7 +66,7 @@ fn round_interrupt_header_line(
 /// Draw a round-interrupt marker as a top-level **Entry** (C11, following the
 /// ADR-0111 universal shape): header row, one-row gap, unfolded body. The
 /// body is the `TranscriptMessage::round_interrupted` raw text
-/// (`round N · <reason>`), wrapped at the body width in the foreground tone.
+/// (`Round N — <reason>`), wrapped at the body width in the foreground tone.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_round_interrupt(
     frame: &mut Frame,
@@ -167,7 +171,7 @@ mod tests {
             40,
         );
         let text: String = line.spans.iter().map(|s| s.content.clone()).collect();
-        assert_eq!(text, "▲ interrupted · 21:39");
+        assert_eq!(text, format!("▲ interrupted{:>27}", "21:39"));
     }
 
     #[test]
@@ -188,7 +192,7 @@ mod tests {
             mutx_engine::Color::Yellow,
             Some("21:39"),
             mutx_engine::Color::DarkGray,
-            5, // narrower than " · 21:39"
+            5, // narrower than the label and timestamp
         );
         let text: String = line.spans.iter().map(|s| s.content.clone()).collect();
         assert_eq!(text, "▲ interrupted");

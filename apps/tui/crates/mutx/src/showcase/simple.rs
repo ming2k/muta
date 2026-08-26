@@ -95,7 +95,7 @@ pub fn provider() -> io::Result<()> {
         &mut state,
         |f, s| {
             let title = format!(
-                " connections picker · {} providers  / to search  q/Ctrl+C=quit",
+                " connections picker  {} providers  / to search  q/Ctrl+C=quit",
                 s.picker.rows.len(),
             );
             let hint = " ↑↓ navigate  Enter select  / search  Esc back/quit ";
@@ -241,7 +241,7 @@ pub fn models() -> io::Result<()> {
         &mut state,
         |f, s| {
             let title = format!(
-                " models picker · {} pairs  / to search  q/Ctrl+C=quit",
+                " models picker  {} pairs  / to search  q/Ctrl+C=quit",
                 s.picker.rows.iter().map(|r| r.models.len()).sum::<usize>(),
             );
             let hint = " ↑↓ navigate  Enter activate  * favorite  e settings  Esc back/quit ";
@@ -337,7 +337,7 @@ pub fn model_editor() -> io::Result<()> {
     common::run_showcase(
         &mut state,
         |f, s| {
-            let title = " key editor · API key  q/Ctrl+C=quit".to_string();
+            let title = " key editor  API key  q/Ctrl+C=quit".to_string();
             let hint = " type to edit  Enter save  Esc quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
                 draw_model_editor(
@@ -349,6 +349,7 @@ pub fn model_editor() -> io::Result<()> {
                     0,
                     None,
                     &[],
+                    None,
                     None,
                     &theme,
                 );
@@ -421,7 +422,7 @@ pub fn history() -> io::Result<()> {
             let ranked = fuzzy::rank(&texts, &s.query);
             let index = s.index.min(ranked.len().saturating_sub(1));
             let title = format!(
-                " history search · {} entries  type to fuzzy-filter  q/Ctrl+C=quit",
+                " history search  {} entries  type to fuzzy-filter  q/Ctrl+C=quit",
                 s.history.len(),
             );
             let hint = " type to filter  ↑↓ navigate  Esc clear/quit ";
@@ -557,10 +558,10 @@ pub fn sessions() -> io::Result<()> {
         |f, s| {
             let index = s.index.min(s.sessions.len().saturating_sub(1));
             let title = format!(
-                " sessions picker · {} sessions · q/Ctrl+C=quit",
+                " sessions picker  {} sessions  q/Ctrl+C=quit",
                 s.sessions.len()
             );
-            let hint = " ↑↓ navigate · Esc quit ";
+            let hint = " ↑↓ navigate  Esc quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
                 let mut scroll = 0;
                 let mut info_scroll = 0;
@@ -657,8 +658,8 @@ pub fn activity() -> io::Result<()> {
     common::run_showcase(
         &mut state,
         |f, s| {
-            let title = " activity modal · q/Ctrl+C=quit";
-            let hint = " ←→ / Tab cycle tabs · ↑↓ scroll · Esc quit ";
+            let title = " activity modal  q/Ctrl+C=quit";
+            let hint = " ←→ / Tab cycle tabs  ↑↓ scroll  Esc quit ";
             common::draw_with_chrome(f, title, hint, &theme, |f| {
                 let mut scroll = s.scroll.get();
                 draw_activity_modal(
@@ -671,7 +672,7 @@ pub fn activity() -> io::Result<()> {
                         current_turn: 2,
                         current_model: "claude-sonnet-4-5",
                         round_started_at: Some(s.started),
-                        activity: "running runner · exploring the codebase",
+                        activity: "running runner — exploring the codebase",
                         provider_retry: None,
                     },
                     &mut scroll,
@@ -721,7 +722,7 @@ pub fn help() -> io::Result<()> {
         |f, _| {
             common::draw_with_chrome(
                 f,
-                " help · keybindings · q/Esc=quit",
+                " help  keybindings  q/Esc=quit",
                 " Esc quit ",
                 &theme,
                 |f| {
@@ -767,11 +768,11 @@ pub fn toast() -> io::Result<()> {
         |f, s| {
             let (msg, failed) = variants[s.idx];
             let title = format!(
-                " toast · variant {}/{} · Tab=next · q/Ctrl+C=quit",
+                " toast  variant {}/{}  Tab=next  q/Ctrl+C=quit",
                 s.idx + 1,
                 variants.len()
             );
-            let hint = " Tab next · Esc quit ";
+            let hint = " Tab next  Esc quit ";
             common::draw_with_chrome(f, &title, hint, &theme, |f| {
                 if s.idx == variants.len() - 1 {
                     draw_armed_toast(f, msg, &theme);
@@ -882,7 +883,7 @@ pub fn effort_ignition() -> io::Result<()> {
                 mutx_engine::Style::default()
                     .fg(theme.brand())
                     .add_modifier(mutx_engine::Modifier::BOLD),
-                "effort ignition · Kimi K3 max",
+                "effort ignition  Kimi K3 max",
             );
         },
         |s, key| match key.code {

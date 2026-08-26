@@ -32,7 +32,7 @@ TODOS 1/8 · write the docs   Ctrl+T expand   ↔↔   R3 segment: wide whitespa
 |------|------|--------------|--------|--------|
 | **R0** | Atomic | Parts of one value | No symbol — 0–1 space | `24.1 KB`, `3 tool calls`, `round 1`, `Ctrl+P block` |
 | **R1** | Modify | Trailing token is a state / measure / attribute of the leading one | ` · ` (space, middle dot, space) | `Thinking · 120 chars`, `↳ Completed · 3 calls · 1.2s`, `[Image #1 · 1.5 KB]`, `· blocked` |
-| **R2** | Enumerate | Same-rank peers | Plain whitespace, no glyph | `turn 2  sonnet`, `/skills  /repeat  /help`, `Ctrl+O insert  Ctrl+P block  Ctrl+Q expand` |
+| **R2** | Enumerate | Same-rank peers | Plain whitespace, no glyph | `turn 2  sonnet`, `/skills  /repeat  /help`, `Ctrl+P block  Ctrl+Q expand` |
 | **R3** | Segment | Cross-group boundary (content vs keycap legend, panel identity vs preview) | Plain whitespace, wide | `BAR_LEGEND_GAP_MIN` (6 cols) |
 | **↑** | Hierarchy | Container → member, tree parent → child | ` › ` inline breadcrumb; `↳` + indent for tree nesting | `round 3 › turn 2`, `Connections › keybindings` |
 
@@ -69,7 +69,7 @@ equal gaps are what make the group read as a list.
 
 - `turn 2  sonnet` (turn header: anchor  model)
 - `Ctrl-M  /models` (carousel keycap + command peers)
-- `Ctrl+O insert  Ctrl+P block  Ctrl+Q expand` (queue-bar legend: three independent affordances)
+- `Ctrl+P block  Ctrl+Q expand` (queue-bar legend: two independent affordances)
 - `type filter  ↑↓ navigate  Enter activate` (modal footer hints)
 - `v1.2.3  local  #rust #tui` (skill metadata: version, source, tags)
 
@@ -81,7 +81,7 @@ keycap legend, so a truncated preview's `…` never butts against a key.
 
 ```
 TODOS 1/8 · write the docs   Ctrl+T expand
-QUEUE 2  fix the flaky test   Ctrl+O insert  Ctrl+P block  Ctrl+Q expand
+QUEUE 2  fix the flaky test   Ctrl+P block  Ctrl+Q expand
 ```
 
 ### Hierarchy — never `·`
@@ -147,7 +147,7 @@ Conforming surfaces (R1 modifiers, kept):
 
 Migrated to whitespace / breadcrumb:
 
-- Queue-bar legend: `Ctrl+O insert  Ctrl+P block  Ctrl+Q expand` (R2).
+- Queue-bar legend: `Ctrl+P block  Ctrl+Q expand` (R2).
 - Modal footer hints: `type filter  ↑↓ navigate  Enter activate` (R2).
 - Empty-state suggestions: `/skills  /repeat  /help` (R2).
 - Help copy: `copy  clear input  quit (×2)` (R2).

@@ -172,19 +172,19 @@ pub enum PatchOp {
 }
 
 /// How a child process's stdin should be provisioned. This is the
-/// **execution contract** for the bash tool: an autonomous agent can never
+/// **execution contract** for the command tool: an autonomous agent can never
 /// "type" into a running process, so stdin is decided **before** spawn and
 /// provisioned once. The decision happens in the agent dispatch layer
 /// (see `StdinPolicy::decide`), which consults the command's interactive
 /// classifier and the active authorization (human input vs. an opt-in
-/// model-supplied buffer) — see the disclosure/bash design doc.
+/// model-supplied buffer) — see the command disclosure design doc.
 ///
 /// Keeping stdin out of the model's writable JSON arguments (it lives on the
 /// tool trait's signature instead) makes the "input only ever comes from a
 /// declared source" contract structural rather than conventional: in a
 /// default session the model cannot supply stdin at all, mirroring how mature
 /// agent harnesses (e.g. Claude Code) deliberately omit a `stdin` parameter
-/// from their bash tool's schema.
+/// from their command tool's schema.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StdinPolicy {
     /// Connect stdin to `/dev/null` (EOF immediately). The default hard floor:
@@ -204,7 +204,7 @@ pub enum StdinPolicy {
     ///    child has a chance to block.
     /// 2. **Model-supplied** (opt-in): an runner profile or main config set
     ///    `allow_model_stdin`, which dynamically exposed a `stdin` parameter
-    ///    in the bash tool schema and the model filled it. For autonomous /
+    ///    in the command tool schema and the model filled it. For autonomous /
     ///    autopilot flows where no human is reachable.
     ///
     /// In both cases the bytes are buffered in the pipe ahead of the child's
@@ -503,7 +503,7 @@ impl ToolOutput {
     /// Flatten to the legacy display string. This is the bridge that lets the
     /// existing string-based transcript/UI render unchanged while structured
     /// data is also available. `Shell` reproduces the exact format historically
-    /// emitted by the bash tool (`tools.rs`), so migrating bash to
+    /// emitted by the command tool, so migrating command execution to
     /// [`ToolOutput::Shell`] is invisible to any consumer still reading text.
     pub fn to_text(&self) -> String {
         match self {
@@ -639,7 +639,7 @@ pub enum ToolStream {
 }
 
 /// Compose the non-truncated bash-tool display string from structured fields
-/// (mirrors `BashTool::call`). Pub(crate) so the bash tool can compute the
+/// (mirrors `ExecuteCommandTool::call`). Pub(crate) so the command tool can compute the
 /// pre-truncation length to decide its `truncated` flag without duplicating
 /// the format logic.
 pub fn shell_inner_text(stdout: &str, stderr: &str, exit: Option<i32>) -> String {
@@ -660,7 +660,7 @@ pub fn shell_inner_text(stdout: &str, stderr: &str, exit: Option<i32>) -> String
 }
 
 /// The composed shell output is "large" once it crosses this many bytes. Both
-/// the producer (`BashTool`, which pre-computes the `truncated` hint from the
+/// the producer (`ExecuteCommandTool`, which pre-computes the `truncated` hint from the
 /// same length) and the consumer (`shell_to_text`, which performs the actual
 /// cut for text-based callers) read this single source of truth so the two
 /// cannot drift apart.
@@ -675,7 +675,7 @@ pub const SHELL_TRUNCATED_CHARS: usize = 4000;
 pub const TAB_WIDTH: usize = 8;
 
 /// Reconstruct the legacy bash-tool display string from structured fields.
-/// Mirrors `BashTool::call` byte-for-byte so migrating to [`ToolOutput::Shell`]
+/// Mirrors `ExecuteCommandTool::call` byte-for-byte so migrating to [`ToolOutput::Shell`]
 /// changes nothing for text-based consumers. The truncation policy
 /// ([`SHELL_MAX_OUTPUT_CHARS`] threshold, [`SHELL_TRUNCATED_CHARS`] cut) lives
 /// here as the back-compat bridge; structured consumers read the raw fields

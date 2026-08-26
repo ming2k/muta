@@ -159,9 +159,82 @@ pub struct ModelCapabilities {
     pub effort_levels: Vec<crate::effort::EffortLevel>,
 }
 
+/// A user's explicit capability override for one (provider-instance, model)
+/// route -- the **top layer** of the capability resolution order (ADR-0080).
+///
+/// Every field is optional; `None` means "no opinion, fall through to the
+/// layer below". A present `Some(false)` is meaningful: it forces the
+/// capability off even when both the remote advertisement and the static
+/// baseline say otherwise (e.g. a relay's `glm-5.3-flash` that strips image
+/// inputs, or an account whose plan caps the context window lower than the
+/// model card claims).
+///
+/// This lives in `muta-contracts` (not persistence) so the merge function can
+/// live beside the structure it overrides -- persistence keys it per
+/// `(instance_id, model_id)` inside `RouteSettings` and owns only storage.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS,
+)]
+#[serde(default)]
+pub struct CapabilityOverrides {
+    /// Force the family tag used for family-scoped wire behavior (cache
+    /// policy, effort mapping). `None` -> inherit from the layers below.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// Force the context window (tokens). `None` -> inherit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<usize>,
+    /// Force the max output tokens. `None` -> inherit. `Some(0)` clears an
+    /// inherited cap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// Force the thinking representation. `None` -> inherit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingSupport>,
+    /// Force native tool calling on/off. `None` -> inherit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<bool>,
+    /// Force image-input support on/off. `None` -> inherit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
+}
+
+impl CapabilityOverrides {
+    /// Whether any knob is set. An all-`None` record is a no-op and should
+    /// not be persisted.
+    pub fn is_empty(&self) -> bool {
+        self.family.is_none()
+            && self.context_window.is_none()
+            && self.max_output_tokens.is_none()
+            && self.thinking.is_none()
+            && self.tool_call.is_none()
+            && self.vision.is_none()
+    }
+}
+
 impl ModelCapabilities {
     /// Resolve effective capabilities for `model_id`, applying all explicitly
     /// advertised remote fields over the local baseline.
+    ///
+    /// # Capability resolution order (ADR-0080)
+    ///
+    /// This method implements the **lower two layers** of the canonical
+    /// three-layer capability resolution order:
+    ///
+    /// ```text
+    /// 1. user config     — `RouteSettings::capability_overrides`
+    ///                      (per provider-instance + model id, applied last
+    ///                      by the catalog derivation, see ADR-0080)
+    /// 2. remote metadata — the `remote` argument here: fields a trusted
+    ///                      endpoint advertised (`fitting: true` templates)
+    /// 3. local baseline  — the static registry entry for the model id
+    /// ```
+    ///
+    /// A field resolved by a higher layer wins; an absent field at a higher
+    /// layer falls through to the layer below. The top (user) layer is *not*
+    /// applied here — capability overrides are the user's per-route choices
+    /// and are stamped on by [`Self::apply_overrides`] at the catalog
+    /// derivation site, keeping this function a pure baseline⊕remote merge.
     pub fn for_channel(model_id: &str, remote: Option<&RemoteModelMetadata>) -> Self {
         let baseline = resolve(model_id);
         let remote = remote.cloned().unwrap_or_default();
@@ -188,6 +261,35 @@ impl ModelCapabilities {
             }),
         }
     }
+
+    /// Apply the **top layer** of the capability resolution order (ADR-0080):
+    /// stamp the user's explicit `CapabilityOverrides` onto the already-merged
+    /// (baseline + remote) capabilities. Consumes `self` and returns the
+    /// overridden copy. This is deliberately a separate step from
+    /// [`Self::for_channel`] so that merge stays pure baseline+remote and
+    /// this stays the single, auditable place a user can win over a provider.
+    pub fn apply_overrides(mut self, user: &CapabilityOverrides) -> Self {
+        if let Some(family) = user.family.clone() {
+            self.family = family;
+        }
+        if let Some(context_window) = user.context_window {
+            self.context_window = context_window;
+        }
+        if let Some(max_output_tokens) = user.max_output_tokens {
+            self.max_output_tokens = Some(max_output_tokens);
+        }
+        if let Some(thinking) = user.thinking {
+            self.thinking = thinking;
+        }
+        if let Some(tool_call) = user.tool_call {
+            self.tool_call = tool_call;
+        }
+        if let Some(vision) = user.vision {
+            self.vision = vision;
+        }
+        self
+    }
+
 
     /// Coarse reasoning capability used by picker and request construction.
     pub const fn reasoning(&self) -> bool {
@@ -449,6 +551,47 @@ pub fn sanitize_model_id(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_overrides_win_over_remote_and_baseline() {
+        // ADR-0080: layer 1 (user) beats layer 2 (remote) beats layer 3
+        // (baseline), field-wise; unset user knobs fall through.
+        let remote = RemoteModelMetadata {
+            vision: Some(true),
+            tool_call: Some(true),
+            context_window: Some(222_000),
+            ..Default::default()
+        };
+        let user = CapabilityOverrides {
+            // user says vision off, even though remote+baseline say on
+            vision: Some(false),
+            // user has no opinion on tool_call -> remote's true stands
+            tool_call: None,
+            // user has no opinion on context window -> remote's 222_000 stands
+            context_window: None,
+            family: Some("user-family".to_string()),
+            thinking: None,
+            max_output_tokens: Some(4_096),
+        };
+        let caps = ModelCapabilities::for_channel("fixture-alpha", Some(&remote))
+            .apply_overrides(&user);
+        // Layer 1 wins:
+        assert!(!caps.vision, "user Some(false) must beat remote Some(true)");
+        assert_eq!(caps.family, "user-family");
+        assert_eq!(caps.max_output_tokens, Some(4_096));
+        // Fall-through to layer 2:
+        assert!(caps.tool_call);
+        assert_eq!(caps.context_window, 222_000);
+    }
+
+    #[test]
+    fn empty_capability_overrides_are_a_noop() {
+        let caps = ModelCapabilities::for_channel("fixture-alpha", None);
+        let overridden = caps.clone().apply_overrides(&CapabilityOverrides::default());
+        assert_eq!(caps, overridden);
+        assert!(CapabilityOverrides::default().is_empty());
+    }
+
 
     // Fixture baselines. Core's own tests must not depend on real vendor data
     // (that lives with the provider crates), so they register small tables of

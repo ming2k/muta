@@ -339,13 +339,13 @@ mod tests {
     fn inlines_tool_call_and_result() {
         let call = ToolCall {
             id: "bash_1".to_string(),
-            name: "bash".to_string(),
+            name: "execute_command".to_string(),
             arguments: r#"{"command":"ls"}"#.to_string(),
         };
         let messages = vec![
             user("list files"),
             assistant_with_call("", call),
-            tool_result("bash", "file1\nfile2"),
+            tool_result("execute_command", "file1\nfile2"),
         ];
         let out = format_export_markdown(
             ExportContext {
@@ -356,7 +356,7 @@ mod tests {
             &messages,
             &[],
         );
-        assert!(out.contains("### Tool call: `bash`"));
+        assert!(out.contains("### Tool call: `execute_command`"));
         assert!(out.contains(r#""command": "ls""#));
         assert!(out.contains("**Result:**"));
         assert!(out.contains("file1"));
@@ -366,19 +366,19 @@ mod tests {
     fn pairs_repeated_same_named_calls_in_order() {
         let call_a = ToolCall {
             id: "bash_a".to_string(),
-            name: "bash".to_string(),
+            name: "execute_command".to_string(),
             arguments: r#"{"command":"echo a"}"#.to_string(),
         };
         let call_b = ToolCall {
             id: "bash_b".to_string(),
-            name: "bash".to_string(),
+            name: "execute_command".to_string(),
             arguments: r#"{"command":"echo b"}"#.to_string(),
         };
         let messages = vec![
             assistant_with_call("", call_a),
-            tool_result("bash", "first"),
+            tool_result("execute_command", "first"),
             assistant_with_call("", call_b),
-            tool_result("bash", "second"),
+            tool_result("execute_command", "second"),
         ];
         let out = format_export_markdown(
             ExportContext {
@@ -403,7 +403,7 @@ mod tests {
     fn notes_interrupted_call_when_no_result() {
         let call = ToolCall {
             id: "bash_1".to_string(),
-            name: "bash".to_string(),
+            name: "execute_command".to_string(),
             arguments: r#"{"command":"sleep 10"}"#.to_string(),
         };
         let messages = vec![user("kick off"), assistant_with_call("", call)];

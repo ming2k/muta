@@ -5,7 +5,7 @@ use crate::serve::{ATTACH_SYNC_BUFFER_CAP, AttachAction, is_attach_sync_event};
 use muta_agent::{Agent, AgentIdentity, MasterPreset};
 use muta_contracts::{
     AgentRequest, AgentResponse, MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession,
-    PermissionDecision, SessionHosting, SessionOverview, SessionStatus, WipStatus,
+    PermissionDecision, SessionHosting, SessionOverview, SessionStatus,
 };
 use muta_persistence::session::SessionStore;
 use std::collections::{HashMap, VecDeque};
@@ -150,17 +150,7 @@ pub struct SessionRegistry {
     sessions: Arc<Mutex<HashMap<String, Arc<HostedSession>>>>,
     monitor: MonitorBus,
     meta: Arc<Mutex<MonitorMeta>>,
-    /// Declared work-in-progress per session id (ADR-0097 §5): the
-    /// coordination registry sessions consult via `check_wip`. In-memory —
-    /// advisory by design, so a restart simply drops declarations until
-    /// peers re-declare (never a correctness hazard).
-    wip: Arc<Mutex<HashMap<String, WipStatus>>>,
 }
-
-/// Shared handle on the WIP-coordination registry (ADR-0097 §5), injected
-/// into the per-session `declare_wip`/`wip_done` tools so they mutate the
-/// daemon's coordination state without holding the whole registry.
-pub type WipRegistry = Arc<Mutex<HashMap<String, WipStatus>>>;
 
 /// How long a never-persisted (empty) hosted session may sit idle before the
 /// reaper reclaims it. Five minutes is comfortably longer than any legitimate
@@ -204,7 +194,6 @@ impl SessionRegistry {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             monitor,
             meta: Arc::new(Mutex::new(MonitorMeta::default())),
-            wip: Arc::new(Mutex::new(HashMap::new())),
         }
     }
     /// Record the host's provenance (project root + start time) so monitor
@@ -373,7 +362,7 @@ impl SessionRegistry {
 
     /// Tear down a session whose driver task panicked (the "evict" leg of
     /// task supervision). Reuses the kill path's cleanup — entry removal,
-    /// terminal `Exit` broadcast, bounded SessionEnd hooks, WIP clearing,
+    /// terminal `Exit` broadcast, bounded SessionEnd hooks,
     /// `SessionRemoved` — but is tolerant of racing callers (another client
     /// may have already killed the session). Uses a tighter hook budget:
     /// this runs from inside the crashed task, so a hanging SessionEnd hook
@@ -415,7 +404,6 @@ impl SessionRegistry {
                 "crash eviction: SessionEnd hook exceeded 2s; abandoning it"
             );
         }
-        self.clear_wip(session_id).await;
         self.publish(MonitorEvent::SessionRemoved {
             session_id: session_id.to_string(),
         })
@@ -447,7 +435,6 @@ impl SessionRegistry {
         // Deliberately NOT sending AgentResponse::Exit and NOT firing
         // SessionEnd: suspension is invisible by design (no receivers exist
         // as a precondition) and the session continues on resume.
-        self.clear_wip(session_id).await;
         self.publish(MonitorEvent::SessionRemoved {
             session_id: session_id.to_string(),
         })
@@ -629,8 +616,6 @@ impl SessionRegistry {
                 "registry: SessionEnd hook exceeded its budget; abandoning it"
             );
         }
-        // A killed session's declared WIP goes with it (ADR-0097 §5 cleanup).
-        self.clear_wip(session_id).await;
         self.publish(MonitorEvent::SessionRemoved {
             session_id: session_id.to_string(),
         })
@@ -790,124 +775,6 @@ impl SessionRegistry {
                 );
             }
         });
-    }
-
-    // ── WIP coordination (ADR-0097 §5) ────────────────────────────────────
-
-    /// The shared WIP-coordination handle, for injecting into the session
-    /// tools (ADR-0097 §5).
-    pub fn wip_registry_handle(&self) -> WipRegistry {
-        Arc::clone(&self.wip)
-    }
-
-    /// A `check_wip` closure bound to one session, for injecting into the
-    /// `check_wip` tool. It clones the registry so the tool can query
-    /// against the live sessions index without holding a registry borrow.
-    fn check_wip_closure(&self, session_id: String) -> crate::wip_tools::CheckWipQuery {
-        let registry = self.clone();
-        Arc::new(move |paths: Vec<String>, concern: Option<String>| {
-            let registry = registry.clone();
-            let sid = session_id.clone();
-            Box::pin(async move { registry.check_wip(&sid, &paths, concern.as_deref()).await })
-        })
-    }
-
-    /// Register (or replace) a session's declared WIP and project it onto the
-    /// session's monitor row so peers and the dashboard see it.
-    pub async fn declare_wip(&self, session_id: &str, paths: Vec<String>, summary: String) {
-        let status = WipStatus { paths, summary };
-        self.wip
-            .lock()
-            .await
-            .insert(session_id.to_string(), status.clone());
-        let hosted = self.sessions.lock().await.get(session_id).cloned();
-        if let Some(e) = hosted {
-            e.tracker.lock().await.set_wip(Some(status));
-        }
-    }
-
-    /// Clear a session's declared WIP (on `wip_done`, kill, or natural
-    /// settle) and remove it from the monitor row.
-    pub async fn clear_wip(&self, session_id: &str) {
-        self.wip.lock().await.remove(session_id);
-        let hosted = self.sessions.lock().await.get(session_id).cloned();
-        if let Some(e) = hosted {
-            e.tracker.lock().await.set_wip(None);
-        }
-    }
-
-    /// Answer a session's `check_wip`: the conflicting declared-WIPs of
-    /// *other* sessions in the same workspace, plus the advice the session
-    /// should act on (ADR-0097 §5). Advisory, never a lock.
-    pub async fn check_wip(
-        &self,
-        session_id: &str,
-        query_paths: &[String],
-        concern: Option<&str>,
-    ) -> (Vec<muta_contracts::WipConflict>, muta_contracts::WipAdvice) {
-        let workspace = self
-            .sessions
-            .lock()
-            .await
-            .get(session_id)
-            .map(|e| e.project_root.clone());
-        let Some(workspace) = workspace else {
-            // Unknown session: no coordination data — proceed as today.
-            return (Vec::new(), muta_contracts::WipAdvice::Proceed);
-        };
-
-        // Peer sessions in the same workspace (by registry index), minus the
-        // asker itself. Snapshot the candidate stores under the lock, then
-        // resolve ids *outside* it: `session.id()` is async, and awaiting it
-        // with the map held serializes every concurrent resolve/kill/suspend
-        // against one another.
-        let peer_stores: Vec<Arc<SessionStore>> = {
-            let map = self.sessions.lock().await;
-            map.values()
-                .filter(|e| e.project_root == workspace)
-                .map(|e| Arc::clone(&e.session))
-                .collect()
-        };
-        let mut peers = Vec::new();
-        for store in peer_stores {
-            let id = store.id().await;
-            if id != session_id {
-                peers.push(id);
-            }
-        }
-
-        let declared = self.wip.lock().await;
-        let mut conflicts = Vec::new();
-        for peer in peers {
-            let Some(wip) = declared.get(&peer) else {
-                continue;
-            };
-            let overlap = overlap_paths(query_paths, &wip.paths);
-            // A peer whose WIP doesn't intersect the query at all is not a
-            // conflict for this concern (when the query named paths).
-            if !query_paths.is_empty() && overlap.is_empty() && concern.is_none() {
-                continue;
-            }
-            conflicts.push(muta_contracts::WipConflict {
-                session: peer,
-                paths: wip.paths.clone(),
-                summary: wip.summary.clone(),
-                overlap,
-            });
-        }
-
-        let advice = if conflicts.is_empty() {
-            muta_contracts::WipAdvice::Proceed
-        } else if query_paths.is_empty() {
-            // Whole-workspace concern (e.g. "run the full suite") with any
-            // WIP present: narrow / skip global verification.
-            muta_contracts::WipAdvice::ProceedScoped
-        } else if conflicts.iter().any(|c| !c.overlap.is_empty()) {
-            muta_contracts::WipAdvice::Defer
-        } else {
-            muta_contracts::WipAdvice::ProceedScoped
-        };
-        (conflicts, advice)
     }
 
     pub async fn host(&self, entry: HostedSession) -> BoundSession {
@@ -1108,7 +975,6 @@ impl SessionRegistry {
             project_root: Some(project_root.clone()),
             yolo: false,
             human_channel: Some(Arc::clone(&human_channel)),
-            extra_session_tools: None,
             teardown_token: Some(cancel.clone()),
         })
         .await
@@ -1116,20 +982,6 @@ impl SessionRegistry {
         let session = boot.session.clone();
         let req_tx = boot.req_tx.clone();
         let command_catalog = boot.command_catalog.clone();
-        // WIP-coordination tools (ADR-0097 §5): build them now that the
-        // session id is known, and publish them onto the agent the assemble
-        // built so its model can declare/consult WIP against this daemon's
-        // coordination registry. Done before the driver starts serving
-        // requests so the tools are present from the first turn.
-        let session_id = session.id().await;
-        let wip_tools = crate::wip_tools::build_wip_tools(
-            self.wip_registry_handle(),
-            session_id.clone(),
-            self.check_wip_closure(session_id),
-        );
-        boot.agent
-            .dynamic_tool_sink()
-            .replace("wip-coordination", wip_tools);
         let (events_tx, _) = broadcast::channel::<AgentResponse>(1024);
         let tap = events_tx.clone();
         let mut rr = boot.resp_rx;
@@ -1231,7 +1083,7 @@ impl SessionRegistry {
 
                 // Visible failure instead of silence: attached clients learn
                 // why before the Exit marker, then the entry is torn down
-                // through the standard path (SessionRemoved, WIP cleared,
+                // through the standard path (SessionRemoved,
                 // SessionEnd hooks bounded at 2s). The session stays on disk,
                 // so the next attach lazy-resumes it cleanly.
                 let _ = crash_events.send(AgentResponse::Error(format!(
@@ -1408,7 +1260,6 @@ fn base_row(overview: SessionOverview, project_root: &std::path::Path) -> Monito
         context_tokens: None,
         note: None,
         project_root: project_root.display().to_string(),
-        wip: None,
         // Lineage rides from the overview (ADR-0103 fork surfacing).
         parent_id: overview.parent_id,
         fork_kind: overview.fork_kind,
@@ -1451,92 +1302,4 @@ async fn session_exists_on_disk(project_root: &std::path::Path, id: &str) -> boo
         .await
         .map(|items| items.iter().any(|i| i.id == id))
         .unwrap_or(false)
-}
-
-/// Insert/replace a session's declared WIP into the shared coordination
-/// registry (the half of `declare_wip` the session tools drive directly).
-pub(crate) async fn declare_wip_on(registry: &WipRegistry, session_id: &str, status: WipStatus) {
-    registry.lock().await.insert(session_id.to_string(), status);
-}
-
-/// Remove a session's declared WIP from the shared coordination registry.
-pub(crate) async fn clear_wip_on(registry: &WipRegistry, session_id: &str) {
-    registry.lock().await.remove(session_id);
-}
-
-/// The subset of `wip` paths overlapping the query's `query` paths. Paths are
-/// compared normalized (separators unified, trailing slashes stripped, `.`
-/// resolved); a declared path overlaps a queried path when either is a prefix
-/// of the other (a directory WIP covers files beneath it, and vice versa).
-/// Empty when the query named no paths.
-fn overlap_paths(query: &[String], wip: &[String]) -> Vec<String> {
-    if query.is_empty() {
-        return Vec::new();
-    }
-    let norm = |p: &str| -> String {
-        let p = p.replace('\\', "/");
-        let mut p = p.trim_end_matches('/').to_string();
-        // Resolve leading "./" so workspace-relative forms compare equal.
-        while let Some(rest) = p.strip_prefix("./") {
-            p = rest.to_string();
-        }
-        p
-    };
-    let query_norm: Vec<String> = query.iter().map(|p| norm(p)).collect();
-    wip.iter()
-        .filter(|w| {
-            let w = norm(w);
-            query_norm.iter().any(|q| {
-                w == *q || w.starts_with(&format!("{q}/")) || q.starts_with(&format!("{w}/"))
-            })
-        })
-        .cloned()
-        .collect()
-}
-
-#[cfg(test)]
-mod wip_tests {
-    use super::overlap_paths;
-
-    fn v(paths: &[&str]) -> Vec<String> {
-        paths.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn overlap_exact_and_prefix_both_directions() {
-        // Exact match.
-        assert_eq!(
-            overlap_paths(&v(&["src/a.rs"]), &v(&["src/a.rs"])),
-            v(&["src/a.rs"])
-        );
-        // WIP dir covers queried file beneath it.
-        assert_eq!(overlap_paths(&v(&["src/a.rs"]), &v(&["src"])), v(&["src"]));
-        // Queried dir covers WIP file beneath it.
-        assert_eq!(
-            overlap_paths(&v(&["src"]), &v(&["src/a.rs"])),
-            v(&["src/a.rs"])
-        );
-        // Disjoint paths don't overlap.
-        assert!(overlap_paths(&v(&["src/a.rs"]), &v(&["docs/b.md"])).is_empty());
-        // Sibling names sharing a prefix string but not a path segment.
-        assert!(overlap_paths(&v(&["src/app"]), &v(&["src/apple"])).is_empty());
-    }
-
-    #[test]
-    fn overlap_normalizes_separators_and_dots() {
-        assert_eq!(
-            overlap_paths(&v(&["./src/a.rs"]), &v(&["src/a.rs"])),
-            v(&["src/a.rs"])
-        );
-        assert_eq!(
-            overlap_paths(&v(&["src\\a.rs"]), &v(&["src/a.rs"])),
-            v(&["src/a.rs"])
-        );
-        assert_eq!(overlap_paths(&v(&["src/"]), &v(&["src"])), v(&["src"]));
-    }
-
-    #[test]
-    fn overlap_empty_query_means_no_specific_paths() {
-        assert!(overlap_paths(&[], &v(&["src"])).is_empty());
-    }
 }

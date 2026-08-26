@@ -20,7 +20,7 @@
 ## Features
 
 - **Semantic TUI** — In-house grid + diff rendering engine (`mutx-engine`), built from scratch to replace ratatui. Retained-mode grid with write-marks-dirty diff, wide-glyph ownership, and `bce`-aware crossterm backend. Live status, expandable tool steps, and structured diffs.
-- **Tool Use** — Full ReAct loop with native and fallback tool-calling; bash, file I/O, file discovery (`find_files`), text search (`search_text`), web search, and MCP servers.
+- **Tool Use** — Full ReAct loop with native and fallback tool-calling; command execution, file I/O, file discovery (`find_files`), text search (`search_text`), web search, and MCP servers.
 - **Scheduled Prompts** — Schedule prompts on a clock with `/schedule`: recurring cron jobs or one-shot countdown/absolute-time timers, so the agent can run on autopilot on a schedule.
 - **Session Daemon & Control Plane** — The `muta` core daemon owns every session across every project, while `mutx` and the web app are peer clients. Work survives closed terminals; `muta daemon status` provides a live multi-task view and `/dashboard` in `mutx` switches sessions without killing them.
 - **Durable Sessions** — Atomic persistence with compaction, resume, and fork.
@@ -109,7 +109,6 @@ and [ADR-0096](docs/adr/0096-unified-session-daemon.md).
 | `F5` | `/btw` asides list |
 | `Ctrl+Q` | Open the round queue |
 | `Ctrl+P` | Block / resume the round queue |
-| `Ctrl+O` | Insert input into the running round |
 | `Ctrl+M` | Open the model picker (Kitty keyboard protocol; `/models` always works) |
 | `Ctrl+L` | Global view switcher — jump between every surface (pickers, dashboard, sessions included), MRU-first; typing filters fuzzily. Views are retained: leaving one keeps its scroll, selection, and (for pickers) your in-progress composer draft (ADR-0133) |
 | `Ctrl+R` | Input history search |

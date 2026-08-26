@@ -34,11 +34,12 @@ fn display_width_u16(s: &str) -> u16 {
 
 /// Round / time label drawn *outside* a sent user-message panel (on the row
 /// above it, on plain `surface`), so the panel itself holds only the typed
-/// text. The "Sent" word is dropped: `round N · HH:MM` is enough provenance,
+/// text. The "Sent" word is dropped: `round N` plus a right-aligned `HH:MM`
+/// is enough provenance,
 /// and queued messages keep their `⏸ Queued` pending marker.
 ///
 /// The whole header row is composed from the shared `MetaStrip` component
-/// (`render/components/meta_strip.rs`) — the same two-tone "anchor · detail"
+/// (`render/components/meta_strip.rs`) — the same two-tone metadata
 /// treatment the assistant turn header uses. The strip leads with a `<` gutter rail (accent
 /// tone) representing Unix stdin redirection, matching the Unix pipeline visual language.
 ///
@@ -66,7 +67,7 @@ fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
     }
 }
 
-fn sent_header_meta(msg: &TranscriptMessage, is_queued: bool) -> String {
+fn sent_header_context(msg: &TranscriptMessage, is_queued: bool) -> String {
     // The trailing metadata after the anchor, drawn muted (grey, no bold).
     // Return only the chip text: `MetaStrip::detail` owns the separator between
     // visible chips. Queued messages render no meta — the anchor path emits
@@ -77,20 +78,12 @@ fn sent_header_meta(msg: &TranscriptMessage, is_queued: bool) -> String {
     if msg.origin == crate::model::document::UserMessageOrigin::Steer
         || msg.origin == crate::model::document::UserMessageOrigin::FollowUp
     {
-        return match (msg.turn, msg.sent_at_ms) {
-            (Some(turn), Some(sent_at_ms)) => {
-                format!("round {turn} · {}", sent_time_label(sent_at_ms))
-            }
-            (Some(turn), None) => format!("round {turn}"),
-            (None, Some(sent_at_ms)) => sent_time_label(sent_at_ms),
-            (None, None) => String::new(),
-        };
+        return msg
+            .turn
+            .map(|turn| format!("round {turn}"))
+            .unwrap_or_default();
     }
-    if let Some(sent_at_ms) = msg.sent_at_ms {
-        sent_time_label(sent_at_ms)
-    } else {
-        String::new()
-    }
+    String::new()
 }
 
 fn table_line_hidden_ranges(line_text: &str, info: &TableRowInfo) -> Vec<(usize, usize)> {
@@ -272,7 +265,7 @@ pub fn draw_message_body(
                 } = inline;
                 let is_user = msg.role == muta_contracts::Role::User;
                 // Both pending deliveries render as a waiting panel: a
-                // mid-round insert blocked on the running turn
+                // busy-Enter steer blocked on the running turn
                 // (`Queued`), and one whose round ended first and now
                 // waits to ship as the next round's prompt
                 // (`HeldNextRound`).
@@ -368,9 +361,12 @@ pub fn draw_message_body(
                                     .lead(round_gutter, MetaTone::Accent)
                                     .anchor(sent_header_anchor(msg, is_queued))
                                     .fill_tail(theme.surface());
-                                let meta = sent_header_meta(msg, is_queued);
-                                if !meta.is_empty() {
-                                    strip = strip.detail(meta);
+                                let context = sent_header_context(msg, is_queued);
+                                if !context.is_empty() {
+                                    strip = strip.detail(context);
+                                }
+                                if let Some(sent_at_ms) = msg.sent_at_ms {
+                                    strip = strip.trailing_detail(sent_time_label(sent_at_ms));
                                 }
                                 strip
                             };

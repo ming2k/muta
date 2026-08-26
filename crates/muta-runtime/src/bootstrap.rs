@@ -70,10 +70,6 @@ pub struct BootstrapParams {
     /// harness's posture gate reads it before parking a human request.
     /// `None` on one-shot CLI paths that never attach.
     pub human_channel: Option<Arc<muta_contracts::human_request::HumanChannelAccountant>>,
-    /// Extra tools to publish onto the assembled agent (ADR-0097 §5's
-    /// WIP-coordination tools). The assemble passes them through untouched;
-    /// the registry publishes them once the session id is known.
-    pub extra_session_tools: Option<Vec<Arc<dyn muta_contracts::Tool>>>,
     /// Session-lifetime cancellation token (ADR-0125): passed through to the
     /// background `/schedule` scheduler so it stops when the harness is torn
     /// down (suspension, kill, daemon drain) instead of ticking forever.
@@ -109,9 +105,6 @@ pub struct Bootstrap {
     pub restored_messages: Vec<Message>,
     /// Complete daemon-owned command/completion vocabulary for this session.
     pub command_catalog: muta_contracts::CommandCatalog,
-    /// Echo of [`BootstrapParams::extra_session_tools`], for the registry to
-    /// publish once the session id is known. Not consumed by the assemble.
-    pub extra_session_tools: Option<Vec<Arc<dyn muta_contracts::Tool>>>,
     /// The primary agent (same `Arc` as `agent_for_session_end`), exposed so
     /// the registry can publish session-scoped tools onto it.
     pub agent: Arc<Agent>,
@@ -158,7 +151,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         project_root: project_override,
         yolo: yolo_at_start,
         human_channel,
-        extra_session_tools,
         teardown_token,
     } = params;
     debug_assert!(
@@ -878,7 +870,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         initial_model_name,
         restored_messages,
         command_catalog,
-        extra_session_tools,
         agent: agent_for_session_end.clone(),
         security: workspace_security.clone(),
     })

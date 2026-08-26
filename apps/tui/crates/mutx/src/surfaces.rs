@@ -70,9 +70,9 @@ impl View {
     /// The secondary line the switcher shows under the label.
     pub(crate) fn hint(self) -> &'static str {
         match self {
-            Self::Session => "Esc · home",
+            Self::Session => "Esc  home",
             Self::Dashboard => "/dashboard",
-            Self::Settings => "/config · /settings",
+            Self::Settings => "/config  /settings",
             Self::Runner => "zoom an runner task",
             Self::Side => "focus an aside",
         }

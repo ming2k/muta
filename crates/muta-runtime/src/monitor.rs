@@ -12,7 +12,7 @@
 //! display badge, and the `Needs*` states are overlays on a still-running
 //! round, exactly like the single-session `ParentStatus` (ADR-0017).
 
-use muta_contracts::{AgentResponse, MonitoredSession, RoundEvent, SessionStatus, WipStatus};
+use muta_contracts::{AgentResponse, MonitoredSession, RoundEvent, SessionStatus};
 
 /// Tracks one hosted session. `base` is the cheap header row (from the same
 /// deferred parse that feeds the sessions picker), re-seeded whenever a
@@ -31,10 +31,6 @@ pub struct MonitorTracker {
     activity: Option<String>,
     context_tokens: Option<usize>,
     note: Option<String>,
-    /// The session's declared WIP (ADR-0097 §5). Set by the registry's WIP
-    /// coordination registry (not folded from the event stream), so it lives
-    /// beside the tracked fields and is projected onto the row by [`Self::row`].
-    wip: Option<WipStatus>,
 }
 
 impl MonitorTracker {
@@ -61,15 +57,7 @@ impl MonitorTracker {
             activity: None,
             context_tokens: None,
             note: None,
-            wip: None,
         }
-    }
-
-    /// Set or clear the session's declared WIP (ADR-0097 §5). Called by the
-    /// registry's WIP coordination registry; the next [`Self::row`] projection
-    /// carries it to the dashboard.
-    pub fn set_wip(&mut self, wip: Option<WipStatus>) {
-        self.wip = wip;
     }
 
     /// The current panel row. `updated_at` advances with every observed event
@@ -86,7 +74,6 @@ impl MonitorTracker {
         row.activity = self.activity.clone();
         row.context_tokens = self.context_tokens;
         row.note = self.note.clone();
-        row.wip = self.wip.clone();
         row
     }
 
@@ -284,27 +271,11 @@ mod tests {
                 context_tokens: None,
                 note: None,
                 project_root: "/tmp/proj".into(),
-                wip: None,
                 parent_id: None,
                 fork_kind: muta_contracts::SessionForkKind::Trunk,
             },
             SessionStatus::Idle,
         )
-    }
-
-    #[test]
-    fn set_wip_projects_onto_the_row() {
-        let mut t = tracker();
-        assert!(t.row().wip.is_none());
-        t.set_wip(Some(muta_contracts::WipStatus {
-            paths: vec!["src".into()],
-            summary: "mid-refactor".into(),
-        }));
-        let wip = t.row().wip.expect("wip projected");
-        assert_eq!(wip.paths, vec!["src".to_string()]);
-        assert_eq!(wip.summary, "mid-refactor");
-        t.set_wip(None);
-        assert!(t.row().wip.is_none());
     }
 
     #[test]
@@ -377,10 +348,10 @@ mod tests {
         assert_eq!(t.row().turn, Some(1), "a second turn keeps the round open");
         t.observe(&round_event(RoundEvent::ToolCall {
             id: "c1".into(),
-            name: "bash".into(),
+            name: "execute_command".into(),
             arguments: "{}".into(),
         }));
-        assert_eq!(t.row().current_tool.as_deref(), Some("bash"));
+        assert_eq!(t.row().current_tool.as_deref(), Some("execute_command"));
         t.observe(&round_event(RoundEvent::RoundCompleted(RoundSummary {
             round: 1,
             output_tokens: 300,

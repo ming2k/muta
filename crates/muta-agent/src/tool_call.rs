@@ -1,7 +1,7 @@
 //! Agent compatibility path for text-emitted tool calls.
 //!
 //! Providers without native function calling (or ones that mirror a native
-//! call as text) emit a JSON object such as `{"tool":"bash","arguments":{...}}`,
+//! call as text) emit a JSON object such as `{"tool":"execute_command","arguments":{...}}`,
 //! optionally wrapped in ChatML/Hermes sentinel tokens.
 //! [`parse_text_tool_call`] recovers a [`ToolCall`] from such prose-embedded
 //! JSON. Provider-native framing remains in the protocol SDKs.

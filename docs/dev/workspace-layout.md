@@ -14,7 +14,7 @@ crates/
   mutx/           # terminal frontend library: app shell, view tree, showcase
   mutx-engine/    # in-house grid + diff rendering engine
   muta-runtime/       # session harness, handlers, serve transport, control-plane client
-  muta-agent/         # orchestration: the round/turn loop, built-in tools (bash, read, find_files, search_text, webfetch, …)
+  muta-agent/         # orchestration: the round/turn loop, built-in tools (execute_command, read, find_files, search_text, webfetch, …)
   muta-mcp/           # MCP connector: stdio JSON-RPC client, server lifecycle, tool adapters
   muta-skills/        # skill discovery, registry, and tool adapters
   muta-persistence/   # durable state: session store, config, paths

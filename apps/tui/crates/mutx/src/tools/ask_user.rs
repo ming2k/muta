@@ -19,9 +19,9 @@ impl ToolPresenter for AskUserPresenter {
             .and_then(|v| v.as_str());
         if let Some(q) = first {
             if count > 1 {
-                format!("Ask {} questions · {}", count, q)
+                format!("Ask {} questions: {}", count, q)
             } else {
-                format!("Ask · {}", q)
+                format!("Ask: {}", q)
             }
         } else {
             format!(

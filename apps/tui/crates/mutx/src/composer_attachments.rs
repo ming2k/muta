@@ -1,10 +1,10 @@
 //! Attachment "chips" staged behind short placeholders inside the live input
 //! box, mirroring the paste UX in codex / claude-code / opencode:
 //!
-//! - Pasting an image inserts `[Image #N · size]` into the input text and
+//! - Pasting an image inserts `[Image #N (size)]` into the input text and
 //!   stages the base64 payload in `pending_images`. The chip is the user's
 //!   visible affordance that an attachment will ship with the next message.
-//! - Pasting a large block of text inserts `[Pasted text #N +M lines · size]`
+//! - Pasting a large block of text inserts `[Pasted text #N +M lines (size)]`
 //!   and stages the full text in `pending_text_pastes`, so the input box stays
 //!   compact instead of being flooded by thousands of lines.
 //! - A single `Backspace` against either chip removes the whole chip (plus
@@ -90,16 +90,16 @@ pub fn base64_byte_size(b64: &str) -> usize {
     b64.len().saturating_sub(padding) * 3 / 4
 }
 
-/// Build the `[Image #N · size]` label staged behind a pasted image
+/// Build the `[Image #N (size)]` label staged behind a pasted image
 /// attachment. `size_bytes` is the raw (unencoded) byte length of the image,
 /// so the identifier reports the attachment's real weight; the composer
 /// paints image chips in a distinct color (see `Theme::chip_image_fg`)
 /// so they read as image blocks at a glance.
 pub fn image_chip(number_one_based: usize, size_bytes: usize) -> String {
-    format!("[Image #{number_one_based} · {}]", human_size(size_bytes))
+    format!("[Image #{number_one_based} ({})]", human_size(size_bytes))
 }
 
-/// Build the `[Pasted text #N +M lines · size]` label staged behind a large
+/// Build the `[Pasted text #N +M lines (size)]` label staged behind a large
 /// pasted text block. `line_count` is the number of logical lines
 /// (`\n`-separated) and `size_bytes` the byte length of the original paste,
 /// so the chip's identifier reports exactly how much text is hidden behind
@@ -108,7 +108,7 @@ pub fn image_chip(number_one_based: usize, size_bytes: usize) -> String {
 /// read as text blocks.
 pub fn paste_chip(number_one_based: usize, line_count: usize, size_bytes: usize) -> String {
     format!(
-        "[Pasted text #{number_one_based} +{line_count} lines · {}]",
+        "[Pasted text #{number_one_based} +{line_count} lines ({})]",
         human_size(size_bytes)
     )
 }
@@ -135,14 +135,17 @@ pub fn paste_line_count(text: &str) -> usize {
 /// Parse the inside of a `[...]` chip (without the surrounding brackets).
 /// Returns `(kind, number, line_count_opt)` on a syntactic match. Both the
 /// bare legacy forms (`[Image #1]`, `[Pasted text #1 +5 lines]`) and the
-/// size-badged forms (`[Image #1 · 24.1 KB]`, `[Pasted text #1 +5 lines ·
-/// 24.1 KB]`) are recognized; the size badge itself is not parsed here —
+/// current size-badged forms (`[Image #1 (24.1 KB)]`,
+/// `[Pasted text #1 +5 lines (24.1 KB)]`) and the former ` · size` forms are
+/// recognized; the size badge itself is not parsed here —
 /// [`reconcile`] recomputes sizes from the staged payloads, so a stale badge
 /// is corrected rather than trusted.
 fn parse_chip_body(body: &str) -> Option<(ChipKind, usize, Option<usize>)> {
     if let Some(rest) = body.strip_prefix("Image #") {
-        // Optional ` · size` suffix; the number is everything up to it.
-        let num_part = rest.split(" · ").next().unwrap_or(rest);
+        // The number ends before either the current `(size)` suffix or the
+        // legacy `· size` suffix. Rejecting neither keeps resumed drafts
+        // editable while every newly reconciled chip uses the current form.
+        let num_part = rest.split_once(' ').map_or(rest, |(number, _)| number);
         let n = num_part.parse::<usize>().ok()?;
         if n == 0 {
             return None;
@@ -150,7 +153,8 @@ fn parse_chip_body(body: &str) -> Option<(ChipKind, usize, Option<usize>)> {
         return Some((ChipKind::Image, n, None));
     }
     if let Some(rest) = body.strip_prefix("Pasted text #") {
-        // Optional ` +M lines[ · size]` suffix. The number itself is
+        // Optional ` +M lines[ (size)]` or legacy ` +M lines[ · size]`
+        // suffix. The number itself is
         // everything up to the first space or end-of-string.
         let (num_part, tail) = match rest.find(' ') {
             Some(idx) => (&rest[..idx], &rest[idx..]),
@@ -531,14 +535,14 @@ mod tests {
 
     #[test]
     fn image_chip_format() {
-        assert_eq!(image_chip(1, 0), "[Image #1 · 0 B]");
-        assert_eq!(image_chip(7, 1536), "[Image #7 · 1.5 KB]");
+        assert_eq!(image_chip(1, 0), "[Image #1 (0 B)]");
+        assert_eq!(image_chip(7, 1536), "[Image #7 (1.5 KB)]");
     }
 
     #[test]
     fn paste_chip_format() {
-        assert_eq!(paste_chip(1, 5, 0), "[Pasted text #1 +5 lines · 0 B]");
-        assert_eq!(paste_chip(3, 0, 1024), "[Pasted text #3 +0 lines · 1.0 KB]");
+        assert_eq!(paste_chip(1, 5, 0), "[Pasted text #1 +5 lines (0 B)]");
+        assert_eq!(paste_chip(3, 0, 1024), "[Pasted text #3 +0 lines (1.0 KB)]");
     }
 
     #[test]
@@ -559,11 +563,11 @@ mod tests {
         // Byte ranges point at the actual chip substrings.
         assert_eq!(
             &input[chips[0].start_byte..chips[0].end_byte],
-            "[Image #1 · 2.0 KB]"
+            "[Image #1 (2.0 KB)]"
         );
         assert_eq!(
             &input[chips[1].start_byte..chips[1].end_byte],
-            "[Pasted text #2 +10 lines · 5.0 KB]"
+            "[Pasted text #2 +10 lines (5.0 KB)]"
         );
     }
 
@@ -578,10 +582,18 @@ mod tests {
             parse_chip_body("Pasted text #1 +5 lines"),
             Some((ChipKind::Paste, 1, Some(5)))
         );
-        // The new size-badged forms parse too; the badge is not trusted.
+        // Current and legacy size-badged forms parse; the badge is not trusted.
+        assert_eq!(
+            parse_chip_body("Image #3 (24.1 KB)"),
+            Some((ChipKind::Image, 3, None))
+        );
         assert_eq!(
             parse_chip_body("Image #3 · 24.1 KB"),
             Some((ChipKind::Image, 3, None))
+        );
+        assert_eq!(
+            parse_chip_body("Pasted text #2 +12 lines (5.0 KB)"),
+            Some((ChipKind::Paste, 2, Some(12)))
         );
         assert_eq!(
             parse_chip_body("Pasted text #2 +12 lines · 5.0 KB"),

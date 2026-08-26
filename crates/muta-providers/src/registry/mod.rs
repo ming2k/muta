@@ -443,6 +443,50 @@ mod spec_tests {
     }
 
     #[test]
+    fn shared_baseline_ids_are_identical_across_provider_tables() {
+        // `resolve_model` (baseline_models().find) returns the first table that
+        // declares an id, so when several provider files carry the same id
+        // (zai/opencode-go both list glm-5.2; kimi/opencode-go both list
+        // kimi-k2.7-code) the copies MUST be field-identical -- otherwise which
+        // copy wins depends on link order, an invisible behavior change.
+        // `Model` is not `PartialEq`, so compare a derived signature instead.
+        use std::collections::HashMap;
+
+        fn signature(m: &muta_contracts::Model) -> String {
+            format!(
+                "{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}",
+                m.context_window,
+                m.thinking,
+                m.tool_call,
+                m.vision,
+                m.format,
+                m.model_guidance,
+                m.effort_levels,
+            )
+        }
+
+        let mut seen: HashMap<&str, (&str, String)> = HashMap::new();
+        for spec in PROVIDER_TEMPLATE_SPECS {
+            for m in spec.baselines {
+                let sig = signature(m);
+                match seen.insert(m.id, (spec.id, sig)) {
+                    Some((first_provider, first_sig)) => {
+                        assert_eq!(
+                            first_sig,
+                            seen[&m.id].1,
+                            "{id}: baseline declared by {first_provider} and {} disagree \
+                             (context_window/thinking/tool_call/vision/format/guidance/effort)",
+                            spec.id,
+                            id = m.id
+                        );
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+
+    #[test]
     fn template_models_are_covered_by_the_local_baseline_table() {
         // Every id a template seeds must have baseline metadata in the same
         // provider file's local table — that table is what the reconciliation
@@ -494,6 +538,7 @@ mod build_tests {
             api_key: "k".into(),
             model: "gpt-4o".to_string(),
             remote: None,
+            user_overrides: None,
         };
         let provider = build_provider_for_channel(&channel, "openai", None);
         assert_eq!(provider.provider_id(), "openai");
@@ -518,6 +563,7 @@ mod build_tests {
             api_key: "go-key".into(),
             model: "minimax-m3".to_string(),
             remote: None,
+            user_overrides: None,
         };
         let provider = build_provider_for_channel(&channel, "opencode-go", None);
         assert_eq!(provider.provider_id(), "opencode-go");

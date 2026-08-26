@@ -4,7 +4,7 @@ Skills are on-demand domain expertise. A skill is a Markdown document with a
 small YAML header; when the agent needs that expertise, the document body is
 injected into the conversation so the model can act on it. Skills are *not*
 tools — they carry no executable code. They steer the model by adding
-instructions, and the model then uses ordinary tools (bash, edit, ...) to do
+instructions, and the model then uses ordinary tools (execute_command, edit, ...) to do
 the work those instructions describe.
 
 This page covers where skills come from, how they are ordered, and how a skill
@@ -81,7 +81,7 @@ There are two paths from identifying a skill to placing its body in context:
 1. **Explicit — `use_skill`.** The model calls the `use_skill` tool with a
    skill name. The tool looks up the skill, returns its body as a tool result,
    and also lists the auxiliary files in the skill directory. `use_skill` is an
-   ordinary read-only tool, architecturally identical to `read_text` or `bash`;
+   ordinary read-only tool, architecturally identical to `read_text` or `execute_command`;
    its only specialty is that its result happens to be a skill body. This works
    even for disabled skills, so the model can load one and explain why it did
    nothing.

@@ -428,7 +428,7 @@ mod tests {
         // No project root → no persistence, so seeding is purely in-memory.
         let rules = vec![
             PermissionRuleConfig {
-                tool: "bash".to_string(),
+                tool: "execute_command".to_string(),
                 scope: "*".to_string(),
             },
             PermissionRuleConfig {
@@ -438,7 +438,7 @@ mod tests {
         ];
         store.seed_from_config(&rules);
         assert!(store.is_always_allowed(&PermissionRule {
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             scope: "*".to_string(),
         }));
         assert!(store.is_always_allowed(&PermissionRule {
@@ -451,11 +451,11 @@ mod tests {
     fn wildcard_scope_allows_any_scope_for_same_tool() {
         let store = PermissionStore::new();
         store.seed_from_config(&[PermissionRuleConfig {
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             scope: "*".to_string(),
         }]);
         assert!(store.is_always_allowed(&PermissionRule {
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             scope: "git status".to_string(),
         }));
         assert!(!store.is_always_allowed(&PermissionRule {
@@ -468,7 +468,7 @@ mod tests {
     fn seed_from_config_does_not_duplicate_existing_rules() {
         let store = PermissionStore::new();
         let rule = PermissionRuleConfig {
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             scope: "*".to_string(),
         };
         store.seed_from_config(std::slice::from_ref(&rule));
@@ -490,25 +490,25 @@ mod tests {
         // back when seed_from_config runs again (e.g. on restart).
         let store = PermissionStore::new();
         let rule = PermissionRuleConfig {
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             scope: "git status".to_string(),
         };
         store.seed_from_config(std::slice::from_ref(&rule));
         assert!(store.is_always_allowed(&PermissionRule {
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             scope: "git status".to_string(),
         }));
         // User revokes it.
-        assert!(store.revoke_allowed("bash", "git status"));
+        assert!(store.revoke_allowed("execute_command", "git status"));
         assert!(!store.is_always_allowed(&PermissionRule {
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             scope: "git status".to_string(),
         }));
         // Re-seed (simulating a restart): the revoked rule stays revoked.
         store.seed_from_config(std::slice::from_ref(&rule));
         assert!(
             !store.is_always_allowed(&PermissionRule {
-                tool: "bash".to_string(),
+                tool: "execute_command".to_string(),
                 scope: "git status".to_string(),
             }),
             "a revoked config rule must not resurrect on re-seed"
@@ -521,20 +521,20 @@ mod tests {
         // The user reversed their revocation; the declarative seed wins again.
         let store = PermissionStore::new();
         let rule = PermissionRuleConfig {
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             scope: "git status".to_string(),
         };
         store.seed_from_config(std::slice::from_ref(&rule));
-        store.revoke_allowed("bash", "git status");
+        store.revoke_allowed("execute_command", "git status");
         // Re-approve interactively.
         store.add_always(PermissionRule {
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             scope: "git status".to_string(),
         });
         // A subsequent seed is idempotent (rule present) but no longer blocked.
         store.seed_from_config(std::slice::from_ref(&rule));
         assert!(store.is_always_allowed(&PermissionRule {
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             scope: "git status".to_string(),
         }));
     }
@@ -546,7 +546,7 @@ mod tests {
         let store = PermissionStore::new();
         store.seed_from_config(&[
             PermissionRuleConfig {
-                tool: "bash".to_string(),
+                tool: "execute_command".to_string(),
                 scope: "*".to_string(),
             },
             PermissionRuleConfig {
@@ -558,7 +558,7 @@ mod tests {
         // Re-seed: neither rule comes back.
         store.seed_from_config(&[
             PermissionRuleConfig {
-                tool: "bash".to_string(),
+                tool: "execute_command".to_string(),
                 scope: "*".to_string(),
             },
             PermissionRuleConfig {
@@ -586,11 +586,11 @@ mod tests {
         let store = PermissionStore::new();
         store.set_project_root_with_dirs(Some(project_root.clone()), &dirs);
         let rule = PermissionRuleConfig {
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             scope: "git push".to_string(),
         };
         store.seed_from_config(std::slice::from_ref(&rule));
-        store.revoke_allowed("bash", "git push");
+        store.revoke_allowed("execute_command", "git push");
 
         // A fresh store pointed at the same bucket loads the revoked set.
         let reloaded = PermissionStore::new();
@@ -598,7 +598,7 @@ mod tests {
         reloaded.seed_from_config(std::slice::from_ref(&rule));
         assert!(
             !reloaded.is_always_allowed(&PermissionRule {
-                tool: "bash".to_string(),
+                tool: "execute_command".to_string(),
                 scope: "git push".to_string(),
             }),
             "revocation must survive a restart (persisted revoked set)"

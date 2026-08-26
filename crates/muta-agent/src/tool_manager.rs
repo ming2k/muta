@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn classifies_three_buckets_in_order() {
         let m = manager(
-            vec![StubTool::new("bash"), StubTool::new("read")],
+            vec![StubTool::new("execute_command"), StubTool::new("read_text")],
             vec![StubTool::new("mcp__srv__x")],
             vec![StubTool::new("my_rpc")],
             vec![],
@@ -290,8 +290,8 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                (ToolSource::Builtin, "bash"),
-                (ToolSource::Builtin, "read"),
+                (ToolSource::Builtin, "execute_command"),
+                (ToolSource::Builtin, "read_text"),
                 (ToolSource::User, "my_rpc"),
                 (ToolSource::Mcp, "mcp__srv__x"),
             ]
@@ -328,10 +328,10 @@ mod tests {
     #[test]
     fn loop_tools_filters_disabled_and_preserves_stable_schema() {
         let m = manager(
-            vec![StubTool::new("bash"), StubTool::new("ask_user")],
+            vec![StubTool::new("execute_command"), StubTool::new("ask_user")],
             vec![],
             vec![],
-            vec!["bash"],
+            vec!["execute_command"],
         );
         let live = m.loop_tools(false);
         let names: Vec<&str> = live.iter().map(|t| t.name()).collect();
@@ -350,12 +350,15 @@ mod tests {
     #[test]
     fn find_returns_source() {
         let m = manager(
-            vec![StubTool::new("bash")],
+            vec![StubTool::new("execute_command")],
             vec![StubTool::new("mcp__s__t")],
             vec![],
             vec![],
         );
-        assert_eq!(m.find("bash").unwrap().source, ToolSource::Builtin);
+        assert_eq!(
+            m.find("execute_command").unwrap().source,
+            ToolSource::Builtin
+        );
         assert_eq!(m.find("mcp__s__t").unwrap().source, ToolSource::Mcp);
         assert!(m.find("nope").is_none());
     }

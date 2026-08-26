@@ -153,7 +153,9 @@ The second landing batch closed the remaining audit findings:
   under a 30s timeout could buffer hundreds of MB.
 - **Hook output cap**: 1 MiB per stream via `AsyncReadExt::take` — a chatty
   hook can no longer buffer unbounded output for its whole 60s budget.
-- **`check_wip` lock scope**: peer ids resolve outside the sessions-map
+- **`check_wip` lock scope** (historical; the WIP-coordination tools were
+  later removed with ADR-0097 §5's first slice): peer ids resolve outside the
+  sessions-map
   lock (the old code awaited `session.id()` with the map held,
   serializing every concurrent resolve/kill/suspend).
 - **First-turn AI title re-wired** (ADR-0022): `execute_round` now fires

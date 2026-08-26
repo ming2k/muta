@@ -1566,7 +1566,7 @@ mod tests {
 
         let toolset = muta_contracts::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
-            std::sync::Arc::new(crate::tools::BashTool::new(None)),
+            std::sync::Arc::new(crate::tools::ExecuteCommandTool::new(None)),
             std::sync::Arc::new(crate::tools::AskUserTool),
             std::sync::Arc::new(StubWriteTool),
             std::sync::Arc::new(runner_tool),
@@ -1599,7 +1599,7 @@ mod tests {
 
         let toolset = muta_contracts::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
-            std::sync::Arc::new(crate::tools::BashTool::new(None)),
+            std::sync::Arc::new(crate::tools::ExecuteCommandTool::new(None)),
             std::sync::Arc::new(crate::tools::WriteFileTool::new(None)),
             std::sync::Arc::new(crate::tools::EditFileTool::new(None)),
             std::sync::Arc::new(crate::tools::AskUserTool),
@@ -1613,7 +1613,7 @@ mod tests {
         let selected = muta_contracts::RUNNER_CODE.resolve_tools(&toolset, &model, &model_sel);
         let names: std::collections::HashSet<&str> = selected.iter().map(|t| t.name()).collect();
         assert!(names.contains("read_text"));
-        assert!(names.contains("bash"));
+        assert!(names.contains("execute_command"));
         assert!(names.contains("write_file"));
         assert!(names.contains("edit_file"));
         assert!(!names.contains("runner_code"), "recursion must be excluded");

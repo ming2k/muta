@@ -93,12 +93,12 @@ async fn call_structured(&self, arguments: &str) -> Result<crate::ToolOutput, St
 ```
 
 The variants (`Text`, `Error`, `Shell`, `Code`, `Listing`, `Matches`) live in
-`crates/muta-contracts/src/tool_output.rs`. `bash` is the reference example — it
+`crates/muta-contracts/src/tool_output.rs`. `execute_command` is the reference example — it
 also overrides `call_structured_with_events` to stream stdout live via
 `ToolStream`.
 
 > **Note on `call_structured_with_events`.** If you override it (rare — only
-> `bash` and the envoy `task` tool do), the signature now takes a final
+> `execute_command` and the envoy `task` tool do), the signature now takes a final
 > `stdin: StdinPolicy` argument. Non-shell tools ignore it (it defaults to
 > `StdinPolicy::Closed`, which gives a child no stdin); the default
 > `call`/`call_structured` delegations pass `Closed` for you, so most tools
@@ -137,7 +137,7 @@ fn permission_scope(&self, arguments: &str) -> String {
 
 `json_string` (`crates/muta-agent/src/tools/helpers.rs`) extracts a JSON field
 from the arguments string and falls back to `"*"`. Existing scopes: file
-tools use the `path` argument, `bash` uses the full `command` text. Pick a scope that distinguishes
+tools use the `path` argument, `execute_command` uses the full `command` text. Pick a scope that distinguishes
 meaningfully different invocations but is stable across retries of the same
 invocation.
 

@@ -144,7 +144,7 @@ pub(crate) const ACTIVITY_BAR_ROWS: u16 = 1;
 pub(crate) const TODO_BAR_ROWS: u16 = 1;
 /// Minimum gap between a footer bar's left content and its right-pinned
 /// keycap legend (the todo bar's `Ctrl+T expand`, the queue bar's
-/// `Ctrl+O insert  Ctrl+P block  Ctrl+Q expand`). Deliberately wider than the
+/// `Ctrl+P block  Ctrl+Q expand`). Deliberately wider than the
 /// 2-col inter-cluster
 /// gap used by the hint bar: a legend is a keyboard affordance, not
 /// prose, so it needs real visual distance from the content — especially when
@@ -152,26 +152,11 @@ pub(crate) const TODO_BAR_ROWS: u16 = 1;
 /// directly against a keycap.
 pub(crate) const BAR_LEGEND_GAP_MIN: usize = 6;
 
-// ── Join ladder: relationship spacing (see docs/reference/tui/visual-language.md) ──
-// Every adjacent pair of tokens on a row picks its join from one rung of the
-// ladder. The rung encodes the *semantic distance* between the two tokens:
-// the tighter the relationship, the quieter the join.
-//
-//   R0  Atomic   `Image #1`, `24.1 KB`, `3 tool calls`, `Ctrl+P block`
-//                Parts of one value — no symbol, 0–1 space.
-//   R1  Modify   `Thinking · 120 tokens`, `↳ Completed · 3 calls · 1.2s`
-//                The trailing token is a state / measure / attribute of the
-//                leading one. THE one and only use of the middle dot.
-//   R2  Enumerate  `turn 2  sonnet`, `/skills  /repeat  /help`
-//                Same-rank peers — separated by plain whitespace, no glyph.
-//   R3  Segment  `TODOS 1/8 · …   Ctrl+T expand`
-//                Cross-group boundary (content vs keycap legend) — a wide
-//                whitespace budget, `BAR_LEGEND_GAP_MIN`.
-//   ↑ hierarchy  `round 3 › turn 2`   Container › member breadcrumb (`↳` for
-//                tree nesting). A *different level* is never joined with `·`.
-/// R1: the leading token's state / measure / attribute (` · `).
-pub(crate) const JOIN_MODIFY: &str = " · ";
-/// R2: same-rank peer enumeration — pure whitespace, no glyph (columns).
+// ── Semantic joins (see docs/reference/tui/visual-language.md) ──────────────
+// Keep labels free of punctuation soup. Atomic values use ordinary spaces,
+// peer metadata uses a two-column gap, secondary measures use parentheses,
+// cause/reason uses an em dash, and hierarchy uses a breadcrumb.
+/// Same-rank peer enumeration — pure whitespace, no glyph (columns).
 pub(crate) const JOIN_ENUMERATE_COLS: usize = 2;
 /// Container › member breadcrumb for inline hierarchy (`round 3 › turn 2`).
 pub(crate) const JOIN_BREADCRUMB: &str = " › ";

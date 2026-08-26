@@ -435,7 +435,7 @@ fn command_result_message_expands_and_round_trips_display() {
         "permissions",
         "",
         Some(muta_contracts::CommandResult::PermissionList {
-            allowed: vec!["bash".to_string()],
+            allowed: vec!["execute_command".to_string()],
         }),
     );
     assert_eq!(message.command_result_expanded(), Some(false));
@@ -455,7 +455,7 @@ fn command_result_message_expands_and_round_trips_display() {
 }
 
 /// ADR-0106: the command row's layout follows the shape of the reply — a
-/// short single line joins inline (` · `), anything longer discloses, and a
+/// a short single line joins inline with whitespace, anything longer discloses, and a
 /// missing result renders plain. The classifier is width-aware so an inline
 /// reply is never a truncated fragment.
 #[test]
@@ -492,7 +492,7 @@ fn command_row_layout_classifies_by_result_shape() {
         "permissions",
         "",
         Some(muta_contracts::CommandResult::PermissionList {
-            allowed: vec!["bash".to_string(), "edit_file".to_string()],
+            allowed: vec!["execute_command".to_string(), "edit_file".to_string()],
         }),
     );
     assert_eq!(
@@ -759,7 +759,7 @@ fn provider_retry_state_formats_summary_and_timing() {
         failure: "HTTP 429: rate limited".to_string(),
     };
     let summary = state.summary(now);
-    assert_eq!(summary, "retry 1/15 · next in 6.6s");
+    assert_eq!(summary, "retry 1/15 (next in 6.6s)");
 
     let running_state = ProviderRetryState {
         attempt: 4,
@@ -768,7 +768,7 @@ fn provider_retry_state_formats_summary_and_timing() {
         failure: "HTTP 503: overloaded".to_string(),
     };
     let running_summary = running_state.summary(now);
-    assert_eq!(running_summary, "retry 3/15 · running · 1.2s");
+    assert_eq!(running_summary, "retry 3/15 (running for 1.2s)");
 }
 
 #[test]
@@ -1816,8 +1816,9 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         editor_target_is_builtin: false,
         editor_effort: "high".to_string(),
         editor_thinking_available: false,
-        editor_thinking: true,
-        custom_field: 0,
+                editor_thinking: true,
+        editor_vision_override: None,
+        editor_tool_override: None, custom_field: 0,
         custom_fields: Vec::new(),
         custom_protocol_wire: String::new(),
         custom_models: Vec::new(),
@@ -2691,85 +2692,7 @@ fn queue_pointer_vanished_target_sends_as_new_message() {
     assert_eq!(app.input, "edited", "the edit must survive the race");
 }
 
-/// ADR-0126 behavior lock: `Ctrl+O` stages the insert as a **transcript
-/// entry** the moment it is sent — queued delivery state, `↳ insert` origin,
-/// a correlation `insert_id` — and the outbox stays untouched. The staged
-/// images ship with the request (they were silently dropped before).
-#[tokio::test]
-async fn insert_into_round_stages_a_transcript_entry_and_ships_images() {
-    use crate::model::document::{DeliveryStatus, UserMessageOrigin};
 
-    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
-    app.running_sessions.insert("session-a".to_string());
-    app.input = "steer this".to_string();
-    let image = muta_contracts::ImagePart {
-        mime: "image/png".to_string(),
-        data: "abc".to_string(),
-    };
-    app.pending_images = vec![image];
-
-    // Replace the sink channel with a live receiver so the request the
-    // handler sends can be inspected.
-    let (tx, mut requests) = mpsc::unbounded_channel();
-    app.tx = tx;
-    super::event_loop::handle_insert_into_round(&mut app, &runtime, "session-a").await;
-
-    // The transcript owns the insert immediately, in the pending state.
-    let messages = runtime.messages.read().await.clone();
-    let entry = messages.last().expect("the insert entry was pushed");
-    assert_eq!(entry.role, muta_contracts::Role::User);
-    assert_eq!(entry.raw, "steer this");
-    assert_eq!(entry.delivery, DeliveryStatus::Queued);
-    assert_eq!(entry.origin, UserMessageOrigin::Steer);
-    assert!(
-        entry.insert_id.is_some(),
-        "the entry carries its correlation id"
-    );
-
-    // The outbox is not involved.
-    assert_eq!(
-        app.pending_count("session-a"),
-        0,
-        "an insert must never become an outbox item"
-    );
-
-    // The request ships the staged images (regression: the old path sent
-    // `Vec::new()` and dropped them) and carries the same correlation id.
-    let sent = requests.try_recv().expect("the insert request was sent");
-    match sent {
-        muta_contracts::AgentRequest::Steer { input, .. } => {
-            assert_eq!(input.images.len(), 1, "staged images must ship");
-            assert_eq!(input.images[0].data, "abc");
-            assert_eq!(
-                entry.insert_id.as_deref(),
-                Some(input.id.as_str()),
-                "the entry and the request share the correlation id"
-            );
-        }
-        other => panic!("expected Steer, got {other:?}"),
-    }
-}
-
-/// ADR-0126 behavior lock: an idle `Ctrl+O` restores the composer verbatim —
-/// a stray chord never eats the draft.
-#[tokio::test]
-async fn insert_into_round_while_idle_restores_the_draft() {
-    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
-    app.input = "my draft".to_string();
-    app.pending_text_pastes = vec!["big paste".to_string()];
-
-    super::event_loop::handle_insert_into_round(&mut app, &runtime, "session-a").await;
-
-    assert_eq!(app.input, "my draft");
-    assert_eq!(app.pending_text_pastes.len(), 1);
-    assert_eq!(
-        runtime.messages.read().await.len(),
-        0,
-        "nothing staged while idle"
-    );
-}
 
 #[test]
 fn recall_queued_restores_staged_images() {
@@ -3777,7 +3700,7 @@ fn move_queued_swaps_within_session_and_clamps_at_edges() {
 
 #[test]
 fn inserts_are_transcript_owned_not_outbox_items() {
-    // ADR-0126: a mid-round insert (`Ctrl+O`) never enters the outbox. It
+    // A live busy-Enter steer never enters the outbox. It
     // becomes a transcript entry (`DeliveryStatus::Queued`) the moment it is
     // sent, so the outbox cannot dispatch, recall, delete, or reorder it —
     // and `UserInputUnavailable` hands it back by *staging a new outbox item*
@@ -5591,7 +5514,6 @@ fn console_host_rows(app: &mut App) {
         context_tokens: None,
         note: None,
         project_root: "/tmp/proj".to_string(),
-        wip: None,
         parent_id: None,
         fork_kind: muta_contracts::SessionForkKind::Trunk,
     };

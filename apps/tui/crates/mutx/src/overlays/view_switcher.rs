@@ -61,7 +61,7 @@ pub(crate) fn draw_view_switcher(
     // The live filter (phase 5): shown in the header as `filter: <query>` —
     // the switcher does not borrow the composer, so the header is its only
     // visible query surface.
-    let filter_title = format!("{} · filter: {query}", title);
+    let filter_title = format!("{} — filter: {query}", title);
     let header = if query.is_empty() {
         ModalHeader::title(&title)
     } else {
@@ -106,7 +106,7 @@ pub(crate) fn draw_view_switcher(
             };
             let hint = id.hint();
             let label = id.label();
-            let one_line = format!("{label}  ·  {hint}");
+            let one_line = format!("{label}  {hint}");
             let text = if one_line.width() > text_budget {
                 truncate_ellipsis(&one_line, text_budget)
             } else {

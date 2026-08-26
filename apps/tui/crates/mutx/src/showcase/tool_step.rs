@@ -122,7 +122,7 @@ pub fn run() -> io::Result<()> {
             // Title bar: scenario index + label, so the active fixture is
             // obvious without reading the whole transcript.
             let title = format!(
-                " tool-step · [{}/{}] {}  Tab=next  Ctrl+T=toggle  q/Esc=quit",
+                " tool-step  [{}/{}] {}  Tab=next  Ctrl+T=toggle  q/Esc=quit",
                 s.scenario + 1,
                 SCENARIO_COUNT,
                 SCENARIO_LABELS[s.scenario]
@@ -289,7 +289,7 @@ fn bash_failed(id: &str) -> TranscriptMessage {
         truncated: false,
         termination: muta_contracts::tool_output::ShellTermination::Exited,
     };
-    let mut m = TranscriptMessage::tool_step(id, "bash", args);
+    let mut m = TranscriptMessage::tool_step(id, "execute_command", args);
     m.finish_tool_step(id, structured.to_text(), structured, 1200);
     m.pin_tool_step_expanded(true);
     m
@@ -298,7 +298,8 @@ fn bash_failed(id: &str) -> TranscriptMessage {
 /// A still-running step: created but never finished, so its status stays
 /// `Running` and its header carries the accent.
 fn running(id: &str) -> TranscriptMessage {
-    let mut m = TranscriptMessage::tool_step(id, "bash", r#"{"command":"cargo build"}"#);
+    let mut m =
+        TranscriptMessage::tool_step(id, "execute_command", r#"{"command":"cargo build"}"#);
     m.set_tool_step_expanded(false);
     m
 }
@@ -306,7 +307,8 @@ fn running(id: &str) -> TranscriptMessage {
 /// A cancelled step: created then cancelled, so its status is `Cancelled` and
 /// it renders collapsed + muted.
 fn cancelled(id: &str) -> TranscriptMessage {
-    let mut m = TranscriptMessage::tool_step(id, "bash", r#"{"command":"sleep 60"}"#);
+    let mut m =
+        TranscriptMessage::tool_step(id, "execute_command", r#"{"command":"sleep 60"}"#);
     m.cancel_tool_step(id);
     m.set_tool_step_expanded(false);
     m

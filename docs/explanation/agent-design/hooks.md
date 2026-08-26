@@ -75,7 +75,7 @@ event." muta keeps the first internal and exposes only the second.
 | `PostCompact` | After a compaction completes | Observe |
 | `Turn` | After each non-terminal ReAct turn, before the next model request (ADR-0030) | Inject only — **`Deny` is ignored**, so a turn-count hook cannot become a de-facto turn cap. Carries the read-only-turn streak so a hook can target exploration-without-progress. The harness declares no built-in threshold here; users opt in. |
 | `TurnStart` | Once per ReAct turn, at turn **start** — after tools are prepared, before the next model completion | Inject only — **`Deny` is ignored** (same constraint as `Turn`). It is the symmetric partner of `Turn`; use it to (re)inject context for the upcoming turn, for example to re-anchor the principal's role after read-only delegations. The former event name `RoundStart` remains a read-only compatibility alias. |
-| `PermissionRequest` | The agent is about to **block** waiting for your approval (a tool with a side effect needs permission) | Observe-only — **`Pass` only**, fire-and-forget. The canonical use is a desktop/bell notification so you notice a long-running task is parked on you. Honours a tool-name matcher (e.g. only `bash`). Cannot grant or deny. |
+| `PermissionRequest` | The agent is about to **block** waiting for your approval (a tool with a side effect needs permission) | Observe-only — **`Pass` only**, fire-and-forget. The canonical use is a desktop/bell notification so you notice a long-running task is parked on you. Honours a tool-name matcher (e.g. only `execute_command`). Cannot grant or deny. |
 | `UserQuestion` | The agent is about to **block** on an `ask_user` question | Observe-only — same fire-and-forget contract as `PermissionRequest`. No matcher (`ask_user` is a single tool). |
 
 A hook returning a capability the event does not honour is ignored, so a
@@ -87,7 +87,7 @@ deny.
 A `PreToolUse`, `TurnStart`, or `Turn` hook may return `ScopeTools` to
 **temporarily** hide tools from the model — their schemas are dropped and
 dispatch rejects them — and have them come back automatically at a restore
-point. This lets a policy hook scope the toolset to a scenario (e.g. drop `bash`
+point. This lets a policy hook scope the toolset to a scenario (e.g. drop `execute_command`
 for a read-only sub-task) without you toggling `/tools` by hand.
 
 | Restore point | When the disable is undone |

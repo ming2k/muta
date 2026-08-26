@@ -200,11 +200,11 @@ pub fn draw_provider_retry(
         )
     } else {
         format!(
-            "running · {}",
+            "running for {}",
             retry_duration(now.saturating_duration_since(*retry_at))
         )
     };
-    let summary = format!("provider retry {retry}/{max_retries} · {timing}");
+    let summary = format!("provider retry {retry}/{max_retries} ({timing})");
     let disclosure = if *expanded {
         Disclosure::Expanded
     } else {
@@ -801,7 +801,8 @@ fn termination_footer(
     match term {
         T::Exited => None,
         T::IdleBlocked => Some((
-            "⏸ no output for a while — likely waiting for input. If this is a \
+            "⏸ killed after ~10s with no output — the command was probably \
+             waiting for input the agent can't provide. If it wanted a \
              password (sudo/gpg/pinentry), approve the inline prompt or use a \
              non-interactive flag (--passphrase-file / SUDO_ASKPASS / `y | …`). \
              Full-screen TUI tools (whiptail/dialog/pinentry-curses) read the \
@@ -833,7 +834,7 @@ fn termination_footer(
 /// restored without a structured payload. The command line is not selectable
 /// (it's derived from the call, not the output stream); output rows are.
 #[allow(clippy::too_many_arguments)]
-fn draw_bash_content(
+fn draw_command_content(
     ctx: &mut RenderCtx<'_, '_>,
     mi: usize,
     block_idx: usize,
@@ -901,11 +902,11 @@ fn draw_bash_content(
         // through the fold — the exit / truncated / termination footers below
         // stay outside it, so the trailing "events" are always visible even for
         // a huge log. Short output (≤ HEAD + TAIL + 1 lines) renders verbatim;
-        // `emit_bash_lines_folded` is a no-op on an empty stream.
+        // `emit_command_lines_folded` is a no-op on an empty stream.
         let mut byte_offset = 0usize;
-        let output_rows = bash_structured_lines(lines, stdout, stderr, base, stderr_style);
+        let output_rows = command_structured_lines(lines, stdout, stderr, base, stderr_style);
         if !output_rows.is_empty() {
-            byte_offset = emit_bash_lines_folded(
+            byte_offset = emit_command_lines_folded(
                 ctx,
                 mi,
                 block_idx,
@@ -918,7 +919,7 @@ fn draw_bash_content(
             );
         }
         if *truncated {
-            byte_offset = emit_bash_lines(
+            byte_offset = emit_command_lines(
                 ctx,
                 mi,
                 block_idx,
@@ -931,9 +932,18 @@ fn draw_bash_content(
                 byte_offset,
             );
         }
-        if let Some(code) = exit.filter(|c| *c != 0) {
+        // Exit-code footer: always painted when the code is known, so an
+        // expanded step closes with a diagnostic fact even on success
+        // ("did it actually exit 0?"). A clean `exit 0` is dimmed to stay
+        // quiet; any non-zero code keeps the loud warn marker.
+        if let Some(code) = exit {
             let m = format!("exit {}", code);
-            let _ = emit_bash_lines(
+            let style = if *code == 0 {
+                Style::default().bg(result_bg).fg(ctx.theme.dim())
+            } else {
+                marker_style
+            };
+            let _ = emit_command_lines(
                 ctx,
                 mi,
                 block_idx,
@@ -942,7 +952,7 @@ fn draw_bash_content(
                 pad,
                 sel_range,
                 &m,
-                marker_style,
+                style,
                 byte_offset,
             );
         }
@@ -950,14 +960,14 @@ fn draw_bash_content(
         // ── Themed termination footer (L6) ──
         // Every non-trivial termination renders a themed footer so the user
         // and the model see *why* the command ended, not just that it did.
-        // A healthy `Exited` run is silent (its exit code is above, if
-        // non-zero); every other variant paints a coloured marker + a
+        // A healthy `Exited` run is silent here (its exit code is above);
+        // every other variant paints a coloured marker + a
         // remediation hint. All colors flow through the shared theme tokens,
         // reusing the block-level design contract (diff tokens, warn/err)
         // so the footer reads as part of the same surface language.
         if let Some(footer) = termination_footer(*termination, ctx.theme) {
             let (text, style) = footer;
-            let _ = emit_bash_lines(
+            let _ = emit_command_lines(
                 ctx,
                 mi,
                 block_idx,
@@ -1001,7 +1011,7 @@ fn draw_bash_content(
             || trimmed.starts_with("[Output truncated")
             || trimmed.starts_with("[Output was large");
         let style = if is_marker { marker_style } else { base };
-        let _ = emit_bash_lines(
+        let _ = emit_command_lines(
             ctx,
             mi,
             block_idx,
@@ -1021,7 +1031,7 @@ fn draw_bash_content(
 /// `*byte_offset` (advanced past the section). Shared by the structured and
 /// legacy bash renderers.
 #[allow(clippy::too_many_arguments)]
-fn emit_bash_lines(
+fn emit_command_lines(
     ctx: &mut RenderCtx<'_, '_>,
     mi: usize,
     block_idx: usize,
@@ -1075,14 +1085,14 @@ fn emit_bash_lines(
 
 /// Materialize a structured `Shell` result's output stream into an ordered
 /// list of `(text, style)` logical lines, in the same byte-offset layout
-/// [`emit_bash_lines`] uses (one logical line per entry; the caller anchors
+/// [`emit_command_lines`] uses (one logical line per entry; the caller anchors
 /// them sequentially). Each entry carries its per-stream style so a folded
 /// view still colours stdout/stderr correctly even when the middle is dropped.
 ///
 /// Prefers the arrival-ordered `lines` (the TUI-authoritative interleaved
 /// view), falling back to the all-stdout-then-all-stderr flat strings for the
 /// legacy / live-seed / restored-session path. Empty bands contribute nothing.
-fn bash_structured_lines(
+fn command_structured_lines(
     lines: &[muta_contracts::tool_output::ShellLine],
     stdout: &str,
     stderr: &str,
@@ -1098,7 +1108,7 @@ fn bash_structured_lines(
             } else {
                 base
             };
-            // `emit_bash_lines` normalizes CR/BS itself, so pass the raw text.
+            // `emit_command_lines` normalizes CR/BS itself, so pass the raw text.
             out.push((l.text.clone(), style));
         }
         return out;
@@ -1129,7 +1139,7 @@ fn bash_structured_lines(
 /// visible head and tail text only — the hidden middle is neither painted nor
 /// selectable, matching "you can't select what isn't on screen."
 #[allow(clippy::too_many_arguments)]
-fn emit_bash_lines_folded(
+fn emit_command_lines_folded(
     ctx: &mut RenderCtx<'_, '_>,
     mi: usize,
     block_idx: usize,
@@ -1144,7 +1154,7 @@ fn emit_bash_lines_folded(
     let fold_after = BASH_FOLD_HEAD_ROWS + BASH_FOLD_TAIL_ROWS + 1;
     if total <= fold_after {
         for (text, style) in rows {
-            byte_offset = emit_bash_lines(
+            byte_offset = emit_command_lines(
                 ctx,
                 mi,
                 block_idx,
@@ -1167,7 +1177,7 @@ fn emit_bash_lines_folded(
 
     // ── head ──
     for (text, style) in rows[..head_end].iter() {
-        byte_offset = emit_bash_lines(
+        byte_offset = emit_command_lines(
             ctx,
             mi,
             block_idx,
@@ -1185,7 +1195,7 @@ fn emit_bash_lines_folded(
     // Advance `byte_offset` past every hidden logical line so the tail rows
     // anchor at their true `output`-space positions. Each hidden line occupies
     // `text.len() + 1` bytes in the flat stream (the `+1` is the `\n`
-    // separator `emit_bash_lines` counts). `normalize_carriage_returns` can
+    // separator `emit_command_lines` counts). `normalize_carriage_returns` can
     // only shrink a line, so this upper bound keeps offsets monotonic; the
     // tail offsets stay past the head, which is all selection anchoring needs.
     for (text, _style) in rows[head_end..tail_start].iter() {
@@ -1202,7 +1212,7 @@ fn emit_bash_lines_folded(
 
     // ── tail ──
     for (text, style) in rows[tail_start..].iter() {
-        byte_offset = emit_bash_lines(
+        byte_offset = emit_command_lines(
             ctx,
             mi,
             block_idx,
@@ -1263,9 +1273,9 @@ fn draw_tool_result(
         ResultKind::Matches => {
             draw_matches_content(ctx, mi, block_idx, output, selection, indent, inner_w)
         }
-        ResultKind::Bash => {
-            let command = bash_command_for(structured, arguments);
-            draw_bash_content(
+        ResultKind::Command => {
+            let command = command_for(structured, arguments);
+            draw_command_content(
                 ctx, mi, block_idx, output, structured, &command, selection, indent, inner_w,
             );
         }
@@ -1336,7 +1346,7 @@ fn draw_tool_error(
         .fg(ctx.theme.err())
         .add_modifier(Modifier::BOLD);
     let selection = block_selection_range(selection, mi, block_idx);
-    let _ = emit_bash_lines(
+    let _ = emit_command_lines(
         ctx,
         mi,
         block_idx,
@@ -1355,7 +1365,7 @@ fn draw_tool_error(
 /// call starts, so it is available even while streaming), falling back to
 /// parsing the JSON arguments for legacy / restored sessions without a
 /// structured payload.
-fn bash_command_for(structured: Option<&muta_contracts::ToolOutput>, arguments: &str) -> String {
+fn command_for(structured: Option<&muta_contracts::ToolOutput>, arguments: &str) -> String {
     if let Some(muta_contracts::ToolOutput::Shell { command, .. }) = structured
         && !command.is_empty()
     {
@@ -1837,12 +1847,12 @@ pub fn draw_tool_step(
                 }
 
                 // Tool-specific content (label-free). bash renders `$ cmd` +
-                // output; others their block. A streaming or freshly-spawned bash
+                // output; others their block. A streaming or freshly-spawned command
                 // step renders its `$ cmd` and live streaming output.
                 let has_output = output.as_deref().is_some_and(|s| !s.is_empty());
-                let is_bash = name == "bash";
+                let is_command = matches!(name.as_str(), "execute_command" | "bash");
                 let has_structured = structured.is_some();
-                if has_output || is_bash || has_structured {
+                if has_output || is_command || has_structured {
                     draw_tool_result(
                         &mut ctx,
                         mi,
@@ -2271,9 +2281,9 @@ pub fn draw_reasoning_trace(
 pub(crate) const MARKER_COLLAPSED: &str = "+";
 pub(crate) const MARKER_EXPANDED: &str = "-";
 
-/// Build the one-row header of a command entry: `⌘ command · 21:39`.
+/// Build the one-row header of a command entry: `⌘ command          21:39`.
 /// The `⌘` (or `❯`) glyph and `command` label are rendered in the same
-/// indicator tone (BOLD), followed by the muted trailing timestamp ` · HH:MM`.
+/// indicator tone (BOLD), with the muted timestamp pinned to the right edge.
 fn command_header_line(
     lead_symbol: &str,
     family_tone: Color,
@@ -2294,12 +2304,15 @@ fn command_header_line(
             .add_modifier(Modifier::BOLD),
     ));
 
-    // Trailing timestamp: ` · HH:MM` in muted color.
+    // Trailing timestamp: whitespace-aligned to the right edge.
     if let Some(time) = time_label {
-        let time_span = format!(" · {time}");
-        let budget = full_width.saturating_sub(used);
-        if time_span.width() <= budget {
-            spans.push(Span::styled(time_span, Style::default().fg(muted)));
+        let time_width = time.width();
+        if used + 1 + time_width <= full_width {
+            spans.push(Span::styled(
+                " ".repeat(full_width - used - time_width),
+                Style::default(),
+            ));
+            spans.push(Span::styled(time.to_string(), Style::default().fg(muted)));
         }
     }
 
@@ -2310,7 +2323,7 @@ fn command_header_line(
 /// and output (ADR-0111, revising ADR-0109/0108/0106).
 ///
 /// Every command entry is structured identically to a turn entry:
-/// - **Header**: `⌘ command · HH:MM` (generic descriptor with shared indicator tone)
+/// - **Header**: `⌘ command` plus a right-aligned `HH:MM` timestamp
 /// - **Gap**: 1 blank row separating header and content body (`TURN_HEADER_BODY_GAP_ROWS`)
 /// - **Body**: The concrete invocation (e.g. `/autopilot on`) followed by result output blocks.
 #[allow(clippy::too_many_arguments)]

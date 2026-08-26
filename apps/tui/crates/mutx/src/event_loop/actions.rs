@@ -40,8 +40,6 @@ pub(super) use commands::split_command_word;
 pub(crate) use commands::handle_ctrl_c;
 
 #[cfg(test)]
-pub(crate) use commands::handle_insert_into_round;
-#[cfg(test)]
 pub(crate) use commands::handle_send_slash;
 #[cfg(test)]
 pub(crate) use modals::handle_close_modal;
@@ -126,9 +124,6 @@ pub(super) async fn dispatch_action(
                 crate::app::ComposerSendMode::Steer => crate::app::ComposerSendMode::FollowUp,
                 crate::app::ComposerSendMode::FollowUp => crate::app::ComposerSendMode::Steer,
             };
-        }
-        input::InputAction::InsertIntoRound => {
-            commands::handle_insert_into_round(app, runtime, viewed_session_id).await;
         }
         input::InputAction::SendSlash(cmd) => {
             return commands::handle_send_slash(app, runtime, session, cmd).await;
@@ -345,6 +340,10 @@ pub(super) async fn dispatch_action(
             // the thinking field is a toggle (no text), so it clears the
             // line while focused.
             if app.editor_model_settings_only {
+                // The settings editor owns fields 1..=4 (effort, thinking
+                // when available, then the capability overrides 3/4).
+                // Tab wraps 1 ↔ 4 when the override rows are shown.
+                let has_overrides = app.editor_model_settings_only;
                 match app.editor_field {
                     1 if app.editor_thinking_available => {
                         app.editor_effort = app.input.clone();
@@ -355,12 +354,28 @@ pub(super) async fn dispatch_action(
                     2 if app.editor_thinking_available => {
                         app.input = app.editor_effort.clone();
                         app.set_cursor_end();
+                        if has_overrides {
+                            app.editor_field = 3;
+                        } else {
+                            app.editor_field = 1;
+                        }
+                    }
+                    3 => {
+                        app.editor_field = 4;
+                    }
+                    4 => {
+                        app.input = app.editor_effort.clone();
+                        app.set_cursor_end();
                         app.editor_field = 1;
                     }
                     _ => {
                         app.input = app.editor_effort.clone();
                         app.set_cursor_end();
-                        app.editor_field = 1;
+                        if has_overrides {
+                            app.editor_field = 3;
+                        } else {
+                            app.editor_field = 1;
+                        }
                     }
                 }
             }
@@ -413,6 +428,16 @@ pub(super) async fn dispatch_action(
             if app.editor_thinking_available {
                 app.editor_thinking = !app.editor_thinking;
             }
+        }
+        input::InputAction::ModelEditorVisionCycle => {
+            // Cycle the vision capability override (ADR-0080 layer 1):
+            // inherit → force on → force off → inherit.
+            app.editor_vision_override =
+                cycle_tri_state(app.editor_vision_override);
+        }
+        input::InputAction::ModelEditorToolCycle => {
+            // Cycle the tool-call capability override, same tri-state.
+            app.editor_tool_override = cycle_tri_state(app.editor_tool_override);
         }
         input::InputAction::SubmitModelEditor => {
             return modals::handle_submit_model_editor(app);
@@ -2314,5 +2339,17 @@ pub(crate) mod host_test_shims {
 
     pub(crate) fn kill_cancel(app: &mut App) {
         host::cancel_kill_confirm(app);
+    }
+}
+
+
+/// Cycle a capability-override tri-state (ADR-0080 layer 1): unset (inherit
+/// from the lower layers) → forced on → forced off → unset. Used by the
+/// settings editor's Space cycling on fields 3/4.
+fn cycle_tri_state(v: Option<bool>) -> Option<bool> {
+    match v {
+        None => Some(true),
+        Some(true) => Some(false),
+        Some(false) => None,
     }
 }

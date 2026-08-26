@@ -223,8 +223,8 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // do not borrow `app` (which is mutated again right after the
     // draw closure).
     //
-    // Every outbox item is a next-round item now: a live mid-round
-    // insert (`Ctrl+O`) is transcript-owned and never passes through
+    // Every outbox item is a next-round item now: a live busy-Enter steer is
+    // transcript-owned and never passes through
     // the outbox (ADR-0126), so there is no `steering` slice to
     // exclude from the modal either.
     let queue_items: Vec<view::QueueItemView> = app
@@ -730,6 +730,11 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 .editor_model_settings_only
                 .then_some(app.editor_thinking)
                 .filter(|_| app.editor_thinking_available);
+            // Capability overrides (ADR-0080 layer 1): shown in the
+            // settings-only editor (fields 3/4), cycled with Space.
+            let overrides = app
+                .editor_model_settings_only
+                .then_some((app.editor_vision_override, app.editor_tool_override));
             Some(view::draw_model_editor(
                 f,
                 &title,
@@ -740,6 +745,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 effort,
                 &effort_levels,
                 thinking,
+                overrides,
                 &app.theme,
             ))
         }
@@ -775,7 +781,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         Modal::CustomProvider => {
             let editing = app.custom_is_editing();
             let title = if editing {
-                format!("Edit · {}", app.custom_name)
+                format!("Edit — {}", app.custom_name)
             } else {
                 crate::provider_template_label_for(&app.custom_protocol_wire)
             };

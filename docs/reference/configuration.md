@@ -69,10 +69,11 @@ The optional `[master]` table.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `master.hard_stop_turns` | `0` | Hard-stop a round after this many ReAct turns. `0` = uncapped (the only execution cap; compaction is the backstop) |
-| `master.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for a `bash` command it emits. Off by default: the bash schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the bash schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for autopilot/automatic flows where no human is reachable |
-| `master.skip_interactive_input` | `false` | Whether an interactive `bash` command (matched by the interactive classifier: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) **never** pops the inline input panel. Off by default: a command needing input prompts you with an input panel (command + masked/plain field). On: the panel is skipped and the command runs with stdin closed — it reads EOF immediately and fails fast with a non-interactive remedy hint, exactly as under autopilot mode. For users who find the prompt disruptive and would rather retry the command themselves. Note: this only governs the interactive-input path; it does not turn the master on autopilot, so ordinary tool confirmations still apply |
-| `master.doom_guard.enabled` | `true` | Doom-loop guard: blocks a watched tool signature before its first repeat executes in the same round. On by default — a model making progress never trips it, and the cheapest token-burning loop (`sleep N; make` variants) is exactly what a default-off guard never catches. Forced off for subordinate runners |
+| `master.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for an `execute_command` call it emits. Off by default: the execute_command schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the execute_command schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for autopilot/automatic flows where no human is reachable |
+| `master.skip_interactive_input` | `false` | Whether an interactive `execute_command` invocation (matched by the interactive classifier: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) **never** pops the inline input panel. Off by default: a command needing input prompts you with an input panel (command + masked/plain field). On: the panel is skipped and the command runs with stdin closed — it reads EOF immediately and fails fast with a non-interactive remedy hint, exactly as under autopilot mode. For users who find the prompt disruptive and would rather retry the command themselves. Note: this only governs the interactive-input path; it does not turn the master on autopilot, so ordinary tool confirmations still apply |
+| `master.doom_guard.enabled` | `true` | Doom-loop guard: blocks a watched tool signature once it recurs enough times to reach `threshold` within the window. On by default — a model making progress never trips it, and the cheapest token-burning loop (`sleep N; make` variants) is capped at its third occurrence (ADR-0148). Forced off for subordinate runners |
 | `master.doom_guard.window` | `16` | Number of recent watched tool signatures retained for repeat detection |
+| `master.doom_guard.threshold` | `3` | Occurrences in-window before a repeat is blocked. `3` (ADR-0148): one same-signature re-run is tolerated — a transient retry, a re-run of the same test after an edit — and the second repeat is blocked. `2` restores the strict ADR-0113 first-repeat block. Clamped to `>= 2` |
 
 ```toml
 [master]
@@ -83,6 +84,7 @@ skip_interactive_input = false
 [master.doom_guard]
 enabled = true
 window = 16
+threshold = 3
 ```
 
 
@@ -144,22 +146,22 @@ instances never repeat them.
 |-----|---------|---------|
 | `favorites` | `[]` | Favorite **model ids** pinned for quick access in the picker (ADR-0046 made favorites per-model). Flat list of model wire ids; a starred daily-driver model sorts into the second priority tier (below the currently-active pair) wherever it is served |
 
-## Permissions, bash policy, and tool variants
+## Permissions, command policy, and tool variants
 
 The optional `[permissions]` and `[bash_policy]` tables govern the permission
-broker and the bash command guard.
+broker and the command guard (`[bash_policy]`, the config key retained from the tool's original name).
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `permissions.allow` | `[]` | Rules to pre-seed the "always allow" allowlist at startup: each rule is a `{ tool, scope }` pair. `scope = "*"` matches every call to the tool; any other value must match the call's scope exactly (a full path, or the exact command string for `bash`) — no prefix or substring matching |
-| `bash_policy.enabled` | `true` | Master switch for the bash policy guard; dangerous built-in commands stay protected even when `bash` is broadly allowed |
+| `permissions.allow` | `[]` | Rules to pre-seed the "always allow" allowlist at startup: each rule is a `{ tool, scope }` pair. `scope = "*"` matches every call to the tool; any other value must match the call's scope exactly (a full path, or the exact command string for `execute_command`) — no prefix or substring matching |
+| `bash_policy.enabled` | `true` | Master switch for the bash policy guard; dangerous built-in commands stay protected even when `execute_command` is broadly allowed |
 | `bash_policy.allow_user_override_builtin_deny` | `false` | Whether an explicit user `allow` rule may override a compiled-in `deny` rule (user `allow` can still override compiled-in `confirm` rules) |
 | `bash_policy.rules` | `[]` | User rules evaluated before built-in `confirm` rules: each rule is a `{ name, match, pattern, action, reason }` tuple. `match` is `"regex"` (default), `"contains"`, `"startswith"`, or `"program"`; `action` is `"allow"`, `"confirm"`, or `"deny"` |
 
 ```toml
 [permissions]
 allow = [
-  { tool = "bash", scope = "git status" },
+  { tool = "execute_command", scope = "git status" },
   { tool = "hook", scope = ".muta/hooks/lint.sh" },
 ]
 
@@ -281,7 +283,7 @@ expand_auto_scroll = false
 
 [default_expanded]
 edit_file = true
-bash = true
+execute_command = true
 thinking = false
 
 [custom_color_scheme]
@@ -355,10 +357,10 @@ command = ".muta/hooks/turn-open.sh"
 # waiting for you. The canonical use is a desktop/bell notification so a
 # long-running task that goes on autopilot still gets your attention. Outcomes are
 # ignored — these never grant/deny or alter the transcript. The matcher targets
-# the tool seeking approval (here: only bash). `UserQuestion` has no matcher.
+# the tool seeking approval (here: only execute_command). `UserQuestion` has no matcher.
 [[hooks]]
 event   = "PermissionRequest"
-matcher = "bash"
+matcher = "execute_command"
 command = ".muta/hooks/notify.sh \"Needs approval\""
 [[hooks]]
 event   = "UserQuestion"

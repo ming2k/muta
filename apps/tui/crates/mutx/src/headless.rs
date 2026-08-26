@@ -285,10 +285,10 @@ pub async fn run_headless(
                         println!("{}", serde_json::to_string(&event_obj)?);
                         io::stdout().flush()?;
                     } else if is_tty {
-                        eprintln!("\n\x1b[33m[Interrupted · {}]\x1b[0m", record.label());
+                        eprintln!("\n\x1b[33m[Interrupted — {}]\x1b[0m", record.label());
                         io::stderr().flush()?;
                     } else {
-                        eprintln!("\n[Interrupted · {}]", record.label());
+                        eprintln!("\n[Interrupted — {}]", record.label());
                         io::stderr().flush()?;
                     }
                 }

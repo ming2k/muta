@@ -153,7 +153,7 @@ async fn secret_scrub_middleware_redacts_credentials() {
     };
 
     middleware
-        .post_execute("bash", &mut output, &env)
+        .post_execute("execute_command", &mut output, &env)
         .await
         .unwrap();
 
@@ -178,7 +178,7 @@ async fn spill_middleware_offloads_massive_output() {
 
     let mut output = ToolOutput::Text(large_text.clone());
     middleware
-        .post_execute("bash", &mut output, &env)
+        .post_execute("execute_command", &mut output, &env)
         .await
         .unwrap();
 

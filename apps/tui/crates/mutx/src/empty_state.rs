@@ -153,15 +153,18 @@ impl CarouselPage {
     }
 }
 
-/// The built-in wordmark, rendered when no user logo is supplied (figlet
-/// "small" font). Compact enough to fit an 80-column terminal with room for
+/// The built-in wordmark, rendered when no user logo is supplied (a 6-row
+/// hand-tuned "muta" in the spirit of figlet's gothic/old-english style).
+/// 30 columns wide — compact enough to fit an 80-column terminal with room for
 /// the guidance line beneath, while still reading as a logo at a glance
 /// rather than competing with the transcript that will replace it.
 const BUILTIN_LOGO: &[&str] = &[
-    "            _        ",
-    "  _ __ _  _| |_ __ _ ",
-    " | '  \\ || |  _/ _` |",
-    " |_|_|_\\_,_|\\__\\__,_|",
+    "   _____          __          ",
+    "  /     \\  __ ___/  |______   ",
+    " /  \\ /  \\|  |  \\   __\\__  \\  ",
+    "/    Y    \\  |  /|  |  / __ \\_",
+    "\\____|__  /____/ |__| (____  /",
+    "        \\/                 \\/ ",
 ];
 
 /// Parse a raw logo file into a display-safe line vector, enforcing the

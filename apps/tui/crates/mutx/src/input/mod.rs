@@ -269,6 +269,11 @@ pub enum InputAction {
     /// Toggle extended thinking on/off (Space) on the Anthropic key editor's
     /// thinking field. Orthogonal to effort.
     ModelEditorThinkingToggle,
+    /// Cycle the vision capability override (ADR-0080 layer 1) tri-state:
+    /// inherit → force on → force off. Field 3 of the settings editor.
+    ModelEditorVisionCycle,
+    /// Cycle the tool-call capability override tri-state. Field 4.
+    ModelEditorToolCycle,
     /// Submit the custom-provider editor → `AgentRequest::AddProvider`.
     SubmitCustomProvider,
     /// Cancel the custom-provider editor and return to the Connections list.
@@ -555,11 +560,6 @@ pub enum InputAction {
     /// `↓` while the queue pointer is armed: step toward newer items and,
     /// past the newest, dissolve the pointer (restoring the stashed draft).
     QueuePointerNext,
-    /// `Ctrl+O` at the top level: insert the current composer text into the
-    /// running round (steer at the next safe turn boundary). Data-less — the
-    /// event loop reads the composer buffer itself, exactly like the
-    /// text-triggered modal commands do.
-    InsertIntoRound,
     /// Delete the queue modal's selected item. Bound to `D` inside the queue
     /// modal (matching the destructive-delete convention in Connections /
     /// Sessions).
@@ -1433,13 +1433,7 @@ pub fn process_event(
                         InputAction::None
                     }
                 }
-                // Ctrl+O is a declared global binding (registry →
-                // InsertIntoRound) and only reaches this arm inside a modal,
-                // where the composer is borrowed (or hidden) — so it is a
-                // no-op there.
-                KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    InputAction::None
-                }
+
                 // F5 is a declared global binding (registry → OpenBtwList).
                 // Inside the asides modal itself it re-queries the list (a
                 // refresh) rather than toggling the modal closed; inside any
@@ -2107,11 +2101,17 @@ pub fn process_event(
                         InputAction::PermissionsClearAll
                     } else if c == ' '
                         && context.active_modal == super::Modal::ModelEditor
-                        && context.editor_field == Some(2)
+                        && matches!(context.editor_field, Some(2 | 3 | 4))
                     {
-                        // Space toggles the key editor's thinking field
-                        // (Anthropic, field 2) instead of inserting a space.
-                        InputAction::ModelEditorThinkingToggle
+                        // Space on the key editor's non-text fields instead
+                        // of inserting a space. Field 2 (thinking) is a binary
+                        // toggle; fields 3/4 (capability overrides, ADR-0080)
+                        // are tri-state: inherit → force on → force off.
+                        match context.editor_field {
+                            Some(3) => InputAction::ModelEditorVisionCycle,
+                            Some(4) => InputAction::ModelEditorToolCycle,
+                            _ => InputAction::ModelEditorThinkingToggle,
+                        }
                     } else if c.is_ascii_digit()
                         && c != '0'
                         && context.active_modal == super::Modal::ModelEditor
@@ -2137,7 +2137,7 @@ pub fn process_event(
                         InputAction::None
                     } else if edits_input_field(&context)
                         && !(context.active_modal == super::Modal::ModelEditor
-                            && context.editor_field == Some(2))
+                            && matches!(context.editor_field, Some(2 | 3 | 4)))
                     {
                         // The key editor's thinking field (2) is a toggle, not
                         // a text field — don't let printable chars mutate the

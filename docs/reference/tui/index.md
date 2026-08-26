@@ -99,7 +99,7 @@ ADR-0079; paths below are relative to that directory.
 | `disclosure/renderers.rs` | Tool-step, thinking (`draw_reasoning_trace`), and envoy step renderers |
 | `disclosure/state.rs` | Step state machine: `Disclosure`, `Interaction`, summary color/weight computation |
 | `layout/` | Transcript arrangement strategies: `turn_band` (selected by `[tui] transcript_layout`) |
-| `tools/` | Per-tool-step presenters (`bash`, `edit`, `read`, `search`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
+| `tools/` | Per-tool-step presenters (`execute_command`, `edit`, `read`, `search`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
 | `composer.rs` | `draw_composer` (live input box), `INPUT_MSG_IDX` |
 | `chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
 | `page_header.rs` | `draw_page_header` / `PageHeader` / `SessionHead` / `PageHints::has_content` — the unified head band at the top of every view (demand-driven row 2) |

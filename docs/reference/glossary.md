@@ -64,7 +64,7 @@ The architecture defines a three-tier agent hierarchy: **`Supervisor`**, **`Mast
 | **runner** | An isolated sub-agent spawned by a master to investigate or execute a sub-task; shares only the provider, running with fresh history and profile-filtered tools. |
 | **profile** | A declarative bundle (name, system-prompt fragment, and `ToolPolicy`) that scopes a runner's behavior. |
 | **`EXPLORE` profile** | Research role: pure read tools. Bound by the `runner` tool. |
-| **`CODE` profile** | Coding role: write-capable (admits `bash`/`edit_file`/`write_file`). Runs autopilot like built-in runners — delegation via `runner_code` is the authorization. |
+| **`CODE` profile** | Coding role: write-capable (admits `execute_command`/`edit_file`/`write_file`). Runs autopilot like built-in runners — delegation via `runner_code` is the authorization. |
 | **`TITLE` profile** | Read-only role used to generate a session title in a single model call. [ADR-0022](../adr/0022-session-level-ai-title.md) |
 | **full-duplex** | Runners are not fire-and-forget: requests travel up to the master, replies travel down to the child. |
 
@@ -78,7 +78,7 @@ The architecture defines a three-tier agent hierarchy: **`Supervisor`**, **`Mast
 | **workspace asset trust** | Canonical-workspace-keyed SHA-256 trust for the independent `mcp`, `skills`, `hooks`, and `rules` project asset domains. It controls loading only. |
 | **spatial workspace boundary** | The canonical primary workspace plus user-configured linked roots within which native file operations may occur. It does not load assets or authorize runtime operations. |
 | **runtime permission grant** | Authority for one concrete hazardous operation scope, granted Once, for the Session, or Always. It does not trust project assets or widen filesystem roots. |
-| **sandbox bash tool** | Dedicated `sandbox_bash` tool providing physical workspace containment for isolated testing and analysis. |
+| **workspace sandbox** | The isolated variant of `execute_command` (`shell_isolation: Workspace`): commands run inside a container confined to the admitted workspace roots, with no host file or network access. Offered automatically when `muta_platform::workspace_sandbox::available()`. |
 | **autopilot** | A persisted interaction posture: never wait for confirmations, questions, or stdin. Missing grants fail immediately. [Autopilot operation](../explanation/agent-design/autopilot.md) |
 | **`tool_call_id` pairing** | The wire requirement that every result message references a preceding call id; preserved across pruning and fallback. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 

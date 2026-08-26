@@ -13,38 +13,36 @@ pub mod search;
 mod ssrf;
 
 mod ask_user;
-mod bash;
-mod edit;
+mod edit_file;
+mod execute_command;
 mod file_search;
 mod find_files;
 mod helpers;
-mod list;
-mod read;
+mod list_dir;
 mod read_image;
-mod sandbox_bash;
+mod read_text;
 mod search_text;
 pub mod syntax_guard;
 mod todo;
 mod web;
-mod write;
+mod write_file;
 
 pub use syntax_guard::{SyntaxCheckResult, verify_syntax};
 
 // Re-export every tool struct at the module root so existing consumers
 // (`crate::tools::ReadTextTool`, etc.) keep resolving unchanged.
 pub use ask_user::AskUserTool;
-pub use bash::BashTool;
-pub use edit::EditFileTool;
+pub use edit_file::EditFileTool;
+pub use execute_command::ExecuteCommandTool;
 pub use find_files::FindFilesTool;
-pub use list::ListDirTool;
-pub use read::{ReadTextTerseTool, ReadTextTool};
+pub use list_dir::ListDirTool;
+pub use read_text::{ReadTextTerseTool, ReadTextTool};
 pub use read_image::ReadImageTool;
-pub use sandbox_bash::SandboxBashTool;
 pub use search_text::SearchTextTool;
 pub use todo::{TodoToolContext, TodoUpdateTool, TodoWriteTool};
 pub(crate) use web::html_to_text;
 pub use web::{WebFetchTool, WebPageSnapshot, WebSearchTool, WebSnapshotResult};
-pub use write::WriteFileTool;
+pub use write_file::WriteFileTool;
 
 #[cfg(test)]
 mod tests;

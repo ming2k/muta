@@ -85,7 +85,7 @@ pub fn run() -> io::Result<()> {
             }
 
             let title = format!(
-                " transcript · [{}/{}] {} · Tab=next · ↑↓ scroll · Ctrl+T toggle · q/Esc quit",
+                " transcript  [{}/{}] {}  Tab=next  ↑↓ scroll  Ctrl+T toggle  q/Esc quit",
                 s.scenario + 1,
                 SCENARIO_COUNT,
                 SCENARIO_LABELS[s.scenario],

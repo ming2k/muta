@@ -207,7 +207,17 @@ pub(crate) fn draw_page_header(
     let tag_style = fill.fg(theme.dim());
     let badge_style = fill.fg(theme.brand()).add_modifier(Modifier::BOLD);
     let primary_style = fill.fg(theme.brand());
-    let meta_style = fill.fg(theme.muted());
+    let meta_style = match header {
+        PageHeader::Btw(head)
+            if matches!(
+                head.parent,
+                muta_contracts::ParentStatus::NeedsApproval
+                    | muta_contracts::ParentStatus::NeedsInput
+                    | muta_contracts::ParentStatus::Failed
+                    | muta_contracts::ParentStatus::Interrupted
+            ) => fill.fg(theme.warn()).add_modifier(Modifier::BOLD),
+        _ => fill.fg(theme.muted()),
+    };
     // The session mode flag (`autopilot`) reads as a persistent safety state,
     // so it takes the warning tone; every other variant's right side is quiet
     // metadata (the `/btw` return hint, the Runner sibling count).
@@ -280,7 +290,7 @@ pub(crate) fn draw_page_header(
 /// status; this row carries *what the keys do in this view*.
 ///
 /// Content by page kind, all horizontally centered on the band background:
-/// - **Main**: the live aside chip (`btw 2 · 1 running`) and `F5 asides` —
+/// - **Main**: the live aside chip (`btw: 2 total (1 active)`) and `F5 asides` —
 ///   rendered only while asides exist (the caller gates the row itself on
 ///   [`PageHints::has_content`]). No interrupt pair: the activity bar's
 ///   hint is the authoritative one and spells the real double-Esc arming
@@ -317,9 +327,9 @@ pub(crate) fn draw_page_header_hints(
     let note: Option<String> = match hints.kind {
         PageKind::Main => hints.asides.as_ref().map(|chip| {
             if chip.running > 0 {
-                format!("btw {} · {} running", chip.total, chip.running)
+                format!("btw: {} total ({} active)", chip.total, chip.running)
             } else {
-                format!("btw {}", chip.total)
+                format!("btw: {} total", chip.total)
             }
         }),
         PageKind::Btw => {
@@ -515,7 +525,7 @@ enum Tone {
     Meta,
 }
 
-/// Fit `primary · meta` into the left-hand budget while prioritizing the
+/// Fit `primary  meta` into the left-hand budget while prioritizing the
 /// compact state/index metadata. On very narrow rows the primary description
 /// disappears before that orienting metadata does.
 fn fit_context(primary: &str, meta: &str, budget: usize) -> Vec<(String, Tone)> {
@@ -531,7 +541,7 @@ fn fit_context(primary: &str, meta: &str, budget: usize) -> Vec<(String, Tone)> 
 
     let primary_width = primary.width();
     let meta_width = meta.width();
-    const SEPARATOR: &str = " · ";
+    const SEPARATOR: &str = "  ";
     let separator_width = SEPARATOR.width();
 
     if primary_width + separator_width + meta_width <= budget {
@@ -556,12 +566,12 @@ fn fit_context(primary: &str, meta: &str, budget: usize) -> Vec<(String, Tone)> 
 
 fn parent_status_label(status: muta_contracts::ParentStatus) -> &'static str {
     match status {
-        muta_contracts::ParentStatus::Idle => "main idle",
-        muta_contracts::ParentStatus::Running => "main running",
-        muta_contracts::ParentStatus::NeedsApproval => "main needs approval",
-        muta_contracts::ParentStatus::NeedsInput => "main needs input",
-        muta_contracts::ParentStatus::Failed => "main failed",
-        muta_contracts::ParentStatus::Interrupted => "main interrupted",
+        muta_contracts::ParentStatus::Idle => "[main: idle]",
+        muta_contracts::ParentStatus::Running => "[main: running]",
+        muta_contracts::ParentStatus::NeedsApproval => "[⚠ main: approval needed]",
+        muta_contracts::ParentStatus::NeedsInput => "[⚠ main: input needed]",
+        muta_contracts::ParentStatus::Failed => "[⚠ main: failed]",
+        muta_contracts::ParentStatus::Interrupted => "[⚠ main: interrupted]",
     }
 }
 
@@ -617,7 +627,7 @@ mod tests {
                 parent: muta_contracts::ParentStatus::NeedsApproval,
             }),
         );
-        assert!(row.starts_with("   /btw Side conversation · main needs approval"));
+        assert!(row.starts_with("   /btw Side conversation  [⚠ main: approval needed]"));
         // ADR-0103: the exit affordance moved to the row-2 legend; row 1 is
         // pure identity + status now.
         assert!(!row.trim_end().contains("Esc back"));
@@ -731,7 +741,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
-        assert!(row.contains("btw 2 · 1 running"), "aside chip: {row}");
+        assert!(row.contains("btw: 2 total (1 active)"), "aside chip: {row}");
         assert!(row.contains("asides"), "F5 pair: {row}");
         assert!(!row.contains("Esc"), "no interrupt pair: {row}");
     }

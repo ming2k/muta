@@ -66,7 +66,7 @@ fn fixtures() -> Vec<UserQuestionRequest> {
                 ],
                 multi_select: true,
             }],
-            origin: Some("runner #b4e1 · explore".into()),
+            origin: Some("runner #b4e1 (explore)".into()),
         },
     ]
 }
@@ -98,7 +98,7 @@ pub fn run() -> io::Result<()> {
         &mut state,
         |f, s| {
             let title = format!(
-                " question modal · fixture {}/{}  Tab=next fixture  q/Ctrl+C=quit",
+                " question modal  fixture {}/{}  Tab=next fixture  q/Ctrl+C=quit",
                 s.idx + 1,
                 s.fx.len(),
             );

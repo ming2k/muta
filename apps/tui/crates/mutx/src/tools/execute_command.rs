@@ -1,10 +1,10 @@
-//! Presenter for `bash`.
+//! Presenter for `execute_command` (and legacy persisted `bash` steps).
 
 use super::{ArgLayout, ResultKind, ToolPresenter, ToolView, truncate};
 
-pub struct BashPresenter;
+pub struct ExecuteCommandPresenter;
 
-impl ToolPresenter for BashPresenter {
+impl ToolPresenter for ExecuteCommandPresenter {
     fn summary(&self, view: &ToolView) -> String {
         view.str("command")
             .and_then(command_summary)
@@ -13,15 +13,21 @@ impl ToolPresenter for BashPresenter {
     }
 
     fn result_kind(&self) -> ResultKind {
-        ResultKind::Bash
+        ResultKind::Command
     }
 
     fn arg_layout(&self) -> ArgLayout {
         ArgLayout::Command
     }
 
+    /// Collapsed by default: the summary line ("Run cargo test · 0ms")
+    /// covers the common case, and verbose command output otherwise dominates
+    /// the transcript. Failures still force-expand (lifecycle rule in
+    /// `step_interaction::default_tool_expanded`), and
+    /// `[tui.default_expanded] execute_command = true` restores the old
+    /// open-by-default behavior.
     fn default_expanded(&self) -> bool {
-        true
+        false
     }
 }
 

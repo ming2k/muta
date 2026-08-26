@@ -999,6 +999,11 @@ pub fn draw_model_editor(
     // a checkbox; toggled with Space by the caller.
     // `None` hides. Orthogonal to effort.
     thinking: Option<bool>,
+    // Capability overrides (ADR-0080 layer 1) currently held by the editor:
+    // `vision`/`tool_call` tri-states (`None` inherit, `Some(true)` force on,
+    // `Some(false)` force off), cycled with Space at fields 3/4. `None` hides
+    // the whole block (models whose editor was opened without it).
+    overrides: Option<(Option<bool>, Option<bool>)>,
     theme: &Theme,
 ) -> mutx_engine::Rect {
     let geometry = ContentModalSpec::MODEL_EDITOR;
@@ -1102,6 +1107,37 @@ pub fn draw_model_editor(
         ]));
     }
 
+    // Capability-override block (optional): two tri-state rows (vision,
+    // tool call). Unlike thinking's binary checkbox these cycle three states —
+    // inherit (no override), force on, force off — because "unset" is itself
+    // meaningful: it yields to the remote advertisement and the baseline.
+    if let Some((vision, tool)) = overrides {
+        for (idx, (label, value)) in [(0u8, ("Vision", vision)), (1u8, ("Tool call", tool))] {
+            let field = 3 + idx;
+            let label_text = format!("{:<8}", label);
+            let box_style = Style::default()
+                .fg(if focused_field == field {
+                    theme.brand()
+                } else {
+                    theme.fg()
+                })
+                .add_modifier(Modifier::BOLD);
+            let (marker, word, word_style) = match value {
+                None => ("[-]", "inherit", Style::default().fg(theme.muted())),
+                Some(true) => ("[x]", "force on", Style::default().fg(theme.ok())),
+                Some(false) => ("[ ]", "force off", Style::default().fg(theme.warn())),
+            };
+            let tail = format!("{marker} {word}");
+            let pad = body_width.saturating_sub(label_text.width() + tail.width());
+            body.push(Line::from(vec![
+                Span::styled(label_text, label_style),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(marker.to_string(), box_style),
+                Span::styled(format!(" {word}"), word_style),
+            ]));
+        }
+    }
+
     let body_rect = f.body;
     render_body(frame, body_rect, body, &mut 0, None, 0, false, theme);
 
@@ -1110,6 +1146,9 @@ pub fn draw_model_editor(
         hints.push(FooterHint::primary(keyvocab::ENTER, "save"));
         if effort.is_some() || thinking.is_some() {
             hints.push(FooterHint::secondary(keyvocab::TAB, "field"));
+        }
+        if overrides.is_some() {
+            hints.push(FooterHint::secondary(keyvocab::SPACE, "override"));
         }
         if effort.is_some() {
             // ←/→ steps one rung; a digit jumps straight to that tier.
@@ -1755,6 +1794,7 @@ mod tests {
         effort: Option<&str>,
         levels: &[String],
         thinking: Option<bool>,
+        overrides: Option<(Option<bool>, Option<bool>)>,
     ) -> String {
         let theme = Theme::default();
         let mut terminal = mutx_engine::TestTerminal::new(width, height);
@@ -1769,6 +1809,7 @@ mod tests {
                 effort,
                 levels,
                 thinking,
+                overrides,
                 &theme,
             );
         });
@@ -1808,7 +1849,7 @@ mod tests {
             for ladder in &ladders {
                 for tier in ladder {
                     let lv: Vec<String> = ladder.iter().map(|s| s.to_string()).collect();
-                    let text = render_settings_editor(cols, 24, Some(tier), &lv, None);
+                    let text = render_settings_editor(cols, 24, Some(tier), &lv, None, None);
                     // The slider's shape markers are present at every width.
                     assert!(
                         text.contains('●'),
@@ -1830,7 +1871,7 @@ mod tests {
         // sitting squarely on the selected node; every tier labeled underneath
         // centered on its node in ascending depth.
         let full = levels(&["low", "medium", "high", "xhigh", "max"]);
-        let text = render_settings_editor(120, 24, Some("high"), &full, None);
+        let text = render_settings_editor(120, 24, Some("high"), &full, None, None);
         let rows: Vec<&str> = text.lines().collect();
         let label_idx = rows
             .iter()
@@ -1909,7 +1950,7 @@ mod tests {
         // interior labels thin out (ends + selected stay) instead of swapping
         // to a carousel. Absolutely no `<`/`>` chevrons anywhere.
         let full = levels(&["low", "medium", "high", "xhigh", "max"]);
-        let text = render_settings_editor(56, 24, Some("high"), &full, None);
+        let text = render_settings_editor(56, 24, Some("high"), &full, None, None);
         let rows: Vec<&str> = text.lines().collect();
         let track_row = rows
             .iter()
@@ -1948,7 +1989,7 @@ mod tests {
         // The 7-rung OpenAI ladder (`none`…`max`) fits a standard body with
         // every tier labeled verbatim — no squeezing needed where it counts.
         let openai = levels(&["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
-        let text = render_settings_editor(120, 24, Some("medium"), &openai, None);
+        let text = render_settings_editor(120, 24, Some("medium"), &openai, None, None);
         let labels_row = text
             .lines()
             .find(|l| l.contains("minimal"))
@@ -1968,17 +2009,17 @@ mod tests {
         // truncated to the available width rather than dropped or wrapped
         // awkwardly — at every width, and for an unknown ladder too.
         let full = levels(&["low", "medium", "high", "xhigh", "max"]);
-        let wide = render_settings_editor(120, 24, Some("high"), &full, None);
+        let wide = render_settings_editor(120, 24, Some("high"), &full, None, None);
         assert!(
             wide.contains("deep reasoning"),
             "slider caption present: {wide:?}"
         );
-        let narrow = render_settings_editor(56, 24, Some("high"), &full, None);
+        let narrow = render_settings_editor(56, 24, Some("high"), &full, None, None);
         assert!(
             narrow.contains("deep reasoning"),
             "narrow slider caption present: {narrow:?}"
         );
-        let unknown = render_settings_editor(120, 24, Some("high"), &[], None);
+        let unknown = render_settings_editor(120, 24, Some("high"), &[], None, None);
         assert!(
             unknown.contains("deep reasoning"),
             "unknown-ladder caption present: {unknown:?}"
@@ -2004,6 +2045,7 @@ mod tests {
                 Some("high"),
                 &full,
                 None,
+                None,
                 &theme,
             );
         });
@@ -2024,6 +2066,7 @@ mod tests {
                 Some("high"),
                 &full,
                 None,
+                None,
                 &theme,
             );
         });
@@ -2037,10 +2080,10 @@ mod tests {
     fn thinking_renders_as_a_checkbox_not_a_carousel() {
         // The boolean is `[x]`/`[ ]`, never `< on >` — the control's shape
         // finally matches its semantics.
-        let on = render_settings_editor(100, 24, None, &[], Some(true));
+        let on = render_settings_editor(100, 24, None, &[], Some(true), None);
         assert!(on.contains("[x] on"), "checked: {on:?}");
         assert!(!on.contains("< on >"), "no carousel for a bool: {on:?}");
-        let off = render_settings_editor(100, 24, None, &[], Some(false));
+        let off = render_settings_editor(100, 24, None, &[], Some(false), None);
         assert!(off.contains("[ ] off"), "unchecked: {off:?}");
     }
 

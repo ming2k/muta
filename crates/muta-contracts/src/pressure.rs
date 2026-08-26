@@ -773,7 +773,7 @@ mod tests {
         let big = "Y".repeat(5_000);
         let mut messages = vec![
             Message::new(Role::User, "q1"),
-            Message::tool_result(&call("c1", "bash", "{}"), big),
+            Message::tool_result(&call("c1", "execute_command", "{}"), big),
             Message::new(Role::User, "q2"),
         ];
 
@@ -947,7 +947,10 @@ mod tests {
         // yields negative reclaim — clearing it would *grow* the window. Such a
         // candidate is skipped entirely (no real gain), so it is left verbatim.
         let tiny = "ok".to_string();
-        let mut messages = vec![Message::tool_result(&call("c1", "bash", "{}"), tiny)];
+        let mut messages = vec![Message::tool_result(
+            &call("c1", "execute_command", "{}"),
+            tiny,
+        )];
         assert!(prune_tool_results(&mut messages, 0, 1).is_none());
         assert_eq!(messages[0].content, "ok");
     }
@@ -955,7 +958,10 @@ mod tests {
     #[test]
     fn recency_protection_and_min_reclaim_gate() {
         let big = "Z".repeat(3_000);
-        let mut messages = vec![Message::tool_result(&call("c", "bash", "{}"), big)];
+        let mut messages = vec![Message::tool_result(
+            &call("c", "execute_command", "{}"),
+            big,
+        )];
 
         // Fully protected by a large recency budget -> None, untouched.
         assert!(prune_tool_results(&mut messages, 10_000, 1).is_none());

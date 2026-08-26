@@ -98,7 +98,7 @@ fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
                 mime,
                 data: encoded,
             });
-            // Insert a short `[Image #N · size]` chip at the cursor so the
+            // Insert a short `[Image #N (size)]` chip at the cursor so the
             // user has a visible, atomic affordance for the staged
             // attachment — the chip is what they backspace to undo the
             // paste. The trailing space keeps the cursor on a word boundary
@@ -115,7 +115,7 @@ fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
         }
         ClipboardRead::Text(text) => {
             // Large pastes (multi-line or long enough to balloon the input
-            // box) are staged behind a `[Pasted text #N +M lines · size]`
+            // box) are staged behind a `[Pasted text #N +M lines (size)]`
             // chip instead of being inlined verbatim. Short snippets keep
             // flowing through the cursor like an ordinary editor paste. The
             // line count and byte size in the label tell the user exactly

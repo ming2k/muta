@@ -4412,7 +4412,7 @@ mod tests {
                 commands.push(
                     muta_contracts::CommandRecord::new("permissions", "").with_result(
                         muta_contracts::CommandResult::PermissionList {
-                            allowed: vec!["bash".to_string()],
+                            allowed: vec!["execute_command".to_string()],
                         },
                     ),
                 );
@@ -4440,7 +4440,7 @@ mod tests {
         );
         assert_eq!(
             commands[1].result.as_ref().unwrap().to_text(),
-            "Always-allowed tools:\n- bash"
+            "Always-allowed tools:\n- execute_command"
         );
 
         let _ = fs::remove_dir_all(directory);
@@ -5007,7 +5007,7 @@ mod tests {
         assert_eq!(store.round_counter().await, 0);
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("bash".to_string());
+        disabled.insert("execute_command".to_string());
         disabled.insert("edit_file".to_string());
         store.set_disabled_tools(disabled.clone()).await.unwrap();
         store.set_round_counter(42).await.unwrap();

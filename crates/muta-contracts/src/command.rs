@@ -363,7 +363,7 @@ mod tests {
                 title: "Autopilot ON".to_string(),
             },
             CommandResult::PermissionList {
-                allowed: vec!["bash".to_string(), "edit".to_string()],
+                allowed: vec!["execute_command".to_string(), "edit_file".to_string()],
             },
             CommandResult::Search {
                 query: "foo".to_string(),
@@ -419,10 +419,10 @@ mod tests {
         );
         assert_eq!(
             CommandResult::PermissionList {
-                allowed: vec!["bash".to_string()],
+                allowed: vec!["execute_command".to_string()],
             }
             .to_text(),
-            "Always-allowed tools:\n- bash"
+            "Always-allowed tools:\n- execute_command"
         );
         assert_eq!(
             CommandResult::Search {

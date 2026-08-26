@@ -136,7 +136,7 @@ silently lost:
 | Slot | Contents | Behaviour |
 |------|----------|-----------|
 | **Draft** (the newest position) | The input that has **not been successfully sent**: what you are composing right now, an input restored by interrupting a round before output (`UnsentInput`), or an entry inserted from Ctrl+R | Editable and **remembered**. Walk into history with `↑` and back with `↓` and the draft comes back exactly as you left it (text + attachments) |
-| **Queue row** (an outbox item) | A staged next-round message: a busy-Enter item, or a `Ctrl+O` insert whose round ended before admission | **Editable projection**. `↑`/`↓` walk the pointer across the queue without removing anything; `Enter` writes the edit back **into that item, in place** — the queue's length and order are untouched |
+| **Queue row** (an outbox item) | A staged next-round message (a busy-Enter item) | **Editable projection**. `↑`/`↓` walk the pointer across the queue without removing anything; `Enter` writes the edit back **into that item, in place** — the queue's length and order are untouched |
 | **History row** `p` | A previously sent prompt from this session's history, newest-first | **Read-only snapshot**. You can edit it before sending, but the edit is temporary — once the pointer moves away, coming back to the row reloads the original text |
 
 Navigation (the queue comes first — it is the newer, more urgent surface):

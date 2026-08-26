@@ -218,7 +218,8 @@ pub struct Agent {
     /// is on-demand (`/review`) and never aborts a round.
     hard_stop_turns: Arc<std::sync::Mutex<usize>>,
     /// Advanced pre-dispatch doom-loop guard configuration. Default
-    /// **disabled** ([`muta_contracts::DoomGuardConfig::default`]); seeded from
+    /// **enabled** (`window: 16`, `threshold: 3` — ADR-0113 §5 flipped it
+    /// on, ADR-0148 relaxed the trip point); seeded from
     /// `[master.doom_guard]` in `config.toml` and forced to
     /// [`muta_contracts::DoomGuardConfig::disabled`] for runners and the review
     /// diagnostic. Held behind an `Arc<RwLock>` because master-profile
@@ -3908,7 +3909,7 @@ impl Agent {
     /// Three-way stdin policy for a `bash` call (L3 + L3.5). See the decision
     /// block in [`Self::execute_tool`] for the contract. `arguments` is the
     /// raw JSON tool arguments.
-    async fn decide_bash_stdin(
+    async fn decide_command_stdin(
         &self,
         arguments: &str,
         event_tx: &mpsc::UnboundedSender<AgentEvent>,
@@ -4118,16 +4119,16 @@ impl Agent {
         }
 
         // ── Stdin policy decision (L3 + L3.5) ──
-        // Decided here, before spawn, for bash only. The three-way decision:
+        // Decided here, before spawn, for execute_command only. The three-way decision:
         //   1. opt-in model stdin (α): `allow_model_stdin` on AND the model
         //      supplied a `stdin` arg → Prefilled{model}. Structurally
         //      unreachable unless the flag exposed the schema field.
         //   2. human input (β, default): the interactive classifier matched →
         //      ask the operator; Prefilled{human} or Closed (if cancelled).
         //   3. closed (default hard floor): everything else.
-        // For non-bash tools, Closed is always correct (they ignore stdin).
-        let stdin_policy = if call.name == "bash" {
-            self.decide_bash_stdin(&call.arguments, event_tx).await
+        // For other tools, Closed is always correct (they ignore stdin).
+        let stdin_policy = if call.name == "execute_command" {
+            self.decide_command_stdin(&call.arguments, event_tx).await
         } else {
             StdinPolicy::default()
         };
@@ -4464,7 +4465,7 @@ mod tests {
         let command = "pwd; ls -la".to_string();
         let request = muta_contracts::PermissionRequest {
             id: String::new(),
-            tool: "bash".to_string(),
+            tool: "execute_command".to_string(),
             label: "run command".to_string(),
             description: String::new(),
             arguments: String::new(),
@@ -4624,12 +4625,12 @@ mod tests {
     #[test]
     fn scoped_disable_hides_until_restore() {
         let mut scoped = ScopedToolDisable::default();
-        assert!(!scoped.contains("bash"));
-        scoped.disable("bash", RestorePoint::TurnEnd);
-        assert!(scoped.contains("bash"));
+        assert!(!scoped.contains("execute_command"));
+        scoped.disable("execute_command", RestorePoint::TurnEnd);
+        assert!(scoped.contains("execute_command"));
         scoped.restore_turn_end();
         assert!(
-            !scoped.contains("bash"),
+            !scoped.contains("execute_command"),
             "TurnEnd restore must re-enable the tool"
         );
         assert!(scoped.is_empty(), "both buckets drained");
@@ -4640,11 +4641,11 @@ mod tests {
     #[test]
     fn turn_end_restore_keeps_round_end_disables() {
         let mut scoped = ScopedToolDisable::default();
-        scoped.disable("bash", RestorePoint::TurnEnd);
+        scoped.disable("execute_command", RestorePoint::TurnEnd);
         scoped.disable("edit_file", RestorePoint::RoundEnd);
         scoped.restore_turn_end();
         assert!(
-            !scoped.contains("bash"),
+            !scoped.contains("execute_command"),
             "TurnEnd disable must be restored at the ReAct-turn boundary"
         );
         assert!(
@@ -4653,28 +4654,31 @@ mod tests {
         );
     }
 
-    /// Nested disables compose via refcount: two hooks disable `bash` at
+    /// Nested disables compose via refcount: two hooks disable `execute_command` at
     /// different restore points; the earlier (TurnEnd) restore must NOT bring
     /// it back while the later (RoundEnd) is still in effect.
     #[test]
     fn nested_disables_refcount_correctly() {
         let mut scoped = ScopedToolDisable::default();
-        scoped.disable("bash", RestorePoint::RoundEnd);
-        scoped.disable("bash", RestorePoint::TurnEnd);
-        assert!(scoped.contains("bash"));
+        scoped.disable("execute_command", RestorePoint::RoundEnd);
+        scoped.disable("execute_command", RestorePoint::TurnEnd);
+        assert!(scoped.contains("execute_command"));
         scoped.restore_turn_end();
         assert!(
-            scoped.contains("bash"),
-            "bash still hidden: the RoundEnd disable outlives the TurnEnd restore"
+            scoped.contains("execute_command"),
+            "execute_command still hidden: the RoundEnd disable outlives the TurnEnd restore"
         );
         scoped.restore_round_end();
-        assert!(!scoped.contains("bash"), "bash back after round end");
+        assert!(
+            !scoped.contains("execute_command"),
+            "execute_command back after round end"
+        );
     }
 
     // ── skip_interactive_input wiring (ADR-0043 interactive-input opt-out) ──
 
     /// Minimal provider mock so an `Agent` can be constructed in unit tests
-    /// without a live model. `decide_bash_stdin` never reaches the provider, so
+    /// without a live model. `decide_command_stdin` never reaches the provider, so
     /// the chat/stream impls are unreachable panics.
     struct NoopProvider;
 
@@ -4684,13 +4688,13 @@ mod tests {
             &self,
             _: muta_contracts::ModelRequest,
         ) -> Result<muta_contracts::Message, String> {
-            unreachable!("decide_bash_stdin must not call the provider")
+            unreachable!("decide_command_stdin must not call the provider")
         }
         async fn stream_chat(
             &self,
             _: muta_contracts::ModelRequest,
         ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
-            unreachable!("decide_bash_stdin must not call the provider")
+            unreachable!("decide_command_stdin must not call the provider")
         }
     }
 
@@ -4717,7 +4721,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
         let policy = agent
-            .decide_bash_stdin(r#"{"command":"sudo ls /root"}"#, &tx)
+            .decide_command_stdin(r#"{"command":"sudo ls /root"}"#, &tx)
             .await;
         assert_eq!(policy, StdinPolicy::Closed, "stdin must be closed");
         assert!(
@@ -4746,7 +4750,7 @@ mod tests {
             tokio::spawn(async move {
                 // Park until the test observes the InputRequest, then drop the
                 // agent handle via the cancel signal so the task ends.
-                let _ = agent.decide_bash_stdin(&args, &tx).await;
+                let _ = agent.decide_command_stdin(&args, &tx).await;
                 let _ = rx_cancel.await;
             })
         };

@@ -797,7 +797,7 @@ impl ToolPool {
 /// - **Context-free** — for tools needing no runtime state. `$build` is any
 ///   expression evaluating to `T: Tool`:
 ///   ```ignore
-///   muta_contracts::register_tool!(BashFactory => BashTool);
+///   muta_contracts::register_tool!(ExecuteCommandFactory => ExecuteCommandTool);
 ///   ```
 ///
 /// - **Context-aware** — `$ctx` (a name *you* choose) binds the build context,
@@ -1402,4 +1402,3 @@ mod tests {
         assert!(!write_audit.admitted);
     }
 }
-

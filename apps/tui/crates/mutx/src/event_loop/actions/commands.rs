@@ -1,5 +1,5 @@
 //! Composer-submission and interrupt handlers for the input dispatch match
-//! (`SendChat` / `InsertIntoRound` / `SendSlash` / `CtrlC`).
+//! (`SendChat` / `SendSlash` / `CtrlC`).
 //! Extracted verbatim from the corresponding arms of `dispatch_action`'s
 //! match; only the arm-level `continue` / `return Ok(())` control flow became
 //! [`ActionFlow`] values (it already was, inside `dispatch_action`).
@@ -204,84 +204,7 @@ pub(super) async fn handle_send_chat(
     }
 }
 
-/// Loop stage (input dispatch): the `InsertIntoRound` arm of the action match.
-///
-/// The insert becomes a **transcript entry immediately** (ADR-0126): it is
-/// appended to the scrollback as a user message flagged
-/// `DeliveryStatus::Queued` — visually "blocked on the running turn" — so
-/// the user sees it land in the conversation without disturbing the running
-/// turn's own rendering (the turn's streaming entry is a separate message and
-/// keeps appending below it). The entry is flipped to delivered when the
-/// harness admits it (`UserInputInserted`), and it is **not** owned by the
-/// outbox queue anymore: it cannot be recalled, edited, deleted, or reordered
-/// from the queue. It has already entered the conversation.
-pub(crate) async fn handle_insert_into_round(
-    app: &mut App,
-    runtime: &UiRuntime,
-    viewed_session_id: &str,
-) {
-    // `Ctrl+O` at the top level: steer the composed text into the
-    // *running* round instead of staging it for the next one.
-    // The registry resolved a data-less action, so take the
-    // composer here — exactly like `SendChat` does.
-    let text = std::mem::take(&mut app.input);
-    app.cursor_position = 0;
-    app.input_scroll = 0;
-    app.suggestion_index = None;
-    let images = std::mem::take(&mut app.pending_images);
-    let text_pastes = std::mem::take(&mut app.pending_text_pastes);
-    // The composer's content is leaving the queue-pointer projection and
-    // entering the conversation: drop the pointer **without** restoring its
-    // stash (the stash would clobber the content just taken). The projection
-    // either becomes the insert entry (below) or is put back on the idle
-    // path — either way the stash is obsolete.
-    app.drop_queue_pointer_without_restore();
-    let busy = app.running_sessions.contains(viewed_session_id);
-    if !busy || (text.is_empty() && images.is_empty()) {
-        // Nothing to steer into (idle) or nothing to say:
-        // restore the composer verbatim so a stray Ctrl+O never
-        // eats the draft.
-        app.input = text;
-        app.pending_images = images;
-        app.pending_text_pastes = text_pastes;
-        app.set_cursor_end();
-    } else {
-        let expanded = composer_attachments::expand_paste_chips(&text, &text_pastes);
-        let expanded = composer_attachments::strip_orphan_image_chips(&expanded, images.len());
-        let id = app.new_insert_id();
-        app.record_input_history(text.clone(), images.clone(), text_pastes);
-        // The draft has entered the conversation (as a blocked insert
-        // entry) — it is no longer the unsent slot.
-        app.clear_history_draft();
-        app.follow_bottom = true;
-        app.pin_summary_line = None;
-        // Commit the entry to the transcript now, in the `⏸ Queued`
-        // delivery state: it renders as a user panel that visibly
-        // waits on the running turn (see `message_body.rs`). The
-        // listener flips it to delivered on `UserInputInserted`.
-        let sent_at_ms = now_epoch_ms();
-        let entry = TranscriptMessage::new(Role::User, text.clone())
-            .with_origin(crate::model::document::UserMessageOrigin::Steer)
-            .with_sent_at_ms(sent_at_ms)
-            .with_insert_id(id.clone())
-            .queued();
-        if !app.in_side_view {
-            runtime.messages.write().await.push(entry);
-        } else {
-            runtime.side_messages.write().await.push(entry);
-        }
-        let _ = app.tx.send(AgentRequest::Steer {
-            session_id: viewed_session_id.to_string(),
-            input: muta_contracts::QueuedMessage {
-                id,
-                text: expanded,
-                display_text: Some(text),
-                images,
-                sent_at_ms: Some(sent_at_ms),
-            },
-        });
-    }
-}
+
 
 /// Loop stage (input dispatch): the `SendSlash` arm of the action match.
 /// `pub(crate)` so behavior-lock tests in `crate::tests` can drive it directly

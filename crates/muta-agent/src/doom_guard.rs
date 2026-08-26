@@ -20,11 +20,11 @@
 //! - **All tools**: covers the common doom-loop culprits — `read`,
 //!   `find_files`, `list_dir`, `search_text`, `bash`, `webfetch`, `websearch`, `edit_file`,
 //!   `write_file` — keyed by a normalised signature, not just reads.
-//! - **First repeat trips it (threshold = 2)**: by the time a call recurs in
-//!   one round, it is almost never productive, and the cost of letting it run
-//!   (context bloat + a contradictory nudge) outweighs the rare false positive.
-//!   A progress turn (any *different* tool call) still clears the window, so
-//!   legitimate interleave is unaffected.
+//! - **Threshold-gated (default 3, ADR-0148)**: one same-signature re-run per
+//!   window is tolerated — a transient retry, or re-running the same test
+//!   command after an edit — and the second repeat is blocked. The strict
+//!   ADR-0113 behavior (block on the first repeat) is `threshold = 2` in
+//!   `[master.doom_guard]`.
 //!
 //! Detection is pure signature bookkeeping — no model call. The action is a
 //! [`crate::loop_guard::GuardAction::Block`]: the signature is masked for the
@@ -51,8 +51,8 @@ use crate::loop_guard::GuardAction;
 ///
 /// Kept as a sorted set so the [`covers`] lookup is O(log n).
 const WATCHED_TOOLS: &[&str] = &[
-    "bash",
     "edit_file",
+    "execute_command",
     "find_files",
     "list_dir",
     "read",
@@ -81,10 +81,15 @@ pub(crate) fn covers(name: &str) -> bool {
 ///   A read to a different offset/limit represents legitimate forward paging
 ///   or section inspection and produces a distinct signature. Re-reading the
 ///   identical range on the same path collides and is blocked.
-/// - **Path-addressed mutations / directory reads** (`edit_file`, `write_file`,
-///   `list_dir`, `read_image`): `name|path` — the target file/dir. Mutations
-///   keep `path` only because an A→B→A edit thrash on one file is the classic
-///   doom loop.
+/// - **Content-addressed mutations** (`edit_file`, `write_file`):
+///   `name|path|content_hash` — the target file plus a stable 64-bit hash of
+///   the payload (old/new for edits, content for writes; ADR-0148). Path-only
+///   keying blocked the *second edit to the same file*, which is normal
+///   multi-hunk work, not a loop; content keying still catches an exact
+///   A→B→A thrash (the identical payload recurs) while distinct edits to one
+///   file no longer collide.
+/// - **Path-addressed directory reads** (`list_dir`, `read_image`):
+///   `name|path` — the target dir/file.
 /// - **Command-addressed calls** (`bash`): `name|command` — the literal command
 ///   string. Running the identical command twice in a turn is never productive.
 /// - **Query-addressed calls** (`search_text`, `websearch`): `name|query` — the search
@@ -164,6 +169,31 @@ pub fn doom_signature(name: &str, args: &str) -> String {
             return format!("{name}|{}", normalize_query_locator(s));
         }
     }
+    // Content-addressed mutations (ADR-0148): edits and writes key on path
+    // *plus* a hash of the payload, so sequential distinct edits to one file
+    // are different calls while an exact A→B→A payload thrash still collides.
+    if name == "edit_file" || name == "write_file" {
+        let path = value
+            .get("path")
+            .or_else(|| value.get("file_path"))
+            .or_else(|| value.get("file"))
+            .and_then(Value::as_str)
+            .map(normalize_path_locator)
+            .unwrap_or_default();
+        let mut payload = String::new();
+        for key in ["old_string", "old", "new_string", "new", "content"] {
+            if let Some(s) = value.get(key).and_then(Value::as_str) {
+                payload.push_str(s);
+                payload.push('\u{1f}');
+            }
+        }
+        if !payload.is_empty() {
+            let h = stable_hash(payload.as_bytes());
+            return format!("{name}|{path}|h={h}");
+        }
+        // No payload recognised (e.g. a tool schema variant): fall through
+        // to path-only so the call is still keyed.
+    }
     for key in ["path", "file_path", "file", "filename"] {
         if let Some(s) = value.get(key).and_then(Value::as_str) {
             return format!("{name}|{}", normalize_path_locator(s));
@@ -242,6 +272,18 @@ fn is_noise_first_token(token: &str) -> bool {
 
 /// Normalize query/pattern/url locators: trim + collapse whitespace and
 /// lowercase (search text casing is not intent). Kept conservative — no
+/// FNV-1a 64-bit: a short, stable, dependency-free digest for signature
+/// keying. Not cryptographic — it only needs collision resistance against
+/// *distinct payloads issued by one model in one round*.
+fn stable_hash(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 /// stemming or stopword removal, which could over-merge distinct queries.
 fn normalize_query_locator(raw: &str) -> String {
     raw.split_whitespace()
@@ -288,8 +330,9 @@ fn normalized_string_array(value: &Value, key: &str, lowercase: bool) -> String 
 pub struct DoomLoopGuard {
     config: DoomGuardConfig,
     /// Signatures of watched tool calls already seen this round (within the
-    /// window). A signature about to run that is *already present* here is a
-    /// repeat → block.
+    /// window), in dispatch order with multiplicity. A signature about to
+    /// run whose in-window count has reached `config.threshold` → block;
+    /// below that the re-run is admitted (one tolerated retry, ADR-0148).
     window: VecDeque<String>,
 }
 
@@ -333,9 +376,18 @@ impl DoomLoopGuard {
         if !self.config.enabled {
             return GuardAction::Continue;
         }
+        // A threshold of 1 would fire on first occurrence and block all
+        // progress; the strictest meaningful setting is 2 (block on the
+        // first repeat), the relaxed default is 3 (ADR-0148).
+        let threshold = self.config.threshold.max(2);
+        // Calls whose in-window occurrence count (including this one) has
+        // reached the threshold. One same-signature re-run is tolerated
+        // before the block lands.
         let repeated: Vec<String> = signatures
             .iter()
-            .filter(|sig| self.window.contains(*sig))
+            .filter(|sig| {
+                self.window.iter().filter(|w| *w == *sig).count() + 1 >= threshold
+            })
             .cloned()
             .collect();
         // Record every signature now, so the window reflects what has been
@@ -348,9 +400,9 @@ impl DoomLoopGuard {
         if repeated.is_empty() {
             return GuardAction::Continue;
         }
-        // Build one consolidated block message naming every repeat. The count
-        // here is "times seen so far" (window count after this push), which is
-        // 2 for the first trip — the honest framing for "you are repeating".
+        // Build one consolidated block message naming every repeat. The
+        // message does not cite a count: with a relaxed threshold the honest
+        // framing is simply "this exact call has already run and run again".
         let summary = repeated
             .iter()
             .map(|s| format!("- {}", humanize_sig(s)))
@@ -420,9 +472,18 @@ mod tests {
         }
     }
 
+    /// The strict ADR-0113 posture: block on the first repeat.
+    fn strict() -> DoomGuardConfig {
+        DoomGuardConfig {
+            enabled: true,
+            threshold: 2,
+            ..DoomGuardConfig::default()
+        }
+    }
+
     #[test]
     fn covers_the_watched_set() {
-        assert!(covers("bash"));
+        assert!(covers("execute_command"));
         assert!(covers("read_text"));
         assert!(covers("write_file"));
         assert!(!covers("use_skill"));
@@ -433,14 +494,44 @@ mod tests {
     #[test]
     fn first_occurrence_is_allowed() {
         let mut g = DoomLoopGuard::new(enabled());
-        let action = g.check_ahead(&[doom_signature("bash", r#"{"command":"ls"}"#)]);
+        let action = g.check_ahead(&[doom_signature("execute_command", r#"{"command":"ls"}"#)]);
         assert_eq!(action, GuardAction::Continue);
     }
 
     #[test]
-    fn second_occurrence_blocks_and_masks_signature() {
+    fn second_occurrence_is_tolerated_then_third_blocks() {
         let mut g = DoomLoopGuard::new(enabled());
-        let s = doom_signature("bash", r#"{"command":"make test"}"#);
+        let s = doom_signature("execute_command", r#"{"command":"make test"}"#);
+        // 1st: fresh — admitted.
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&s)),
+            GuardAction::Continue
+        );
+        // 2nd: one same-signature re-run is tolerated (ADR-0148) — the
+        // re-run still executes, no block, no message.
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&s)),
+            GuardAction::Continue
+        );
+        // 3rd: threshold (3) reached → blocked before it runs.
+        let action = g.check_ahead(std::slice::from_ref(&s));
+        match action {
+            GuardAction::Block {
+                signatures,
+                message,
+            } => {
+                assert_eq!(signatures, vec![s]);
+                assert!(message.contains("blocked"));
+                assert!(message.contains("make test"));
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strict_threshold_two_blocks_on_first_repeat() {
+        let mut g = DoomLoopGuard::new(strict());
+        let s = doom_signature("execute_command", r#"{"command":"make test"}"#);
         assert_eq!(
             g.check_ahead(std::slice::from_ref(&s)),
             GuardAction::Continue
@@ -462,7 +553,11 @@ mod tests {
     #[test]
     fn disabled_guard_never_blocks() {
         let mut g = DoomLoopGuard::new(DoomGuardConfig::disabled());
-        let s = doom_signature("bash", r#"{"command":"ls"}"#);
+        let s = doom_signature("execute_command", r#"{"command":"ls"}"#);
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&s)),
+            GuardAction::Continue
+        );
         assert_eq!(
             g.check_ahead(std::slice::from_ref(&s)),
             GuardAction::Continue
@@ -476,8 +571,8 @@ mod tests {
     #[test]
     fn distinct_commands_do_not_collide() {
         let mut g = DoomLoopGuard::new(enabled());
-        let a = doom_signature("bash", r#"{"command":"ls"}"#);
-        let b = doom_signature("bash", r#"{"command":"pwd"}"#);
+        let a = doom_signature("execute_command", r#"{"command":"ls"}"#);
+        let b = doom_signature("execute_command", r#"{"command":"pwd"}"#);
         assert_eq!(g.check_ahead(&[a]), GuardAction::Continue);
         assert_eq!(g.check_ahead(&[b]), GuardAction::Continue);
     }
@@ -505,10 +600,32 @@ mod tests {
     }
 
     #[test]
-    fn edit_thrash_on_same_path_collides() {
-        let a = doom_signature("edit_file", r#"{"path":"a.rs","old":"x","new":"y"}"#);
-        let b = doom_signature("edit_file", r#"{"path":"a.rs","old":"y","new":"x"}"#);
-        assert_eq!(a, b, "edits to the same path collide (A->B->A thrash)");
+    fn exact_edit_thrash_collides_distinct_edits_do_not() {
+        // Same payload twice (exact A→B→A thrash) → collides.
+        let a = doom_signature("edit_file", r#"{"path":"a.rs","old_string":"x","new_string":"y"}"#);
+        let b = doom_signature("edit_file", r#"{"path":"a.rs","old_string":"x","new_string":"y"}"#);
+        assert_eq!(a, b, "an identical edit payload must collide with itself");
+
+        // Same path, different payload (sequential distinct edits) → distinct
+        // signatures, so the second edit to a file is not a "repeat" (ADR-0148).
+        let c = doom_signature("edit_file", r#"{"path":"a.rs","old_string":"y","new_string":"z"}"#);
+        assert_ne!(a, c, "distinct edits to one file must not collide");
+
+        // A true A→B→A thrash re-issues the *identical* payload; that
+        // collides even though it is the third edit to the same file.
+        let d = doom_signature("edit_file", r#"{"path":"a.rs","old_string":"y","new_string":"x"}"#);
+        assert_ne!(a, d);
+        let back = doom_signature("edit_file", r#"{"path":"a.rs","old_string":"y","new_string":"x"}"#);
+        assert_eq!(d, back, "the identical payload recurring is the thrash signal");
+    }
+
+    #[test]
+    fn write_content_hash_keys_the_payload() {
+        let a = doom_signature("write_file", r#"{"path":"a.rs","content":"one"}"#);
+        let b = doom_signature("write_file", r#"{"path":"a.rs","content":"two"}"#);
+        assert_ne!(a, b, "different content is a different call");
+        let a2 = doom_signature("write_file", r#"{"path":"a.rs","content":"one"}"#);
+        assert_eq!(a, a2, "rewriting the same content is an exact repeat");
     }
 
     #[test]
@@ -516,10 +633,11 @@ mod tests {
         let mut g = DoomLoopGuard::new(DoomGuardConfig {
             enabled: true,
             window: 2,
+            ..DoomGuardConfig::default()
         });
-        let s = doom_signature("bash", r#"{"command":"ls"}"#);
-        let other1 = doom_signature("bash", r#"{"command":"pwd"}"#);
-        let other2 = doom_signature("bash", r#"{"command":"whoami"}"#);
+        let s = doom_signature("execute_command", r#"{"command":"ls"}"#);
+        let other1 = doom_signature("execute_command", r#"{"command":"pwd"}"#);
+        let other2 = doom_signature("execute_command", r#"{"command":"whoami"}"#);
         assert_eq!(
             g.check_ahead(std::slice::from_ref(&s)),
             GuardAction::Continue
@@ -576,31 +694,31 @@ mod tests {
 
     #[test]
     fn sleep_noise_variants_collide() {
-        let a = doom_signature("bash", r#"{"command":"sleep 1; make test"}"#);
-        let b = doom_signature("bash", r#"{"command":"sleep 2; make test"}"#);
+        let a = doom_signature("execute_command", r#"{"command":"sleep 1; make test"}"#);
+        let b = doom_signature("execute_command", r#"{"command":"sleep 2; make test"}"#);
         assert_eq!(a, b, "timing no-op must not distinguish signatures");
     }
 
     #[test]
     fn bare_sleep_variants_collide() {
-        let a = doom_signature("bash", r#"{"command":"sleep 5"}"#);
-        let b = doom_signature("bash", r#"{"command":"sleep 9"}"#);
+        let a = doom_signature("execute_command", r#"{"command":"sleep 5"}"#);
+        let b = doom_signature("execute_command", r#"{"command":"sleep 9"}"#);
         assert_eq!(a, b, "a pure no-op keys on its stripped form");
     }
 
     #[test]
     fn env_assignment_prefixes_collide() {
-        let a = doom_signature("bash", r#"{"command":"FOO=1 make test"}"#);
-        let b = doom_signature("bash", r#"{"command":"make test"}"#);
+        let a = doom_signature("execute_command", r#"{"command":"FOO=1 make test"}"#);
+        let b = doom_signature("execute_command", r#"{"command":"make test"}"#);
         assert_eq!(a, b, "leading VAR=value is plumbing, not intent");
     }
 
     #[test]
     fn program_casing_collides_but_arguments_do_not() {
-        let a = doom_signature("bash", r#"{"command":"Make test"}"#);
-        let b = doom_signature("bash", r#"{"command":"make test"}"#);
+        let a = doom_signature("execute_command", r#"{"command":"Make test"}"#);
+        let b = doom_signature("execute_command", r#"{"command":"make test"}"#);
         assert_eq!(a, b, "program-name casing is not intent");
-        let c = doom_signature("bash", r#"{"command":"make check"}"#);
+        let c = doom_signature("execute_command", r#"{"command":"make check"}"#);
         assert_ne!(b, c, "different arguments remain distinct");
     }
 
@@ -636,17 +754,28 @@ mod tests {
     #[test]
     fn normalized_variant_loop_is_blocked() {
         // End-to-end: a variant loop (the exact escape the normalization
-        // closes) must trip the guard's pre-dispatch block.
+        // closes) must trip the guard's pre-dispatch block — at the default
+        // threshold of 3 (one re-run tolerated, the second repeat blocked;
+        // ADR-0148).
         let mut g = DoomLoopGuard::new(enabled());
-        let s = doom_signature("bash", r#"{"command":"sleep 1; make test"}"#);
+        let s = doom_signature("execute_command", r#"{"command":"sleep 1; make test"}"#);
         assert_eq!(
             g.check_ahead(std::slice::from_ref(&s)),
             GuardAction::Continue
         );
-        // Same intent, different noise → same signature → blocked.
-        let variant = doom_signature("bash", r#"{"command":"FOO=1 sleep 99; make test"}"#);
+        // Same intent, different noise → same signature. The first variant
+        // re-run is the tolerated one.
+        let variant = doom_signature("execute_command", r#"{"command":"FOO=1 sleep 99; make test"}"#);
         assert_eq!(variant, s, "precondition: normalization collapses them");
-        match g.check_ahead(std::slice::from_ref(&variant)) {
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&variant)),
+            GuardAction::Continue,
+            "the tolerated re-run must not block (ADR-0148)"
+        );
+        // The second variant repeat reaches the threshold → blocked.
+        let variant2 = doom_signature("execute_command", r#"{"command":"sleep 3; make test"}"#);
+        assert_eq!(variant2, s, "precondition: normalization collapses them");
+        match g.check_ahead(std::slice::from_ref(&variant2)) {
             GuardAction::Block { signatures, .. } => {
                 assert_eq!(signatures, vec![s]);
             }

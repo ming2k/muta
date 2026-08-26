@@ -18,7 +18,7 @@ use super::Theme;
 use super::components::keycap::{keycap_span, keycap_style};
 use super::design::{
     BAR_LEGEND_GAP_MIN, HINT_BAR_GAP_MIN, HINT_BAR_INNER_PADDING, HINT_BAR_MODEL_GAP,
-    HINT_BAR_SEGMENT_GAP, JOIN_ENUMERATE_COLS, JOIN_MODIFY,
+    HINT_BAR_SEGMENT_GAP, JOIN_ENUMERATE_COLS,
 };
 use super::keymap::Key;
 use super::primitives::{contrast_fg, viewport_rect};
@@ -112,7 +112,7 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 ///
 /// Layout:
 /// ```text
-/// <spinner> <status> (<elapsed> · Esc Esc interrupt) [· » <pursuit>] [⚠ <alert>]
+/// <spinner> <status> [<elapsed>]                    Esc Esc interrupt
 /// ```
 /// The whole bar is transient (turn-scoped): it shows only while a round is
 /// active and is hidden while idle, so the row returns to the transcript.
@@ -130,12 +130,11 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 /// paused.)
 ///
 /// The bar surfaces what the user most wants to know mid-round — the live
-/// status, whether a pursuit/plan is in flight, and how long the round has
+/// status and how long the round has
 /// run — and is the click target that opens the Activity modal for the full
 /// detail. The structural counters (`round N · turn M · <model>`) live in the
 /// modal: they change rarely and take space, while the bar is a glance
 /// surface. Segments are omitted when there is nothing to report:
-/// - pursuit badge only when a pursuit is armed (`⟴ <truncated objective>`);
 /// - elapsed only while the round timer is running;
 /// - the whole bar only while a round is active.
 ///
@@ -168,32 +167,38 @@ pub fn draw_activity_bar(
 
     let row_width = rect.width as usize;
     let available_width = row_width;
-    let elapsed = round_started_at.map(|started| format_elapsed(started.elapsed()));
-    let full_hint_width = elapsed
-        .as_ref()
-        .map(|value| UnicodeWidthStr::width(format!(" ({value} · Esc Esc interrupt)").as_str()))
-        .unwrap_or_else(|| UnicodeWidthStr::width(" (Esc Esc interrupt)"));
-    let interrupt_hint_width = UnicodeWidthStr::width(" (Esc Esc interrupt)");
-    let tiny_interrupt_hint_width = UnicodeWidthStr::width(" Esc Esc");
+    let elapsed = round_started_at.map(|started| format!(" [{}]", format_elapsed(started.elapsed())));
+    let full_interrupt_width = UnicodeWidthStr::width("Esc Esc interrupt");
+    let key_interrupt_width = UnicodeWidthStr::width("Esc Esc");
     let prefix_width = UnicodeWidthStr::width(" ● ");
     const MIN_STATUS_WIDTH: usize = 4;
     const MIN_TINY_STATUS_WIDTH: usize = 1;
-    let show_elapsed =
-        elapsed.is_some() && available_width >= prefix_width + full_hint_width + MIN_STATUS_WIDTH;
-    let show_interrupt_words =
-        show_elapsed || available_width >= prefix_width + interrupt_hint_width + MIN_STATUS_WIDTH;
+    const SEGMENT_GAP: usize = 2;
+    let show_interrupt_words = available_width
+        >= prefix_width + SEGMENT_GAP + full_interrupt_width + MIN_STATUS_WIDTH;
     let show_interrupt_keys = show_interrupt_words
-        || available_width >= prefix_width + tiny_interrupt_hint_width + MIN_TINY_STATUS_WIDTH;
-    let hint_width = if show_elapsed {
-        full_hint_width
-    } else if show_interrupt_words {
-        interrupt_hint_width
+        || available_width
+            >= prefix_width + SEGMENT_GAP + key_interrupt_width + MIN_TINY_STATUS_WIDTH;
+    let interrupt_width = if show_interrupt_words {
+        full_interrupt_width
     } else if show_interrupt_keys {
-        tiny_interrupt_hint_width
+        key_interrupt_width
     } else {
         0
     };
-    let status_width = available_width.saturating_sub(prefix_width + hint_width);
+    let interrupt_gap = if show_interrupt_keys { SEGMENT_GAP } else { 0 };
+    let elapsed_width = elapsed.as_deref().map(UnicodeWidthStr::width).unwrap_or(0);
+    let show_elapsed = elapsed.is_some()
+        && available_width
+            >= prefix_width
+                + MIN_STATUS_WIDTH
+                + elapsed_width
+                + interrupt_gap
+                + interrupt_width;
+    let visible_elapsed_width = if show_elapsed { elapsed_width } else { 0 };
+    let status_width = available_width.saturating_sub(
+        prefix_width + visible_elapsed_width + interrupt_gap + interrupt_width,
+    );
     let status = truncate_for_bar(status, status_width);
 
     let mut spans: Vec<Span> = Vec::new();
@@ -231,28 +236,23 @@ pub fn draw_activity_bar(
         spans.extend(shimmer_spans(&status, spinner_phase, theme));
     }
 
-    // Keep the interrupt instruction immediately after the live status,
-    // matching the place users look while waiting. Elapsed time is useful
-    // context, but it drops before the key hint on narrow terminals.
-    if show_interrupt_words {
-        spans.push(Span::styled(" (", dim));
-        if show_elapsed {
-            spans.push(Span::styled(elapsed.unwrap_or_default(), dim));
-            // R1: the elapsed time is a property of the running state.
-            spans.push(Span::styled(JOIN_MODIFY, dim));
+    if show_elapsed {
+        spans.push(Span::styled(elapsed.unwrap_or_default(), dim));
+    }
+
+    // The interrupt affordance is a separate, right-pinned segment. This
+    // keeps operational keys out of the activity sentence and leaves a stable
+    // scan target as the status and elapsed value change.
+    if show_interrupt_keys {
+        let used: usize = spans.iter().map(|span| span.content.width()).sum();
+        let gap = available_width.saturating_sub(used + interrupt_width);
+        spans.push(Span::styled(" ".repeat(gap), dim));
+        spans.push(keycap_span(theme, Key::ESC.display()));
+        spans.push(Span::styled(" ", dim));
+        spans.push(keycap_span(theme, Key::ESC.display()));
+        if show_interrupt_words {
+            spans.push(Span::styled(" interrupt", dim));
         }
-        spans.push(keycap_span(theme, Key::ESC.display()));
-        spans.push(Span::styled(" ", dim));
-        spans.push(keycap_span(theme, Key::ESC.display()));
-        spans.push(Span::styled(" interrupt)", dim));
-    } else if show_interrupt_keys {
-        // At the minimum supported terminal width, keep the actual keys and
-        // drop only the explanatory words. The Activity help entry supplies
-        // the long form if the user needs it.
-        spans.push(Span::styled(" ", dim));
-        spans.push(keycap_span(theme, Key::ESC.display()));
-        spans.push(Span::styled(" ", dim));
-        spans.push(keycap_span(theme, Key::ESC.display()));
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
@@ -341,11 +341,11 @@ pub fn draw_todo_bar(
     let legend_width =
         |spans: &Vec<Span<'static>>| -> usize { spans.iter().map(|s| s.content.width()).sum() };
 
-    // Columns reserved between the identity and the legend: the ` · ` that
+    // Columns reserved between the identity and the legend: the gap that
     // leads the preview (only when there is one) plus the legend's breathing
     // room — deliberately wider than the hint/status bar gap so the keycap
     // never reads as glued to the content.
-    let content_sep = UnicodeWidthStr::width(JOIN_MODIFY);
+    let content_sep = 2;
     let gap_for = |legend_w: usize| if legend_w > 0 { BAR_LEGEND_GAP_MIN } else { 0 };
     const MIN_PREVIEW_WIDTH: usize = 4;
     let preview_budget = |legend_w: usize| {
@@ -375,7 +375,7 @@ pub fn draw_todo_bar(
             one_line
         };
         let preview_w = preview.width();
-        row.push(Span::styled(JOIN_MODIFY, dim));
+        row.push(Span::styled("  ", dim));
         row.push(Span::styled(preview, fg));
         // Space before the legend: at least `gap` so the keycap keeps real
         // distance from the content even when the preview truncates to fill;
@@ -782,27 +782,27 @@ fn input_action_spans(
 
     if let Some(badge) = queue_editing_badge {
         spans.push(Span::styled(format!(" {badge}"), hint_style));
-        spans.push(Span::styled(" · ", hint_style));
+        spans.push(Span::styled("  ", hint_style));
         spans.push(Span::styled(Key::ESC.display(), key_style));
         spans.push(Span::styled(" cancel", hint_style));
     } else if busy {
         match composer_send_mode.unwrap_or_default() {
             crate::app::ComposerSendMode::Steer => {
                 spans.push(Span::styled(" steer", hint_style));
-                spans.push(Span::styled(" · ", hint_style));
+                spans.push(Span::styled("  ", hint_style));
                 spans.push(Span::styled(Key::TAB.display(), key_style));
                 spans.push(Span::styled(if compact { " follow-up" } else { " follow-up mode" }, hint_style));
             }
             crate::app::ComposerSendMode::FollowUp => {
                 spans.push(Span::styled(" follow-up", hint_style));
-                spans.push(Span::styled(" · ", hint_style));
+                spans.push(Span::styled("  ", hint_style));
                 spans.push(Span::styled(Key::TAB.display(), key_style));
                 spans.push(Span::styled(if compact { " steer" } else { " steer mode" }, hint_style));
             }
         }
     } else if can_retry {
         spans.push(Span::styled(" send", hint_style));
-        spans.push(Span::styled(" · ", hint_style));
+        spans.push(Span::styled("  ", hint_style));
         spans.push(Span::styled("/retry", key_style));
         if !compact {
             spans.push(Span::styled(" to retry", hint_style));
@@ -1133,9 +1133,9 @@ pub struct QueueItemView {
     pub queued_at_ms: u64,
     /// The user's literal prompt text (the first run is previewed in the bar).
     pub text: String,
-    /// `true` while the item is an in-flight mid-round steer. **Dead since
-    /// ADR-0126** — a live insert (`Ctrl+O`) is transcript-owned and never
-    /// enters the outbox — but retained so the view struct keeps its shape;
+    /// `true` while the item is an in-flight mid-round steer. A live busy-Enter
+    /// steer is transcript-owned and never enters the outbox, but this field is
+    /// retained so the view struct keeps its shape;
     /// producers always pass `false`.
     #[allow(dead_code)]
     pub steering: bool,
@@ -1166,12 +1166,11 @@ pub struct QueueBarView<'a> {
 /// todo bar above it. The single row carries, left → right: the identity
 /// (`QUEUE` + count, plus a `· blocked` state tag while the user holds the
 /// outbox), a one-line preview of the next item to pop, and the right-pinned
-/// keycap legend (`Ctrl+O` insert into the running round, `Ctrl+P`
-/// block/resume, `Ctrl+Q` expand).
+/// keycap legend (`Ctrl+P` block/resume, `Ctrl+Q` expand).
 ///
 /// Width pressure degrades the middle and the legend before the identity:
 /// the preview truncates with `…`, then the legend sheds its labels and the
-/// `Ctrl+Q`/`Ctrl+O` clusters (keeping `Ctrl+P`, the state toggle), then the
+/// `Ctrl+Q` cluster (keeping `Ctrl+P`, the state toggle), then the
 /// legend drops entirely. An empty queue is never rendered (the layout hides
 /// the row), so there is no empty-hint state.
 ///
@@ -1200,8 +1199,7 @@ pub fn draw_queue_bar(
 
     // ── Resolve the next item to pop ────────────────────────────────────────
     // Dispatch is FIFO: the front-most item pops first. Every bar item is a
-    // next-round entry now — a live mid-round insert (`Ctrl+O`) is a
-    // transcript entry and never appears here (ADR-0126).
+    // next-round entry now (ADR-0126).
     let next = items.first();
 
     let count = items.len();
@@ -1226,7 +1224,7 @@ pub fn draw_queue_bar(
         .fg(theme.brand())
         .add_modifier(Modifier::BOLD);
 
-    // ── Left: `QUEUE N [· blocked]` ─────────────────────────────────────────
+    // ── Left: `QUEUE N [blocked]` ───────────────────────────────────────────
     let mut left: Vec<Span<'static>> =
         vec![Span::styled("QUEUE", tag_style), Span::styled(" ", dim)];
     let count_label = if count > 99 {
@@ -1235,36 +1233,27 @@ pub fn draw_queue_bar(
         count.to_string()
     };
     left.push(Span::styled(count_label, count_style));
-    // When blocked, append an explicit `· blocked` tag in the error color so
+    // When blocked, append an explicit `blocked` tag in the error color so
     // the held-back state never reads as an ordinary pause — the count is
     // already error-colored, and this label spells out why. R1: `blocked` is
-    // a state of the queue (JOIN_MODIFY).
+    // a state of the queue.
     if blocked {
-        left.push(Span::styled(JOIN_MODIFY, dim));
+        left.push(Span::styled("  ", dim));
         left.push(Span::styled("blocked", count_style));
     }
 
     // ── Right-side keycap legend ────────────────────────────────────────────
-    // The keys explain the three outbox affordances (the Ctrl row, ADR-0124):
-    //   Ctrl+O — insert the composer text into the running round (mid-round steer)
+    // The keys explain the outbox affordances (the Ctrl row, ADR-0124):
     //   Ctrl+P — block / resume the outbox (toggles; label flips with state)
     //   Ctrl+Q — expand the full queue list
     // The keycap units are same-rank peers (R2), so they are separated by
     // plain whitespace — no dot. Under width pressure the labels drop first,
-    // then the Ctrl+Q and Ctrl+O clusters, keeping `Ctrl+P` (the state
-    // toggle) last.
+    // then the Ctrl+Q cluster, keeping `Ctrl+P` (the state toggle) last.
     let mk_right = |density: LegendDensity| -> Vec<Span<'static>> {
         let mut spans: Vec<Span<'static>> = Vec::new();
         let sep = |spans: &mut Vec<Span<'static>>| {
             spans.push(Span::styled(" ".repeat(JOIN_ENUMERATE_COLS), dim));
         };
-        if !matches!(density, LegendDensity::Tiny) {
-            spans.push(keycap_span(theme, Key::CTRL_O.display()));
-            if matches!(density, LegendDensity::Full) {
-                spans.push(Span::styled(" insert", dim));
-            }
-            sep(&mut spans);
-        }
         spans.push(keycap_span(theme, Key::CTRL_P.display()));
         if matches!(density, LegendDensity::Full) {
             spans.push(Span::styled(
@@ -1272,10 +1261,12 @@ pub fn draw_queue_bar(
                 dim,
             ));
         }
-        if matches!(density, LegendDensity::Full) {
+        if !matches!(density, LegendDensity::Tiny) {
             sep(&mut spans);
             spans.push(keycap_span(theme, Key::CTRL_Q.display()));
-            spans.push(Span::styled(" expand", dim));
+            if matches!(density, LegendDensity::Full) {
+                spans.push(Span::styled(" expand", dim));
+            }
         }
         spans
     };
@@ -1375,9 +1366,9 @@ pub fn draw_queue_bar(
 /// How much of the queue bar's keycap legend survives under width pressure.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegendDensity {
-    /// Keys + labels: `Ctrl+O insert  Ctrl+P block  Ctrl+Q expand`.
+    /// Keys + labels: `Ctrl+P block  Ctrl+Q expand`.
     Full,
-    /// Bare keycaps: `Ctrl+O  Ctrl+P  Ctrl+Q`.
+    /// Bare keycaps: `Ctrl+P  Ctrl+Q`.
     Compact,
     /// Only the block/resume toggle: `Ctrl+P`.
     Tiny,
@@ -1909,7 +1900,7 @@ mod tests {
             .map(|x| buf.content[x].symbol().to_string())
             .collect::<String>();
         assert!(
-            text.contains("Enter send · /retry to retry"),
+            text.contains("Enter send  /retry to retry"),
             "row was {text:?}"
         );
     }
@@ -1972,7 +1963,7 @@ mod tests {
         let text = (0..buffer.area().width as usize)
             .map(|x| buffer.content[x].symbol().to_string())
             .collect::<String>();
-        assert!(text.contains("Enter steer · Tab follow-up mode"), "row was {text:?}");
+        assert!(text.contains("Enter steer  Tab follow-up mode"), "row was {text:?}");
     }
 
     #[test]
@@ -2516,11 +2507,11 @@ mod tests {
         // Identity + count reflects the one item; no time label anymore.
         assert!(text.contains("QUEUE 1"), "row was {text:?}");
         assert!(!text.contains(":"), "time label leaked: {text:?}");
-        // Legend: the three keycap units are same-rank peers (R2) — joined by
+        // Legend: the keycap units are same-rank peers (R2) — joined by
         // plain whitespace, never a `·` (which would imply one modifies the
         // other).
         assert!(
-            text.contains("Ctrl+O insert  Ctrl+P block  Ctrl+Q expand"),
+            text.contains("Ctrl+P block  Ctrl+Q expand"),
             "peer keycaps must use R2 whitespace: {text:?}"
         );
         assert!(!text.contains('·'), "no R1 dot between peers: {text:?}");
@@ -2536,7 +2527,7 @@ mod tests {
 
     #[test]
     fn queue_bar_ignores_the_legacy_steer_flag() {
-        // ADR-0126: a mid-round insert (`Ctrl+O`) is a transcript entry, not
+        // A busy-Enter steer is a transcript entry, not
         // an outbox item, so a `steering: true` view item can no longer be
         // produced by the projection. If one ever leaks through (a stale
         // snapshot), the bar must still render it as an ordinary next-round

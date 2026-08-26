@@ -45,11 +45,11 @@ pub struct MasterRuntimeConfig {
     /// historical `nudge` spelling) and
     /// `Agent::set_doom_guard_config`. Default disabled.
     pub nudge: crate::DoomGuardConfig,
-    /// Whether the model may supply stdin bytes for a `bash` call it emits.
+    /// Whether the model may supply stdin bytes for an `execute_command` call it emits.
     /// Mirrors `[master] allow_model_stdin` and
     /// `Agent::set_allow_model_stdin`. Default `false`.
     pub allow_model_stdin: bool,
-    /// Whether an interactive `bash` command skips the inline input panel and
+    /// Whether an interactive `execute_command` call skips the inline input panel and
     /// instead runs with stdin closed (fast failure + non-interactive remedy).
     /// Mirrors `[master] skip_interactive_input` and
     /// `Agent::set_skip_interactive_input`. Default `false`.
@@ -137,7 +137,7 @@ impl MasterPreset {
                 "a careful AI code analyst performing contained inspection and testing in sandbox",
             ),
         )
-        .with_selection(ToolSelection::only(MasterPresetDelegation::CODE_ANALYST_TOOLS.iter().copied()))
+        .with_selection(MASTER_CODE_ANALYST.selection())
     }
 
 
@@ -194,7 +194,7 @@ pub enum MasterPresetId {
     /// and written design rationale before any change.
     Architect,
     /// Reviewer: read-only code review. Read/search/inspect tools only — no
-    /// `write_file`, `edit_file`, or `bash`. The persona is a meticulous
+    /// `write_file`, `edit_file`, or `execute_command`. The persona is a meticulous
     /// reviewer who reports findings and proposed diffs without applying them.
     Reviewer,
     /// Security auditor: read-only, command-confined. Read/search tools plus a
@@ -254,7 +254,7 @@ impl MasterPresetId {
 /// The developer master preset: native toolchain authority (ADR-0144 §3).
 ///
 /// This is the *default* master — identical in capability to the historical
-/// `Code` principal: unrestricted scope, host `bash`, the full runner
+/// `Code` principal: unrestricted scope, host command execution, the full runner
 /// catalog. What it adds over `for_role(Code, …)` is the explicit runner
 /// delegation set, which the master-facing runner dispatch consults to decide
 /// which [`crate::RunnerPreset`]s may be loaded.
@@ -268,14 +268,14 @@ pub const MASTER_DEVELOPER: MasterPresetDelegation = MasterPresetDelegation {
         crate::runner::RUNNER_CODE.name,
         crate::runner::RUNNER_MCP_SPECIALIST.name,
     ],
-    // Declared tools: everything (host `bash` included).
+    // Declared tools: everything (the host `execute_command` variant included).
     tool_scope: ToolScope::All,
 };
 
-/// The code-analyst master preset: no native command line (ADR-0144 §3).
+/// The code-analyst master preset: no host command execution (ADR-0144 §3).
 ///
-/// The analyst swaps host `bash` for `sandbox_bash`: contained execution good
-/// for `cargo metadata`-class probes and basic functional tests, never host
+/// The analyst pins `execute_command` to its workspace-contained variant:
+/// suitable for `cargo metadata`-class probes and basic functional tests, never host
 /// writes. Its runner delegation is restricted to read-only presets — an
 /// analyst must not be able to spawn a write-capable runner and thereby
 /// regain the write authority its own preset denies.
@@ -314,7 +314,7 @@ impl MasterPresetDelegation {
         &[MASTER_DEVELOPER, MASTER_CODE_ANALYST];
 
     /// The code-analyst's tool declaration: the full read/analyze surface
-    /// plus **contained** execution (`sandbox_bash`), minus host `bash`.
+    /// plus the workspace-contained `execute_command` variant.
     ///
     /// `ToolScope::Only` holds a `BTreeSet` and cannot be spelled in a
     /// `const`, so the flat names live here; [`Self::selection`] builds the
@@ -325,7 +325,7 @@ impl MasterPresetDelegation {
         "list_dir",
         "read_image",
         "search_text",
-        "sandbox_bash",
+        "execute_command",
         "edit_file",
         "write_file",
         "webfetch",
@@ -346,10 +346,16 @@ impl MasterPresetDelegation {
 
     /// The [`ToolSelection`] this preset declares to the pool resolver.
     pub fn selection(&self) -> ToolSelection {
-        match self.declared_tools() {
+        let mut selection = match self.declared_tools() {
             None => ToolSelection::unrestricted(),
             Some(names) => ToolSelection::only(names.iter().copied()),
+        };
+        if self.preset_id == "code_analyst" {
+            selection
+                .variants
+                .insert("execute_command".to_string(), "workspace".to_string());
         }
+        selection
     }
 }
 
@@ -434,7 +440,7 @@ impl MasterPreset {
                         "list_dir",
                         "read_image",
                         "search_text",
-                        "bash",
+                        "execute_command",
                         "webfetch",
                         "websearch",
                         "todo",
@@ -533,13 +539,13 @@ mod tests {
     fn reviewer_role_is_read_only() {
         let base = AgentIdentity::new("muta", "coding assistant");
         let reviewer = MasterPreset::for_role(MasterPresetId::Reviewer, &base);
-        // Scoped: write/edit/bash are NOT admitted.
+        // Scoped: write/edit/command execution are NOT admitted.
         let crate::ToolScope::Only(names) = &reviewer.agent_selection.scope else {
             panic!("reviewer must be scoped, not unrestricted");
         };
         assert!(!names.contains("write_file"));
         assert!(!names.contains("edit_file"));
-        assert!(!names.contains("bash"));
+        assert!(!names.contains("execute_command"));
         assert!(names.contains("read_text"));
     }
 
@@ -547,11 +553,11 @@ mod tests {
     fn security_role_confines_commands() {
         let base = AgentIdentity::new("muta", "coding assistant");
         let security = MasterPreset::for_role(MasterPresetId::Security, &base);
-        // bash IS admitted (for audit commands) but the command scope narrows it.
+        // Command execution is admitted for audits, but its scope is narrowed.
         let crate::ToolScope::Only(names) = &security.agent_selection.scope else {
             panic!("security must be scoped");
         };
-        assert!(names.contains("bash"));
+        assert!(names.contains("execute_command"));
         let commands = security.operation_scope.commands.as_ref().unwrap();
         assert!(commands.allows("git log"));
         assert!(commands.allows("cargo audit"));

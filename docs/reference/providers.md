@@ -69,7 +69,7 @@ env vars are data in that table, not hard-coded per struct.
 | `default_provider` | Endpoint | Credentials | Default / popular models |
 |--------------------|----------|-------------|--------------------------|
 | `kimi-code` | `https://api.kimi.com/coding/v1/chat/completions` | instance credential (`credentials.toml [providers.<id>]`) | `k3` (Kimi K3, 1M context) plus the platform's live `/models` list |
-| `zai-code` | `https://open.bigmodel.cn/api/coding/paas/v4/chat/completions` | instance credential (`credentials.toml [providers.<id>]`) | `glm-5.3` (default), `glm-5.2` |
+| `zai-code` | `https://open.bigmodel.cn/api/coding/paas/v4/chat/completions` | instance credential (`credentials.toml [providers.<id>]`) | `glm-5.3` (default), `glm-5.3-flash`, `glm-5.2` |
 
 ### Bespoke providers
 
@@ -92,6 +92,10 @@ Notes:
 - `zai-code` targets the Zhipu BigModel / Z.AI coding-plan platform (CN) and serves the
   GLM-5 family; it sends a `ZCode/3.5.3` User-Agent along with native ZCode identity headers
   (`X-Title`, `X-ZCode-Agent`, `HTTP-Referer`) so the platform recognises its native coding client.
+  It tracks the platform's live `GET /models` list at startup (ids only — the endpoint returns
+  no capability metadata), intersected against the client's GLM baselines; `glm-5.3` is the
+  default, `glm-5.3-flash` (native multimodal, ~1/3 credit burn) and `glm-5.2` round out the
+  curated offering list.
 - `kimi-code` tracks the Kimi Code platform's live `GET /models` list at
   startup (`k3` by default); model overrides are ignored. It is the first
   **fitting** template: platform-native ids the client registry does not know

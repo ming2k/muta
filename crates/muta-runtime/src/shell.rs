@@ -1,19 +1,19 @@
 //! The `!`-prefix shell-command path, extracted from `main.rs`. Executes a
-//! command directly through the `bash` tool, bypassing the LLM, and emits the
+//! command directly through `execute_command`, bypassing the LLM, and emits the
 //! same lifecycle events as a normal tool step (`ToolCall` → live
 //! `ToolStream` → `ToolResult` / `ToolCancelled`) so the existing render path
 //! picks it up unchanged.
 
 use muta_agent::Agent;
 use muta_agent::orchestration::{round_response, send_harness_state};
-use muta_agent::tools::BashTool;
+use muta_agent::tools::ExecuteCommandTool;
 use muta_agent::{RoundBegin, RoundLifecycle};
 use muta_contracts::{AgentResponse, LoopStatus, RoundEvent, Tool, ToolOutput, ToolStream};
 use muta_persistence::session::SessionStore;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// Execute a `!`-prefixed shell command directly through the `bash` tool,
+/// Execute a `!`-prefixed shell command directly through `execute_command`,
 /// bypassing the LLM. Emits the same lifecycle events as a normal tool step
 /// (`ToolCall` → live `ToolStream` → `ToolResult` or `ToolCancelled`) so the
 /// existing render path picks it up unchanged.
@@ -38,7 +38,7 @@ pub async fn run_shell_command(
     // TUI's live display) as a `CommandRecord` under the `"shell"` name with
     // `result: None` — the invocation is durable, the reply is not persisted.
     // The tool result stays ephemeral: it surfaces live via the ToolResult
-    // event and mirroring it durably would duplicate the model-driven bash
+    // event and mirroring it durably would duplicate the model-driven command
     // path (ADR-0050's boundary, retained).
     let echo_text = format!("!{}", command);
     if let Err(error) = session
@@ -78,23 +78,23 @@ pub async fn run_shell_command(
     let is_current = || lifecycle.is_current(generation);
 
     // Surface the synthetic tool step starting. The response listener maps
-    // `name: "bash"` to the "running command" activity status.
+    // `name: "execute_command"` to the "running command" activity status.
     let _ = tx.send(round_response(
         &session_id,
         RoundEvent::ToolCall {
             id: call_id.clone(),
-            name: "bash".to_string(),
+            name: "execute_command".to_string(),
             arguments: arguments.clone(),
         },
     ));
 
     // Run in the session's workspace root, not the daemon process's cwd
     // (ADR-0096): the `!` path must land in the same project the model-driven
-    // bash tool does.
+    // command tool does.
     let shell_env: Arc<dyn muta_contracts::ExecutionEnvironment> = Arc::new(
         muta_agent::execution::WorkspaceExecutionEnvironment::new(project_root),
     );
-    let bash = BashTool::with_env(shell_env);
+    let command_tool = ExecuteCommandTool::with_env(shell_env);
     let tx_for_stream = tx.clone();
     let session_id_for_stream = session_id.clone();
     let call_id_for_stream = call_id.clone();
@@ -116,7 +116,7 @@ pub async fn run_shell_command(
     // future enhancement may let the `!` channel opt into a PTY or human
     // input injection for truly interactive commands, but that is a separate
     // UX decision from the autonomous-agent stdin contract.
-    let run = bash.call_structured_with_events(
+    let run = command_tool.call_structured_with_events(
         "",
         &arguments,
         Box::new(|_| {}),
@@ -136,7 +136,7 @@ pub async fn run_shell_command(
                     &session_id,
                     RoundEvent::ToolCancelled {
                         id: call_id,
-                        name: "bash".to_string(),
+                        name: "execute_command".to_string(),
                     },
                 ));
             }
@@ -149,7 +149,7 @@ pub async fn run_shell_command(
                         &session_id,
                         RoundEvent::ToolResult {
                             id: call_id,
-                            name: "bash".to_string(),
+                            name: "execute_command".to_string(),
                             output,
                             structured,
                             duration_ms: 0,
@@ -162,7 +162,7 @@ pub async fn run_shell_command(
                         &session_id,
                         RoundEvent::ToolResult {
                             id: call_id,
-                            name: "bash".to_string(),
+                            name: "execute_command".to_string(),
                             output: error,
                             structured,
                             duration_ms: 0,

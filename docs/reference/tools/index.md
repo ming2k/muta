@@ -20,7 +20,7 @@ assembled explicitly because it captures a snapshot of the other tools.
 
 | Tool | Access | Permission scope | Reference page |
 |------|--------|------------------|----------------|
-| `bash` | `Execute` | `command` argument | [bash](bash.md) |
+| `execute_command` | `Execute` | `command` argument | [execute_command](execute_command.md) |
 | `read_text` | `Read` | `*` | [filesystem](filesystem.md) |
 | `read_image` | `Read` | `*` | [filesystem](filesystem.md) |
 | `write_file` | `Write` | `path` argument | [filesystem](filesystem.md) |
@@ -40,7 +40,7 @@ assembled explicitly because it captures a snapshot of the other tools.
 | `mcp__<server>__<tool>` | `Read` if server `read_only = true`, else `Write` | `*` | [mcp](mcp.md) |
 
 `permission_scope` defaults to `"*"`. Only `write_file`, `edit_file`, and
-`bash` override it; their scope string is what a cached `Always` rule matches
+`execute_command` override it; their scope string is what a cached `Always` rule matches
 against.
 
 Parameters are exposed to the model as JSON Schema via

@@ -97,7 +97,6 @@ pub mod task_fault_tolerance;
 pub use task_fault_tolerance as supervise;
 pub mod supervisor;
 pub mod ui_bridge;
-pub mod wip_tools;
 
 pub use supervisor::Supervisor;
 pub use session_driver::SessionDriver;

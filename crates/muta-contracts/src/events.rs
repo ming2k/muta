@@ -165,6 +165,11 @@ pub enum AgentRequest {
         model: String,
         effort: Option<String>,
         thinking: Option<bool>,
+        /// Capability overrides (ADR-0080 layer 1): `None` keeps the stored
+        /// overrides untouched; `Some(record)` replaces them wholesale (an
+        /// empty record clears them). Persisted per (instance, model) in the
+        /// route-settings **state** store, never in config.
+        overrides: Option<crate::model::CapabilityOverrides>,
     },
     /// Edit the per-model reasoning settings (Anthropic effort/thinking) for a
     /// **built-in** model, persisted into the `[model_reasoning."<model-id>"]`
@@ -176,6 +181,9 @@ pub enum AgentRequest {
         model: String,
         effort: Option<String>,
         thinking: Option<bool>,
+        /// Capability overrides (ADR-0080 layer 1) — same semantics as
+        /// [`AgentRequest::EditProviderModel::overrides`].
+        overrides: Option<crate::model::CapabilityOverrides>,
     },
     /// Delete a user-defined provider entirely: drop the entry from
     /// `config.providers`, remove it from `favorites`, and persist. If the

@@ -1,6 +1,6 @@
 # 0097. Session addressing and the orchestrator console
 
-- **Status:** Proposed
+- **Status:** Proposed (§5's first implementation slice has since been removed)
 - **Date:** 2026-08-12
 - **Builds on:** ADR-0093 (monitor protocol), ADR-0094 (serve vocabulary),
   ADR-0096 (unified session daemon and control plane)
@@ -200,7 +200,15 @@ the admission axis for the orchestrator side; on the session side these
 two tools are ordinary builtins gated by the session's own model-visible
 toolset, exactly like `todo`/`websearch`.
 
-**Implementation status (first slice, done)**:
+**Implementation status (first slice, done; later removed)**:
+
+> **Removal note (2026-08-26):** the WIP-coordination slice below was
+> subsequently **removed from the codebase**: `wip_tools.rs` and the registry's
+> WIP bookkeeping are gone, `MonitoredSession` no longer carries a `wip`
+> projection, and the `WipStatus`/`WipConflict`/`WipAdvice` contracts were
+> deleted. Voluntary WIP declaration did not pay for its complexity —
+> workspace access is now structured so collisions are prevented rather than
+> negotiated. §5 is kept as the historical design record.
 
 - Core types `WipStatus`/`WipConflict`/`WipAdvice` and a
   `MonitoredSession.wip` projection field live in

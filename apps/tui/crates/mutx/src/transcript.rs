@@ -695,13 +695,13 @@ mod tests {
             at_ms: 42,
             round: Some(3),
         });
-        assert_eq!(marker.raw, "Interrupted · round 3 · Esc Esc");
+        assert_eq!(marker.raw, "Round 3 — cancelled via [Esc Esc]");
 
         let unnumbered = TranscriptMessage::round_interrupted(RoundInterrupt {
             reason: RoundInterruptReason::Terminated,
             at_ms: 42,
             round: None,
         });
-        assert_eq!(unnumbered.raw, "Interrupted · process exited");
+        assert_eq!(unnumbered.raw, "Process exited");
     }
 }

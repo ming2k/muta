@@ -420,8 +420,8 @@ fn draw_composer_impl(
             .bg(panel_bg)
             .fg(theme.brand())
             .add_modifier(Modifier::BOLD);
-        // Attachment chips (`[Image #N · size]` / `[Pasted text #N +M lines
-        // · size]`) render as tinted "pills" so a pasted block reads as a
+        // Attachment chips (`[Image #N (size)]` / `[Pasted text #N +M lines
+        // (size)]`) render as tinted "pills" so a pasted block reads as a
         // distinct object inside the live input instead of ordinary prose.
         // Paste chips take the calm blue, image chips the warm amber; each is
         // a bold colored label on a tinted band derived from the current

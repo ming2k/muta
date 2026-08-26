@@ -114,7 +114,7 @@ least one session.
  DASHBOARD all projects                    2 session(s) · 1 running · 1 need attention
 ┌ Console ──────────────────────────────────────────────────────────┐
 │ #2 fix the flaky parser test — running · round 3 › turn 1         │
-│ 512 out · 1m23s · tool bash · waiting for model · ctx 48.2k       │
+│ 512 out · 1m23s · tool execute_command · waiting for model · ctx 48.2k │
 └───────────────────────────────────────────────────────────────────┘
 ┌ Sessions ─────────────────────────────────────────────────────────┐
 │ #1 api-docs   45s   needs-approval   #2 parser-fix 1m23s running  │

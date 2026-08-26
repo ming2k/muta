@@ -105,7 +105,7 @@ impl Tool for SupervisorListSessionsTool {
     }
 
     fn description(&self) -> &str {
-        "List all hosted and active sessions in the Muta daemon, including session IDs, project roots, token usage, WIP status, and active masters."
+        "List all hosted and active sessions in the Muta daemon, including session IDs, project roots, status, token usage, and active masters."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -123,25 +123,17 @@ impl Tool for SupervisorListSessionsTool {
                 include_idle: true,
             })
             .await;
-        let wip_map = self.registry.wip_registry_handle();
-        let wip = wip_map.lock().await;
-
         let sessions: Vec<serde_json::Value> = snapshot
             .sessions
             .iter()
             .map(|s| {
-                let session_wip = s.wip.as_ref().or_else(|| wip.get(&s.id));
                 json!({
                     "session_id": s.id,
                     "overview": s.overview,
                     "project_root": s.project_root,
                     "status": s.status.as_str(),
                     "output_tokens": s.output_tokens,
-                    "round": s.round,
-                    "wip": session_wip.map(|w| json!({
-                        "summary": w.summary,
-                        "paths": w.paths
-                    }))
+                    "round": s.round
                 })
             })
             .collect();
@@ -172,7 +164,7 @@ impl Tool for SupervisorInspectSessionTool {
     }
 
     fn description(&self) -> &str {
-        "Inspect a session in detail: status, recent turns, WIP declaration, and token usage."
+        "Inspect a session in detail: status, recent turns, activity, and token usage."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -208,10 +200,6 @@ impl Tool for SupervisorInspectSessionTool {
             .find(|s| s.id == session_id)
             .ok_or_else(|| format!("Session '{session_id}' not found"))?;
 
-        let wip_map = self.registry.wip_registry_handle();
-        let wip = wip_map.lock().await;
-        let session_wip = session.wip.as_ref().or_else(|| wip.get(session_id));
-
         Ok(json!({
             "session_id": session.id,
             "overview": session.overview,
@@ -219,11 +207,7 @@ impl Tool for SupervisorInspectSessionTool {
             "status": session.status.as_str(),
             "output_tokens": session.output_tokens,
             "round": session.round,
-            "activity": session.activity,
-            "wip": session_wip.map(|w| json!({
-                "summary": w.summary,
-                "paths": w.paths
-            }))
+            "activity": session.activity
         })
         .to_string())
     }
@@ -333,7 +317,7 @@ impl Tool for SupervisorCoordinateDebugTool {
     }
 
     fn description(&self) -> &str {
-        "Coordinate joint debugging (联调) across multiple sessions: check for cross-session file/task overlaps, align progress, and dispatch coordination instructions."
+        "Coordinate joint debugging (联调) across multiple sessions: select participants, align progress, and dispatch coordination instructions."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -370,9 +354,6 @@ impl Tool for SupervisorCoordinateDebugTool {
                 include_idle: true,
             })
             .await;
-        let wip_map = self.registry.wip_registry_handle();
-        let wip = wip_map.lock().await;
-
         let participating_sessions: Vec<_> = snapshot
             .sessions
             .iter()
@@ -384,26 +365,6 @@ impl Tool for SupervisorCoordinateDebugTool {
                 }
             })
             .collect();
-
-        let mut file_claims: std::collections::HashMap<String, Vec<String>> =
-            std::collections::HashMap::new();
-        let mut conflicts: Vec<serde_json::Value> = Vec::new();
-
-        for session in &participating_sessions {
-            let session_wip = session.wip.as_ref().or_else(|| wip.get(&session.id));
-            if let Some(w) = session_wip {
-                for file in &w.paths {
-                    let claimants = file_claims.entry(file.clone()).or_default();
-                    claimants.push(session.id.clone());
-                    if claimants.len() > 1 {
-                        conflicts.push(json!({
-                            "file": file,
-                            "claimed_by_sessions": claimants
-                        }));
-                    }
-                }
-            }
-        }
 
         let mut dispatched_instructions = 0;
         if let Some(instr) = instruction {
@@ -424,7 +385,6 @@ impl Tool for SupervisorCoordinateDebugTool {
 
         Ok(json!({
             "participating_sessions_count": participating_sessions.len(),
-            "potential_file_conflicts": conflicts,
             "instructions_dispatched": dispatched_instructions,
             "status": "coordinated"
         })

@@ -57,9 +57,8 @@ pub enum ComposerSendMode {
 
 /// A user message owned by the compact outbox (the **next-round** queue).
 ///
-/// Two kinds of content live here: a busy Enter (staged while a round runs)
-/// and a mid-round insert (`Ctrl+O`) whose round ended before admission
-/// (handed back by `UserInputUnavailable`) — both wait to become the **next**
+/// Follow-up content and a busy-Enter steer whose round ended before admission
+/// (handed back by `UserInputUnavailable`) wait here to become the **next**
 /// round's prompt. The item is intentionally absent from the transcript until
 /// the harness dispatches it, so pending state never scrolls away or
 /// masquerades as conversation history. (A *live* insert is different: it is
@@ -191,11 +190,11 @@ impl ProviderRetryState {
             )
         } else {
             format!(
-                "running · {}",
+                "running for {}",
                 format_retry_duration(now.saturating_duration_since(self.retry_at))
             )
         };
-        format!("retry {retry}/{max_retries} · {timing}")
+        format!("retry {retry}/{max_retries} ({timing})")
     }
 }
 
@@ -980,6 +979,13 @@ pub struct App {
     /// Toggled with Space when [`Self::editor_thinking_available`] is true;
     /// orthogonal to effort.
     pub editor_thinking: bool,
+    /// Capability-override tri-state for **vision** (ADR-0080 layer 1), shown
+    /// in the per-model settings editor. Cycled with Space: `None` = inherit
+    /// (no override) → `Some(true)` force on → `Some(false)` force off.
+    pub editor_vision_override: Option<bool>,
+    /// Capability-override tri-state for **tool calling**, same cycling and
+    /// semantics as [`Self::editor_vision_override`].
+    pub editor_tool_override: Option<bool>,
     /// Focused field of the provider editor (`Modal::CustomProvider`) as an
     /// index into [`Self::custom_fields`] — the per-template visible field set
     /// (Name / Base URL / Token / Model). The focused field always borrows the
@@ -1772,10 +1778,10 @@ impl App {
     }
 
     /// A staged next-round item failed to start its round (e.g. no provider
-    /// configured), or a mid-round insert's round ended before admission.
+    /// configured), or a busy-Enter steer's round ended before admission.
     ///
     /// For an item still in the outbox this just flips it back to `Waiting`.
-    /// For a **transcript-owned insert** (`Ctrl+O` handed back by
+    /// For a **transcript-owned steer** (busy Enter handed back by
     /// `UserInputUnavailable`) there is no outbox item — the content lives in
     /// the transcript entry — so the caller stages one here (`text` /
     /// attachments from the held entry) under the same id: the queue then
@@ -2127,7 +2133,7 @@ impl App {
         None
     }
 
-    /// Stage a composed message as an in-flight mid-round steer (`Ctrl+O`).
+    /// Mint the correlation id for an in-flight busy-Enter steer.
     ///
     /// The insert is **transcript-owned** (ADR-0126): it becomes a
     /// `DeliveryStatus::Queued` entry the moment it is sent and never enters

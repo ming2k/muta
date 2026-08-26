@@ -499,6 +499,7 @@ async fn factory_publishes_explicit_high_effort() {
         api_key: "k".into(),
         model: "claude-opus-4-8".into(),
         remote: None,
+        user_overrides: None,
     };
     assert_factory_body(channel, json!({ "output_config": { "effort": "high" } })).await;
 }
@@ -525,6 +526,7 @@ async fn factory_keeps_effort_decoupled_from_thinking_off() {
         api_key: "k".into(),
         model: "claude-opus-4-8".into(),
         remote: None,
+        user_overrides: None,
     };
     // The request publishes the effort override; the absence of a `thinking`
     // field is verified by the companion unit test.
@@ -548,6 +550,7 @@ async fn factory_publishes_thinking_without_output_config() {
         api_key: "k".into(),
         model: "claude-opus-4-8".into(),
         remote: None,
+        user_overrides: None,
     };
     assert_factory_body(
         channel,
@@ -576,6 +579,7 @@ async fn sonnet5_opt_out_emits_explicit_disabled() {
         api_key: "k".into(),
         model: "claude-sonnet-5".into(),
         remote: None,
+        user_overrides: None,
     };
     assert_factory_body(
         channel,
@@ -604,6 +608,7 @@ async fn sonnet5_opt_in_publishes_adaptive_and_full_effort_range() {
         api_key: "k".into(),
         model: "claude-sonnet-5".into(),
         remote: None,
+        user_overrides: None,
     };
     assert_factory_body(
         channel,
@@ -633,6 +638,7 @@ async fn fable5_always_on_thinking_ignores_off_override() {
         api_key: "k".into(),
         model: "claude-fable-5".into(),
         remote: None,
+        user_overrides: None,
     };
     assert_factory_body(
         channel,

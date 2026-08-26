@@ -475,6 +475,7 @@ impl SessionDriver {
                     model,
                     effort,
                     thinking,
+                    overrides,
                 } => {
                     crate::handlers_provider::edit_model(
                         &mut config,
@@ -486,6 +487,7 @@ impl SessionDriver {
                         model,
                         effort,
                         thinking,
+                        overrides,
                     )
                     .await;
                 }
@@ -493,6 +495,7 @@ impl SessionDriver {
                     model,
                     effort,
                     thinking,
+                    overrides,
                 } => {
                     crate::handlers_provider::edit_model_reasoning(
                         &mut config,
@@ -503,6 +506,7 @@ impl SessionDriver {
                         model,
                         effort,
                         thinking,
+                        overrides,
                     )
                     .await;
                 }
@@ -1048,7 +1052,7 @@ mod tests {
             base_url: None,
         }));
         assert!(!round_owned_request(&AgentRequest::ToggleTool {
-            name: "bash".to_string(),
+            name: "execute_command".to_string(),
             enabled: false,
         }));
         assert!(!round_owned_request(&AgentRequest::ToggleMcpServer {

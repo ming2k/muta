@@ -7,23 +7,28 @@ use crate::tools::helpers::{
     WorkspaceBase, env_from_root, execution_environment, json_string, workspace_base,
 };
 
-/// Execute a command in the platform's native non-interactive shell.
+/// Execute a command in a non-interactive shell.
 ///
 /// Commands run in the session's workspace root (captured at factory time),
 /// not the daemon process's cwd — under the unified daemon (ADR-0096) those
 /// differ whenever the daemon was first spawned from another project.
-pub struct BashTool {
+pub struct ExecuteCommandTool {
     pub(crate) root: WorkspaceBase,
     pub(crate) env: Option<std::sync::Arc<dyn muta_contracts::ExecutionEnvironment>>,
+    workspace_sandbox: bool,
 }
 
-impl BashTool {
-    /// Build the compatibility-named `bash` tool against a workspace root.
-    /// runtime uses this for the `!`-prefix shell path, which bypasses the
+impl ExecuteCommandTool {
+    /// Build the default host-command variant against a workspace root.
+    /// Runtime uses this for the `!`-prefix shell path, which bypasses the
     /// factory-based toolset assembly but must still run in the session's
     /// project (not the daemon's process cwd, ADR-0096).
     pub fn new(root: Option<std::path::PathBuf>) -> Self {
-        Self { root, env: None }
+        Self {
+            root,
+            env: None,
+            workspace_sandbox: false,
+        }
     }
 
     /// Build the shell tool backed by a custom execution environment.
@@ -32,34 +37,84 @@ impl BashTool {
         Self {
             root,
             env: Some(env),
+            workspace_sandbox: false,
+        }
+    }
+
+    /// Build the workspace-contained variant. It shares the same
+    /// model-facing capability name; agent presets select it by variant id.
+    pub fn workspace_with_env(
+        env: std::sync::Arc<dyn muta_contracts::ExecutionEnvironment>,
+    ) -> Self {
+        let root = Some(env.workspace_root().to_path_buf());
+        Self {
+            root,
+            env: Some(env),
+            workspace_sandbox: true,
+        }
+    }
+
+    fn shell_isolation(&self) -> muta_contracts::ShellIsolation {
+        if self.workspace_sandbox {
+            muta_contracts::ShellIsolation::Workspace
+        } else {
+            self.env
+                .as_ref()
+                .map(|env| env.shell_isolation())
+                .unwrap_or(muta_contracts::ShellIsolation::Host)
         }
     }
 }
 
 #[async_trait]
-impl Tool for BashTool {
+impl Tool for ExecuteCommandTool {
     fn name(&self) -> &str {
-        "bash"
+        "execute_command"
     }
-    /// The compatibility-named `bash` tool runs native-shell commands — its
-    /// primary purpose is execution, not workspace
+    fn variant(&self) -> &str {
+        if self.workspace_sandbox {
+            "workspace"
+        } else {
+            "default"
+        }
+    }
+    fn is_available(&self) -> bool {
+        self.shell_isolation() != muta_contracts::ShellIsolation::Workspace
+            || muta_platform::workspace_sandbox::available()
+    }
+    /// The command tool's primary purpose is execution, not workspace
     /// mutation — so it sits in the `Execute` tier between pure reads and
     /// file-writing tools. The broker still gates it (`Execute > Read`). See
     /// ADR-0012.
     fn description(&self) -> &str {
-        "Execute a shell command. Use for build, test, git, or system commands. Supports persistent sessions via run_persistent or terminal_id."
+        if self.workspace_sandbox {
+            "Execute a shell command inside the isolated workspace. Use for builds, tests, metadata inspection, and contained checks. Host files outside the admitted workspace roots and network access are unavailable."
+        } else {
+            "Execute a shell command. Use for build, test, git, or system commands. Supports persistent sessions via run_persistent or terminal_id."
+        }
     }
     fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "command": { "type": "string", "description": "The shell command to execute" },
-                "timeout": { "type": "integer", "description": "Overall timeout in seconds (default 30). A command producing no output for 10s is still killed early as a blocked-command guard." },
-                "terminal_id": { "type": "string", "description": "Optional persistent terminal session identifier to reuse environment variables, cwd, and shell state across commands." },
-                "run_persistent": { "type": "boolean", "description": "Set to true to run in a persistent terminal session." }
-            },
-            "required": ["command"]
-        })
+        if self.workspace_sandbox {
+            json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "The shell command to execute inside the workspace sandbox" },
+                    "timeout": { "type": "integer", "description": "Overall timeout in seconds (default 30). Output idle for 10s is killed early." }
+                },
+                "required": ["command"]
+            })
+        } else {
+            json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "The shell command to execute" },
+                    "timeout": { "type": "integer", "description": "Overall timeout in seconds (default 30). A command producing no output for 10s is still killed early as a blocked-command guard." },
+                    "terminal_id": { "type": "string", "description": "Optional persistent terminal session identifier to reuse environment variables, cwd, and shell state across commands." },
+                    "run_persistent": { "type": "boolean", "description": "Set to true to run in a persistent terminal session." }
+                },
+                "required": ["command"]
+            })
+        }
     }
     fn scope_target(&self, arguments: &str) -> muta_contracts::ScopeTarget {
         muta_contracts::ScopeTarget::Command(json_string(arguments, "command"))
@@ -70,10 +125,19 @@ impl Tool for BashTool {
     fn permission_submission(&self, arguments: &str) -> Option<muta_contracts::ToolPermissionSubmission> {
         let command = json_string(arguments, "command");
         let first_word = command.split_whitespace().next().unwrap_or("sh");
+        let sandboxed = self.shell_isolation() == muta_contracts::ShellIsolation::Workspace;
         Some(muta_contracts::ToolPermissionSubmission {
             hazard_level: muta_contracts::HazardLevel::CommandExecution,
-            label: format!("Execute command: `{}`", if command.len() > 50 { format!("{}...", &command[..47]) } else { command.clone() }),
-            description: format!("Runs host shell command `{command}`. May modify system state or execute arbitrary binaries."),
+            label: format!(
+                "Execute{}: `{}`",
+                if sandboxed { " in workspace" } else { " command" },
+                if command.len() > 50 { format!("{}...", &command[..47]) } else { command.clone() }
+            ),
+            description: if sandboxed {
+                format!("Runs command `{command}` inside the isolated workspace with network access disabled.")
+            } else {
+                format!("Runs host shell command `{command}`. May modify system state or execute arbitrary binaries.")
+            },
             scope: command.clone(),
             payload: muta_contracts::ToolPermissionPayload::Command {
                 command: command.clone(),
@@ -160,7 +224,7 @@ impl Tool for BashTool {
                 .env
                 .clone()
                 .unwrap_or_else(|| env_from_root(&self.root));
-            if env.shell_isolation() == muta_contracts::ShellIsolation::Workspace {
+            if self.shell_isolation() == muta_contracts::ShellIsolation::Workspace {
                 return Err(
                     "Persistent terminal sessions are disabled in the workspace sandbox; run a non-persistent command instead."
                         .to_string(),
@@ -188,7 +252,7 @@ impl Tool for BashTool {
         // `Closed` → the platform null device (the default hard floor: a child
         // blocking on `read(stdin)` gets instant EOF). `Prefilled` → a pipe we write the
         // bytes into right after spawn; the pipe buffer holds them ahead of
-        // the child's first read. (L1 — see disclosure/bash design doc.)
+        // the child's first read. (L1 — see the command disclosure design doc.)
         let stdin_bytes = match &stdin_policy {
             muta_contracts::StdinPolicy::Closed => None,
             muta_contracts::StdinPolicy::Prefilled { data } => Some(data.clone()),
@@ -228,7 +292,7 @@ impl Tool for BashTool {
                 .env
                 .clone()
                 .unwrap_or_else(|| env_from_root(&self.root));
-            let mut invocation = match env.shell_isolation() {
+            let mut invocation = match self.shell_isolation() {
                 muta_contracts::ShellIsolation::Host => muta_platform::shell::native_shell(command),
                 muta_contracts::ShellIsolation::Workspace => {
                     workspace_sandbox_shell(command, env.workspace_root(), env.additional_roots())?
@@ -458,13 +522,18 @@ fn workspace_sandbox_shell(
     )
 }
 
-muta_contracts::register_tool!(BashFactory => |ctx| BashTool {
+muta_contracts::register_tool!(ExecuteCommandFactory => |ctx| ExecuteCommandTool {
     root: workspace_base(ctx),
     env: Some(execution_environment(ctx)),
+    workspace_sandbox: false,
+});
+
+muta_contracts::register_tool!(WorkspaceExecuteCommandFactory => |ctx| {
+    ExecuteCommandTool::workspace_with_env(execution_environment(ctx))
 });
 
 /// Keep the first `head` and last `head` bytes of `s` (UTF-8-safe, without
-/// splitting a character), joining them with a marker row. Used by the bash
+/// splitting a character), joining them with a marker row. Used by the command
 /// tool's collection cap so a chatty command's resident payload stays bounded
 /// while both the leading context and the error-bearing tail survive.
 fn head_tail(s: &str, head: usize) -> String {
@@ -501,8 +570,8 @@ mod tests {
 
     /// A healthy command captures stdout and exits cleanly with `Exited`.
     #[tokio::test]
-    async fn bash_captures_stdout_and_exits() {
-        let tool = BashTool::new(None);
+    async fn execute_command_captures_stdout_and_exits() {
+        let tool = ExecuteCommandTool::new(None);
         let out = tool
             .call_structured(&arguments(native_command(
                 "printf hello",
@@ -533,8 +602,8 @@ mod tests {
     /// is the L1 hard floor: `cat` with no input and closed stdin exits 0
     /// immediately.
     #[tokio::test]
-    async fn bash_closed_stdin_means_eof_not_hang() {
-        let tool = BashTool::new(None);
+    async fn execute_command_closed_stdin_means_eof_not_hang() {
+        let tool = ExecuteCommandTool::new(None);
         // `read line` under `sh -c` with stdin=/dev/null returns non-zero
         // immediately (EOF) rather than blocking.
         let out = tokio::time::timeout(
@@ -559,8 +628,8 @@ mod tests {
     /// A prefilled stdin policy pipes the bytes into the child: `cat` echoes
     /// them back. This is the L3.5 seam (human/model input injection).
     #[tokio::test]
-    async fn bash_prefilled_stdin_feeds_the_child() {
-        let tool = BashTool::new(None);
+    async fn execute_command_prefilled_stdin_feeds_the_child() {
+        let tool = ExecuteCommandTool::new(None);
         let mut on_stream = |_: muta_contracts::ToolStream| ();
         let out = tool
             .call_structured_with_events(
@@ -593,8 +662,8 @@ mod tests {
     /// over the alternate screen.
     #[cfg(unix)]
     #[tokio::test]
-    async fn bash_child_runs_in_its_own_process_group() {
-        let tool = BashTool::new(None);
+    async fn execute_command_child_runs_in_its_own_process_group() {
+        let tool = ExecuteCommandTool::new(None);
         // `ps` reports PID and PGID. Under `.process_group(0)` they are equal.
         let out = tool
             .call_structured(r#"{"command":"ps -o pid=,pgid= -p $$ || echo \"ps=$$\""}"#)
@@ -619,8 +688,8 @@ mod tests {
     /// group kill must reach it.
     #[cfg(unix)]
     #[tokio::test]
-    async fn bash_timeout_kills_grandchildren() {
-        let tool = BashTool::new(None);
+    async fn execute_command_timeout_kills_grandchildren() {
+        let tool = ExecuteCommandTool::new(None);
         // Marker file the grandchild touches when (if) it survives the tool
         // call; checked after the timeout returns.
         let marker = std::env::temp_dir().join(format!(
@@ -675,8 +744,8 @@ mod tests {
     /// including a PowerShell-spawned grandchild.
     #[cfg(windows)]
     #[tokio::test]
-    async fn bash_timeout_kills_grandchildren() {
-        let tool = BashTool::new(None);
+    async fn execute_command_timeout_kills_grandchildren() {
+        let tool = ExecuteCommandTool::new(None);
         let marker = std::env::temp_dir().join(format!(
             "muta-grandchild-{}.txt",
             uuid::Uuid::new_v4().simple()
@@ -721,8 +790,8 @@ mod tests {
     /// head and tail survive with a drop marker between them, and the
     /// `truncated` hint is set so text consumers render the truncation note.
     #[tokio::test]
-    async fn bash_caps_huge_output_in_memory() {
-        let tool = BashTool::new(None);
+    async fn execute_command_caps_huge_output_in_memory() {
+        let tool = ExecuteCommandTool::new(None);
         // ~800k chars: an order of magnitude above the 64k-char collection
         // threshold (SHELL_MAX_OUTPUT_CHARS × 8).
         let out = tool
@@ -759,8 +828,8 @@ mod tests {
     /// width math matches the grid. A literal `\t` would otherwise be measured
     /// as width 0 and scramble the disclosure band.
     #[tokio::test]
-    async fn bash_captures_expanded_tabs() {
-        let tool = BashTool::new(None);
+    async fn execute_command_captures_expanded_tabs() {
+        let tool = ExecuteCommandTool::new(None);
         let out = tool
             .call_structured(&arguments(native_command(
                 "printf 'a\\tb\\n'",
@@ -784,10 +853,10 @@ mod tests {
     /// must not have its commands land in project B.
     #[cfg(unix)]
     #[tokio::test]
-    async fn bash_runs_in_the_session_workspace_root() {
-        let marker = std::env::temp_dir().join(format!("muta-bash-root-{}", std::process::id()));
+    async fn execute_command_runs_in_the_session_workspace_root() {
+        let marker = std::env::temp_dir().join(format!("muta-command-root-{}", std::process::id()));
         std::fs::create_dir_all(&marker).expect("mkdir");
-        let tool = BashTool::new(Some(marker.clone()));
+        let tool = ExecuteCommandTool::new(Some(marker.clone()));
         let out = tool
             .call_structured(r#"{"command":"pwd"}"#)
             .await
@@ -809,7 +878,7 @@ mod tests {
             return;
         }
         let base = std::env::temp_dir().join(format!(
-            "muta-bash-sandbox-{}",
+            "muta-command-sandbox-{}",
             uuid::Uuid::new_v4().simple()
         ));
         let workspace = base.join("workspace");
@@ -821,7 +890,7 @@ mod tests {
         let env = std::sync::Arc::new(crate::execution::WorkspaceExecutionEnvironment::new(
             &workspace,
         ));
-        let tool = crate::tools::sandbox_bash::SandboxBashTool::with_env(env);
+        let tool = ExecuteCommandTool::workspace_with_env(env);
         let command = format!(
 
             "test -r visible && test ! -e {} && test ! -e /etc/passwd && \
@@ -847,7 +916,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_terminal_preserves_state() {
-        let tool = BashTool::new(None);
+        let tool = ExecuteCommandTool::new(None);
         // Step 1: Export a variable in a persistent session
         let res1 = tool
             .call_structured(

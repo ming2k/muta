@@ -147,7 +147,8 @@ impl Agent {
         // and now — the tool never executes, so its result never enters
         // context. Unlike the post-hoc read-loop guard, this covers all
         // watched tools (bash/webfetch/edit/...), not just reads, and trips
-        // on the *first* repeat (threshold = 2). `Block` records the
+        // when a same-signature call reaches `threshold` occurrences
+        // (default 3: one re-run tolerated, ADR-0148). `Block` records the
         // repeated signatures into the per-round mask, so the per-call
         // `is_blocked` filter below short-circuits them without re-running
         // the guard. We surface the guard's message as a notice + a hidden
@@ -202,7 +203,7 @@ impl Agent {
         // Signature-level loop guard (ADR-0036): a call whose canonical
         // signature is in the per-round block mask — set either by the
         // read-loop guard (a repeat that escalated past a nudge) or by the
-        // doom guard above (any watched tool's first repeat) — is
+        // doom guard above (a watched tool that hit the repeat threshold) — is
         // short-circuited here, before execution. The model gets an
         // explanatory error instead of the content/side-effect, so it is
         // physically unable to re-enter the loop. Blocked calls are split

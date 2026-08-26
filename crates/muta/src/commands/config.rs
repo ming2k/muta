@@ -122,6 +122,7 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "master.doom_guard.enabled" => println!("{}", config.master.doom_guard.enabled),
                 "master.doom_guard.window" => println!("{}", config.master.doom_guard.window),
+                "master.doom_guard.threshold" => println!("{}", config.master.doom_guard.threshold),
                 "daemon.shutdown_grace_secs" => println!("{}", config.daemon.shutdown_grace_secs),
                 "daemon.idle_exit_minutes" => println!("{}", config.daemon.idle_exit_minutes),
                 "daemon.local_auth" => println!("{}", config.daemon.local_auth),
@@ -232,6 +233,11 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                     config.master.doom_guard.window = value
                         .parse()
                         .map_err(|_| "invalid integer for master.doom_guard.window")?;
+                }
+                "master.doom_guard.threshold" => {
+                    config.master.doom_guard.threshold = value
+                        .parse()
+                        .map_err(|_| "invalid integer for master.doom_guard.threshold")?;
                 }
                 "daemon.shutdown_grace_secs" => {
                     config.daemon.shutdown_grace_secs = value

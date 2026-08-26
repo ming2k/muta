@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Doom guard relaxed (ADR-0148):** `[master.doom_guard] threshold` is a
+  live key again with a new default of `3` — one same-signature re-run per
+  window is tolerated (a transient retry, a re-run of the same test command
+  after an edit) and the second repeat is blocked pre-dispatch. The strict
+  ADR-0113 first-repeat block is still available with `threshold = 2`.
+  `edit_file`/`write_file` signatures are now content-addressed (path +
+  stable payload hash) instead of path-only, so sequential distinct edits
+  to one file no longer collide; an exact payload repeat (true A→B→A
+  thrash) still does. Wired through `muta config get/set
+  master.doom_guard.threshold`.
+- Command steps (`execute_command`, legacy `bash`) now default to collapsed
+  in the TUI transcript, matching every other tool kind. The summary line
+  ("Run cargo test · 1.2s") covers the common case; failures still
+  force-expand, and `[tui.default_expanded] execute_command = true` restores
+  the old open-by-default behavior.
+- Expanded command steps now always paint an `exit N` footer when the exit
+  code is known, including a dimmed `exit 0` on success, so a completed run
+  ends with a diagnostic fact instead of silence. (Previously only non-zero
+  codes rendered.)
+
+### Fixed
+
+- `/yolo` ack toast: collapsed the multi-line `•`-bulleted confirmation into
+  a single-line `Status: explanation` string. The toast bubble renders one
+  line capped at 58 columns, so the old three-line title was flattened and
+  mid-word truncated. The slash-handler ack now matches the `--yolo` startup
+  toast phrasing.
+- Legacy-session posture restore no longer re-escalates a de-escalated
+  session: the ledger heuristic classified ack titles with an "on"-first
+  substring test, but every OFF phrasing shipped before 0.35.4 also contains
+  "on" ("permission", "questions", "interaction"), so a resumed legacy
+  session whose last ack was OFF came back with auto-approval silently
+  re-enabled. Classification now tests "off" first via
+  `classify_yolo_ack_title`, with unit and ADR-0132 integration regressions
+  covering all historical ack phrasings.
+- Reworded the shell idle-blocked footer ("⏸ no output for a while…") to
+  state what actually happened: the command was killed after ~10s of silence
+  because it was almost certainly waiting for stdin input the agent can't
+  provide, with the same non-interactive retry hints.
+
 ## [0.35.4] - 2026-08-26
 
 ### Changed
@@ -41,6 +83,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project MCP definitions in `.muta/mcp.json`, top-level `skills/` discovery,
   trusted project rules in model context, and live reload/unload of every asset
   domain (ADR-0147).
+- Per-model capability overrides in the settings () editor: two tri-state
+  rows (Vision, Tool call — inherit / force on / force off, Space to cycle,
+  Tab to reach them) persisted per (provider-instance, model) in the
+  route-settings **state** store, never in . Submitting the
+  editor sends the full record, so clearing both rows to "inherit" removes
+  the stored overrides.
+- Three-layer model capability resolution, formalized as ADR-0080: user
+  `RouteSettings::capability_overrides` > remote `RemoteModelMetadata` >
+  the static baseline registry. `CapabilityOverrides` (family, context
+  window, max output tokens, thinking, tool call, vision — all optional,
+  `Some(false)` meaningful) is carried on `Channel::user_overrides` and
+  applied by the single `ModelCapabilities::apply_overrides` site; empty
+  records are filtered before persistence. A cross-provider test now locks
+  shared baseline ids (e.g. `glm-5.2`, `kimi-k2.7-code`) byte-identical.
+- `glm-5.3-flash` on the `zai-code` provider. Zhipu's GLM Coding Plan now
+  serves it on every tier (native multimodal vision, 1M context, ~1/3 of
+  GLM-5.3's credit burn); the model picker offers it between the flagship and
+  `glm-5.2`, with the same always-on thinking ladder (`low`/`high`/`xhigh`/
+  `max`).
 
 ## [0.35.1] - 2026-08-26
 

@@ -216,12 +216,12 @@ fn draw_header(frame: &mut Frame, rect: Rect, total: usize, shown: usize, theme:
             .add_modifier(Modifier::BOLD),
     );
     let count = if total == 0 {
-        Span::styled(" · no history yet", Style::default().fg(theme.muted()))
+        Span::styled("  no history yet", Style::default().fg(theme.muted()))
     } else if shown == total {
-        Span::styled(format!(" · {shown}"), Style::default().fg(theme.muted()))
+        Span::styled(format!("  {shown}"), Style::default().fg(theme.muted()))
     } else {
         Span::styled(
-            format!(" · {shown}/{total}"),
+            format!("  {shown}/{total}"),
             Style::default().fg(theme.muted()),
         )
     };

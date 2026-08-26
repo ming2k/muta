@@ -7,17 +7,19 @@
 //! the `[master.doom_guard]` TOML table, and `muta-agent` applies it to each
 //! round's guard at ReAct-turn boundaries.
 //!
-//! Default is **enabled** (`window: 16`) — flipped on in ADR-0113 §5: the
-//! guard is signature bookkeeping with normalized locators, a model making
-//! progress never trips it, and the cheapest token-burning loop (variant
-//! `sleep N; make`) is exactly what a default-off guard never catches. Turn
-//! it off explicitly with `[master.doom_guard] enabled = false`.
+//! Default is **enabled** (`window: 16`, `threshold: 3`) — the guard flipped
+//! on in ADR-0113 §5 and its strictness relaxed in ADR-0148: the guard is
+//! signature bookkeeping with normalized locators, a model making progress
+//! never trips it, and the cheapest token-burning loop (variant
+//! `sleep N; make`) is still capped at its third occurrence. Turn it off
+//! explicitly with `[master.doom_guard] enabled = false`, or restore the
+//! ADR-0113 first-repeat block with `threshold = 2`.
 //!
 //! The canonical TOML key is `doom_guard` (`[master.doom_guard]`); the
 //! historical `nudge` spelling is accepted as a serde alias so existing
 //! `config.toml` files keep loading; the next save writes the new key. The
-//! now-removed `threshold`/`escalate_at`/`path_threshold` keys are ignored
-//! silently.
+//! now-removed `escalate_at`/`path_threshold` keys are ignored silently;
+//! `threshold` is live again (ADR-0148).
 
 use serde::{Deserialize, Serialize};
 
@@ -30,27 +32,31 @@ use serde::{Deserialize, Serialize};
 /// this round, the guard blocks it before it executes and injects an
 /// explanatory note so the model changes approach.
 ///
-/// **Default is enabled** (`window: 16`) — see the module docs and
-/// ADR-0113 §5 for why the original opt-in default was flipped.
+/// **Default is enabled** (`window: 16`, `threshold: 3`) — see the module
+/// docs, ADR-0113 §5 (default flip) and ADR-0148 (threshold relaxation).
 ///
 /// ```toml
 /// [master.doom_guard]
 /// enabled = false  # opt out of the variant-loop defense
 /// window  = 16     # sliding-window size (recent watched signatures)
+/// threshold = 3    # occurrences in-window before a block (>= 2)
 /// ```
 ///
 /// Detection is pure signature bookkeeping (no model call) and the block is
 /// non-terminating — the hard backstops (`hard_stop_turns`, `abort`, `Esc`)
-/// still cap. The guard trips on the *first* repeat (threshold 2): a call
-/// already issued this round is blocked before it runs a second time.
+/// still cap. The guard trips when a call reaches `threshold` occurrences
+/// in-window (default 3: one same-signature re-run is tolerated, the second
+/// repeat is blocked); `threshold = 2` restores the ADR-0113 first-repeat
+/// block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DoomGuardConfig {
     /// Master switch. `true` (the default): the doom guard blocks a watched
-    /// tool call that repeats within the window — the cheapest defense
-    /// against variant loops (`sleep 1; make` / `sleep 2; make`) burning
-    /// tokens until the context overflows. Wired through
-    /// `Agent::set_doom_guard_config`; forced off for runners and the `/review`
+    /// tool call once it recurs within the window enough times to reach
+    /// `threshold` — the cheapest defense against variant loops
+    /// (`sleep 1; make` / `sleep 2; make`) burning tokens until the context
+    /// overflows. Wired through `Agent::set_doom_guard_config`; forced off
+    /// for runners and the `/review`
 
     /// diagnostic regardless of user setting. Signatures are normalized
     /// (leading env assignments, timing no-ops, casing, path decoration), so
@@ -61,6 +67,13 @@ pub struct DoomGuardConfig {
     /// `A B A B` thrash *and* short variant cycles, small enough that an
     /// old, since-abandoned call ages out and stops counting. Default `16`.
     pub window: usize,
+    /// Occurrences within the window before a repeat is blocked: `2` blocks
+    /// on the first repeat (the strict ADR-0113 behavior), `3` (the
+    /// default, ADR-0148) tolerates one same-signature re-run — a transient
+    /// retry, a re-run of the same test command after an edit — and blocks
+    /// the second. Clamped to `>= 2` at use sites (below that the guard
+    /// would fire on first occurrence and block all progress).
+    pub threshold: usize,
 }
 
 impl DoomGuardConfig {
@@ -80,6 +93,7 @@ impl Default for DoomGuardConfig {
         Self {
             enabled: true,
             window: 16,
+            threshold: 3,
         }
     }
 }
@@ -93,6 +107,7 @@ mod tests {
         let cfg = DoomGuardConfig::default();
         assert!(cfg.enabled, "on by default: the variant-loop defense");
         assert_eq!(cfg.window, 16);
+        assert_eq!(cfg.threshold, 3, "one same-signature re-run tolerated (ADR-0148)");
     }
 
     #[test]
@@ -100,6 +115,7 @@ mod tests {
         let off = DoomGuardConfig::disabled();
         assert!(!off.enabled);
         assert_eq!(off.window, 16);
+        assert_eq!(off.threshold, 3);
     }
 
     #[test]
@@ -107,6 +123,7 @@ mod tests {
         let cfg = DoomGuardConfig {
             enabled: true,
             window: 12,
+            threshold: 4,
         };
         let s = toml::to_string(&cfg).unwrap();
         let parsed: DoomGuardConfig = toml::from_str(&s).unwrap();
@@ -120,17 +137,20 @@ mod tests {
         let parsed: DoomGuardConfig = toml::from_str(s).unwrap();
         assert!(parsed.enabled);
         assert_eq!(parsed.window, 16);
+        assert_eq!(parsed.threshold, 3);
     }
 
     #[test]
-    fn legacy_threshold_keys_are_ignored_silently() {
+    fn legacy_escalation_keys_are_ignored_and_threshold_is_live() {
         // Existing config.toml files may still carry the removed
-        // threshold/escalate_at/path_threshold keys. serde ignores unknown
-        // fields by default (no deny_unknown_fields), so parsing must succeed
-        // and the legacy values must not affect the new shape.
-        let s = "enabled = true\nthreshold = 3\nescalate_at = 6\npath_threshold = 8\n";
+        // escalate_at/path_threshold keys. serde ignores unknown fields by
+        // default (no deny_unknown_fields), so parsing must succeed and the
+        // legacy values must not affect the shape. `threshold` is a live
+        // key again (ADR-0148), so it parses as a real field.
+        let s = "enabled = true\nthreshold = 2\nescalate_at = 6\npath_threshold = 8\n";
         let parsed: DoomGuardConfig = toml::from_str(s).unwrap();
         assert!(parsed.enabled);
         assert_eq!(parsed.window, 16);
+        assert_eq!(parsed.threshold, 2, "threshold is a live key again (ADR-0148)");
     }
 }

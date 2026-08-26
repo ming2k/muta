@@ -76,19 +76,10 @@ muta supports two complementary delegation patterns:
 - **Implementation Delegation (`envoy_code`)**: The principal delegates
   concrete coding and testing tasks to an autonomous subagent.
 
-When multiple sessions or subagents operate concurrently in the same
-repository, **WIP coordination tools** prevent conflicting operations:
-
-```text
-[Subagent A] ──► declare_wip(paths=["src/auth/*"]) ──► [Edits & Verifies] ──► wip_done()
-                                                               ▲
-[Subagent B] ──► check_wip() ──(Detects Conflict)──────────────┘
-```
-
-1. An agent declares its intended edit surface via `declare_wip`.
-2. Before running whole-workspace verification (such as clean builds or
-   integration suites), peer sessions invoke `check_wip` to detect
-   active overlapping edits and defer execution until the workspace is clean.
+Note: the WIP-coordination tools (`declare_wip`/`check_wip`/`wip_done`) that
+once lived here as session-facing tools were removed; workspace-exclusivity is
+now enforced structurally (one session owns a workspace, peers coordinate
+through the orchestrator console) rather than through voluntary declarations.
 
 ## Extensible capability integration
 

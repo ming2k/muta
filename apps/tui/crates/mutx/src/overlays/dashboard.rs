@@ -291,7 +291,7 @@ fn draw_header(frame: &mut Frame, header: Rect, rows: &[MonitoredSession], theme
         if needing > 0 {
             parts.push(format!("{needing} need attention"));
         }
-        format!("{} ", parts.join(" · "))
+        format!("{} ", parts.join("  "))
     };
 
     let title = " DASHBOARD ";
@@ -663,9 +663,9 @@ fn render_footer(
     if prompting {
         // Inline prompt inside the 3-row Runner-style bar:
         let (label, hint) = if prompt_create_new {
-            ("New session task: ", " (Enter create · Esc cancel)")
+            ("New session task: ", " (Enter create  Esc cancel)")
         } else {
-            ("Send task: ", " (Enter send · Esc cancel)")
+            ("Send task: ", " (Enter send  Esc cancel)")
         };
 
         let prompt_line = Line::from(vec![
@@ -857,7 +857,7 @@ fn session_detail_lines(row: &MonitoredSession, width: usize, theme: &Theme) -> 
         Style::default().fg(theme.fg()),
     );
     let round = match row.turn {
-        Some(t) => format!("round {} · turn {}", row.round, t),
+        Some(t) => format!("round {} › turn {}", row.round, t),
         None => format!("round {}", row.round),
     };
     field("progress", round, Style::default().fg(theme.fg()));
@@ -1246,13 +1246,13 @@ fn console_lines(
             Style::default().fg(theme.muted()),
         ),
         Span::styled("@3 text".to_string(), Style::default().fg(theme.brand())),
-        Span::styled(" sends · ".to_string(), Style::default().fg(theme.dim())),
+        Span::styled(" sends  ".to_string(), Style::default().fg(theme.dim())),
         Span::styled(
             "/kill /interrupt /suspend /new /help".to_string(),
             Style::default().fg(theme.brand()),
         ),
         Span::styled(
-            " manage · bare text prompts the selection".to_string(),
+            " manage  bare text prompts the selection".to_string(),
             Style::default().fg(theme.dim()),
         ),
     ]));
@@ -1302,7 +1302,6 @@ mod tests {
             context_tokens: None,
             note: None,
             project_root: project_root.into(),
-            wip: None,
             parent_id: None,
             fork_kind: muta_contracts::SessionForkKind::Trunk,
         }

@@ -375,6 +375,7 @@ pub async fn edit_model(
     model: String,
     effort: Option<String>,
     thinking: Option<bool>,
+    overrides: Option<muta_contracts::CapabilityOverrides>,
 ) {
     let valid_effort = effort.and_then(|e| {
         let t = e.trim();
@@ -411,6 +412,11 @@ pub async fn edit_model(
             entry.thinking = None;
         }
         muta_contracts::catalog::Transport::Google { .. } => {}
+    }
+    // Capability overrides (ADR-0080 layer 1): `None` keeps the stored
+    // record untouched; `Some(record)` replaces it wholesale (empty clears).
+    if let Some(record) = overrides {
+        entry.capability_overrides = (!record.is_empty()).then_some(record);
     }
     if entry.is_empty() {
         routes.remove(&provider_id, &model);
@@ -458,6 +464,7 @@ pub async fn edit_model_reasoning(
     model: String,
     effort: Option<String>,
     thinking: Option<bool>,
+    overrides: Option<muta_contracts::CapabilityOverrides>,
 ) {
     let valid_effort = effort.and_then(|e| {
         let t = e.trim();
@@ -471,6 +478,12 @@ pub async fn edit_model_reasoning(
     let entry = routes.settings_for_mut(&provider_id, &model);
     entry.effort = valid_effort;
     entry.thinking = thinking;
+    if let Some(record) = overrides {
+        entry.capability_overrides = (!record.is_empty()).then_some(record);
+    }
+    if entry.is_empty() {
+        routes.remove(&provider_id, &model);
+    }
     if routes.save().is_err() {
         tracing::warn!("edit_model_reasoning: could not persist route settings");
     }

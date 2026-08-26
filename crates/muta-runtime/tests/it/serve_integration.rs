@@ -31,7 +31,6 @@ fn idle_base(id: String) -> muta_contracts::MonitoredSession {
         context_tokens: None,
         note: None,
         project_root: String::new(),
-        wip: None,
         parent_id: None,
         fork_kind: muta_contracts::SessionForkKind::default(),
     }

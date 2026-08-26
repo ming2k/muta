@@ -248,7 +248,7 @@ read-only and cannot steer any session.
   "turn": 1,
   "output_tokens": 512,
   "elapsed_ms": 83000,
-  "current_tool": "bash",
+  "current_tool": "execute_command",
   "activity": "waiting for model",
   "context_tokens": 48200,
   "note": null

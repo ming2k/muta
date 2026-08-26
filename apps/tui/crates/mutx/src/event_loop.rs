@@ -42,11 +42,6 @@ mod render;
 
 #[cfg(test)]
 pub(crate) use actions::handle_esc_interrupt;
-/// Test-only bridge: the behavior-lock tests in `crate::tests` drive the
-/// insert staging directly (ADR-0126). The production path dispatches it
-/// inside `actions::process`; this re-export never leaves the test profile.
-#[cfg(test)]
-pub(crate) use actions::handle_insert_into_round;
 #[cfg(test)]
 pub(crate) use actions::handle_send_slash;
 /// Same bridge for the dashboard console dispatcher: the tests in
@@ -2352,7 +2347,7 @@ pub(super) fn tool_activity_status(name: &str) -> &'static str {
         "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" => "exploring",
         "search_text" => "searching codebase",
         "write_file" | "edit_file" => "making edits",
-        "bash" => "running command",
+        "execute_command" | "bash" => "running command",
         name if name.starts_with("mcp__") => "using MCP",
         _ => "using tool",
     }

@@ -373,7 +373,7 @@ the list. Data comes from the session-context snapshot.
 ╭────────────────────────────────────────────────────────╮
 │ Tools                                                  │
 │                                                        │
-│  ●  bash              builtin    run a shell command[on]│  ← selected → brand bg
+│  ●  execute_command    builtin    run a shell command[on]│  ← selected → brand bg
 │  ●  read_text         builtin    read a text file    [on]│
 │  ○  mcp__fs__search   mcp:fs     semantic file search[off]│
 │  …                                                     │

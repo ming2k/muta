@@ -146,6 +146,11 @@ pub struct Channel {
     /// catalogue owns the fields it explicitly supplies; the static model
     /// registry remains the fallback for omitted or offline data.
     pub remote: Option<crate::RemoteModelMetadata>,
+    /// The user's explicit capability overrides for this route — the top
+    /// layer of the capability resolution order (ADR-0080), applied after
+    /// the remote overlay in [`Channel::capabilities`]. `None` means the
+    /// user has no opinion and the two lower layers decide.
+    pub user_overrides: Option<crate::model::CapabilityOverrides>,
 }
 
 impl Channel {
@@ -164,7 +169,11 @@ impl Channel {
     /// baseline, preventing a global model id from overwriting account-specific
     /// routes or capabilities.
     pub fn capabilities(&self) -> crate::ModelCapabilities {
-        crate::ModelCapabilities::for_channel(&self.model, self.remote.as_ref())
+        let merged = crate::ModelCapabilities::for_channel(&self.model, self.remote.as_ref());
+        match &self.user_overrides {
+            Some(user) => merged.apply_overrides(user),
+            None => merged,
+        }
     }
 }
 
@@ -281,6 +290,7 @@ mod tests {
                 api_key: "k".into(),
                 model: "deepseek-v4-flash".to_string(),
                 remote: None,
+                user_overrides: None,
             }],
             default_channel: 0,
             builtin: true,
@@ -313,6 +323,7 @@ mod tests {
             api_key: "   ".into(),
             model: "gpt-4o".to_string(),
             remote: None,
+            user_overrides: None,
         };
         assert!(!channel.key_ready());
     }
@@ -344,6 +355,7 @@ mod tests {
             api_key: "  ".into(),
             model: "minimax-m3".to_string(),
             remote: None,
+            user_overrides: None,
         };
         assert!(!channel.key_ready(), "empty key must not be ready");
     }
@@ -370,6 +382,7 @@ mod tests {
                     api_key: "k".into(),
                     model: "glm-5.2".to_string(),
                     remote: None,
+                    user_overrides: None,
                 },
                 Channel {
                     id: "minimax-m3".to_string(),
@@ -384,6 +397,7 @@ mod tests {
                     api_key: "k".into(),
                     model: "minimax-m3".to_string(),
                     remote: None,
+                    user_overrides: None,
                 },
             ],
             default_channel: 0,
@@ -441,6 +455,7 @@ mod tests {
                 api_key: "k".into(),
                 model: "fixture-alpha".to_string(),
                 remote: None,
+                user_overrides: None,
             }],
             default_channel: 0,
             builtin: true,

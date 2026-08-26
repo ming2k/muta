@@ -55,14 +55,14 @@ Autopilot reclaims the surfaces that would otherwise park a round:
 
 These rules guarantee that an unattended round does not deadlock. They do not
 guarantee that every attempted action succeeds: missing grants, sandbox
-failures, hard bash denies, provider errors, and ordinary tool failures remain
+failures, hard command denies, provider errors, and ordinary tool failures remain
 terminal or model-visible results.
 
 ## Bash and dependency installation
 
 Package installation is a command execution action, not a proxy for project
 asset trust. A command such as `pnpm install` runs only when its exact runtime
-scope is authorized and still passes the bash safety policy. Autopilot returns
+scope is authorized and still passes the command safety policy. Autopilot returns
 `[permission required]` immediately when that authority is absent.
 
 Project MCP servers and hooks are narrower still: after asset trust they run

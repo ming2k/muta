@@ -513,7 +513,7 @@ fn backspace_in_compose_returns_backspace_action() {
 
 #[test]
 fn backspace_atomically_deletes_an_image_chip() {
-    // Pasting an image inserts `[Image #1 · size] ` (chip + trailing
+    // Pasting an image inserts `[Image #1 (size)] ` (chip + trailing
     // space). A single Backspace right after the space must erase both
     // the space and the chip — mirroring codex / claude-code / opencode's
     // atomic chip backspace. The reconcile pass in the event loop

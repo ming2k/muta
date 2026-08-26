@@ -148,13 +148,12 @@ pub use hooks::{
 pub use identity::AgentIdentity;
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
-    BaselineModels, FittedModel, Model, ModelCapabilities, RemoteModelEndpoint,
+    BaselineModels, CapabilityOverrides, FittedModel, Model, ModelCapabilities, RemoteModelEndpoint,
     RemoteModelMetadata, WireFormat, baseline_models, model_by_id, register_fitted_models,
     resolve as resolve_model, sanitize_model_id,
 };
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,
-    WipAdvice, WipConflict, WipStatus,
 };
 pub use pressure::{
     CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PruneOutcome, RequestTokenEstimate,

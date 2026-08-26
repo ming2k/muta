@@ -1585,7 +1585,7 @@ impl Tool for RecordingTool {
         serde_json::json!({"type": "object"})
     }
     fn scope_target(&self, arguments: &str) -> muta_contracts::ScopeTarget {
-        if self.name == "bash" {
+        if self.name == "execute_command" {
             let command = serde_json::from_str::<serde_json::Value>(arguments)
                 .ok()
                 .and_then(|v| {
@@ -1797,27 +1797,29 @@ async fn golden_repeated_identical_tool_calls_run_without_hard_abort() {
     let _ = outcome.unwrap();
 }
 
-/// End-to-end: the doom guard intercepts a *repeating bash command* before it
-/// executes. Unlike the read-loop guard (read-only, trips at threshold 3), the
-/// doom guard covers all watched tools and trips on the *first* repeat — so the
-/// second identical `bash` call never reaches the tool body, and the model sees
-/// a `[loop guard]` refusal instead of a fresh result. This is the integration
-/// proof that the guard fires pre-dispatch (the decisive fix): the repeat's
-/// side effect and output never enter context.
+/// End-to-end: the doom guard intercepts a repeating command before it
+/// executes. Unlike the read-loop guard (read-only, post-hoc), the doom guard
+/// covers all watched tools and trips when a same-signature call reaches the
+/// configured threshold (default 3, ADR-0148): the first re-run executes, and
+/// the *third* identical `execute_command` call never reaches the tool body —
+/// the model sees a `[loop guard]` refusal instead of a fresh result. This is
+/// the integration proof that the guard fires pre-dispatch (the decisive
+/// fix): the blocked repeat's side effect and output never enter context.
 #[tokio::test]
-async fn doom_guard_blocks_repeating_bash_before_execution() {
-    // Tool name is `bash` so it lands in the doom guard's watched set; the
-    // command locator makes two identical calls share a signature.
-    let bash = RecordingTool::read("bash", "BASH-OUT");
-    let calls = bash.calls_handle();
-    let cmd = || turn(&[("c", "bash", r#"{"command":"make test"}"#)]);
+async fn doom_guard_blocks_repeating_command_before_execution() {
+    // Tool name is `execute_command` so it lands in the doom guard's watched set; the
+    // command locator makes identical calls share a signature.
+    let command = RecordingTool::read("execute_command", "COMMAND-OUT");
+    let calls = command.calls_handle();
+    let cmd = || turn(&[("c", "execute_command", r#"{"command":"make test"}"#)]);
     let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             cmd(), // 1st: allowed, executes
-            cmd(), // 2nd: repeat → blocked before execution
+            cmd(), // 2nd: same-signature re-run tolerated (ADR-0148), executes
+            cmd(), // 3rd: threshold reached → blocked before execution
             text_turn("done"),
         ])),
-        vec![Arc::new(bash)],
+        vec![Arc::new(command)],
         crate::AgentIdentity::default(),
     ));
     agent.set_doom_guard_config(muta_contracts::DoomGuardConfig {
@@ -1825,7 +1827,7 @@ async fn doom_guard_blocks_repeating_bash_before_execution() {
         ..muta_contracts::DoomGuardConfig::default()
     });
     agent.seed_permissions_from_config(&[muta_persistence::config::PermissionRuleConfig {
-        tool: "bash".to_string(),
+        tool: "execute_command".to_string(),
         scope: "make test".to_string(),
     }]);
 
@@ -1835,11 +1837,12 @@ async fn doom_guard_blocks_repeating_bash_before_execution() {
         .await;
     assert_eq!(outcome.unwrap().message.content, "done");
 
-    // The tool body ran exactly once — the 2nd call was intercepted pre-dispatch.
+    // The tool body ran exactly twice — the tolerated re-run (2nd) executed,
+    // the 3rd call was intercepted pre-dispatch.
     let executed = calls.lock().unwrap().len();
     assert_eq!(
-        executed, 1,
-        "the repeating bash call must be blocked before execution; tool ran {executed} times"
+        executed, 2,
+        "one re-run is tolerated, the third identical call must be blocked before execution; tool ran {executed} times"
     );
 
     // The model received a [loop guard] refusal for the blocked call.
@@ -1849,7 +1852,7 @@ async fn doom_guard_blocks_repeating_bash_before_execution() {
         .collect();
     assert!(
         !blocked.is_empty(),
-        "the blocked bash call must surface a [loop guard] result to the model"
+        "the blocked command call must surface a [loop guard] result to the model"
     );
 
     // A steering note was injected explaining the block.
@@ -1874,14 +1877,15 @@ async fn doom_block_is_surgical_across_files() {
     let reader_calls = reader.calls_handle();
     let lister = RecordingTool::read("list_dir", "LIST");
     let lister_calls = lister.calls_handle();
-    // Two reads of big.rs (2nd is a repeat → blocked), then a read of small.rs
-    // (must succeed — different path), then a list_dir (must succeed — different
-    // tool), then done.
+    // Three reads of big.rs (3rd reaches the default threshold → blocked),
+    // then a read of small.rs (must succeed — different path), then a list_dir
+    // (must succeed — different tool), then done.
     let read_big = || turn(&[("c", "read_text", r#"{"path":"big.rs"}"#)]);
     let read_small = || turn(&[("c", "read_text", r#"{"path":"small.rs"}"#)]);
     let list = || turn(&[("c", "list_dir", r#"{"path":"."}"#)]);
     let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
+            read_big(),
             read_big(),
             read_big(),
             read_small(),
@@ -1902,12 +1906,13 @@ async fn doom_block_is_surgical_across_files() {
         .await;
     assert_eq!(outcome.unwrap().message.content, "done");
 
-    // The reader ran exactly once (big.rs 1st; 2nd blocked) and the small.rs
-    // read went through the same tool unblocked — so reader_calls is 2.
+    // The reader ran exactly twice (big.rs 1st + tolerated 2nd; 3rd blocked)
+    // and the small.rs read went through the same tool unblocked — so
+    // reader_calls is 3.
     assert_eq!(
         reader_calls.lock().unwrap().len(),
-        2,
-        "big.rs once + small.rs once (the repeat is blocked, the new file is not)"
+        3,
+        "big.rs twice (one tolerated re-run) + small.rs once; the third repeat is blocked, the new file is not"
     );
     // The different tool is entirely outside the big.rs block mask.
     assert_eq!(
@@ -1929,7 +1934,7 @@ async fn doom_block_is_surgical_across_files() {
 /// default ever flips.
 #[tokio::test]
 async fn doom_guard_suppressed_when_disabled() {
-    let cmd = || turn(&[("c", "bash", r#"{"command":"make test"}"#)]);
+    let cmd = || turn(&[("c", "execute_command", r#"{"command":"make test"}"#)]);
     let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             cmd(),
@@ -1937,12 +1942,12 @@ async fn doom_guard_suppressed_when_disabled() {
             cmd(),
             text_turn("done"),
         ])),
-        vec![Arc::new(RecordingTool::read("bash", "BASH-OUT"))],
+        vec![Arc::new(RecordingTool::read("execute_command", "COMMAND-OUT"))],
         crate::AgentIdentity::default(),
     ));
     agent.set_doom_guard_config(muta_contracts::DoomGuardConfig::disabled());
     agent.seed_permissions_from_config(&[muta_persistence::config::PermissionRuleConfig {
-        tool: "bash".to_string(),
+        tool: "execute_command".to_string(),
         scope: "make test".to_string(),
     }]);
 
@@ -1967,15 +1972,15 @@ async fn doom_guard_suppressed_when_disabled() {
 }
 
 #[tokio::test]
-async fn bash_policy_confirm_auto_approves_under_yolo() {
-    let bash = RecordingTool::read("bash", "BASH-OUT");
-    let calls = bash.calls_handle();
+async fn command_policy_confirm_auto_approves_under_yolo() {
+    let command = RecordingTool::read("execute_command", "COMMAND-OUT");
+    let calls = command.calls_handle();
     let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            turn(&[("c", "bash", r#"{"command":"git reset --hard"}"#)]),
+            turn(&[("c", "execute_command", r#"{"command":"git reset --hard"}"#)]),
             text_turn("done"),
         ])),
-        vec![Arc::new(bash)],
+        vec![Arc::new(command)],
         crate::AgentIdentity::default(),
     ));
     agent.set_yolo(true);
@@ -1989,25 +1994,25 @@ async fn bash_policy_confirm_auto_approves_under_yolo() {
     let tool_message = messages
         .iter()
         .find(|m| m.role == Role::Tool)
-        .expect("bash tool result should be recorded");
-    assert!(tool_message.content.contains("BASH-OUT"));
+        .expect("command tool result should be recorded");
+    assert!(tool_message.content.contains("COMMAND-OUT"));
     assert!(outcome.unwrap().message.content.contains("done"));
 }
 
 #[tokio::test]
-async fn bash_policy_user_allow_overrides_builtin_confirm() {
-    let bash = RecordingTool::read("bash", "BASH-OUT");
-    let calls = bash.calls_handle();
+async fn command_policy_user_allow_overrides_builtin_confirm() {
+    let command = RecordingTool::read("execute_command", "COMMAND-OUT");
+    let calls = command.calls_handle();
     let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
-            turn(&[("c", "bash", r#"{"command":"git reset --hard"}"#)]),
+            turn(&[("c", "execute_command", r#"{"command":"git reset --hard"}"#)]),
             text_turn("done"),
         ])),
-        vec![Arc::new(bash)],
+        vec![Arc::new(command)],
         crate::AgentIdentity::default(),
     ));
     agent.seed_permissions_from_config(&[muta_persistence::config::PermissionRuleConfig {
-        tool: "bash".to_string(),
+        tool: "execute_command".to_string(),
         scope: "git reset --hard".to_string(),
     }]);
     let mut config = muta_persistence::config::BashPolicyConfig::default();

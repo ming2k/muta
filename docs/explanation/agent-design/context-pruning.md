@@ -15,7 +15,7 @@ see [Harness architecture](harness.md#context-projection).
 ## What it relieves
 
 In an agentic loop the bulkiest, most disposable context is **tool output**:
-hundreds of lines of `bash` logs, whole files from `read`, search dumps, a
+hundreds of lines of `execute_command` logs, whole files from `read`, search dumps, a
 envoy's full transcript. These age badly — an early `search_text` result rarely
 informs a decision fifty rounds later — yet they keep occupying the window.
 

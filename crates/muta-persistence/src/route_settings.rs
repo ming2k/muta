@@ -256,6 +256,7 @@ mod tests {
             &RouteSettings {
                 effort: Some("medium".into()),
                 thinking: Some(false),
+                capability_overrides: None,
             },
             "the cache entry must land in the state store"
         );

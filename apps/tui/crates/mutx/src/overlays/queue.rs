@@ -13,9 +13,9 @@
 //! (Esc / outside-click) resumes normal auto-drain. `Esc` / outside-click
 //! close.
 //!
-//! Every listed item is a **next-round** entry: either a busy Enter staged
-//! while a round runs, or a mid-round insert whose round ended before
-//! admission. A *live* insert (`Ctrl+O`) is transcript-owned (ADR-0126) — it
+//! Every listed item is a **next-round** entry: either a follow-up staged
+//! while a round runs, or a busy-Enter steer whose round ended before
+//! admission. A live steer is transcript-owned — it
 //! renders in the scrollback as a `⏸ Queued` entry and never appears here;
 //! if its round closes first it is handed back into this list and becomes
 //! manageable like any other item.
@@ -130,7 +130,6 @@ pub fn draw_queue_modal(
                 FooterHint::always(keyvocab::ESC, "close"),
                 FooterHint::secondary("J/K", "reorder"),
                 FooterHint::secondary(keyvocab::CTRL_P, if blocked { "resume" } else { "block" }),
-                FooterHint::secondary(keyvocab::CTRL_O, "insert"),
             ],
             empty_footer_hints: &[FooterHint::always(keyvocab::ESC, "close")],
             // Destructive delete sits at band 70 (outlives secondaries, never

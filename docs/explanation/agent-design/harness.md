@@ -189,7 +189,7 @@ Write-capable tools pass through a core permission broker before execution:
 2. The CLI projects the request to the TUI.
 3. The permission modal offers once, always, or reject.
 4. Always requires a separate confirmation and is cached by tool plus resource
-   scope for the current process. File writes scope by path and bash scopes by
+   scope for the current process. File writes scope by path and execute_command scopes by
    its complete command.
 5. The reply resolves the waiter and tool execution resumes or returns a
    denied result.

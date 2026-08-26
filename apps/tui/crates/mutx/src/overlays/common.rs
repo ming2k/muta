@@ -187,13 +187,13 @@ impl McpRow {
     pub fn dashboard_summary(&self, theme: &Theme) -> (String, Color, &'static str) {
         match self {
             Self::Connected(tools) => (
-                format!("connected · {} tools", tools.len()),
+                format!("connected ({} tools)", tools.len()),
                 theme.ok(),
                 "●",
             ),
             Self::Connecting => ("connecting…".to_string(), theme.muted(), "◌"),
             Self::Disabled => ("disabled".to_string(), theme.muted(), "○"),
-            Self::Failed(reason) => (format!("failed · {reason}"), theme.err(), "●"),
+            Self::Failed(reason) => (format!("failed — {reason}"), theme.err(), "●"),
         }
     }
 }

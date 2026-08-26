@@ -69,7 +69,9 @@ impl ThinkingMode {
 /// - **Manual** (`thinking: {type:"enabled", budget_tokens: N}`): a fixed token
 ///   budget, no `effort`. The only form Haiku 4.5 / Opus·Sonnet 4.5 / Claude 4
 ///   accept; needs the `interleaved-thinking` beta header alongside tools.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingSupport {
     /// The model cannot think. (GPT-4o, Gemini, the conservative fallback.)

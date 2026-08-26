@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn is_blocked_empty_mask_admits_everything() {
         let state = RoundGuardState::new();
-        assert!(!state.is_blocked("bash", r#"{"command":"ls"}"#));
+        assert!(!state.is_blocked("execute_command", r#"{"command":"ls"}"#));
     }
 
     #[test]

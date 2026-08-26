@@ -1065,7 +1065,7 @@ mod tests {
                 &selection,
                 &mut layout_map,
             );
-            draw_model_editor(f, "OpenAI", "", 0, true, 0, None, &[], None, &theme);
+            draw_model_editor(f, "OpenAI", "", 0, true, 0, None, &[], None, None, &theme);
             // Provider-template chooser.
             let mut template_scroll = 0;
             draw_provider_template_chooser(0, f, &theme, &mut template_scroll);
@@ -1187,8 +1187,8 @@ mod tests {
         terminal.draw(|f| {
             let request = PermissionRequest {
                 id: "p1".to_string(),
-                tool: "bash".to_string(),
-                label: "bash".to_string(),
+                tool: "execute_command".to_string(),
+                label: "execute_command".to_string(),
                 description: "run a command".to_string(),
                 arguments: r#"{"command":"ls"}"#.to_string(),
                 scope: "*".to_string(),
@@ -2495,7 +2495,7 @@ mod tests {
         let text_x = COMPOSER_PROMPT_PREFIX_COLS as u16;
         let panel_bg = theme.input_surface();
 
-        // Chip labels are ASCII plus a multi-byte `·` badge; display columns
+        // Chip labels use ASCII metadata; display columns
         // come from `str_len`, never from the raw byte length.
         let paste_width = mutx_engine::text::str_len(&paste_chip);
         let paste_start = text_x + "see ".len() as u16;
@@ -2741,7 +2741,7 @@ mod tests {
         let theme = Theme::default();
         let image_chip = crate::composer_attachments::image_chip(1, 1536);
         // Narrow text area (16 - 2 prefix - 2 pad = 12 cols) forces the
-        // `[Image #1 · 1.5 KB]` label onto its own wrapped fragment.
+        // `[Image #1 (1.5 KB)]` label onto its own wrapped fragment.
         let input = format!("xx {image_chip} yy");
         let mut terminal = mutx_engine::TestTerminal::new(16, 6);
         terminal.draw(|f| {
@@ -3599,7 +3599,7 @@ mod tests {
         ];
         let rows = vec![
             vec![
-                "bash".to_string(),
+                "execute_command".to_string(),
                 "Write".to_string(),
                 "std::process::Command (sh -c / cmd /C)".to_string(),
                 "execute shell command, supports timeout, truncates output".to_string(),
@@ -4451,7 +4451,7 @@ mod tests {
             }),
         );
         let row1 = grid_row(&terminal, 1);
-        assert!(row1.contains("btw 2 · 1 running"), "chip: {row1:?}");
+        assert!(row1.contains("btw: 2 total (1 active)"), "chip: {row1:?}");
         assert!(row1.contains("F5"), "aside jump pair: {row1:?}");
         assert!(!row1.contains("Esc"), "no interrupt pair: {row1:?}");
         assert!(!row1.contains("F1"), "no global help pair: {row1:?}");

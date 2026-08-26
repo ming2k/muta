@@ -6,7 +6,7 @@
 
 use muta_contracts::{RunnerEvent, Role};
 
-use crate::design::{COMMAND_CARD_LEAD_COLS, JOIN_MODIFY};
+use crate::design::{COMMAND_CARD_LEAD_COLS, JOIN_ENUMERATE_COLS};
 use unicode_width::UnicodeWidthStr;
 
 /// Lifecycle of a tool step, stored explicitly (not inferred from `output`)
@@ -189,7 +189,7 @@ pub enum CommandPhase {
     /// the user wondering whether it ran.
     Pending,
     /// The typed result arrived (or is known not to exist — legacy folds,
-    /// shell passthroughs): the row shows `invocation · reply` per its
+    /// shell passthroughs): the row shows `invocation  reply` per its
     /// [`CommandRowLayout`].
     Completed,
     /// No result will ever arrive (the session view moved on before the reply
@@ -209,7 +209,7 @@ pub enum CommandRowLayout {
     /// the invocation, dimmed. Nothing to expand.
     Plain,
     /// A single-line, short reply (acks, `/new`'s confirmation, `/schedule`):
-    /// rendered inline on the same row as `invocation · reply`. No marker —
+    /// rendered inline on the same row as `invocation  reply`. No marker —
     /// there is no second view to disclose.
     Inline,
     /// A multi-line or long reply (`/search`, `/session status`, `/review`,
@@ -218,7 +218,7 @@ pub enum CommandRowLayout {
     Disclose,
 }
 
-/// Width of the trailing sent-time label ` · HH:MM` appended to a command
+/// Width reserved for a trailing `HH:MM` timestamp on a command
 /// card when `sent_at_ms` is present — reserved by
 /// [`TranscriptMessage::command_row_layout`] before the inline/Disclose
 /// classification so a timestamped row never flips to Disclose at render
@@ -246,14 +246,15 @@ pub fn command_row_layout(
     if text.contains('\n') {
         return CommandRowLayout::Disclose;
     }
-    // The inline join is `invocation` + JOIN_MODIFY (` · `) + reply; the row
+    // The inline join is `invocation` + a two-column peer gap + reply; the row
     // must hold both without truncation for the reply to read as an
     // attribute, not a fragment. The card chrome (identity bar + marker slot
     // + glyph, ADR-0109) and the trailing timestamp eat into the same row, so
     // the budget subtracts them — but the time label is render-time state the
     // classifier cannot see, so the classifier subtracts only the fixed
     // chrome and the renderer's clamp guards the timestamp.
-    let used = COMMAND_ROW_CHROME_COLS + invocation.width() + JOIN_MODIFY.width() + text.width();
+    let used =
+        COMMAND_ROW_CHROME_COLS + invocation.width() + JOIN_ENUMERATE_COLS + text.width();
     if used <= available_width {
         CommandRowLayout::Inline
     } else {
@@ -462,7 +463,7 @@ pub enum DeliveryStatus {
     /// is staged in the TUI's send queue and will be dispatched automatically
     /// when the harness returns to idle.
     Queued,
-    /// A mid-round insert (`Ctrl+O`) whose round ended — naturally or by an
+    /// A busy-Enter steer whose round ended — naturally or by an
     /// interrupt (Esc Esc) — before it could be admitted at a turn boundary.
     /// The entry stays in the transcript (it never leaves the conversation)
     /// but is re-queued as the **next round's** prompt: it renders with the
@@ -530,8 +531,8 @@ pub struct TranscriptMessage {
     /// else stays at the default [`DeliveryStatus::Delivered`]. The renderer
     /// and the queue dispatch/recall paths key off this.
     pub delivery: DeliveryStatus,
-    /// Correlation id for a mid-round insert entry (`Ctrl+O`,
-    /// `AgentRequest::InsertUserInput`). Set when the entry is staged into the
+    /// Correlation id for a busy-Enter steer (`AgentRequest::Steer`). Set when
+    /// the entry is staged into the
     /// transcript as [`DeliveryStatus::Queued`]; the response listener uses it
     /// to find and settle the entry when the harness reports
     /// `UserInputInserted` / `NextRoundStarted` / `UserInputUnavailable`.
@@ -612,7 +613,7 @@ impl TranscriptMessage {
         self
     }
 
-    /// Correlate this message with a mid-round insert (`Ctrl+O`) by its
+    /// Correlate this message with a busy-Enter steer by its
     /// harness-side input id, so the response listener can settle the entry
     /// when the insert is admitted or handed back. Builder-style companion of
     /// [`Self::queued`].
@@ -1298,7 +1299,7 @@ impl TranscriptMessage {
     /// always classifies `Plain` — the phase owns its presentation until the
     /// reply settles. `available_width` is the row's usable columns.
     ///
-    /// A present `sent_at_ms` renders a trailing `· HH:MM` (always 8 columns),
+    /// A present `sent_at_ms` renders a trailing `HH:MM` timestamp,
     /// so the method reserves that span before classifying — the free
     /// classifier stays purely shape-based and timestamp-blind.
     pub fn command_row_layout(&self, available_width: usize) -> Option<CommandRowLayout> {
@@ -1733,11 +1734,31 @@ impl TranscriptMessage {
     /// The body is composed here (and re-composed identically on resume) so
     /// the live row and the restored row render byte-identically: the round
     /// number when known, the reason label, and nothing else — the timestamp
-    /// renders from `sent_at_ms` as the trailing ` · HH:MM` chip.
+    /// renders from `sent_at_ms` as right-aligned `HH:MM` metadata.
     pub fn round_interrupted(record: muta_contracts::RoundInterrupt) -> Self {
         let raw = match record.round {
-            Some(round) => format!("Interrupted · round {} · {}", round, record.reason.label()),
-            None => format!("Interrupted · {}", record.reason.label()),
+            Some(round) => match record.reason {
+                muta_contracts::RoundInterruptReason::User => {
+                    format!("Round {round} — cancelled via [Esc Esc]")
+                }
+                muta_contracts::RoundInterruptReason::Superseded => {
+                    format!("Round {round} — superseded by new message")
+                }
+                muta_contracts::RoundInterruptReason::Terminated => {
+                    format!("Round {round} — process exited")
+                }
+            },
+            None => match record.reason {
+                muta_contracts::RoundInterruptReason::User => {
+                    "Cancelled via [Esc Esc]".to_string()
+                }
+                muta_contracts::RoundInterruptReason::Superseded => {
+                    "Superseded by new message".to_string()
+                }
+                muta_contracts::RoundInterruptReason::Terminated => {
+                    "Process exited".to_string()
+                }
+            },
         };
         Self {
             id: next_message_id(),
@@ -1882,13 +1903,13 @@ impl TranscriptMessage {
                     .copied()
                     .unwrap_or(0);
                 if bucket == 0 {
-                    "Thinking · …".to_string()
+                    "Thinking …".to_string()
                 } else {
-                    format!("Thinking · ~{bucket} tokens")
+                    format!("Thinking (~{bucket} tokens)")
                 }
             }
             Some(_) => format!(
-                "Thinking · {tokens} tokens · {}",
+                "Thinking ({tokens} tokens, {})",
                 duration_text(*duration_ms)
             ),
         })
@@ -1914,18 +1935,18 @@ impl TranscriptMessage {
         let summary = crate::tools::summary_for(name, arguments, profile.as_deref());
         Some(match status {
             ToolStepStatus::Running => summary,
-            ToolStepStatus::Ok => format!("{} · {}", summary, duration_text(*duration_ms)),
+            ToolStepStatus::Ok => format!("{} ({})", summary, duration_text(*duration_ms)),
             ToolStepStatus::Failed => {
-                format!("{} · failed {}", summary, duration_text(*duration_ms))
+                format!("{} (failed {})", summary, duration_text(*duration_ms))
             }
             ToolStepStatus::Denied => {
-                format!("{} · denied {}", summary, duration_text(*duration_ms))
+                format!("{} (denied {})", summary, duration_text(*duration_ms))
             }
             ToolStepStatus::Cancelled => {
-                format!("{} · cancelled {}", summary, duration_text(*duration_ms))
+                format!("{} (cancelled {})", summary, duration_text(*duration_ms))
             }
             ToolStepStatus::Interrupted => {
-                format!("{} · interrupted {}", summary, duration_text(*duration_ms))
+                format!("{} (interrupted {})", summary, duration_text(*duration_ms))
             }
         })
     }
@@ -1973,14 +1994,14 @@ impl TranscriptMessage {
             let summary = crate::tools::summary_for(name, arguments, profile.as_deref());
             let suffix = match status {
                 ToolStepStatus::Running => String::new(),
-                ToolStepStatus::Ok => format!(" · {}", duration_text(*duration_ms)),
-                ToolStepStatus::Failed => format!(" · failed {}", duration_text(*duration_ms)),
-                ToolStepStatus::Denied => format!(" · denied {}", duration_text(*duration_ms)),
+                ToolStepStatus::Ok => format!(" ({})", duration_text(*duration_ms)),
+                ToolStepStatus::Failed => format!(" (failed {})", duration_text(*duration_ms)),
+                ToolStepStatus::Denied => format!(" (denied {})", duration_text(*duration_ms)),
                 ToolStepStatus::Cancelled => {
-                    format!(" · cancelled {}", duration_text(*duration_ms))
+                    format!(" (cancelled {})", duration_text(*duration_ms))
                 }
                 ToolStepStatus::Interrupted => {
-                    format!(" · interrupted {}", duration_text(*duration_ms))
+                    format!(" (interrupted {})", duration_text(*duration_ms))
                 }
             };
             self.raw = format!("{}{}", summary, suffix);
@@ -3324,7 +3345,7 @@ mod tests {
             TranscriptMessage::tool_step("c", "runner", r#"{"description":"d","prompt":"p"}"#);
         task.push_runner_event(&RunnerEvent::ToolCall {
             id: "i".into(),
-            name: "bash".into(),
+            name: "execute_command".into(),
             arguments: "{}".into(),
             round: 1,
             turn: 0,
@@ -3354,7 +3375,7 @@ mod tests {
             TranscriptMessage::tool_step("c", "runner", r#"{"description":"d","prompt":"p"}"#);
         task.push_runner_event(&RunnerEvent::ToolCall {
             id: "i".into(),
-            name: "bash".into(),
+            name: "execute_command".into(),
             arguments: r#"{"command":"rm -rf x"}"#.into(),
             round: 1,
             turn: 0,
@@ -3368,7 +3389,7 @@ mod tests {
         task.push_runner_event(&RunnerEvent::PermissionRequest(
             muta_contracts::PermissionRequest {
                 id: "p1".into(),
-                tool: "bash".into(),
+                tool: "execute_command".into(),
                 label: "Run rm".into(),
                 description: String::new(),
                 arguments: "{}".into(),
@@ -3385,7 +3406,7 @@ mod tests {
         // The next progress event from the runner clears the parked wait.
         task.push_runner_event(&RunnerEvent::ToolResult {
             id: "i".into(),
-            name: "bash".into(),
+            name: "execute_command".into(),
             output: "done".into(),
             duration_ms: 3,
         });
@@ -3447,7 +3468,8 @@ mod tests {
         // "Error", so the legacy text sniff misclassified it as `Ok`. With
         // structured `ToolOutput::Shell { exit: Some(1) }`, `is_error()` now
         // drives the classification and the step correctly reads `Failed`.
-        let mut step = TranscriptMessage::tool_step("c", "bash", r#"{"command":"false"}"#);
+        let mut step =
+            TranscriptMessage::tool_step("c", "execute_command", r#"{"command":"false"}"#);
         let structured = muta_contracts::ToolOutput::Shell {
             command: "false".into(),
             stdout: String::new(),
@@ -3468,7 +3490,8 @@ mod tests {
 
     #[test]
     fn bash_success_is_classified_ok() {
-        let mut step = TranscriptMessage::tool_step("c", "bash", r#"{"command":"true"}"#);
+        let mut step =
+            TranscriptMessage::tool_step("c", "execute_command", r#"{"command":"true"}"#);
         let structured = muta_contracts::ToolOutput::Shell {
             command: "true".into(),
             stdout: "ok\n".into(),
@@ -3490,7 +3513,8 @@ mod tests {
         // interleaved output — not the all-stdout-then-all-stderr degraded
         // band the empty-`lines` fallback forced.
         use muta_contracts::{ToolStream, tool_output::ShellStream};
-        let mut step = TranscriptMessage::tool_step("c", "bash", r#"{"command":"x"}"#);
+        let mut step =
+            TranscriptMessage::tool_step("c", "execute_command", r#"{"command":"x"}"#);
         assert!(step.push_tool_stream("c", &ToolStream::Stdout("Compiling a\n".into())));
         assert!(step.push_tool_stream("c", &ToolStream::Stderr("warning: b\n".into())));
         assert!(step.push_tool_stream("c", &ToolStream::Stdout("Compiling c\n".into())));
