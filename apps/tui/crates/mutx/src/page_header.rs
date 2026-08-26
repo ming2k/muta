@@ -115,10 +115,10 @@ pub(crate) struct SessionHead<'a> {
     /// Tilde-shortened workspace path (e.g. `~/projects/xx`). Already
     /// abbreviated by the caller; rendered as-is.
     pub workspace: &'a str,
-    /// `true` while the session runs in autopilot mode (`--autopilot` /
-    /// `/autopilot on`). Shown as a warning-toned `autopilot` tag on the
+    /// `true` while the session runs in YOLO mode (`--yolo` /
+    /// `/yolo on`). Shown as a warning-toned `YOLO` tag on the
     /// right — the session's persistent mode flag.
-    pub autopilot: bool,
+    pub yolo: bool,
 }
 
 struct HeaderContent {
@@ -161,8 +161,8 @@ pub(crate) fn draw_page_header(
             badge: String::new(),
             primary: head.workspace.to_string(),
             meta: String::new(),
-            action: if head.autopilot {
-                "autopilot ".to_string()
+            action: if head.yolo {
+                "YOLO ".to_string()
             } else {
                 String::new()
             },
@@ -890,15 +890,15 @@ mod tests {
     }
 
     #[test]
-    fn session_header_shows_id_tail_workspace_and_autopilot() {
+    fn session_header_shows_id_tail_workspace_and_yolo() {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
-            autopilot: true,
+            yolo: true,
         };
         let row = rendered_row(80, PageHeader::Session(&head));
         assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
-        assert!(row.trim_end().ends_with("autopilot"));
+        assert!(row.trim_end().ends_with("YOLO"));
     }
 
     #[test]
@@ -906,11 +906,11 @@ mod tests {
         let head = SessionHead {
             session_id: "ab",
             workspace: "~/work",
-            autopilot: false,
+            yolo: false,
         };
         let row = rendered_row(40, PageHeader::Session(&head));
         assert!(row.starts_with("   SESSION ab ~/work"));
-        assert!(!row.contains("autopilot"));
+        assert!(!row.contains("YOLO"));
     }
 
     /// The head band is top-level chrome: its `body` background owns every
@@ -922,7 +922,7 @@ mod tests {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
-            autopilot: true,
+            yolo: true,
         };
         let mut terminal = mutx_engine::TestTerminal::new(40, 1);
         terminal.draw(|frame| {

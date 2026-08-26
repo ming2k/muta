@@ -66,15 +66,8 @@ struct PermissionState {
 pub struct PermissionStore {
     state: Mutex<PermissionState>,
     persistence: Mutex<Option<PermissionPersistence>>,
-    /// When true, the agent runs **autopilot** — without human intervention.
-    /// This controls only interaction: a missing authority result is returned
-    /// immediately instead of parking, and the allowlist is never bypassed.
-    ///
-    /// This is the **single source of truth** for the agent's attended state:
-    /// `Agent::get_autopilot`/`set_autopilot` are thin forwards here, and the
-    /// permission chain snapshots it once into `PolicyContext::autopilot`
-    /// (cloned before the async chain runs, so no lock is held across `.await`).
-    autopilot: Mutex<bool>,
+    /// When true, the agent runs in **yolo mode** — all tool permissions are auto-approved.
+    yolo: Mutex<bool>,
 }
 
 /// Stable on-disk target for one project's permissions.
@@ -93,18 +86,18 @@ impl PermissionStore {
         Self {
             state: Mutex::new(PermissionState::default()),
             persistence: Mutex::new(None),
-            autopilot: Mutex::new(false),
+            yolo: Mutex::new(false),
         }
     }
 
-    // ── autopilot ────────────────────────────────────────────────────
+    // ── yolo ────────────────────────────────────────────────────────
 
-    pub fn autopilot(&self) -> bool {
-        *lock(&self.autopilot)
+    pub fn yolo(&self) -> bool {
+        *lock(&self.yolo)
     }
 
-    pub fn set_autopilot(&self, value: bool) {
-        *lock(&self.autopilot) = value;
+    pub fn set_yolo(&self, value: bool) {
+        *lock(&self.yolo) = value;
     }
 
     // Pending-request parking moved to the human-request broker

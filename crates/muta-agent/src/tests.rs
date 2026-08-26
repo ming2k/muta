@@ -1655,7 +1655,7 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
             AgentEvent::ToolCancelled { name, .. } => {
                 format!("tool-cancelled {name}")
             }
-            AgentEvent::AutopilotChanged(enabled) => format!("autopilot {enabled}"),
+            AgentEvent::YoloChanged(enabled) => format!("yolo {enabled}"),
             AgentEvent::PermissionRequest(request) => {
                 format!("permission-request {} {}", request.tool, request.scope)
             }
@@ -1967,7 +1967,7 @@ async fn doom_guard_suppressed_when_disabled() {
 }
 
 #[tokio::test]
-async fn bash_policy_confirm_requires_authority_under_autopilot() {
+async fn bash_policy_confirm_auto_approves_under_yolo() {
     let bash = RecordingTool::read("bash", "BASH-OUT");
     let calls = bash.calls_handle();
     let agent = Arc::new(Agent::new(
@@ -1978,26 +1978,19 @@ async fn bash_policy_confirm_requires_authority_under_autopilot() {
         vec![Arc::new(bash)],
         crate::AgentIdentity::default(),
     ));
-    agent.seed_permissions_from_config(&[muta_persistence::config::PermissionRuleConfig {
-        tool: "bash".to_string(),
-        scope: "git reset --hard".to_string(),
-    }]);
-    agent.set_autopilot(true);
+    agent.set_yolo(true);
 
     let mut messages = vec![Message::new(Role::User, "discard changes")];
     let outcome = agent
         .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
         .await;
 
-    assert_eq!(calls.lock().unwrap().len(), 0);
+    assert_eq!(calls.lock().unwrap().len(), 1);
     let tool_message = messages
         .iter()
         .find(|m| m.role == Role::Tool)
-        .expect("policy refusal should be recorded as the bash tool result");
-    assert!(tool_message.content.contains("[permission required]"));
-    assert!(tool_message.content.contains("runtime grant"));
-    assert!(tool_message.content.contains("approve interactively"));
-    assert!(tool_message.content.contains("git reset --hard"));
+        .expect("bash tool result should be recorded");
+    assert!(tool_message.content.contains("BASH-OUT"));
     assert!(outcome.unwrap().message.content.contains("done"));
 }
 
@@ -2209,7 +2202,7 @@ async fn autopilot_reclaims_ask_user_and_short_circuits_stale_calls() {
         vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_autopilot(true);
+    agent.set_yolo(true);
 
     let mut messages = vec![Message::new(Role::User, "choose")];
     let mut events = Vec::new();
@@ -2224,9 +2217,9 @@ async fn autopilot_reclaims_ask_user_and_short_circuits_stale_calls() {
     // No question was ever surfaced to a human.
     assert!(
         !lines.iter().any(|line| line.starts_with("user-question")),
-        "ask_user should not surface a question under autopilot"
+        "ask_user should not surface a question under yolo"
     );
-    // The stale call was answered with the autopilot refusal.
+    // The stale call was answered with the yolo refusal.
     assert!(
         lines.iter().any(|line| {
             line.starts_with("tool-result ask_user") && line.contains("unavailable")
@@ -2235,10 +2228,7 @@ async fn autopilot_reclaims_ask_user_and_short_circuits_stale_calls() {
 }
 
 #[tokio::test]
-async fn autopilot_preserves_schema_and_intercepts_ask_user_at_runtime() {
-    // Under ADR-0137, tool schemas remain invariant across autopilot transitions to
-    // maximize KV-cache reuse. Autopilot restrictions on ask_user are enforced at
-    // execution time via PermissionPolicy Gate 6 rather than mutating the schema.
+async fn yolo_preserves_schema_and_intercepts_ask_user_at_runtime() {
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![text_turn("ok")])),
         vec![Arc::new(crate::tools::AskUserTool)],
@@ -2247,12 +2237,12 @@ async fn autopilot_preserves_schema_and_intercepts_ask_user_at_runtime() {
     let visible_before = agent.visible_tools();
     let names_before: Vec<&str> = visible_before.iter().map(|t| t.name()).collect();
     assert!(names_before.contains(&"ask_user"));
-    agent.set_autopilot(true);
+    agent.set_yolo(true);
     let visible_after = agent.visible_tools();
     let names_after: Vec<&str> = visible_after.iter().map(|t| t.name()).collect();
     assert!(
         names_after.contains(&"ask_user"),
-        "ask_user schema is preserved under autopilot for KV-cache stability, got {names_after:?}"
+        "ask_user schema is preserved under yolo mode for KV-cache stability, got {names_after:?}"
     );
 }
 

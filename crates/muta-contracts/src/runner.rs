@@ -137,24 +137,14 @@ pub struct RunnerPreset {
     /// *down* by the model's hard capability limit if the pinned variant is
     /// unusable. See [`ToolSet::resolve_for`].
     pub variant_pins: &'static [(&'static str, &'static str)],
-    /// Whether the spawned runner runs **autopilot**: without human
-    /// intervention — no permission confirmations, no questions, the runner
-    /// proceeds on its own authority. Concretely this bypasses the permission
-    /// broker, but the intent is broader autonomy, not just prompt-skipping.
-    /// Full-duplex (ADR-0029): the built-in profiles keep this `true` to
-    /// preserve the legacy autonomous contract (the broker's
-    /// `PermissionRequest` would otherwise surface up to the parent, which
-    /// historically had no path to answer it). Now that the up-direction
-    /// (forwarding) and down-direction (registry → handle →
-    /// `reply_permission`) are wired, a future interactive profile can set
-    /// this `false` so an runner's tool calls prompt the user through the
-    /// same modal a top-level call uses, and the reply routes back down.
-    pub autopilot: bool,
+    /// Whether the spawned runner runs in **yolo mode**: auto-approves all
+    /// permissions without human intervention.
+    pub yolo: bool,
     /// Whether an runner spawned under this profile may have the **model**
     /// supply stdin bytes for a `bash` call it emits (the opt-in automatic-
     /// flow path). Default `false` for every built-in profile: autonomous
     /// runners run non-interactively (the L1 hard floor + L2 idle watchdog
-    /// keep them from hanging); a profile aimed at autopilot CI/batch flows
+    /// keep them from hanging); a profile aimed at automated CI/batch flows
     /// where no human is reachable can set this `true` so the model can feed
     /// a command's stdin directly. Without it, stdin is structurally
     /// unreachable from the model's arguments even inside an runner.
@@ -289,7 +279,7 @@ handful of turns, then answer.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    autopilot: true,
+    yolo: true,
     allow_model_stdin: false,
 };
 
@@ -315,7 +305,7 @@ the title in the same language as the conversation.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    autopilot: true,
+    yolo: true,
     allow_model_stdin: false,
 };
 
@@ -397,7 +387,7 @@ of turns, then answer.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    autopilot: true,
+    yolo: true,
     allow_model_stdin: false,
 };
 
@@ -417,7 +407,7 @@ to the principal agent. Never output giant raw payloads if a clear summary answe
         command_allowlist: &[],
     },
     variant_pins: &[],
-    autopilot: true,
+    yolo: true,
     allow_model_stdin: false,
 };
 
@@ -678,15 +668,15 @@ mod tests {
     // profile value (see the doc comment above), not a computed property.
     #[allow(clippy::assertions_on_constants)]
     #[test]
-    fn code_profile_runs_autopilot() {
+    fn code_profile_runs_yolo() {
         use crate::RUNNER_CODE;
-        assert!(RUNNER_CODE.autopilot);
+        assert!(RUNNER_CODE.yolo);
     }
 
     #[test]
     fn mcp_specialist_profile_admits_dynamic_tools_and_excludes_recursion() {
         use crate::RUNNER_MCP_SPECIALIST;
-        assert!(RUNNER_MCP_SPECIALIST.autopilot);
+        assert!(RUNNER_MCP_SPECIALIST.yolo);
         // Dynamic / external tools admitted
         assert!(
             RUNNER_MCP_SPECIALIST

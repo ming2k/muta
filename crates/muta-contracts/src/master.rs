@@ -97,9 +97,9 @@ pub struct MasterPreset {
     pub operation_scope: OperationScope,
     /// Runtime execution knobs (hard stop, doom guard, model stdin).
     pub config: MasterRuntimeConfig,
-    /// Whether this principal runs on autopilot (no human confirmations). Default
+    /// Whether this principal runs in YOLO mode (auto-approves all tool permissions). Default
     /// `false` — a top-level principal is interactive by contract.
-    pub autopilot: bool,
+    pub yolo: bool,
 }
 
 impl MasterPreset {
@@ -113,7 +113,7 @@ impl MasterPreset {
             agent_selection: ToolSelection::unrestricted(),
             operation_scope: OperationScope::unrestricted(),
             config: MasterRuntimeConfig::default(),
-            autopilot: false,
+            yolo: false,
         }
     }
 
@@ -159,9 +159,9 @@ impl MasterPreset {
         self
     }
 
-    /// Run attended (`false`, the default) or autopilot (`true`).
-    pub fn with_autopilot(mut self, autopilot: bool) -> Self {
-        self.autopilot = autopilot;
+    /// Run attended (`false`, the default) or yolo mode (`true`).
+    pub fn with_yolo(mut self, yolo: bool) -> Self {
+        self.yolo = yolo;
         self
     }
 }
@@ -455,7 +455,7 @@ mod tests {
     fn with_identity_is_unrestricted_and_attended() {
         let p = MasterPreset::with_identity("code", AgentIdentity::new("n", "m"));
         assert_eq!(p.name, "code");
-        assert!(!p.autopilot);
+        assert!(!p.yolo);
         // unrestricted selection ⇒ All scope, empty variant pins
         assert_eq!(p.agent_selection.scope, crate::ToolScope::All);
         assert!(p.agent_selection.variants.is_empty());
@@ -472,12 +472,12 @@ mod tests {
     #[test]
     fn builders_override_defaults() {
         let p = MasterPreset::with_identity("ops", AgentIdentity::default())
-            .with_autopilot(true)
+            .with_yolo(true)
             .with_runtime_config(MasterRuntimeConfig {
                 hard_stop_turns: 7,
                 ..Default::default()
             });
-        assert!(p.autopilot);
+        assert!(p.yolo);
         assert_eq!(p.config.hard_stop_turns, 7);
     }
 

@@ -34,8 +34,8 @@ impl Default for InteractionConfig {
 pub struct InteractionController {
     /// Baseline posture (Interactive vs Autonomous vs AutoReject).
     posture: Arc<AtomicU8>,
-    /// Autopilot flag (when true, runs unattended).
-    autopilot: Arc<AtomicBool>,
+    /// YOLO mode flag (when true, auto-approves all tool permissions).
+    yolo: Arc<AtomicBool>,
     /// Model-provided stdin support for shell tools.
     allow_model_stdin: Arc<AtomicBool>,
     /// Skip interactive shell input popups.
@@ -56,7 +56,7 @@ impl InteractionController {
     pub fn new(config: InteractionConfig) -> Self {
         Self {
             posture: Arc::new(AtomicU8::new(HumanChannelPosture::Interactive as u8)),
-            autopilot: Arc::new(AtomicBool::new(false)),
+            yolo: Arc::new(AtomicBool::new(false)),
             allow_model_stdin: Arc::new(AtomicBool::new(config.allow_model_stdin)),
             skip_interactive_input: Arc::new(AtomicBool::new(config.skip_interactive_input)),
             fallback_policy: Mutex::new(config.fallback_policy),
@@ -82,12 +82,12 @@ impl InteractionController {
         self.posture.store(posture as u8, Ordering::Relaxed);
     }
 
-    pub fn autopilot(&self) -> bool {
-        self.autopilot.load(Ordering::Relaxed)
+    pub fn yolo(&self) -> bool {
+        self.yolo.load(Ordering::Relaxed)
     }
 
-    pub fn set_autopilot(&self, value: bool) {
-        self.autopilot.store(value, Ordering::Relaxed);
+    pub fn set_yolo(&self, value: bool) {
+        self.yolo.store(value, Ordering::Relaxed);
     }
 
     pub fn allow_model_stdin(&self) -> bool {
@@ -146,7 +146,7 @@ mod tests {
     fn interaction_controller_defaults() {
         let c = InteractionController::default();
         assert_eq!(c.human_posture(), HumanChannelPosture::Interactive);
-        assert!(!c.autopilot());
+        assert!(!c.yolo());
         assert!(!c.allow_model_stdin());
         assert!(!c.skip_interactive_input());
         assert_eq!(c.autonomous_fallback_policy(), AutonomousFallbackPolicy::FailClosed);
@@ -155,8 +155,8 @@ mod tests {
     #[test]
     fn interaction_controller_mutations() {
         let c = InteractionController::default();
-        c.set_autopilot(true);
-        assert!(c.autopilot());
+        c.set_yolo(true);
+        assert!(c.yolo());
         c.set_allow_model_stdin(true);
         assert!(c.allow_model_stdin());
         c.set_skip_interactive_input(true);

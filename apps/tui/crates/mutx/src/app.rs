@@ -571,12 +571,9 @@ pub struct App {
     pub harness_retry_pending: bool,
     pub activity_status: String,
     pub provider_retry: Option<ProviderRetryState>,
-    /// Whether write-tool permission prompts are bypassed this session
-    /// (`--autopilot` / `/autopilot on`). Mirrored from the harness
-    /// snapshot; surfaced by the state bar's flat `autopilot` label (warning
-    /// tone + bold) directly below the input so the elevated state is
-    /// unmissable.
-    pub autopilot: bool,
+    /// Whether all tool permissions are auto-approved this session
+    /// (`--yolo` / `/yolo on`). Mirrored from the harness snapshot.
+    pub yolo: bool,
     /// Unified task list, mirrored from `AgentResponse::TodosUpdated`. Shown
     /// inside the Activity modal (and no longer pinned above the input box) so
     /// the footer reclaims the vertical space. `None` (or an empty list)

@@ -384,7 +384,7 @@ fn restored_slash_echoes_fold_into_command_components() {
             // A display-content slash shape (legacy sessions pre-ADR-0050).
             {
                 let mut m = Message::new(Role::User, "expanded prompt text");
-                m.display_content = Some("/autopilot on".to_string());
+                m.display_content = Some("/yolo on".to_string());
                 m
             },
             Message::new(Role::User, "and me too"), // another real prompt
@@ -1720,7 +1720,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         harness_retry_pending: false,
         activity_status: String::new(),
         provider_retry: None,
-        autopilot: false,
+        yolo: false,
         todos: None,
         round_count: 0,
         current_turn: 0,
@@ -1888,18 +1888,15 @@ fn completions_classifies_slash_input_as_slash_kind() {
 }
 
 #[test]
-fn completions_autopilot_subcommand_offers_on_off() {
-    // After `/autopilot ` (a space the user types to opt into subcommand
-    // discovery), the menu must offer `on` and `off` so the pair can be
-    // completed instead of dead-ending.
+fn completions_yolo_subcommand_offers_on_off() {
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
-    app.input = "/autopilot ".to_string();
+    app.input = "/yolo ".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     assert_eq!(app.completion_kind(), CompletionKind::Slash);
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     assert!(
-        labels.contains(&"/autopilot on") && labels.contains(&"/autopilot off"),
+        labels.contains(&"/yolo on") && labels.contains(&"/yolo off"),
         "expected both on/off subcommands, got {labels:?}"
     );
     // Candidates replace the whole input.
@@ -1909,14 +1906,14 @@ fn completions_autopilot_subcommand_offers_on_off() {
     }
 
     // Typing a prefix narrows the pair.
-    app.input = "/autopilot of".to_string();
+    app.input = "/yolo of".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    assert_eq!(labels, vec!["/autopilot off"]);
+    assert_eq!(labels, vec!["/yolo off"]);
 
     // An unknown suffix dead-ends (no candidates, like any non-prefix).
-    app.input = "/autopilot x".to_string();
+    app.input = "/yolo x".to_string();
     app.cursor_position = app.input.chars().count();
     assert!(app.completions().is_empty());
 }
@@ -3570,7 +3567,7 @@ async fn slash_dispatch_never_arms_activity_state() {
         session_id: "session-a".to_string(),
     };
 
-    super::event_loop::handle_send_slash(&mut app, &runtime, &session, "/autopilot on".to_string())
+    super::event_loop::handle_send_slash(&mut app, &runtime, &session, "/yolo on".to_string())
         .await;
 
     assert!(

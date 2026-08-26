@@ -1038,7 +1038,7 @@ mod tests {
         // The TUI optimistically paints "queued" for these; none of them emit
         // a terminal lifecycle event of their own, so the driver must.
         assert!(!round_owned_request(&AgentRequest::SlashCommand(
-            "/autopilot on".to_string()
+            "/yolo on".to_string()
         )));
         assert!(!round_owned_request(&AgentRequest::Interrupt));
         assert!(!round_owned_request(&AgentRequest::SwitchProvider {
@@ -1103,11 +1103,11 @@ mod tests {
     #[tokio::test]
     async fn activity_reconcile_fires_only_for_control_plane_requests_with_no_live_round() {
         let lifecycle = Arc::new(RoundLifecycle::new());
-        let autopilot = AgentRequest::SlashCommand("/autopilot on".to_string());
+        let yolo = AgentRequest::SlashCommand("/yolo on".to_string());
 
         // Idle harness + control-plane request → the driver must reconcile.
         assert!(
-            needs_activity_reconcile(&autopilot, &lifecycle).await,
+            needs_activity_reconcile(&yolo, &lifecycle).await,
             "idle + slash command needs the reconcile"
         );
 
@@ -1140,14 +1140,14 @@ mod tests {
         // alone so the round's timer/turn counters are not reset.
         let begin = lifecycle.begin().await;
         assert!(
-            !needs_activity_reconcile(&autopilot, &lifecycle).await,
+            !needs_activity_reconcile(&yolo, &lifecycle).await,
             "live round suppresses the reconcile"
         );
         assert!(lifecycle.finish(begin.generation).await);
 
         // Back to idle → the reconcile is armed again.
         assert!(
-            needs_activity_reconcile(&autopilot, &lifecycle).await,
+            needs_activity_reconcile(&yolo, &lifecycle).await,
             "idle again → reconcile re-arms"
         );
     }

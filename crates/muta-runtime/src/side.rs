@@ -105,7 +105,7 @@ impl SideSession {
         // could not be routed back to the side `Agent` through the shared
         // permission channel. This mirrors the runner policy (`runner_tool.rs`
         // sets `autopilot`).
-        agent.set_autopilot(true);
+        agent.set_yolo(true);
 
         Ok(Self {
             id: side_id,

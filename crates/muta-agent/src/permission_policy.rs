@@ -149,6 +149,8 @@ pub struct PolicyContext<'a> {
     pub operation_scope: muta_contracts::OperationScope,
     pub disabled: std::collections::HashSet<String>,
     pub scoped_disabled: ScopedToolDisable,
+    /// When true (YOLO mode), all permissions are auto-approved.
+    pub yolo: bool,
     /// Agent capabilities (hooks, bash policy, permission parking). Sync
     /// policies ignore this; async policies call through it.
     pub ctx: &'a dyn PermissionContext,
@@ -310,7 +312,7 @@ impl PermissionPolicy for ScopeGatePolicy {
         "scope-gate"
     }
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if matches!(ctx.scope_target, ScopeTarget::Unspecified) {
+        if ctx.yolo || matches!(ctx.scope_target, ScopeTarget::Unspecified) {
             return PolicyDecision::Pass;
         }
         if ctx.operation_scope.allows(&ctx.scope_target) {
@@ -357,23 +359,7 @@ impl std::fmt::Display for ScopeTargetDisplay<'_> {
 }
 
 /// Gate 5: bash command policy. A **complete** gate — every bash outcome,
-/// including the interactive confirm, is decided here. The old design left the
-/// attended `Confirm` path in `execute_tool` (it "needed an event channel to
-/// park"), which forced three corollary hacks: a chain-external re-evaluation
-/// of the same policy, an ambiguous `Option<ToolOutput>` return whose `None`
-/// conflated Allow with "needs confirm", and a *second* prompt on top of the
-/// broker's own missing-authority result for the same command.
-///
-/// All of that is gone. The gate now maps the [`BashVerdict`] directly:
-/// - [`BashVerdict::Allow`] → `Pass` (fall through to the authority broker).
-/// - [`BashVerdict::Deny`] → `Deny` (unconditional hard refusal).
-/// - [`BashVerdict::Confirm`] → `MissingAuthority` with `one_off: true`.
-///   An attended caller may park once; an autopilot caller fails immediately.
-///
-/// Because the confirm is `one_off`, an `Always` reply is honoured for this one
-/// call but **not persisted** — a dangerous-command confirmation is sharper
-/// than ordinary tool permission and stays one-off unless the user writes an
-/// explicit `[bash_policy.rules] action = "allow"` override.
+/// including the interactive confirm, is decided here.
 pub struct BashPolicy;
 #[async_trait]
 impl PermissionPolicy for BashPolicy {
@@ -392,37 +378,37 @@ impl PermissionPolicy for BashPolicy {
             BashVerdict::Allow => PolicyDecision::Pass,
             BashVerdict::Deny { output } => PolicyDecision::Deny { output },
             BashVerdict::Confirm { match_ } => {
-                // Build the one-off dangerous-command prompt. `one_off: true`
-                // tells the caller (and the TUI) that an `Always` reply is not
-                // persisted and the option should be de-emphasised.
-                PolicyDecision::MissingAuthority {
-                    request: muta_contracts::PermissionRequest {
-                        id: String::new(), // caller fills the generated id
-                        tool: "bash".to_string(),
-                        label: "Dangerous bash command".to_string(),
-                        description: format!(
-                            "Bash policy requires one-off confirmation before running this \
-                             command.\n\nRule: {}{}\nReason: {}\n\nA broad bash allowlist entry \
-                             does not bypass this safety check.",
-                            match_.name,
-                            if match_.builtin { " (built-in)" } else { "" },
-                            match_.reason,
-                        ),
-                        arguments: ctx.arguments.to_string(),
-                        scope: command.clone(),
-                        elevation: false,
-                        one_off: true,
-                        origin: None,
-                        hazard: Some(muta_contracts::hazard::HazardLevel::CommandExecution),
-                        submission: None,
-                    },
-                    // A well-formed rule that is never persisted: `one_off`
-                    // short-circuits persistence in the caller. Carried only to
-                    // satisfy the missing-authority shape uniformly.
-                    rule: PermissionRule {
-                        tool: "bash".to_string(),
-                        scope: command,
-                    },
+                if ctx.yolo {
+                    // Under YOLO mode, dangerous commands requiring confirmation are auto-approved.
+                    PolicyDecision::Pass
+                } else {
+                    // Build the one-off dangerous-command prompt.
+                    PolicyDecision::MissingAuthority {
+                        request: muta_contracts::PermissionRequest {
+                            id: String::new(),
+                            tool: "bash".to_string(),
+                            label: "Dangerous bash command".to_string(),
+                            description: format!(
+                                "Bash policy requires one-off confirmation before running this \
+                                 command.\n\nRule: {}{}\nReason: {}\n\nA broad bash allowlist entry \
+                                 does not bypass this safety check.",
+                                match_.name,
+                                if match_.builtin { " (built-in)" } else { "" },
+                                match_.reason,
+                            ),
+                            arguments: ctx.arguments.to_string(),
+                            scope: command.clone(),
+                            elevation: false,
+                            one_off: true,
+                            origin: None,
+                            hazard: Some(muta_contracts::hazard::HazardLevel::CommandExecution),
+                            submission: None,
+                        },
+                        rule: PermissionRule {
+                            tool: "bash".to_string(),
+                            scope: command,
+                        },
+                    }
                 }
             }
         }
@@ -430,14 +416,6 @@ impl PermissionPolicy for BashPolicy {
 }
 
 /// Gate 6: the authority broker and hazard-aware permission handler.
-///
-/// Treats tools as the direct object of evaluation.
-/// Safe tools with no mutating scope target pass automatically.
-/// Dangerous tools (file modification, command execution, etc.) check if their
-/// specific scope rule is admitted by the workspace PermissionStore (permanent or session).
-/// If not admitted, returns MissingAuthority with the structured ToolPermissionSubmission.
-///
-/// Decoupled from workspace trust / execution profiles.
 pub struct BrokerPolicy;
 #[async_trait]
 impl PermissionPolicy for BrokerPolicy {
@@ -445,6 +423,9 @@ impl PermissionPolicy for BrokerPolicy {
         "broker"
     }
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
+        if ctx.yolo {
+            return PolicyDecision::Approve;
+        }
         let submission = ctx.tool.permission_submission(ctx.arguments);
         if submission.is_none() && matches!(ctx.scope_target, ScopeTarget::Unspecified) {
             return PolicyDecision::Pass;
@@ -589,7 +570,7 @@ mod tests {
         name: &'a str,
         args: &'a str,
         target: ScopeTarget,
-        _autopilot: bool,
+        yolo: bool,
         op: muta_contracts::OperationScope,
         disabled: std::collections::HashSet<String>,
         scoped: ScopedToolDisable,
@@ -603,6 +584,7 @@ mod tests {
             operation_scope: op,
             disabled,
             scoped_disabled: scoped,
+            yolo,
             ctx: ctxr,
         }
     }
@@ -651,7 +633,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scope_gate_reports_same_missing_authority_under_autopilot() {
+    async fn scope_gate_out_of_scope_passes_under_yolo() {
         let (granted, _inside, outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
@@ -671,7 +653,7 @@ mod tests {
             "write_file",
             "{}",
             ScopeTarget::Path(outside),
-            true, // autopilot
+            true, // yolo
             op.clone(),
             disabled.clone(),
             scoped.clone(),
@@ -679,7 +661,7 @@ mod tests {
         );
         assert!(matches!(
             ScopeGatePolicy.evaluate(&c).await,
-            PolicyDecision::MissingAuthority { .. }
+            PolicyDecision::Pass
         ));
     }
 
@@ -824,7 +806,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broker_autopilot_does_not_create_authority() {
+    async fn broker_yolo_approves_automatically() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/anywhere")),
@@ -840,7 +822,7 @@ mod tests {
             "write_file",
             "{}",
             ScopeTarget::Path(PathBuf::from("/anywhere")),
-            true,
+            true, // yolo
             op.clone(),
             disabled.clone(),
             scoped.clone(),
@@ -848,7 +830,7 @@ mod tests {
         );
         assert!(matches!(
             BrokerPolicy.evaluate(&c).await,
-            PolicyDecision::MissingAuthority { .. }
+            PolicyDecision::Approve
         ));
     }
 
@@ -1076,7 +1058,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chain_out_of_scope_autopilot_has_same_authority_result() {
+    async fn chain_out_of_scope_yolo_approves() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
@@ -1095,7 +1077,7 @@ mod tests {
             "write_file",
             "{}",
             ScopeTarget::Path(PathBuf::from("/etc/passwd")),
-            true, // autopilot
+            true, // yolo
             op.clone(),
             disabled.clone(),
             scoped.clone(),
@@ -1104,7 +1086,7 @@ mod tests {
         let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
         assert!(matches!(
             chain.evaluate(&c).await,
-            PolicyDecision::MissingAuthority { .. }
+            PolicyDecision::Approve
         ));
     }
 

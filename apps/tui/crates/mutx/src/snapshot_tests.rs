@@ -945,11 +945,11 @@ fn concurrent_turn_and_command_entries_render_and_expand_dynamically() {
 /// reveals the completed result body.
 #[test]
 fn command_component_pending_then_completed() {
-    let mut message = TranscriptMessage::pending_command("autopilot", "on");
+    let mut message = TranscriptMessage::pending_command("yolo", "on");
 
     let pending = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
     assert!(
-        pending.contains("⌘ command") && pending.contains("/autopilot on"),
+        pending.contains("⌘ command") && pending.contains("/yolo on"),
         "a pending row shows generic header with invocation in body:\n{pending}"
     );
     assert!(
@@ -957,22 +957,22 @@ fn command_component_pending_then_completed() {
         "a pending row shows no disclosure marker:\n{pending}"
     );
     assert!(
-        !pending.contains("Autopilot ON"),
+        !pending.contains("YOLO mode ON"),
         "a pending row shows no reply:\n{pending}"
     );
 
     // The reply settles the same component in place.
     assert!(
         message.settle_command_result(muta_contracts::CommandResult::Ack {
-            title: "Autopilot ON".to_string(),
+            title: "YOLO mode ON".to_string(),
         }),
         "a pending command settles with its result"
     );
     let completed = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
     assert!(
         completed.contains("⌘ command")
-            && completed.contains("/autopilot on")
-            && completed.contains("Autopilot ON"),
+            && completed.contains("/yolo on")
+            && completed.contains("YOLO mode ON"),
         "the settled entry renders its header, invocation, and result body:\n{completed}"
     );
 
@@ -1339,10 +1339,10 @@ fn command_component_renders_lead_symbols_and_timestamps() {
     let epoch_ms = 1_700_000_000_000; // Produces a deterministic HH:MM label
     let messages = vec![
         TranscriptMessage::command_result(
-            "autopilot",
+            "yolo",
             "on",
             Some(muta_contracts::CommandResult::Ack {
-                title: "Autopilot ON: agent will run without intervention".to_string(),
+                title: "YOLO mode ON: all tool permissions are auto-approved".to_string(),
             }),
         )
         .with_sent_at_ms(epoch_ms),
@@ -1351,11 +1351,11 @@ fn command_component_renders_lead_symbols_and_timestamps() {
 
     let grid = render_transcript_grid(&messages, 140, 18);
     assert!(
-        grid.contains("⌘ command") && grid.contains("/autopilot on"),
+        grid.contains("⌘ command") && grid.contains("/yolo on"),
         "slash command must render with ⌘ command header and invocation in body:\n{grid}"
     );
     assert!(
-        grid.contains("Autopilot ON: agent will run without intervention"),
+        grid.contains("YOLO mode ON: all tool permissions are auto-approved"),
         "ack title must render in body:\n{grid}"
     );
     assert!(

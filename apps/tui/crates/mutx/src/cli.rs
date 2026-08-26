@@ -54,8 +54,8 @@ pub struct CliArgs {
     pub mode: Mode,
     /// `--project <path>`: operate on the project at `<path>`.
     pub project: Option<PathBuf>,
-    /// `--autopilot` / `--yolo` / `-y`: no confirmations or questions.
-    pub autopilot: bool,
+    /// `--yolo` / `-y` / `--autopilot`: auto-approve all tool permissions.
+    pub yolo: bool,
     /// `--interactive` / `-i`: force the TUI when headless would apply.
     pub interactive: bool,
     /// `-p`/`--prompt`/`--print` or a positional prompt phrase.
@@ -158,7 +158,7 @@ fn flag_value<'a, I: Iterator<Item = &'a String>>(
 /// Parse the command line. The caller owns error rendering and exit policy.
 pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     let mut project = None;
-    let mut autopilot = false;
+    let mut yolo = false;
     let mut interactive = false;
     let mut prompt = None;
     let mut prompt_from_flag = false;
@@ -199,7 +199,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
             "--cache-dir" => {
                 cache_dir = Some(PathBuf::from(flag_value("--cache-dir", inline, &mut iter)?));
             }
-            "--autopilot" | "--yolo" | "-y" => autopilot = true,
+            "--yolo" | "-y" | "--autopilot" => yolo = true,
             "--interactive" | "-i" => interactive = true,
             "--json" | "-j" => json = true,
             "--print" | "--prompt" | "-p" => {
@@ -231,7 +231,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     let base = |mode| CliArgs {
         mode,
         project: project.clone(),
-        autopilot,
+        yolo,
         interactive,
         prompt: prompt.clone(),
         prompt_from_flag,

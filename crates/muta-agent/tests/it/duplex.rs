@@ -243,14 +243,14 @@ const INTERACTIVE: RunnerPreset = RunnerPreset {
         command_allowlist: &[],
     },
     variant_pins: &[],
-    autopilot: false,
+    yolo: false,
     allow_model_stdin: false,
 };
 
 #[tokio::test]
 async fn streaming_loop_fires_permission_broker_direct() {
     // Isolation: does run_streaming_with_events itself surface a permission
-    // request for a write tool when autopilot is false? Decouples the
+    // request for a write tool when yolo is false? Decouples the
     // streaming driver from the RunnerTool wrapping.
     let ran = Arc::new(AtomicUsize::new(0));
     let agent = Arc::new(Agent::new(
@@ -258,7 +258,7 @@ async fn streaming_loop_fires_permission_broker_direct() {
         vec![Arc::new(BrokerGatedTool(Arc::clone(&ran))) as Arc<dyn Tool>],
         muta_agent::AgentIdentity::default(),
     ));
-    agent.set_autopilot(false);
+    agent.set_yolo(false);
 
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel::<AgentEvent>();
     let a = Arc::clone(&agent);

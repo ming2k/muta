@@ -1176,11 +1176,10 @@ pub enum RoundEvent {
     /// `todo_update`). Mirrors [`AgentEvent::TodosUpdated`]. An empty list
     /// means "no active task list" and hides the sticky panel.
     TodosUpdated(crate::todos::TodoList),
-    /// The autopilot toggle changed. `autopilot` = the agent runs without
-    /// human intervention (no confirmations, no questions). Emitted by
-    /// `/autopilot` so the TUI can refresh its badge without waiting for the
-    /// next harness snapshot.
-    AutopilotChanged(bool),
+    /// The YOLO toggle changed. `yolo` = the agent runs in full auto-approve mode
+    /// (all permissions bypassed). Emitted by `/yolo` so the TUI can refresh its badge
+    /// without waiting for the next harness snapshot.
+    YoloChanged(bool),
     RetryScheduled {
         attempt: usize,
         max_attempts: usize,
@@ -1309,10 +1308,11 @@ pub struct HarnessSnapshot {
     /// transcript messages, which may have been compacted.
     #[serde(default)]
     pub round_counter: u64,
-    /// Whether write-tool permission prompts are bypassed this session
-    /// (`--autopilot` / `/autopilot on`). The TUI mirrors this into a
+    /// Whether tool permission prompts are bypassed this session
+    /// (`-y` / `/yolo on`). The TUI mirrors this into a
     /// visible badge so the elevated state is never silent.
-    pub autopilot: bool,
+    #[serde(default, alias = "autopilot")]
+    pub yolo: bool,
     /// Workspace authority is independent from attended/autopilot posture.
     /// Frontends surface this state continuously so authority is never implicit.
     #[serde(default)]
@@ -1699,8 +1699,8 @@ pub enum AgentEvent {
     /// The task list changed (`todo` / `todo_update`). The TUI uses this to refresh the
     /// unified sticky panel above the input box.
     TodosUpdated(crate::todos::TodoList),
-    /// The autopilot toggle changed (via `/autopilot`).
-    AutopilotChanged(bool),
+    /// The YOLO toggle changed (via `/yolo`).
+    YoloChanged(bool),
     PermissionRequest(PermissionRequest),
     UserQuestionRequest(UserQuestionRequest),
     /// An interactive `bash` command needs a line of input from the operator

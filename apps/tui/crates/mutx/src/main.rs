@@ -195,7 +195,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let CliArgs {
         mode,
         project: project_override,
-        autopilot: autopilot_at_start,
+        yolo: yolo_at_start,
         interactive,
         prompt,
         json: _,
@@ -240,9 +240,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(debug_assertions)]
         Mode::Showcase(component) => mutx::showcase::run(&component),
-        Mode::Dashboard => run_dashboard(project_override, autopilot_at_start).await,
+        Mode::Dashboard => run_dashboard(project_override, yolo_at_start).await,
         Mode::Attach { id } => {
-            run_attached(id, false, project_override, autopilot_at_start, false, None).await
+            run_attached(id, false, project_override, yolo_at_start, false, None).await
         }
         Mode::Run { prompt } => {
             if interactive {
@@ -251,7 +251,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     None,
                     true,
                     project_override,
-                    autopilot_at_start,
+                    yolo_at_start,
                     false,
                     Some(prompt),
                 )
@@ -261,7 +261,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     prompt,
                     parsed.json,
                     project_override,
-                    autopilot_at_start,
+                    yolo_at_start,
                     remote,
                     token,
                 )
@@ -273,7 +273,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 None,
                 true,
                 project_override,
-                autopilot_at_start,
+                yolo_at_start,
                 false,
                 prompt,
             )
@@ -331,7 +331,7 @@ async fn save_history_bounded(history: Vec<muta_contracts::HistoryEntry>, dedup:
 /// a carrier session just to display an empty dashboard.
 async fn run_dashboard(
     project_override: Option<PathBuf>,
-    autopilot_at_start: bool,
+    yolo_at_start: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_root = project_override
         .clone()
@@ -371,7 +371,7 @@ async fn run_dashboard(
         Some(carrier),
         false,
         project_override,
-        autopilot_at_start,
+        yolo_at_start,
         true,
         None,
     )
@@ -387,7 +387,7 @@ async fn run_attached(
     session_id: Option<String>,
     fresh: bool,
     project_override: Option<PathBuf>,
-    autopilot_at_start: bool,
+    yolo_at_start: bool,
     dashboard_entry: bool,
     mut initial_prompt: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -409,7 +409,7 @@ async fn run_attached(
     // connect opens the TUI sessions picker over a throwaway carrier; the
     // picker's `/sessions <id>` exit re-attaches through `switch_to`.
     let mut pick_pending = session_id.is_none() && !fresh;
-    let mut autopilot_pending = autopilot_at_start;
+    let mut yolo_pending = yolo_at_start;
     // `mutx dashboard` raises the dashboard over the carrier session on the
     // first TUI entry only; a `/host` switch re-attaches into an ordinary
     // conversation view (the overlay does not re-arm).
@@ -497,11 +497,11 @@ async fn run_attached(
                 }
             }
         };
-        if autopilot_pending {
+        if yolo_pending {
             let _ = tx.send(muta_contracts::AgentRequest::SlashCommand(
-                "/autopilot on".to_string(),
+                "/yolo on".to_string(),
             ));
-            autopilot_pending = false;
+            yolo_pending = false;
         }
         if let Some(prompt) = initial_prompt.take() {
             let _ = tx.send(muta_contracts::AgentRequest::Chat {

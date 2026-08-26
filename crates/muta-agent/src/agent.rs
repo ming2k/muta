@@ -1151,7 +1151,7 @@ impl Agent {
             tool_names,
             model_guidance,
             provider_guidance,
-            autopilot: self.get_autopilot(),
+            yolo: self.get_yolo(),
             available_skills,
             project_rules: self
                 .project_rules
@@ -1668,8 +1668,8 @@ impl Agent {
         *self.round_counter.lock().unwrap_or_else(|e| e.into_inner()) = count;
     }
 
-    pub fn get_autopilot(&self) -> bool {
-        self.permissions.autopilot()
+    pub fn get_yolo(&self) -> bool {
+        self.permissions.yolo()
     }
 
     /// ADR-0141: whether a human can currently answer this agent's parked
@@ -1711,8 +1711,9 @@ impl Agent {
     }
 
 
-    pub fn set_autopilot(&self, enabled: bool) {
-        self.permissions.set_autopilot(enabled);
+    pub fn set_yolo(&self, enabled: bool) {
+        self.permissions.set_yolo(enabled);
+        self.interaction.set_yolo(enabled);
     }
 
     pub fn set_workspace_security(&self, snapshot: muta_contracts::WorkspaceSecuritySnapshot) {
@@ -1827,7 +1828,7 @@ impl Agent {
         self.set_doom_guard_config(profile.config.nudge);
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
-        self.set_autopilot(profile.autopilot);
+        self.set_yolo(profile.yolo);
     }
 
 
@@ -2539,7 +2540,7 @@ impl Agent {
         // Delegate to the ToolManager's schema authority.
         // Under ADR-0137, tool schemas remain deterministic and invariant to maximize
         // KV-cache reuse. Autopilot restrictions are enforced at runtime via PermissionPolicy.
-        self.tool_manager.loop_tools(self.get_autopilot())
+        self.tool_manager.loop_tools(self.get_yolo())
     }
 
     /// Structured view of every installed tool, for the session modal's Tools
@@ -3936,13 +3937,12 @@ impl Agent {
             })
             .unwrap_or_default();
         if let Some(input_kind) = crate::shell_input::classify(&command) {
-            // Autopilot, or the operator has opted out of the interactive
+            // YOLO mode, or the operator has opted out of the interactive
             // input panel: no one is going to type into the prompt, so the
-            // inline panel would either deadlock (autopilot) or just disrupt
-            // (opt-out). Close stdin instead — the command then fails fast
-            // with a non-interactive remedy, which is the honest outcome.
-            if self.get_autopilot() {
-                tracing::info!(command = %command, "interactive command stdin closed under autopilot");
+            // inline panel would either deadlock or just disrupt.
+            // Close stdin instead — the command then fails fast with a non-interactive remedy.
+            if self.get_yolo() {
+                tracing::info!(command = %command, "interactive command stdin closed under yolo mode");
                 return StdinPolicy::default();
             }
             if self.skip_interactive_input() {
@@ -4016,6 +4016,7 @@ impl Agent {
             operation_scope,
             disabled: disabled_snapshot,
             scoped_disabled: scoped_snapshot,
+            yolo: self.get_yolo(),
             ctx: self, // Agent: PermissionContext
         };
 
@@ -4026,9 +4027,9 @@ impl Agent {
                 return output;
             }
             crate::permission_policy::PolicyDecision::MissingAuthority { request, rule } => {
-                if self.get_autopilot() {
-                    return permission_required_output(&request);
-                }
+                if self.get_yolo() {
+                    // Under YOLO mode, missing authority is auto-approved.
+                } else {
                 // The single interactive-park path. Both the broker (a
                 // write/execute the user must approve) and the bash
                 // dangerous-command confirm reach here; `request.one_off`
@@ -4100,17 +4101,14 @@ impl Agent {
                         };
                     }
                 }
-
             }
         }
+    }
 
-        // Interaction posture is intentionally resolved only after the
-        // authority chain. PolicyContext does not contain autopilot, so no
-        // authority policy can accidentally turn posture into a grant.
         if call.name == "ask_user" {
-            if self.get_autopilot() {
+            if self.get_yolo() {
                 return ToolOutput::Text(
-                    "ask_user is unavailable: this session is running on autopilot and no human \
+                    "ask_user is unavailable: this session is running in YOLO mode and no human \
                      is reachable to answer. Resolve the ambiguity yourself — pick the most \
                      reasonable default and proceed."
                         .to_string(),
@@ -4714,7 +4712,7 @@ mod tests {
         use muta_contracts::{AgentEvent, StdinPolicy};
         use tokio::sync::mpsc;
         let agent = stdin_test_agent();
-        agent.set_autopilot(false);
+        agent.set_yolo(false);
         agent.set_skip_interactive_input(true);
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
@@ -4738,7 +4736,7 @@ mod tests {
         use muta_contracts::AgentEvent;
         use tokio::sync::mpsc;
         let agent = stdin_test_agent();
-        agent.set_autopilot(false);
+        agent.set_yolo(false);
         agent.set_skip_interactive_input(false);
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();

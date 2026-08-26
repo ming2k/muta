@@ -63,8 +63,8 @@ pub struct BootstrapParams {
     pub startup: SessionStart,
     /// `--project` override; when `None`, the current directory is used.
     pub project_root: Option<PathBuf>,
-    /// `--autopilot` at start: the agent runs without human intervention.
-    pub autopilot: bool,
+    /// `--yolo` at start: auto-approve all tool permissions.
+    pub yolo: bool,
     /// ADR-0141: the human-channel accountant this session reports into.
     /// Attach/detach on the WS layer ORs client postures into it; the
     /// harness's posture gate reads it before parking a human request.
@@ -156,7 +156,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ui,
         startup,
         project_root: project_override,
-        autopilot: autopilot_at_start,
+        yolo: yolo_at_start,
         human_channel,
         extra_session_tools,
         teardown_token,
@@ -634,30 +634,18 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         mcp_runtime_for_bg.refresh_all().await;
     });
     muta_agent::dynamic::spawn_refresh(McpCatalog::new(mcp_runtime.clone()));
-    if autopilot_at_start {
-        agent.set_autopilot(true);
-        // ADR-0132: persist the startup posture onto the session so a later
-        // daemon crash/restart restores it. Previously this path never wrote
-        // the store (only a live toast), so a `--autopilot` session lost its
-        // posture on every restart — and, because the command ledger was
-        // never written either, not even the legacy ledger heuristic could
-        // recover it. Best-effort: a failed persist degrades to the old
-        // process-local behaviour.
-        if let Err(error) = session.set_autopilot(true).await {
+    if yolo_at_start {
+        agent.set_yolo(true);
+        if let Err(error) = session.set_yolo(true).await {
             tracing::warn!(
                 error = %error,
-                "could not persist --autopilot startup posture"
+                "could not persist --yolo startup posture"
             );
         }
-        // Surface the `--autopilot` startup state as a transient toast rather
-        // than a transcript line: it is a command acknowledgment, not model
-        // output, so it should not pollute the conversation the user is about
-        // to have. The TUI badge (refreshed by the periodic harness snapshot)
-        // keeps the elevated state visible thereafter.
         let _ = resp_tx.send(round_response(
             &session.id().await,
             RoundEvent::Notice(AgentNotice::command_ack(
-                "Autopilot ON: no human interaction; approved actions run and missing authority fails immediately.",
+                "YOLO mode ON: all tool permissions are auto-approved.",
             )),
         ));
     }
@@ -776,13 +764,13 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         // value, and `set_autopilot` on the store is a no-op guard), but the
         // explicit flag above wins when both apply, matching the user's most
         // recent explicit intent.
-        let persisted_autopilot = session.autopilot().await;
-        if persisted_autopilot && !agent.get_autopilot() {
-            agent.set_autopilot(true);
+        let persisted_yolo = session.yolo().await;
+        if persisted_yolo && !agent.get_yolo() {
+            agent.set_yolo(true);
             let restored_session_id = session.id().await;
             tracing::info!(
                 session = %restored_session_id,
-                "restored unattended (autopilot) posture from session store"
+                "restored YOLO mode posture from session store"
             );
         }
 

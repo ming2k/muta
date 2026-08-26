@@ -552,7 +552,7 @@ pub fn send_harness_state(
         RoundEvent::HarnessState(HarnessSnapshot {
             loop_status,
             round_counter,
-            autopilot: agent.get_autopilot(),
+            yolo: agent.get_yolo(),
             workspace_security: agent.workspace_security(),
             retry_pending: false,
         }),
@@ -584,7 +584,7 @@ pub async fn send_harness_state_for_session(
         RoundEvent::HarnessState(HarnessSnapshot {
             loop_status,
             round_counter,
-            autopilot: agent.get_autopilot(),
+            yolo: agent.get_yolo(),
             workspace_security: agent.workspace_security(),
             retry_pending,
         }),
@@ -1658,8 +1658,8 @@ pub fn relay_agent_event(
         AgentEvent::TodosUpdated(todos) => {
             round_response(session_id, RoundEvent::TodosUpdated(todos))
         }
-        AgentEvent::AutopilotChanged(enabled) => {
-            round_response(session_id, RoundEvent::AutopilotChanged(enabled))
+        AgentEvent::YoloChanged(enabled) => {
+            round_response(session_id, RoundEvent::YoloChanged(enabled))
         }
         AgentEvent::PermissionRequest(request) => {
             round_response(session_id, RoundEvent::PermissionRequest(request))

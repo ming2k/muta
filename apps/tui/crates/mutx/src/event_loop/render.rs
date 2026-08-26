@@ -273,7 +273,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             session_head: Some(view::SessionHead {
                 session_id: viewed_session_id,
                 workspace: &app.current_workspace,
-                autopilot: app.autopilot,
+                yolo: app.yolo,
             }),
             todos: app.todos.as_ref(),
             // View-scoped: the elapsed-timer origin belongs to the viewed

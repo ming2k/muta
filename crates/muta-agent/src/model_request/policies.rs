@@ -149,34 +149,28 @@ impl SystemPromptSection for PersistenceGuidance {
     }
 }
 
-/// The autonomous-operation posture. Active only when the agent is running
-/// autopilot this round. The harness reclaims `ask_user`; approved actions run
-/// without pausing and missing authority fails immediately. This tells the
-/// model the human is unreachable — it must resolve ambiguity itself, pick a
-/// sensible default, and never block waiting for an answer. Leading `\n`
-/// separates it from the paragraphs above.
-struct AutopilotGuidance;
+/// The YOLO mode guidance section. Active only when the agent is running
+/// in YOLO mode this round. The harness reclaims `ask_user`; all tool actions are auto-approved.
+/// Leading `\n` separates it from the paragraphs above.
+struct YoloGuidance;
 
-const AUTOPILOT: &str = "\nYou are running on autopilot: no human is reachable this round. The \
-                          question tool has been reclaimed; approved actions run without pausing, \
-                          while missing authority fails immediately and must never be treated as \
-                          granted. When faced with ambiguity, pick the most reasonable safe default \
-                          and proceed rather than asking — there is no one to answer. Surface any \
-                          irreversible or high-stakes choice you made on your own in your final \
-                          summary instead of stopping to ask.";
+const YOLO_GUIDANCE: &str = "\nYou are running in YOLO mode: all tool permissions (file edits, creations, command execution) are auto-approved. The \
+                              question tool has been reclaimed. When faced with ambiguity, pick the most reasonable safe default \
+                              and proceed directly rather than asking. Surface any key choices or verification results in your \
+                              final summary.";
 
-impl SystemPromptSection for AutopilotGuidance {
+impl SystemPromptSection for YoloGuidance {
     fn id(&self) -> &'static str {
-        "system.autopilot"
+        "system.yolo"
     }
     fn rank(&self) -> u32 {
         36
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
-        ctx.autopilot
+        ctx.yolo
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
-        Some(String::from(AUTOPILOT))
+        Some(String::from(YOLO_GUIDANCE))
     }
 }
 
@@ -383,7 +377,7 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(ProviderGuidance);
     registry.register(ProjectRulesGuidance);
     registry.register(PersistenceGuidance);
-    registry.register(AutopilotGuidance);
+    registry.register(YoloGuidance);
     registry.register(DelegationGuidance);
     registry.register(FileEditingGuidance);
     registry.register(WorkspaceRootsGuidance);

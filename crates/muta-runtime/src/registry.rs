@@ -1106,7 +1106,7 @@ impl SessionRegistry {
             ui,
             startup,
             project_root: Some(project_root.clone()),
-            autopilot: false,
+            yolo: false,
             human_channel: Some(Arc::clone(&human_channel)),
             extra_session_tools: None,
             teardown_token: Some(cancel.clone()),

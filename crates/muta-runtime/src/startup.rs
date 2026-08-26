@@ -242,12 +242,12 @@ define_builtin_commands! {
         intent_keywords: ["settings", "config", "preferences", "theme", "themes", "appearance", "options", "color", "layout", "reload", "conf", "setting", "setup"],
         category: Config,
     },
-    Autopilot = "/autopilot" : {
-        summary: "Toggle autonomous execution mode",
-        description: "Toggles unattended interaction posture: approved actions run, missing authority fails immediately, and question tools are reclaimed.",
-        usage: ["/autopilot", "/autopilot on", "/autopilot off"],
-        examples: [("/autopilot on", "Enable autonomous execution"), ("/autopilot off", "Return to interactive confirmation mode")],
-        intent_keywords: ["autopilot", "yolo", "auto", "autonomous", "unattended", "headless", "skip-confirm"],
+    Yolo = "/yolo" : {
+        summary: "Toggle YOLO auto-approve execution mode",
+        description: "Toggles YOLO mode: automatically approves all tool permissions (file edits, creations, command execution) while retaining catastrophic hard denies.",
+        usage: ["/yolo", "/yolo on", "/yolo off"],
+        examples: [("/yolo on", "Enable YOLO auto-approve mode"), ("/yolo off", "Return to interactive confirmation mode")],
+        intent_keywords: ["yolo", "autopilot", "auto", "autonomous", "unattended", "headless", "skip-confirm", "auto-approve", "bypass"],
         category: Automation,
     },
     Master = "/master" : {

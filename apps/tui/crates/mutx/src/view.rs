@@ -4383,7 +4383,7 @@ mod tests {
                     session_head: Some(SessionHead {
                         session_id: "sess-01a2b3c4",
                         workspace: "~/projects/xx",
-                        autopilot: false,
+                        yolo: false,
                     }),
                     todos: None,
                     round_started_at: None,

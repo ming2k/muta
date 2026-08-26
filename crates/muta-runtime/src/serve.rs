@@ -918,7 +918,7 @@ where
         let snapshot = muta_contracts::HarnessSnapshot {
             loop_status: muta_contracts::LoopStatus::Idle,
             round_counter: bound.session.round_counter().await,
-            autopilot: bound.session.autopilot().await,
+            yolo: bound.session.yolo().await,
             workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
             retry_pending: bound.session.retry_pending().await.is_some(),
         };

@@ -292,7 +292,7 @@ pub async fn run_tui(
     let harness = Arc::new(Mutex::new(HarnessSnapshot {
         loop_status: LoopStatus::Idle,
         round_counter: initial_round_count,
-        autopilot: false,
+        yolo: false,
         workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
         retry_pending: false,
     }));
@@ -1580,9 +1580,9 @@ pub async fn run_tui(
                                 *todos_clone.lock().await = Some(list);
                             }
                         }
-                        RoundEvent::AutopilotChanged(enabled) => {
+                        RoundEvent::YoloChanged(enabled) => {
                             if !routes_to_side {
-                                harness_clone.lock().await.autopilot = enabled;
+                                harness_clone.lock().await.yolo = enabled;
                             }
                         }
                         RoundEvent::RetryScheduled {
@@ -2012,7 +2012,7 @@ pub async fn run_tui(
         harness_retry_pending: false,
         activity_status: String::new(),
         provider_retry: None,
-        autopilot: false,
+        yolo: false,
         todos: None,
         round_count: 0,
         current_turn: 0,

@@ -485,7 +485,7 @@ impl UiRuntime {
             harness: Arc::new(Mutex::new(HarnessSnapshot {
                 loop_status: LoopStatus::Idle,
                 round_counter: 0,
-                autopilot: false,
+                yolo: false,
                 workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
                 retry_pending: false,
             })),
@@ -1188,7 +1188,7 @@ async fn sync_runtime_state(
     let harness = runtime.harness.lock().await.clone();
     app.loop_status = harness.loop_status;
     app.harness_retry_pending = harness.retry_pending;
-    app.autopilot = harness.autopilot;
+    app.yolo = harness.yolo;
     app.activity_status = runtime.activity_status.lock().await.clone();
     app.provider_retry = runtime.provider_retry.lock().await.clone();
     app.session_context = runtime.session_context.lock().await.clone();
