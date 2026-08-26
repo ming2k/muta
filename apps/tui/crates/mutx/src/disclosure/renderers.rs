@@ -1,5 +1,5 @@
 //! Step rendering implementation: the summary primitives, the per-tool body
-//! content renderers (code, listing, grep, bash, diff), and the top-level
+//! content renderers (code, listing, matches, bash, diff), and the top-level
 //! orchestrators (`draw_tool_step`, `draw_reasoning_trace`, and
 //! `draw_envoy_inline_step`) that compose them. Also
 //! produces the sticky pinned-step summary that
@@ -508,7 +508,7 @@ fn draw_code_content(
     }
 }
 
-/// Render a `list_dir` / `glob` result: one entry per row on `code_bg`,
+/// Render a `list_dir` / `find_files` result: one entry per row on `code_bg`,
 /// directories (entries ending in `/`) in `info`, files in `code_fg`. No
 /// line-number gutter since listing rows have no meaningful line index.
 fn draw_listing_content(
@@ -561,8 +561,8 @@ fn draw_listing_content(
     }
 }
 
-/// A single logical line parsed out of grep's `path:linenum:content` format.
-struct GrepLine<'a> {
+/// A single logical line parsed out of `search_text`'s `path:linenum:content` format.
+struct MatchLine<'a> {
     path: &'a str,
     lineno: &'a str,
     content: &'a str,
@@ -575,7 +575,7 @@ struct GrepLine<'a> {
 /// that is followed by an all-digit run and another colon as the
 /// line-number separator. Returns `None` for blank separators or any line
 /// that doesn't match the ripgrep shape.
-fn parse_grep_line(line: &str) -> Option<GrepLine<'_>> {
+fn parse_match_line(line: &str) -> Option<MatchLine<'_>> {
     for (idx, ch) in line.char_indices() {
         if ch != ':' {
             continue;
@@ -595,7 +595,7 @@ fn parse_grep_line(line: &str) -> Option<GrepLine<'_>> {
             let lineno = &after[..digits_end];
             let content = &after[digits_end + 1..];
             let content_offset = idx + 1 + digits_end + 1;
-            return Some(GrepLine {
+            return Some(MatchLine {
                 path,
                 lineno,
                 content,
@@ -609,7 +609,7 @@ fn parse_grep_line(line: &str) -> Option<GrepLine<'_>> {
 /// Emit `text` as one or more wrapped rows at column `indent`, all styled
 /// with `style` on `pad`'s background, recording a selectable [`BlockRegion`]
 /// per row whose byte range is anchored at `abs_start` within the tool
-/// output. Used for grep path headers, ripgrep separator rows, and any
+/// output. Used for search path headers, ripgrep separator rows, and any
 /// other "simple" result row that doesn't need a line-number gutter.
 #[allow(clippy::too_many_arguments)]
 fn emit_simple_rows(
@@ -646,7 +646,7 @@ fn emit_simple_rows(
     }
 }
 
-/// Render a `grep` result by grouping matches under their file path. Each
+/// Render a `search_text` result by grouping matches under their file path. Each
 /// new path is printed once as a bold `heading_fg` header row; each match
 /// is shown as `{lineno}  {content}` with the line number dimmed and the
 /// line-number column aligned across the whole result. Non-match lines
@@ -654,7 +654,7 @@ fn emit_simple_rows(
 /// Selection byte ranges are anchored in the original tool output so
 /// copy/cut works across the visible match content.
 #[allow(clippy::too_many_arguments)]
-fn draw_grep_content(
+fn draw_matches_content(
     ctx: &mut RenderCtx<'_, '_>,
     mi: usize,
     block_idx: usize,
@@ -685,7 +685,7 @@ fn draw_grep_content(
     // so the content column stays aligned within and across files.
     let mut lineno_width = 1usize;
     for (_, line) in &logical {
-        if let Some(p) = parse_grep_line(line) {
+        if let Some(p) = parse_match_line(line) {
             lineno_width = lineno_width.max(p.lineno.len());
         }
     }
@@ -696,7 +696,7 @@ fn draw_grep_content(
     let mut current_path: Option<&str> = None;
 
     for (line_start_byte, logical_line) in &logical {
-        match parse_grep_line(logical_line) {
+        match parse_match_line(logical_line) {
             Some(parsed) => {
                 if current_path != Some(parsed.path) {
                     current_path = Some(parsed.path);
@@ -1260,8 +1260,8 @@ fn draw_tool_result(
         ResultKind::Listing => {
             draw_listing_content(ctx, mi, block_idx, output, selection, indent, inner_w)
         }
-        ResultKind::Grep => {
-            draw_grep_content(ctx, mi, block_idx, output, selection, indent, inner_w)
+        ResultKind::Matches => {
+            draw_matches_content(ctx, mi, block_idx, output, selection, indent, inner_w)
         }
         ResultKind::Bash => {
             let command = bash_command_for(structured, arguments);
@@ -1779,7 +1779,7 @@ pub fn draw_tool_step(
     // Body region (only when expanded). Tool steps are flat — no band, no
     // Tool/Arguments/Result labels — so an expanded step reads like a log entry:
     // the tool-specific content directly under the summary (bash → `$ cmd` +
-    // output; list/grep → entries; edit/write → diff; read → code), indented to
+    // output; list/search → entries; edit/write → diff; read → code), indented to
     // align with prose. Only content blocks carry a `code_bg`; everything else
     // sits on the app background.
     if expanded {

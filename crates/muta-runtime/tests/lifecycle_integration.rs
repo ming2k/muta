@@ -132,6 +132,9 @@ async fn host_one(registry: &Arc<SessionRegistry>, project: &str) {
     registry
         .host(HostedSession {
             project_root: project.into(),
+            security: std::sync::Arc::new(
+                muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
+            ),
             session,
             req_tx,
             events: bc_tx,
@@ -377,6 +380,9 @@ async fn idle_suspension_spares_sessions_with_armed_schedules() {
         registry
             .host(HostedSession {
                 project_root: project_root.to_path_buf(),
+                security: std::sync::Arc::new(
+                    muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
+                ),
                 session,
                 req_tx,
                 events: bc_tx,
@@ -439,4 +445,68 @@ async fn idle_suspension_spares_sessions_with_armed_schedules() {
         suspended.contains(&plain_id),
         "a schedule-free idle session should still suspend (suspended: {suspended:?})"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Workspace-trust reply semantics: structured option tokens (not substring
+// matching) decide the persisted profile, and unrecognised answers fail
+// closed.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn trust_reply_tokens_map_to_persisted_profiles() {
+    use muta_contracts::WorkspaceExecutionProfile;
+    use muta_persistence::workspace_security::WorkspaceSecurityStore;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("security.json");
+    let store = WorkspaceSecurityStore::load_from(file.clone());
+
+    // The exact tokens `serve.rs` publishes and `handlers_permission` matches.
+    let full = "Grant development authority (with extensions)";
+    let ws_only = "Grant development authority (workspace only)";
+    let restricted = "Keep restricted";
+
+    // Seed project contributions so `trust_extensions` has content to bind
+    // to (an empty `.muta/` makes every extensions assertion trivially
+    // false and hides a regression).
+    std::fs::create_dir_all(tmp.path().join(".muta").join("skills")).unwrap();
+    std::fs::write(tmp.path().join(".muta").join(".contrib-marker"), b"seed").unwrap();
+
+    for (answer, execution, extensions_trusted) in [
+        (full, WorkspaceExecutionProfile::Development, true),
+        (ws_only, WorkspaceExecutionProfile::Development, false),
+        (restricted, WorkspaceExecutionProfile::Restricted, false),
+        // An *unrecognised* answer (legacy client, hand-crafted reply) must
+        // fail closed to restricted, never fall through to a permissive
+        // branch.
+        (
+            "something else",
+            WorkspaceExecutionProfile::Restricted,
+            false,
+        ),
+    ] {
+        // Reset to the undecided state between rounds. `Unknown` cannot be
+        // persisted through `set_execution` round-trips here (it reads
+        // back as the stored profile), so reset via restricted first — the
+        // assertions below are on the *result* of `apply_trust_decision`,
+        // not on the reset.
+        let _ = store.set_execution(tmp.path(), WorkspaceExecutionProfile::Restricted);
+        let _ = store.untrust_extensions(tmp.path());
+        muta_runtime::handlers_permission::apply_trust_decision(&store, tmp.path(), answer);
+        let snap = store.snapshot(tmp.path());
+        assert_eq!(snap.execution, execution, "answer {answer:?}");
+        assert_eq!(
+            snap.extensions.is_trusted(),
+            extensions_trusted,
+            "answer {answer:?}"
+        );
+        // Durable: a fresh handle over the same file sees the same state.
+        let reloaded = WorkspaceSecurityStore::load_from(file.clone());
+        assert_eq!(
+            reloaded.snapshot(tmp.path()).execution,
+            execution,
+            "answer {answer:?}"
+        );
+    }
 }

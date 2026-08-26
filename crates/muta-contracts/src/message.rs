@@ -568,7 +568,7 @@ mod tests {
         };
         let nested_call = ToolCall {
             id: "call_inner".to_string(),
-            name: "grep".to_string(),
+            name: "search_text".to_string(),
             arguments: r#"{"pattern":"foo"}"#.to_string(),
         };
         let inner_child = Message::new(Role::Tool, "match at a.rs:1")

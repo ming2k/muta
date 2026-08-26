@@ -203,11 +203,14 @@ impl ExecutionEnvironment for LocalExecutionEnvironment {
     }
 }
 
-/// Filesystem provider that physically confines every operation to one root.
+/// Filesystem provider that physically confines every operation to the
+/// admitted root set (ADR-0142: the workspace root plus any configured
+/// additional roots).
 #[derive(Debug, Clone)]
 struct WorkspaceFsProvider {
     inner: LocalFsProvider,
     root: PathBuf,
+    additional_roots: Vec<PathBuf>,
 }
 
 impl WorkspaceFsProvider {
@@ -216,6 +219,37 @@ impl WorkspaceFsProvider {
         Self {
             inner: LocalFsProvider::new(),
             root,
+            additional_roots: Vec::new(),
+        }
+    }
+
+    /// Widen admission to extra canonicalized roots (ADR-0142). The primary
+    /// root keeps its exclusive duties — relative resolution and every
+    /// project-bound decision; additional roots only expand containment.
+    fn with_additional_roots(mut self, additional: Vec<PathBuf>) -> Self {
+        self.additional_roots = additional
+            .into_iter()
+            .filter(|extra| *extra != self.root && !extra.starts_with(&self.root))
+            .collect();
+        self
+    }
+
+    /// Canonicalized additional roots admitted alongside the primary.
+    fn additional_roots(&self) -> &[PathBuf] {
+        self.additional_roots.as_slice()
+    }
+
+    /// Human-readable summary of the admitted set for denial messages.
+    fn admitted_set(&self) -> String {
+        if self.additional_roots.is_empty() {
+            self.root.display().to_string()
+        } else {
+            let mut listed = self.root.display().to_string();
+            for extra in &self.additional_roots {
+                listed.push_str(", ");
+                listed.push_str(&extra.display().to_string());
+            }
+            listed
         }
     }
 
@@ -231,16 +265,21 @@ impl WorkspaceFsProvider {
                 path.display()
             ))
         })?;
-        if resolved.starts_with(&self.root) {
+        let admitted = resolved.starts_with(&self.root)
+            || self
+                .additional_roots
+                .iter()
+                .any(|extra| resolved.starts_with(extra));
+        if admitted {
             // Operate on the checked path, not the original spelling. This
             // collapses `..` and already-resolved symlink parents so the I/O
             // call cannot reinterpret a different lexical route.
             Ok(resolved)
         } else {
             Err(FsError::PermissionDenied(format!(
-                "'{}' is outside workspace '{}'",
+                "'{}' is outside the admitted workspace roots [{}]",
                 path.display(),
-                self.root.display()
+                self.admitted_set()
             )))
         }
     }
@@ -353,9 +392,33 @@ impl WorkspaceExecutionEnvironment {
         }
     }
 
+    /// Multi-root construction (ADR-0142): the primary root keeps its
+    /// resolution/cwd duties, and each canonicalized additional root widens
+    /// filesystem admission and sandbox mounts for cross-project workflows.
+    pub fn with_additional_roots(
+        workspace_root: impl Into<PathBuf>,
+        additional_roots: Vec<PathBuf>,
+    ) -> Self {
+        let workspace_root = workspace_root.into();
+        Self {
+            fs: WorkspaceFsProvider::new(workspace_root.clone())
+                .with_additional_roots(additional_roots),
+            process: WorkspaceProcessRunner,
+            workspace_root,
+            security_handle: std::sync::Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
+
+    /// Canonicalized additional roots admitted alongside the primary (ADR-0142).
+    pub fn additional_roots(&self) -> &[PathBuf] {
+        self.fs.additional_roots()
+    }
+
     pub fn with_security_handle(
         workspace_root: impl Into<PathBuf>,
-        security_handle: std::sync::Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
+        security_handle: std::sync::Arc<
+            std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>,
+        >,
     ) -> Self {
         let workspace_root = workspace_root.into();
         Self {
@@ -395,13 +458,21 @@ impl ExecutionEnvironment for WorkspaceExecutionEnvironment {
         &self.workspace_root
     }
 
+    fn additional_roots(&self) -> &[PathBuf] {
+        self.fs.additional_roots()
+    }
+
     fn shell_isolation(&self) -> ShellIsolation {
         let is_development_trusted = self
             .security_handle
             .read()
             .ok()
             .and_then(|guard| guard.as_ref().cloned())
-            .and_then(|h| h.lock().ok().map(|s| s.execution == muta_contracts::WorkspaceExecutionProfile::Development))
+            .and_then(|h| {
+                h.lock()
+                    .ok()
+                    .map(|s| s.execution == muta_contracts::WorkspaceExecutionProfile::Development)
+            })
             .unwrap_or(false);
 
         if is_development_trusted {
@@ -457,6 +528,59 @@ mod workspace_tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn additional_roots_widen_admission_without_losing_primary() {
+        let root = scratch();
+        let sibling = scratch(); // a separate project root
+        let stranger = scratch(); // neither root
+        let sibling_file = sibling.join("api.rs");
+        std::fs::write(&sibling_file, b"sibling").unwrap();
+        let stranger_file = stranger.join("secret.txt");
+        std::fs::write(&stranger_file, b"secret").unwrap();
+
+        let env = WorkspaceExecutionEnvironment::with_additional_roots(
+            &root,
+            vec![sibling.canonicalize().unwrap()],
+        );
+
+        // Relative resolution still binds to the primary root only.
+        env.fs()
+            .write(Path::new("primary.txt"), b"ok")
+            .await
+            .unwrap();
+        assert_eq!(
+            env.fs().read(&root.join("primary.txt")).await.unwrap(),
+            b"ok"
+        );
+        // The admitted sibling root is now readable and writable...
+        assert_eq!(env.fs().read(&sibling_file).await.unwrap(), b"sibling");
+        env.fs()
+            .write(&sibling.join("note.md"), b"cross")
+            .await
+            .unwrap();
+        // ...while an unadmitted third location still fails closed.
+        assert!(matches!(
+            env.fs().read(&stranger_file).await,
+            Err(FsError::PermissionDenied(_))
+        ));
+        // The sandbox env carries the roots for the bash tool to bind.
+        assert_eq!(env.additional_roots(), &[sibling.canonicalize().unwrap()]);
+    }
+
+    #[tokio::test]
+    async fn additional_root_inside_workspace_is_ignored() {
+        // A root nested inside the primary adds no authority; the loader
+        // rejects it, and the environment defensively drops it too.
+        let root = scratch();
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let env = WorkspaceExecutionEnvironment::with_additional_roots(
+            &root,
+            vec![nested.canonicalize().unwrap()],
+        );
+        assert!(env.additional_roots().is_empty());
+    }
+
+    #[tokio::test]
     async fn workspace_fs_denies_symlink_escape() {
         let root = scratch();
         let outside = scratch().join("secret.txt");
@@ -487,7 +611,7 @@ mod workspace_tests {
 
     #[tokio::test]
     async fn every_builtin_file_discovery_path_rejects_workspace_escape() {
-        use crate::tools::{FindTool, GlobTool, GrepTool, ListDirTool, ReadImageTool};
+        use crate::tools::{FindFilesTool, ListDirTool, ReadImageTool, SearchTextTool};
         use muta_contracts::Tool;
 
         let root = scratch();
@@ -499,56 +623,44 @@ mod workspace_tests {
         let env: std::sync::Arc<dyn ExecutionEnvironment> =
             std::sync::Arc::new(WorkspaceExecutionEnvironment::new(&root));
 
-        let find = FindTool::with_env(env.clone());
-        let glob = GlobTool::with_env(env.clone());
-        let grep = GrepTool::with_env(env.clone());
+        let find_files = FindFilesTool::with_env(env.clone());
+        let search_text = SearchTextTool::with_env(env.clone());
         let list = ListDirTool::with_env(env.clone());
         let image = ReadImageTool::with_env(env);
 
         assert!(
-            find.call(&serde_json::json!({ "path": outside_root }).to_string())
+            find_files
+                .call(&serde_json::json!({ "patterns": ["*"], "path": outside_root }).to_string())
                 .await
                 .unwrap_err()
-                .contains("outside workspace")
+                .contains("outside the admitted workspace roots")
         );
         assert!(
-            glob.call(&serde_json::json!({ "pattern": "*", "path": outside_root }).to_string())
+            search_text
+                .call(&serde_json::json!({ "query": "secret", "path": outside_text }).to_string())
                 .await
                 .unwrap_err()
-                .contains("outside workspace")
-        );
-        assert!(
-            grep.call(
-                &serde_json::json!({ "pattern": "secret", "path": outside_text }).to_string()
-            )
-            .await
-            .unwrap_err()
-            .contains("outside workspace")
+                .contains("outside the admitted workspace roots")
         );
         assert!(
             list.call(&serde_json::json!({ "path": outside_root }).to_string())
                 .await
                 .unwrap_err()
-                .contains("outside workspace")
+                .contains("outside the admitted workspace roots")
         );
         assert!(
             image
                 .call(&serde_json::json!({ "path": outside_image }).to_string())
                 .await
                 .unwrap_err()
-                .contains("outside workspace")
+                .contains("outside the admitted workspace roots")
         );
         assert!(
-            glob.call(r#"{"pattern":"../*","path":"."}"#)
+            find_files
+                .call(r#"{"patterns":["*"],"path":"../outside"}"#)
                 .await
                 .unwrap_err()
-                .contains("must stay relative")
-        );
-        assert!(
-            list.call(r#"{"pattern":"../*","path":"."}"#)
-                .await
-                .unwrap_err()
-                .contains("must stay relative")
+                .contains("relative to the workspace")
         );
     }
 
@@ -564,7 +676,8 @@ mod workspace_tests {
             },
         ));
 
-        let env = WorkspaceExecutionEnvironment::with_security_handle(&root, security_snapshot.clone());
+        let env =
+            WorkspaceExecutionEnvironment::with_security_handle(&root, security_snapshot.clone());
 
         // When untrusted (Unknown), uses Sandbox if available, else Host fallback
         assert_eq!(

@@ -180,7 +180,7 @@ pub struct Theme {
     /// theme tokens rather than magic `Color::Rgb` literals, so retuning
     /// the palette in one place retunes every block. The diff block is
     /// the reference renderer — it owns the row/highlight pair — and the
-    /// flat code blocks (read / bash / listing / grep / markdown) reuse
+    /// flat code blocks (read / bash / listing / matches / markdown) reuse
     /// the same token system via [`code_surface`](Theme::code_surface).
     /// Low-chroma row tint so added/removed blocks read at a glance.
     pub diff_add_bg: Color,

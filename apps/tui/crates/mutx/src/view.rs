@@ -1314,7 +1314,7 @@ mod tests {
             duration_ms: 5,
         };
         // Turn 1: a 3-call concurrent batch.
-        for (id, name) in [("a", "read_text"), ("b", "grep"), ("c", "list_dir")] {
+        for (id, name) in [("a", "read_text"), ("b", "search_text"), ("c", "list_dir")] {
             task.push_envoy_event(&call(id, name, 1, 0));
             task.push_envoy_event(&result(id, name));
         }
@@ -1388,14 +1388,14 @@ mod tests {
         assert!(body.contains("turn 1"), "expected a `turn 1` band: {body}");
         assert!(body.contains("turn 2"), "expected a `turn 2` band: {body}");
         // Same-turn sibling calls are flush (no blank row between `read_text`
-        // and `grep` inside turn 1); the two turns are separated by a blank.
+        // and `search_text` inside turn 1); the two turns are separated by a blank.
         let line_of = |needle: &str| {
             rows.iter()
                 .position(|r| r.contains(needle))
                 .unwrap_or_else(|| panic!("no row containing {needle}"))
         };
         let t1_first = line_of("Read");
-        let t1_second = line_of("Grep");
+        let t1_second = line_of("Search");
         assert_eq!(t1_second, t1_first + 1, "same-turn calls stay flush");
         // turn 2's header sits at least one blank row after turn 1's batch.
         let t2_header = line_of("turn 2");
@@ -1415,7 +1415,7 @@ mod tests {
         );
         task.push_envoy_event(&muta_contracts::EnvoyEvent::ToolCall {
             id: "inner".into(),
-            name: "grep".into(),
+            name: "search_text".into(),
             arguments: r#"{"pattern":"foo"}"#.into(),
             round: 1,
             turn: 0,

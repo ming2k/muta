@@ -19,10 +19,10 @@ mod bash;
 mod diff;
 mod edit;
 mod fallback;
-mod grep;
 mod meta;
 mod read;
 mod read_image;
+mod search;
 mod web;
 
 pub(crate) use diff::DiffCache;
@@ -106,10 +106,10 @@ impl ToolStatus {
 pub enum ResultKind {
     /// Line-numbered code block (default / unknown tools, `read_text`).
     Code,
-    /// Directory / glob listing.
+    /// Directory or file-search listing.
     Listing,
-    /// Ripgrep-style `path:line:match` rendering.
-    Grep,
+    /// `path:line:match` search-result rendering.
+    Matches,
     /// Shell output with `$ command` framing and exit/section markers.
     Bash,
     /// A red/green line diff derived from a structured patch result. Legacy
@@ -122,7 +122,7 @@ pub enum ResultKind {
 pub enum ArgLayout {
     /// No arguments section — the header summary already captures the inputs
     /// (the default for tools whose summary names their key argument, e.g.
-    /// `Read path`, `Grep "pat" in path`). Edit/write also use this: the path
+    /// `Read path`, `Search "query" in path`). Edit/write also use this: the path
     /// is in the header and the content is in the diff.
     None,
     /// A single wrapped command string (bash), shown under an `Arguments`
@@ -195,10 +195,9 @@ pub fn presenter_for(name: &str) -> &'static dyn ToolPresenter {
         "edit_file" => &edit::EditPresenter,
         "write_file" => &edit::WritePresenter,
         "bash" => &bash::BashPresenter,
-        "grep" => &grep::GrepPresenter,
-        "glob" => &grep::GlobPresenter,
-        "list_dir" => &grep::ListDirPresenter,
-        "find" => &grep::FindPresenter,
+        "find_files" => &search::FindFilesPresenter,
+        "list_dir" => &search::ListDirPresenter,
+        "search_text" => &search::SearchTextPresenter,
         "webfetch" => &web::WebFetchPresenter,
         "websearch" => &web::WebSearchPresenter,
         "todo" => &meta::TodoPresenter,
@@ -283,18 +282,18 @@ mod tests {
         );
         assert_eq!(
             summary(
-                "grep",
-                serde_json::json!({"pattern": "ToolStep", "path": "src"})
+                "search_text",
+                serde_json::json!({"query": "ToolStep", "path": "src"})
             ),
-            "Grep \"ToolStep\" in src"
+            "Search \"ToolStep\" in src"
         );
     }
 
     #[test]
-    fn bash_summary_uses_first_command_line() {
+    fn bash_summary_uses_process_name() {
         assert_eq!(
             summary("bash", serde_json::json!({"command": "cargo build\nmore"})),
-            "Run cargo build"
+            "Run cargo"
         );
     }
 

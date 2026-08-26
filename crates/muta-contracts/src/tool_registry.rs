@@ -79,6 +79,84 @@ impl ToolContext {
     pub fn workspace_root(&self) -> Option<&std::path::Path> {
         self.get::<WorkspaceRoot>().map(|root| root.0.as_path())
     }
+
+    /// The session's admitted root set, when the bootstrap provided one.
+    ///
+    /// `None` means the session declared no additional roots (or predates
+    /// ADR-0142); callers fall back to [`Self::workspace_root`]-only
+    /// admission, which is the strictly narrower set.
+    pub fn workspace_roots(&self) -> Option<&WorkspaceRoots> {
+        self.get::<WorkspaceRoots>()
+    }
+}
+
+/// The session's complete admitted filesystem authority (ADR-0142): the
+/// primary workspace root plus any configured additional roots.
+///
+/// The primary root keeps every historical duty — relative paths resolve
+/// against it, shells start in it, project-bound discovery (skills,
+/// extensions, `.muta/config.toml`) reads only it. Additional roots purely
+/// *widen admission*: a path under any root passes the sandbox's
+/// containment check instead of failing closed. This is the cross-project
+/// escape hatch — a session for a frontend repo can admit the sibling
+/// backend repo without `/trust`-ing host execution or re-rooting.
+///
+/// Every root is stored canonicalized at assembly time, so containment
+/// checks are plain `starts_with` on lexical paths with no symlink
+/// re-resolution per operation.
+#[derive(Debug, Clone)]
+pub struct WorkspaceRoots {
+    primary: std::path::PathBuf,
+    additional: Vec<std::path::PathBuf>,
+}
+
+impl WorkspaceRoots {
+    /// Single-root authority: admission is exactly the primary root.
+    pub fn single(primary: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            primary: primary.into(),
+            additional: Vec::new(),
+        }
+    }
+
+    /// Multi-root authority. The primary keeps its duties; `additional`
+    /// (already canonicalized by the loader) widens admission only.
+    pub fn new(
+        primary: impl Into<std::path::PathBuf>,
+        additional: Vec<std::path::PathBuf>,
+    ) -> Self {
+        Self {
+            primary: primary.into(),
+            additional,
+        }
+    }
+
+    /// The root relative paths resolve against and shells start in.
+    pub fn primary(&self) -> &std::path::Path {
+        self.primary.as_path()
+    }
+
+    /// Configured additional roots, in declaration order.
+    pub fn additional(&self) -> &[std::path::PathBuf] {
+        self.additional.as_slice()
+    }
+
+    /// Every admitted root: primary first, then additional in order.
+    pub fn iter(&self) -> impl Iterator<Item = &std::path::Path> {
+        std::iter::once(self.primary.as_path()).chain(self.additional.iter().map(|p| p.as_path()))
+    }
+
+    /// Admission check: does `path` (already canonical/absolute) fall under
+    /// any admitted root? An empty root set admits nothing, so this stays
+    /// fail-closed for degenerate configurations.
+    pub fn contains(&self, path: &std::path::Path) -> bool {
+        self.iter().any(|root| path.starts_with(root))
+    }
+
+    /// True when the session admitted anything beyond the primary root.
+    pub fn is_multi_root(&self) -> bool {
+        !self.additional.is_empty()
+    }
 }
 
 /// Builder for [`ToolContext`]. Provide services by concrete type, then
@@ -981,7 +1059,7 @@ mod tests {
     fn resolve_for_intersects_agent_and_model_scope() {
         let pool = ToolSet::from_tools(vec![
             cap("read_text", "default", false),
-            cap("grep", "default", false),
+            cap("search_text", "default", false),
             cap("write_file", "default", false),
         ]);
         // Agent admits read_text + write_file; model admits everything (All).
@@ -1115,5 +1193,33 @@ mod tests {
         let handle: Arc<i32> = ctx.shared::<i32>().unwrap();
         assert_eq!(*handle, 7);
         assert!(ctx.shared::<u64>().is_none());
+    }
+    #[test]
+    fn workspace_roots_admission_and_visibility() {
+        use super::WorkspaceRoots;
+        use std::path::Path;
+
+        let roots = WorkspaceRoots::new("/proj/frontend", vec!["/proj/backend".into()]);
+        // Primary keeps its resolution duties.
+        assert_eq!(roots.primary(), Path::new("/proj/frontend"));
+        assert!(roots.is_multi_root());
+        // Admission spans every root...
+        assert!(roots.contains(Path::new("/proj/frontend/src/main.rs")));
+        assert!(roots.contains(Path::new("/proj/backend/api.rs")));
+        // ...and fails closed elsewhere.
+        assert!(!roots.contains(Path::new("/proj/design-kit/logo.png")));
+        assert!(!roots.contains(Path::new("/etc/passwd")));
+        // Surfacing: primary first, then additional in declaration order.
+        let listed: Vec<&Path> = roots.iter().collect();
+        assert_eq!(
+            listed,
+            vec![Path::new("/proj/frontend"), Path::new("/proj/backend")]
+        );
+
+        // The single-root construction admits exactly the primary.
+        let single = WorkspaceRoots::single("/proj/frontend");
+        assert!(!single.is_multi_root());
+        assert!(single.contains(Path::new("/proj/frontend/x")));
+        assert!(!single.contains(Path::new("/proj/backend/x")));
     }
 }

@@ -2119,13 +2119,13 @@ mod tests {
         );
         // Focused row's description is revealed.
         assert!(
-            text.contains("Claude models over the Anthropic"),
+            text.contains("Flagship Claude models with advanced reasoning"),
             "focused description revealed: {text:?}"
         );
         // An unfocused row's description is hidden (Antigravity OAuth is
         // further down the sorted list).
         assert!(
-            !text.contains("via Google OAuth subscription"),
+            !text.contains("Google One AI Premium"),
             "unfocused rows show title only: {text:?}"
         );
         // The old meta run is gone. Checked per line, and only for a DIGIT-

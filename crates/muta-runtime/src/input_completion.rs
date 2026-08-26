@@ -728,7 +728,10 @@ mod tests {
             expand_usage_options("/repeat cancel <id>"),
             vec!["/repeat cancel"]
         );
-        assert_eq!(expand_usage_options("/repeat <cron> <prompt>"), Vec::<String>::new());
+        assert_eq!(
+            expand_usage_options("/repeat <cron> <prompt>"),
+            Vec::<String>::new()
+        );
         assert_eq!(expand_usage_options("/init [path]"), Vec::<String>::new());
         assert_eq!(expand_usage_options("/models"), Vec::<String>::new());
     }

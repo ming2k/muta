@@ -194,6 +194,14 @@ pub trait ExecutionEnvironment: Send + Sync {
     /// The canonical root directory for this environment.
     fn workspace_root(&self) -> &Path;
 
+    /// Canonicalized additional roots admitted alongside the primary
+    /// (ADR-0142). Empty for the default single-root environment; shell
+    /// sandboxes bind each entry read-write and path confinement admits
+    /// anything under them.
+    fn additional_roots(&self) -> &[PathBuf] {
+        &[]
+    }
+
     /// Required containment for shell-capable tools.
     fn shell_isolation(&self) -> ShellIsolation {
         ShellIsolation::Host

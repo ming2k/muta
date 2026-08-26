@@ -183,7 +183,7 @@ pub async fn add(
         api_key_env: None,
         client_identity,
         transport: if is_preset { None } else { Some(transport) },
-        base_url,
+        base_url: if is_preset { None } else { base_url },
         user_agent: if is_preset { None } else { user_agent },
         models: if is_preset {
             Vec::new()
@@ -282,15 +282,14 @@ pub async fn edit(
     if let Some(ci) = client_identity {
         instance.client_identity = ci;
     }
-    // OAuth connections' endpoint and bearer are resolved by the auth flow; the
-    // editor hides Base URL/Token for OAuth, but the server guards too so a
-    // malformed/empty payload can't wipe them.
+    // OAuth connections' endpoint and bearer are resolved by the auth flow;
+    // Preset connections' endpoints are derived from the hardcoded preset spec.
+    // Pure-custom connections (preset_id = None) adopt the edited base_url and transport.
     if !instance.auth.is_oauth() {
-        if !trimmed_url.is_empty() {
-            instance.base_url = Some(trimmed_url.to_string());
-        }
-        // A pure-custom connection also adopts the edited transport.
         if instance.preset_id.is_none() {
+            if !trimmed_url.is_empty() {
+                instance.base_url = Some(trimmed_url.to_string());
+            }
             instance.transport = Some(transport);
         }
         // An empty key keeps whatever the instance already had.

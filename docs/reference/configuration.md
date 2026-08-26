@@ -185,6 +185,36 @@ The optional `[tool_variants]` table pins per-model tool variant selections
 (`capability → variant_id`), one table per model id — e.g. which tool schema
 variant a model receives for a capability with several implementations.
 
+## Additional workspace roots
+
+The optional `[workspace]` table lives in the **project-local**
+`.muta/config.toml` (not the global file) and widens the session's admitted
+filesystem boundary for cross-project work — the escape hatch from
+single-workspace containment.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `workspace.additional_roots` | `[]` | Extra directories admitted alongside the project root. Relative paths resolve against the **project root** (never the process cwd); `~` expands to the user's home |
+
+```toml
+# .muta/config.toml in the project root
+[workspace]
+additional_roots = ["../backend", "~/projects/design-kit"]
+```
+
+Admission is enforced at every layer: file tools may read and write under any
+admitted root, and the bash sandbox bind-mounts each root read-write while
+keeping the rest of the host invisible. Everything else stays bound to the
+primary root — relative paths, the shell's cwd, and project-bound discovery
+(skills, extensions, `.muta/config.toml` itself).
+
+Entries are validated at session start. An entry that does not exist, is not
+a directory, is the workspace root itself, or nests inside the workspace is
+rejected with an error naming the entry; the session then falls back to
+strict single-root containment (the reason is logged) rather than starting
+half-admitted. Duplicate entries that resolve to the same directory collapse
+silently.
+
 ## Per-model reasoning settings
 
 Reasoning controls are **per route** — one (instance, model) pair — not per

@@ -23,7 +23,7 @@ impl FileOperations {
                     let path = args.get("path").and_then(|v| v.as_str());
 
                     match call.name.as_str() {
-                        "read_text" | "read_file" | "find" | "grep" => {
+                        "read_text" | "read_file" | "find_files" | "list_dir" | "search_text" => {
                             if let Some(p) = path {
                                 if !p.is_empty() && p != "." {
                                     self.read.insert(p.to_string());

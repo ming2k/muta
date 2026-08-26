@@ -48,7 +48,7 @@ disappears.
 | Model name | `brand` + BOLD |
 | Instance suffix | `@<instance>` in `muted`, after the effort tag — the provider instance's display name, so identical models served by different instances stay attributable (mirrors the `· <provider>` suffix in the Models picker) |
 | Reasoning effort | `{effort}` in `info` + BOLD, right after the model name — only while the active model is actually reasoning (Anthropic: thinking opted in; OpenAI: model exposes effort) |
-| Context usage | `89.2k` in `text_muted`; `(8%)` in threshold color (green/yellow/red); click opens the token-source report |
+| Context usage | Committed AI-visible context only: `89.2k` in `text_muted`; `(8%)` in threshold color (green/yellow/red); live composer drafts are excluded; click opens the token-source report |
 | Background | `surface` |
 
 There is no compose/browse mode pill: the TUI has a single navigation

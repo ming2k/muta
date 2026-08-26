@@ -84,7 +84,7 @@ pub(crate) use view::*;
 pub(crate) mod fuzzy;
 pub(crate) mod modal;
 pub(crate) mod providers;
-pub(crate) mod views;
+pub(crate) mod surfaces;
 
 #[cfg(test)]
 mod snapshot_tests;
@@ -1944,11 +1944,11 @@ pub async fn run_tui(
     let messages_for_loop = messages.clone();
 
     let mut app = App {
-        views: crate::views::ViewRegistry::new(),
+        panels: crate::surfaces::PanelRegistry::new(),
         surfaces: if startup_overlay == StartupOverlay::SessionsPicker {
-            crate::views::SurfaceRouter::with_view(crate::views::ViewId::Sessions)
+            crate::surfaces::SurfaceRouter::with_panel(crate::surfaces::PanelId::Sessions)
         } else {
-            crate::views::SurfaceRouter::new()
+            crate::surfaces::SurfaceRouter::new()
         },
         queue_exit_session: None,
         view_switcher_query: String::new(),
@@ -2182,7 +2182,7 @@ pub async fn run_tui(
     };
 
     if startup_overlay == StartupOverlay::SessionsPicker {
-        app.views.open(crate::views::ViewId::Sessions);
+        app.panels.open(crate::surfaces::PanelId::Sessions);
     }
 
     // Run app

@@ -120,6 +120,15 @@ pub struct Bootstrap {
     /// The primary agent (same `Arc` as `agent_for_session_end`), exposed so
     /// the registry can publish session-scoped tools onto it.
     pub agent: Arc<Agent>,
+    /// The workspace-authority store assembled for this session's project
+    /// root. The registry surfaces it on [`crate::registry::BoundSession`]
+    /// so the WS attach path can detect an unconfigured workspace and push
+    /// the trust decision to the attaching client. Bootstrap itself no
+    /// longer emits the trust question over `resp_rx` (see `assemble`): the
+    /// broadcast channel does not exist yet at that point, so the event
+    /// reached nobody. Attach-time replay in `serve.rs` is the delivery
+    /// mechanism instead.
+    pub security: Arc<WorkspaceSecurityStore>,
 }
 
 /// Ensure the four XDG application roots exist. Best-effort.
@@ -368,6 +377,37 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // self-register and are assembled explicitly below. MCP tools are
     // discovered at runtime and published directly to the principal Agent;
     // they are not part of this static capability set.
+    // Workspace security snapshot (ADR-0140) is computed once, early: it
+    // decides both the shell-sandbox state reported to the agent and — via
+    // the content-bound extension gate below — whether the project's
+    // declared additional workspace roots are admitted at all.
+    let workspace_security = Arc::new(WorkspaceSecurityStore::load());
+    let mut security_snapshot = workspace_security.snapshot(&project_root);
+    security_snapshot.sandbox = if muta_agent::execution::workspace_sandbox_available() {
+        WorkspaceSandboxState::Enforced
+    } else {
+        WorkspaceSandboxState::Unavailable
+    };
+    // Additional workspace roots (ADR-0142) are a project-config capability:
+    // a fresh clone can declare `additional_roots = ["~"]` and expect every
+    // host secret inside $HOME to become sandbox-admissible. The extension
+    // digest covers `.muta/config.toml`, so the same content-bound gate that
+    // quarantines MCP servers and hooks must gate root admission too. An
+    // untrusted project admits nothing beyond its own tree.
+    let additional_roots: Vec<std::path::PathBuf> = if security_snapshot.extensions.is_trusted() {
+        match Config::load_workspace_additional_roots(&project_root) {
+            Ok(roots) => roots,
+            Err(reason) => {
+                // Advisory like the mcp/hooks projections: a malformed
+                // [workspace] table starts the session under strict
+                // single-root containment rather than refusing to boot.
+                eprintln!("muta: additional workspace roots unavailable: {reason}");
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
     // Hot-reloadable `[websearch]` handle: the web tools hold the same `Arc`
     // (via the tool context below), and `UpdateWebSearchConfig` /
     // `/settings reload` write into it, so backend/reader/proxy changes
@@ -376,7 +416,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         config.websearch.clone(),
     ));
     let execution_env = Arc::new(
-        muta_agent::execution::WorkspaceExecutionEnvironment::new(project_root.clone()),
+        muta_agent::execution::WorkspaceExecutionEnvironment::with_additional_roots(
+            project_root.clone(),
+            additional_roots.clone(),
+        ),
     );
     let tool_ctx = {
         let mut builder = ToolContextBuilder::new();
@@ -394,6 +437,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         // client spawned it from — correct only by coincidence. This is the
         // fix for "launched in project A, session edits project B".
         builder.provide(muta_contracts::WorkspaceRoot(project_root.clone()));
+        builder.provide(muta_contracts::WorkspaceRoots::new(
+            project_root.clone(),
+            additional_roots.clone(),
+        ));
         builder.build()
     };
     let mut toolset: ToolSet = collect_toolset(&tool_ctx);
@@ -435,11 +482,14 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // underlying `Arc<EnvoyTool>` is what gets layered into the toolset.
     let envoy_tool_handle = envoy_tool.clone();
     toolset.insert(envoy_tool);
-    let agent = Arc::new(
-        Agent::builder_from_toolset(agent_provider, toolset, identity)
-            .with_skills((*skills_registry).clone())
-            .build(),
-    );
+    let mut agent = Agent::builder_from_toolset(agent_provider, toolset, identity)
+        .with_skills((*skills_registry).clone())
+        .build();
+    // Surface the admitted additional roots to the model (ADR-0142): the
+    // system prompt tells it cross-project paths are legal instead of letting
+    // it discover the widened boundary through trial and error.
+    agent.set_additional_workspace_roots(additional_roots.clone());
+    let agent = Arc::new(agent);
     // Override axis (model): envoys are agents on the same model, so they
     // inherit the parent's tool-variant selection. The profile still owns the
     // orthogonal scope axis.
@@ -469,13 +519,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // package — MCP servers, hooks, project skills AND project slash
     // commands — loads only after the current content has been explicitly
     // trusted. Global config is user-authored and trusted unconditionally.
-    let workspace_security = Arc::new(WorkspaceSecurityStore::load());
-    let mut security_snapshot = workspace_security.snapshot(&project_root);
-    security_snapshot.sandbox = if muta_agent::execution::workspace_sandbox_available() {
-        WorkspaceSandboxState::Enforced
-    } else {
-        WorkspaceSandboxState::Unavailable
-    };
     agent.set_workspace_security(security_snapshot.clone());
     let extensions_trusted = security_snapshot.extensions.is_trusted();
     let project_mcp = Config::load_project_mcp(&project_root);
@@ -493,59 +536,14 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // content-bound extension state), so bootstrap only needs the presence
     // checks for the notice; the background refresh finds no Repo-scope
     // sources while they are quarantined.
-    if security_snapshot.execution == WorkspaceExecutionProfile::Unknown {
-        let _ = resp_tx.send(round_response(
-            &session.id().await,
-            RoundEvent::Notice(
-                AgentNotice::new(
-                    NoticeKind::ReviewAlert,
-                    NoticeSeverity::Warning,
-                    "Workspace trust unconfigured",
-                    NoticeSource::Harness,
-                )
-                .with_surface(NoticeSurface::Banner)
-                .with_body(
-                    "This workspace has no persisted trust decision. Choose an option below or run \
-                     `/trust` to authorize development in this project.",
-                ),
-            ),
-        ));
-        let _ = resp_tx.send(round_response(
-            &session.id().await,
-            RoundEvent::UserQuestionRequest(muta_contracts::UserQuestionRequest {
-                id: format!("trust-{}", session.id().await),
-                questions: vec![muta_contracts::UserQuestion {
-                    header: Some("Workspace Trust".to_string()),
-                    question: format!("Trust this workspace?\n{}", project_root.display()),
-                    options: vec![
-                        muta_contracts::UserQuestionOption {
-                            label: "Trust (Full Development & Extensions)".to_string(),
-                            description: Some(
-                                "Allow full editing, tests, and command execution; load project extensions (MCP, hooks, skills)"
-                                    .to_string(),
-                            ),
-                        },
-                        muta_contracts::UserQuestionOption {
-                            label: "Trust Workspace Only (Quarantine Extensions)".to_string(),
-                            description: Some(
-                                "Allow full editing, tests, and command execution, but keep project MCP servers, hooks, and skills quarantined"
-                                    .to_string(),
-                            ),
-                        },
-                        muta_contracts::UserQuestionOption {
-                            label: "Read-only (Strict Sandbox)".to_string(),
-                            description: Some(
-                                "Inspect and analyze codebase safely; commands require explicit individual approval in a strict network-disabled sandbox"
-                                    .to_string(),
-                            ),
-                        },
-                    ],
-                    multi_select: false,
-                }],
-                origin: None,
-            }),
-        ));
-    }
+    // Workspace-trust prompt: deliberately NOT emitted here. Bootstrap runs
+    // before the session's broadcast channel exists — a question sent on
+    // `resp_rx` reaches the tap task only after the channel is created, and
+    // the tap broadcasts to zero subscribers, so the trust question was
+    // silently dropped and no client ever saw it. The WS attach path
+    // (`serve.rs`) now pushes the prompt to each attaching client while the
+    // workspace remains unconfigured, which is the delivery path that
+    // actually reaches a human.
     if security_snapshot.execution == WorkspaceExecutionProfile::Development
         && security_snapshot.sandbox == WorkspaceSandboxState::Unavailable
     {
@@ -921,7 +919,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         skills_registry,
         envoy_registry,
         mcp_runtime,
-        workspace_security,
+        workspace_security: workspace_security.clone(),
         commands: commands_for_task,
         command_catalog: command_catalog.clone(),
         embedding_store: embedding_store_for_commands,
@@ -953,5 +951,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         input_history_config,
         extra_session_tools,
         agent: agent_for_session_end.clone(),
+        security: workspace_security.clone(),
     })
 }

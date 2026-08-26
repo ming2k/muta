@@ -68,9 +68,8 @@ pub(crate) fn resolve_workspace_path(base: &WorkspaceBase, path: &str) -> PathBu
 
 /// Directories that are almost never interesting to search or list and can be
 /// enormous: VCS metadata, dependency trees, and build output. These are shared
-/// by `grep`, `glob`, and `list_dir` so the three tools prune the *same* set
-/// of directories and never disagree about what exists in a tree (previously
-/// grep skipped 4 dirs, glob skipped 10, and list skipped none).
+/// by `find_files` and `search_text` so discovery and content search prune the
+/// same set of directories and never disagree about the searchable tree.
 pub(crate) const IGNORED_DIRS: &[&str] = &[
     ".git",
     "node_modules",
@@ -90,16 +89,6 @@ pub(crate) const IGNORED_DIRS: &[&str] = &[
     ".idea",
     ".vscode",
 ];
-
-/// True if `path` has any component matching [`IGNORED_DIRS`].
-pub(crate) fn should_skip_path(path: &std::path::Path) -> bool {
-    path.components().any(|component| {
-        component
-            .as_os_str()
-            .to_str()
-            .is_some_and(|name| IGNORED_DIRS.contains(&name))
-    })
-}
 
 /// Extract a string field from JSON arguments for `permission_scope`.
 pub(crate) fn json_string(arguments: &str, key: &str) -> String {

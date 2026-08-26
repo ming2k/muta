@@ -1083,6 +1083,103 @@ impl Config {
         }
     }
 
+    /// Load only the `[workspace]` table from a project-local
+    /// `.muta/config.toml` (ADR-0142). Returns an empty vec when the file or
+    /// table is absent. Like [`Self::load_project_mcp`], this is a *narrow*
+    /// projection so an unrelated or partially-invalid key elsewhere in the
+    /// project file does not fail the whole load.
+    ///
+    /// Each declared path is resolved **relative to the project root** (never
+    /// the process cwd) with `~` expansion, then canonicalized. Validation is
+    /// deliberately eager and total: one bad entry fails the whole table with
+    /// a message naming the entry, because silently dropping a root the user
+    /// relies on mid-workflow is worse than refusing to widen admission. The
+    /// caller decides whether to treat that as fatal or advisory.
+    pub fn load_workspace_additional_roots(
+        project_root: &std::path::Path,
+    ) -> Result<Vec<std::path::PathBuf>, String> {
+        let path = project_root.join(".muta/config.toml");
+        let Ok(content) = fs::read_to_string(&path) else {
+            return Ok(Vec::new());
+        };
+        #[derive(Deserialize)]
+        struct ProjectWorkspaceProjection {
+            #[serde(default)]
+            workspace: WorkspaceTableProjection,
+        }
+        #[derive(Deserialize, Default)]
+        struct WorkspaceTableProjection {
+            #[serde(default)]
+            additional_roots: Vec<String>,
+        }
+        let parsed = toml::from_str::<ProjectWorkspaceProjection>(&content)
+            .map_err(|err| format!("invalid [workspace] table in {}: {err}", path.display()))?;
+        if parsed.workspace.additional_roots.is_empty() {
+            return Ok(Vec::new());
+        }
+        let canonical_root =
+            std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let mut resolved_roots = Vec::new();
+        for raw in &parsed.workspace.additional_roots {
+            let expanded: std::path::PathBuf = if raw == "~" {
+                home.clone().ok_or_else(|| {
+                    "[workspace].additional_roots: '~' used but HOME is unset".to_string()
+                })?
+            } else if let Some(rest) = raw.strip_prefix("~/") {
+                match &home {
+                    Some(h) => h.join(rest),
+                    None => {
+                        return Err(format!(
+                            "[workspace].additional_roots: '{raw}' uses '~' but HOME is unset"
+                        ));
+                    }
+                }
+            } else {
+                std::path::Path::new(raw)
+                    .starts_with("/")
+                    .then(|| std::path::PathBuf::from(raw))
+                    .unwrap_or_else(|| canonical_root.join(raw))
+            };
+            let expanded = if expanded.is_absolute() {
+                expanded
+            } else {
+                canonical_root.join(&expanded)
+            };
+            let canonical = std::fs::canonicalize(&expanded).map_err(|_| {
+                format!(
+                    "[workspace].additional_roots: '{}' does not exist",
+                    expanded.display()
+                )
+            })?;
+            if !canonical.is_dir() {
+                return Err(format!(
+                    "[workspace].additional_roots: '{}' is not a directory",
+                    canonical.display()
+                ));
+            }
+            if canonical == canonical_root {
+                return Err(format!(
+                    "[workspace].additional_roots: '{}' is the workspace root itself; it is already admitted",
+                    canonical.display()
+                ));
+            }
+            if canonical.starts_with(&canonical_root) {
+                return Err(format!(
+                    "[workspace].additional_roots: '{}' is inside the workspace and already admitted",
+                    canonical.display()
+                ));
+            }
+            // Distinct spellings of the same directory (relative plus
+            // absolute, a symlinked twin) collapse silently: admission is a
+            // set, and the second mention grants nothing new to reject.
+            if !resolved_roots.contains(&canonical) {
+                resolved_roots.push(canonical);
+            }
+        }
+        Ok(resolved_roots)
+    }
+
     /// Append project-local `[[hooks]]` to this config's (global-origin) hooks.
     /// Project hooks are appended *after* global ones so the global ordering is
     /// preserved; hook semantics within one event are order-independent (each
@@ -1654,6 +1751,109 @@ name = "DeepSeek"
         let dir = std::env::temp_dir().join(format!("muta-project-mcp-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join(".muta")).unwrap();
         dir
+    }
+
+    #[test]
+    fn load_workspace_additional_roots_empty_when_table_absent() {
+        let root = scratch_project_root();
+        assert!(
+            Config::load_workspace_additional_roots(&root)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn load_workspace_additional_roots_resolves_relative_and_absolute_entries() {
+        let root = scratch_project_root();
+        let sibling =
+            std::env::temp_dir().join(format!("muta-additional-root-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(
+            root.join(".muta/config.toml"),
+            format!(
+                r#"
+                    [workspace]
+                    additional_roots = ["../{}", "{}"]
+                "#,
+                sibling.file_name().unwrap().to_string_lossy(),
+                sibling.canonicalize().unwrap().display()
+            ),
+        )
+        .unwrap();
+        let roots = Config::load_workspace_additional_roots(&root).unwrap();
+        // Both spellings resolve to the same canonical sibling directory.
+        assert_eq!(roots, vec![sibling.canonicalize().unwrap()]);
+    }
+
+    #[test]
+    fn load_workspace_additional_roots_rejects_missing_and_nested_entries() {
+        let root = scratch_project_root();
+        // Missing directory.
+        std::fs::write(
+            root.join(".muta/config.toml"),
+            r#"
+                [workspace]
+                additional_roots = ["../does-not-exist-anywhere"]
+            "#,
+        )
+        .unwrap();
+        let err = Config::load_workspace_additional_roots(&root).unwrap_err();
+        assert!(err.contains("does not exist"), "{err}");
+
+        // Nested inside the workspace (already admitted).
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(
+            root.join(".muta/config.toml"),
+            r#"
+                [workspace]
+                additional_roots = ["nested"]
+            "#,
+        )
+        .unwrap();
+        let err = Config::load_workspace_additional_roots(&root).unwrap_err();
+        assert!(err.contains("already admitted"), "{err}");
+
+        // The workspace root itself.
+        let canonical = root.canonicalize().unwrap();
+        std::fs::write(
+            root.join(".muta/config.toml"),
+            format!(
+                r#"
+                    [workspace]
+                    additional_roots = ["{}"]
+                "#,
+                canonical.display()
+            ),
+        )
+        .unwrap();
+        let err = Config::load_workspace_additional_roots(&root).unwrap_err();
+        assert!(err.contains("workspace root itself"), "{err}");
+    }
+
+    #[test]
+    fn load_workspace_additional_roots_survives_unrelated_invalid_keys() {
+        // Narrow projection: a broken [mcp] table must not break [workspace].
+        let root = scratch_project_root();
+        let sibling =
+            std::env::temp_dir().join(format!("muta-additional-root-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(
+            root.join(".muta/config.toml"),
+            format!(
+                r#"
+                    [workspace]
+                    additional_roots = ["{}"]
+
+                    [mcp.broken]
+                    command = "not-an-array"
+                "#,
+                sibling.canonicalize().unwrap().display()
+            ),
+        )
+        .unwrap();
+        let roots = Config::load_workspace_additional_roots(&root).unwrap();
+        assert_eq!(roots, vec![sibling.canonicalize().unwrap()]);
     }
 
     #[test]

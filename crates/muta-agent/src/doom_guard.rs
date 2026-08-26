@@ -17,8 +17,8 @@
 //! This guard is the inverse on every axis:
 //! - **Pre-dispatch**: it runs *before* tools execute, so a repeated call never
 //!   produces side effects or output. The model only ever sees the refusal.
-//! - **All tools**: covers the common doom-loop culprits — `read`, `grep`,
-//!   `glob`, `list_dir`, `bash`, `webfetch`, `websearch`, `edit_file`,
+//! - **All tools**: covers the common doom-loop culprits — `read`,
+//!   `find_files`, `list_dir`, `search_text`, `bash`, `webfetch`, `websearch`, `edit_file`,
 //!   `write_file` — keyed by a normalised signature, not just reads.
 //! - **First repeat trips it (threshold = 2)**: by the time a call recurs in
 //!   one round, it is almost never productive, and the cost of letting it run
@@ -53,12 +53,12 @@ use crate::loop_guard::GuardAction;
 const WATCHED_TOOLS: &[&str] = &[
     "bash",
     "edit_file",
-    "glob",
-    "grep",
+    "find_files",
     "list_dir",
     "read",
     "read_image",
     "read_text",
+    "search_text",
     "webfetch",
     "websearch",
     "write_file",
@@ -76,22 +76,22 @@ pub(crate) fn covers(name: &str) -> bool {
 /// not.
 ///
 /// The key fields are picked per argument shape:
-/// - **Path-addressed calls** (`read`, `edit_file`, `write_file`, `list_dir`…):
-///   `name|path` — the target file/dir. We deliberately drop `offset`/`limit`
-///   so re-reading the same file at a new offset *does* count as a repeat
-///   (the read-loop guard's "forward paging" carve-out does not apply here:
-///   within a single turn, re-reading the same file at a different offset is
-///   almost always a symptom of the model losing track of what it already has
-///   in context). Mutations (`edit_file`/`write_file`) keep `path` only — two
-///   edits to the same path collide even if the patch differs, because an
-///   A→B→A thrash on one file is the classic doom loop.
+/// - **Range-addressed file reads** (`read_text`, `read`):
+///   `name|path|offset={offset}|limit={limit}` — normalized line range (ADR-0034).
+///   A read to a different offset/limit represents legitimate forward paging
+///   or section inspection and produces a distinct signature. Re-reading the
+///   identical range on the same path collides and is blocked.
+/// - **Path-addressed mutations / directory reads** (`edit_file`, `write_file`,
+///   `list_dir`, `read_image`): `name|path` — the target file/dir. Mutations
+///   keep `path` only because an A→B→A edit thrash on one file is the classic
+///   doom loop.
 /// - **Command-addressed calls** (`bash`): `name|command` — the literal command
 ///   string. Running the identical command twice in a turn is never productive.
-/// - **Query-addressed calls** (`grep`, `websearch`): `name|query` — the search
+/// - **Query-addressed calls** (`search_text`, `websearch`): `name|query` — the search
 ///   text. A different query is a different call; the same query again is a
 ///   repeat.
 /// - **URL-addressed calls** (`webfetch`): `name|url`.
-/// - **Pattern-only calls** (`glob`): `name|pattern`.
+/// - **Pattern-list calls** (`find_files`): the whole normalized argument set.
 /// - **Anything else / unparseable**: fall back to `name|<raw args>` so the
 ///   call is still keyed (two identical blobs still collide) but distinct
 ///   blobs stay distinct.
@@ -100,6 +100,56 @@ pub fn doom_signature(name: &str, args: &str) -> String {
         return format!("{name}|<unwatched>");
     }
     let value: Value = serde_json::from_str(args).unwrap_or(Value::Null);
+    if name == "find_files" {
+        let path = value
+            .get("path")
+            .and_then(Value::as_str)
+            .map(normalize_path_locator)
+            .unwrap_or_else(|| ".".to_string());
+        return format!(
+            "{name}|{path}|include={}|exclude={}",
+            normalized_string_array(&value, "patterns", false),
+            normalized_string_array(&value, "exclude", false)
+        );
+    }
+    if name == "search_text" {
+        let query = value
+            .get("query")
+            .and_then(Value::as_str)
+            .map(normalize_query_locator)
+            .unwrap_or_default();
+        let path = value
+            .get("path")
+            .and_then(Value::as_str)
+            .map(normalize_path_locator)
+            .unwrap_or_else(|| ".".to_string());
+        return format!(
+            "{name}|{query}|{path}|include={}|exclude={}|literal={}",
+            normalized_string_array(&value, "include", false),
+            normalized_string_array(&value, "exclude", false),
+            value
+                .get("literal")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        );
+    }
+    if name == "read_text" || name == "read" {
+        let path = value
+            .get("path")
+            .or_else(|| value.get("file_path"))
+            .or_else(|| value.get("file"))
+            .or_else(|| value.get("filename"))
+            .and_then(Value::as_str)
+            .map(normalize_path_locator)
+            .unwrap_or_default();
+        let offset = value
+            .get("offset")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            .max(1);
+        let limit = value.get("limit").and_then(Value::as_u64).unwrap_or(0);
+        return format!("{name}|{path}|offset={offset}|limit={limit}");
+    }
     // Prefer the most specific locator present, in priority order.
     for key in ["command", "cmd"] {
         if let Some(s) = value.get(key).and_then(Value::as_str) {
@@ -205,6 +255,27 @@ fn normalize_query_locator(raw: &str) -> String {
 fn normalize_path_locator(raw: &str) -> String {
     let trimmed = raw.trim().trim_end_matches('/');
     trimmed.strip_prefix("./").unwrap_or(trimmed).to_string()
+}
+
+fn normalized_string_array(value: &Value, key: &str, lowercase: bool) -> String {
+    let mut strings = value
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|item| {
+            let item = item.trim();
+            if lowercase {
+                item.to_lowercase()
+            } else {
+                item.to_string()
+            }
+        })
+        .collect::<Vec<_>>();
+    strings.sort();
+    strings.dedup();
+    strings.join(",")
 }
 
 /// The pre-dispatch doom-loop detector.
@@ -313,13 +384,28 @@ impl DoomLoopGuard {
 /// Reduce a machine signature (`name|locator`) to a short human phrase for the
 /// block message, e.g. `bash ls -la`, `read_text src/main.rs`.
 fn humanize_sig(signature: &str) -> String {
-    let mut parts = signature.splitn(2, '|');
-    let name = parts.next().unwrap_or("").trim();
-    let rest = parts.next().unwrap_or("");
-    if rest.is_empty() || rest == "<unwatched>" {
-        name.to_string()
+    let parts: Vec<&str> = signature.split('|').collect();
+    if (parts.first() == Some(&"read_text") || parts.first() == Some(&"read")) && parts.len() == 4 {
+        let name = parts[0];
+        let path = parts[1];
+        let offset = parts[2].strip_prefix("offset=").unwrap_or("1");
+        let limit = parts[3].strip_prefix("limit=").unwrap_or("0");
+        if offset == "1" && limit == "0" {
+            format!("{name} {path}")
+        } else if limit == "0" {
+            format!("{name} {path} :{offset},$")
+        } else {
+            format!("{name} {path} :{offset},limit={limit}")
+        }
     } else {
-        format!("{name} {rest}")
+        let mut parts = signature.splitn(2, '|');
+        let name = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("");
+        if rest.is_empty() || rest == "<unwatched>" {
+            name.to_string()
+        } else {
+            format!("{name} {rest}")
+        }
     }
 }
 
@@ -397,12 +483,25 @@ mod tests {
     }
 
     #[test]
-    fn path_keyed_read_ignores_offset() {
-        // read_text on the same file at a different offset is still a repeat
-        // under the doom guard — re-reading a file mid-turn is the smell.
-        let a = doom_signature("read_text", r#"{"path":"a.rs","offset":1}"#);
-        let b = doom_signature("read_text", r#"{"path":"a.rs","offset":50}"#);
-        assert_eq!(a, b, "same path collapses to one signature");
+    fn read_distinct_ranges_do_not_collide() {
+        let a = doom_signature("read_text", r#"{"path":"a.rs","offset":1,"limit":100}"#);
+        let b = doom_signature("read_text", r#"{"path":"a.rs","offset":101,"limit":100}"#);
+        assert_ne!(
+            a, b,
+            "different offsets must not collide so forward paging works"
+        );
+    }
+
+    #[test]
+    fn read_same_range_collides_and_normalizes_defaults() {
+        let a = doom_signature("read_text", r#"{"path":"a.rs"}"#);
+        let b = doom_signature("read_text", r#"{"path":"a.rs","offset":1,"limit":0}"#);
+        assert_eq!(
+            a, b,
+            "implicit defaults must match explicit offset 1 limit 0"
+        );
+        let c = doom_signature("read_text", r#"{"path":"a.rs","offset":1}"#);
+        assert_eq!(a, c);
     }
 
     #[test]
@@ -449,10 +548,24 @@ mod tests {
     fn humanize_sig_formats_locators() {
         assert_eq!(humanize_sig("bash|ls -la"), "bash ls -la");
         assert_eq!(
-            humanize_sig("read_text|src/main.rs"),
+            humanize_sig(&doom_signature("read_text", r#"{"path":"src/main.rs"}"#)),
             "read_text src/main.rs"
         );
-        assert_eq!(humanize_sig("grep"), "grep");
+        assert_eq!(
+            humanize_sig(&doom_signature(
+                "read_text",
+                r#"{"path":"src/main.rs","offset":110}"#
+            )),
+            "read_text src/main.rs :110,$"
+        );
+        assert_eq!(
+            humanize_sig(&doom_signature(
+                "read_text",
+                r#"{"path":"src/main.rs","offset":110,"limit":50}"#
+            )),
+            "read_text src/main.rs :110,limit=50"
+        );
+        assert_eq!(humanize_sig("search_text"), "search_text");
         assert_eq!(humanize_sig("use_skill|<unwatched>"), "use_skill");
     }
 
@@ -493,11 +606,24 @@ mod tests {
 
     #[test]
     fn query_casing_and_spacing_collide() {
-        let a = doom_signature("grep", r#"{"query":"TODO  fix"}"#);
-        let b = doom_signature("grep", r#"{"query":"todo fix"}"#);
+        let a = doom_signature("search_text", r#"{"query":"TODO  fix"}"#);
+        let b = doom_signature("search_text", r#"{"query":"todo fix"}"#);
         assert_eq!(a, b);
-        let c = doom_signature("grep", r#"{"query":"todo refactor"}"#);
+        let c = doom_signature("search_text", r#"{"query":"todo refactor"}"#);
         assert_ne!(b, c);
+    }
+
+    #[test]
+    fn file_pattern_order_does_not_change_search_intent() {
+        let a = doom_signature(
+            "find_files",
+            r#"{"patterns":["*.rs","*.toml"],"path":"./src"}"#,
+        );
+        let b = doom_signature(
+            "find_files",
+            r#"{"path":"src/","patterns":["*.toml","*.rs"]}"#,
+        );
+        assert_eq!(a, b);
     }
 
     #[test]

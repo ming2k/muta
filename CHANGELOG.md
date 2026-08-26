@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Consolidated filesystem discovery into `find_files`, renamed content search
+  to `search_text`, and made `list_dir` shallow-only. Tool policies that name
+  `glob`, `find`, or `grep` must use `find_files` or `search_text`; recursive
+  discovery now passes one or more glob strings in `find_files.patterns`.
+- Simplified TUI context accounting: the hint bar now shows only committed
+  context, while Context Usage folds a draft into its projected total and
+  breaks the draft down into composer text and approximate message framing.
+
 ## [0.34.4] - 2026-08-25
 
 ### Added

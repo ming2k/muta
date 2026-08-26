@@ -20,7 +20,7 @@
 ## Features
 
 - **Semantic TUI** — In-house grid + diff rendering engine (`mutx-engine`), built from scratch to replace ratatui. Retained-mode grid with write-marks-dirty diff, wide-glyph ownership, and `bce`-aware crossterm backend. Live status, expandable tool steps, and structured diffs.
-- **Tool Use** — Full ReAct loop with native and fallback tool-calling; bash, file I/O, grep, glob, web search, and MCP servers.
+- **Tool Use** — Full ReAct loop with native and fallback tool-calling; bash, file I/O, file discovery (`find_files`), text search (`search_text`), web search, and MCP servers.
 - **Scheduled Prompts** — Schedule prompts on a clock with `/schedule`: recurring cron jobs or one-shot countdown/absolute-time timers, so the agent can run on autopilot on a schedule.
 - **Session Daemon & Control Plane** — The `muta` core daemon owns every session across every project, while `mutx` and the web app are peer clients. Work survives closed terminals; `muta daemon status` provides a live multi-task view and `/dashboard` in `mutx` switches sessions without killing them.
 - **Durable Sessions** — Atomic persistence with compaction, resume, and fork.

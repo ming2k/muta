@@ -267,7 +267,7 @@ pub(crate) const MODAL_TITLE_META_GAP: usize = 2;
 
 // ── Block-level code/text surfaces ────────────────────────────────────────
 // Every block-level content surface — the markdown `Block::Code` band and the
-// tool-step result blocks (read / bash / listing / grep / diff) — shares ONE
+// tool-step result blocks (read / bash / listing / matches / diff) — shares ONE
 // design contract so a code block looks the same whether it sits in assistant
 // prose or inside an expanded tool step. These tokens are that contract: the
 // geometry every code band agrees on. Colors live in `theme` (incl. the diff

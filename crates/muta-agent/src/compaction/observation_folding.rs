@@ -81,8 +81,8 @@ mod tests {
             ), // > 2KB
             Message::new(Role::Assistant, "Found 200 files."),
             // Turn 2 (Old)
-            Message::new(Role::User, "Now grep for ActorHandle"),
-            Message::new(Role::Assistant, "Running grep..."),
+            Message::new(Role::User, "Now search for ActorHandle"),
+            Message::new(Role::Assistant, "Running search_text..."),
             Message::new(
                 Role::Tool,
                 "src/actor.rs: pub struct ActorHandle;\n".repeat(40),

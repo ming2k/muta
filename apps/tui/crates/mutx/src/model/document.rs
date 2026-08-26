@@ -3280,13 +3280,13 @@ mod tests {
         // An in-flight child tool call surfaces the tool's header.
         task.push_envoy_event(&EnvoyEvent::ToolCall {
             id: "inner".into(),
-            name: "grep".into(),
-            arguments: r#"{"pattern":"foo"}"#.into(),
+            name: "search_text".into(),
+            arguments: r#"{"query":"foo"}"#.into(),
             round: 1,
             turn: 0,
         });
         let running = task.envoy_status_line().expect("running status");
-        assert!(running.contains("Grep"), "got: {running}");
+        assert!(running.contains("Search"), "got: {running}");
 
         // Completing the parent hides the peek row; the outcome row takes over
         // with the envoy's one-line conclusion.
@@ -3565,8 +3565,8 @@ mod tests {
         // A nested tool call still in flight.
         task.push_envoy_event(&EnvoyEvent::ToolCall {
             id: "inner".into(),
-            name: "grep".into(),
-            arguments: r#"{"pattern":"foo"}"#.into(),
+            name: "search_text".into(),
+            arguments: r#"{"query":"foo"}"#.into(),
             round: 1,
             turn: 0,
         });

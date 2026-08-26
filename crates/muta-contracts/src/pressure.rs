@@ -493,7 +493,7 @@ fn arg_str<'a>(args: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
         .find_map(|k| args.get(*k).and_then(|v| v.as_str()))
 }
 
-/// Short label for a tool call, e.g. `read src/main.rs`, `grep "TODO"`, or just
+/// Short label for a tool call, e.g. `read src/main.rs`, `search_text "TODO"`, or just
 /// `bash` when no salient argument is found.
 fn tool_label(name: &str, arguments: &str) -> String {
     let args = parsed_args(arguments);
@@ -525,7 +525,7 @@ fn tool_label(name: &str, arguments: &str) -> String {
 }
 
 /// The file path a tool touched, used for staleness/dedup. `None` for tools that
-/// are not file-addressed (e.g. `bash`, `grep` without a file).
+/// are not file-addressed (e.g. `bash`, `search_text` without a file).
 fn file_key(_name: &str, arguments: &str) -> Option<String> {
     let args = parsed_args(arguments);
     arg_str(&args, &["path", "file_path", "file", "filename"]).map(|s| s.to_string())

@@ -169,7 +169,7 @@ pub use tokenizer::{StreamingCounter, Tokenizer, count_tokens, truncate_to_token
 pub use tool_output::truncate_utf8;
 pub use tool_registry::{
     Capability, ToolContext, ToolContextBuilder, ToolFactory, ToolScope, ToolSelection, ToolSet,
-    WorkspaceRoot, collect_toolset,
+    WorkspaceRoot, WorkspaceRoots, collect_toolset,
 };
 pub mod wire;
 pub use web_config::{SharedWebSearchConfig, WebSearchConfig};

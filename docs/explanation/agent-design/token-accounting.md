@@ -232,14 +232,14 @@ breakdown, and a recent-request event log; see
 
 The hint bar's context meter — the `89.2k (8%)` indicator pinned to the
 bottom-right — is now **clickable**. Clicking it opens a centered, read-only
-**Context Usage** modal. The top shows the current AI-visible context size
-plus the session-average model output rate; the request-usage list groups the
+**Context Usage** modal. The top shows the projected next-request size plus
+the session-average model output rate; the request-usage list groups the
 active session's attempts by user round, and a detail page expands a round
 into its model turns:
 
-```
+```text
 ┌─ Context Usage ───────────────────────────────────────────┐
-│ Size                 12.5k / 200.0k (6%)                  │
+│ Projected size       12.5k / 200.0k (6%)                  │
 │ Output rate          52.3 tok/s                           │
 │                                                          │
 │   Round      State        Tokens       TPS                │
@@ -250,9 +250,14 @@ into its model turns:
 └────────────────────────────────────────────────────────────┘
 ```
 
-The top read-out has two peer key/value rows: context **Size** and the
+The top read-out has two peer key/value rows: **Projected size** and the
 session-wide **Output rate** — the average tokens/sec across *every* request
-the session made, not just the last round. The label is "Output rate", not
+the session made, not just the last round. Projected size folds any unsent
+composer draft into one total rather than presenting it as a `+n` addend.
+The draft breakdown separates the tokenized composer text from **message
+framing**: the approximate chat-template overhead for the role and message
+boundaries. The framing value carries a `~` prefix because provider templates
+vary. The label is "Output rate", not
 "Throughput", deliberately: throughput implies end-to-end processing speed,
 but this figure *excludes* tool execution, hooks, and human-decision pauses —
 it isolates how fast the model itself generated. It is computed as Σ output
@@ -284,9 +289,9 @@ dropped.
 
 The report answers two questions at a glance:
 
-- **"What would the next request contain?"** — the current-context line is
-  available before the first request and refreshes after committed history
-  changes.
+- **"What would the next request contain?"** — the projected-size line is
+  available before the first request, refreshes after committed history
+  changes, and includes the current draft when one exists.
 - **"How fast is the model generating?"** — the output-rate line divides the
   session's output tokens by its total *generation* time (the time the model
   actually spent streaming, excluding tool execution and human-decision

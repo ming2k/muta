@@ -258,10 +258,9 @@ impl EnvoyProfile {
 const READ_ONLY_TOOLS: &[&str] = &[
     "read_text",
     "read_image",
-    "grep",
-    "find",
-    "glob",
+    "find_files",
     "list_dir",
+    "search_text",
     "webfetch",
     "websearch",
 ];
@@ -369,10 +368,9 @@ const QUANT_ANALYSIS_TOOLS: &[&str] = &[
     // Generic read-only inspection (shared with EXPLORE).
     "read_text",
     "read_image",
-    "grep",
-    "find",
-    "glob",
+    "find_files",
     "list_dir",
+    "search_text",
     "webfetch",
     "websearch",
     // Quant domain — read-only.
@@ -426,10 +424,9 @@ const CODING_TOOLS: &[&str] = &[
     // Generic read-only inspection (shared with EXPLORE).
     "read_text",
     "read_image",
-    "grep",
-    "find",
-    "glob",
+    "find_files",
     "list_dir",
+    "search_text",
     "webfetch",
     "websearch",
     // Workspace mutation — the code-editing surface.
@@ -593,7 +590,7 @@ mod tests {
     #[test]
     fn explore_admits_a_whitelisted_read_tool() {
         assert!(EXPLORE.tool_policy.admits(&make("read_text")));
-        assert!(EXPLORE.tool_policy.admits(&make("grep")));
+        assert!(EXPLORE.tool_policy.admits(&make("search_text")));
     }
 
     #[test]
@@ -666,18 +663,18 @@ mod tests {
 
     #[test]
     fn resolve_tools_applies_scope_and_runtime_rules() {
-        // `grep` is whitelisted → admitted. `bash` is not whitelisted → dropped
+        // `search_text` is whitelisted → admitted. `bash` is not whitelisted → dropped
         // by scope. `read_text` is whitelisted *but spawns an envoy* → dropped
         // by the runtime recursion rule despite passing the name scope.
         let toolset = ToolSet::from_tools(vec![
-            Arc::new(make("grep")) as Arc<dyn Tool>,
+            Arc::new(make("search_text")) as Arc<dyn Tool>,
             Arc::new(make("bash")) as Arc<dyn Tool>,
             Arc::new(with_spawn(make("read_text"))) as Arc<dyn Tool>,
         ]);
         let selected =
             EXPLORE.resolve_tools(&toolset, &test_model(), &ToolSelection::unrestricted());
         let names: Vec<&str> = selected.iter().map(|t| t.name()).collect();
-        assert_eq!(names, vec!["grep"]);
+        assert_eq!(names, vec!["search_text"]);
     }
 
     #[test]
@@ -729,7 +726,7 @@ mod tests {
         assert!(QUANT.tool_policy.admits(&make("list_positions")));
         // Shared read-only inspection: admitted.
         assert!(QUANT.tool_policy.admits(&make("read_text")));
-        assert!(QUANT.tool_policy.admits(&make("grep")));
+        assert!(QUANT.tool_policy.admits(&make("search_text")));
         // Live trading is NOT admitted — a quant analyst recommends, never
         // trades. Trading needs a separate, user-supervised profile.
         assert!(!QUANT.tool_policy.admits(&make("place_order")));
@@ -770,7 +767,7 @@ mod tests {
         assert!(CODE.tool_policy.admits(&make("todo")));
         // Shared read-only inspection: admitted.
         assert!(CODE.tool_policy.admits(&make("read_text")));
-        assert!(CODE.tool_policy.admits(&make("grep")));
+        assert!(CODE.tool_policy.admits(&make("search_text")));
         // A non-whitelisted tool is excluded (name scope is real — adding a
         // new tool to the parent never silently widens CODE).
         assert!(!CODE.tool_policy.admits(&make("some_new_tool")));

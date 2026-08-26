@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 pub enum ToolFileAccessOperation {
     /// Read a single file or tree, without modifying it.
     Read,
-    /// Search/grep across a tree. Treated as read-side for conflict purposes:
+    /// Search across a tree. Treated as read-side for conflict purposes:
     /// two searches never conflict.
     Search,
     /// Write/overwrite a file.
@@ -169,7 +169,7 @@ impl ToolAccesses {
     pub fn read_write_tree(path: impl Into<String>) -> Self {
         Self::none().with_file(ToolFileAccessOperation::ReadWrite, path, true)
     }
-    /// Search/grep a tree.
+    /// Search a tree.
     #[inline]
     pub fn search_tree(path: impl Into<String>) -> Self {
         Self::none().with_file(ToolFileAccessOperation::Search, path, true)

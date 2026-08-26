@@ -408,11 +408,26 @@ async fn handle_user_question_request(
 
     for q in &req.questions {
         if !is_tty {
-            let default_answer = q
-                .options
-                .first()
-                .map(|opt| opt.label.clone())
-                .unwrap_or_default();
+            // Non-interactive answering must fail closed. Blindly taking the
+            // first option silently granted full workspace trust (the prompt
+            // orders its options most-permissive-first for interactive
+            // convenience) to any piped/stdin-less invocation — a script or
+            // a cron wrapper would have "decided" trust on the operator's
+            // behalf. Security questions default to their least-privilege
+            // option instead, and we say so.
+            let default_answer = if req.id.starts_with("trust-") {
+                eprintln!(
+                    "mutx: workspace trust is unconfigured and stdin is not a TTY; \
+                     keeping the workspace restricted. Run an interactive session or \
+                     `/trust` to record a decision."
+                );
+                "Keep restricted".to_string()
+            } else {
+                q.options
+                    .first()
+                    .map(|opt| opt.label.clone())
+                    .unwrap_or_default()
+            };
             all_answers.push(vec![default_answer]);
             continue;
         }

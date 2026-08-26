@@ -193,6 +193,10 @@ pub struct Agent {
     /// `updated_at_round` for the TUI stale detector.
     round_counter: Arc<std::sync::Mutex<u64>>,
     permissions: crate::permission_store::PermissionStore,
+    /// Canonicalized additional workspace roots (ADR-0142), set once by the
+    /// assembling bootstrap. Kept as an owned copy so system-prompt assembly
+    /// never re-reads the project config mid-session.
+    additional_workspace_roots: Vec<std::path::PathBuf>,
     /// Workspace authority is orthogonal to interaction posture. Shared with
     /// spawned envoys so delegation cannot silently widen the parent's grant.
     workspace_security: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
@@ -949,6 +953,7 @@ impl Agent {
             todos,
             round_counter,
             permissions: crate::permission_store::PermissionStore::new(),
+            additional_workspace_roots: Vec::new(),
             workspace_security: Arc::new(std::sync::Mutex::new(
                 muta_contracts::WorkspaceSecuritySnapshot::default(),
             )),
@@ -1098,6 +1103,11 @@ impl Agent {
             provider_guidance,
             autopilot: self.get_autopilot(),
             available_skills,
+            additional_workspace_roots: self
+                .additional_workspace_roots
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
         }
     }
 
@@ -1424,6 +1434,18 @@ impl Agent {
     /// and the base relative file-tool paths resolve against. `None` when no
     /// project was designated (envoys, tests, or a detached session), in which
     /// case file injection is disabled.
+    /// Record the session's additional workspace roots (ADR-0142). Called
+    /// once by the assembling bootstrap after they validate; they surface to
+    /// the model through the `WorkspaceRootsGuidance` system-prompt section.
+    pub fn set_additional_workspace_roots(&mut self, roots: Vec<std::path::PathBuf>) {
+        self.additional_workspace_roots = roots;
+    }
+
+    /// The session's additional workspace roots, if any (ADR-0142).
+    pub fn additional_workspace_roots(&self) -> &[std::path::PathBuf] {
+        &self.additional_workspace_roots
+    }
+
     pub(crate) fn workspace_root(&self) -> Option<std::path::PathBuf> {
         self.permissions.project_root()
     }
@@ -3291,7 +3313,7 @@ impl Agent {
 
     /// Whether a tool call's [`ScopeTarget`] is [`ScopeTarget::Unspecified`] —
     /// i.e. the tool declares no locatable target (a pure read/search like
-    /// `read_text`, `grep`). Used to classify a turn as read-only for the
+    /// `read_text`, `search_text`). Used to classify a turn as read-only for the
     /// turn-hook streak counter. An unknown tool name reads as `true`
     /// (unspecified), matching the trait default.
     pub(crate) fn tool_target_is_unspecified(&self, name: &str, arguments: &str) -> bool {

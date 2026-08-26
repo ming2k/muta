@@ -42,6 +42,11 @@ pub struct HostedSession {
     /// (ADR-0093). Owned here so the broadcast-tap task can fold events in
     /// and the registry can read rows out for snapshots.
     pub tracker: Arc<Mutex<MonitorTracker>>,
+    /// Durable workspace-authority store for the project at
+    /// [`HostedSession::project_root`]. Surfaced through [`BoundSession`]
+    /// so the WS attach path can push the trust decision to a client when
+    /// the workspace has none yet (`WorkspaceExecutionProfile::Unknown`).
+    pub security: Arc<muta_persistence::workspace_security::WorkspaceSecurityStore>,
     /// Attach-time state-sync buffer: the startup events an attaching client
     /// cannot reconstruct (active provider/model, picker snapshot, key
     /// readiness). Filled by the broadcast-tap; drained into each new client
@@ -87,6 +92,7 @@ pub struct HostedSession {
 }
 #[derive(Clone)]
 pub struct BoundSession {
+    pub project_root: std::path::PathBuf,
     pub session: Arc<SessionStore>,
     pub req_tx: mpsc::UnboundedSender<AgentRequest>,
     pub events: broadcast::Sender<AgentResponse>,
@@ -95,6 +101,21 @@ pub struct BoundSession {
     /// client right after it subscribes, before it joins the live broadcast.
     pub sync_buffer: Arc<Mutex<VecDeque<AgentResponse>>>,
     pub command_catalog: muta_contracts::CommandCatalog,
+    /// Durable workspace-authority store for this session's project. The
+    /// WS attach path reads it to detect an *unconfigured* workspace
+    /// (`WorkspaceExecutionProfile::Unknown`) and push the trust decision
+    /// to the attaching client (see `serve.rs`). Bootstrap's own emission
+    /// of that question races the broadcast channel: it is sent before any
+    /// subscriber exists, so the broadcast drops it — attach-time replay
+    /// is the delivery mechanism that actually reaches a client.
+    pub security: Arc<muta_persistence::workspace_security::WorkspaceSecurityStore>,
+}
+
+impl BoundSession {
+    /// The canonical project root this session is bound to (ADR-0096).
+    pub fn project_root(&self) -> &std::path::Path {
+        &self.project_root
+    }
 }
 pub enum ResolveOutcome {
     Welcome(BoundSession),
@@ -886,11 +907,13 @@ impl SessionRegistry {
     pub async fn host(&self, entry: HostedSession) -> BoundSession {
         let id = entry.session.id().await;
         let b = BoundSession {
+            project_root: entry.project_root.clone(),
             session: entry.session.clone(),
             req_tx: entry.req_tx.clone(),
             events: entry.events.clone(),
             sync_buffer: entry.sync_buffer.clone(),
             command_catalog: entry.command_catalog.clone(),
+            security: entry.security.clone(),
         };
         let tracker = entry.tracker.clone();
         self.publish(MonitorEvent::SessionAdded(tracker.lock().await.row()))
@@ -1214,14 +1237,17 @@ impl SessionRegistry {
         });
         let id = session.id().await;
         let bound = BoundSession {
+            project_root: project_root.clone(),
             session: session.clone(),
             req_tx: req_tx.clone(),
             events: events_tx.clone(),
             sync_buffer: sync_buffer.clone(),
             command_catalog: command_catalog.clone(),
+            security: boot.security.clone(),
         };
         let hosted = Arc::new(HostedSession {
             project_root,
+            security: boot.security.clone(),
             session,
             req_tx,
             events: events_tx,
@@ -1248,11 +1274,13 @@ impl SessionRegistry {
     }
     fn bound_from(&self, e: &Arc<HostedSession>) -> BoundSession {
         BoundSession {
+            project_root: e.project_root.clone(),
             session: e.session.clone(),
             req_tx: e.req_tx.clone(),
             events: e.events.clone(),
             sync_buffer: e.sync_buffer.clone(),
             command_catalog: e.command_catalog.clone(),
+            security: e.security.clone(),
         }
     }
 

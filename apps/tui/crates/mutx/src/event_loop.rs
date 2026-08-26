@@ -1307,12 +1307,12 @@ async fn sync_runtime_state(
     if can_apply_backend_navigation && runtime.open_sessions.swap(false, Ordering::SeqCst) {
         // A retained view (ADR-0139): first show initializes; when
         // the picker is already up this signal is just a data refresh —
-        // `open_view` is a same-view re-focus that does not reset, so the
+        // `open_panel` is a same-view re-focus that does not reset, so the
         // cursor never snaps back on a delete (the refresh-while-open
         // regression this branch used to guard with an `opening` flag).
-        actions::enter_view(
+        actions::enter_panel(
             app,
-            crate::views::ViewId::Sessions,
+            crate::surfaces::PanelId::Sessions,
             runtime,
             &view_session_id,
         );
@@ -1321,7 +1321,12 @@ async fn sync_runtime_state(
         app.session_tree = tree;
     }
     if can_apply_backend_navigation && runtime.open_tree.swap(false, Ordering::SeqCst) {
-        actions::enter_view(app, crate::views::ViewId::Tree, runtime, &view_session_id);
+        actions::enter_panel(
+            app,
+            crate::surfaces::PanelId::Tree,
+            runtime,
+            &view_session_id,
+        );
     }
     // Mirror the daemon monitor snapshot for the `/host` panel.
     {
@@ -1346,7 +1351,7 @@ async fn sync_runtime_state(
         // entry-state ritual once; the cockpit log now lives for the
         // *view's* lifetime (cleared on first open, retained across
         // hide) — it is a session at the controls, not history.
-        actions::enter_view(app, crate::views::ViewId::Host, runtime, &view_session_id);
+        actions::enter_view(app, crate::surfaces::View::Dashboard, runtime);
     }
     // Mirror the on-demand session detail (info sub-view) when the
     // listener has a fresh one. Replacing `None` with `None` is a
@@ -2348,8 +2353,8 @@ pub(super) async fn run_app_loop(
 
 pub(super) fn tool_activity_status(name: &str) -> &'static str {
     match name {
-        "read_text" | "read_image" | "list_dir" | "find" | "glob" | "use_skill" => "exploring",
-        "grep" => "searching codebase",
+        "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" => "exploring",
+        "search_text" => "searching codebase",
         "write_file" | "edit_file" => "making edits",
         "bash" => "running command",
         name if name.starts_with("mcp__") => "using MCP",

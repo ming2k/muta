@@ -208,7 +208,7 @@ impl Tool for BashTool {
             let mut invocation = match env.shell_isolation() {
                 muta_contracts::ShellIsolation::Host => muta_platform::shell::native_shell(command),
                 muta_contracts::ShellIsolation::Workspace => {
-                    workspace_sandbox_shell(command, env.workspace_root())?
+                    workspace_sandbox_shell(command, env.workspace_root(), env.additional_roots())?
                 }
             };
             invocation
@@ -426,10 +426,12 @@ impl Tool for BashTool {
 fn workspace_sandbox_shell(
     command: &str,
     workspace_root: &std::path::Path,
+    additional_roots: &[std::path::PathBuf],
 ) -> Result<tokio::process::Command, String> {
-    muta_platform::workspace_sandbox::shell(
+    muta_platform::workspace_sandbox::shell_with_roots(
         command,
         workspace_root,
+        additional_roots,
         muta_platform::workspace_sandbox::WorkspaceAccess::ReadWrite,
         muta_platform::workspace_sandbox::NetworkAccess::Disabled,
     )

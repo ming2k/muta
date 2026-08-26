@@ -346,13 +346,6 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 busy,
                 can_retry,
                 context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
-                // Live composer-draft token count (framing included), shown
-                // as the `(+n)` addend next to the used-context figure.
-                draft_tokens: if app.input.is_empty() {
-                    0
-                } else {
-                    muta_contracts::count_tokens(&app.input)
-                },
                 ignition_elapsed_ms: app
                     .effort_ignition_epoch
                     .map(|epoch| epoch.elapsed().as_millis()),
@@ -908,6 +901,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 view::ContextUsageView {
                     snapshot: app.context_tokens,
                     window_tokens: crate::providers::model_context_window(&app.current_model),
+                    draft_content_tokens: muta_contracts::count_tokens(&app.input),
                     draft_tokens: muta_contracts::estimate_draft_tokens(&app.input),
                 },
                 app.modal_index
@@ -1075,15 +1069,15 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         // in MRU order, then the rest as discovery. Renders from the view
         // registry; Enter switches via `ViewSwitchActivate`.
         Modal::ViewSwitcher => {
-            let rows = app.views.switcher_rows_filtered(&app.view_switcher_query);
-            let open_ids = app.views.order().to_vec();
+            let rows = app.panels.switcher_rows_filtered(&app.view_switcher_query);
+            let open_ids = app.panels.order().to_vec();
             Some(view::draw_view_switcher(
                 f,
                 &rows,
                 &app.view_switcher_query,
                 app.modal_index,
                 &open_ids,
-                app.transient_return_view(),
+                app.transient_return_panel(),
                 &mut app.session_scroll,
                 app.session_modal_follow,
                 &app.theme,

@@ -58,6 +58,25 @@ async fn prehosted_with_catalog(
     let (req_tx, req_rx) = mpsc::unbounded_channel::<AgentRequest>();
     let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
     let registry = Arc::new(SessionRegistry::prehost_only());
+    // Pre-configure the workspace decision so the attach path's trust push
+    // (unconfigured workspaces only) stays out of these tests' frames.
+    // `unconfigured_workspace_pushes_trust_prompt_on_attach` covers that
+    // branch end-to-end. The state file needs its own directory: the
+    // atomic-write path chmods the *parent* private (0700), which fails
+    // with EPERM on the shared root-owned /tmp itself.
+    let state_dir = std::env::temp_dir().join(format!("muta-serve-it-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&state_dir).unwrap();
+    let security = Arc::new(
+        muta_persistence::workspace_security::WorkspaceSecurityStore::load_from(
+            state_dir.join("security.json"),
+        ),
+    );
+    security
+        .set_execution(
+            std::path::Path::new("/tmp/muta-test-project"),
+            muta_contracts::WorkspaceExecutionProfile::Development,
+        )
+        .unwrap();
     let base = idle_base(session.id().await);
     let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
         base,
@@ -94,6 +113,7 @@ async fn prehosted_with_catalog(
     registry
         .host(HostedSession {
             project_root: std::path::PathBuf::from("/tmp/muta-test-project"),
+            security,
             session,
             req_tx,
             events: bc_tx.clone(),
@@ -256,6 +276,9 @@ async fn host_with_project(registry: &SessionRegistry, project: std::path::PathB
     registry
         .host(HostedSession {
             project_root: project,
+            security: std::sync::Arc::new(
+                muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
+            ),
             session,
             req_tx,
             events: bc_tx,
@@ -1227,6 +1250,9 @@ async fn host_bare(
     registry
         .host(HostedSession {
             project_root: std::env::temp_dir().join("muta-reaper-project"),
+            security: std::sync::Arc::new(
+                muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
+            ),
             session,
             req_tx,
             events: bc_tx.clone(),
@@ -1775,6 +1801,9 @@ async fn control_suspend_session_parks_a_contentful_session() {
     registry
         .host(HostedSession {
             project_root: tmp.path().to_path_buf(),
+            security: std::sync::Arc::new(
+                muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
+            ),
             session,
             req_tx,
             events: bc_tx,
@@ -1807,4 +1836,114 @@ async fn control_suspend_session_parks_a_contentful_session() {
     );
     // Parked: gone from the hosted set (and the monitor row with it).
     assert!(!hosted_ids(&registry).await.contains(&id));
+}
+
+// ---------------------------------------------------------------------------
+// Workspace-trust attach push (regression: the trust question used to be
+// emitted during bootstrap, before the session's broadcast channel had any
+// subscriber, so the broadcast silently dropped it and no client ever saw
+// it. The WS attach path now pushes the prompt to each attaching client
+// while the workspace stays unconfigured.)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn unconfigured_workspace_pushes_trust_prompt_on_attach() {
+    let tmp = tempfile::tempdir().unwrap();
+    let security_file = tmp.path().join("workspace_security.json");
+    let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
+
+    let security = Arc::new(
+        muta_persistence::workspace_security::WorkspaceSecurityStore::load_from(
+            security_file.clone(),
+        ),
+    );
+
+    let registry = Arc::new(SessionRegistry::prehost_only());
+    let (req_tx, _req_rx) = mpsc::unbounded_channel::<AgentRequest>();
+    let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
+    let sync_buffer = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+    let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
+        idle_base(session.id().await),
+        muta_contracts::SessionStatus::Idle,
+    )));
+    registry
+        .host(HostedSession {
+            project_root: tmp.path().to_path_buf(),
+            security,
+            session,
+            req_tx,
+            events: bc_tx,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            tracker,
+            sync_buffer,
+            command_catalog: Default::default(),
+            created_at: std::time::Instant::now(),
+            last_activity: tokio::sync::Mutex::new(std::time::Instant::now()),
+            last_seen_tick: std::sync::atomic::AtomicU64::new(0),
+            activity_tick: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            agent_for_session_end: None,
+        })
+        .await;
+
+    let mut handle = serve::start_server(serve::ServeOptions::default(), registry);
+    let port = handle.startup.port.take().unwrap().await.unwrap().unwrap();
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .unwrap();
+    ws.send(WsMessage::Text(
+        serde_json::to_string(&Wire::Select {
+            version: None,
+            action: AttachAction::Attach(None),
+            project: None,
+            protocol: Some(muta_contracts::PROTOCOL_VERSION),
+        })
+        .unwrap()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    // Welcome, then the attach-sync snapshots, then — for an unconfigured
+    // workspace — the banner notice and the `trust-` question.
+    let mut saw_notice = false;
+    let mut question: Option<muta_contracts::UserQuestionRequest> = None;
+    for _ in 0..12 {
+        let raw = tokio::time::timeout(Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let frame = serde_json::from_str::<Wire>(raw.to_text().unwrap_or("")).unwrap();
+        let Wire::Response { response } = frame else {
+            continue;
+        };
+        let AgentResponse::Round { event, .. } = response else {
+            continue;
+        };
+        match event {
+            RoundEvent::Notice(n)
+                if n.body
+                    .as_deref()
+                    .is_some_and(|b| b.contains("trust decision")) =>
+            {
+                saw_notice = true
+            }
+            RoundEvent::UserQuestionRequest(q) if q.id.starts_with("trust-") => question = Some(q),
+            _ => {}
+        }
+        if saw_notice && question.is_some() {
+            break;
+        }
+    }
+    let question = question.expect("trust question never pushed to attaching client");
+    assert!(saw_notice, "trust banner notice never pushed");
+    assert_eq!(question.questions.len(), 1);
+    assert_eq!(question.questions[0].options.len(), 3);
+
+    // (The reply -> persistence half is covered by the driver harness in
+    // `lifecycle_integration`; this test pins the *delivery* regression:
+    // the prompt must reach the attaching client at all. Before the fix,
+    // the question was broadcast before any subscriber existed and was
+    // silently dropped.)
 }

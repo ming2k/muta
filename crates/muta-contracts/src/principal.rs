@@ -254,10 +254,10 @@ impl PrincipalProfile {
                 );
                 Self::with_identity("reviewer", identity).with_selection(ToolSelection::only([
                     "read_text",
-                    "grep",
-                    "glob",
+                    "find_files",
                     "list_dir",
                     "read_image",
+                    "search_text",
                     "webfetch",
                     "websearch",
                     "todo",
@@ -288,10 +288,10 @@ impl PrincipalProfile {
                 Self::with_identity("security", identity)
                     .with_selection(ToolSelection::only([
                         "read_text",
-                        "grep",
-                        "glob",
+                        "find_files",
                         "list_dir",
                         "read_image",
+                        "search_text",
                         "bash",
                         "webfetch",
                         "websearch",

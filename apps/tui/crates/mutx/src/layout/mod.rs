@@ -613,7 +613,7 @@ mod tests {
         let thinking = TranscriptMessage::thinking("reasoning").with_turn(4);
         let mut tool = TranscriptMessage::tool_step("call", "read_text", "{}").with_turn(4);
         tool.set_tool_step_expanded(true);
-        let next_tool = TranscriptMessage::tool_step("next", "grep", "{}").with_turn(4);
+        let next_tool = TranscriptMessage::tool_step("next", "search_text", "{}").with_turn(4);
         let text = TranscriptMessage::new(Role::Assistant, "answer").with_turn(4);
         let next_round = TranscriptMessage::new(Role::Assistant, "next").with_turn(5);
 

@@ -115,10 +115,11 @@ before the round runs.
 
 | Term | Definition |
 |------|------------|
-| **surface** | The TUI's exact foreground navigation unit: chat, a retained `View(ViewId)`, or a `Transient(Modal)`. `SurfaceRouter` is the sole owner of the active surface and transient return stack. [ADR-0139](../adr/0139-unified-tui-surface-router-and-view-lifecycle.md) |
-| **view** | A stable, directly focusable TUI place with an exact `ViewId`, retained navigation state, MRU presence, and complete create/show/hide/switch/close semantics. A shared renderer does not merge identities: Activity and Todos are separate views. [TUI modals and lifecycle](tui/modals.md#surface-and-view-lifecycle) |
+| **surface** | The TUI's exact foreground navigation unit (ADR-0141): a full-screen `View` (the base), a `Panel(PanelId)` floating over it, or a `Transient(Modal)`. `SurfaceRouter` is the sole owner of the active surface and its return stacks. [ADR-0139](../adr/0139-unified-tui-surface-router-and-view-lifecycle.md), [ADR-0141](../adr/0141-view-means-fullscreen-and-modal-means-modal.md) |
+| **view** | An independent, full-screen TUI destination (ADR-0141): `Session`, `Dashboard`, `Settings`, `Envoy`, or `Side`. The terminal is the view. Owned exclusively by the `SurfaceRouter`; `App::current_view` is the accessor, and `in_envoy_view`/`in_side_view` derive from it. [TUI modals and lifecycle](tui/modals.md#surface-view-and-panel-lifecycle) |
+| **panel** | A *retained modal* (ADR-0141): one of the browse overlays (Help, Activity, Todos, Tools, MCP, Skills, Permissions, Usage stats, Context report, Asides, Models, Connections, History, Queue, Sessions, Session tree) with an exact `PanelId`, retained cursor/scroll/parked drafts, MRU presence in the quick switcher, and the complete create/show/hide/switch/close lifecycle of ADR-0139. Retention is orthogonal to geometry: a panel is still a modal floating over the active view. [TUI modals and lifecycle](tui/modals.md#surface-view-and-panel-lifecycle) |
 | **transient surface** | A request sheet, quick switcher, or transactional editor that temporarily pushes over a parent surface and pops back to that exact parent. It is not retained or listed as a view. [ADR-0139](../adr/0139-unified-tui-surface-router-and-view-lifecycle.md) |
-| **modal** | A presentation/input discriminant for an overlay. `Modal` determines rendering, recess, and input dispatch, but is not navigation identity and cannot be inverted into a `ViewId`. [TUI architecture](tui/architecture.md#surface-routing-and-shared-presentation-discriminants) |
+| **modal** | A presentation/input discriminant for an overlay. `Modal` determines rendering, recess, and input dispatch, but is not navigation identity and cannot be inverted into a `PanelId` or `View`. Under ADR-0141 every surface projects one-way to its modal. [TUI architecture](tui/architecture.md#surface-routing-and-shared-presentation-discriminants) |
 
 ## Context projection
 

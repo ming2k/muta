@@ -65,7 +65,7 @@ The view modules live flat under `apps/tui/crates/mutx/src/`, grouped by concern
 | `view.rs` | The transcript-area renderer: `draw_transcript`, `TranscriptView`, `HeightCache`; re-exports the drawing surface (chrome, composer, overlays, theme, …) the shell consumes. |
 | `components/` | Reusable composed components: modal pages, selectable lists, scroll bodies, selectable document bodies (`selectable_body`), footer hints, toasts, notices, option rows, and one-line metadata strips (`MetaStrip`). |
 | `overlays/` | One renderer per modal (provider, session, help, activity, config, permission, …). |
-| `tools/` | Per-tool-step renderers (bash, edit, read, grep, web, ask_user, diff, …). |
+| `tools/` | Per-tool-step presenters (bash, edit, read, search, web, ask_user, diff, …). |
 | `disclosure/` | Expandable-step disclosure: state machine, sticky-pin tracking, step renderers. |
 | `layout/` | Transcript arrangement strategies (`default` / `legacy`). |
 | `theme.rs` / `design.rs` | Color scheme + non-color design tokens (spacing, gutters, row counts). |
@@ -121,20 +121,31 @@ without owning state:
   decision both key off it.
 - `ActivityTab` — which section the Activity modal shows.
 
-The shell owns exact navigation separately in `views.rs`. `SurfaceRouter` is
-the sole authority for the active `Surface` (`Chat`, `View(ViewId)`, or
-`Transient(Modal)`) and the transient return stack; `ViewRegistry` owns lazy
-view state and MRU order. Render code receives only the router's `Modal`
-projection. Lifecycle code operates on `ViewId`, so it never attempts the
-lossy inverse mapping from a modal back to a view.
+The shell owns exact navigation separately in `surfaces.rs`. `SurfaceRouter`
+is the sole authority for the active `Surface` (`View`, `Panel(PanelId)`, or
+`Transient(Modal)`) — the base full-screen view plus the transient return
+stack; `PanelRegistry` owns lazy panel state and MRU order. Render code
+receives only the router's `Modal` projection. Lifecycle code operates on
+`PanelId`/`View`, so it never attempts the lossy inverse mapping from a
+modal back to a surface.
 
-All entry paths converge on the event loop's `enter_view` transaction. It
-runs first-create initialization, refresh-on-show backend queries, and
-enter/exit hooks consistently for shortcuts, mouse actions, switcher actions,
-and backend presentation signals. Snapshot responses update data only;
-separate open signals navigate. Request sheets and workflow editors push/pop
-through the router, while drill-ins remain state owned by their parent view.
-See [ADR-0139](../../adr/0139-unified-tui-surface-router-and-view-lifecycle.md).
+Under ADR-0141 a **view** is an independent full-screen destination
+(`Session`, `Dashboard`, `Settings`, `Envoy`, `Side`) and a **panel** is a
+retained modal — one of the browse overlays (help, activity, todos, tools,
+…) floating over the active view. Envoy zoom and the aside view route
+through the router as views (`App::focus_stack` / `side_session_id` remain
+frame data), so `in_envoy_view()` / `in_side_view()` derive from the router
+instead of scattered booleans and stack emptiness.
+
+All entry paths converge on the event loop's `enter_panel` / `enter_view`
+transactions. They run first-create initialization, refresh-on-show backend
+queries, and enter/exit hooks consistently for shortcuts, mouse actions,
+switcher actions, and backend presentation signals. Snapshot responses
+update data only; separate open signals navigate. Request sheets and
+workflow editors push/pop through the router, while drill-ins remain state
+owned by their parent surface. See
+[ADR-0139](../../adr/0139-unified-tui-surface-router-and-view-lifecycle.md)
+and [ADR-0141](../../adr/0141-view-means-fullscreen-and-modal-means-modal.md).
 
 Because presentation types are shared by both layers and dependencies point
 downward, they live in the lower layer (`tui::modal`) and the shell re-exports

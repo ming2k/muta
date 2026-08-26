@@ -160,11 +160,25 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
                     .iter()
                     .find(|r| r.id == id)
                     .cloned();
-                let (name, protocol, base_url, auth) = row
-                    .map(|r| (r.name, r.protocol, r.base_url, r.auth))
-                    .unwrap_or_default();
+                let (name, protocol, base_url, auth, is_preset) = row
+                    .map(|r| {
+                        (
+                            r.name,
+                            r.protocol,
+                            r.base_url,
+                            r.auth,
+                            !r.preset_id.is_empty(),
+                        )
+                    })
+                    .unwrap_or((
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        muta_contracts::ChannelAuth::ApiKey,
+                        false,
+                    ));
                 app.model_search = false;
-                app.open_edit_provider_editor(id, name, protocol, base_url, auth);
+                app.open_edit_provider_editor(id, name, protocol, base_url, auth, is_preset);
             }
         }
     }
@@ -335,7 +349,7 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
             app.set_cursor(0);
         }
         // Queue's exit hook (the open-time auto-block release) now lives in
-        // `hide_active_view` — every hide path releases it, not just this
+        // `hide_active_panel` — every hide path releases it, not just this
         // one (ADR-0139).
         app.modal_keymap_open = false;
         if !matches!(app.active_modal(), Modal::Models | Modal::Connections) {

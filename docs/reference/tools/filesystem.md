@@ -1,8 +1,12 @@
 # Filesystem tools
 
-Read and mutate files and directory listings. `read_text` / `read_image` /
-`grep` / `glob` / `list_dir` are `Read`; `write_file` / `edit_file` are
-`Write`. Source: `crates/muta-agent/src/tools/`.
+Read and mutate files and directory listings. `read_text`, `read_image`,
+`find_files`, `list_dir`, and `search_text` are `Read`; `write_file` and
+`edit_file` are `Write`. Source: `crates/muta-agent/src/tools/`.
+
+Relative paths resolve from the primary workspace. An absolute path is
+accepted only when it is inside the primary or an explicitly admitted
+additional workspace root.
 
 ## `read_text`
 
@@ -44,32 +48,44 @@ works across kimi / GLM / OpenAI / Gemini.
 | `old_string` | string | yes | Must exist verbatim |
 | `new_string` | string | yes | Replacement text |
 
-## `grep`
+## `find_files`
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
-| `pattern` | string | yes | — | Regex |
-| `path` | string | no | `.` | Search root |
-| `ext` | string | no | — | File extension filter |
-| `context` | integer | no | `0` | Lines of context per match (clamped to 10) |
+| `patterns` | string array | yes | — | Path globs relative to `path`; alternatives are separate array items (OR) |
+| `path` | string | no | `.` | Directory to search |
+| `exclude` | string array | no | `[]` | Path globs to exclude |
+| `max_depth` | integer | no | unlimited | Maximum depth below `path` |
+| `limit` | integer | no | `200` | Result cap; maximum `1000` |
 
-Backed by ripgrep. Output is capped globally (≈200 lines / 32 KB) with a
-truncation notice; `--max-count` bounds matches per file at 50.
+Globs use ripgrep-compatible gitignore semantics. A slashless glob matches a
+file name at any depth; a leading `/` anchors it to `path`. Pass alternatives
+as separate `patterns` items instead of a brace-packed glob. The walker reads
+`.gitignore` and `.ignore`, searches hidden paths unless ignored, and always
+prunes repository metadata, dependency, and build-output directories.
 
-## `glob`
+## `search_text`
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
-| `pattern` | string | yes | — | Glob, e.g. `**/*.rs` |
-| `path` | string | no | `.` | Search root |
+| `query` | string | yes | — | Regular expression, or exact text with `literal` |
+| `path` | string | no | `.` | File or directory to search |
+| `include` | string array | no | `[]` | File globs relative to `path`; alternatives are separate array items (OR) |
+| `exclude` | string array | no | `[]` | File globs to exclude |
+| `literal` | boolean | no | `false` | Disable regular-expression parsing |
+| `context` | integer | no | `0` | Context lines per match; maximum `10` |
+| `limit` | integer | no | `200` | Returned-line cap; maximum `1000` |
 
-Capped at `GLOB_MAX_RESULTS = 200` (`crates/muta-agent/src/tools/glob.rs`).
+Runs in-process with Rust's `regex` engine and ripgrep's `ignore` traversal
+library; it does not spawn an `rg` executable. Output is capped at about 32 KB,
+and each file contributes at most 50 matches.
 
 ## `list_dir`
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
 | `path` | string | no | `.` | Directory |
-| `pattern` | string | no | — | Optional glob |
-| `recursive` | boolean | no | `false` | Recurse |
-| `max_results` | integer | no | `100` | Cap |
+| `limit` | integer | no | `200` | Entry cap; maximum `1000` |
+
+Returns only immediate children in stable order. Use `find_files` for
+recursive or filtered discovery.

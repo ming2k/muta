@@ -347,10 +347,10 @@ fn bash_expanded_folds_long_output_keeping_tail_events() {
 }
 
 #[test]
-fn grep_expanded_renders_grouped_matches() {
+fn search_text_expanded_renders_grouped_matches() {
     let m = tool_step(
-        "grep",
-        r#"{"pattern":"foo","path":"src"}"#,
+        "search_text",
+        r#"{"query":"foo","path":"src"}"#,
         Some("src/a.rs:10:let foo = 1;\nsrc/a.rs:22:foo();\nsrc/b.rs:5:foo,"),
         true,
     );
@@ -692,8 +692,8 @@ fn expanded_body_flush_to_header_neighbours_stay_flush() {
             false, // collapsed — flush against the next step's header
         ),
         tool_step_structured(
-            "grep",
-            r#"{"pattern":"foo","path":"src"}"#,
+            "search_text",
+            r#"{"query":"foo","path":"src"}"#,
             muta_contracts::ToolOutput::Matches {
                 pattern: "foo".into(),
                 lines: vec!["src/a.rs:10:1:foo".into(), "src/b.rs:5:1:foo".into()],

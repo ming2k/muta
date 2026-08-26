@@ -178,17 +178,12 @@ pub fn derive_channel(
     }
 }
 
-/// The base transport for a non-OAuth connection: preset route (with
-/// connection-level overrides) or the pure-custom declaration.
+/// The base transport for a non-OAuth connection: preset route (always derived
+/// from the hardcoded preset spec) or the pure-custom declaration.
 fn base_route(connection: &Connection, model: &str) -> (UserTransport, String, String) {
     if let Some(pid) = connection.preset_id.as_deref() {
         let (protocol, base_url, tpl_ua) =
             template_route(pid, model).unwrap_or(("openai", "", None));
-        let base_url = connection
-            .base_url
-            .clone()
-            .filter(|u| !u.trim().is_empty())
-            .unwrap_or_else(|| base_url.to_string());
         let user_agent = connection
             .user_agent
             .clone()
@@ -200,7 +195,11 @@ fn base_route(connection: &Connection, model: &str) -> (UserTransport, String, S
                 }
             })
             .unwrap_or_else(|| connection.client_identity.user_agent().to_string());
-        (transport_for_protocol(protocol), base_url, user_agent)
+        (
+            transport_for_protocol(protocol),
+            base_url.to_string(),
+            user_agent,
+        )
     } else {
         let transport = connection.transport.unwrap_or(UserTransport::OpenAi);
         let base_url = connection
@@ -246,10 +245,7 @@ fn copilot_route(
             copilot: true,
         },
         Some(RemoteModelEndpoint::ChatCompletions) | None => Transport::OpenAi {
-            base_url: connection
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "https://api.githubcopilot.com/chat/completions".to_string()),
+            base_url: "https://api.githubcopilot.com/chat/completions".to_string(),
             user_agent: ua(),
             effort,
             copilot: true,

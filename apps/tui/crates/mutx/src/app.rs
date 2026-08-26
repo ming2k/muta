@@ -429,17 +429,20 @@ pub struct App {
     pub completion_request_id: u64,
     pub cursor_position: usize,
     pub input_scroll: usize,
-    /// Authoritative foreground surface and transient return stack. Callers
-    /// consume [`Self::active_modal`] as the rendering projection; view
-    /// identity is always read from [`Self::active_view`].
-    pub(crate) surfaces: crate::views::SurfaceRouter,
+    /// Authoritative foreground surface: the full-screen view plus whatever
+    /// panel/transient floats over it (ADR-0141). Callers consume
+    /// [`Self::active_modal`] as the rendering projection; panel identity is
+    /// always read from [`Self::active_panel`] and view identity from
+    /// [`Self::current_view`].
+    pub(crate) surfaces: crate::surfaces::SurfaceRouter,
     pub modal_index: usize,
-    /// Retained view states + the MRU order that backs the Ctrl+L quick
-    /// switcher (ADR-0139). Browse surfaces open through
-    /// [`Self::open_view`], which initialises state exactly once per view
+    /// Retained panel states + the MRU order that backs the Ctrl+L quick
+    /// switcher (ADR-0139/0141). Browse panels open through
+    /// [`Self::open_panel`], which initialises state exactly once per panel
     /// and restores it on every later open — hide/close/switch instead of
-    /// the old reset-on-every-open ritual.
-    pub(crate) views: crate::views::ViewRegistry,
+    /// the old reset-on-every-open ritual. Full-screen views are not
+    /// registered here: their state already persists on `App`.
+    pub(crate) panels: crate::surfaces::PanelRegistry,
     /// The quick switcher's live fuzzy query (ADR-0139). The
     /// switcher does not borrow the composer (it must work over surfaces
     /// that have their own input semantics); printable keys append here,
@@ -447,7 +450,7 @@ pub struct App {
     /// `fuzzy_match` against each view's label + hint.
     pub(crate) view_switcher_query: String,
     /// The session whose outbox the Queue view auto-blocked on entry
-    /// (ADR-0139). `hide_active_view` is an `&mut App` method that
+    /// (ADR-0139). `hide_active_panel` is an `&mut App` method that
     /// cannot see the loop's `viewed_session_id`, so the block site records
     /// the target here and the exit hook consumes it.
     pub(crate) queue_exit_session: Option<String>,
@@ -926,7 +929,7 @@ pub struct App {
     /// The composer draft parked while the input-injection sheet
     /// (L3.5 β) borrows the input line. Under ADR-0139 the
     /// picker flows (Models / Connections / History) park their drafts in
-    /// per-view slots on the `ViewRegistry`; this remaining global slot
+    /// per-view slots on the `PanelRegistry`; this remaining global slot
     /// serves the one request-driven borrowed-line surface, whose
     /// lifecycle (queue-front arrival → reply) never coexists with a
     /// picker's.
@@ -1077,18 +1080,33 @@ impl App {
         self.surfaces.modal()
     }
 
-    /// Exact identity of the focused retained view. This deliberately cannot
-    /// be reconstructed from [`Self::active_modal`] because Activity and
-    /// Todos share the same modal presentation.
-    pub(crate) fn active_view(&self) -> Option<crate::views::ViewId> {
+    /// Exact identity of the focused retained panel (ADR-0141: a retained
+    /// modal). This deliberately cannot be reconstructed from
+    /// [`Self::active_modal`] because Activity and Todos share the same
+    /// modal presentation.
+    pub(crate) fn active_panel(&self) -> Option<crate::surfaces::PanelId> {
+        self.surfaces.active_panel()
+    }
+
+    /// The full-screen view the user stands in (ADR-0141) — the terminal is
+    /// this view. Single source of truth behind `in_envoy_view()` /
+    /// `in_side_view()`, replacing the bare `focus_stack` emptiness check
+    /// and the bare `in_side_view` boolean.
+    pub(crate) fn current_view(&self) -> crate::surfaces::View {
         self.surfaces.active_view()
     }
 
-    /// Replace the foreground with chat and discard unreachable return
-    /// frames. View exits should normally use [`Self::hide_active_view`] so
-    /// their lifecycle hook runs first.
+    /// Navigate to a full-screen view, remembering a scoped view
+    /// (`Envoy`/`Side`) so closing the destination returns to it.
+    pub(crate) fn show_view_surface(&mut self, view: crate::surfaces::View) {
+        self.surfaces.show_view(view);
+    }
+
+    /// Hard reset to the session view (home): drop the overlay, the
+    /// transient chain, and any view-return frames. Session switches and
+    /// queue exits use this.
     pub(crate) fn show_chat_surface(&mut self) {
-        self.surfaces.show_chat();
+        self.surfaces.show_session_view();
     }
 
     pub(crate) fn replace_transient_surface(&mut self, modal: Modal) {
@@ -1103,17 +1121,17 @@ impl App {
     /// parent identity and its retained cursor/scroll before the child
     /// borrows shared presentation fields.
     pub(crate) fn push_transient_surface(&mut self, modal: Modal) {
-        if let Some(id) = self.active_view() {
-            self.save_view_state(id);
+        if let Some(id) = self.active_panel() {
+            self.save_panel_state(id);
         }
         self.surfaces.push_transient(modal);
     }
 
-    /// Pop one transient and restore the parent view's live projection.
+    /// Pop one transient and restore the parent panel's live projection.
     pub(crate) fn pop_transient_surface(&mut self) -> Modal {
         let restored = self.surfaces.pop_transient();
-        if let Some(id) = restored.view() {
-            self.restore_view_state(id);
+        if let Some(id) = restored.panel() {
+            self.restore_panel_state(id);
         }
         restored.modal()
     }
@@ -1121,13 +1139,13 @@ impl App {
     pub(crate) fn transient_return_modal(&self) -> Modal {
         self.surfaces
             .return_surface()
-            .map_or(Modal::None, crate::views::Surface::modal)
+            .map_or(Modal::None, crate::surfaces::Surface::modal)
     }
 
-    pub(crate) fn transient_return_view(&self) -> Option<crate::views::ViewId> {
+    pub(crate) fn transient_return_panel(&self) -> Option<crate::surfaces::PanelId> {
         self.surfaces
             .return_surface()
-            .and_then(crate::views::Surface::view)
+            .and_then(crate::surfaces::Surface::panel)
     }
 
     pub(crate) fn can_open_view_switcher(&self) -> bool {
@@ -1138,15 +1156,17 @@ impl App {
     /// Data snapshots are always safe to apply, but navigation waits while a
     /// transient transaction or a parent-owned drill-in has control.
     pub(crate) fn can_accept_navigation_signal(&self) -> bool {
-        use crate::views::Surface;
-        let root_surface = matches!(self.surfaces.active(), Surface::Chat | Surface::View(_));
-        let active_view = self.active_view();
+        use crate::surfaces::{Surface, View};
+        let root_surface = !matches!(self.surfaces.active(), Surface::Transient(_));
+        let active_panel = self.active_panel();
+        let view = self.current_view();
         root_surface
-            && !(active_view == Some(crate::views::ViewId::Host)
-                && (self.host_prompting || self.host_preview.is_some()))
-            && !(active_view == Some(crate::views::ViewId::Sessions) && self.session_info_detail)
-            && !(active_view == Some(crate::views::ViewId::TokenReport) && self.token_report_detail)
-            && !(active_view == Some(crate::views::ViewId::Config)
+            && !(view == View::Dashboard && (self.host_prompting || self.host_preview.is_some()))
+            && !(active_panel == Some(crate::surfaces::PanelId::Sessions)
+                && self.session_info_detail)
+            && !(active_panel == Some(crate::surfaces::PanelId::TokenReport)
+                && self.token_report_detail)
+            && !(view == View::Settings
                 && (self.config_custom_editing
                     || self.websearch_editing.is_some()
                     || self.config_focus == crate::overlays::ConfigFocus::Detail))
@@ -1154,36 +1174,42 @@ impl App {
 
     #[cfg(test)]
     pub(crate) fn set_active_modal_for_test(&mut self, modal: Modal) {
-        use crate::views::ViewId;
-        let view = match modal {
-            Modal::Help => Some(ViewId::Help),
+        use crate::surfaces::{PanelId, View};
+        let panel = match modal {
+            Modal::Help => Some(PanelId::Help),
             Modal::Activity => Some(if self.activity_tab == ActivityTab::Todos {
-                ViewId::Todos
+                PanelId::Todos
             } else {
-                ViewId::Activity
+                PanelId::Activity
             }),
-            Modal::Tools => Some(ViewId::Tools),
-            Modal::Mcp => Some(ViewId::Mcp),
-            Modal::Skills => Some(ViewId::Skills),
-            Modal::Permissions => Some(ViewId::Permissions),
-            Modal::UsageStats => Some(ViewId::UsageStats),
-            Modal::TokenReport => Some(ViewId::TokenReport),
-            Modal::Btw => Some(ViewId::Btw),
-            Modal::Config => Some(ViewId::Config),
-            Modal::Models => Some(ViewId::Models),
-            Modal::Connections => Some(ViewId::Connections),
-            Modal::HistorySearch => Some(ViewId::HistorySearch),
-            Modal::Queue => Some(ViewId::Queue),
-            Modal::Host => Some(ViewId::Host),
-            Modal::Sessions => Some(ViewId::Sessions),
-            Modal::Tree => Some(ViewId::Tree),
+            Modal::Tools => Some(PanelId::Tools),
+            Modal::Mcp => Some(PanelId::Mcp),
+            Modal::Skills => Some(PanelId::Skills),
+            Modal::Permissions => Some(PanelId::Permissions),
+            Modal::UsageStats => Some(PanelId::UsageStats),
+            Modal::TokenReport => Some(PanelId::TokenReport),
+            Modal::Btw => Some(PanelId::Btw),
+            Modal::Config => {
+                self.surfaces.show_view(View::Settings);
+                return;
+            }
+            Modal::Models => Some(PanelId::Models),
+            Modal::Connections => Some(PanelId::Connections),
+            Modal::HistorySearch => Some(PanelId::HistorySearch),
+            Modal::Queue => Some(PanelId::Queue),
+            Modal::Host => {
+                self.surfaces.show_view(View::Dashboard);
+                return;
+            }
+            Modal::Sessions => Some(PanelId::Sessions),
+            Modal::Tree => Some(PanelId::Tree),
             _ => None,
         };
-        if let Some(id) = view {
-            self.views.open(id);
-            self.surfaces.show_view(id);
+        if let Some(id) = panel {
+            self.panels.open(id);
+            self.surfaces.show_panel(id);
         } else if modal == Modal::None {
-            self.surfaces.show_chat();
+            self.surfaces.show_session_view();
         } else {
             self.surfaces.show_transient(modal);
         }
@@ -2109,9 +2135,9 @@ impl App {
         if let Some(sid) = self.queue_exit_session.take() {
             self.resume_queue(&sid);
         }
-        self.surfaces.show_chat();
-        self.views.close_all();
-        for id in crate::views::ViewId::ALL {
+        self.surfaces.show_session_view();
+        self.panels.close_all();
+        for id in crate::surfaces::PanelId::ALL {
             self.reset_view_payload(id);
         }
         self.session_context = None;
@@ -2141,23 +2167,23 @@ impl App {
         self.session_history_backfill_cursor = 0;
     }
 
-    /// Focus a browse view under the ADR-0139 lifecycle. State is initialized
-    /// once and restored on later shows. The return value reports first show
-    /// for UI defaults only; `enter_view` refreshes authoritative data on
-    /// every show.
-    pub(crate) fn open_view(&mut self, id: crate::views::ViewId) -> bool {
-        if let Some(current) = self.active_view()
+    /// Focus a browse panel under the ADR-0139/0141 lifecycle. State is
+    /// initialized once and restored on later shows. The return value
+    /// reports first show for UI defaults only; `enter_panel` refreshes
+    /// authoritative data on every show.
+    pub(crate) fn open_panel(&mut self, id: crate::surfaces::PanelId) -> bool {
+        if let Some(current) = self.active_panel()
             && current != id
         {
-            self.deactivate_view(current);
+            self.deactivate_panel(current);
         }
-        let first = self.views.open(id).is_none();
-        self.surfaces.show_view(id);
-        self.restore_view_state(id);
+        let first = self.panels.open(id).is_none();
+        self.surfaces.show_panel(id);
+        self.restore_panel_state(id);
         self.modal_keymap_open = false;
-        if id == crate::views::ViewId::Todos {
+        if id == crate::surfaces::PanelId::Todos {
             self.activity_tab = crate::modal::ActivityTab::Todos;
-        } else if id == crate::views::ViewId::Activity {
+        } else if id == crate::surfaces::PanelId::Activity {
             self.activity_tab = crate::modal::ActivityTab::Activity;
         }
         first
@@ -2166,19 +2192,19 @@ impl App {
     /// Whether this view borrows the composer line and therefore owns a
     /// per-view draft slot (Models / Connections / HistorySearch — the
     /// surfaces whose filter field *is* the composer).
-    fn owns_composer_draft(&self, id: crate::views::ViewId) -> bool {
+    fn owns_composer_draft(&self, id: crate::surfaces::PanelId) -> bool {
         matches!(
             id,
-            crate::views::ViewId::Models
-                | crate::views::ViewId::Connections
-                | crate::views::ViewId::HistorySearch
+            crate::surfaces::PanelId::Models
+                | crate::surfaces::PanelId::Connections
+                | crate::surfaces::PanelId::HistorySearch
         )
     }
 
     /// Park the live composer draft into a view's own slot,
     /// clearing the borrowed line for the view's filter/entry use.
-    fn park_draft_into(&mut self, id: crate::views::ViewId) {
-        if let Some(state) = self.views.states_mut(&id) {
+    fn park_draft_into(&mut self, id: crate::surfaces::PanelId) {
+        if let Some(state) = self.panels.states_mut(&id) {
             state.draft = Some(std::mem::take(&mut self.input));
         }
         self.set_cursor(0);
@@ -2188,8 +2214,8 @@ impl App {
 
     /// Hand a view's parked draft back to the composer and clear its slot
     /// (the view is leaving the borrowed-line state for chat).
-    fn restore_draft_from(&mut self, id: crate::views::ViewId) {
-        if let Some(state) = self.views.states_mut(&id) {
+    fn restore_draft_from(&mut self, id: crate::surfaces::PanelId) {
+        if let Some(state) = self.panels.states_mut(&id) {
             self.input = state.draft.take().unwrap_or_default();
         }
         self.set_cursor_end();
@@ -2203,39 +2229,45 @@ impl App {
     /// user resumes typing what they were typing before Ctrl+M. The stack
     /// is cleared: nothing between chat and here is reachable via Esc.
     pub(crate) fn restore_chat_after_editor_chain(&mut self) {
-        while self.active_view().is_none() && self.transient_return_modal() != Modal::None {
+        while self.active_panel().is_none() && self.transient_return_modal() != Modal::None {
             self.pop_transient_surface();
         }
-        if let Some(id) = self.active_view() {
-            self.deactivate_view(id);
+        if let Some(id) = self.active_panel() {
+            self.deactivate_panel(id);
         }
-        self.show_chat_surface();
+        // The editor chain ends at the panel it started from; if even that
+        // is gone, reveal the full-screen view beneath (ADR-0141).
+        if self.active_panel().is_none() && self.surfaces.active_panel().is_none() {
+            self.surfaces.hide_panel();
+        }
         self.modal_keymap_open = false;
     }
 
     /// Snapshot the *current* field values of a browse view into the
     /// registry — the "save on losing focus" half of the contract. The
-    /// inverse of the restore in [`Self::open_view`].
-    pub(crate) fn save_view_state(&mut self, id: crate::views::ViewId) {
-        let scroll = self.view_scroll(id);
-        let follow = self.view_follow(id);
-        let draft = self.views.states(&id).and_then(|s| s.draft.clone());
+    /// inverse of the restore in [`Self::open_panel`].
+    pub(crate) fn save_panel_state(&mut self, id: crate::surfaces::PanelId) {
+        let scroll = self.panel_scroll(id);
+        let follow = self.panel_follow(id);
+        let draft = self.panels.states(&id).and_then(|s| s.draft.clone());
         let query = if self.owns_composer_draft(id) {
             self.input.clone()
         } else {
-            self.views
+            self.panels
                 .states(&id)
                 .map(|state| state.query.clone())
                 .unwrap_or_default()
         };
         let query_active = match id {
-            crate::views::ViewId::Models | crate::views::ViewId::Connections => self.model_search,
-            crate::views::ViewId::HistorySearch => self.history_search,
+            crate::surfaces::PanelId::Models | crate::surfaces::PanelId::Connections => {
+                self.model_search
+            }
+            crate::surfaces::PanelId::HistorySearch => self.history_search,
             _ => false,
         };
-        self.views.save(
+        self.panels.save(
             id,
-            crate::views::ViewState {
+            crate::surfaces::PanelState {
                 index: self.modal_index,
                 scroll,
                 follow,
@@ -2248,11 +2280,11 @@ impl App {
 
     /// Restore the live fields projected by a retained view. Draft-owning
     /// views first park the chat composer, then load their own retained query.
-    fn restore_view_state(&mut self, id: crate::views::ViewId) {
-        let state = self.views.states(&id).cloned().unwrap_or_default();
+    fn restore_panel_state(&mut self, id: crate::surfaces::PanelId) {
+        let state = self.panels.states(&id).cloned().unwrap_or_default();
         self.modal_index = state.index;
-        self.apply_view_scroll(id, state.scroll);
-        self.apply_view_follow(id, state.follow);
+        self.apply_panel_scroll(id, state.scroll);
+        self.apply_panel_follow(id, state.follow);
         if self.owns_composer_draft(id) {
             if state.draft.is_none() {
                 self.park_draft_into(id);
@@ -2262,10 +2294,10 @@ impl App {
             self.input_scroll = 0;
             self.suggestion_index = None;
             match id {
-                crate::views::ViewId::Models | crate::views::ViewId::Connections => {
+                crate::surfaces::PanelId::Models | crate::surfaces::PanelId::Connections => {
                     self.model_search = state.query_active;
                 }
-                crate::views::ViewId::HistorySearch => {
+                crate::surfaces::PanelId::HistorySearch => {
                     self.history_search = state.query_active;
                 }
                 _ => {}
@@ -2273,13 +2305,43 @@ impl App {
         }
     }
 
-    /// Run the exit hook for one exact view without choosing the next
+    /// Exit hook for a full-screen view (ADR-0141). Mirrors
+    /// [`Self::deactivate_panel`]: hide, switch, and close all route here.
+    /// Public wrapper for the event loop's `enter_view` transaction.
+    pub(crate) fn leave_view_for_navigation(&mut self, view: crate::surfaces::View) {
+        self.deactivate_view(view)
+    }
+
+    fn deactivate_view(&mut self, view: crate::surfaces::View) {
+        match view {
+            crate::surfaces::View::Dashboard => {
+                self.host_prompting = false;
+                self.host_prompt_new = false;
+                self.host_preview = None;
+                self.host_preview_scroll = 0;
+            }
+            crate::surfaces::View::Settings => {
+                self.websearch_editing = None;
+                if self.config_custom_editing {
+                    self.theme =
+                        Theme::from_color_scheme(&self.color_scheme, &self.custom_color_scheme);
+                    self.custom_color_draft = self.custom_color_scheme.clone();
+                    self.config_custom_editing = false;
+                }
+            }
+            crate::surfaces::View::Session
+            | crate::surfaces::View::Envoy
+            | crate::surfaces::View::Side => {}
+        }
+    }
+
+    /// Run the exit hook for one exact panel without choosing the next
     /// surface. Both hide and switch use this path.
-    fn deactivate_view(&mut self, id: crate::views::ViewId) {
-        self.save_view_state(id);
+    fn deactivate_panel(&mut self, id: crate::surfaces::PanelId) {
+        self.save_panel_state(id);
         if self.owns_composer_draft(id) {
             self.restore_draft_from(id);
-            if id == crate::views::ViewId::HistorySearch {
+            if id == crate::surfaces::PanelId::HistorySearch {
                 self.history_search = false;
                 self.history_preview = false;
                 self.history_clear_confirm = false;
@@ -2287,44 +2349,51 @@ impl App {
                 self.model_search = false;
             }
         }
-        if id == crate::views::ViewId::Host {
-            self.host_prompting = false;
-            self.host_prompt_new = false;
-            self.host_preview = None;
-            self.host_preview_scroll = 0;
-        }
-        if id == crate::views::ViewId::Sessions {
+        if id == crate::surfaces::PanelId::Sessions {
             self.session_info_detail = false;
             self.session_detail = None;
             self.session_info_scroll = 0;
         }
-        if id == crate::views::ViewId::TokenReport {
+        if id == crate::surfaces::PanelId::TokenReport {
             self.token_report_detail = false;
         }
-        if id == crate::views::ViewId::Config {
-            self.websearch_editing = None;
-            if self.config_custom_editing {
-                self.theme =
-                    Theme::from_color_scheme(&self.color_scheme, &self.custom_color_scheme);
-                self.custom_color_draft = self.custom_color_scheme.clone();
-                self.config_custom_editing = false;
-            }
-        }
-        if id == crate::views::ViewId::Queue
+        if id == crate::surfaces::PanelId::Queue
             && let Some(sid) = self.queue_exit_session.take()
         {
             self.resume_queue(&sid);
         }
-        self.views.hide(id);
+        self.panels.hide(id);
     }
 
-    /// The `hide` verb (ADR-0139): the active browse view loses focus with
-    /// its state retained. Returns `true` when the active surface *was* a
-    /// browse view (so callers skip their modal-specific close logic).
-    pub(crate) fn hide_active_view(&mut self) -> bool {
-        if let Some(id) = self.active_view() {
-            self.deactivate_view(id);
-            self.show_chat_surface();
+    /// The `hide` verb (ADR-0139/0141): the active panel loses focus with
+    /// its state retained, revealing the full-screen view beneath. Returns
+    /// `true` when the active surface *was* a panel or a non-session view
+    /// (so callers skip their modal-specific close logic).
+    pub(crate) fn hide_active_panel(&mut self) -> bool {
+        if let Some(id) = self.active_panel() {
+            self.deactivate_panel(id);
+            self.surfaces.hide_panel();
+            self.modal_keymap_open = false;
+            true
+        } else if self.current_view() != crate::surfaces::View::Session {
+            // Esc from a full-screen destination returns to the scoped view
+            // it was opened over (envoy/side), else home — not a hard reset,
+            // which would drop the zoom/side return frames.
+            let leaving = self.current_view();
+            self.surfaces.back_view();
+            // Leaving Envoy/Side via the router must also drop their frame
+            // data, or `focus_stack`/`in_side_view` would dangle past the
+            // surface that gave them meaning.
+            if leaving == crate::surfaces::View::Envoy {
+                self.focus_stack.clear();
+                self.reset_view_state();
+            }
+            if leaving == crate::surfaces::View::Side {
+                self.in_side_view = false;
+                self.side_session_id = None;
+                self.reset_view_state();
+            }
+            self.deactivate_view(leaving);
             self.modal_keymap_open = false;
             true
         } else {
@@ -2335,78 +2404,68 @@ impl App {
     /// Explicitly close a retained view, dropping both its navigation state
     /// and its view-owned volatile UI payload. Closing the focused view first
     /// runs the same exit hook as a switch/hide.
-    pub(crate) fn close_view(&mut self, id: crate::views::ViewId) {
-        if self.active_view() == Some(id) {
-            self.deactivate_view(id);
-            self.show_chat_surface();
+    pub(crate) fn close_panel(&mut self, id: crate::surfaces::PanelId) {
+        if self.active_panel() == Some(id) {
+            self.deactivate_panel(id);
+            // Reveal the full-screen view the panel floated over (ADR-0141)
+            // — closing a panel never discards the zoom/side context under it.
+            self.surfaces.hide_panel();
         }
-        self.views.close(id);
+        self.panels.close(id);
         self.reset_view_payload(id);
         self.modal_keymap_open = false;
     }
 
-    fn reset_view_payload(&mut self, id: crate::views::ViewId) {
-        use crate::views::ViewId;
+    fn reset_view_payload(&mut self, id: crate::surfaces::PanelId) {
+        use crate::surfaces::PanelId;
         match id {
-            ViewId::Help => self.help_scroll = 0,
-            ViewId::Activity | ViewId::Todos => self.activity_scroll = 0,
-            ViewId::Tools | ViewId::Mcp => {
+            PanelId::Help => self.help_scroll = 0,
+            PanelId::Activity | PanelId::Todos => self.activity_scroll = 0,
+            PanelId::Tools | PanelId::Mcp => {
                 self.session_scroll = 0;
                 self.session_modal_follow = true;
             }
-            ViewId::Skills => {
+            PanelId::Skills => {
                 self.session_scroll = 0;
                 self.session_modal_follow = true;
                 self.skills_expanded = None;
             }
-            ViewId::Permissions => self.permissions_scroll = 0,
-            ViewId::UsageStats => {
+            PanelId::Permissions => self.permissions_scroll = 0,
+            PanelId::UsageStats => {
                 self.usage_stats = None;
                 self.usage_stats_scroll = 0;
             }
-            ViewId::TokenReport => {
+            PanelId::TokenReport => {
                 self.token_report = None;
                 self.token_report_scroll = 0;
                 self.token_report_detail = false;
             }
-            ViewId::Btw => {
+            PanelId::Btw => {
                 self.btw_list.clear();
                 self.btw_scroll = 0;
                 self.btw_modal_follow = true;
             }
-            ViewId::Config => {
-                self.config_scroll = 0;
-                self.config_detail_scroll = 0;
-                self.config_custom_editing = false;
-            }
-            ViewId::Models | ViewId::Connections => {
+            PanelId::Models | PanelId::Connections => {
                 self.model_search = false;
                 self.model_scroll = 0;
                 self.model_modal_follow = true;
             }
-            ViewId::HistorySearch => {
+            PanelId::HistorySearch => {
                 self.history_search = false;
                 self.history_preview = false;
                 self.history_clear_confirm = false;
             }
-            ViewId::Queue => {
+            PanelId::Queue => {
                 self.queue_scroll = 0;
                 self.queue_modal_follow = true;
             }
-            ViewId::Host => {
-                self.host_scroll = 0;
-                self.host_detail_scroll = 0;
-                self.host_preview = None;
-                self.host_prompting = false;
-                self.host_console_log.clear();
-            }
-            ViewId::Sessions => {
+            PanelId::Sessions => {
                 self.sessions_overview.clear();
                 self.session_info_detail = false;
                 self.session_detail = None;
                 self.session_info_scroll = 0;
             }
-            ViewId::Tree => {
+            PanelId::Tree => {
                 self.session_tree = muta_contracts::SessionTree::default();
                 self.tree_scroll = 0;
                 self.tree_modal_follow = true;
@@ -2486,109 +2545,96 @@ impl App {
             self.modal_keymap_open = false;
             return true;
         }
-        self.hide_active_view()
+        self.hide_active_panel()
     }
 
     /// The per-view body-scroll slot, mirroring [`Self::modal_scroll_field`]
     /// for the retained views. Tools/Mcp/Skills share `session_scroll`
     /// exactly as `modal_scroll_field` already routes them.
     ///
-    /// Config is excluded: its cursor lives in `config_category` /
-    /// `config_detail_index` / `config_focus` (not `modal_index`) and its
-    /// body scrolls in two pane-specific slots. Its open/close paths never
-    /// reset those fields today, so retention there is already the default —
-    /// `open_view`'s save/restore of `ViewState` is a no-op for it.
-    fn view_scroll(&self, id: crate::views::ViewId) -> usize {
+    /// Full-screen views are excluded entirely (ADR-0141): their retained
+    /// fields (`host_scroll`, `config_*`, …) already persist on `App` for
+    /// the app's lifetime, so registry save/restore would be a no-op for
+    /// them.
+    fn panel_scroll(&self, id: crate::surfaces::PanelId) -> usize {
         match id {
-            crate::views::ViewId::Help => self.help_scroll,
-            crate::views::ViewId::Activity | crate::views::ViewId::Todos => self.activity_scroll,
-            crate::views::ViewId::Tools
-            | crate::views::ViewId::Mcp
-            | crate::views::ViewId::Skills => self.session_scroll,
-            crate::views::ViewId::Permissions => self.permissions_scroll,
-            crate::views::ViewId::UsageStats => self.usage_stats_scroll,
-            crate::views::ViewId::TokenReport => self.token_report_scroll,
-            crate::views::ViewId::Btw => self.btw_scroll,
-            crate::views::ViewId::HistorySearch => self.history_scroll,
-            crate::views::ViewId::Models | crate::views::ViewId::Connections => self.model_scroll,
-            crate::views::ViewId::Queue => self.queue_scroll,
-            crate::views::ViewId::Host => match self.host_focus {
-                crate::overlays::DashboardFocus::List => self.host_scroll,
-                crate::overlays::DashboardFocus::Detail => self.host_detail_scroll,
-            },
-            crate::views::ViewId::Sessions => self.session_scroll,
-            crate::views::ViewId::Tree => self.tree_scroll,
-            // Config: no single slot (see doc above); the saved state is not
-            // used for it.
-            crate::views::ViewId::Config => 0,
+            crate::surfaces::PanelId::Help => self.help_scroll,
+            crate::surfaces::PanelId::Activity | crate::surfaces::PanelId::Todos => {
+                self.activity_scroll
+            }
+            crate::surfaces::PanelId::Tools
+            | crate::surfaces::PanelId::Mcp
+            | crate::surfaces::PanelId::Skills => self.session_scroll,
+            crate::surfaces::PanelId::Permissions => self.permissions_scroll,
+            crate::surfaces::PanelId::UsageStats => self.usage_stats_scroll,
+            crate::surfaces::PanelId::TokenReport => self.token_report_scroll,
+            crate::surfaces::PanelId::Btw => self.btw_scroll,
+            crate::surfaces::PanelId::HistorySearch => self.history_scroll,
+            crate::surfaces::PanelId::Models | crate::surfaces::PanelId::Connections => {
+                self.model_scroll
+            }
+            crate::surfaces::PanelId::Queue => self.queue_scroll,
+            crate::surfaces::PanelId::Sessions => self.session_scroll,
+            crate::surfaces::PanelId::Tree => self.tree_scroll,
         }
     }
 
-    fn apply_view_scroll(&mut self, id: crate::views::ViewId, scroll: usize) {
+    fn apply_panel_scroll(&mut self, id: crate::surfaces::PanelId, scroll: usize) {
         match id {
-            crate::views::ViewId::Help => self.help_scroll = scroll,
-            crate::views::ViewId::Activity | crate::views::ViewId::Todos => {
+            crate::surfaces::PanelId::Help => self.help_scroll = scroll,
+            crate::surfaces::PanelId::Activity | crate::surfaces::PanelId::Todos => {
                 self.activity_scroll = scroll;
             }
-            crate::views::ViewId::Tools
-            | crate::views::ViewId::Mcp
-            | crate::views::ViewId::Skills => {
+            crate::surfaces::PanelId::Tools
+            | crate::surfaces::PanelId::Mcp
+            | crate::surfaces::PanelId::Skills => {
                 self.session_scroll = scroll;
             }
-            crate::views::ViewId::Permissions => self.permissions_scroll = scroll,
-            crate::views::ViewId::UsageStats => self.usage_stats_scroll = scroll,
-            crate::views::ViewId::TokenReport => self.token_report_scroll = scroll,
-            crate::views::ViewId::Btw => self.btw_scroll = scroll,
-            crate::views::ViewId::HistorySearch => self.history_scroll = scroll,
-            crate::views::ViewId::Models | crate::views::ViewId::Connections => {
+            crate::surfaces::PanelId::Permissions => self.permissions_scroll = scroll,
+            crate::surfaces::PanelId::UsageStats => self.usage_stats_scroll = scroll,
+            crate::surfaces::PanelId::TokenReport => self.token_report_scroll = scroll,
+            crate::surfaces::PanelId::Btw => self.btw_scroll = scroll,
+            crate::surfaces::PanelId::HistorySearch => self.history_scroll = scroll,
+            crate::surfaces::PanelId::Models | crate::surfaces::PanelId::Connections => {
                 self.model_scroll = scroll;
             }
-            crate::views::ViewId::Queue => self.queue_scroll = scroll,
-            crate::views::ViewId::Host => match self.host_focus {
-                crate::overlays::DashboardFocus::List => self.host_scroll = scroll,
-                crate::overlays::DashboardFocus::Detail => self.host_detail_scroll = scroll,
-            },
-            crate::views::ViewId::Sessions => self.session_scroll = scroll,
-            crate::views::ViewId::Tree => self.tree_scroll = scroll,
-            // Config: no single slot; retention is field-native (see
-            // `view_scroll`).
-            crate::views::ViewId::Config => {}
+            crate::surfaces::PanelId::Queue => self.queue_scroll = scroll,
+            crate::surfaces::PanelId::Sessions => self.session_scroll = scroll,
+            crate::surfaces::PanelId::Tree => self.tree_scroll = scroll,
         }
     }
 
-    fn view_follow(&self, id: crate::views::ViewId) -> bool {
+    fn panel_follow(&self, id: crate::surfaces::PanelId) -> bool {
         match id {
-            crate::views::ViewId::Tools
-            | crate::views::ViewId::Mcp
-            | crate::views::ViewId::Skills => self.session_modal_follow,
-            crate::views::ViewId::Btw => self.btw_modal_follow,
-            crate::views::ViewId::HistorySearch => self.history_modal_follow,
-            crate::views::ViewId::Models | crate::views::ViewId::Connections => {
+            crate::surfaces::PanelId::Tools
+            | crate::surfaces::PanelId::Mcp
+            | crate::surfaces::PanelId::Skills => self.session_modal_follow,
+            crate::surfaces::PanelId::Btw => self.btw_modal_follow,
+            crate::surfaces::PanelId::HistorySearch => self.history_modal_follow,
+            crate::surfaces::PanelId::Models | crate::surfaces::PanelId::Connections => {
                 self.model_modal_follow
             }
-            crate::views::ViewId::Queue => self.queue_modal_follow,
-            crate::views::ViewId::Host => self.host_modal_follow,
-            crate::views::ViewId::Sessions => self.session_modal_follow,
-            crate::views::ViewId::Tree => self.tree_modal_follow,
+            crate::surfaces::PanelId::Queue => self.queue_modal_follow,
+            crate::surfaces::PanelId::Sessions => self.session_modal_follow,
+            crate::surfaces::PanelId::Tree => self.tree_modal_follow,
             // These surfaces don't track a follow flag (plain scroll bodies).
             _ => true,
         }
     }
 
-    fn apply_view_follow(&mut self, id: crate::views::ViewId, follow: bool) {
+    fn apply_panel_follow(&mut self, id: crate::surfaces::PanelId, follow: bool) {
         match id {
-            crate::views::ViewId::Tools
-            | crate::views::ViewId::Mcp
-            | crate::views::ViewId::Skills
-            | crate::views::ViewId::Sessions => self.session_modal_follow = follow,
-            crate::views::ViewId::Btw => self.btw_modal_follow = follow,
-            crate::views::ViewId::HistorySearch => self.history_modal_follow = follow,
-            crate::views::ViewId::Models | crate::views::ViewId::Connections => {
+            crate::surfaces::PanelId::Tools
+            | crate::surfaces::PanelId::Mcp
+            | crate::surfaces::PanelId::Skills
+            | crate::surfaces::PanelId::Sessions => self.session_modal_follow = follow,
+            crate::surfaces::PanelId::Btw => self.btw_modal_follow = follow,
+            crate::surfaces::PanelId::HistorySearch => self.history_modal_follow = follow,
+            crate::surfaces::PanelId::Models | crate::surfaces::PanelId::Connections => {
                 self.model_modal_follow = follow;
             }
-            crate::views::ViewId::Queue => self.queue_modal_follow = follow,
-            crate::views::ViewId::Host => self.host_modal_follow = follow,
-            crate::views::ViewId::Tree => self.tree_modal_follow = follow,
+            crate::surfaces::PanelId::Queue => self.queue_modal_follow = follow,
+            crate::surfaces::PanelId::Tree => self.tree_modal_follow = follow,
             // Plain scroll bodies do not expose a follow flag.
             _ => {}
         }
@@ -2828,8 +2874,11 @@ impl App {
     }
 
     /// Whether the view is currently zoomed into an envoy task.
+    /// Whether the view is currently zoomed into an envoy task. Derived
+    /// from the router (ADR-0141), not from zoom-stack emptiness: a
+    /// dashboard opened over the zoom keeps the zoom alive underneath.
     pub fn in_envoy_view(&self) -> bool {
-        !self.focus_stack.is_empty()
+        self.current_view() == crate::surfaces::View::Envoy
     }
 
     /// The message slice currently in view: the `/btw` side transcript when
@@ -2893,7 +2942,9 @@ impl App {
         }
     }
 
-    /// Zoom into an envoy task's child messages.
+    /// Zoom into an envoy task's child messages. The zoom frame (call id +
+    /// saved scroll) stays on `App` as data; the surface is the router's
+    /// [`View::Envoy`](crate::surfaces::View::Envoy) (ADR-0141).
     pub fn enter_envoy(&mut self, call_id: String) {
         let saved_scroll = ScrollSnapshot {
             offset: self.scroll,
@@ -2903,16 +2954,24 @@ impl App {
             call_id,
             saved_scroll,
         });
+        if self.current_view() != crate::surfaces::View::Envoy {
+            self.surfaces.show_view(crate::surfaces::View::Envoy);
+        }
         self.reset_view_state();
     }
 
     /// Return from the current envoy view to its parent. Returns true if a
-    /// view was actually popped.
+    /// view was actually popped. When the last frame pops, the surface
+    /// leaves `View::Envoy` through the router's return path (which also
+    /// drains a destination view opened over the zoom, e.g. the dashboard).
     pub fn exit_envoy(&mut self) -> bool {
         if let Some(frame) = self.focus_stack.pop() {
             self.reset_view_state();
             self.scroll = frame.saved_scroll.offset;
             self.follow_bottom = frame.saved_scroll.follow_bottom;
+            if self.focus_stack.is_empty() && self.in_envoy_view() {
+                self.surfaces.back_view();
+            }
             true
         } else {
             false
@@ -2928,7 +2987,12 @@ impl App {
     /// task step.
     pub fn enter_side_view(&mut self, side_id: String) {
         self.side_session_id = Some(side_id.clone());
+        // The surface is the router's `View::Side` (ADR-0141); the flag
+        // below remains as cheap payload for the input context and tests.
         self.in_side_view = true;
+        if self.current_view() != crate::surfaces::View::Side {
+            self.surfaces.show_view(crate::surfaces::View::Side);
+        }
         self.parent_status = ParentStatus::Idle;
         // An armed Esc confirmation is view-scoped: entering the aside must
         // not inherit the primary's arm (a second Esc here would otherwise
@@ -2993,6 +3057,9 @@ impl App {
         }
         self.in_side_view = false;
         self.side_session_id = None;
+        if self.current_view() == crate::surfaces::View::Side {
+            self.surfaces.show_session_view();
+        }
         // Dropping any armed Esc confirmation is part of leaving: the arm
         // targeted the aside's round, and a carried arm would fire the
         // *primary's* interrupt on the next Esc. Covers the Ctrl+C detach
@@ -3600,7 +3667,7 @@ impl App {
     /// stashed it on open); the chooser is a pure list, so the composer line
     /// stays clear.
     pub fn open_provider_template_chooser(&mut self) {
-        if self.active_view() == Some(crate::views::ViewId::Connections) {
+        if self.active_panel() == Some(crate::surfaces::PanelId::Connections) {
             self.push_transient_surface(Modal::ProviderTemplate);
         } else {
             self.replace_transient_surface(Modal::ProviderTemplate);
@@ -3730,11 +3797,11 @@ impl App {
     }
 
     /// Open the provider editor in **edit** mode for an existing user provider,
-    /// pre-filling its metadata. The visible fields depend on the channel's auth
-    /// type: an API-key channel shows Name / Base URL / Token, while an OAuth
-    /// channel (ChatGPT/Codex, xAI) shows Name only — its endpoint and token are
-    /// owned by the auth flow and must not be hand-edited. The Model field is
-    /// always hidden (models are managed in the Models picker).
+    /// pre-filling its metadata. The visible fields depend on whether it is a
+    /// preset vs custom provider, and its auth type: a custom API-key channel shows
+    /// Name / Base URL / Token, a preset API-key channel shows Name / Token, and an
+    /// OAuth channel (ChatGPT/Codex, xAI, Copilot, Antigravity) shows Name only.
+    /// The Model field is always hidden (models are managed in the Models picker).
     pub fn open_edit_provider_editor(
         &mut self,
         id: String,
@@ -3742,14 +3809,15 @@ impl App {
         protocol: String,
         base_url: String,
         auth: ChannelAuth,
+        is_preset: bool,
     ) {
-        if self.active_view() == Some(crate::views::ViewId::Connections) {
+        if self.active_panel() == Some(crate::surfaces::PanelId::Connections) {
             self.push_transient_surface(Modal::CustomProvider);
         } else {
             self.replace_transient_surface(Modal::CustomProvider);
         }
         self.custom_edit_id = Some(id);
-        self.custom_fields = edit_fields(&protocol, auth);
+        self.custom_fields = edit_fields(is_preset, auth);
         self.custom_field = 0;
         self.custom_protocol_wire = protocol;
         self.custom_models.clear();

@@ -438,7 +438,7 @@ pub trait Tool: Send + Sync {
     /// | `Command(_)` | `all()` | serializes with everything in the batch |
     ///
     /// Tools override this to declare a **precise** access (e.g. `read_file`
-    /// for read-only tools, `search_tree` for grep, `read_tree` for a
+    /// for read-only tools, `search_tree` for content search, `read_tree` for a
     /// directory listing). Like [`scope_target`](Self::scope_target), this
     /// never reaches the model.
     fn accesses(&self, arguments: &str) -> ToolAccesses {
@@ -558,7 +558,7 @@ pub enum ScopeTarget {
     /// A shell command string (e.g. `bash`). Checked against the scope's command
     /// allowlist, when one is set.
     Command(String),
-    /// The tool declares no locatable target (e.g. `grep`, `list_dir`). Admitted
+    /// The tool declares no locatable target (e.g. `search_text`, `list_dir`). Admitted
     /// by the scope gate without a dimension check.
     Unspecified,
 }
@@ -618,7 +618,7 @@ fn leading_program(command: &str) -> String {
 /// prompt**: calls whose [`ScopeTarget`] falls outside the granted scope are
 /// blocked outright. `OperationScope` scopes *where* (paths) and *what*
 /// (commands) a tool may touch. A tool with [`ScopeTarget::Unspecified`] (no
-/// locatable target, e.g. `read_text`, `grep`) skips the scope gate and the
+/// locatable target, e.g. `read_text`, `search_text`) skips the scope gate and the
 /// permission broker entirely; a tool with a `Path`/`Command` target is checked
 /// against this scope first, then surfaces to the broker for approval. See
 /// ADR-0028.

@@ -140,10 +140,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "anthropic",
         label: "Anthropic",
-        description: "Claude models over the Anthropic /messages API",
+        description: "Anthropic API — Flagship Claude models with advanced reasoning (API Key)",
         protocol: "anthropic",
         models: muta_providers::ANTHROPIC_BUILTIN_MODELS,
-        needs_url: true,
+        needs_url: false,
         url_hint: "https://api.anthropic.com/v1/messages",
         needs_model: false,
         default_url: Some("https://api.anthropic.com/v1/messages"),
@@ -153,7 +153,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "chatgpt-oauth",
         label: "ChatGPT",
-        description: "GPT-5.x via ChatGPT Pro/Plus subscription (browser OAuth)",
+        description: "ChatGPT Plus/Pro subscription — Flagship GPT & deep reasoning models (browser OAuth)",
         protocol: "openai",
         models: muta_providers::CHATGPT_BUILTIN_MODELS,
         needs_url: false,
@@ -166,7 +166,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "custom-openai",
         label: "Custom Provider",
-        description: "Any OpenAI-compatible endpoint — custom relay or self-hosted gateway",
+        description: "Custom OpenAI-compatible gateway, local runtime, or relay (Base URL & Key)",
         protocol: "openai",
         models: &[],
         needs_url: true,
@@ -179,7 +179,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "deepseek",
         label: "DeepSeek",
-        description: "DeepSeek V4 Flash (0731) + Pro (0813) over the OpenAI Responses API",
+        description: "DeepSeek Platform API — High-performance reasoning & coding models (API Key)",
         protocol: "openai-responses",
         models: muta_providers::DEEPSEEK_BUILTIN_MODELS,
         needs_url: false,
@@ -192,7 +192,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "copilot-oauth",
         label: "GitHub Copilot",
-        description: "GPT-4o/5.x via GitHub Copilot subscription (device OAuth)",
+        description: "GitHub Copilot subscription — Multi-vendor coding & reasoning models (device OAuth)",
         protocol: "openai",
         models: muta_providers::COPILOT_SEED_MODELS,
         needs_url: false,
@@ -205,10 +205,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "google",
         label: "Google AI Studio",
-        description: "Native Google API — Google AI Studio or compatible relay",
+        description: "Google AI Studio / Developer API — Full-range Gemini models (API Key)",
         protocol: "google",
         models: muta_providers::GOOGLE_BUILTIN_MODELS,
-        needs_url: true,
+        needs_url: false,
         url_hint: "https://generativelanguage.googleapis.com/v1beta",
         needs_model: false,
         default_url: Some("https://generativelanguage.googleapis.com/v1beta"),
@@ -218,7 +218,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "antigravity-oauth",
         label: "Google Antigravity",
-        description: "Gemini 3.x / Claude / GPT models via Google One AI Premium (Antigravity)",
+        description: "Google One AI Premium subscription — Flagship Gemini & companion Claude models (browser OAuth)",
         protocol: "google",
         models: muta_providers::ANTIGRAVITY_OAUTH_MODELS,
         needs_url: false,
@@ -231,7 +231,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "kimi-code",
         label: "Kimi Code",
-        description: "Moonshot Kimi coding-plan endpoint",
+        description: "Moonshot Kimi Coding Plan — Long-context coding & reasoning models (API Key)",
         protocol: "openai",
         models: muta_providers::KIMI_CODE_MODELS,
         needs_url: false,
@@ -244,7 +244,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "openai",
         label: "OpenAI",
-        description: "OpenAI API — GPT-5.5 family",
+        description: "OpenAI Platform API — Official flagship GPT & frontier reasoning models (API Key)",
         protocol: "openai",
         models: muta_providers::OPENAI_BUILTIN_MODELS,
         needs_url: false,
@@ -257,10 +257,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "opencode-go",
         label: "OpenCode Go",
-        description: "opencode.ai relay — OpenAI chat-completions coding models",
+        description: "OpenCode.ai subscription relay — Cloud-accelerated coding & agent models (API Key)",
         protocol: "openai",
         models: muta_providers::OPENCODE_GO_MODELS,
-        needs_url: true,
+        needs_url: false,
         url_hint: "https://opencode.ai/zen/go/v1/chat/completions",
         needs_model: false,
         default_url: Some("https://opencode.ai/zen/go/v1/chat/completions"),
@@ -270,7 +270,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "zai-code",
         label: "ZAI Code (CN)",
-        description: "Zhipu BigModel / Z.AI coding-plan endpoint (CN)",
+        description: "Zhipu Z.AI Coding Plan — Flagship GLM & code-enhanced models (API Key)",
         protocol: "openai",
         models: muta_providers::ZAI_CODE_MODELS,
         needs_url: false,
@@ -283,7 +283,7 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     ProviderTemplate {
         id: "xai-oauth",
         label: "xAI",
-        description: "Grok 4.x via SuperGrok subscription (browser OAuth)",
+        description: "SuperGrok / X Premium subscription — Flagship Grok reasoning models (browser OAuth)",
         protocol: "openai",
         models: muta_providers::XAI_BUILTIN_MODELS,
         needs_url: false,
@@ -322,16 +322,18 @@ pub fn provider_type_label(template_id: &str) -> Option<&'static str> {
 }
 
 /// The ordered editor fields shown when **editing** an existing user provider.
-/// For an API-key channel the form offers Name, Base URL, and Token (the Model
+/// For an API-key custom provider the form offers Name, Base URL, and Token (the Model
 /// field is omitted — models, and their per-model reasoning, ADR-0046, are
-/// managed in the Models picker). For an OAuth channel (ChatGPT/Codex or xAI)
-/// only Name is editable: the Base URL and Token are fixed by the auth flow
-/// (e.g. `https://api.x.ai/...`, `https://chatgpt.com/backend-api/codex/...`)
-/// and must not be hand-edited, so a rename is the only safe operation.
-pub fn edit_fields(protocol: &str, auth: ChannelAuth) -> Vec<CustomField> {
-    let _ = protocol;
+/// managed in the Models picker). For a preset provider (where endpoint and models
+/// are derived from the hardcoded preset spec), Base URL is fixed by the preset,
+/// so only Name and Token are offered. For an OAuth channel (ChatGPT/Codex, xAI,
+/// Copilot, Antigravity) only Name is editable: the Base URL and Token are fixed by
+/// the auth flow and must not be hand-edited, so a rename is the only safe operation.
+pub fn edit_fields(is_preset: bool, auth: ChannelAuth) -> Vec<CustomField> {
     if auth.is_oauth() {
         vec![CustomField::Name]
+    } else if is_preset {
+        vec![CustomField::Name, CustomField::Token]
     } else {
         vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
     }
@@ -1352,14 +1354,18 @@ mod tests {
     }
 
     #[test]
-    fn edit_fields_api_key_shows_name_url_token() {
-        // An API-key provider exposes every editable field; editing can change
-        // the endpoint and key as well as rename.
-        let fields = edit_fields("openai", ChannelAuth::ApiKey);
+    fn edit_fields_api_key_shows_name_url_token_for_custom_only() {
+        // A pure-custom API-key provider exposes Name, Base URL, and Token.
+        let custom_fields = edit_fields(false, ChannelAuth::ApiKey);
         assert_eq!(
-            fields,
+            custom_fields,
             vec![CustomField::Name, CustomField::BaseUrl, CustomField::Token]
         );
+
+        // A preset API-key provider derives its Base URL from the preset spec,
+        // so it only exposes Name and Token.
+        let preset_fields = edit_fields(true, ChannelAuth::ApiKey);
+        assert_eq!(preset_fields, vec![CustomField::Name, CustomField::Token]);
     }
 
     #[test]
@@ -1369,10 +1375,10 @@ mod tests {
         // `https://chatgpt.com/backend-api/codex/...`). The editor must expose
         // only a rename, so the server-side guard is never the lone defense
         // against wiping them.
-        let xai = edit_fields("xai", ChannelAuth::XaiOAuth);
+        let xai = edit_fields(true, ChannelAuth::XaiOAuth);
         assert_eq!(xai, vec![CustomField::Name]);
 
-        let chatgpt = edit_fields("chatgpt", ChannelAuth::ChatGptOAuth);
+        let chatgpt = edit_fields(true, ChannelAuth::ChatGptOAuth);
         assert_eq!(chatgpt, vec![CustomField::Name]);
     }
 

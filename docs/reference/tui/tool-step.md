@@ -50,8 +50,8 @@ session.
 | Tool | Renderer | Notes |
 |------|----------|-------|
 | `bash` | `draw_bash_content` | A `$ command` prompt line, then the captured lines in **arrival order** — stdout and stderr interleaved exactly as the process wrote them, each coloured by source stream (stderr in `error_fg`) — then an `exit N` / `[output truncated]` footer, all one `code_bg` block. Carriage returns are collapsed (only the text after the last `\r` on a line survives). The ordered view comes from the structured `Shell::lines` field (available while streaming); legacy/restored payloads with only flat `stdout`/`stderr` fall back to the all-stdout-then-all-stderr bands. Command comes from the structured `Shell` payload, falling back to the parsed arguments. Long output is **middle-folded** (see [Long output folding](#long-output-folding)). |
-| `list_dir`, `glob` | `draw_listing_content` | One entry per row, no gutter, on `code_bg`. Directories (entries ending in `/`) in `info`, files in `code_fg`. |
-| `grep` | `draw_grep_content` | Matches grouped under a bold `heading_fg` file-path header; each match shown as `{lineno}  {content}` with the line-number column aligned and dimmed. |
+| `find_files`, `list_dir` | `draw_listing_content` | One entry per row, no gutter, on `code_bg`. Directories (entries ending in `/`) in `info`, files in `code_fg`. |
+| `search_text` | `draw_matches_content` | Matches grouped under a bold `heading_fg` file-path header; each match shown as `{lineno}  {content}` with the line-number column aligned and dimmed. |
 | `edit_file`, `write_file` | `draw_diff_content` | A real `similar`-based unified diff: line-number gutter, `+`/`-` sign column, and intra-line word highlight on the changed spans, on `code_bg`. |
 | `read_text`, others | `draw_code_content` | Code block with line-number gutter on `code_bg` (the fallback for unrecognized tools). |
 
@@ -138,7 +138,7 @@ one-line header (the summary, colored by run state) with no marker glyph.
 `draw_tool_step` in `apps/tui/crates/mutx/src/disclosure/renderers.rs`. Shared
 header via `draw_expandable_step_header` (from
 `apps/tui/crates/mutx/src/disclosure/mod.rs`). Expanded content dispatched by
-`draw_tool_result` to `draw_listing_content`, `draw_grep_content`,
+`draw_tool_result` to `draw_listing_content`, `draw_matches_content`,
 `draw_bash_content` (which renders the `$ command` line + the structured
 `Shell` payload), `draw_diff_content`, or `draw_code_content`. The bash command
 is resolved by `bash_command_for`. Presenters (summary / `result_kind` /

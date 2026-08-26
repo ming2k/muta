@@ -860,7 +860,6 @@ pub fn effort_ignition() -> io::Result<()> {
                     busy: false,
                     can_retry: false,
                     context_tokens: Some(12_400),
-                    draft_tokens: 42,
                     ignition_elapsed_ms: elapsed_ms,
                 },
                 &theme,

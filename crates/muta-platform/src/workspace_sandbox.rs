@@ -71,11 +71,31 @@ pub fn shell(
     workspace_access: WorkspaceAccess,
     network_access: NetworkAccess,
 ) -> Result<tokio::process::Command, String> {
-    command_with_environment(
+    shell_with_roots(
+        command,
+        workspace_root,
+        &[],
+        workspace_access,
+        network_access,
+    )
+}
+
+/// Build a sandboxed non-interactive shell command over a multi-root
+/// workspace (ADR-0142): `workspace_root` stays the cwd, and every entry of
+/// `additional_roots` is admitted read-write alongside it.
+pub fn shell_with_roots(
+    command: &str,
+    workspace_root: &Path,
+    additional_roots: &[PathBuf],
+    workspace_access: WorkspaceAccess,
+    network_access: NetworkAccess,
+) -> Result<tokio::process::Command, String> {
+    command_with_roots(
         "/bin/sh",
         &["-c".to_string(), command.to_string()],
         &HashMap::new(),
         workspace_root,
+        additional_roots,
         workspace_access,
         network_access,
     )
@@ -92,6 +112,32 @@ pub fn command_with_environment(
     workspace_access: WorkspaceAccess,
     network_access: NetworkAccess,
 ) -> Result<tokio::process::Command, String> {
+    command_with_roots(
+        program,
+        args,
+        environment,
+        workspace_root,
+        &[],
+        workspace_access,
+        network_access,
+    )
+}
+
+/// Build a sandboxed direct-program command over a multi-root workspace
+/// (ADR-0142). Identical containment to
+/// [`command_with_environment`], plus one read-write bind per additional
+/// root. A root that is redundant with the primary (or a duplicate of an
+/// earlier entry) is skipped rather than rejected, so a stale
+/// `[workspace]` table cannot brick the sandbox.
+pub fn command_with_roots(
+    program: &str,
+    args: &[String],
+    environment: &HashMap<String, String>,
+    workspace_root: &Path,
+    additional_roots: &[PathBuf],
+    workspace_access: WorkspaceAccess,
+    network_access: NetworkAccess,
+) -> Result<tokio::process::Command, String> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (
@@ -99,6 +145,7 @@ pub fn command_with_environment(
             args,
             environment,
             workspace_root,
+            additional_roots,
             workspace_access,
             network_access,
         );
@@ -179,6 +226,26 @@ pub fn command_with_environment(
             })
             .arg(&root)
             .arg(&root);
+        // Additional roots (ADR-0142): widened admission, same containment.
+        // Each entry is bind-mounted at its canonical path. The `created` set
+        // mixes real mounts with plain `--dir` markers (e.g. the tmpfs `/tmp`),
+        // so membership must NOT be read as "already covered" — a sibling under
+        // /tmp needs its own bind to become visible inside the tmpfs. Only an
+        // exact match (the entry *is* an already-bound root) or a vanished
+        // directory skips; a stale configured tree therefore cannot brick the
+        // sandbox, and nothing beyond the configured set is ever admitted.
+        let mut bound_roots: BTreeSet<PathBuf> = BTreeSet::new();
+        bound_roots.insert(root.clone());
+        for extra in additional_roots {
+            let Ok(canonical) = std::fs::canonicalize(extra) else {
+                continue;
+            };
+            if !bound_roots.insert(canonical.clone()) {
+                continue;
+            }
+            create_ancestors(&mut invocation, &canonical, &mut created);
+            invocation.arg("--bind").arg(&canonical).arg(&canonical);
+        }
         invocation.args(["--dir", "/tmp/muta-home", "--chdir"]);
         invocation.arg(&root);
         invocation.args([
@@ -340,6 +407,70 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn additional_roots_are_mounted_read_write() {
+        let root = scratch();
+        let sibling = scratch();
+        std::fs::write(sibling.join("sibling.txt"), "from sibling").unwrap();
+
+        let command = shell_with_roots(
+            "true",
+            &root,
+            std::slice::from_ref(&sibling),
+            WorkspaceAccess::ReadWrite,
+            NetworkAccess::Disabled,
+        )
+        .unwrap();
+        // The sibling must appear as a bind mount at its canonical path...
+        let arguments = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let bind_at = arguments
+            .iter()
+            .position(|arg| arg == "--bind" && *sibling.to_string_lossy() == **arg)
+            .or_else(|| {
+                arguments
+                    .windows(3)
+                    .position(|w| w[0] == "--bind" && w[1] == sibling.to_string_lossy())
+            });
+        let bind_ok = bind_at
+            .map(|i| {
+                arguments
+                    .get(i + 2)
+                    .map(|dst| *dst == sibling.to_string_lossy())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        assert!(bind_ok, "sibling not bound: {arguments:?}");
+        // ...and the process can read and write through it, while the temp
+        // parent holding both scratch dirs stays otherwise invisible.
+        std::fs::write(
+            root.join("probe.sh"),
+            format!(
+                "cat {}/sibling.txt && touch {}/written && ! test -e /etc/passwd",
+                sibling.display(),
+                sibling.display()
+            ),
+        )
+        .unwrap();
+        let mut command = shell_with_roots(
+            "sh probe.sh",
+            &root,
+            std::slice::from_ref(&sibling),
+            WorkspaceAccess::ReadWrite,
+            NetworkAccess::Disabled,
+        )
+        .unwrap();
+        let output = command.output().await.unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("from sibling"));
+        assert!(sibling.join("written").exists());
+        std::fs::remove_dir_all(root).ok();
+        std::fs::remove_dir_all(sibling).ok();
+    }
+
     #[tokio::test]
     async fn project_extension_profile_is_read_only_and_host_blind() {
         if !available() {

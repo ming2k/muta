@@ -4,7 +4,7 @@
 //! batch of tool calls, pumped through the *production* `draw_transcript`
 //! renderer. It is the live, interactive fixture for the tool-step TUI:
 //! spacing (collapsed steps stack flush; expanded bodies own their padding),
-//! per-tool body renderers (read → code, grep → matches, bash → shell), and
+//! per-tool body renderers (read → code, search → matches, bash → shell), and
 //! the lifecycle colour grammar (running / ok / failed / cancelled).
 //!
 //! ## Scenarios
@@ -12,7 +12,7 @@
 //! The showcase cycles through three scenarios so each spacing/layout rule is
 //! visible on its own:
 //!
-//! 1. **flush batch** — a parallel fan-out of collapsed read/grep calls. The
+//! 1. **flush batch** — a parallel fan-out of collapsed read/search calls. The
 //!    headers stack with *no* blank rows between them: a batch of parallel
 //!    tool calls reads as one compact log block.
 //! 2. **expanded body** — one call expanded mid-batch. Its body is padded one
@@ -199,7 +199,7 @@ fn flush_batch() -> Vec<TranscriptMessage> {
     vec![
         read("call_a", "src/lib.rs", true),
         read("call_b", "src/main.rs", true),
-        grep("call_c", "ToolStep", "src"),
+        search_text("call_c", "ToolStep", "src"),
         read("call_d", "README.md", false),
     ]
 }
@@ -208,10 +208,10 @@ fn flush_batch() -> Vec<TranscriptMessage> {
 /// header and one from the next; the collapsed neighbours stay flush.
 fn expanded_body() -> Vec<TranscriptMessage> {
     vec![
-        read("call_a", "src/lib.rs", true),      // collapsed
-        grep_expanded("call_b", "foo", "src"),   // expanded mid-batch
-        read("call_c", "src/main.rs", true),     // collapsed
-        read("call_d", "tests/basic.rs", false), // collapsed
+        read("call_a", "src/lib.rs", true),           // collapsed
+        search_text_expanded("call_b", "foo", "src"), // expanded mid-batch
+        read("call_c", "src/main.rs", true),          // collapsed
+        read("call_d", "tests/basic.rs", false),      // collapsed
     ]
 }
 
@@ -251,9 +251,9 @@ fn read(id: &str, path: &str, present: bool) -> TranscriptMessage {
     m
 }
 
-/// A finished, Ok `grep` step, collapsed.
-fn grep(id: &str, pattern: &str, path: &str) -> TranscriptMessage {
-    let args = format!(r#"{{"pattern":"{pattern}","path":"{path}"}}"#);
+/// A finished, successful `search_text` step, collapsed.
+fn search_text(id: &str, pattern: &str, path: &str) -> TranscriptMessage {
+    let args = format!(r#"{{"query":"{pattern}","path":"{path}"}}"#);
     let structured = ToolOutput::Matches {
         pattern: pattern.into(),
         lines: vec![
@@ -262,15 +262,15 @@ fn grep(id: &str, pattern: &str, path: &str) -> TranscriptMessage {
             format!("{path}/b.rs:22:1:    {pattern}_ref()"),
         ],
     };
-    let mut m = TranscriptMessage::tool_step(id, "grep", &args);
+    let mut m = TranscriptMessage::tool_step(id, "search_text", &args);
     m.finish_tool_step(id, structured.to_text(), structured, 18);
     m.set_tool_step_expanded(false);
     m
 }
 
-/// A finished, Ok `grep` step, expanded (to show the body-padding rule).
-fn grep_expanded(id: &str, pattern: &str, path: &str) -> TranscriptMessage {
-    let mut m = grep(id, pattern, path);
+/// A finished, successful `search_text` step, expanded.
+fn search_text_expanded(id: &str, pattern: &str, path: &str) -> TranscriptMessage {
+    let mut m = search_text(id, pattern, path);
     m.pin_tool_step_expanded(true);
     m
 }

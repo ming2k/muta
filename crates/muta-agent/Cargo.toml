@@ -26,6 +26,7 @@ uuid = { workspace = true }
 regex = "1"
 fastrand = { workspace = true }
 glob = { workspace = true }
+ignore = { workspace = true }
 walkdir = { workspace = true }
 inventory = { workspace = true }
 base64 = { workspace = true }

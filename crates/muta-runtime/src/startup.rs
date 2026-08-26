@@ -371,8 +371,8 @@ define_builtin_commands! {
         category: Project,
     },
     Trust = "/trust" : {
-        summary: "Trust workspace for development and manage project extensions",
-        description: "Authorize development in this workspace, trust project extensions (MCP, hooks, skills), or set restricted mode.",
+        summary: "Record the workspace execution decision and manage project extensions",
+        description: "Decide this workspace's execution authority (development or restricted), trust project extensions (MCP, hooks, skills) independently, or inspect status.",
         usage: ["/trust", "/trust [workspace|extensions|all|readonly|status|revoke]"],
         examples: [
             ("/trust", "Trust workspace and its project extensions"),

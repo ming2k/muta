@@ -158,7 +158,7 @@ mod tests {
         ));
         assert!(default_tool_expanded(
             ToolStepStatus::Failed,
-            "grep",
+            "search_text",
             &cfg,
             false
         ));

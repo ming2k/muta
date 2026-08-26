@@ -180,7 +180,7 @@ fn opencode_go_routes_models_by_wire_format() {
 }
 
 #[test]
-fn instance_base_url_override_wins_over_the_template_default() {
+fn preset_instance_always_uses_the_hardcoded_template_endpoint() {
     let mut deepseek = instance("deepseek", Some("deepseek"));
     deepseek.base_url = Some("https://relay.example.com/v1/responses".to_string());
     let channel = derive_channel(
@@ -192,7 +192,7 @@ fn instance_base_url_override_wins_over_the_template_default() {
     );
     match &channel.transport {
         Transport::OpenAiResponses { base_url, .. } => {
-            assert_eq!(base_url, "https://relay.example.com/v1/responses");
+            assert_eq!(base_url, "https://api.deepseek.com/v1/responses");
         }
         other => panic!("expected Responses transport, got {other:?}"),
     }

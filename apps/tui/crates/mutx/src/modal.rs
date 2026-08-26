@@ -1,10 +1,11 @@
 //! Modal identity and surface-recess policy.
 //!
-//! [`Modal`] is a fieldless discriminant naming *which* overlay is open; it is
-//! the seam shared between the view layer (modal geometry via
-//! [`paint::primitives::modal_area`](crate), per-modal renderers) and
-//! the app shell (which tracks the active modal as state). [`Recess`] is the
-//! single source of truth for how the live surface recedes behind a modal.
+//! [`Modal`] is a fieldless discriminant naming *which* overlay presentation
+//! is drawn; under ADR-0141 it is a projection of the router's surface (see
+//! [`crate::surfaces`), never an identity. It is the seam shared between the
+//! render layer (modal geometry via [`crate::primitives::modal_area`],
+//! per-modal renderers) and input dispatch. [`Recess`] is the single source
+//! of truth for how the live surface recedes behind a modal.
 
 #[derive(PartialEq, Clone, Copy, Debug, Default)]
 pub enum Modal {
@@ -75,13 +76,12 @@ pub enum Modal {
     CustomProvider,
     Help,
     Sessions,
-    /// Session dashboard (`/host`, ADR-0096): a first-class, full-screen
-    /// control view over every session the unified daemon hosts. Unlike the
-    /// transient centered modals, it takes over the whole viewport — header,
-    /// live session list, detail pane, footer command strip — so it reads as a
-    /// primary screen, not an overlay. Enter attaches to a hosted session;
-    /// `i` / `p` / `n` issue control-plane verbs. Data comes from the monitor
-    /// stream the TUI maintains client-side.
+    /// Presentation of the full-screen dashboard view
+    /// ([`View::Dashboard`](crate::surfaces::View::Dashboard), `/dashboard`,
+    /// ADR-0096/0141): header, live session list, detail pane, footer
+    /// command strip over the whole viewport. Enter attaches to a hosted
+    /// session; `i` / `p` / `n` issue control-plane verbs. Data comes from
+    /// the monitor stream the TUI maintains client-side.
     Host,
     /// Tools manager modal: a centered, dismissable, selectable list of every
     /// session tool — builtins, `mcp:<server>`, `pursuit`, `plan` — each with a
@@ -115,8 +115,10 @@ pub enum Modal {
     /// Config manager modal: a centered, dismissable overlay listing the
     /// configurable categories (Appearance). Opened with the
     /// `/config` slash command (intercepted locally, never sent to the
-    /// Full-screen Settings View (`/config`): dual-pane configuration center.
-    /// `Tab` switches focus between categories and detail; `Esc` closes.
+    /// Presentation of the full-screen settings view
+    /// ([`View::Settings`](crate::surfaces::View::Settings), `/config` /
+    /// `/settings`, ADR-0141): dual-pane configuration center. `Tab`
+    /// switches focus between categories and detail; `Esc` closes.
     Config,
     /// Activity overview: the current pursuit (objective + checklist), the live
     /// plan-progress breakdown, and the running round/turn/model/elapsed/
@@ -160,12 +162,13 @@ pub enum Modal {
     InputInjection,
     /// Session DAG tree viewer (`/tree`).
     Tree,
-    /// Global view quick switcher (ADR-0139, `Ctrl+L`): a centered picker
-    /// over every browse surface — open views first in MRU order, then the
-    /// rest as discovery. `Enter` switches (hides the current view, focus
-    /// moves, retained scroll/index restored); `Esc` closes with nothing
-    /// changed. Not itself a retained view: it is a transient chooser over
-    /// them, so it stays out of the [`crate::views::ViewRegistry`].
+    /// Global quick switcher (ADR-0139/0141, `Ctrl+L`): a centered picker
+    /// over every navigable surface — switchable full-screen views first,
+    /// then retained panels, open ones in MRU order, then the rest as
+    /// discovery. `Enter` switches (hides the current panel, focus moves,
+    /// retained scroll/index restored); `Esc` closes with nothing changed.
+    /// Not itself a retained surface: it is a transient chooser over them,
+    /// so it stays out of the [`crate::surfaces::PanelRegistry`].
     ViewSwitcher,
 }
 
@@ -205,9 +208,9 @@ impl Modal {
             Modal::None | Modal::Question | Modal::Permission | Modal::HistorySearch => {
                 Recess::None
             }
-            // Context switch: the surfaces that fully own the screen.
-            // Sessions is a context-switch picker; Host is the session
-            // dashboard; Config is the full-screen Settings View.
+            // Context switch: the surfaces that fully own the screen. The
+            // two full-screen views (Host = dashboard, Config = settings —
+            // ADR-0141) plus the sessions picker, a context-switch surface.
             Modal::Sessions | Modal::Host | Modal::Config => Recess::Takeover, // Everything else recedes the surface for focus while keeping it
             // visible (transcript, chrome, and all).
             _ => Recess::Dim,

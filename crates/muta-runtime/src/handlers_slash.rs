@@ -1508,17 +1508,19 @@ pub async fn dispatch(
                         record_error(session, resp_tx, name, args, error).await;
                         return;
                     }
-                    let ext_trusted = match workspace_security.trust_extensions(project_root_for_side) {
-                        Ok(trusted) => trusted,
-                        Err(error) => {
-                            record_error(session, resp_tx, name, args, error).await;
-                            return;
-                        }
-                    };
+                    let ext_trusted =
+                        match workspace_security.trust_extensions(project_root_for_side) {
+                            Ok(trusted) => trusted,
+                            Err(error) => {
+                                record_error(session, resp_tx, name, args, error).await;
+                                return;
+                            }
+                        };
                     let ext_info = if ext_trusted {
                         let mut reloaded = Config::load();
                         reloaded.merge_project_mcp(Config::load_project_mcp(project_root_for_side));
-                        reloaded.merge_project_hooks(Config::load_project_hooks(project_root_for_side));
+                        reloaded
+                            .merge_project_hooks(Config::load_project_hooks(project_root_for_side));
                         let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
                         agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
                         agent.set_bash_policy(&reloaded.bash_policy);
@@ -1537,7 +1539,8 @@ pub async fn dispatch(
                     } else {
                         String::new()
                     };
-                    let snapshot = runtime_workspace_security(workspace_security, project_root_for_side);
+                    let snapshot =
+                        runtime_workspace_security(workspace_security, project_root_for_side);
                     agent.set_workspace_security(snapshot.clone());
                     let message = format!(
                         "✓ Workspace trusted for development{ext_info}.\n\
@@ -1551,7 +1554,8 @@ pub async fn dispatch(
                         snapshot.extensions.as_str(),
                         snapshot.sandbox.as_str(),
                     );
-                    record_command(session, resp_tx, name, args, CommandResult::Text(message)).await;
+                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
+                        .await;
                     send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                 }
                 "workspace" | "dev" | "development" => {
@@ -1562,7 +1566,8 @@ pub async fn dispatch(
                         record_error(session, resp_tx, name, args, error).await;
                         return;
                     }
-                    let snapshot = runtime_workspace_security(workspace_security, project_root_for_side);
+                    let snapshot =
+                        runtime_workspace_security(workspace_security, project_root_for_side);
                     agent.set_workspace_security(snapshot.clone());
                     let message = format!(
                         "✓ Workspace execution authority set to development.\n\
@@ -1574,7 +1579,8 @@ pub async fn dispatch(
                         snapshot.extensions.as_str(),
                         snapshot.sandbox.as_str(),
                     );
-                    record_command(session, resp_tx, name, args, CommandResult::Text(message)).await;
+                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
+                        .await;
                     send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                 }
                 "extensions" | "ext" => {
@@ -1600,12 +1606,14 @@ pub async fn dispatch(
                     } else {
                         let mut reloaded = Config::load();
                         reloaded.merge_project_mcp(Config::load_project_mcp(project_root_for_side));
-                        reloaded.merge_project_hooks(Config::load_project_hooks(project_root_for_side));
+                        reloaded
+                            .merge_project_hooks(Config::load_project_hooks(project_root_for_side));
                         let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
                         agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
                         agent.set_bash_policy(&reloaded.bash_policy);
                         skills_registry_for_commands.reload().await;
-                        let snapshot = runtime_workspace_security(workspace_security, project_root_for_side);
+                        let snapshot =
+                            runtime_workspace_security(workspace_security, project_root_for_side);
                         agent.set_workspace_security(snapshot.clone());
                         let connected = report
                             .connected
@@ -1632,14 +1640,14 @@ pub async fn dispatch(
                     send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                 }
                 "readonly" | "restricted" => {
-                    if let Err(error) = workspace_security.set_execution(
-                        project_root_for_side,
-                        WorkspaceExecutionProfile::Restricted,
-                    ) {
+                    if let Err(error) = workspace_security
+                        .set_execution(project_root_for_side, WorkspaceExecutionProfile::Restricted)
+                    {
                         record_error(session, resp_tx, name, args, error).await;
                         return;
                     }
-                    let snapshot = runtime_workspace_security(workspace_security, project_root_for_side);
+                    let snapshot =
+                        runtime_workspace_security(workspace_security, project_root_for_side);
                     agent.set_workspace_security(snapshot.clone());
                     let message = format!(
                         "✓ Workspace set to restricted read-only posture.\n\
@@ -1650,14 +1658,14 @@ pub async fn dispatch(
                         snapshot.root,
                         snapshot.extensions.as_str(),
                     );
-                    record_command(session, resp_tx, name, args, CommandResult::Text(message)).await;
+                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
+                        .await;
                     send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                 }
                 "revoke" | "untrust" | "reset" => {
-                    if let Err(error) = workspace_security.set_execution(
-                        project_root_for_side,
-                        WorkspaceExecutionProfile::Unknown,
-                    ) {
+                    if let Err(error) = workspace_security
+                        .set_execution(project_root_for_side, WorkspaceExecutionProfile::Unknown)
+                    {
                         record_error(session, resp_tx, name, args, error).await;
                         return;
                     }
@@ -1667,7 +1675,8 @@ pub async fn dispatch(
                     agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
                     agent.set_bash_policy(&reloaded.bash_policy);
                     skills_registry_for_commands.reload().await;
-                    let snapshot = runtime_workspace_security(workspace_security, project_root_for_side);
+                    let snapshot =
+                        runtime_workspace_security(workspace_security, project_root_for_side);
                     agent.set_workspace_security(snapshot.clone());
                     let message = format!(
                         "✓ Workspace trust revoked.\n\
@@ -1677,17 +1686,20 @@ pub async fn dispatch(
                          • Preflight will require explicit trust before subsequent turns.",
                         snapshot.root,
                     );
-                    record_command(session, resp_tx, name, args, CommandResult::Text(message)).await;
+                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
+                        .await;
                     send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                 }
                 "status" => {
-                    let snapshot = runtime_workspace_security(workspace_security, project_root_for_side);
+                    let snapshot =
+                        runtime_workspace_security(workspace_security, project_root_for_side);
                     agent.set_workspace_security(snapshot.clone());
                     let runtime_mode = match snapshot.execution {
                         WorkspaceExecutionProfile::Development => {
                             "Host Native (Full Toolchains & Cache Active)"
                         }
-                        WorkspaceExecutionProfile::Restricted | WorkspaceExecutionProfile::Unknown => {
+                        WorkspaceExecutionProfile::Restricted
+                        | WorkspaceExecutionProfile::Unknown => {
                             if snapshot.sandbox == muta_contracts::WorkspaceSandboxState::Enforced {
                                 "Physical Sandbox (Bubblewrap Enforced, Network Disabled)"
                             } else {
@@ -1708,7 +1720,8 @@ pub async fn dispatch(
                         runtime_mode,
                         if agent.get_autopilot() { "on" } else { "off" },
                     );
-                    record_command(session, resp_tx, name, args, CommandResult::Text(message)).await;
+                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
+                        .await;
                     send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                 }
                 _ => {

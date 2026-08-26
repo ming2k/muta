@@ -283,6 +283,32 @@ impl SystemPromptSection for SkillsGuidance {
     }
 }
 
+/// Cross-project admission notice (ADR-0142). Active only when the session
+/// admitted additional workspace roots, so the default single-root prompt is
+/// byte-for-byte unchanged.
+struct WorkspaceRootsGuidance;
+
+impl SystemPromptSection for WorkspaceRootsGuidance {
+    fn id(&self) -> &'static str {
+        "system.workspace_roots"
+    }
+    fn rank(&self) -> u32 {
+        58
+    }
+    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
+        !ctx.additional_workspace_roots.is_empty()
+    }
+    fn render(&self, ctx: &SystemPromptContext) -> Option<String> {
+        if ctx.additional_workspace_roots.is_empty() {
+            return None;
+        }
+        let listed = ctx.additional_workspace_roots.join("\n  - ");
+        Some(format!(
+            "## Additional workspace roots\n\nBesides the primary workspace root, this session is also admitted to these directories (cross-project access is intended and sandbox-approved):\n  - {listed}\n\nFile tools and shell commands may read and write there. Project-relative conventions (skills, extensions, `.muta/config.toml`) still bind to the primary root only."
+        ))
+    }
+}
+
 /// Specialized, hyper-compact system prompt section for an autonomous subagent role.
 struct SubagentRoleGuidance {
     role: muta_contracts::ActorRole,
@@ -339,6 +365,7 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(AutopilotGuidance);
     registry.register(DelegationGuidance);
     registry.register(FileEditingGuidance);
+    registry.register(WorkspaceRootsGuidance);
     registry.register(WebUntrustedContentGuidance);
     registry.register(SkillsGuidance);
     registry
@@ -352,5 +379,6 @@ pub fn subagent_system_prompt_registry(role: &muta_contracts::ActorRole) -> Syst
     registry.register(ToneGuidance);
     registry.register(ModelGuidance);
     registry.register(FileEditingGuidance);
+    registry.register(WorkspaceRootsGuidance);
     registry
 }

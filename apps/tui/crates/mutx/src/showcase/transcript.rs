@@ -161,20 +161,20 @@ fn chat_flow() -> Vec<TranscriptMessage> {
     thinking.set_thinking_duration(1_260);
     thinking.set_thinking_expanded(false);
 
-    let mut grep = TranscriptMessage::tool_step(
-        "grep_bg",
-        "grep",
-        r#"{"pattern":"theme.surface","path":"apps/tui/crates/mutx/src/render"}"#,
+    let mut search = TranscriptMessage::tool_step(
+        "search_bg",
+        "search_text",
+        r#"{"query":"theme.surface","path":"apps/tui/crates/mutx/src/render"}"#,
     );
-    let grep_out = ToolOutput::Matches {
+    let search_out = ToolOutput::Matches {
         pattern: "theme.surface".into(),
         lines: vec![
             "render/mod.rs:230: frame.render_widget(... bg(theme.surface()))".into(),
             "showcase/common.rs: draw_app_background(...)".into(),
         ],
     };
-    grep.finish_tool_step("grep_bg", grep_out.to_text(), grep_out, 44);
-    grep.set_tool_step_expanded(false);
+    search.finish_tool_step("search_bg", search_out.to_text(), search_out, 44);
+    search.set_tool_step_expanded(false);
 
     vec![
         TranscriptMessage::new(
@@ -182,7 +182,7 @@ fn chat_flow() -> Vec<TranscriptMessage> {
             "Resize the showcase window and check whether the old right edge leaves stale cells.",
         ),
         thinking,
-        grep,
+        search,
         TranscriptMessage::notice(
             NoticeSeverity::Warning,
             "Showcase fixtures should repaint the entire app surface before drawing partial modal chrome.",

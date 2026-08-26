@@ -97,20 +97,34 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
   (arm, then exit) instead of closing; with text staged in the dashboard's
   inline `p` / `n` prompt the chain is clear → arm → quit.
 
-### Surface and view lifecycle
+### Surface, view, and panel lifecycle
 
 `Modal` is a rendering/input discriminant, not navigation identity. The
-authoritative foreground is one exact `Surface`: chat, `View(ViewId)`, or a
-transient modal. This distinction matters because Activity and Todos share
-the same renderer while remaining different destinations.
+authoritative foreground is one exact `Surface`: a full-screen `View`, a
+`Panel(PanelId)` floating over it, or a transient modal. This distinction
+matters because Activity and Todos share the same renderer while remaining
+different destinations.
 
-A **view** is a stable, directly focusable place with retained navigation
-state and the complete create/show/hide/switch/close lifecycle. The 18 views
-are Help, Activity, Todos, Tools, MCP, Skills, Permissions, Usage statistics,
-Context report, Asides, Settings, Models, Connections, History, Queue,
-Session dashboard, Sessions, and Session tree. Chat is the root surface;
-request sheets, the quick switcher, child editors, drill-ins, toasts, and
-completion menus are not views.
+Under [ADR-0141](../../adr/0141-view-means-fullscreen-and-modal-means-modal.md)
+the vocabulary is fixed by geometry:
+
+- A **view** is an independent, full-screen destination — the terminal *is*
+  the view. The closed set is `Session` (the live conversation, the home
+  every Esc falls back to), `Dashboard` (`/dashboard`), `Settings`
+  (`/config`), `Envoy` (zoomed into an envoy task), and `Side` (an aside's
+  transcript). Envoy zoom and the side view route through the surface
+  router like any other view; their frame data (the zoom stack, the side
+  session id) lives on the shell.
+- A **panel** is a *retained modal* — one of the browse overlays (Help,
+  Activity, Todos, Tools, MCP, Skills, Permissions, Usage statistics,
+  Context report, Asides, Models, Connections, History, Queue, Sessions,
+  Session tree) that floats over the active view and keeps the
+  create/show/hide/switch/close lifecycle of ADR-0139: retained cursor and
+  scroll, per-panel parked drafts, MRU presence in the quick switcher.
+  Retention is orthogonal to geometry: a panel is still a modal.
+- Request sheets, the quick switcher, child editors, drill-ins, toasts, and
+  completion menus are neither: they are transient surfaces over whatever
+  is active.
 
 The lifecycle defined by [ADR-0139](../../adr/0139-unified-tui-surface-router-and-view-lifecycle.md)
 is:

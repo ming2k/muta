@@ -79,7 +79,7 @@ impl ToolMiddleware for SpillMiddleware {
         let rewritten = format!(
             "{head}\n\n\
              [... Output exceeded {max_bytes} bytes ({total_bytes} total bytes). \
-             Full unabridged output saved to '{path}'. Use `read_text` or `grep` on this file to inspect specifics. ...]\n\n\
+             Full unabridged output saved to '{path}'. Use `read_text` or `search_text` on this file to inspect specifics. ...]\n\n\
              {tail}",
             max_bytes = self.max_inline_bytes,
             total_bytes = text.len(),

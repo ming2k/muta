@@ -32,6 +32,9 @@ use crate::view::Theme;
 pub struct ContextUsageView {
     pub snapshot: Option<ContextTokenSnapshot>,
     pub window_tokens: usize,
+    /// Tokenized composer text, excluding the chat-message wrapper.
+    pub draft_content_tokens: usize,
+    /// Complete draft estimate: composer text plus message framing.
     pub draft_tokens: usize,
 }
 
@@ -120,6 +123,7 @@ pub fn draw_token_report_modal(
             context.snapshot,
             context.window_tokens,
             context.draft_tokens,
+            context.draft_content_tokens,
             selected,
             body_width,
             theme,
@@ -136,6 +140,7 @@ pub fn draw_token_report_modal(
             context.snapshot,
             context.window_tokens,
             context.draft_tokens,
+            context.draft_content_tokens,
             selected,
             body_width,
             theme,
@@ -196,6 +201,7 @@ fn list_body(
     current_context: Option<ContextTokenSnapshot>,
     context_window: usize,
     draft_tokens: usize,
+    draft_content_tokens: usize,
     selected: usize,
     body_width: usize,
     theme: &Theme,
@@ -208,33 +214,17 @@ fn list_body(
         let total_with_draft = snapshot.tokens.saturating_add(draft_tokens);
         let size = if context_window > 0 {
             let ratio = (total_with_draft as f64 / context_window as f64).clamp(0.0, 1.0);
-            if draft_tokens > 0 {
-                format!(
-                    "{} (+{}) / {}  ({}%)",
-                    fmt_token_count(snapshot.tokens),
-                    fmt_token_count(draft_tokens),
-                    fmt_token_count(context_window),
-                    (ratio * 100.0).round() as u32,
-                )
-            } else {
-                format!(
-                    "{} / {}  ({}%)",
-                    fmt_token_count(snapshot.tokens),
-                    fmt_token_count(context_window),
-                    (ratio * 100.0).round() as u32,
-                )
-            }
-        } else if draft_tokens > 0 {
             format!(
-                "{} (+{})",
-                fmt_token_count(snapshot.tokens),
-                fmt_token_count(draft_tokens)
+                "{} / {}  ({}%)",
+                fmt_token_count(total_with_draft),
+                fmt_token_count(context_window),
+                (ratio * 100.0).round() as u32,
             )
         } else {
-            fmt_token_count(snapshot.tokens)
+            fmt_token_count(total_with_draft)
         };
         body.push(kv_styled(
-            "Size",
+            "Projected size",
             &size,
             Style::default().fg(theme.fg()),
             theme,
@@ -256,10 +246,23 @@ fn list_body(
             ));
         }
         if draft_tokens > 0 {
+            let framing_tokens = draft_tokens.saturating_sub(draft_content_tokens);
             body.push(kv_styled(
                 "Draft prompt",
-                &format!("{} (composer input)", fmt_token_count(draft_tokens)),
+                &fmt_token_count(draft_tokens),
                 Style::default().fg(theme.info()),
+                theme,
+            ));
+            body.push(kv_styled(
+                "  Composer text",
+                &fmt_token_count(draft_content_tokens),
+                Style::default().fg(theme.muted()),
+                theme,
+            ));
+            body.push(kv_styled(
+                "  Message framing",
+                &format!("~{}", fmt_token_count(framing_tokens)),
+                Style::default().fg(theme.muted()),
                 theme,
             ));
         }
@@ -1326,7 +1329,7 @@ mod tests {
     }
 
     #[test]
-    fn context_size_is_plain_without_provenance_legend() {
+    fn projected_size_and_draft_breakdown_are_plain_without_addend_syntax() {
         let theme = Theme::default();
         let report = TokenSourceReport::default();
         let (body, _follow) = list_body(
@@ -1339,6 +1342,7 @@ mod tests {
             }),
             200_000,
             300,
+            296,
             0,
             80,
             &theme,
@@ -1347,7 +1351,7 @@ mod tests {
         let size = body
             .iter()
             .flat_map(|line| &line.spans)
-            .find(|span| span.content.contains("12.5k (+300) / 200.0k"))
+            .find(|span| span.content.contains("12.8k / 200.0k"))
             .expect("context size span");
 
         assert!(text.contains("Base overhead"));
@@ -1356,6 +1360,11 @@ mod tests {
         assert!(text.contains("9.3k"));
         assert!(text.contains("Draft prompt"));
         assert!(text.contains("300"));
+        assert!(text.contains("Composer text"));
+        assert!(text.contains("296"));
+        assert!(text.contains("Message framing"));
+        assert!(text.contains("~4"));
+        assert!(!text.contains("(+"));
 
         // The in-body section headings ("Current AI-visible context",
         // "Request usage") have been removed — the modal title already
@@ -1398,7 +1407,7 @@ mod tests {
         let report = ledger.snapshot_for_session("session");
 
         assert_eq!(token_report_round_count(&report), 2);
-        let (list_body_lines, follow) = list_body(&report, None, 0, 0, 0, 80, &theme);
+        let (list_body_lines, follow) = list_body(&report, None, 0, 0, 0, 0, 80, &theme);
         let list = body_text(&list_body_lines);
         // List rows use bare ordinals ("3rd", "2nd"); the round context is
         // carried by the table header, and there is no longer a "Usage by
@@ -1533,7 +1542,7 @@ mod tests {
         let report = ledger.snapshot_for_session("session");
 
         // Select the second round (index 1).
-        let (body, follow) = list_body(&report, None, 0, 0, 1, 80, &theme);
+        let (body, follow) = list_body(&report, None, 0, 0, 0, 1, 80, &theme);
         let selected_line = follow.expect("a follow index for the selected row");
         let line = &body[selected_line];
 
@@ -1607,7 +1616,7 @@ mod tests {
         let report = ledger.snapshot_for_session("session");
 
         let body_width = 80usize;
-        let (body, _follow) = list_body(&report, None, 0, 0, 0, body_width, &theme);
+        let (body, _follow) = list_body(&report, None, 0, 0, 0, 0, body_width, &theme);
 
         // Header row carries "Tokens"; data rows carry a bare ordinal ("3rd",
         // "2nd") plus a token value.
@@ -1995,7 +2004,7 @@ mod tests {
         ledger.settle_request(&r3, RequestUsageStatus::Interrupted, None, 500, 0);
         let report = ledger.snapshot_for_session("session");
 
-        let (list_lines, _follow) = list_body(&report, None, 0, 0, 0, 80, &theme);
+        let (list_lines, _follow) = list_body(&report, None, 0, 0, 0, 0, 80, &theme);
         let list = body_text(&list_lines);
         let tps_cell = |label: &str| {
             list_lines
@@ -2039,7 +2048,7 @@ mod tests {
         let only_untimed = empty.begin_request("session", "relay", "model-a", 1, 1, 0);
         empty.settle_request(&only_untimed, RequestUsageStatus::Completed, None, 80, 0);
         let report = empty.snapshot_for_session("session");
-        let (lines, _) = list_body(&report, None, 0, 0, 0, 80, &theme);
+        let (lines, _) = list_body(&report, None, 0, 0, 0, 0, 80, &theme);
         let session_rate_span = lines
             .iter()
             .find(|line| line.spans.iter().any(|s| s.content.trim() == "Output rate"))

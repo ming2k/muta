@@ -162,7 +162,12 @@ pub(super) async fn handle_selection_start(
         // Activity modal on top of an in-progress decision.
         // A retained view (ADR-0133): reopen restores the scroll the user
         // left; only the first open initialises.
-        super::enter_view(app, crate::views::ViewId::Todos, runtime, viewed_session_id);
+        super::enter_panel(
+            app,
+            crate::surfaces::PanelId::Todos,
+            runtime,
+            viewed_session_id,
+        );
     } else if app.active_modal() == Modal::None
         && app
             .activity_rect
@@ -170,9 +175,9 @@ pub(super) async fn handle_selection_start(
     {
         // A retained view (ADR-0133): reopen restores the scroll the user
         // left; only the first open initialises.
-        super::enter_view(
+        super::enter_panel(
             app,
-            crate::views::ViewId::Activity,
+            crate::surfaces::PanelId::Activity,
             runtime,
             viewed_session_id,
         );
@@ -185,7 +190,12 @@ pub(super) async fn handle_selection_start(
         // the full Queue view. Retained (ADR-0133): cursor/scroll
         // survive hide; the auto-block runs on every entry (an editing
         // safety latch, mirrored by the hide-time resume).
-        super::enter_view(app, crate::views::ViewId::Queue, runtime, viewed_session_id);
+        super::enter_panel(
+            app,
+            crate::surfaces::PanelId::Queue,
+            runtime,
+            viewed_session_id,
+        );
     } else if app.active_modal() == Modal::None
         && app
             .hint_context_rect
@@ -201,9 +211,9 @@ pub(super) async fn handle_selection_start(
         // first open initialises. The attach-mode report fetch stays tied to
         // the ledger being absent — it is a data-lifecycle concern, not an
         // open ritual, so it runs whenever the report is missing.
-        super::enter_view(
+        super::enter_panel(
             app,
-            crate::views::ViewId::TokenReport,
+            crate::surfaces::PanelId::TokenReport,
             runtime,
             viewed_session_id,
         );

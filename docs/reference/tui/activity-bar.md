@@ -81,8 +81,8 @@ session.
 |--------------|-------|
 | Queued (a chat round admitted, not yet running) | `queued` |
 | Waiting for provider | `waiting for model` |
-| `read_text` / `list_dir` / `use_skill` | `exploring` |
-| `grep` | `searching codebase` |
+| `read_text` / `find_files` / `list_dir` / `use_skill` | `exploring` |
+| `search_text` | `searching codebase` |
 | `write_file` / `edit_file` | `making edits` |
 | `bash` | `running command` |
 | MCP tools (`mcp__*`) | `using MCP` |

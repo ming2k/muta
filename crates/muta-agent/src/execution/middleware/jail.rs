@@ -5,7 +5,7 @@ use muta_contracts::execution::{ExecutionEnvironment, ToolMiddleware};
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
 
-/// Middleware that inspects path arguments in tool calls and rejects paths outside the workspace root.
+/// Reject path arguments outside the primary and explicitly admitted workspace roots.
 #[derive(Debug, Default, Clone)]
 pub struct WorkspaceJailMiddleware;
 
@@ -18,9 +18,8 @@ impl ToolMiddleware for WorkspaceJailMiddleware {
         env: &dyn ExecutionEnvironment,
     ) -> Result<(), String> {
         let path_str = match tool {
-            "read_text" | "read_text_terse" | "write_file" | "edit_file" | "list_dir" => {
-                arguments.get("path").and_then(|v| v.as_str())
-            }
+            "edit_file" | "find_files" | "list_dir" | "read_text" | "read_text_terse"
+            | "search_text" | "write_file" => arguments.get("path").and_then(|v| v.as_str()),
             _ => None,
         };
 
@@ -34,9 +33,15 @@ impl ToolMiddleware for WorkspaceJailMiddleware {
             // this middleware because the backing FS may be remote or virtual.
             let root = lexical_normalize(env.workspace_root());
             let resolved = lexical_normalize(&env.workspace_root().join(Path::new(raw_path)));
-            if !resolved.starts_with(&root) {
+            let admitted = resolved.starts_with(&root)
+                || env
+                    .additional_roots()
+                    .iter()
+                    .map(|path| lexical_normalize(path))
+                    .any(|path| resolved.starts_with(path));
+            if !admitted {
                 return Err(format!(
-                    "Security Denial: access to '{raw_path}' is outside the workspace root and forbidden."
+                    "Security Denial: access to '{raw_path}' is outside the admitted workspace roots."
                 ));
             }
         }

@@ -685,7 +685,7 @@ pub enum InputAction {
     ViewSwitcherBackspace,
     /// Switch to the view highlighted in the quick switcher (ADR-0139,
     /// Enter). Hides the current browse view (state retained in the
-    /// `ViewRegistry`) and focuses the target with its retained
+    /// `PanelRegistry`) and focuses the target with its retained
     /// scroll/index restored.
     ViewSwitchActivate,
     /// Explicitly close the selected retained view and discard its UI state.

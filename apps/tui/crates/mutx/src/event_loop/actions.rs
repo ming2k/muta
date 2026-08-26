@@ -420,17 +420,17 @@ pub(super) async fn dispatch_action(
             handle_esc_interrupt(app, false);
         }
         input::InputAction::OpenModels => {
-            enter_view(
+            enter_panel(
                 app,
-                crate::views::ViewId::Models,
+                crate::surfaces::PanelId::Models,
                 runtime,
                 viewed_session_id,
             );
         }
         input::InputAction::OpenConnections => {
-            enter_view(
+            enter_panel(
                 app,
-                crate::views::ViewId::Connections,
+                crate::surfaces::PanelId::Connections,
                 runtime,
                 viewed_session_id,
             );
@@ -451,9 +451,9 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::OpenHistory => {
-            enter_view(
+            enter_panel(
                 app,
-                crate::views::ViewId::HistorySearch,
+                crate::surfaces::PanelId::HistorySearch,
                 runtime,
                 viewed_session_id,
             );
@@ -463,7 +463,7 @@ pub(super) async fn dispatch_action(
             // of `history_rows` (the filtered matches) and drop it into
             // the input box for further editing / sending. The message
             // is not shipped here — the user hits Enter again to send.
-            app.save_view_state(crate::views::ViewId::HistorySearch);
+            app.save_panel_state(crate::surfaces::PanelId::HistorySearch);
             let ranked = app.history_rows();
             let pick = ranked.get(app.modal_index).or_else(|| ranked.first());
             let Some((orig_idx, _)) = pick else {
@@ -489,10 +489,13 @@ pub(super) async fn dispatch_action(
             // view's parked chat draft is dropped (not restored). Its search
             // query/index were saved before the composer replacement, so the
             // view still resumes where it was on the next Ctrl+R.
-            if let Some(state) = app.views.states_mut(&crate::views::ViewId::HistorySearch) {
+            if let Some(state) = app
+                .panels
+                .states_mut(&crate::surfaces::PanelId::HistorySearch)
+            {
                 state.draft = None;
             }
-            app.views.hide(crate::views::ViewId::HistorySearch);
+            app.panels.hide(crate::surfaces::PanelId::HistorySearch);
             app.history_search = false;
             app.input_scroll = 0;
             app.suggestion_index = None;
@@ -546,34 +549,49 @@ pub(super) async fn dispatch_action(
             app.history_clear_confirm = false;
         }
         input::InputAction::OpenHelp => {
-            enter_view(app, crate::views::ViewId::Help, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Help,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::OpenPermissions => {
-            enter_view(
+            enter_panel(
                 app,
-                crate::views::ViewId::Permissions,
+                crate::surfaces::PanelId::Permissions,
                 runtime,
                 viewed_session_id,
             );
         }
         input::InputAction::OpenTools => {
-            enter_view(app, crate::views::ViewId::Tools, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Tools,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::OpenUsage => {
-            enter_view(
+            enter_panel(
                 app,
-                crate::views::ViewId::UsageStats,
+                crate::surfaces::PanelId::UsageStats,
                 runtime,
                 viewed_session_id,
             );
         }
         input::InputAction::OpenMcp => {
-            enter_view(app, crate::views::ViewId::Mcp, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Mcp,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::OpenSkills => {
-            enter_view(
+            enter_panel(
                 app,
-                crate::views::ViewId::Skills,
+                crate::surfaces::PanelId::Skills,
                 runtime,
                 viewed_session_id,
             );
@@ -597,12 +615,7 @@ pub(super) async fn dispatch_action(
             let _ = app.tx.send(AgentRequest::QuerySessionContext);
         }
         input::InputAction::OpenConfig => {
-            enter_view(
-                app,
-                crate::views::ViewId::Config,
-                runtime,
-                viewed_session_id,
-            );
+            enter_view(app, crate::surfaces::View::Settings, runtime);
         }
         input::InputAction::ConfigFocusToggle => {
             if app.active_modal() == Modal::Config {
@@ -982,7 +995,7 @@ pub(super) async fn dispatch_action(
                     .min(app.sessions_overview.len().saturating_sub(1)),
             ) {
                 let id = session.id.clone();
-                app.hide_active_view();
+                app.hide_active_panel();
                 app.modal_index = 0;
                 // A session was chosen from the startup picker, so a
                 // real conversation now backs the view: subsequent
@@ -1021,7 +1034,7 @@ pub(super) async fn dispatch_action(
                     app.switch_to_target = Some(row.id.clone());
                     app.should_quit.store(true, Ordering::SeqCst);
                 }
-                app.hide_active_view();
+                app.hide_active_panel();
                 app.modal_index = 0;
                 app.host_prompting = false;
             }
@@ -1105,7 +1118,7 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::CreateNewSession => {
             app.startup_overlay = crate::StartupOverlay::None;
-            app.hide_active_view();
+            app.hide_active_panel();
             let _ = app.tx.send(AgentRequest::SlashCommand("/new".to_string()));
         }
         input::InputAction::OpenSessionInfo => {
@@ -1291,7 +1304,12 @@ pub(super) async fn dispatch_action(
             // Activity view pinned to the Todos section, exactly
             // like clicking the todo bar. A retained view (ADR-0133):
             // reopen restores the retained scroll.
-            enter_view(app, crate::views::ViewId::Todos, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Todos,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::OpenQueue => {
             // F2 opens the queue overview — the full outbox list that
@@ -1305,7 +1323,12 @@ pub(super) async fn dispatch_action(
             // matching resume is the view's exit hook (hide). A
             // persistent user block is a different thing (`F3` /
             // Ctrl+P), unaffected here.
-            enter_view(app, crate::views::ViewId::Queue, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Queue,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::FocusNextTarget => {
             // Ctrl+↓ (or ↓ while focused): advance to the next step.
@@ -1439,7 +1462,12 @@ pub(super) async fn dispatch_action(
             // list and pop the modal once the rows land. The open signal is
             // consumed by the loop's sync stage, so a slow harness reply
             // simply opens with the last known rows and refreshes in place.
-            enter_view(app, crate::views::ViewId::Btw, runtime, viewed_session_id);
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::Btw,
+                runtime,
+                viewed_session_id,
+            );
         }
         input::InputAction::ViewSwitcherFilter { ch } => {
             // ADR-0139: the filter is the switcher's own query,
@@ -1471,7 +1499,7 @@ pub(super) async fn dispatch_action(
             // a second Ctrl+L while it is up cancels back to the surface it
             // was opened over, exactly like Esc (nothing changed). The
             // switcher is a transient chooser, never a retained view, so it
-            // does not touch the ViewRegistry on open/close; only Enter
+            // does not touch the PanelRegistry on open/close; only Enter
             // (`ViewSwitchActivate`) performs a switch.
             if app.active_modal() == Modal::ViewSwitcher {
                 app.dismiss_surface();
@@ -1496,33 +1524,44 @@ pub(super) async fn dispatch_action(
             if app.active_modal() != Modal::ViewSwitcher {
                 return ActionFlow::Handled;
             }
-            let rows = app.views.switcher_rows_filtered(&app.view_switcher_query);
+            let rows = app.panels.switcher_rows_filtered(&app.view_switcher_query);
             let Some(target) = rows.get(app.modal_index).copied() else {
                 return ActionFlow::Handled;
             };
             // The switcher must not leak its own selection state into the
-            // target view: reset the cursor before opening so the registry's
-            // restore (not the switcher's row index) wins.
+            // target surface: reset the cursor before opening so the
+            // registry's restore (not the switcher's row index) wins.
             app.modal_index = 0;
             app.pop_transient_surface();
-            enter_view(app, target, runtime, viewed_session_id);
+            match target {
+                crate::surfaces::SwitcherTarget::View(view) => {
+                    enter_view(app, view, runtime);
+                }
+                crate::surfaces::SwitcherTarget::Panel(id) => {
+                    enter_panel(app, id, runtime, viewed_session_id);
+                }
+            }
         }
         input::InputAction::ViewCloseSelected => {
             if app.active_modal() != Modal::ViewSwitcher {
                 return ActionFlow::Handled;
             }
-            let rows = app.views.switcher_rows_filtered(&app.view_switcher_query);
+            let rows = app.panels.switcher_rows_filtered(&app.view_switcher_query);
             let Some(target) = rows.get(app.modal_index).copied() else {
                 return ActionFlow::Handled;
             };
-            if app.transient_return_view() == Some(target) {
-                app.pop_transient_surface();
-                app.close_view(target);
-                app.push_transient_surface(Modal::ViewSwitcher);
-            } else {
-                app.close_view(target);
+            // Only retained panels carry closeable state; views keep their
+            // fields natively on `App` and are never switcher-closed.
+            if let crate::surfaces::SwitcherTarget::Panel(id) = target {
+                if app.transient_return_panel() == Some(id) {
+                    app.pop_transient_surface();
+                    app.close_panel(id);
+                    app.push_transient_surface(Modal::ViewSwitcher);
+                } else {
+                    app.close_panel(id);
+                }
             }
-            let remaining = app.views.switcher_rows_filtered(&app.view_switcher_query);
+            let remaining = app.panels.switcher_rows_filtered(&app.view_switcher_query);
             app.modal_index = app.modal_index.min(remaining.len().saturating_sub(1));
             app.session_modal_follow = true;
         }
@@ -1532,7 +1571,7 @@ pub(super) async fn dispatch_action(
             // full transcript back-fill; the modal closes on arrival.
             if let Some(row) = app.btw_list.get(app.modal_index) {
                 let side_id = row.id.clone();
-                app.hide_active_view();
+                app.hide_active_panel();
                 app.modal_keymap_open = false;
                 let _ = app.tx.send(AgentRequest::FocusSide { side_id });
             }
@@ -1766,7 +1805,7 @@ pub(super) async fn dispatch_action(
             // composer and closes the modal. Closing resumes the
             // auto-block the modal set on open.
             let idx = app.modal_index;
-            app.hide_active_view();
+            app.hide_active_panel();
             match app.recall_queued_at(viewed_session_id, idx) {
                 Some(crate::app::RecallQueued::Restored(dispatch)) => {
                     // The item left the queue, so a pointer at it (or at a
@@ -2044,26 +2083,27 @@ pub(super) async fn dispatch_action(
     ActionFlow::Handled
 }
 
-/// The sole retained-view entry transaction. It focuses/restores the view,
-/// runs one-time initialization, then applies the view's refresh-on-show and
-/// enter-hook policy. Dedicated shortcuts, mouse targets, backend open signals
-/// and the quick switcher all route here.
-pub(super) fn enter_view(
+/// The sole retained-panel entry transaction (ADR-0141: panels are
+/// retained modals). It focuses/restores the panel, runs one-time
+/// initialization, then applies the panel's refresh-on-show and enter-hook
+/// policy. Dedicated shortcuts, mouse targets, backend open signals and the
+/// quick switcher all route here. Full-screen views use [`enter_view`].
+pub(super) fn enter_panel(
     app: &mut App,
-    id: crate::views::ViewId,
+    id: crate::surfaces::PanelId,
     runtime: &UiRuntime,
     viewed_session_id: &str,
 ) -> bool {
-    use crate::views::ViewId;
+    use crate::surfaces::PanelId;
 
-    let first = app.open_view(id);
+    let first = app.open_panel(id);
     app.selection = SelectionState::None;
     app.focused_target = None;
     app.drag.cancel();
 
     if first {
         match id {
-            ViewId::Models => {
+            PanelId::Models => {
                 app.model_search = false;
                 app.model_modal_follow = true;
                 let rows = app.models_flat_filtered();
@@ -2075,7 +2115,7 @@ pub(super) fn enter_view(
                     .unwrap_or(0);
                 app.suggestion_index = None;
             }
-            ViewId::Connections => {
+            PanelId::Connections => {
                 app.model_search = false;
                 app.model_modal_follow = true;
                 let ranked = app.providers_filtered();
@@ -2090,61 +2130,42 @@ pub(super) fn enter_view(
                     .unwrap_or(0);
                 app.suggestion_index = None;
             }
-            ViewId::HistorySearch => {
+            PanelId::HistorySearch => {
                 app.history_clear_confirm = false;
                 app.modal_index = 0;
                 app.history_scroll = 0;
                 app.history_modal_follow = true;
                 app.history_preview = false;
             }
-            ViewId::Config => {
-                app.config_focus = crate::overlays::ConfigFocus::Categories;
-                app.config_category = 0;
-                app.config_detail_index = Theme::color_scheme_index(&app.color_scheme);
-                app.config_custom_editing = false;
-                app.config_scroll = 0;
-                app.config_detail_scroll = 0;
-                app.websearch_editing = None;
-            }
-            ViewId::Host => {
-                app.host_modal_follow = true;
-                app.host_focus = crate::overlays::DashboardFocus::Detail;
-                app.host_console_log.clear();
-            }
             _ => {}
         }
     }
 
-    if id == ViewId::HistorySearch {
+    if id == PanelId::HistorySearch {
         app.history_search = true;
     }
-    if id == ViewId::Queue {
+    if id == PanelId::Queue {
         app.block_queue(viewed_session_id);
         app.queue_exit_session = Some(viewed_session_id.to_string());
     }
-    if id == ViewId::Host {
-        app.host_kill_confirm = None;
-        app.host_kill_confirm_id = None;
-    }
 
     let request = match id {
-        ViewId::Permissions | ViewId::Tools | ViewId::Mcp | ViewId::Skills => {
+        PanelId::Permissions | PanelId::Tools | PanelId::Mcp | PanelId::Skills => {
             Some(AgentRequest::QuerySessionContext)
         }
-        ViewId::UsageStats => {
+        PanelId::UsageStats => {
             app.usage_stats = None;
             Some(AgentRequest::QueryUsageStats { event_cap: 200 })
         }
-        ViewId::TokenReport if app.token_ledger.is_none() => {
+        PanelId::TokenReport if app.token_ledger.is_none() => {
             app.token_report = None;
             Some(AgentRequest::QueryTokenUsage {
                 session_id: viewed_session_id.to_string(),
             })
         }
-        ViewId::Btw => Some(AgentRequest::QueryBtwList),
-        ViewId::Config => Some(AgentRequest::QueryWebSearchConfig),
-        ViewId::Sessions => Some(AgentRequest::QuerySessionsOverview),
-        ViewId::Tree => Some(AgentRequest::QuerySessionTree),
+        PanelId::Btw => Some(AgentRequest::QueryBtwList),
+        PanelId::Sessions => Some(AgentRequest::QuerySessionsOverview),
+        PanelId::Tree => Some(AgentRequest::QuerySessionTree),
         _ => None,
     };
     if let Some(request) = request
@@ -2162,6 +2183,56 @@ pub(super) fn enter_view(
     first
 }
 
+/// Enter a full-screen view (ADR-0141): navigate the router, run the view's
+/// every-show UI refresh, and fire its data-refresh request. Views keep
+/// their retained fields natively on `App` (no registry), so — unlike
+/// panels — there is no first-open distinction.
+pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &UiRuntime) {
+    use crate::surfaces::View;
+
+    let previous = app.current_view();
+    if previous != view {
+        app.leave_view_for_navigation(previous);
+    }
+    app.show_view_surface(view);
+    app.selection = SelectionState::None;
+    app.focused_target = None;
+    app.drag.cancel();
+
+    let request = match view {
+        View::Settings => {
+            app.config_focus = crate::overlays::ConfigFocus::Categories;
+            app.config_category = 0;
+            app.config_detail_index = Theme::color_scheme_index(&app.color_scheme);
+            app.config_custom_editing = false;
+            app.config_scroll = 0;
+            app.config_detail_scroll = 0;
+            app.websearch_editing = None;
+            Some(AgentRequest::QueryWebSearchConfig)
+        }
+        View::Dashboard => {
+            app.host_modal_follow = true;
+            app.host_focus = crate::overlays::DashboardFocus::Detail;
+            app.host_console_log.clear();
+            app.host_kill_confirm = None;
+            app.host_kill_confirm_id = None;
+            None
+        }
+        View::Session | View::Envoy | View::Side => None,
+    };
+    if let Some(request) = request
+        && app.tx.send(request).is_err()
+    {
+        show_local_toast(
+            app,
+            "Could not refresh view: backend disconnected.".to_string(),
+            true,
+            std::time::Duration::from_millis(3200),
+        );
+    }
+    let _ = runtime;
+}
+
 #[cfg(test)]
 mod view_entry_tests {
     use super::*;
@@ -2173,17 +2244,17 @@ mod view_entry_tests {
         app.tx = tx;
         let runtime = UiRuntime::minimal_for_test();
 
-        assert!(enter_view(
+        assert!(enter_panel(
             &mut app,
-            crate::views::ViewId::Tree,
+            crate::surfaces::PanelId::Tree,
             &runtime,
             "s1"
         ));
         assert!(matches!(rx.try_recv(), Ok(AgentRequest::QuerySessionTree)));
         app.dismiss_surface();
-        assert!(!enter_view(
+        assert!(!enter_panel(
             &mut app,
-            crate::views::ViewId::Tree,
+            crate::surfaces::PanelId::Tree,
             &runtime,
             "s1"
         ));
@@ -2197,12 +2268,12 @@ mod view_entry_tests {
         app.tx = tx;
         let runtime = UiRuntime::minimal_for_test();
 
-        enter_view(&mut app, crate::views::ViewId::Sessions, &runtime, "s1");
+        enter_panel(&mut app, crate::surfaces::PanelId::Sessions, &runtime, "s1");
         assert!(matches!(
             rx.try_recv(),
             Ok(AgentRequest::QuerySessionsOverview)
         ));
-        enter_view(&mut app, crate::views::ViewId::Skills, &runtime, "s1");
+        enter_panel(&mut app, crate::surfaces::PanelId::Skills, &runtime, "s1");
         assert!(matches!(
             rx.try_recv(),
             Ok(AgentRequest::QuerySessionContext)

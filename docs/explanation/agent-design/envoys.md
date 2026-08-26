@@ -8,7 +8,7 @@ conversation. For the tool's parameters and access class, see
 
 ## Why an envoy tool
 
-A single agent round accumulates context: every file read, every grep result,
+A single agent round accumulates context: every file read, every search result,
 every tool turn stays in the transcript. For a large investigation that touches
 many unrelated corners of the codebase, one of two things happens — either the
 context fills with material only loosely related to the final answer, or the
@@ -71,7 +71,7 @@ vocabulary; the dispatch tools bind them by reference.
 
 | Profile | Bound by | Ceiling | Write grant | Gets |
 |---------|----------|---------|-------------|------|
-| `EXPLORE` | `envoy` tool | `Read` | none | Pure read tools (`read_text`, `grep`, `glob`, `list_dir`, …) |
+| `EXPLORE` | `envoy` tool | `Read` | none | Pure read tools (`read_text`, `find_files`, `list_dir`, `search_text`, …) |
 | `CODE` | `envoy_code` tool | `Write` | none | Read tools + `bash`, `edit_file`, `write_file`, `todo*` — a full coding surface; runs on autopilot, so the delegation *is* the authorization |
 | `TITLE` | harness title generation | `Read` | none | No tools — a single `provider.chat()` call |
 | `INTERACTIVE` | (reserved, no dispatch tool yet) | `Read` | none | Pure read tools, with `ask_user` forwarded up |

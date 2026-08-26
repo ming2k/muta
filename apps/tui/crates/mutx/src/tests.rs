@@ -708,7 +708,7 @@ fn restored_tool_results_merge_into_steps_in_fifo_order() {
 #[test]
 fn tool_activity_is_semantic_and_loop_progress_is_preserved() {
     assert_eq!(
-        event_loop::tool_activity_status("grep"),
+        event_loop::tool_activity_status("search_text"),
         "searching codebase"
     );
     assert_eq!(
@@ -1550,10 +1550,13 @@ fn history_modal_is_click_dismissable_and_restores_draft() {
     // the HistorySearch view's own slot, then dismissing the view, hands it
     // back to the composer — the same Esc/outside-click teardown.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_view(crate::views::ViewId::HistorySearch);
-    // Simulate the parked draft (open_view parked the live composer, which
+    app.open_panel(crate::surfaces::PanelId::HistorySearch);
+    // Simulate the parked draft (open_panel parked the live composer, which
     // started empty) and the live filter state.
-    if let Some(st) = app.views.states_mut(&crate::views::ViewId::HistorySearch) {
+    if let Some(st) = app
+        .panels
+        .states_mut(&crate::surfaces::PanelId::HistorySearch)
+    {
         st.draft = Some("my draft".to_string());
     }
     app.input = "git".to_string(); // the live fuzzy query
@@ -1567,8 +1570,8 @@ fn history_modal_is_click_dismissable_and_restores_draft() {
     assert_eq!(app.input, "my draft", "draft restored from the view's slot");
     assert_eq!(app.cursor_position, "my draft".chars().count());
     assert!(
-        app.views
-            .states(&crate::views::ViewId::HistorySearch)
+        app.panels
+            .states(&crate::surfaces::PanelId::HistorySearch)
             .is_none_or(|st| st.draft.is_none()),
         "slot emptied"
     );
@@ -1609,8 +1612,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
     }
     let cwd = tmp.path().to_path_buf();
     let app = App {
-        views: crate::views::ViewRegistry::new(),
-        surfaces: crate::views::SurfaceRouter::new(),
+        panels: crate::surfaces::PanelRegistry::new(),
+        surfaces: crate::surfaces::SurfaceRouter::new(),
         queue_exit_session: None,
         view_switcher_query: String::new(),
         input: String::new(),
@@ -5737,7 +5740,7 @@ fn browse_view_reopen_restores_scroll_and_selection() {
     // it returns to the exact scroll/index the user left. Before the
     // refactor every open reset them to 0.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    assert!(app.open_view(crate::views::ViewId::Help));
+    assert!(app.open_panel(crate::surfaces::PanelId::Help));
     assert_eq!(app.active_modal(), Modal::Help);
     assert_eq!(app.modal_index, 0);
 
@@ -5748,7 +5751,7 @@ fn browse_view_reopen_restores_scroll_and_selection() {
     assert_eq!(app.active_modal(), Modal::None);
 
     // Reopen: first-open returned false and the retained state is back.
-    assert!(!app.open_view(crate::views::ViewId::Help));
+    assert!(!app.open_panel(crate::surfaces::PanelId::Help));
     assert_eq!(app.modal_index, 3, "selection retained across hide");
     assert_eq!(app.help_scroll, 42, "scroll retained across hide");
 }
@@ -5758,32 +5761,32 @@ fn browse_view_state_is_per_view() {
     // Two views keep independent retained state — the buffer analogy: each
     // buffer remembers its own cursor.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_view(crate::views::ViewId::Permissions);
+    app.open_panel(crate::surfaces::PanelId::Permissions);
     app.modal_index = 2;
     app.permissions_scroll = 7;
     assert!(app.dismiss_surface());
 
-    app.open_view(crate::views::ViewId::UsageStats);
+    app.open_panel(crate::surfaces::PanelId::UsageStats);
     app.modal_index = 1;
     app.usage_stats_scroll = 9;
     assert!(app.dismiss_surface());
 
-    app.open_view(crate::views::ViewId::Permissions);
+    app.open_panel(crate::surfaces::PanelId::Permissions);
     assert_eq!((app.modal_index, app.permissions_scroll), (2, 7));
-    app.open_view(crate::views::ViewId::UsageStats);
+    app.open_panel(crate::surfaces::PanelId::UsageStats);
     assert_eq!((app.modal_index, app.usage_stats_scroll), (1, 9));
 }
 
 #[test]
 fn view_follow_mode_is_restored_per_view() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_view(crate::views::ViewId::Tools);
+    app.open_panel(crate::surfaces::PanelId::Tools);
     app.session_modal_follow = false;
 
-    app.open_view(crate::views::ViewId::Mcp);
+    app.open_panel(crate::surfaces::PanelId::Mcp);
     app.session_modal_follow = true;
 
-    app.open_view(crate::views::ViewId::Tools);
+    app.open_panel(crate::surfaces::PanelId::Tools);
     assert!(
         !app.session_modal_follow,
         "shared live fields must restore the selected view's retained mode"
@@ -5795,12 +5798,12 @@ fn todos_and_activity_are_separate_places() {
     // Two view ids share the Activity modal but keep their own tab —
     // switching between them lands on the section the id names.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_view(crate::views::ViewId::Todos);
+    app.open_panel(crate::surfaces::PanelId::Todos);
     assert_eq!(app.active_modal(), Modal::Activity);
     assert_eq!(app.activity_tab, ActivityTab::Todos);
     assert!(app.dismiss_surface());
 
-    app.open_view(crate::views::ViewId::Activity);
+    app.open_panel(crate::surfaces::PanelId::Activity);
     assert_eq!(app.activity_tab, ActivityTab::Activity);
 }
 
@@ -5809,11 +5812,14 @@ fn view_state_is_forgotten_on_session_change() {
     // `close_all` fires on viewed-session change: retained state belongs to
     // the conversation, not the terminal (ADR-0133 close verb).
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_view(crate::views::ViewId::Help);
+    app.open_panel(crate::surfaces::PanelId::Help);
     app.help_scroll = 5;
     app.modal_index = 1;
     app.on_viewed_session_changed();
-    assert!(app.open_view(crate::views::ViewId::Help), "state forgotten");
+    assert!(
+        app.open_panel(crate::surfaces::PanelId::Help),
+        "state forgotten"
+    );
     assert_eq!(app.help_scroll, 0);
     assert_eq!(app.modal_index, 0);
 }
@@ -5824,7 +5830,7 @@ fn view_switcher_restore_roundtrip() {
     // back to it (state intact); Enter on another view hides the origin
     // and focuses the target with its own retained state.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_view(crate::views::ViewId::Help);
+    app.open_panel(crate::surfaces::PanelId::Help);
     app.modal_index = 4;
 
     // Open the transient switcher over Help; the router preserves the exact
@@ -5843,19 +5849,20 @@ fn view_switcher_restore_roundtrip() {
     );
 
     // Help's retained state survived the switcher round-trip.
-    app.open_view(crate::views::ViewId::Activity);
-    assert!(!app.open_view(crate::views::ViewId::Help));
+    app.open_panel(crate::surfaces::PanelId::Activity);
+    assert!(!app.open_panel(crate::surfaces::PanelId::Help));
     assert_eq!(app.modal_index, 4, "retained selection intact");
 }
 
 #[test]
 fn config_view_reopen_keeps_pane_and_category() {
-    // Settings is a retained view too (ADR-0133 phase 2): the open ritual
-    // (pane reset + current-scheme positioning) runs once; a reopen keeps
-    // the category/pane the user left. Esc's three-step back (editor →
-    // detail → categories → hide) ends in the shared dismiss verb.
+    // Settings is a full-screen view (ADR-0141) whose fields persist
+    // natively on `App`: the enter ritual (pane reset + current-scheme
+    // positioning) runs on every enter; a reopen keeps the category/pane
+    // the user left. Esc's three-step back (editor → detail → categories →
+    // hide) ends in the shared dismiss verb.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    assert!(app.open_view(crate::views::ViewId::Config));
+    app.show_view_surface(crate::surfaces::View::Settings);
     assert_eq!(app.active_modal(), Modal::Config);
 
     // The user walks into a category and the Detail pane, then hides.
@@ -5864,8 +5871,8 @@ fn config_view_reopen_keeps_pane_and_category() {
     assert!(app.dismiss_surface());
     assert_eq!(app.active_modal(), Modal::None);
 
-    // Reopen: not a first open, and the pane/category survived.
-    assert!(!app.open_view(crate::views::ViewId::Config));
+    // Reopen: the pane/category survived.
+    app.show_view_surface(crate::surfaces::View::Settings);
     assert_eq!(app.config_category, 2, "category retained across hide");
     assert_eq!(
         app.config_focus,
@@ -5885,13 +5892,13 @@ fn model_editor_esc_pops_back_to_its_picker() {
     // Models returns to Models; one opened from Connections returns to
     // Connections — the same editor, two parents, no hard-coding.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_view(crate::views::ViewId::Models);
+    app.open_panel(crate::surfaces::PanelId::Models);
     app.push_transient_surface(crate::Modal::ModelEditor);
     app.pop_transient_surface();
     assert_eq!(app.active_modal(), crate::Modal::Models, "pops to Models");
 
     // From Connections: the same editor, a different pushed parent.
-    app.open_view(crate::views::ViewId::Connections);
+    app.open_panel(crate::surfaces::PanelId::Connections);
     app.push_transient_surface(crate::Modal::ModelEditor);
     app.pop_transient_surface();
     assert_eq!(
@@ -5908,7 +5915,7 @@ fn per_view_drafts_do_not_clobber_each_other() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     // Park a draft on Models.
     app.input = "models draft".to_string();
-    app.open_view(crate::views::ViewId::Models);
+    app.open_panel(crate::surfaces::PanelId::Models);
     assert!(app.input.is_empty(), "composer borrowed");
     // Esc hands the draft back.
     assert!(app.dismiss_surface());
@@ -5916,7 +5923,7 @@ fn per_view_drafts_do_not_clobber_each_other() {
 
     // Now the same for HistorySearch — its slot is independent.
     app.input = "history draft".to_string();
-    app.open_view(crate::views::ViewId::HistorySearch);
+    app.open_panel(crate::surfaces::PanelId::HistorySearch);
     assert!(app.input.is_empty());
     assert!(app.dismiss_surface());
     assert_eq!(app.input, "history draft");
@@ -5926,17 +5933,17 @@ fn per_view_drafts_do_not_clobber_each_other() {
 fn switching_picker_view_preserves_query_and_chat_draft_separately() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.input = "unsent chat".to_string();
-    app.open_view(crate::views::ViewId::Models);
+    app.open_panel(crate::surfaces::PanelId::Models);
     app.model_search = true;
     app.input = "claude".to_string();
 
-    app.open_view(crate::views::ViewId::Help);
+    app.open_panel(crate::surfaces::PanelId::Help);
     assert_eq!(
         app.input, "unsent chat",
         "switch restores the chat composer"
     );
 
-    app.open_view(crate::views::ViewId::Models);
+    app.open_panel(crate::surfaces::PanelId::Models);
     assert_eq!(
         app.input, "claude",
         "picker query is retained independently"
@@ -5949,10 +5956,10 @@ fn switching_picker_view_preserves_query_and_chat_draft_separately() {
 #[test]
 fn transient_sheet_returns_to_exact_todos_view() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_view(crate::views::ViewId::Todos);
+    app.open_panel(crate::surfaces::PanelId::Todos);
     app.push_transient_surface(Modal::Question);
     assert_eq!(app.pop_transient_surface(), Modal::Activity);
-    assert_eq!(app.active_view(), Some(crate::views::ViewId::Todos));
+    assert_eq!(app.active_panel(), Some(crate::surfaces::PanelId::Todos));
     assert_eq!(app.activity_tab, ActivityTab::Todos);
 }
 
@@ -5961,7 +5968,7 @@ fn backend_navigation_waits_for_transient_and_drill_in_surfaces() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     assert!(app.can_accept_navigation_signal(), "chat is safe");
 
-    app.open_view(crate::views::ViewId::Models);
+    app.open_panel(crate::surfaces::PanelId::Models);
     app.push_transient_surface(Modal::ModelEditor);
     assert!(
         !app.can_accept_navigation_signal(),
@@ -5970,7 +5977,7 @@ fn backend_navigation_waits_for_transient_and_drill_in_surfaces() {
     app.pop_transient_surface();
     assert!(app.can_accept_navigation_signal());
 
-    app.open_view(crate::views::ViewId::Config);
+    app.show_view_surface(crate::surfaces::View::Settings);
     app.config_focus = crate::overlays::ConfigFocus::Detail;
     assert!(
         !app.can_accept_navigation_signal(),
@@ -5981,25 +5988,25 @@ fn backend_navigation_waits_for_transient_and_drill_in_surfaces() {
 #[test]
 fn explicit_view_close_discards_retained_state_and_payload() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_view(crate::views::ViewId::UsageStats);
+    app.open_panel(crate::surfaces::PanelId::UsageStats);
     app.usage_stats_scroll = 17;
-    app.close_view(crate::views::ViewId::UsageStats);
+    app.close_panel(crate::surfaces::PanelId::UsageStats);
 
-    assert!(!app.views.is_open(crate::views::ViewId::UsageStats));
+    assert!(!app.panels.is_open(crate::surfaces::PanelId::UsageStats));
     assert_eq!(app.active_modal(), Modal::None);
     assert_eq!(app.usage_stats_scroll, 0);
-    assert!(app.open_view(crate::views::ViewId::UsageStats));
+    assert!(app.open_panel(crate::surfaces::PanelId::UsageStats));
 }
 
 #[test]
 fn switching_away_from_queue_runs_exit_hook() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     let sid = "queue-session";
-    app.open_view(crate::views::ViewId::Queue);
+    app.open_panel(crate::surfaces::PanelId::Queue);
     app.block_queue(sid);
     app.queue_exit_session = Some(sid.to_string());
 
-    app.open_view(crate::views::ViewId::Help);
+    app.open_panel(crate::surfaces::PanelId::Help);
 
     assert!(!app.is_queue_blocked(sid));
     assert!(app.queue_exit_session.is_none());
@@ -6009,12 +6016,12 @@ fn switching_away_from_queue_runs_exit_hook() {
 fn switcher_enter_hides_origin_and_restores_target_state() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     // Target retains state.
-    app.open_view(crate::views::ViewId::Help);
+    app.open_panel(crate::surfaces::PanelId::Help);
     app.modal_index = 2;
     assert!(app.dismiss_surface());
 
     // Origin: Tools.
-    app.open_view(crate::views::ViewId::Tools);
+    app.open_panel(crate::surfaces::PanelId::Tools);
     app.modal_index = 1;
 
     // Open the switcher over Tools (the Toggle arm's push + borrow).
@@ -6023,10 +6030,10 @@ fn switcher_enter_hides_origin_and_restores_target_state() {
 
     // The switcher's rows put open views first; with only Tools open the
     // first row is Tools itself. Pick Help (find its row).
-    let rows = app.views.switcher_rows();
+    let rows = app.panels.switcher_rows();
     let help_row = rows
         .iter()
-        .position(|r| *r == crate::views::ViewId::Help)
+        .position(|r| *r == crate::surfaces::SwitcherTarget::Panel(crate::surfaces::PanelId::Help))
         .unwrap();
     app.modal_index = help_row;
 
@@ -6034,12 +6041,15 @@ fn switcher_enter_hides_origin_and_restores_target_state() {
     let target = rows[help_row];
     app.modal_index = 0;
     app.pop_transient_surface();
-    let first = app.open_view(target);
+    let crate::surfaces::SwitcherTarget::Panel(target) = target else {
+        panic!("expected a panel row");
+    };
+    let first = app.open_panel(target);
     assert!(!first, "Help was opened before — not a first open");
     assert_eq!(app.active_modal(), crate::Modal::Help);
     assert_eq!(app.modal_index, 2, "Help's retained selection restored");
     assert!(
-        app.views.is_open(crate::views::ViewId::Tools),
+        app.panels.is_open(crate::surfaces::PanelId::Tools),
         "hidden origin remains an initialized MRU buffer"
     );
 }
@@ -6047,9 +6057,9 @@ fn switcher_enter_hides_origin_and_restores_target_state() {
 #[test]
 fn queue_view_hide_releases_the_auto_block() {
     // Phase 4: the open-time auto-block is released by EVERY hide path
-    // (the exit hook in hide_active_view), not just the Esc arm.
+    // (the exit hook in hide_active_panel), not just the Esc arm.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_view(crate::views::ViewId::Queue);
+    app.open_panel(crate::surfaces::PanelId::Queue);
     app.block_queue("sess");
     app.queue_exit_session = Some("sess".to_string());
     assert!(app.is_queue_blocked("sess"));
@@ -6093,35 +6103,51 @@ fn pop_sublayer_steps_back_one_level_at_a_time() {
 #[test]
 fn switcher_filter_narrows_rows_and_matches_labels_and_hints() {
     // Phase 5: the switcher's own fuzzy query against label + hint.
-    let mut reg = crate::views::ViewRegistry::new();
-    reg.open(crate::views::ViewId::Help);
-    reg.open(crate::views::ViewId::Btw);
+    let mut reg = crate::surfaces::PanelRegistry::new();
+    reg.open(crate::surfaces::PanelId::Help);
+    reg.open(crate::surfaces::PanelId::Btw);
 
     // "mcp" matches the MCP label.
     let rows = reg.switcher_rows_filtered("mcp");
-    assert_eq!(rows, vec![crate::views::ViewId::Mcp]);
+    assert_eq!(
+        rows,
+        vec![crate::surfaces::SwitcherTarget::Panel(
+            crate::surfaces::PanelId::Mcp
+        )]
+    );
 
-    // "dash" matches the Host hint ("dashboard").
+    // "dash" matches the Dashboard label (a switchable full-screen view).
     let rows = reg.switcher_rows_filtered("dash");
-    assert_eq!(rows, vec![crate::views::ViewId::Host]);
+    assert_eq!(
+        rows,
+        vec![crate::surfaces::SwitcherTarget::View(
+            crate::surfaces::View::Dashboard
+        )]
+    );
 
     // A query matching nothing yields an empty list (rendered as the
     // placeholder), never a fallback-to-all.
     assert!(reg.switcher_rows_filtered("zzz").is_empty());
 
-    // Empty query = the full MRU list.
+    // Empty query = views first, then the MRU panels.
     let rows = reg.switcher_rows_filtered("");
     assert_eq!(
-        &rows[..2],
-        &[crate::views::ViewId::Btw, crate::views::ViewId::Help]
+        &rows[..4],
+        &[
+            crate::surfaces::SwitcherTarget::View(crate::surfaces::View::Dashboard),
+            crate::surfaces::SwitcherTarget::View(crate::surfaces::View::Settings),
+            crate::surfaces::SwitcherTarget::Panel(crate::surfaces::PanelId::Btw),
+            crate::surfaces::SwitcherTarget::Panel(crate::surfaces::PanelId::Help),
+        ]
     );
 }
 
 #[test]
 fn dashboard_reopen_keeps_selection_and_log() {
-    // Phase 4: the dashboard's dock selection and cockpit log survive hide.
+    // The dashboard is a full-screen view (ADR-0141) whose dock selection
+    // and cockpit log persist natively on `App` across hide.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    assert!(app.open_view(crate::views::ViewId::Host));
+    app.show_view_surface(crate::surfaces::View::Dashboard);
     app.host_console_log
         .push(crate::overlays::ConsoleLine::Receipt {
             ok: true,
@@ -6131,10 +6157,7 @@ fn dashboard_reopen_keeps_selection_and_log() {
     app.modal_index = 3;
     assert!(app.dismiss_surface());
 
-    assert!(
-        !app.open_view(crate::views::ViewId::Host),
-        "not a first open"
-    );
+    app.show_view_surface(crate::surfaces::View::Dashboard);
     assert_eq!(app.modal_index, 3, "dock selection retained");
     assert_eq!(app.host_console_log.len(), 1, "cockpit log retained");
 }

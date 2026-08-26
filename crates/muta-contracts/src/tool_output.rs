@@ -688,7 +688,7 @@ fn shell_to_text(stdout: &str, stderr: &str, exit: Option<i32>, truncated: bool)
     if truncated || inner.len() > SHELL_MAX_OUTPUT_CHARS {
         let tokens = crate::tokenizer::count_tokens(&inner);
         format!(
-            "[Output truncated: {tokens} tokens total]\n{}\n\n[Output was large — use grep or read_text if you need specific parts]",
+            "[Output truncated: {tokens} tokens total]\n{}\n\n[Output was large — use search_text or read_text if you need specific parts]",
             truncate_utf8(&inner, SHELL_TRUNCATED_CHARS)
         )
     } else {
@@ -898,9 +898,9 @@ mod tests {
             text.starts_with("[Output truncated: 1125 tokens total]\n"),
             "got: {text:.80}"
         );
-        assert!(
-            text.ends_with("[Output was large — use grep or read_text if you need specific parts]")
-        );
+        assert!(text.ends_with(
+            "[Output was large — use search_text or read_text if you need specific parts]"
+        ));
     }
 
     #[test]

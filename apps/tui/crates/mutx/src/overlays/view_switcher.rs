@@ -1,15 +1,17 @@
-//! Global view quick switcher (ADR-0139, `Ctrl+L`).
+//! Global quick switcher (ADR-0139/0141, `Ctrl+L`).
 //!
-//! A centered picker over every browse surface — open views first in MRU
-//! order, then the not-yet-opened ones so the list doubles as discovery.
-//! `Enter` switches: the current view is hidden (state retained in the
-//! [`ViewRegistry`](crate::views::ViewRegistry)) and the target's retained
-//! scroll/index is restored — the same "leave and come back, nothing lost"
-//! contract sessions have. `Esc` closes with nothing changed; `Del` closes
-//! the selected view's TUI state without deleting backend data.
+//! A centered picker over every navigable surface: the switchable
+//! full-screen views first, then retained panels — open ones in MRU order,
+//! then the not-yet-opened so the list doubles as discovery. `Enter`
+//! switches: the current panel is hidden (state retained in the
+//! [`PanelRegistry`](crate::surfaces::PanelRegistry)) and the target's
+//! retained scroll/index is restored — the same "leave and come back,
+//! nothing lost" contract sessions have. `Esc` closes with nothing
+//! changed; `Del` closes the selected panel's TUI state without deleting
+//! backend data.
 //!
-//! The switcher itself is not a retained view: it is a transient chooser
-//! *over* views, so it never enters its own registry.
+//! The switcher itself is not a retained surface: it is a transient chooser
+//! *over* surfaces, so it never enters a registry.
 
 use mutx_engine::{
     Frame, Style, {Line, Span},
@@ -20,27 +22,29 @@ use super::common::{placeholder, truncate_ellipsis};
 use crate::components::list::{SelectableListPage, draw_selectable_list_page, row_style};
 use crate::components::modal::ModalHeader;
 use crate::primitives::{FooterHint, keyvocab};
+use crate::surfaces::SwitcherTarget;
 use crate::view::Theme;
-use crate::views::ViewId;
 
 use crate::primitives::ContentModalSpec;
 
-/// Quick-switcher panel geometry: a compact centered list (one row per view
-/// plus a hint column), sized like the queue overview it sits beside.
+/// Quick-switcher panel geometry: a compact centered list (one row per
+/// surface plus a hint column), sized like the queue overview it sits
+/// beside.
 pub(crate) const VIEW_SWITCHER: ContentModalSpec = ContentModalSpec::BTW;
 
-/// Draw the quick switcher. `rows` is the registry's switcher row set (MRU
-/// first), `active` the modal the switcher was opened over (marked with a
-/// `●` marker so "where am I" is readable in the list), `open` the set of
-/// views currently in the MRU order (their rows show the `open` badge).
+/// Draw the quick switcher. `rows` is the registry's switcher row set
+/// (views first, then panels MRU-first), `active` the panel the switcher
+/// was opened over (marked with a `●` marker so "where am I" is readable in
+/// the list), `open` the set of panels currently in the MRU order (their
+/// rows show the `open` badge).
 #[allow(clippy::too_many_arguments)] // showcase parity with other modal renderers
 pub(crate) fn draw_view_switcher(
     frame: &mut Frame,
-    rows: &[ViewId],
+    rows: &[SwitcherTarget],
     query: &str,
     modal_index: usize,
-    open_ids: &[ViewId],
-    active: Option<ViewId>,
+    open_ids: &[crate::surfaces::PanelId],
+    active: Option<crate::surfaces::PanelId>,
     scroll: &mut usize,
     follow_selection: bool,
     theme: &Theme,
@@ -50,9 +54,9 @@ pub(crate) fn draw_view_switcher(
     let body_width = crate::components::modal::modal_body_width(frame, VIEW_SWITCHER);
 
     let title = if rows.is_empty() {
-        "Switch view".to_string()
+        "Switch surface".to_string()
     } else {
-        format!("Switch view ({})", rows.len())
+        format!("Switch surface ({})", rows.len())
     };
     // The live filter (phase 5): shown in the header as `filter: <query>` —
     // the switcher does not borrow the composer, so the header is its only
@@ -68,9 +72,9 @@ pub(crate) fn draw_view_switcher(
     let mut selected_line: Option<usize> = None;
 
     if rows.is_empty() {
-        // Unreachable while `ViewId::ALL` is non-empty, but the empty-list
+        // Unreachable while `PanelId::ALL` is non-empty, but the empty-list
         // path keeps the shared page component's contract total.
-        body.push(placeholder("No views.", true, theme.muted()));
+        body.push(placeholder("No surfaces.", true, theme.muted()));
     } else {
         // Column geometry: gutter + badge (5 = "open " / "here " / "     ")
         // + hint (right-aligned, dim) + 2-col gap + label.
@@ -84,8 +88,12 @@ pub(crate) fn draw_view_switcher(
             if is_sel {
                 selected_line = Some(body.len());
             }
-            let is_open = open_ids.contains(id);
-            let is_here = Some(*id) == active;
+            let (is_open, is_here) = match id {
+                SwitcherTarget::Panel(panel) => (open_ids.contains(panel), Some(*panel) == active),
+                // Views are always conceptually mounted and never the panel
+                // the switcher was opened over.
+                SwitcherTarget::View(_) => (true, false),
+            };
             // Badge: `here` (the surface the switcher was opened over) is
             // the state that matters most, then `open` (in the MRU order,
             // i.e. conceptually mounted), else quiet blank space.
@@ -132,7 +140,7 @@ pub(crate) fn draw_view_switcher(
             item_footer_hints: &[
                 FooterHint::navigation(keyvocab::ARROWS_UD, "select"),
                 FooterHint::primary(keyvocab::ENTER, "switch"),
-                FooterHint::always("Del", "close view"),
+                FooterHint::always("Del", "close panel"),
                 FooterHint::always(keyvocab::ESC, "close"),
             ],
             empty_footer_hints: &[FooterHint::always(keyvocab::ESC, "close")],

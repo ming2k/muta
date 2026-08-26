@@ -25,9 +25,9 @@ assembled explicitly because it captures a snapshot of the other tools.
 | `read_image` | `Read` | `*` | [filesystem](filesystem.md) |
 | `write_file` | `Write` | `path` argument | [filesystem](filesystem.md) |
 | `edit_file` | `Write` | `path` argument | [filesystem](filesystem.md) |
-| `grep` | `Read` | `*` | [filesystem](filesystem.md) |
-| `glob` | `Read` | `*` | [filesystem](filesystem.md) |
+| `find_files` | `Read` | `*` | [filesystem](filesystem.md) |
 | `list_dir` | `Read` | `*` | [filesystem](filesystem.md) |
+| `search_text` | `Read` | `*` | [filesystem](filesystem.md) |
 | `ask_user` | `Read` | `*` | [interaction](interaction.md) |
 | `todo` | `Read` | `*` | [interaction](interaction.md) |
 | `todo_update` | `Read` | `*` | [interaction](interaction.md) |
