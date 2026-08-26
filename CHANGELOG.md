@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-08-26
+
+### Added
+
+- Three-tier agent hierarchy (Supervisor, Master, Runner) with runtime mesh coordination (ADR-0144).
+- Decoupled workspace asset trust and tool hazard model (ADR-0145).
+- Structured tool permission submissions (`HazardLevel`, `ToolPermissionSubmission`, `ToolPermissionPayload`), session-scoped permission grants, and broker submissions (ADR-0146).
+
 ### Changed
 
+- Transitioned agent role vocabulary from principal/envoy to master/runner across crates, contracts, and TUI overlays.
+- Replaced multi-binary test layout with single-binary integration targets (`tests/integration.rs`) and integrated `cargo nextest` watchdog profile.
 - Composer `@` path completion now scans project files in-process with
   ripgrep's `ignore` walker instead of shelling out to a system-installed
   `rg --files`. Machines without `rg` installed get identical gitignore and
@@ -4828,7 +4838,9 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.34.4...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.35.0...HEAD
+[0.35.0]: https://github.com/ming2k/muta/compare/v0.34.5...v0.35.0
+[0.34.5]: https://github.com/ming2k/muta/compare/v0.34.4...v0.34.5
 [0.34.4]: https://github.com/ming2k/muta/compare/v0.34.3...v0.34.4
 [0.34.3]: https://github.com/ming2k/muta/compare/v0.34.2...v0.34.3
 [0.34.2]: https://github.com/ming2k/muta/compare/v0.34.1...v0.34.2
