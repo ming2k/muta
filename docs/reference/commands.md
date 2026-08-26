@@ -31,8 +31,10 @@ Project and user-defined commands are covered under
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/init [path]` | Initialize a `.muta/` config tree |
-| `/trust` | Trust workspace for development and manage project extensions |
+| `/trust [trust|untrust|status]` | Trust or quarantine workspace-supplied contributions (skills, MCP, hooks, AGENTS.md) |
 | `/extensions` | Inspect or trust project-authored extensions |
+
+
 | `/skills [list\|reload]` | List or reload available skills |
 | `/skill <name>` | Load a skill by name |
 | `/tools` | Toggle individual session tools on or off |
@@ -302,9 +304,10 @@ Execution authority and extension trust never imply one another.
 
 The receiving agent gets the full chain of decisions and side effects: hidden
 and system messages are skipped (mirroring TUI rendering), reasoning traces
-are folded into collapsible `<details>` blocks, and envoy transcripts
-nested under `envoy` results are summarised by message counts instead of
+are folded into collapsible `<details>` blocks, and runner transcripts
+nested under `runner` results are summarised by message counts instead of
 dumped in full. If the system clipboard is unavailable, the export falls
+
 back to OSC52 or surfaces the underlying clipboard error.
 
 ## Custom commands

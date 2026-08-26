@@ -63,30 +63,29 @@ compaction_prune = true
 compaction_prune_protect_tokens = 6000
 ```
 
-## Agent behavior
+## Master agent behavior
 
-The optional `[principal]` table.
+The optional `[master]` table.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `principal.hard_stop_turns` | `0` | Hard-stop a round after this many ReAct turns. `0` = uncapped (the only execution cap; compaction is the backstop) |
-| `principal.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for a `bash` command it emits. Off by default: the bash schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the bash schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for autopilot/automatic flows where no human is reachable |
-| `principal.skip_interactive_input` | `false` | Whether an interactive `bash` command (matched by the interactive classifier: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) **never** pops the inline input panel. Off by default: a command needing input prompts you with an input panel (command + masked/plain field). On: the panel is skipped and the command runs with stdin closed — it reads EOF immediately and fails fast with a non-interactive remedy hint, exactly as under autopilot mode. For users who find the prompt disruptive and would rather retry the command themselves. Note: this only governs the interactive-input path; it does not turn the principal on autopilot, so ordinary tool confirmations still apply |
-| `principal.doom_guard.enabled` | `true` | Doom-loop guard (ADR-0113 §5): blocks a watched tool signature before its first repeat executes in the same round. On by default — a model making progress never trips it, and the cheapest token-burning loop (`sleep N; make` variants) is exactly what a default-off guard never catches. Forced off for envoys. The historical `nudge` key still loads (serde alias) |
-| `principal.doom_guard.window` | `16` | Number of recent watched tool signatures retained for repeat detection |
+| `master.hard_stop_turns` | `0` | Hard-stop a round after this many ReAct turns. `0` = uncapped (the only execution cap; compaction is the backstop) |
+| `master.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for a `bash` command it emits. Off by default: the bash schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the bash schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for autopilot/automatic flows where no human is reachable |
+| `master.skip_interactive_input` | `false` | Whether an interactive `bash` command (matched by the interactive classifier: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) **never** pops the inline input panel. Off by default: a command needing input prompts you with an input panel (command + masked/plain field). On: the panel is skipped and the command runs with stdin closed — it reads EOF immediately and fails fast with a non-interactive remedy hint, exactly as under autopilot mode. For users who find the prompt disruptive and would rather retry the command themselves. Note: this only governs the interactive-input path; it does not turn the master on autopilot, so ordinary tool confirmations still apply |
+| `master.doom_guard.enabled` | `true` | Doom-loop guard: blocks a watched tool signature before its first repeat executes in the same round. On by default — a model making progress never trips it, and the cheapest token-burning loop (`sleep N; make` variants) is exactly what a default-off guard never catches. Forced off for subordinate runners |
+| `master.doom_guard.window` | `16` | Number of recent watched tool signatures retained for repeat detection |
 
 ```toml
-[principal]
+[master]
 hard_stop_turns = 0
 allow_model_stdin = false
 skip_interactive_input = false
 
-# Advanced, opt-in deterministic repeated-call blocking. The `nudge` table
-# name is retained for compatibility.
-[principal.nudge]
-enabled = false
-window = 8
+[master.doom_guard]
+enabled = true
+window = 16
 ```
+
 
 ## Provider selection and retry
 

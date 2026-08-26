@@ -33,14 +33,15 @@ the pre-ADR-0047 convention, which older documents may still use. See
 
 ## Roles
 
-The runtime has one execution engine (`Agent`) that runs in one of two roles.
-`agent` is the umbrella term; `principal` and `envoy` name the concrete roles.
+The architecture defines a three-tier agent hierarchy: **`Supervisor`**, **`Master`**, and **`Runner`**.
+`agent` is the umbrella term; the tiers define role, mission, and tool scope.
 
 | Term | Definition |
 |------|------------|
-| **agent** | Umbrella term for the execution engine (`Agent`, crate `muta-agent`) and the engine-level protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). Every running role is an agent; use `principal` or `envoy` when the role matters. [Harness architecture](../explanation/agent-design/harness.md) |
-| **principal** | The top-level, human-facing agent a frontend drives. Owns the visible conversation and the user-tunable `[principal]` config table (`hard_stop_turns`, `allow_model_stdin`, and the advanced `nudge` guard). [Configuration](configuration.md) |
-| **envoy** | An isolated child agent the principal spawns via the `envoy` tool to serve a bounded sub-question; fresh history, profile-filtered tools, shares only the provider. See the [Envoys](#envoys) section. [Envoys](../explanation/agent-design/envoys.md) |
+| **agent** | Umbrella term for an autonomous execution engine (`Agent`, crate `muta-agent`) and its lifecycle protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). Every tier is an agent. |
+| **supervisor** | The singleton daemon-level agent orchestrating sessions, multi-session coordination, debug tracing, and global lifecycle. |
+| **master** | The session-level agent (exactly one active per session). Carries presets (e.g. Developer, Code Analyst) and manages subordinate runners. Owns session conversation and `[master]` config table (`hard_stop_turns`, `allow_model_stdin`, `doom_guard`). |
+| **runner** | A bounded sub-agent spawned by a master (via `runner` or `runner_code` tools) with fresh context, scoped tools, and specific missions. |
 
 ## Scheduling
 
@@ -56,38 +57,31 @@ The runtime has one execution engine (`Agent`) that runs in one of two roles.
 | **todo list** | The single source of truth for remaining work, shared with `todo`/`todo_update`, shown in the Activity modal, and persisted across restarts. The model populates it directly; there is no longer a plan tool that seeds it. [ADR-0020](../adr/0020-unified-task-list.md) |
 | **stop-gate** | The round-exit forcing function: any `Stop` hooks. It is the only gate that can refuse a round ending and force one more turn. [Harness architecture](../explanation/agent-design/harness.md) |
 
-## Envoys
+## Runners
 
 | Term | Definition |
 |------|------------|
-| **envoy** | An isolated child agent spawned by the `envoy` tool to investigate a sub-question; shares only the provider with the parent, runs with a fresh history and profile-filtered tools. [Envoys](../explanation/agent-design/envoys.md) |
-| **profile** | A declarative bundle (name, system-prompt fragment, and a `ToolPolicy`) that scopes an envoy's behavior; bound by reference by dispatch tools. [Envoys](../explanation/agent-design/envoys.md) |
-| **`EXPLORE` profile** | Research role: `Read` ceiling, no write grant; pure read tools. Bound by the `envoy` tool. [Envoys](../explanation/agent-design/envoys.md) |
-| **`CODE` profile** | Coding role: write-capable (admits `bash`/`edit_file`/`write_file`). Runs autopilot like every built-in envoy — the delegation via `envoy_code` is the authorization. Bound by the `envoy_code` tool. [ADR-0087](../adr/0087-code-envoy-runs-autopilot.md) |
+| **runner** | An isolated sub-agent spawned by a master to investigate or execute a sub-task; shares only the provider, running with fresh history and profile-filtered tools. |
+| **profile** | A declarative bundle (name, system-prompt fragment, and `ToolPolicy`) that scopes a runner's behavior. |
+| **`EXPLORE` profile** | Research role: pure read tools. Bound by the `runner` tool. |
+| **`CODE` profile** | Coding role: write-capable (admits `bash`/`edit_file`/`write_file`). Runs autopilot like built-in runners — delegation via `runner_code` is the authorization. |
 | **`TITLE` profile** | Read-only role used to generate a session title in a single model call. [ADR-0022](../adr/0022-session-level-ai-title.md) |
-| **full-duplex** | An envoy is not fire-and-forget: requests travel up to the parent, replies travel down to the exact child. [ADR-0029](../adr/0029-full-duplex-subagent-communication.md) |
+| **full-duplex** | Runners are not fire-and-forget: requests travel up to the master, replies travel down to the child. |
 
 ## Tools and capabilities
 
 | Term | Definition |
 |------|------------|
-| **`ToolAccess`** | An ordered enum (`Read < Execute < Write`); variant order is load-bearing. Each consumer expresses its rule as a threshold. [Tool access](tools/access.md) |
-| **`Read` tier** | Inspects state, no side effects. Admitted by every envoy profile; bypasses the permission broker. [Tool access](tools/access.md) |
-| **`Execute` tier** | Runs commands; may have external side effects but is not a file-mutation primitive. Broker-prompted. [Tool access](tools/access.md) |
-| **`Write` tier** | The tool's purpose is to mutate the workspace. Broker-prompted unless covered by a `write_paths` grant. Default when a tool does not override `access()`. [Tool access](tools/access.md) |
-| **capability axes** | Beyond `access()`, the `Tool` trait exposes `requires_user()` and `spawns_envoy()`, consulted for envoy admission. [Tool access](tools/access.md) |
-| **`ToolPolicy`** | An envoy profile's policy: an `access` ceiling, an `allow_user_interaction` flag, and a `write_paths` grant. [Tool access](tools/access.md) |
-| **ceiling** | The ordered `ToolAccess` threshold a profile admits tools at or below. [Envoys](../explanation/agent-design/envoys.md) |
-| **`write_paths` grant** | A declarative relative-dir spec on `ToolPolicy`; admits a `Write` tool below the ceiling, then scoped at runtime. [ADR-0028](../adr/0028-capability-allocation-scoped-writes.md) |
-| **`WriteScope`** | A runtime, per-agent delegated operation boundary (`None` / `Scoped` / `Unrestricted`). A target outside it produces a missing-authority result in every interaction posture. [ADR-0028](../adr/0028-capability-allocation-scoped-writes.md) |
-| **workspace authority** | The persisted execution profile for one canonical workspace: `unknown`, `restricted`, or `development`. Independent from project-extension trust and autopilot. [Slash commands](commands.md#workspace) |
-| **workspace sandbox** | The physical capability boundary behind `development`: workspace-confined filesystem access and a fail-closed shell built from a minimal read-only system runtime, isolated HOME/tmp/process namespaces, and a scrubbed environment. [ADR-0140](../adr/0140-workspace-authority-and-content-bound-extension-trust.md) |
-| **extension trust** | Content-bound permission to load project MCP servers, hooks, skills, and commands. A digest change automatically quarantines them. [Slash commands](commands.md#extensions) |
-| **permission broker** | The attended interaction surface for a missing authority grant; offers once/always/reject. It does not define authority and is never an autopilot bypass. [Harness architecture](../explanation/agent-design/harness.md) |
-| **autopilot** | A persisted interaction posture: never wait for confirmations, questions, or stdin. It cannot grant authority; missing grants fail immediately. [Autopilot operation](../explanation/agent-design/autopilot.md) |
+| **`ToolPool`** | Unified catalog and declaration pool of all available system, built-in, dynamic (MCP), and user-injected tools. |
+| **`HazardLevel`** | Explicit hazard classification on tools: `FileWrite` (mutates files), `CommandExecution` (executes shell commands), `ProcessLifecycle` (process management). |
+| **`PermissionStore`** | The single source of truth for runtime tool authority. Evaluates approval scopes: `Once` (single call), `Session` (in-memory per session), `Always` (persisted per workspace). |
+| **workspace asset trust** | Content-bound SHA-256 digest trust for project-supplied static assets (skills, MCP servers, hooks, AGENTS.md, config.toml). Decoupled from runtime tool execution. |
+| **sandbox bash tool** | Dedicated `sandbox_bash` tool providing physical workspace containment for isolated testing and analysis. |
+| **autopilot** | A persisted interaction posture: never wait for confirmations, questions, or stdin. Missing grants fail immediately. [Autopilot operation](../explanation/agent-design/autopilot.md) |
 | **`tool_call_id` pairing** | The wire requirement that every result message references a preceding call id; preserved across pruning and fallback. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 
 ## Skills
+
 
 | Term | Definition |
 |------|------------|

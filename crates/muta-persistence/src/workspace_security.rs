@@ -1,37 +1,34 @@
-//! Durable workspace authority and project-extension trust.
+//! Durable workspace trust for project-supplied assets and configurations.
 //!
-//! The two decisions are deliberately independent:
-//! - execution authority controls ordinary workspace operations;
-//! - extension trust controls project-authored MCP servers, hooks, skills, and
-//!   slash commands.
+//! Governs whether project-authored skills, MCP servers, hooks, configuration,
+//! and AGENTS.md instructions are trusted to load for a given workspace.
 //!
-//! Extension trust is content-bound. A changed contribution digest is
-//! quarantined automatically instead of inheriting an old path-only grant.
+//! Trust is strictly content-bound via SHA-256 digests over all project contribution paths.
+//! If project assets change (e.g. via git pull/checkout), trust drops back to
+//! Quarantined until explicitly reviewed again.
 
 use crate::{fsutil, paths};
-use muta_contracts::{
-    WorkspaceExecutionProfile, WorkspaceExtensionsState, WorkspaceSandboxState,
-    WorkspaceSecuritySnapshot,
-};
+use muta_contracts::{WorkspaceSecuritySnapshot, WorkspaceTrustState};
 use serde::{Deserialize, Serialize};
+
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const CURRENT_VERSION: u32 = 1;
 const EXTENSION_PATHS: &[&str] = &[
-    // Hash the whole control-plane tree, not only the declaration file: a
-    // trusted hook/MCP command may point at `.muta/hooks/run.sh`, and changing
-    // that executable must revoke the effective trust too.
+    // Hash the whole control-plane tree, skills, hooks, MCP definitions, and project instructions
     ".muta",
     ".agents/skills",
     ".claude/skills",
+    "skills",
+    "AGENTS.md",
+    ".cursorrules",
+    ".windsurfrules",
 ];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct WorkspaceRecord {
-    #[serde(default)]
-    execution: WorkspaceExecutionProfile,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     extensions_digest: Option<String>,
 }
@@ -52,11 +49,7 @@ impl Default for PersistedWorkspaceSecurity {
     }
 }
 
-/// Durable handle used by bootstrap and the workspace/extension commands.
-///
-/// There is deliberately no per-handle state cache. Each mutation takes the
-/// cross-process companion lock and reloads the latest file before applying
-/// its change, so independent sessions cannot silently overwrite one another.
+/// Durable store for workspace trust decisions.
 #[derive(Debug)]
 pub struct WorkspaceSecurityStore {
     file: PathBuf,
@@ -71,7 +64,7 @@ impl WorkspaceSecurityStore {
         Self { file }
     }
 
-    /// Compute the current, content-aware security state for a workspace.
+    /// Compute the current, content-aware trust state for a workspace.
     pub fn snapshot(&self, workspace: &Path) -> WorkspaceSecuritySnapshot {
         let root = workspace_identity(workspace);
         let key = canonical_string(&root);
@@ -83,58 +76,40 @@ impl WorkspaceSecurityStore {
         let current_digest = match extension_digest(&root) {
             Ok(digest) => digest,
             Err(error) => {
-                tracing::warn!(%error, workspace = %root.display(), "cannot attest project extension content; quarantining it");
+                tracing::warn!(%error, workspace = %root.display(), "cannot attest project contribution content; quarantining it");
                 return WorkspaceSecuritySnapshot {
                     root: key,
-                    execution: record.execution,
-                    extensions: if record.extensions_digest.is_some() {
-                        WorkspaceExtensionsState::Changed
+                    trust: if record.extensions_digest.is_some() {
+                        WorkspaceTrustState::Changed
                     } else {
-                        WorkspaceExtensionsState::Quarantined
+                        WorkspaceTrustState::Quarantined
                     },
-                    sandbox: WorkspaceSandboxState::Unavailable,
+                    extensions: if record.extensions_digest.is_some() {
+                        WorkspaceTrustState::Changed
+                    } else {
+                        WorkspaceTrustState::Quarantined
+                    },
                 };
             }
         };
-        let extensions = match (current_digest, record.extensions_digest.as_deref()) {
-            (None, _) => WorkspaceExtensionsState::Absent,
+        let trust = match (current_digest, record.extensions_digest.as_deref()) {
+            (None, _) => WorkspaceTrustState::Absent,
             (Some(current), Some(trusted)) if current == trusted => {
-                WorkspaceExtensionsState::Trusted
+                WorkspaceTrustState::Trusted
             }
-            (Some(_), Some(_)) => WorkspaceExtensionsState::Changed,
-            (Some(_), None) => WorkspaceExtensionsState::Quarantined,
+            (Some(_), Some(_)) => WorkspaceTrustState::Changed,
+            (Some(_), None) => WorkspaceTrustState::Quarantined,
         };
         WorkspaceSecuritySnapshot {
             root: key,
-            execution: record.execution,
-            extensions,
-            sandbox: WorkspaceSandboxState::Unavailable,
+            trust,
+            extensions: trust,
         }
     }
 
-    /// Set the ordinary execution profile independently of extension trust.
-    pub fn set_execution(
-        &self,
-        workspace: &Path,
-        profile: WorkspaceExecutionProfile,
-    ) -> Result<WorkspaceSecuritySnapshot, String> {
-        let root = workspace_identity(workspace);
-        let key = canonical_string(&root);
-        let _lock = fsutil::FileLock::acquire(&self.file).map_err(|error| {
-            format!(
-                "cannot lock workspace security state '{}': {error}",
-                self.file.display()
-            )
-        })?;
-        let mut state = self.read_state()?;
-        state.workspaces.entry(key).or_default().execution = profile;
-        self.persist(&state)?;
-        Ok(self.snapshot(workspace))
-    }
-
-    /// Trust the exact current project contribution content. Returns `false`
-    /// when the workspace declares no contributions.
-    pub fn trust_extensions(&self, workspace: &Path) -> Result<bool, String> {
+    /// Trust the exact current project contribution content (skills, MCP, hooks, AGENTS.md).
+    /// Returns `false` when the workspace declares no contributions.
+    pub fn trust_workspace(&self, workspace: &Path) -> Result<bool, String> {
         let root = workspace_identity(workspace);
         let Some(digest) = extension_digest(&root)? else {
             return Ok(false);
@@ -152,7 +127,13 @@ impl WorkspaceSecurityStore {
         Ok(true)
     }
 
-    pub fn untrust_extensions(&self, workspace: &Path) -> Result<bool, String> {
+    /// Alias for `trust_workspace`.
+    pub fn trust_extensions(&self, workspace: &Path) -> Result<bool, String> {
+        self.trust_workspace(workspace)
+    }
+
+    /// Revoke trust for the project contributions of a workspace.
+    pub fn untrust_workspace(&self, workspace: &Path) -> Result<bool, String> {
         let key = canonical_string(&workspace_identity(workspace));
         let _lock = fsutil::FileLock::acquire(&self.file).map_err(|error| {
             format!(
@@ -169,6 +150,11 @@ impl WorkspaceSecurityStore {
             self.persist(&state)?;
         }
         Ok(changed)
+    }
+
+    /// Alias for `untrust_workspace`.
+    pub fn untrust_extensions(&self, workspace: &Path) -> Result<bool, String> {
+        self.untrust_workspace(workspace)
     }
 
     fn read_state(&self) -> Result<PersistedWorkspaceSecurity, String> {
@@ -202,128 +188,147 @@ impl WorkspaceSecurityStore {
     }
 
     fn persist(&self, state: &PersistedWorkspaceSecurity) -> Result<(), String> {
-        fsutil::atomic_write_json(&self.file, state).map_err(|error| {
+        if let Some(parent) = self.file.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "cannot create parent directory '{}': {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        let text = serde_json::to_string_pretty(state).map_err(|error| {
             format!(
-                "cannot persist workspace security state '{}': {error}",
+                "cannot serialize workspace security state '{}': {error}",
                 self.file.display()
             )
-        })
+        })?;
+        let temp = format!(
+            "{}.tmp.{}",
+            self.file.display(),
+            uuid::Uuid::new_v4().simple()
+        );
+        std::fs::write(&temp, text).map_err(|error| {
+            format!(
+                "cannot write temporary workspace security state '{temp}': {error}"
+            )
+        })?;
+        std::fs::rename(&temp, &self.file).map_err(|error| {
+            let _ = std::fs::remove_file(&temp);
+            format!(
+                "cannot replace workspace security state '{}': {error}",
+                self.file.display()
+            )
+        })?;
+        Ok(())
     }
 }
 
-/// Stable least-privilege workspace identity. Worktrees and explicitly opened
-/// subdirectories remain separate authority masters; a grant must never
-/// widen itself to a larger repository merely because `.git` exists above it.
-pub fn workspace_identity(start: &Path) -> PathBuf {
-    std::fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf())
+fn workspace_identity(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn canonical_string(path: &Path) -> String {
-    std::fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .into_owned()
+    path.to_string_lossy().to_string()
 }
 
-/// Digest paths and bytes in deterministic order without following symlinks.
-fn extension_digest(root: &Path) -> Result<Option<String>, String> {
-    let mut entries = Vec::<PathBuf>::new();
+fn extension_digest(workspace: &Path) -> Result<Option<String>, String> {
+    let mut files = Vec::new();
     for relative in EXTENSION_PATHS {
-        collect_entries(root, &root.join(relative), &mut entries, true)?;
+        let entry_path = workspace.join(relative);
+        collect_extension_files(workspace, &entry_path, &mut files)?;
     }
-    entries.sort();
-    entries.dedup();
-    if entries.is_empty() {
+    if files.is_empty() {
         return Ok(None);
     }
-    let mut digest = Sha256::new();
-    for path in entries {
-        let relative = path.strip_prefix(root).unwrap_or(&path);
-        digest.update(relative.to_string_lossy().as_bytes());
-        digest.update([0]);
-        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+    files.sort();
+    let mut hasher = Sha256::new();
+    for (rel, abs) in files {
+        hasher.update(rel.as_bytes());
+        hasher.update([0]);
+        let meta = std::fs::symlink_metadata(&abs).map_err(|error| {
             format!(
-                "cannot inspect extension contribution '{}': {error}",
-                path.display()
+                "cannot inspect extension path '{}': {error}",
+                abs.display()
             )
         })?;
-        digest.update([u8::from(metadata.permissions().readonly())]);
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "workspace extension path '{}' is a symlink; symlinked extension content cannot be trusted",
+                abs.display()
+            ));
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            digest.update(metadata.permissions().mode().to_le_bytes());
+            let mode = meta.permissions().mode();
+            hasher.update(mode.to_le_bytes());
+            hasher.update([0]);
         }
-        match metadata {
-            metadata if metadata.file_type().is_symlink() => {
-                return Err(format!(
-                    "project extension contribution '{}' is a symlink; content-bound trust requires regular in-workspace files",
-                    path.display()
-                ));
-            }
-            metadata if metadata.is_file() => {
-                digest.update(b"file\0");
-                let bytes = std::fs::read(&path).map_err(|error| {
-                    format!(
-                        "cannot read extension contribution '{}': {error}",
-                        path.display()
-                    )
-                })?;
-                digest.update(bytes);
-            }
-            metadata if metadata.is_dir() => digest.update(b"dir\0"),
-            _ => {
-                return Err(format!(
-                    "project extension contribution '{}' is not a regular file or directory",
-                    path.display()
-                ));
-            }
-        }
-        digest.update([0xff]);
+        let bytes = std::fs::read(&abs).map_err(|error| {
+            format!(
+                "cannot read extension file content '{}': {error}",
+                abs.display()
+            )
+        })?;
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update([0]);
+        hasher.update(&bytes);
+        hasher.update([0xff]);
     }
-    Ok(Some(hex::encode(digest.finalize())))
+    Ok(Some(format!("{:x}", hasher.finalize())))
 }
 
-fn collect_entries(
+fn collect_extension_files(
     root: &Path,
-    path: &Path,
-    entries: &mut Vec<PathBuf>,
-    missing_ok: bool,
+    current: &Path,
+    out: &mut Vec<(String, PathBuf)>,
 ) -> Result<(), String> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if missing_ok && error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+    let meta = match std::fs::symlink_metadata(current) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
             return Err(format!(
-                "cannot enumerate extension contribution '{}': {error}",
-                path.display()
+                "cannot inspect extension path '{}': {error}",
+                current.display()
             ));
         }
     };
-    entries.push(path.to_path_buf());
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+    if meta.file_type().is_symlink() {
+        return Err(format!(
+            "workspace extension path '{}' is a symlink; symlinked extension content cannot be trusted",
+            current.display()
+        ));
+    }
+    if meta.is_file() {
+        let rel = current
+            .strip_prefix(root)
+            .map_err(|error| {
+                format!(
+                    "extension path '{}' escaped root '{}': {error}",
+                    current.display(),
+                    root.display()
+                )
+            })?
+            .to_string_lossy()
+            .to_string();
+        out.push((rel, current.to_path_buf()));
         return Ok(());
     }
-    let read_dir = std::fs::read_dir(path).map_err(|error| {
-        format!(
-            "cannot enumerate extension directory '{}': {error}",
-            path.display()
-        )
-    })?;
-    let mut children = read_dir
-        .map(|entry| {
-            entry.map(|entry| entry.path()).map_err(|error| {
+    if meta.is_dir() {
+        let entries = std::fs::read_dir(current).map_err(|error| {
+            format!(
+                "cannot read extension directory '{}': {error}",
+                current.display()
+            )
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
                 format!(
-                    "cannot enumerate extension directory '{}': {error}",
-                    path.display()
+                    "cannot read extension directory entry in '{}': {error}",
+                    current.display()
                 )
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    children.sort();
-    for child in children {
-        // Every top-level input is rooted below `root`; do not follow symlinks.
-        if child.starts_with(root) {
-            collect_entries(root, &child, entries, false)?;
+            })?;
+            collect_extension_files(root, &entry.path(), out)?;
         }
     }
     Ok(())
@@ -334,90 +339,44 @@ mod tests {
     use super::*;
 
     fn scratch() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("muta-security-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        root
+        let dir = std::env::temp_dir().join(format!(
+            "muta-test-trust-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
-    fn execution_and_extensions_are_independent_and_content_bound() {
+    fn extensions_are_content_bound_and_quarantined_by_default() {
         let root = scratch();
         let file = root.join("state/workspace_security.json");
         let store = WorkspaceSecurityStore::load_from(file);
         assert_eq!(
-            store.snapshot(&root).execution,
-            WorkspaceExecutionProfile::Unknown
-        );
-        assert_eq!(
-            store.snapshot(&root).extensions,
-            WorkspaceExtensionsState::Absent
+            store.snapshot(&root).trust,
+            WorkspaceTrustState::Absent
         );
 
         std::fs::create_dir_all(root.join(".muta/skills/demo")).unwrap();
         std::fs::write(root.join(".muta/skills/demo/SKILL.md"), "one").unwrap();
         assert_eq!(
-            store.snapshot(&root).extensions,
-            WorkspaceExtensionsState::Quarantined
+            store.snapshot(&root).trust,
+            WorkspaceTrustState::Quarantined
         );
-        assert!(store.trust_extensions(&root).unwrap());
+        assert!(store.trust_workspace(&root).unwrap());
         assert_eq!(
-            store.snapshot(&root).extensions,
-            WorkspaceExtensionsState::Trusted
+            store.snapshot(&root).trust,
+            WorkspaceTrustState::Trusted
         );
 
-        store
-            .set_execution(&root, WorkspaceExecutionProfile::Development)
-            .unwrap();
         std::fs::write(root.join(".muta/skills/demo/SKILL.md"), "two").unwrap();
         let snapshot = store.snapshot(&root);
-        assert_eq!(snapshot.execution, WorkspaceExecutionProfile::Development);
-        assert_eq!(snapshot.extensions, WorkspaceExtensionsState::Changed);
-    }
-
-    #[test]
-    fn state_round_trips_without_legacy_path_only_trust() {
-        let root = scratch();
-        let file = root.join("state/workspace_security.json");
-        WorkspaceSecurityStore::load_from(file.clone())
-            .set_execution(&root, WorkspaceExecutionProfile::Restricted)
-            .unwrap();
-        let reloaded = WorkspaceSecurityStore::load_from(file);
-        assert_eq!(
-            reloaded.snapshot(&root).execution,
-            WorkspaceExecutionProfile::Restricted
-        );
-    }
-
-    #[test]
-    fn independent_store_handles_merge_under_file_lock() {
-        let state_root = scratch();
-        let file = state_root.join("state/workspace_security.json");
-        let first_workspace = scratch();
-        let second_workspace = scratch();
-        let first = WorkspaceSecurityStore::load_from(file.clone());
-        let second = WorkspaceSecurityStore::load_from(file.clone());
-
-        first
-            .set_execution(&first_workspace, WorkspaceExecutionProfile::Restricted)
-            .unwrap();
-        second
-            .set_execution(&second_workspace, WorkspaceExecutionProfile::Development)
-            .unwrap();
-
-        let reloaded = WorkspaceSecurityStore::load_from(file);
-        assert_eq!(
-            reloaded.snapshot(&first_workspace).execution,
-            WorkspaceExecutionProfile::Restricted
-        );
-        assert_eq!(
-            reloaded.snapshot(&second_workspace).execution,
-            WorkspaceExecutionProfile::Development
-        );
+        assert_eq!(snapshot.trust, WorkspaceTrustState::Changed);
     }
 
     #[cfg(unix)]
     #[test]
-    fn executable_mode_change_revokes_extension_trust() {
+    fn executable_mode_change_revokes_trust() {
         use std::os::unix::fs::PermissionsExt;
 
         let root = scratch();
@@ -430,13 +389,13 @@ mod tests {
         std::fs::set_permissions(&hook, permissions).unwrap();
 
         let store = WorkspaceSecurityStore::load_from(file);
-        assert!(store.trust_extensions(&root).unwrap());
+        assert!(store.trust_workspace(&root).unwrap());
         let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
         permissions.set_mode(0o700);
         std::fs::set_permissions(&hook, permissions).unwrap();
         assert_eq!(
-            store.snapshot(&root).extensions,
-            WorkspaceExtensionsState::Changed
+            store.snapshot(&root).trust,
+            WorkspaceTrustState::Changed
         );
     }
 
@@ -451,11 +410,11 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join(".muta/skills/demo/SKILL.md")).unwrap();
 
         let store = WorkspaceSecurityStore::load_from(file);
-        let error = store.trust_extensions(&root).unwrap_err();
+        let error = store.trust_workspace(&root).unwrap_err();
         assert!(error.contains("symlink"));
         assert_eq!(
-            store.snapshot(&root).extensions,
-            WorkspaceExtensionsState::Quarantined
+            store.snapshot(&root).trust,
+            WorkspaceTrustState::Quarantined
         );
     }
 }

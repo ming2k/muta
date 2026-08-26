@@ -124,7 +124,7 @@ pub(crate) const FINISH_DRAIN_GRACE: std::time::Duration = std::time::Duration::
 /// a second. This is the backstop for pathological cases (a child parked on a
 /// human answer it will never get because the same human just pressed Esc).
 /// Bounded so an interrupt never hangs the UI.
-const ENVOY_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+const RUNNER_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub mod agent;
 pub use agent::{Agent, AgentBuilder, RequestTokenEstimate, RoundOutcome};
@@ -140,6 +140,8 @@ pub mod doom_guard;
 pub mod dynamic;
 mod dynamic_tools;
 pub mod hooks;
+pub mod interaction;
+pub use interaction::{InteractionConfig, InteractionController};
 
 pub mod human_broker;
 pub use hooks::{HookRegistry, UserPromptVerdict, matcher_matches};

@@ -23,7 +23,7 @@ use crate::agent::{Agent, RunnerHandle};
 /// Description of the default (read-only, RUNNER_EXPLORE) `runner` dispatch tool,
 /// surfaced to the model. Kept as a `const` so a sibling write-capable tool
 /// can declare its own parallel description without duplicating this string.
-const ENVOY_TOOL_DESCRIPTION: &str = "\
+pub const RUNNER_TOOL_DESCRIPTION: &str = "\
 Launch a focused, read-only runner to research or explore part of the codebase \
 (or the web) and return a concise written answer. Use it to parallelize \
 investigation: finding where code lives, summarizing files, gathering \
@@ -31,12 +31,12 @@ context. The runner cannot modify files — you perform any edits after \
 reviewing its findings.";
 
 /// Description of the write-capable `runner_code` dispatch tool (bound to the
-/// [`muta_contracts::RUNNER_CODE`] profile). Distinct from `ENVOY_TOOL_DESCRIPTION` so
+/// [`muta_contracts::RUNNER_CODE`] profile). Distinct from `RUNNER_TOOL_DESCRIPTION` so
 /// the model understands this is the delegation path for *implementation*
 /// work, not exploration, and that every write/command the runner makes is
 /// user-approved. Paired with the code-profile system prompt, it frames the
 /// coder-subagent role (the analogue of kimi-code's `coder` subagent).
-pub const ENVOY_CODE_TOOL_DESCRIPTION: &str = "\
+pub const RUNNER_CODE_TOOL_DESCRIPTION: &str = "\
 Delegate a well-scoped software-engineering task to a coding runner that \
 implements the change end to end — it reads the relevant code, edits files, \
 and runs builds/tests/git, then returns a technically complete summary of what \
@@ -49,10 +49,11 @@ for trivial edits you can make directly, and once it is running, leave the \
 scope to it (do not redo its work in parallel).";
 
 /// Description of the MCP-specialist dispatch tool (bound to the [`muta_contracts::RUNNER_MCP_SPECIALIST`] profile).
-pub const ENVOY_MCP_TOOL_DESCRIPTION: &str = "\
+pub const RUNNER_MCP_TOOL_DESCRIPTION: &str = "\
 Delegate a specialized integration task (e.g. database operations, external API calls, \
 or third-party MCP tool interactions) to a dedicated runner. The runner runs in an isolated \
 sandbox with access to dynamic/MCP tools and returns a high-signal summary of the results.";
+
 
 /// Retry settings for an runner subagent, inherited from the session's provider retry configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,7 +210,7 @@ impl RunnerTool {
         toolset: muta_contracts::ToolSet,
         profile: &'static RunnerPreset,
     ) -> Self {
-        Self::named(provider, toolset, profile, "runner", ENVOY_TOOL_DESCRIPTION)
+        Self::named(provider, toolset, profile, "runner", RUNNER_TOOL_DESCRIPTION)
     }
 
     /// Like [`new`](Self::new) but shares an existing [`RunnerRegistry`] instead
@@ -230,7 +231,7 @@ impl RunnerTool {
             toolset,
             profile,
             "runner",
-            ENVOY_TOOL_DESCRIPTION,
+            RUNNER_TOOL_DESCRIPTION,
             registry,
         )
     }
@@ -246,10 +247,11 @@ impl RunnerTool {
             toolset,
             &muta_contracts::RUNNER_MCP_SPECIALIST,
             "runner_mcp",
-            ENVOY_MCP_TOOL_DESCRIPTION,
+            RUNNER_MCP_TOOL_DESCRIPTION,
             registry,
         )
     }
+
 
     /// Build a dispatch tool under an explicit name and description. This is
     /// how a second, write-capable runner dispatch tool is constructed: a
@@ -624,9 +626,11 @@ impl RunnerTool {
 
         // The runner's identity *is* its profile's system prompt — that is the
         // persona/mission framing for this role (e.g. RUNNER_EXPLORE's research
-        // framing). `from_persona` injects it verbatim as the preamble.
         let identity = crate::AgentIdentity::from_persona(profile.system_prompt);
         let mut runner = Agent::new(self.provider.clone(), sub_tools, identity);
+        runner.set_tier(muta_contracts::AgentTier::Runner);
+
+
         if let Some(handle) = self
             .parent_workspace_security
             .lock()

@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 /// the master itself. The note pins the boundary explicitly and
 /// unconditionally — it does not rely on a `[hooks]` entry, so the guarantee is
 /// structural.
-const ENVOY_REANCHOR_OK: &str = "\
+const RUNNER_REANCHOR_OK: &str = "\
 [system] The read-only / toolset-scoped framing above applies to the runner only. \
 You (the master agent) retain your full toolset — including write and edit tools \
 and the shell — across this delegation. Perform any edits or writes yourself; the \
@@ -18,7 +18,7 @@ runner cannot.";
 /// Same role-reanchoring for a *failed* runner. Reaffirms the boundary and nudges
 /// the master toward acting directly rather than re-delegating a failing
 /// sub-task.
-const ENVOY_REANCHOR_FAILED: &str = "\
+const RUNNER_REANCHOR_FAILED: &str = "\
 [system] That runner could not complete its sub-task. Its read-only / toolset-scoped \
 framing does not transfer to you: you (the master agent) retain your full toolset \
 — including write and edit tools and the shell. Act directly on the findings above, \
@@ -27,7 +27,7 @@ or re-delegate with a narrower scope.";
 /// Same role-reanchoring for an *interrupted* runner: stopped by the user, not
 /// failed. The partial findings above are real work; the master may continue
 /// them directly or re-delegate, and stays accountable for the outcome.
-const ENVOY_REANCHOR_INTERRUPTED: &str = "\
+const RUNNER_REANCHOR_INTERRUPTED: &str = "\
 [system] That runner was interrupted mid-task (stopped by the user before it finished). \
 Its partial findings above are real work, and its read-only / toolset-scoped framing \
 does not transfer to you: you (the master agent) retain your full toolset — \
@@ -36,8 +36,8 @@ it stopped, or re-delegate with a narrower scope.";
 
 /// Build the model-visible text for an runner tool result: the runner's summary
 /// wrapped in the standard `[<tool> result]:` header, followed by a
-/// deterministic role-reanchoring note (`ENVOY_REANCHOR_OK` on success,
-/// `ENVOY_REANCHOR_FAILED` on `failed`, `ENVOY_REANCHOR_INTERRUPTED` on
+/// deterministic role-reanchoring note (`RUNNER_REANCHOR_OK` on success,
+/// `RUNNER_REANCHOR_FAILED` on `failed`, `RUNNER_REANCHOR_INTERRUPTED` on
 /// `interrupted`). This is the single choke point where
 /// an runner's read-only framing enters the master's transcript, so the
 /// re-anchor is applied here unconditionally — it cannot be forgotten by a
@@ -51,14 +51,15 @@ pub(crate) fn runner_result_text(
     interrupted: bool,
 ) -> String {
     let reanchor = if interrupted {
-        ENVOY_REANCHOR_INTERRUPTED
+        RUNNER_REANCHOR_INTERRUPTED
     } else if failed {
-        ENVOY_REANCHOR_FAILED
+        RUNNER_REANCHOR_FAILED
     } else {
-        ENVOY_REANCHOR_OK
+        RUNNER_REANCHOR_OK
     };
     format!("[{name} result]:\n{summary}\n\n{reanchor}")
 }
+
 
 /// In-memory only mask of tools a hook has temporarily disabled via a
 /// [`muta_contracts::HookOutcome::ScopeTools`] outcome, partitioned by the
@@ -138,11 +139,16 @@ pub use muta_contracts::RequestTokenEstimate;
 /// [`InputReply`] arrives (or `None` on cancel/turn-end).
 pub struct Agent {
     pub provider: Arc<dyn Provider>,
+    /// Position of this agent in the hierarchy (Supervisor, Master, Runner).
+    tier: std::sync::RwLock<muta_contracts::AgentTier>,
+    /// Global/Session tool pool for declarative tool resolution.
+    pool: Arc<std::sync::RwLock<muta_contracts::ToolPool>>,
     /// The full capability set: every tool keyed by capability, with all its
     /// variants. The single source of truth from which the model-visible
     /// [`resolved_tools`](Self::resolved_tools) view is derived for the active
     /// [`variant_selection`](Self::variant_selection).
     pub(crate) toolset: muta_contracts::ToolSet,
+
     /// The active resolved view: exactly one variant per capability, for the
     /// current model's [`variant_selection`](Self::variant_selection). Both request
     /// assembly (`visible_tools` → `ModelRequest`) and dispatch (`find` by name)
@@ -216,41 +222,13 @@ pub struct Agent {
     /// overlays can replace the configuration atomically; the per-round guard
     /// reads it when `RoundState` is constructed.
     doom_guard_config: Arc<std::sync::RwLock<muta_contracts::DoomGuardConfig>>,
-    /// Whether the model may supply stdin bytes for a `bash` call it emits
-    /// (the opt-in automatic-flow path, L3.5 α). Default `false`; seeded from
-    /// `[master] allow_model_stdin`. Lock-free so the dispatch site reads
-    /// it without contention. When `false` the bash schema exposes no `stdin`
-    /// parameter (structurally unreachable from the model); when `true` it
-    /// does, and a model-supplied `stdin` is threaded as
-    /// [`StdinPolicy::Prefilled`].
-    allow_model_stdin: Arc<std::sync::atomic::AtomicBool>,
-    /// Whether an interactive `bash` command skips the operator input panel
-    /// (the L3.5 β path). Default `false`; seeded from
-    /// `[master] skip_interactive_input`. Lock-free so the dispatch site
-    /// reads it without contention. When `true`, a command the interactive
-    /// classifier matches never pops the inline input panel and instead runs
-    /// with stdin closed — fast failure + non-interactive remedy, exactly as
-    /// under autopilot mode, but without turning the master itself
-    /// autopilot.
-    skip_interactive_input: Arc<std::sync::atomic::AtomicBool>,
+    /// Unified interaction controller governing human posture, stdin policy,
+    /// and autonomous fallback behaviors.
+    pub(crate) interaction: Arc<crate::interaction::InteractionController>,
     /// ADR-0141: the single owner of parked human-decision oneshots
-    /// (permission / ask_user / interactive input). The legacy per-protocol
-    /// maps (`ask_user` / `input` / `PermissionState.pending`) are being
-    /// migrated onto it; the wire surface (`reply_user_question`, …) now
-    /// delegates here.
+    /// (permission / ask_user / interactive input).
     human_broker: crate::human_broker::HumanRequestBroker,
-    /// ADR-0141: the human-channel posture for this agent. `Interactive`
-    /// until a client declares otherwise; autonomous contexts (runners with
-    /// `allow_user_interaction: false`, headless no-TTY) read it before
-    /// parking so they can settle by labeled policy instead of deadlocking.
-    human_posture: Arc<std::sync::atomic::AtomicU8>,
-    /// ADR-0141: live channel source when this agent belongs to a hosted
-    /// session. When set, [`Agent::human_posture`] reads the accountant's
-    /// effective OR over attached clients instead of the static flag.
-    human_channel: std::sync::Mutex<Option<std::sync::Arc<muta_contracts::human_request::HumanChannelAccountant>>>,
-    /// ADR-0141: the fallback applied when the posture is Autonomous and a
-    /// tool parks a question. Mirrors `[master] ask_user_fallback`.
-    autonomous_fallback: std::sync::Mutex<AutonomousFallbackPolicy>,
+
     /// Command-aware safety policy for `bash`. This sits above the ordinary
     /// permission broker so broad approvals such as `bash *` cannot silently
     /// authorize destructive commands like `git reset --hard`.
@@ -949,10 +927,15 @@ impl Agent {
             Arc::clone(&scoped_disabled_tools),
         );
 
+        let pool = Arc::new(std::sync::RwLock::new(muta_contracts::ToolPool::new(toolset.clone())));
+
         Self {
             provider,
+            tier: std::sync::RwLock::new(muta_contracts::AgentTier::Master),
+            pool,
             toolset,
             resolved_tools,
+
             dynamic_tools,
             disabled_tools,
             scoped_disabled_tools,
@@ -973,13 +956,10 @@ impl Agent {
             doom_guard_config: Arc::new(std::sync::RwLock::new(
                 muta_contracts::DoomGuardConfig::default(),
             )),
-            allow_model_stdin: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            skip_interactive_input: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            interaction: Arc::new(crate::interaction::InteractionController::default()),
             human_broker: crate::human_broker::HumanRequestBroker::new(),
-            human_posture: Arc::new(std::sync::atomic::AtomicU8::new(0)),
-            human_channel: std::sync::Mutex::new(None),
-            autonomous_fallback: std::sync::Mutex::new(AutonomousFallbackPolicy::FailClosed),
             bash_policy: std::sync::RwLock::new(crate::bash_policy::BashPolicy::default()),
+
             operation_scope: std::sync::Mutex::new(muta_contracts::OperationScope::unrestricted()),
             hooks: crate::hook_runner::HookRunner::new(),
             inbox_tx: std::sync::Mutex::new(None),
@@ -1258,8 +1238,7 @@ impl Agent {
     /// classifier → input panel) or fails fast. When on, the model may feed
     /// a command's stdin directly — for autopilot/automatic flows.
     pub fn set_allow_model_stdin(&self, enabled: bool) {
-        self.allow_model_stdin
-            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+        self.interaction.set_allow_model_stdin(enabled);
     }
 
     /// Replace the command-aware bash safety policy from `[bash_policy]` config.
@@ -1277,8 +1256,7 @@ impl Agent {
     /// dispatch site to decide the [`StdinPolicy`] and whether the bash schema
     /// exposes a `stdin` parameter.
     pub fn allow_model_stdin(&self) -> bool {
-        self.allow_model_stdin
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.interaction.allow_model_stdin()
     }
 
     /// Mirrors `[master] skip_interactive_input` in `config.toml`. When on,
@@ -1288,17 +1266,16 @@ impl Agent {
     /// Lets an operator who finds the prompt disruptive opt out of it without
     /// turning the master itself autopilot.
     pub fn set_skip_interactive_input(&self, enabled: bool) {
-        self.skip_interactive_input
-            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+        self.interaction.set_skip_interactive_input(enabled);
     }
 
     /// Whether an interactive `bash` command should skip the operator input
     /// panel and run with stdin closed instead. Read at the bash dispatch site
     /// to decide the [`StdinPolicy`].
     pub fn skip_interactive_input(&self) -> bool {
-        self.skip_interactive_input
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.interaction.skip_interactive_input()
     }
+
 
     /// Install (or clear with `None`) the mid-turn model-context projection gate.
     pub fn set_context_projection_gate(&self, gate: Option<Arc<dyn ContextProjectionGate>>) {
@@ -1635,18 +1612,7 @@ impl Agent {
     /// channel accountant bound (hosted sessions), this is the live OR over
     /// attached clients; otherwise the static declared posture.
     pub fn human_posture(&self) -> muta_contracts::human_request::HumanChannelPosture {
-        if let Some(accountant) = self
-            .human_channel
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-        {
-            return accountant.effective();
-        }
-        match self.human_posture.load(std::sync::atomic::Ordering::Relaxed) {
-            1 => muta_contracts::human_request::HumanChannelPosture::Autonomous,
-            _ => muta_contracts::human_request::HumanChannelPosture::Interactive,
-        }
+        self.interaction.human_posture()
     }
 
     /// ADR-0141: bind a live channel source (hosted sessions). The agent's
@@ -1655,39 +1621,29 @@ impl Agent {
         &self,
         accountant: std::sync::Arc<muta_contracts::human_request::HumanChannelAccountant>,
     ) {
-        *self
-            .human_channel
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(accountant);
+        self.interaction.set_human_channel(Some(accountant));
     }
 
     /// ADR-0141: how an autonomous session settles a parked question.
     /// Sourced from `[master] ask_user_fallback` config; defaults to
     /// fail-closed (a missing human is an error, not an opinion).
     pub fn autonomous_fallback_policy(&self) -> AutonomousFallbackPolicy {
-        *self.autonomous_fallback
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        self.interaction.autonomous_fallback_policy()
     }
 
     /// ADR-0141: configure the autonomous fallback policy (see
     /// [`Self::autonomous_fallback_policy`]).
     pub fn set_autonomous_fallback_policy(&self, policy: AutonomousFallbackPolicy) {
-        *self.autonomous_fallback
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = policy;
+        self.interaction.set_autonomous_fallback_policy(policy);
     }
 
     /// ADR-0141: declare this agent's human-channel posture. Attaching
     /// clients' declarations are OR-ed at the session level; runners inherit
     /// their parent's posture at spawn.
     pub fn set_human_posture(&self, posture: muta_contracts::human_request::HumanChannelPosture) {
-        let code = match posture {
-            muta_contracts::human_request::HumanChannelPosture::Interactive => 0,
-            muta_contracts::human_request::HumanChannelPosture::Autonomous => 1,
-        };
-        self.human_posture.store(code, std::sync::atomic::Ordering::Relaxed);
+        self.interaction.set_human_posture(posture);
     }
+
 
     pub fn set_autopilot(&self, enabled: bool) {
         self.permissions.set_autopilot(enabled);
@@ -1747,6 +1703,41 @@ impl Agent {
     /// `from_toolset`. A role whose identity should differ per instance composes
     /// [`muta_contracts::MasterPreset::with_identity`] before construction.
     ///
+    /// The position of this agent in the hierarchy (Supervisor, Master, Runner).
+    pub fn tier(&self) -> muta_contracts::AgentTier {
+        self.tier.read().map(|t| *t).unwrap_or(muta_contracts::AgentTier::Master)
+    }
+
+    /// Set this agent's position in the hierarchy.
+    pub fn set_tier(&self, tier: muta_contracts::AgentTier) {
+        if let Ok(mut guard) = self.tier.write() {
+            *guard = tier;
+        }
+    }
+
+    /// Shared handle to the agent's tool pool.
+    pub fn tool_pool(&self) -> Arc<std::sync::RwLock<muta_contracts::ToolPool>> {
+        self.pool.clone()
+    }
+
+    /// Record an agent's requirement declaration against the pool.
+    pub fn declare_tools(&self, declaration: &muta_contracts::ToolDeclaration) {
+        if let Ok(pool_guard) = self.pool.read() {
+            pool_guard.declare(declaration.clone());
+        }
+    }
+
+    /// Apply a master preset delegation (e.g. Developer vs Code Analyst)
+    /// to adjust declared tool availability.
+    pub fn apply_master_delegation(&self, delegation: &muta_contracts::MasterPresetDelegation) {
+        self.set_agent_selection(delegation.selection());
+    }
+
+    /// Apply a declarative master preset.
+    pub fn apply_master_preset(&self, preset: &muta_contracts::MasterPreset) {
+        self.apply_master_profile(preset);
+    }
+
     /// Idempotent over defaults: a profile built with
     /// [`muta_contracts::MasterPreset::with_identity`] (no further narrowing)
     /// reproduces the agent constructor's built-in values, so binding it is a
@@ -1765,11 +1756,8 @@ impl Agent {
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
         self.set_autopilot(profile.autopilot);
-
-        // Autopilot deliberately does not alter workspace authority. An
-        // unrestricted operation scope is still subordinate to the workspace
-        // execution profile and explicit authority rules.
     }
+
 
     /// Replace this agent's identity (name + mission, or a persona override).
     /// Feeds the system-prompt preamble, so the next request reflects the new
@@ -3807,12 +3795,12 @@ impl Agent {
             call_name: call.name.as_str(),
             arguments: &call.arguments,
             scope_target: target.clone(),
-            workspace_execution: self.workspace_security().execution,
             operation_scope,
             disabled: disabled_snapshot,
             scoped_disabled: scoped_snapshot,
             ctx: self, // Agent: PermissionContext
         };
+
         match self.permission_chain().evaluate(&pctx).await {
             crate::permission_policy::PolicyDecision::Pass
             | crate::permission_policy::PolicyDecision::Approve => {}
@@ -4024,7 +4012,7 @@ impl Agent {
                     if let Some(sourced) = self.tool_manager.find(&call.name) {
                         sourced.tool.request_cancel(call_id);
                     }
-                    let grace = tokio::time::sleep(ENVOY_DRAIN_GRACE);
+                    let grace = tokio::time::sleep(RUNNER_DRAIN_GRACE);
                     tokio::pin!(grace);
                     loop {
                         tokio::select! {

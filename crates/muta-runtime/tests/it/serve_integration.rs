@@ -71,13 +71,10 @@ async fn prehosted_with_catalog(
             state_dir.join("security.json"),
         ),
     );
-    security
-        .set_execution(
-            std::path::Path::new("/tmp/muta-test-project"),
-            muta_contracts::WorkspaceExecutionProfile::Development,
-        )
-        .unwrap();
+    let _ = security.trust_workspace(std::path::Path::new("/tmp/muta-test-project"));
     let base = idle_base(session.id().await);
+
+
     let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
         base,
         muta_contracts::SessionStatus::Idle,
@@ -1881,6 +1878,7 @@ async fn unconfigured_workspace_pushes_trust_prompt_on_attach() {
     let tmp = tempfile::tempdir().unwrap();
     let security_file = tmp.path().join("workspace_security.json");
     let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
+    std::fs::write(tmp.path().join("AGENTS.md"), "project instructions").unwrap();
 
     let security = Arc::new(
         muta_persistence::workspace_security::WorkspaceSecurityStore::load_from(
@@ -1939,7 +1937,7 @@ async fn unconfigured_workspace_pushes_trust_prompt_on_attach() {
     .unwrap();
 
     // Welcome, then the attach-sync snapshots, then — for an unconfigured
-    // workspace — the banner notice and the `trust-` question.
+    // workspace with project contributions — the banner notice and the `trust-` question.
     let mut saw_notice = false;
     let mut question: Option<muta_contracts::UserQuestionRequest> = None;
     for _ in 0..12 {
@@ -1959,7 +1957,7 @@ async fn unconfigured_workspace_pushes_trust_prompt_on_attach() {
             RoundEvent::Notice(n)
                 if n.body
                     .as_deref()
-                    .is_some_and(|b| b.contains("trust decision")) =>
+                    .is_some_and(|b| b.contains("contributions") || b.contains("trust")) =>
             {
                 saw_notice = true
             }
@@ -1973,7 +1971,8 @@ async fn unconfigured_workspace_pushes_trust_prompt_on_attach() {
     let question = question.expect("trust question never pushed to attaching client");
     assert!(saw_notice, "trust banner notice never pushed");
     assert_eq!(question.questions.len(), 1);
-    assert_eq!(question.questions[0].options.len(), 3);
+    assert_eq!(question.questions[0].options.len(), 2);
+
 
     // (The reply -> persistence half is covered by the driver harness in
     // `lifecycle_integration`; this test pins the *delivery* regression:

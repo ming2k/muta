@@ -1,7 +1,8 @@
 # ADR-0140: Workspace authority and content-bound extension trust
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0145](0145-decoupled-workspace-asset-trust-and-tool-hazard-model.md)
 - **Date:** 2026-08-25
+
 - **Supersedes:** the path-only trust and autopilot-as-authority portions of
   ADR-0085, ADR-0107, and ADR-0132
 

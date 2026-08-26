@@ -15,9 +15,10 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::shell::run_shell_command;
 use crate::side::{
-    SideRegistry, refuse_if_no_provider, refuse_if_workspace_preflight, start_active_turn,
+    SideRegistry, refuse_if_no_provider, start_active_turn,
     start_session_turn, target_agent,
 };
+
 
 /// `AgentRequest::Chat` — start an interactive round against whichever session
 /// the user is currently composing into (primary or `/btw` side).
@@ -168,10 +169,8 @@ pub async fn shell(
     command: String,
 ) {
     let shell_session_id = session.id().await;
-    if refuse_if_workspace_preflight(resp_tx, agent, &shell_session_id) {
-        return;
-    }
     let shell_tx = resp_tx.clone();
+
     let shell_lifecycle = lifecycle.clone();
     let shell_agent = agent.clone();
     let shell_session = session.clone();

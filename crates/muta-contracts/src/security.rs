@@ -1,67 +1,30 @@
-//! Workspace security vocabulary shared by the runtime and frontends.
+//! Workspace trust vocabulary for project-supplied assets and configurations.
 //!
-//! Workspace execution authority and project-authored extensions are separate
-//! axes.  Opening a directory grants neither.  Autopilot is intentionally not
-//! represented here: it controls whether a missing grant may be requested
-//! interactively, never whether an operation is authorised.
+//! Controls whether project-authored contributions (skills, MCP servers, hooks,
+//! AGENTS.md instructions, and workspace config) are loaded into the runtime.
+//!
+//! Distinct and decoupled from AI runtime tool permissions, which are governed
+//! purely by the Tool Hazard model (`HazardLevel` and `PermissionStore`).
 
 use serde::{Deserialize, Serialize};
 
-/// The authority a workspace grants to ordinary agent operations.
+/// Trust state for project-authored contributions (skills, MCP, hooks, AGENTS.md, config).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub enum WorkspaceExecutionProfile {
-    /// No decision has been made for this workspace. Model and direct-shell
-    /// work must fail preflight until the operator selects a profile.
-    #[default]
-    Unknown,
-    /// Read-oriented posture. Side effects require individual authority rules.
-    Restricted,
-    /// Ordinary development inside the workspace is pre-authorised. Hard bash
-    /// denies and explicit high-risk confirmations remain in force.
-    Development,
-}
-
-impl WorkspaceExecutionProfile {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Unknown => "unknown",
-            Self::Restricted => "restricted",
-            Self::Development => "development",
-        }
-    }
-}
-
-/// Trust state for project-authored control-plane contributions.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub enum WorkspaceExtensionsState {
-    /// The workspace declares no project MCP, hooks, skills, or commands.
+pub enum WorkspaceTrustState {
+    /// The workspace declares no project-level contributions (skills, MCP, hooks, AGENTS.md).
     #[default]
     Absent,
-    /// Contributions exist but their current content has never been trusted.
+    /// Contributions exist in the workspace, but have not been explicitly trusted by the user.
     Quarantined,
-    /// The exact current contribution content was explicitly trusted.
+    /// The exact current content digest of contributions was explicitly trusted by the user.
     Trusted,
-    /// Contributions changed after trust and have returned to quarantine.
+    /// Contributions were previously trusted, but their content/digest has changed.
     Changed,
 }
 
-/// Runtime enforcement state for the physical workspace sandbox.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub enum WorkspaceSandboxState {
-    /// The runtime cannot provide the required containment and must fail closed.
-    #[default]
-    Unavailable,
-    /// Filesystem and shell operations are physically confined to the workspace.
-    Enforced,
-}
-
-impl WorkspaceExtensionsState {
+impl WorkspaceTrustState {
     pub fn is_trusted(self) -> bool {
         matches!(self, Self::Trusted)
     }
@@ -76,14 +39,8 @@ impl WorkspaceExtensionsState {
     }
 }
 
-impl WorkspaceSandboxState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Unavailable => "unavailable",
-            Self::Enforced => "enforced",
-        }
-    }
-}
+/// Alias for compatibility during migration.
+pub type WorkspaceExtensionsState = WorkspaceTrustState;
 
 /// First-class security state attached to every harness snapshot.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
@@ -91,19 +48,30 @@ impl WorkspaceSandboxState {
 pub struct WorkspaceSecuritySnapshot {
     /// Canonical exact workspace root used for persisted decisions.
     pub root: String,
-    pub execution: WorkspaceExecutionProfile,
-    pub extensions: WorkspaceExtensionsState,
+    /// Trust status of workspace contributions (skills, MCP, hooks, AGENTS.md).
     #[serde(default)]
-    pub sandbox: WorkspaceSandboxState,
+    pub trust: WorkspaceTrustState,
+    /// Alias field for extensions trust.
+    #[serde(default)]
+    pub extensions: WorkspaceTrustState,
 }
 
 impl WorkspaceSecuritySnapshot {
-    pub fn unknown(root: impl Into<String>) -> Self {
+    pub fn new(root: impl Into<String>, trust: WorkspaceTrustState) -> Self {
+        let r = root.into();
         Self {
-            root: root.into(),
-            execution: WorkspaceExecutionProfile::Unknown,
-            extensions: WorkspaceExtensionsState::Absent,
-            sandbox: WorkspaceSandboxState::Unavailable,
+            root: r,
+            trust,
+            extensions: trust,
         }
     }
+
+    pub fn unknown(root: impl Into<String>) -> Self {
+        Self::new(root, WorkspaceTrustState::Quarantined)
+    }
+
+    pub fn is_trusted(&self) -> bool {
+        self.trust.is_trusted() || self.extensions.is_trusted()
+    }
 }
+

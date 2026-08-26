@@ -71,14 +71,13 @@ fn workspace_trust_prompt(session_id: &str, project_root: &std::path::Path) -> V
             muta_contracts::AgentNotice::new(
                 muta_contracts::NoticeKind::ReviewAlert,
                 muta_contracts::NoticeSeverity::Warning,
-                "Workspace trust unconfigured",
+                "Workspace contributions unreviewed",
                 muta_contracts::NoticeSource::Harness,
             )
             .with_surface(muta_contracts::NoticeSurface::Banner)
             .with_body(format!(
-                "This workspace ({}) has no persisted trust decision; tools that modify \
-                 anything fail preflight until one is made. Answer the prompt below or run \
-                 `/trust` to record one.",
+                "This workspace ({}) contains project-authored contributions (skills, MCP, hooks, AGENTS.md). \
+                 Answer the prompt below or run `/trust` to load or keep them quarantined.",
                 project_root.display()
             )),
         )),
@@ -87,29 +86,19 @@ fn workspace_trust_prompt(session_id: &str, project_root: &std::path::Path) -> V
                 id: format!("trust-{session_id}"),
                 questions: vec![muta_contracts::UserQuestion {
                     header: Some("Workspace Trust".to_string()),
-                    question: format!("Choose the execution authority for this workspace:\n{}", project_root.display()),
+                    question: format!("Trust project-authored contributions for workspace:\n{}", project_root.display()),
                     options: vec![
                         muta_contracts::UserQuestionOption {
-                            label: crate::handlers_permission::SECURITY_TRUST_OPTION_FULL.to_string(),
+                            label: crate::handlers_permission::SECURITY_TRUST_OPTION_TRUST.to_string(),
                             description: Some(
-                                "Pre-authorise ordinary development operations in this workspace and load \
-                                 its project extensions (MCP servers, hooks, skills, slash commands)."
+                                "Load project skills, MCP servers, hooks, and AGENTS.md instructions for this workspace."
                                     .to_string(),
                             ),
                         },
                         muta_contracts::UserQuestionOption {
-                            label: crate::handlers_permission::SECURITY_TRUST_OPTION_WORKSPACE_ONLY.to_string(),
+                            label: crate::handlers_permission::SECURITY_TRUST_OPTION_QUARANTINE.to_string(),
                             description: Some(
-                                "Pre-authorise development operations, but keep project extensions \
-                                 quarantined."
-                                    .to_string(),
-                            ),
-                        },
-                        muta_contracts::UserQuestionOption {
-                            label: crate::handlers_permission::SECURITY_TRUST_OPTION_RESTRICTED.to_string(),
-                            description: Some(
-                                "Read-oriented posture: side effects keep requiring individual \
-                                 authority rules."
+                                "Keep workspace contributions quarantined (do not load project skills/MCP/hooks/AGENTS.md)."
                                     .to_string(),
                             ),
                         },
@@ -121,6 +110,7 @@ fn workspace_trust_prompt(session_id: &str, project_root: &std::path::Path) -> V
         )),
     ]
 }
+
 
 /// Whether `response` is an attach-time state-sync event: one of the
 /// startup emissions a client that attaches *after* the session began can
@@ -1012,13 +1002,17 @@ where
     // routes `trust-`-prefixed ids to the security store. Re-attached
     // clients re-receive it until a decision is persisted — correct: the
     // workspace is still unconfigured, and the operator is the one who
-    // must configure it.
+    let snap = bound.security.snapshot(bound.project_root());
     if client_posture == muta_contracts::human_request::HumanChannelPosture::Interactive
-        && bound.security.snapshot(bound.project_root()).execution
-            == muta_contracts::WorkspaceExecutionProfile::Unknown
+        && matches!(
+            snap.trust,
+            muta_contracts::WorkspaceTrustState::Quarantined
+                | muta_contracts::WorkspaceTrustState::Changed
+        )
     {
         let session_id = bound.session.id().await;
         for response in workspace_trust_prompt(&session_id, bound.project_root()) {
+
             let text = serde_json::to_string(&Wire::Response { response })
                 .map_err(|e| format!("serialize trust prompt: {e}"))?;
             ws_sink

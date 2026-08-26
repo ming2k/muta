@@ -1,7 +1,8 @@
 # 0042. Principal / Envoy role vocabulary
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0144](0144-three-tier-agent-hierarchy-and-tool-pool.md)
 - **Date:** 2026-06-28
+
 
 ## Context
 

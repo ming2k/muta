@@ -159,11 +159,17 @@ pub enum MeshRoute {
     Any,
 }
 
-/// The envelope carrying one [`MeshMessage`] with routing metadata.
+/// The envelope carrying one [`MeshMessage`] with routing and tracing metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeshEnvelope {
     /// Unique message id (used by acks).
     pub id: String,
+    /// Optional distributed trace id correlating multi-agent operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    /// Optional correlation id linking replies to initiating requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
     /// Sender address; `None` only for daemon-originated control traffic.
     pub sender: Option<MeshAddress>,
     /// Intended recipient address.
@@ -179,7 +185,26 @@ impl MeshEnvelope {
         message: MeshMessage,
     ) -> Self {
         let id = crate::mesh_ids::next_message_id();
-        Self { id, sender, recipient, message }
+        Self {
+            id,
+            trace_id: None,
+            correlation_id: None,
+            sender,
+            recipient,
+            message,
+        }
+    }
+
+    /// Attach a distributed trace ID for cross-session/cross-agent tracing.
+    pub fn with_trace(mut self, trace_id: impl Into<String>) -> Self {
+        self.trace_id = Some(trace_id.into());
+        self
+    }
+
+    /// Attach a correlation ID linking this envelope to a prior request.
+    pub fn with_correlation(mut self, correlation_id: impl Into<String>) -> Self {
+        self.correlation_id = Some(correlation_id.into());
+        self
     }
 
     /// Lawfulness check bundling the sender's tier (when present).
@@ -188,6 +213,7 @@ impl MeshEnvelope {
         self.message.lawful_for(sender.tier, self.recipient.tier)
     }
 }
+
 
 /// Identifiers for mesh envelopes. Module-private helper so the id format can
 /// evolve without touching the envelope shape.

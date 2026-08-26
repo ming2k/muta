@@ -14,54 +14,30 @@ use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 /// Option labels of the workspace-trust question (see `serve.rs`'s
-/// `workspace_trust_prompt` and the `/trust` flows). The reply handler
-/// matches these exact tokens so prompt copy and semantics cannot drift
-/// apart. *Trust* answers decide *whether* authority is granted at all;
-/// *development* is merely the profile one of the grants selects.
-pub(crate) const SECURITY_TRUST_OPTION_FULL: &str = "Grant development authority (with extensions)";
-pub(crate) const SECURITY_TRUST_OPTION_WORKSPACE_ONLY: &str =
-    "Grant development authority (workspace only)";
-pub(crate) const SECURITY_TRUST_OPTION_RESTRICTED: &str = "Keep restricted";
+/// `workspace_trust_prompt` and the `/trust` flows).
+pub(crate) const SECURITY_TRUST_OPTION_TRUST: &str =
+    "Trust workspace (load skills, MCP, hooks, AGENTS.md)";
+pub(crate) const SECURITY_TRUST_OPTION_QUARANTINE: &str =
+    "Keep quarantined (do not load workspace contributions)";
 
-/// Apply a trust-prompt answer to the durable security store. Structured
-/// tokens, not substring matching: the option labels are exactly the three
-/// published by the trust prompt (`serve.rs`'s attach push and the `/trust`
-/// flows). Matching on substrings like "Development" let this handler's
-/// semantics drift with every copy edit of the prompt. An unrecognised
-/// answer (legacy client, hand-crafted reply) fails closed to restricted.
+/// Apply a trust-prompt answer to the durable security store.
 pub fn apply_trust_decision(
     workspace_security: &muta_persistence::workspace_security::WorkspaceSecurityStore,
     project_root: &std::path::Path,
     chosen: &str,
 ) -> &'static str {
     match chosen {
-        SECURITY_TRUST_OPTION_FULL => {
-            let _ = workspace_security.set_execution(
-                project_root,
-                muta_contracts::WorkspaceExecutionProfile::Development,
-            );
-            let _ = workspace_security.trust_extensions(project_root);
-            "✓ Development authority granted and project extensions trusted. Decision persisted."
+        SECURITY_TRUST_OPTION_TRUST => {
+            let _ = workspace_security.trust_workspace(project_root);
+            "✓ Workspace contributions trusted (skills, MCP, hooks, AGENTS.md). Decision persisted."
         }
-        SECURITY_TRUST_OPTION_WORKSPACE_ONLY => {
-            let _ = workspace_security.set_execution(
-                project_root,
-                muta_contracts::WorkspaceExecutionProfile::Development,
-            );
-            let _ = workspace_security.untrust_extensions(project_root);
-            "✓ Development authority granted; project extensions stay quarantined. Decision persisted."
-        }
-        // Restricted, and any unrecognised token: least privilege.
         _ => {
-            let _ = workspace_security.set_execution(
-                project_root,
-                muta_contracts::WorkspaceExecutionProfile::Restricted,
-            );
-            let _ = workspace_security.untrust_extensions(project_root);
-            "✓ Workspace restricted to read-oriented operations. Decision persisted."
+            let _ = workspace_security.untrust_workspace(project_root);
+            "✓ Workspace contributions kept quarantined. Decision persisted."
         }
     }
 }
+
 
 use crate::side::SideRegistry;
 
@@ -172,8 +148,9 @@ pub async fn reply_question(
             .first()
             .and_then(|row| row.first())
             .map(|s| s.as_str())
-            .unwrap_or(SECURITY_TRUST_OPTION_RESTRICTED);
+            .unwrap_or(SECURITY_TRUST_OPTION_QUARANTINE);
         let msg = apply_trust_decision(workspace_security, project_root, chosen);
+
 
         let snapshot = workspace_security.snapshot(project_root);
         agent.set_workspace_security(snapshot);

@@ -47,14 +47,9 @@ fn runtime_workspace_security(
     store: &WorkspaceSecurityStore,
     root: &std::path::Path,
 ) -> muta_contracts::WorkspaceSecuritySnapshot {
-    let mut snapshot = store.snapshot(root);
-    snapshot.sandbox = if muta_agent::execution::workspace_sandbox_available() {
-        muta_contracts::WorkspaceSandboxState::Enforced
-    } else {
-        muta_contracts::WorkspaceSandboxState::Unavailable
-    };
-    snapshot
+    store.snapshot(root)
 }
+
 
 fn live_custom_commands(
     store: &WorkspaceSecurityStore,
@@ -614,7 +609,7 @@ pub async fn dispatch(
             // effect; removed rules are noted but not revoked this session).
             agent.set_bash_policy(&reloaded.bash_policy);
             agent.set_hard_stop_turns(reloaded.master.hard_stop_turns);
-            agent.set_doom_guard_config(reloaded.master.nudge);
+            agent.set_doom_guard_config(reloaded.master.doom_guard);
             agent.set_allow_model_stdin(reloaded.master.allow_model_stdin);
             agent.set_skip_interactive_input(reloaded.master.skip_interactive_input);
             agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
@@ -1497,19 +1492,12 @@ pub async fn dispatch(
             }
         }
         Some(BuiltinCmd::Trust) => {
-            use muta_contracts::WorkspaceExecutionProfile;
-            let sub = parts.get(1).copied().unwrap_or("all");
+
+            let sub = parts.get(1).copied().unwrap_or("trust");
             match sub {
-                "all" | "yes" | "" => {
-                    if let Err(error) = workspace_security.set_execution(
-                        project_root_for_side,
-                        WorkspaceExecutionProfile::Development,
-                    ) {
-                        record_error(session, resp_tx, name, args, error).await;
-                        return;
-                    }
+                "trust" | "yes" | "all" | "extensions" | "ext" | "" => {
                     let ext_trusted =
-                        match workspace_security.trust_extensions(project_root_for_side) {
+                        match workspace_security.trust_workspace(project_root_for_side) {
                             Ok(trusted) => trusted,
                             Err(error) => {
                                 record_error(session, resp_tx, name, args, error).await;
@@ -1532,144 +1520,30 @@ pub async fn dispatch(
                             .map(|(server, _)| server.as_str())
                             .collect::<Vec<_>>();
                         if connected.is_empty() {
-                            " (project extensions, hooks & skills loaded)".to_string()
+                            " (project skills, hooks, and AGENTS.md loaded)".to_string()
                         } else {
-                            format!(" (MCP connected: {})", connected.join(", "))
+                            format!(" (MCP connected: {}, skills/hooks/rules loaded)", connected.join(", "))
                         }
                     } else {
-                        String::new()
+                        " (no project-level contributions found in workspace)".to_string()
                     };
                     let snapshot =
                         runtime_workspace_security(workspace_security, project_root_for_side);
                     agent.set_workspace_security(snapshot.clone());
                     let message = format!(
-                        "✓ Workspace trusted for development{ext_info}.\n\
+                        "✓ Workspace contributions trusted{ext_info}.\n\
                          • Root: {}\n\
-                         • Execution: {}\n\
-                         • Extensions: {}\n\
-                         • Sandbox: {}\n\
+                         • Trust: {}\n\
                          • Decision persisted for this workspace path.",
                         snapshot.root,
-                        snapshot.execution.as_str(),
-                        snapshot.extensions.as_str(),
-                        snapshot.sandbox.as_str(),
+                        snapshot.trust.as_str(),
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))
                         .await;
                     send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                 }
-                "workspace" | "dev" | "development" => {
-                    if let Err(error) = workspace_security.set_execution(
-                        project_root_for_side,
-                        WorkspaceExecutionProfile::Development,
-                    ) {
-                        record_error(session, resp_tx, name, args, error).await;
-                        return;
-                    }
-                    let snapshot =
-                        runtime_workspace_security(workspace_security, project_root_for_side);
-                    agent.set_workspace_security(snapshot.clone());
-                    let message = format!(
-                        "✓ Workspace execution authority set to development.\n\
-                         • Root: {}\n\
-                         • Execution: development\n\
-                         • Extensions: {} (use `/trust extensions` to load project MCP/skills)\n\
-                         • Sandbox: {}",
-                        snapshot.root,
-                        snapshot.extensions.as_str(),
-                        snapshot.sandbox.as_str(),
-                    );
-                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
-                        .await;
-                    send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
-                }
-                "extensions" | "ext" => {
-                    let trusted = match workspace_security.trust_extensions(project_root_for_side) {
-                        Ok(trusted) => trusted,
-                        Err(error) => {
-                            record_error(session, resp_tx, name, args, error).await;
-                            return;
-                        }
-                    };
-                    if !trusted {
-                        record_command(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            CommandResult::Text(
-                                "This workspace declares no project MCP servers, hooks, skills, or slash commands."
-                                    .to_string(),
-                            ),
-                        )
-                        .await;
-                    } else {
-                        let mut reloaded = Config::load();
-                        reloaded.merge_project_mcp(Config::load_project_mcp(project_root_for_side));
-                        reloaded
-                            .merge_project_hooks(Config::load_project_hooks(project_root_for_side));
-                        let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
-                        agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
-                        agent.set_bash_policy(&reloaded.bash_policy);
-                        skills_registry_for_commands.reload().await;
-                        let snapshot =
-                            runtime_workspace_security(workspace_security, project_root_for_side);
-                        agent.set_workspace_security(snapshot.clone());
-                        let connected = report
-                            .connected
-                            .iter()
-                            .filter(|(_, ok)| *ok)
-                            .map(|(server, _)| server.as_str())
-                            .collect::<Vec<_>>();
-                        let mcp = if connected.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" Connected MCP: {}.", connected.join(", "))
-                        };
-                        record_command(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            CommandResult::Text(format!(
-                                "✓ Trusted project extensions.{mcp} Hooks, skills, and commands loaded."
-                            )),
-                        )
-                        .await;
-                    }
-                    send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
-                }
-                "readonly" | "restricted" => {
-                    if let Err(error) = workspace_security
-                        .set_execution(project_root_for_side, WorkspaceExecutionProfile::Restricted)
-                    {
-                        record_error(session, resp_tx, name, args, error).await;
-                        return;
-                    }
-                    let snapshot =
-                        runtime_workspace_security(workspace_security, project_root_for_side);
-                    agent.set_workspace_security(snapshot.clone());
-                    let message = format!(
-                        "✓ Workspace set to restricted read-only posture.\n\
-                         • Root: {}\n\
-                         • Execution: restricted\n\
-                         • Extensions: {}\n\
-                         • Side-effects and commands require explicit individual approval.",
-                        snapshot.root,
-                        snapshot.extensions.as_str(),
-                    );
-                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
-                        .await;
-                    send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
-                }
-                "revoke" | "untrust" | "reset" => {
-                    if let Err(error) = workspace_security
-                        .set_execution(project_root_for_side, WorkspaceExecutionProfile::Unknown)
-                    {
-                        record_error(session, resp_tx, name, args, error).await;
-                        return;
-                    }
-                    let _ = workspace_security.untrust_extensions(project_root_for_side);
+                "untrust" | "revoke" | "quarantine" | "reset" => {
+                    let _ = workspace_security.untrust_workspace(project_root_for_side);
                     let reloaded = Config::load();
                     let _ = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
                     agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
@@ -1679,11 +1553,10 @@ pub async fn dispatch(
                         runtime_workspace_security(workspace_security, project_root_for_side);
                     agent.set_workspace_security(snapshot.clone());
                     let message = format!(
-                        "✓ Workspace trust revoked.\n\
+                        "✓ Workspace trust revoked (quarantined).\n\
                          • Root: {}\n\
-                         • Execution: unknown\n\
-                         • Extensions: quarantined\n\
-                         • Preflight will require explicit trust before subsequent turns.",
+                         • Trust: quarantined\n\
+                         • Project skills, MCP servers, hooks, and AGENTS.md are disabled.",
                         snapshot.root,
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))
@@ -1694,48 +1567,31 @@ pub async fn dispatch(
                     let snapshot =
                         runtime_workspace_security(workspace_security, project_root_for_side);
                     agent.set_workspace_security(snapshot.clone());
-                    let runtime_mode = match snapshot.execution {
-                        WorkspaceExecutionProfile::Development => {
-                            "Host Native (Full Toolchains & Cache Active)"
-                        }
-                        WorkspaceExecutionProfile::Restricted
-                        | WorkspaceExecutionProfile::Unknown => {
-                            if snapshot.sandbox == muta_contracts::WorkspaceSandboxState::Enforced {
-                                "Physical Sandbox (Bubblewrap Enforced, Network Disabled)"
-                            } else {
-                                "Host (Physical Sandbox Unavailable)"
-                            }
-                        }
-                    };
                     let message = format!(
-                        "Workspace Trust & Security Status:\n\
+                        "Workspace Asset Trust Status:\n\
                          • Root: {}\n\
-                         • Execution Authority: {}\n\
-                         • Project Extensions: {}\n\
-                         • Runtime Environment: {}\n\
-                         • Autopilot: {} (interaction only)",
+                         • Trust: {}\n\
+                         • Note: Tool hazard permissions are governed independently by the Permission Handler.",
                         snapshot.root,
-                        snapshot.execution.as_str(),
-                        snapshot.extensions.as_str(),
-                        runtime_mode,
-                        if agent.get_autopilot() { "on" } else { "off" },
+                        snapshot.trust.as_str(),
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))
                         .await;
                     send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
                 }
-                _ => {
+                other => {
                     record_error(
                         session,
                         resp_tx,
                         name,
                         args,
-                        "Usage: /trust [workspace|extensions|all|readonly|status|revoke]",
+                        format!("Unknown /trust subcommand '{other}'. Use `/trust`, `/trust untrust`, or `/trust status`."),
                     )
                     .await;
                 }
             }
         }
+
         Some(BuiltinCmd::Extensions) => {
             let sub = parts.get(1).copied().unwrap_or("status");
             match sub {

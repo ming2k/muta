@@ -2979,7 +2979,7 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
         if let Some(children) = &message.children
             && !children.is_empty()
         {
-            let nested = serialize_runner_transcript_for_summary(children, SUMMARY_ENVOY_CAP_TOKENS);
+            let nested = serialize_runner_transcript_for_summary(children, SUMMARY_RUNNER_CAP_TOKENS);
             if !nested.is_empty() {
                 body.push_str("\n[runner transcript]\n");
                 body.push_str(&nested);
@@ -3019,7 +3019,8 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
 /// summarizer prompt (ADR-0120). Large enough to surface the runner's task,
 /// its key tool calls, and its conclusion; small enough that a turn with
 /// five runners cannot crowd out the rest of the conversation.
-const SUMMARY_ENVOY_CAP_TOKENS: usize = 500;
+const SUMMARY_RUNNER_CAP_TOKENS: usize = 500;
+
 
 /// Render an runner's nested transcript as a compact summarizer-facing view.
 /// Recursive: an runner's own `task` results (sub-runners) are rendered

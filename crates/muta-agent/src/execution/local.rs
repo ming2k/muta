@@ -463,29 +463,10 @@ impl ExecutionEnvironment for WorkspaceExecutionEnvironment {
     }
 
     fn shell_isolation(&self) -> ShellIsolation {
-        let is_development_trusted = self
-            .security_handle
-            .read()
-            .ok()
-            .and_then(|guard| guard.as_ref().cloned())
-            .and_then(|h| {
-                h.lock()
-                    .ok()
-                    .map(|s| s.execution == muta_contracts::WorkspaceExecutionProfile::Development)
-            })
-            .unwrap_or(false);
-
-        if is_development_trusted {
-            // Explicitly trusted for development: unencumbered access to local toolchains & caches.
-            ShellIsolation::Host
-        } else if workspace_sandbox_available() {
-            // Untrusted or restricted: physically isolate inside sandbox.
-            ShellIsolation::Workspace
-        } else {
-            ShellIsolation::Host
-        }
+        ShellIsolation::Host
     }
 }
+
 
 #[cfg(test)]
 mod workspace_tests {
@@ -518,13 +499,10 @@ mod workspace_tests {
         ));
         assert_eq!(
             env.shell_isolation(),
-            if workspace_sandbox_available() {
-                ShellIsolation::Workspace
-            } else {
-                ShellIsolation::Host
-            }
+            ShellIsolation::Host
         );
     }
+
 
     #[cfg(unix)]
     #[tokio::test]
@@ -665,49 +643,20 @@ mod workspace_tests {
     }
 
     #[tokio::test]
-    async fn workspace_shell_isolation_dynamic_transition() {
+    async fn workspace_shell_isolation_is_host_native() {
         let root = scratch();
         let security_snapshot = std::sync::Arc::new(std::sync::Mutex::new(
-            muta_contracts::WorkspaceSecuritySnapshot {
-                root: root.display().to_string(),
-                execution: muta_contracts::WorkspaceExecutionProfile::Unknown,
-                extensions: muta_contracts::WorkspaceExtensionsState::Absent,
-                sandbox: muta_contracts::WorkspaceSandboxState::Unavailable,
-            },
+            muta_contracts::WorkspaceSecuritySnapshot::new(
+                root.display().to_string(),
+                muta_contracts::WorkspaceTrustState::Absent,
+            ),
         ));
 
         let env =
             WorkspaceExecutionEnvironment::with_security_handle(&root, security_snapshot.clone());
 
-        // When untrusted (Unknown), uses Sandbox if available, else Host fallback
-        assert_eq!(
-            env.shell_isolation(),
-            if workspace_sandbox_available() {
-                ShellIsolation::Workspace
-            } else {
-                ShellIsolation::Host
-            }
-        );
-
-        // When restricted (Restricted), remains in Sandbox
-        {
-            let mut snap = security_snapshot.lock().unwrap();
-            snap.execution = muta_contracts::WorkspaceExecutionProfile::Restricted;
-        }
-        assert_eq!(
-            env.shell_isolation(),
-            if workspace_sandbox_available() {
-                ShellIsolation::Workspace
-            } else {
-                ShellIsolation::Host
-            }
-        );
-
-        // When explicitly trusted for Development, dynamically elevates to Host Native
-        {
-            let mut snap = security_snapshot.lock().unwrap();
-            snap.execution = muta_contracts::WorkspaceExecutionProfile::Development;
-        }
         assert_eq!(env.shell_isolation(), ShellIsolation::Host);
     }
 }
+
+

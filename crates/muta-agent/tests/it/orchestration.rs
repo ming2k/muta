@@ -1339,7 +1339,7 @@ async fn supersede_record_is_stamped_at_the_message_send_time() {
         .expect("park survives until taken");
     assert_eq!(parked.at_ms, 42_000);
     assert!(
-        parked.at_ms < crate::unix_epoch_ms_for_test(),
+        parked.at_ms < unix_epoch_ms_for_test(),
         "an explicit send time must win over the wall clock"
     );
 }

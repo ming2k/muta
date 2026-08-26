@@ -21,8 +21,8 @@ use muta_agent::orchestration::{
 use muta_agent::{Agent, AgentIdentity, NoProvider, RoundLifecycle};
 use muta_contracts::{
     AgentResponse, BtwAsideSummary, LoopStatus, ParentStatus, Provider, Tool,
-    WorkspaceExecutionProfile, WorkspaceSandboxState,
 };
+
 use muta_persistence::config::Config;
 use muta_persistence::session::SessionStore;
 use muta_skills::SkillRegistry;
@@ -426,11 +426,9 @@ pub async fn start_active_turn(
     if refuse_if_no_provider(tx, &agent, &session_id) {
         return;
     }
-    if refuse_if_workspace_preflight(tx, &agent, &session_id) {
-        return;
-    }
 
     start_resolved_turn(
+
         master, tx, config, agent, session, lifecycle, session_id, input,
     )
     .await;
@@ -506,11 +504,9 @@ pub async fn start_session_turn(
     if refuse_if_no_provider(tx, &agent, &session_id) {
         return false;
     }
-    if refuse_if_workspace_preflight(tx, &agent, &session_id) {
-        return false;
-    }
 
     start_resolved_turn(
+
         master, tx, config, agent, session, lifecycle, session_id, input,
     )
     .await;
@@ -611,57 +607,14 @@ pub(super) fn refuse_if_no_provider(
     true
 }
 
-/// The single entry gate for every model round and direct-shell command.
-/// Opening a path is not an authority decision; preflight requires an explicit
-/// execution profile before starting work.
-pub(super) fn refuse_if_workspace_preflight(
-    tx: &mpsc::UnboundedSender<AgentResponse>,
-    agent: &Agent,
-    session_id: &str,
-) -> bool {
-    let security = agent.workspace_security();
-    if !workspace_preflight_fails(security.execution, security.sandbox) {
-        return false;
-    }
-    let _ = tx.send(round_response(
-        session_id,
-        RoundEvent::Error(
-            "Workspace preflight: this workspace has not been trusted yet. \
-             Run `/trust` to authorize development, or `/trust readonly` for read-oriented analysis."
-                .to_string(),
-        ),
-    ));
-    send_harness_state(tx, session_id, agent, LoopStatus::Idle);
-    true
-}
-
-fn workspace_preflight_fails(
-    execution: WorkspaceExecutionProfile,
-    _sandbox: WorkspaceSandboxState,
-) -> bool {
-    execution == WorkspaceExecutionProfile::Unknown
-}
-
 use muta_contracts::RoundEvent;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn workspace_preflight_is_explicit_and_fail_closed() {
-        use WorkspaceExecutionProfile::{Development, Restricted, Unknown};
-        use WorkspaceSandboxState::{Enforced, Unavailable};
-
-        assert!(workspace_preflight_fails(Unknown, Enforced));
-        assert!(workspace_preflight_fails(Unknown, Unavailable));
-        assert!(!workspace_preflight_fails(Development, Unavailable));
-        assert!(!workspace_preflight_fails(Development, Enforced));
-        assert!(!workspace_preflight_fails(Restricted, Unavailable));
-        assert!(!workspace_preflight_fails(Restricted, Enforced));
-    }
-
     /// A minimal `SideSession` for registry-mechanics tests: no fork, no
+
     /// provider — the registry only moves these around.
     fn fixture(id: &str) -> SideSession {
         let agent = Arc::new(

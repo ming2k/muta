@@ -198,7 +198,7 @@ async fn run_inner(
     // went nowhere. Log every panic (with origin) through tracing first;
     // supervised call sites then turn it into a state transition instead of
     // a silent zombie. Installed before any task is spawned.
-    crate::supervise::install_panic_hook();
+    crate::task_fault_tolerance::install_panic_hook();
     let gate: Arc<ShutdownGate> =
         Arc::new((*gate).clone().with_version(crate::serve::daemon_version()));
     bootstrap::ensure_app_roots();

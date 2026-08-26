@@ -821,8 +821,9 @@ mod tests {
         let env = std::sync::Arc::new(crate::execution::WorkspaceExecutionEnvironment::new(
             &workspace,
         ));
-        let tool = BashTool::with_env(env);
+        let tool = crate::tools::sandbox_bash::SandboxBashTool::with_env(env);
         let command = format!(
+
             "test -r visible && test ! -e {} && test ! -e /etc/passwd && \
              test -z \"${{CARGO_MANIFEST_DIR:-}}\" && printf sandboxed > created",
             outside.display()

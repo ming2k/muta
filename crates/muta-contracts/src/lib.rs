@@ -109,10 +109,12 @@ pub use execution::{
     ShellIsolation, ToolMiddleware,
 };
 pub use security::{
-    WorkspaceExecutionProfile, WorkspaceExtensionsState, WorkspaceSandboxState,
-    WorkspaceSecuritySnapshot,
+    WorkspaceExtensionsState, WorkspaceSecuritySnapshot, WorkspaceTrustState,
 };
+
 pub mod session_title;
+
+
 pub mod session_tree;
 pub use session_tree::{SessionEntry, SessionEntryId, SessionEntryKind, SessionTree};
 pub mod skills_config;

@@ -4,16 +4,16 @@
 //! pre-dispatch doom-loop guard (`muta_agent::doom_guard`). It lives in
 //! `muta-contracts` (the domain layer) so the harness↔TUI protocol can carry it
 //! without a `muta-persistence` dependency; `muta-persistence::config` re-exports it as
-//! the `[principal.doom_guard]` TOML table, and `muta-agent` applies it to each
+//! the `[master.doom_guard]` TOML table, and `muta-agent` applies it to each
 //! round's guard at ReAct-turn boundaries.
 //!
 //! Default is **enabled** (`window: 16`) — flipped on in ADR-0113 §5: the
 //! guard is signature bookkeeping with normalized locators, a model making
 //! progress never trips it, and the cheapest token-burning loop (variant
 //! `sleep N; make`) is exactly what a default-off guard never catches. Turn
-//! it off explicitly with `[principal.doom_guard] enabled = false`.
+//! it off explicitly with `[master.doom_guard] enabled = false`.
 //!
-//! The canonical TOML key is `doom_guard` (`[principal.doom_guard]`); the
+//! The canonical TOML key is `doom_guard` (`[master.doom_guard]`); the
 //! historical `nudge` spelling is accepted as a serde alias so existing
 //! `config.toml` files keep loading; the next save writes the new key. The
 //! now-removed `threshold`/`escalate_at`/`path_threshold` keys are ignored
@@ -22,8 +22,8 @@
 use serde::{Deserialize, Serialize};
 
 /// User-tunable doom-guard behaviour, deserialized from the
-/// `[principal.doom_guard]` sub-table of `config.toml` (the historical
-/// `[principal.nudge]` spelling — the historical name — deserializes
+/// `[master.doom_guard]` sub-table of `config.toml` (the historical
+/// `[master.nudge]` spelling — the historical name — deserializes
 /// identically via serde alias).
 /// Governs the pre-dispatch doom-loop guard (`muta_agent::doom_guard`):
 /// when the model is about to re-issue a watched tool call it already ran
@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 /// ADR-0113 §5 for why the original opt-in default was flipped.
 ///
 /// ```toml
-/// [principal.doom_guard]
+/// [master.doom_guard]
 /// enabled = false  # opt out of the variant-loop defense
 /// window  = 16     # sliding-window size (recent watched signatures)
 /// ```
@@ -50,7 +50,8 @@ pub struct DoomGuardConfig {
     /// tool call that repeats within the window — the cheapest defense
     /// against variant loops (`sleep 1; make` / `sleep 2; make`) burning
     /// tokens until the context overflows. Wired through
-    /// `Agent::set_doom_guard_config`; forced off for envoys and the `/review`
+    /// `Agent::set_doom_guard_config`; forced off for runners and the `/review`
+
     /// diagnostic regardless of user setting. Signatures are normalized
     /// (leading env assignments, timing no-ops, casing, path decoration), so
     /// legitimate repeats of *distinct* work are not blocked.

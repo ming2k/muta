@@ -59,6 +59,8 @@ impl Supervisor {
         );
 
         let agent = Arc::new(Agent::new(provider, tools, identity));
+        agent.set_tier(muta_contracts::AgentTier::Supervisor);
+
 
         Self {
             agent,

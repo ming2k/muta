@@ -146,8 +146,6 @@ pub struct PolicyContext<'a> {
     pub call_name: &'a str,
     pub arguments: &'a str,
     pub scope_target: ScopeTarget,
-    #[allow(dead_code)]
-    pub workspace_execution: muta_contracts::WorkspaceExecutionProfile,
     pub operation_scope: muta_contracts::OperationScope,
     pub disabled: std::collections::HashSet<String>,
     pub scoped_disabled: ScopedToolDisable,
@@ -155,6 +153,7 @@ pub struct PolicyContext<'a> {
     /// policies ignore this; async policies call through it.
     pub ctx: &'a dyn PermissionContext,
 }
+
 
 impl<'a> PolicyContext<'a> {
     pub fn is_name_disabled(&self) -> bool {
@@ -601,13 +600,13 @@ mod tests {
             call_name: name,
             arguments: args,
             scope_target: target,
-            workspace_execution: muta_contracts::WorkspaceExecutionProfile::Restricted,
             operation_scope: op,
             disabled,
             scoped_disabled: scoped,
             ctx: ctxr,
         }
     }
+
 
     /// Native absolute paths for scope-policy tests. Unix-looking paths such
     /// as `/home/user` are drive-relative on Windows and therefore test a
@@ -1097,7 +1096,8 @@ mod tests {
     async fn broker_submits_hazard_and_kill_spec_for_dangerous_commands() {
         let tool: Arc<dyn Tool> = Arc::new(DangerousCommandTool);
         let ctxr = StubCtx { perms: PermissionStore::new() };
-        let mut c = pctx(
+        let c = pctx(
+
             &tool,
             "bash",
             "cargo test",
@@ -1108,10 +1108,10 @@ mod tests {
             ScopedToolDisable::default(),
             &ctxr,
         );
-        // Even in Development trust profile, dangerous tools are NOT silently bypassed!
-        c.workspace_execution = muta_contracts::WorkspaceExecutionProfile::Development;
+
 
         let decision = BrokerPolicy.evaluate(&c).await;
+
         match decision {
             PolicyDecision::MissingAuthority { request, .. } => {
                 assert_eq!(request.hazard, Some(muta_contracts::HazardLevel::CommandExecution));

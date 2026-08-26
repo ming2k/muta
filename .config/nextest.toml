@@ -6,12 +6,21 @@
 slow-timeout = { period = "15s", terminate-after = 1 }
 retries = 0
 
+[test-groups]
+ts-bindings = { max-threads = 1 }
+
 # Extended timeouts for heavy integration tests
 [[profile.default.overrides]]
 filter = 'test(serve_integration) | test(daemon_spawn) | test(lifecycle_integration)'
 slow-timeout = { period = "45s", terminate-after = 1 }
 threads-required = 2
 
+# Serialize ts-rs binding exports to avoid concurrent writes to wire.gen.ts
+[[profile.default.overrides]]
+filter = 'test(export_bindings_)'
+test-group = 'ts-bindings'
+
 [profile.ci]
 retries = 1
 failure-output = "immediate-final"
+

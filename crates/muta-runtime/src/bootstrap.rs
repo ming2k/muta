@@ -25,8 +25,9 @@ use muta_agent::{Agent, AgentIdentity, RunnerTool, MasterPreset, RoundLifecycle}
 use muta_contracts::{
     AgentNotice, AgentRequest, AgentResponse, RUNNER_EXPLORE, Message, NoticeKind, NoticeSeverity,
     NoticeSource, NoticeSurface, Provider, RoundEvent, ToolContextBuilder, ToolSet,
-    WorkspaceExecutionProfile, WorkspaceExtensionsState, WorkspaceSandboxState, collect_toolset,
+    WorkspaceExtensionsState, collect_toolset,
 };
+
 use muta_mcp::{McpCatalog, McpRuntime};
 use muta_persistence::{
     config::{Config, InputHistoryConfig, TuiConfig},
@@ -388,13 +389,9 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // the content-bound extension gate below — whether the project's
     // declared additional workspace roots are admitted at all.
     let workspace_security = Arc::new(WorkspaceSecurityStore::load());
-    let mut security_snapshot = workspace_security.snapshot(&project_root);
-    security_snapshot.sandbox = if muta_agent::execution::workspace_sandbox_available() {
-        WorkspaceSandboxState::Enforced
-    } else {
-        WorkspaceSandboxState::Unavailable
-    };
+    let security_snapshot = workspace_security.snapshot(&project_root);
     // Additional workspace roots (ADR-0142) are a project-config capability:
+
     // a fresh clone can declare `additional_roots = ["~"]` and expect every
     // host secret inside $HOME to become sandbox-admissible. The extension
     // digest covers `.muta/config.toml`, so the same content-bound gate that
@@ -552,33 +549,12 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // the tap broadcasts to zero subscribers, so the trust question was
     // silently dropped and no client ever saw it. The WS attach path
     // (`serve.rs`) now pushes the prompt to each attaching client while the
-    // workspace remains unconfigured, which is the delivery path that
-    // actually reaches a human.
-    if security_snapshot.execution == WorkspaceExecutionProfile::Development
-        && security_snapshot.sandbox == WorkspaceSandboxState::Unavailable
-    {
-        let _ = resp_tx.send(round_response(
-            &session.id().await,
-            RoundEvent::Notice(
-                AgentNotice::new(
-                    NoticeKind::ReviewAlert,
-                    NoticeSeverity::Info,
-                    "Workspace sandbox is unavailable",
-                    NoticeSource::Harness,
-                )
-                .with_surface(NoticeSurface::Banner)
-                .with_body(
-                    "Development execution is running with host authority. Shell commands execute \
-                     directly in the workspace directory without physical sandbox containment.",
-                ),
-            ),
-        ));
-    }
     if matches!(
-        security_snapshot.extensions,
+        security_snapshot.trust,
         WorkspaceExtensionsState::Quarantined | WorkspaceExtensionsState::Changed
     ) {
         let mut gated: Vec<&str> = Vec::new();
+
         if has_project_external {
             gated.push("MCP servers and/or hooks in .muta/config.toml");
         }
@@ -798,7 +774,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         agent.set_human_posture(muta_contracts::human_request::HumanChannelPosture::Interactive);
     }
     agent.set_hard_stop_turns(config.master.hard_stop_turns);
-    agent.set_doom_guard_config(config.master.nudge);
+    agent.set_doom_guard_config(config.master.doom_guard);
     agent.set_allow_model_stdin(config.master.allow_model_stdin);
     agent.set_skip_interactive_input(config.master.skip_interactive_input);
     agent.set_autonomous_fallback_policy(config.master.ask_user_fallback);

@@ -187,6 +187,8 @@ pub enum MasterPresetId {
     /// embedding binds at startup, so switching back to `code` after another
     /// role restores the baseline.
     Code,
+    /// Code analyst: deep codebase analysis and sandbox testing without host execution.
+    CodeAnalyst,
     /// Architect: design and review focus. Full read access, write tools
     /// retained but the persona steers toward analysis, tradeoff evaluation,
     /// and written design rationale before any change.
@@ -205,15 +207,17 @@ impl MasterPresetId {
     /// Every role in its canonical display order, for pickers and `/help`.
     pub const ALL: &[MasterPresetId] = &[
         MasterPresetId::Code,
+        MasterPresetId::CodeAnalyst,
         MasterPresetId::Architect,
         MasterPresetId::Reviewer,
         MasterPresetId::Security,
     ];
 
-    /// The stable string name used in `@principal:{name}` / `/principal <name>`.
+    /// The stable string name used in `@master:{name}` / `/master <name>`.
     pub fn as_str(self) -> &'static str {
         match self {
             MasterPresetId::Code => "code",
+            MasterPresetId::CodeAnalyst => "code_analyst",
             MasterPresetId::Architect => "architect",
             MasterPresetId::Reviewer => "reviewer",
             MasterPresetId::Security => "security",
@@ -225,7 +229,8 @@ impl MasterPresetId {
     /// [`MasterPresetId::ALL`].
     pub fn parse(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
-            "code" | "coder" | "default" => Some(MasterPresetId::Code),
+            "code" | "coder" | "developer" | "dev" | "default" => Some(MasterPresetId::Code),
+            "code_analyst" | "analyst" | "analysis" => Some(MasterPresetId::CodeAnalyst),
             "architect" | "architecture" => Some(MasterPresetId::Architect),
             "reviewer" | "review" => Some(MasterPresetId::Reviewer),
             "security" | "audit" | "auditor" => Some(MasterPresetId::Security),
@@ -236,13 +241,15 @@ impl MasterPresetId {
     /// A short human description of what this role does, for confirmations.
     pub fn description(self) -> &'static str {
         match self {
-            MasterPresetId::Code => "the default coding principal (full capabilities)",
+            MasterPresetId::Code => "the default developer master (full native capabilities)",
+            MasterPresetId::CodeAnalyst => "code analyst (read-only analysis & sandboxed execution)",
             MasterPresetId::Architect => "architecture & design focus (analysis-first)",
             MasterPresetId::Reviewer => "read-only code review",
             MasterPresetId::Security => "read-only security audit (command-confined)",
         }
     }
 }
+
 
 /// The developer master preset: native toolchain authority (ADR-0144 §3).
 ///
@@ -360,7 +367,18 @@ impl MasterPreset {
     pub fn for_role(role: MasterPresetId, base: &AgentIdentity) -> Self {
         match role {
             MasterPresetId::Code => Self::with_identity("code", base.clone()),
+            MasterPresetId::CodeAnalyst => {
+                let identity = AgentIdentity::new(
+                    base.name.clone(),
+                    "an expert code analyst — conducts deep codebase exploration, syntax analysis, \
+                     and sandboxed functional tests without host mutation",
+                );
+                let mut preset = Self::with_identity("code_analyst", identity);
+                preset.agent_selection = MASTER_CODE_ANALYST.selection();
+                preset
+            }
             MasterPresetId::Architect => {
+
                 let identity = AgentIdentity::new(
                     base.name.clone(),
                     "an expert software architect — evaluates design tradeoffs, \

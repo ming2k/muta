@@ -44,11 +44,12 @@ pub struct HostedSession {
     /// (ADR-0093). Owned here so the broadcast-tap task can fold events in
     /// and the registry can read rows out for snapshots.
     pub tracker: Arc<Mutex<MonitorTracker>>,
-    /// Durable workspace-authority store for the project at
+    /// Durable workspace trust store for the project at
     /// [`HostedSession::project_root`]. Surfaced through [`BoundSession`]
     /// so the WS attach path can push the trust decision to a client when
-    /// the workspace has none yet (`WorkspaceExecutionProfile::Unknown`).
+    /// the workspace contributions are unreviewed (`WorkspaceTrustState::Quarantined`).
     pub security: Arc<muta_persistence::workspace_security::WorkspaceSecurityStore>,
+
     /// Attach-time state-sync buffer: the startup events an attaching client
     /// cannot reconstruct (active provider/model, picker snapshot, key
     /// readiness). Filled by the broadcast-tap; drained into each new client
@@ -108,15 +109,13 @@ pub struct BoundSession {
     /// client right after it subscribes, before it joins the live broadcast.
     pub sync_buffer: Arc<Mutex<VecDeque<AgentResponse>>>,
     pub command_catalog: muta_contracts::CommandCatalog,
-    /// Durable workspace-authority store for this session's project. The
-    /// WS attach path reads it to detect an *unconfigured* workspace
-    /// (`WorkspaceExecutionProfile::Unknown`) and push the trust decision
-    /// to the attaching client (see `serve.rs`). Bootstrap's own emission
-    /// of that question races the broadcast channel: it is sent before any
-    /// subscriber exists, so the broadcast drops it — attach-time replay
-    /// is the delivery mechanism that actually reaches a client.
+    /// Durable workspace trust store for this session's project. The
+    /// WS attach path reads it to detect unreviewed workspace contributions
+    /// (`WorkspaceTrustState::Quarantined`) and push the trust decision
+    /// to the attaching client (see `serve.rs`).
     pub security: Arc<muta_persistence::workspace_security::WorkspaceSecurityStore>,
 }
+
 
 impl BoundSession {
     /// The canonical project root this session is bound to (ADR-0096).
@@ -1187,7 +1186,7 @@ impl SessionRegistry {
                 });
                 if let Err(payload) = fold.catch_unwind().await {
                     tracing::error!(
-                        panic = %crate::supervise::panic_detail(payload),
+                        panic = %crate::task_fault_tolerance::panic_detail(payload),
                         "monitor tap panicked folding an event; dropped one event"
                     );
                 }
@@ -1223,12 +1222,13 @@ impl SessionRegistry {
             let outcome = std::panic::AssertUnwindSafe(run).catch_unwind().await;
             let _ = driver_done_tx.send(()).await;
             if let Err(payload) = outcome {
-                let detail = crate::supervise::panic_detail(payload);
+                let detail = crate::task_fault_tolerance::panic_detail(payload);
                 tracing::error!(
                     session = %crash_id,
                     panic = %detail,
                     "session driver panicked; evicting the hosted session"
                 );
+
                 // Visible failure instead of silence: attached clients learn
                 // why before the Exit marker, then the entry is torn down
                 // through the standard path (SessionRemoved, WIP cleared,

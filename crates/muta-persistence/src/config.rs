@@ -98,9 +98,10 @@ pub struct MasterConfig {
     /// **enabled** (`window: 16`, ADR-0113 §5) — opt out via
     /// `[master.doom_guard] enabled = false`. See [`DoomGuardConfig`]
     /// for the per-field semantics.
-    #[serde(rename = "doom_guard", alias = "nudge")]
-    pub nudge: DoomGuardConfig,
+    #[serde(default, alias = "nudge")]
+    pub doom_guard: DoomGuardConfig,
 }
+
 
 // `DoomGuardConfig` is defined in `muta_contracts::doom_guard_config` and re-exported
 // above via `use muta_contracts::DoomGuardConfig`. It is the `[master.doom_guard]`
@@ -1412,9 +1413,10 @@ mod tests {
             toml::from_str("[master.nudge]\nenabled = false\nwindow = 24\n").unwrap();
         let canonical: Config =
             toml::from_str("[master.doom_guard]\nenabled = false\nwindow = 24\n").unwrap();
-        assert_eq!(legacy.master.nudge, canonical.master.nudge);
-        assert!(!canonical.master.nudge.enabled);
-        assert_eq!(canonical.master.nudge.window, 24);
+        assert_eq!(legacy.master.doom_guard, canonical.master.doom_guard);
+        assert!(!canonical.master.doom_guard.enabled);
+        assert_eq!(canonical.master.doom_guard.window, 24);
+
 
         // Save always writes the canonical key; the alias is load-only.
         let serialized = toml::to_string(&canonical).unwrap();
