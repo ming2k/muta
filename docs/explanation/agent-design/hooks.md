@@ -125,6 +125,20 @@ The non-tool events ignore the matcher and fire on every occurrence.
 A hook runs a shell command. The command receives a JSON snapshot of the
 event on stdin and replies through its exit code and stdout:
 
+Hook definitions and Hook execution are separate security decisions. A
+project Hook must first belong to a trusted Hooks asset domain. Every command
+Hook must also have an already-present exact runtime permission rule using
+`tool = "hook"` and the command string as its scope. Hooks run from inside the
+agent's lifecycle, so a missing rule skips the Hook and reports a fail-closed
+diagnostic instead of recursively opening an approval prompt. For example:
+
+```toml
+[permissions]
+allow = [
+  { tool = "hook", scope = ".muta/hooks/lint.sh" },
+]
+```
+
 ```text
 event fires, matcher matches
   └─ spawn  sh -c <command>,   cwd = project root

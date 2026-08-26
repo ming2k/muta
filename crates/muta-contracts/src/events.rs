@@ -572,6 +572,10 @@ pub enum AgentResponse {
     /// provider picker. Supersedes `ProviderKeys` for the picker's needs;
     /// `ProviderKeys` is retained for the header key-readiness summary.
     ProviderPicker(ProviderPickerSnapshot),
+    /// Copy text to the client's system clipboard (used by `/export` in daemon mode).
+    CopyToClipboard {
+        text: String,
+    },
     /// Blank the visible transcript and zero the round counter: the harness
     /// switched to a brand-new empty session (`/new`, `/session new`). The
     /// previous session is untouched on disk — nothing was deleted.

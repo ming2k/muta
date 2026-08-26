@@ -54,20 +54,16 @@ const WS_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30)
 /// conventional dead-connection verdict.
 const WS_PEER_SILENCE_LIMIT: std::time::Duration = std::time::Duration::from_secs(90);
 
-/// The workspace-trust prompt pushed to a client that attaches while the
-/// workspace has no persisted execution decision. Two frames: a banner
-/// notice explaining *why* the decision is required, and the structured
-/// question whose reply (`trust-`-prefixed id) the driver routes to the
-/// security store. Built here rather than bootstrap because bootstrap's
-/// emission raced the broadcast channel (zero subscribers at assemble
-/// time) and reached nobody — see the attach path below.
-fn workspace_trust_prompt(session_id: &str, project_root: &std::path::Path) -> Vec<AgentResponse> {
+/// Inform a newly attached client that project-authored assets remain
+/// quarantined. Trust mutation is intentionally available only through the
+/// canonical `/trust` command path, which also reloads every affected
+/// consumer atomically.
+fn workspace_trust_notice(session_id: &str, project_root: &std::path::Path) -> AgentResponse {
     let round = |event: muta_contracts::RoundEvent| AgentResponse::Round {
         session_id: session_id.to_string(),
         event,
     };
-    vec![
-        round(muta_contracts::RoundEvent::Notice(
+    round(muta_contracts::RoundEvent::Notice(
             muta_contracts::AgentNotice::new(
                 muta_contracts::NoticeKind::ReviewAlert,
                 muta_contracts::NoticeSeverity::Warning,
@@ -77,38 +73,10 @@ fn workspace_trust_prompt(session_id: &str, project_root: &std::path::Path) -> V
             .with_surface(muta_contracts::NoticeSurface::Banner)
             .with_body(format!(
                 "This workspace ({}) contains project-authored contributions (skills, MCP, hooks, AGENTS.md). \
-                 Answer the prompt below or run `/trust` to load or keep them quarantined.",
+                 Run `/trust` to trust all domains, or `/trust mcp` / `/trust skills` for a narrow grant.",
                 project_root.display()
             )),
-        )),
-        round(muta_contracts::RoundEvent::UserQuestionRequest(
-            muta_contracts::UserQuestionRequest {
-                id: format!("trust-{session_id}"),
-                questions: vec![muta_contracts::UserQuestion {
-                    header: Some("Workspace Trust".to_string()),
-                    question: format!("Trust project-authored contributions for workspace:\n{}", project_root.display()),
-                    options: vec![
-                        muta_contracts::UserQuestionOption {
-                            label: crate::handlers_permission::SECURITY_TRUST_OPTION_TRUST.to_string(),
-                            description: Some(
-                                "Load project skills, MCP servers, hooks, and AGENTS.md instructions for this workspace."
-                                    .to_string(),
-                            ),
-                        },
-                        muta_contracts::UserQuestionOption {
-                            label: crate::handlers_permission::SECURITY_TRUST_OPTION_QUARANTINE.to_string(),
-                            description: Some(
-                                "Keep workspace contributions quarantined (do not load project skills/MCP/hooks/AGENTS.md)."
-                                    .to_string(),
-                            ),
-                        },
-                    ],
-                    multi_select: false,
-                }],
-                origin: None,
-            },
-        )),
-    ]
+        ))
 }
 
 
@@ -992,34 +960,22 @@ where
             .await
             .map_err(|e| format!("ws send: {e}"))?;
     }
-    // Workspace-trust prompt (the "no decision yet" case). Bootstrap's own
-    // emission of this question raced the broadcast channel — it was sent
-    // before any subscriber existed, so the broadcast dropped it and the
-    // first client to attach never saw it. The workspace then sat silently
-    // in `Unknown`, failing tool preflights with no surfaced reason. Push
-    // the decision to *this* client right after the welcome instead. The
-    // reply rides the ordinary `UserQuestionReply` path; `reply_question`
-    // routes `trust-`-prefixed ids to the security store. Re-attached
-    // clients re-receive it until a decision is persisted — correct: the
-    // workspace is still unconfigured, and the operator is the one who
+    // Surface quarantine after attach. This is a notice, not an alternate
+    // mutation path: `/trust` owns persistence and live reload.
     let snap = bound.security.snapshot(bound.project_root());
-    if client_posture == muta_contracts::human_request::HumanChannelPosture::Interactive
-        && matches!(
-            snap.trust,
+    if matches!(
+            snap.aggregate(),
             muta_contracts::WorkspaceTrustState::Quarantined
                 | muta_contracts::WorkspaceTrustState::Changed
-        )
-    {
+        ) {
         let session_id = bound.session.id().await;
-        for response in workspace_trust_prompt(&session_id, bound.project_root()) {
-
-            let text = serde_json::to_string(&Wire::Response { response })
-                .map_err(|e| format!("serialize trust prompt: {e}"))?;
-            ws_sink
-                .send(WsMessage::Text(text.into()))
-                .await
-                .map_err(|e| format!("ws send: {e}"))?;
-        }
+        let response = workspace_trust_notice(&session_id, bound.project_root());
+        let text = serde_json::to_string(&Wire::Response { response })
+            .map_err(|e| format!("serialize trust notice: {e}"))?;
+        ws_sink
+            .send(WsMessage::Text(text.into()))
+            .await
+            .map_err(|e| format!("ws send: {e}"))?;
     }
     // Liveness bookkeeping: a WS peer that dies without a RST (laptop
     // sleep, NAT drop, killed VM) leaves the select below parked on

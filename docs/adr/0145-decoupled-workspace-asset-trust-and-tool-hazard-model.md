@@ -1,6 +1,6 @@
 # 0145. Decoupled Workspace Asset Trust and Tool Hazard Model
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0147
 - **Date:** 2026-08-26
 - **Supersedes:** ADR-0140 (Workspace Authority and Content-Bound Extension Trust)
 

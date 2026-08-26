@@ -47,12 +47,12 @@ impl FsProvider for LocalFsProvider {
             return Err(FsError::from(e));
         }
 
-        if let Err(_e) = tokio::fs::rename(&temp_path, path).await {
+        if let Err(error) = tokio::fs::rename(&temp_path, path).await {
             let _ = tokio::fs::remove_file(&temp_path).await;
-            // Fallback direct write if rename across filesystem boundaries fails
-            tokio::fs::write(path, content)
-                .await
-                .map_err(FsError::from)?;
+            // Never fall back to a direct write: besides losing atomicity, a
+            // changed final path could be a symlink and reinterpret the
+            // already-checked destination outside the admitted roots.
+            return Err(FsError::from(error));
         }
 
         Ok(())
@@ -229,8 +229,15 @@ impl WorkspaceFsProvider {
     fn with_additional_roots(mut self, additional: Vec<PathBuf>) -> Self {
         self.additional_roots = additional
             .into_iter()
+            .filter_map(|extra| std::fs::canonicalize(extra).ok())
+            .filter(|extra| extra.is_dir())
             .filter(|extra| *extra != self.root && !extra.starts_with(&self.root))
-            .collect();
+            .fold(Vec::new(), |mut roots, extra| {
+                if !roots.contains(&extra) {
+                    roots.push(extra);
+                }
+                roots
+            });
         self
     }
 
@@ -288,7 +295,11 @@ impl WorkspaceFsProvider {
 fn resolve_existing_ancestor(path: &Path) -> Option<PathBuf> {
     let mut cursor = path;
     let mut suffix = Vec::new();
-    while !cursor.exists() {
+    // `Path::exists` follows symlinks and therefore treats a dangling link as
+    // absent. `symlink_metadata` recognizes the directory entry itself; the
+    // following canonicalization then rejects the dangling link instead of
+    // rebuilding it lexically beneath an admitted parent.
+    while std::fs::symlink_metadata(cursor).is_err() {
         suffix.push(cursor.file_name()?.to_os_string());
         cursor = cursor.parent()?;
     }
@@ -380,10 +391,11 @@ pub struct WorkspaceExecutionEnvironment {
 impl WorkspaceExecutionEnvironment {
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
         let workspace_root = workspace_root.into();
+        let fs = WorkspaceFsProvider::new(workspace_root);
         Self {
-            fs: WorkspaceFsProvider::new(workspace_root.clone()),
+            workspace_root: fs.root.clone(),
+            fs,
             process: WorkspaceProcessRunner,
-            workspace_root,
         }
     }
 
@@ -395,11 +407,11 @@ impl WorkspaceExecutionEnvironment {
         additional_roots: Vec<PathBuf>,
     ) -> Self {
         let workspace_root = workspace_root.into();
+        let fs = WorkspaceFsProvider::new(workspace_root).with_additional_roots(additional_roots);
         Self {
-            fs: WorkspaceFsProvider::new(workspace_root.clone())
-                .with_additional_roots(additional_roots),
+            workspace_root: fs.root.clone(),
+            fs,
             process: WorkspaceProcessRunner,
-            workspace_root,
         }
     }
 
@@ -442,25 +454,24 @@ impl ExecutionEnvironment for WorkspaceExecutionEnvironment {
 mod workspace_tests {
     use super::*;
 
-    fn scratch() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("muta-workspace-fs-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        root
+    fn scratch() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     #[tokio::test]
     async fn workspace_fs_allows_inside_and_denies_outside() {
         let root = scratch();
-        let outside = scratch().join("secret.txt");
+        let outside_root = scratch();
+        let outside = outside_root.path().join("secret.txt");
         std::fs::write(&outside, "secret").unwrap();
-        let env = WorkspaceExecutionEnvironment::new(&root);
+        let env = WorkspaceExecutionEnvironment::new(root.path());
 
         env.fs()
             .write(Path::new("inside.txt"), b"ok")
             .await
             .unwrap();
         assert_eq!(
-            env.fs().read(&root.join("inside.txt")).await.unwrap(),
+            env.fs().read(&root.path().join("inside.txt")).await.unwrap(),
             b"ok"
         );
         assert!(matches!(
@@ -480,14 +491,14 @@ mod workspace_tests {
         let root = scratch();
         let sibling = scratch(); // a separate project root
         let stranger = scratch(); // neither root
-        let sibling_file = sibling.join("api.rs");
+        let sibling_file = sibling.path().join("api.rs");
         std::fs::write(&sibling_file, b"sibling").unwrap();
-        let stranger_file = stranger.join("secret.txt");
+        let stranger_file = stranger.path().join("secret.txt");
         std::fs::write(&stranger_file, b"secret").unwrap();
 
         let env = WorkspaceExecutionEnvironment::with_additional_roots(
-            &root,
-            vec![sibling.canonicalize().unwrap()],
+            root.path(),
+            vec![sibling.path().canonicalize().unwrap()],
         );
 
         // Relative resolution still binds to the primary root only.
@@ -496,13 +507,13 @@ mod workspace_tests {
             .await
             .unwrap();
         assert_eq!(
-            env.fs().read(&root.join("primary.txt")).await.unwrap(),
+            env.fs().read(&root.path().join("primary.txt")).await.unwrap(),
             b"ok"
         );
         // The admitted sibling root is now readable and writable...
         assert_eq!(env.fs().read(&sibling_file).await.unwrap(), b"sibling");
         env.fs()
-            .write(&sibling.join("note.md"), b"cross")
+            .write(&sibling.path().join("note.md"), b"cross")
             .await
             .unwrap();
         // ...while an unadmitted third location still fails closed.
@@ -511,7 +522,10 @@ mod workspace_tests {
             Err(FsError::PermissionDenied(_))
         ));
         // The sandbox env carries the roots for the bash tool to bind.
-        assert_eq!(env.additional_roots(), &[sibling.canonicalize().unwrap()]);
+        assert_eq!(
+            env.additional_roots(),
+            &[sibling.path().canonicalize().unwrap()]
+        );
     }
 
     #[tokio::test]
@@ -519,31 +533,68 @@ mod workspace_tests {
         // A root nested inside the primary adds no authority; the loader
         // rejects it, and the environment defensively drops it too.
         let root = scratch();
-        let nested = root.join("nested");
+        let nested = root.path().join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         let env = WorkspaceExecutionEnvironment::with_additional_roots(
-            &root,
+            root.path(),
             vec![nested.canonicalize().unwrap()],
         );
         assert!(env.additional_roots().is_empty());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn workspace_fs_denies_symlink_escape() {
         let root = scratch();
-        let outside = scratch().join("secret.txt");
+        let outside_root = scratch();
+        let outside = outside_root.path().join("secret.txt");
         std::fs::write(&outside, "secret").unwrap();
-        std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
-        let env = WorkspaceExecutionEnvironment::new(&root);
+        std::os::unix::fs::symlink(&outside, root.path().join("escape")).unwrap();
+        let env = WorkspaceExecutionEnvironment::new(root.path());
         assert!(matches!(
-            env.fs().read(&root.join("escape")).await,
+            env.fs().read(&root.path().join("escape")).await,
             Err(FsError::PermissionDenied(_))
         ));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_fs_denies_dangling_symlink_destination() {
+        let root = scratch();
+        let outside_root = scratch();
+        let outside = outside_root.path().join("not-created.txt");
+        std::os::unix::fs::symlink(&outside, root.path().join("dangling")).unwrap();
+        let env = WorkspaceExecutionEnvironment::new(root.path());
+
+        assert!(matches!(
+            env.fs()
+                .write(&root.path().join("dangling"), b"blocked")
+                .await,
+            Err(FsError::PermissionDenied(_))
+        ));
+        assert!(!outside.exists());
+    }
+
+    #[tokio::test]
+    async fn additional_roots_are_canonicalized_and_missing_roots_are_dropped() {
+        let root = scratch();
+        let sibling = scratch();
+        let missing = sibling.path().join("missing");
+        let env = WorkspaceExecutionEnvironment::with_additional_roots(
+            root.path(),
+            vec![sibling.path().join("."), missing],
+        );
+
+        assert_eq!(
+            env.additional_roots(),
+            &[sibling.path().canonicalize().unwrap()]
+        );
+    }
+
     #[tokio::test]
     async fn workspace_process_runner_fails_closed() {
-        let env = WorkspaceExecutionEnvironment::new(scratch());
+        let root = scratch();
+        let env = WorkspaceExecutionEnvironment::new(root.path());
         let error = env
             .process()
             .exec(
@@ -564,12 +615,12 @@ mod workspace_tests {
 
         let root = scratch();
         let outside_root = scratch();
-        let outside_text = outside_root.join("secret.txt");
-        let outside_image = outside_root.join("secret.png");
+        let outside_text = outside_root.path().join("secret.txt");
+        let outside_image = outside_root.path().join("secret.png");
         std::fs::write(&outside_text, "secret").unwrap();
         std::fs::write(&outside_image, b"not actually an image").unwrap();
         let env: std::sync::Arc<dyn ExecutionEnvironment> =
-            std::sync::Arc::new(WorkspaceExecutionEnvironment::new(&root));
+            std::sync::Arc::new(WorkspaceExecutionEnvironment::new(root.path()));
 
         let find_files = FindFilesTool::with_env(env.clone());
         let search_text = SearchTextTool::with_env(env.clone());
@@ -578,7 +629,7 @@ mod workspace_tests {
 
         assert!(
             find_files
-                .call(&serde_json::json!({ "patterns": ["*"], "path": outside_root }).to_string())
+                .call(&serde_json::json!({ "patterns": ["*"], "path": outside_root.path() }).to_string())
                 .await
                 .unwrap_err()
                 .contains("outside the admitted workspace roots")
@@ -591,7 +642,7 @@ mod workspace_tests {
                 .contains("outside the admitted workspace roots")
         );
         assert!(
-            list.call(&serde_json::json!({ "path": outside_root }).to_string())
+            list.call(&serde_json::json!({ "path": outside_root.path() }).to_string())
                 .await
                 .unwrap_err()
                 .contains("outside the admitted workspace roots")
@@ -615,10 +666,8 @@ mod workspace_tests {
     #[tokio::test]
     async fn workspace_shell_isolation_is_host_native() {
         let root = scratch();
-        let env = WorkspaceExecutionEnvironment::new(&root);
+        let env = WorkspaceExecutionEnvironment::new(root.path());
 
         assert_eq!(env.shell_isolation(), ShellIsolation::Host);
     }
 }
-
-

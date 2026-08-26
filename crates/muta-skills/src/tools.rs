@@ -1,6 +1,6 @@
 //! Tools for interacting with the skill registry.
 
-use super::SkillRegistry;
+use super::{SkillRegistry, SkillScope};
 use async_trait::async_trait;
 use muta_contracts::Tool;
 use serde_json::json;
@@ -41,7 +41,7 @@ impl Tool for UseSkillTool {
 
         // Snapshot only the metadata we need (name, root) under the read lock,
         // then release it before reading the body — keeps lock scope tight.
-        let (skill_name, files) = {
+        let (skill_name, skill_root, scope) = {
             let registry = self.registry.lock();
             let Some(skill) = registry.get(name) else {
                 return Err(format!(
@@ -49,8 +49,29 @@ impl Tool for UseSkillTool {
                     name
                 ));
             };
-            (skill.name.clone(), list_skill_files(&skill.root))
+            (skill.name.clone(), skill.root.clone(), skill.scope)
         };
+
+        // A repo skill may have changed since the last discovery scan. Check
+        // the live domain digest before reading any filenames or body bytes;
+        // on mismatch, rescan so the stale entry disappears from the registry.
+        if scope == SkillScope::Repo {
+            let project_root = self
+                .registry
+                .project_root()
+                .ok_or_else(|| "Project skill has no workspace root for trust attestation.".to_string())?;
+            let state = muta_persistence::workspace_security::WorkspaceSecurityStore::load()
+                .snapshot(&project_root)
+                .skills;
+            if !state.is_trusted() {
+                self.registry.reload().await;
+                return Err(format!(
+                    "Project skill '{name}' is {} because the skills-domain content changed. Review it and run `/trust skills`.",
+                    state.as_str()
+                ));
+            }
+        }
+        let files = list_skill_files(&skill_root);
 
         // Body is loaded lazily (and cached) on first use of this skill.
         let content = self

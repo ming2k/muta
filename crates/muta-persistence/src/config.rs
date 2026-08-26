@@ -132,6 +132,19 @@ pub struct PermissionConfig {
     pub allow: Vec<PermissionRuleConfig>,
 }
 
+/// User-owned filesystem admission policy for the active workspace.
+///
+/// This table lives in the global `config.toml`, not in project-authored
+/// `.muta/config.toml`: repository content must never be able to widen its own
+/// filesystem boundary. Relative entries are resolved from the active
+/// workspace root.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkspaceConfig {
+    /// Additional directory roots that native file tools may access.
+    pub additional_roots: Vec<String>,
+}
+
 /// Safety policy for model-issued `bash` commands. Built-in dangerous-command
 /// rules are compiled into the agent so the config only contains user choices:
 /// toggles and project-local overrides/additions.
@@ -585,6 +598,11 @@ pub struct Config {
     /// `permissions.json`; these config rules are re-applied on every start.
     #[serde(default)]
     pub permissions: PermissionConfig,
+    /// Filesystem roots admitted in addition to the active project root.
+    /// This is user-owned global policy and is independent of project asset
+    /// trust.
+    #[serde(default)]
+    pub workspace: WorkspaceConfig,
     /// Bash command safety policy (`[bash_policy]` table). Built-in dangerous
     /// command rules are compiled into the agent; this config supplies only
     /// user overrides/additional rules and guard toggles.
@@ -769,6 +787,8 @@ struct RawConfig {
     #[serde(default)]
     permissions: Option<PermissionConfig>,
     #[serde(default)]
+    workspace: Option<WorkspaceConfig>,
+    #[serde(default)]
     bash_policy: Option<BashPolicyConfig>,
     #[serde(default)]
     websearch: Option<WebSearchConfig>,
@@ -847,6 +867,9 @@ impl<'de> Deserialize<'de> for Config {
         if let Some(p) = raw.permissions {
             cfg.permissions = p;
         }
+        if let Some(w) = raw.workspace {
+            cfg.workspace = w;
+        }
         if let Some(b) = raw.bash_policy {
             cfg.bash_policy = b;
         }
@@ -883,6 +906,7 @@ impl Default for Config {
             hidden_models: Vec::new(),
             skills: SkillsConfig::default(),
             permissions: PermissionConfig::default(),
+            workspace: WorkspaceConfig::default(),
             bash_policy: BashPolicyConfig::default(),
             websearch: WebSearchConfig::default(),
             master: MasterConfig::default(),
@@ -966,16 +990,12 @@ impl Config {
     /// Load only the `[mcp.*]` table from a project-local `.muta/config.toml`
     /// (ADR-0085 §2/§3). Returns an empty map when the file or table is absent.
     ///
-    /// This reads a *narrow* projection — just the mcp table — so a project
-    /// config that also carries unrelated keys (or partial/incomplete TOML)
-    /// does not fail the whole load. Project-scope MCP stays quarantined until
-    /// the current extension digest is trusted; this function is pure parsing,
-    /// and the caller applies the content-bound decision.
+    /// This reads a *narrow* projection — just the mcp table — so unrelated
+    /// well-formed keys do not affect the result. Project-scope MCP stays
+    /// quarantined until the current MCP-domain digest is trusted; this
+    /// function is pure parsing, and the caller applies the decision.
     pub fn load_project_mcp(project_root: &std::path::Path) -> HashMap<String, McpServerConfig> {
         let path = project_root.join(".muta/config.toml");
-        let Some(content) = fs::read_to_string(&path).ok() else {
-            return HashMap::new();
-        };
         // Deserialize into a struct that only declares `mcp`, ignoring every
         // other key the project file may carry (deny_unknown_fields off).
         #[derive(Deserialize)]
@@ -983,24 +1003,82 @@ impl Config {
             #[serde(default)]
             mcp: HashMap<String, McpServerConfig>,
         }
-        match toml::from_str::<ProjectMcpProjection>(&content) {
-            Ok(mut parsed) => {
-                let root = std::fs::canonicalize(project_root)
-                    .unwrap_or_else(|_| project_root.to_path_buf());
-                for config in parsed.mcp.values_mut() {
-                    config.sandbox_root = Some(root.clone());
+        let mut servers = match fs::read_to_string(&path) {
+            Ok(content) => match toml::from_str::<ProjectMcpProjection>(&content) {
+                Ok(parsed) => parsed.mcp,
+                Err(err) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "project .muta/config.toml has invalid [mcp.*]; ignoring that MCP source"
+                    );
+                    HashMap::new()
                 }
-                parsed.mcp
-            }
-            Err(err) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %err,
-                    "project .muta/config.toml has invalid [mcp.*]; ignoring project MCP"
-                );
-                HashMap::new()
+            },
+            Err(_) => HashMap::new(),
+        };
+
+        // `.muta/mcp.json` follows the common MCP client shape while retaining
+        // Muta's `read_only` and `enabled` policy fields. A JSON definition with
+        // the same name replaces the TOML entry, giving the dedicated file a
+        // deterministic precedence.
+        #[derive(Deserialize, Default)]
+        struct ProjectMcpJson {
+            #[serde(default, rename = "mcpServers")]
+            mcp_servers: HashMap<String, ProjectMcpJsonServer>,
+        }
+        #[derive(Deserialize)]
+        struct ProjectMcpJsonServer {
+            command: String,
+            #[serde(default)]
+            args: Vec<String>,
+            #[serde(default, rename = "env")]
+            environment: HashMap<String, String>,
+            #[serde(default = "default_true")]
+            enabled: bool,
+            #[serde(default)]
+            read_only: bool,
+        }
+        fn default_true() -> bool {
+            true
+        }
+
+        let json_path = project_root.join(".muta/mcp.json");
+        if let Ok(content) = fs::read_to_string(&json_path) {
+            match serde_json::from_str::<ProjectMcpJson>(&content) {
+                Ok(parsed) => {
+                    for (name, entry) in parsed.mcp_servers {
+                        let mut command = Vec::with_capacity(entry.args.len() + 1);
+                        command.push(entry.command);
+                        command.extend(entry.args);
+                        servers.insert(
+                            name,
+                            McpServerConfig {
+                                command,
+                                environment: entry.environment,
+                                enabled: entry.enabled,
+                                read_only: entry.read_only,
+                                sandbox_root: None,
+                            },
+                        );
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        path = %json_path.display(),
+                        error = %err,
+                        "project .muta/mcp.json is invalid; ignoring that MCP source"
+                    );
+                }
             }
         }
+
+        let root = std::fs::canonicalize(project_root)
+            .unwrap_or_else(|_| project_root.to_path_buf());
+        for config in servers.values_mut() {
+            config.sandbox_root = Some(root.clone());
+        }
+        servers
     }
 
     /// Merge a project-local MCP server set into this (global-origin) config.
@@ -1056,45 +1134,21 @@ impl Config {
         }
     }
 
-    /// Load only the `[workspace]` table from a project-local
-    /// `.muta/config.toml` (ADR-0142). Returns an empty vec when the file or
-    /// table is absent. Like [`Self::load_project_mcp`], this is a *narrow*
-    /// projection so an unrelated or partially-invalid key elsewhere in the
-    /// project file does not fail the whole load.
-    ///
-    /// Each declared path is resolved **relative to the project root** (never
-    /// the process cwd) with `~` expansion, then canonicalized. Validation is
-    /// deliberately eager and total: one bad entry fails the whole table with
-    /// a message naming the entry, because silently dropping a root the user
-    /// relies on mid-workflow is worse than refusing to widen admission. The
-    /// caller decides whether to treat that as fatal or advisory.
-    pub fn load_workspace_additional_roots(
+    /// Resolve the user-owned `[workspace].additional_roots` policy for an
+    /// active project. Repository-local configuration is deliberately not
+    /// consulted, so asset trust can neither widen nor narrow this boundary.
+    pub fn resolve_workspace_additional_roots(
+        &self,
         project_root: &std::path::Path,
     ) -> Result<Vec<std::path::PathBuf>, String> {
-        let path = project_root.join(".muta/config.toml");
-        let Ok(content) = fs::read_to_string(&path) else {
-            return Ok(Vec::new());
-        };
-        #[derive(Deserialize)]
-        struct ProjectWorkspaceProjection {
-            #[serde(default)]
-            workspace: WorkspaceTableProjection,
-        }
-        #[derive(Deserialize, Default)]
-        struct WorkspaceTableProjection {
-            #[serde(default)]
-            additional_roots: Vec<String>,
-        }
-        let parsed = toml::from_str::<ProjectWorkspaceProjection>(&content)
-            .map_err(|err| format!("invalid [workspace] table in {}: {err}", path.display()))?;
-        if parsed.workspace.additional_roots.is_empty() {
+        if self.workspace.additional_roots.is_empty() {
             return Ok(Vec::new());
         }
         let canonical_root =
             std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let mut resolved_roots = Vec::new();
-        for raw in &parsed.workspace.additional_roots {
+        for raw in &self.workspace.additional_roots {
             let expanded: std::path::PathBuf = if raw == "~" {
                 home.clone().ok_or_else(|| {
                     "[workspace].additional_roots: '~' used but HOME is unset".to_string()
@@ -1564,93 +1618,77 @@ name = "DeepSeek"
 
     // --- project-scope MCP merge (ADR-0085 §2/§3) --------------------------
 
-    fn scratch_project_root() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("muta-project-mcp-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join(".muta")).unwrap();
-        dir
+    struct ScratchProject(tempfile::TempDir);
+
+    impl std::ops::Deref for ScratchProject {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &Self::Target {
+            self.0.path()
+        }
+    }
+
+    fn scratch_project_root() -> ScratchProject {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".muta")).unwrap();
+        ScratchProject(dir)
     }
 
     #[test]
-    fn load_workspace_additional_roots_empty_when_table_absent() {
+    fn resolve_workspace_additional_roots_empty_when_table_absent() {
         let root = scratch_project_root();
-        assert!(
-            Config::load_workspace_additional_roots(&root)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(Config::default()
+            .resolve_workspace_additional_roots(&root)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
-    fn load_workspace_additional_roots_resolves_relative_and_absolute_entries() {
+    fn resolve_workspace_additional_roots_resolves_relative_and_absolute_entries() {
         let root = scratch_project_root();
         let sibling =
             std::env::temp_dir().join(format!("muta-additional-root-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&sibling).unwrap();
-        std::fs::write(
-            root.join(".muta/config.toml"),
-            format!(
-                r#"
-                    [workspace]
-                    additional_roots = ["../{}", "{}"]
-                "#,
-                sibling.file_name().unwrap().to_string_lossy(),
-                sibling.canonicalize().unwrap().display()
-            ),
-        )
-        .unwrap();
-        let roots = Config::load_workspace_additional_roots(&root).unwrap();
+        let mut config = Config::default();
+        config.workspace.additional_roots = vec![
+            format!("../{}", sibling.file_name().unwrap().to_string_lossy()),
+            sibling.canonicalize().unwrap().display().to_string(),
+        ];
+        let roots = config.resolve_workspace_additional_roots(&root).unwrap();
         // Both spellings resolve to the same canonical sibling directory.
         assert_eq!(roots, vec![sibling.canonicalize().unwrap()]);
     }
 
     #[test]
-    fn load_workspace_additional_roots_rejects_missing_and_nested_entries() {
+    fn resolve_workspace_additional_roots_rejects_missing_and_nested_entries() {
         let root = scratch_project_root();
         // Missing directory.
-        std::fs::write(
-            root.join(".muta/config.toml"),
-            r#"
-                [workspace]
-                additional_roots = ["../does-not-exist-anywhere"]
-            "#,
-        )
-        .unwrap();
-        let err = Config::load_workspace_additional_roots(&root).unwrap_err();
+        let mut config = Config::default();
+        config.workspace.additional_roots = vec!["../does-not-exist-anywhere".to_string()];
+        let err = config
+            .resolve_workspace_additional_roots(&root)
+            .unwrap_err();
         assert!(err.contains("does not exist"), "{err}");
 
         // Nested inside the workspace (already admitted).
         std::fs::create_dir_all(root.join("nested")).unwrap();
-        std::fs::write(
-            root.join(".muta/config.toml"),
-            r#"
-                [workspace]
-                additional_roots = ["nested"]
-            "#,
-        )
-        .unwrap();
-        let err = Config::load_workspace_additional_roots(&root).unwrap_err();
+        config.workspace.additional_roots = vec!["nested".to_string()];
+        let err = config
+            .resolve_workspace_additional_roots(&root)
+            .unwrap_err();
         assert!(err.contains("already admitted"), "{err}");
 
         // The workspace root itself.
         let canonical = root.canonicalize().unwrap();
-        std::fs::write(
-            root.join(".muta/config.toml"),
-            format!(
-                r#"
-                    [workspace]
-                    additional_roots = ["{}"]
-                "#,
-                canonical.display()
-            ),
-        )
-        .unwrap();
-        let err = Config::load_workspace_additional_roots(&root).unwrap_err();
+        config.workspace.additional_roots = vec![canonical.display().to_string()];
+        let err = config
+            .resolve_workspace_additional_roots(&root)
+            .unwrap_err();
         assert!(err.contains("workspace root itself"), "{err}");
     }
 
     #[test]
-    fn load_workspace_additional_roots_survives_unrelated_invalid_keys() {
-        // Narrow projection: a broken [mcp] table must not break [workspace].
+    fn project_config_cannot_widen_workspace_roots() {
         let root = scratch_project_root();
         let sibling =
             std::env::temp_dir().join(format!("muta-additional-root-{}", uuid::Uuid::new_v4()));
@@ -1661,16 +1699,15 @@ name = "DeepSeek"
                 r#"
                     [workspace]
                     additional_roots = ["{}"]
-
-                    [mcp.broken]
-                    command = "not-an-array"
                 "#,
                 sibling.canonicalize().unwrap().display()
             ),
         )
         .unwrap();
-        let roots = Config::load_workspace_additional_roots(&root).unwrap();
-        assert_eq!(roots, vec![sibling.canonicalize().unwrap()]);
+        let roots = Config::default()
+            .resolve_workspace_additional_roots(&root)
+            .unwrap();
+        assert!(roots.is_empty());
     }
 
     #[test]
@@ -1695,7 +1732,43 @@ name = "DeepSeek"
             Some(root.canonicalize().unwrap().as_path())
         );
 
-        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_project_mcp_reads_json_and_json_overrides_toml() {
+        let root = scratch_project_root();
+        std::fs::write(
+            root.join(".muta/config.toml"),
+            "[mcp.shared]\ncommand = [\"toml-server\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".muta/mcp.json"),
+            r#"{
+                "mcpServers": {
+                    "shared": {
+                        "command": "json-server",
+                        "args": ["--stdio"],
+                        "env": {"MODE": "project"},
+                        "read_only": true
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let mcp = Config::load_project_mcp(&root);
+        assert_eq!(
+            mcp["shared"].command,
+            vec!["json-server".to_string(), "--stdio".to_string()]
+        );
+        assert_eq!(mcp["shared"].environment["MODE"], "project");
+        assert!(mcp["shared"].enabled);
+        assert!(mcp["shared"].read_only);
+        assert_eq!(
+            mcp["shared"].sandbox_root.as_deref(),
+            Some(root.canonicalize().unwrap().as_path())
+        );
     }
 
     #[test]
@@ -1704,7 +1777,6 @@ name = "DeepSeek"
         // No config.toml written.
         let mcp = Config::load_project_mcp(&root);
         assert!(mcp.is_empty());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1725,13 +1797,11 @@ name = "DeepSeek"
         .unwrap();
         let mcp = Config::load_project_mcp(&root);
         assert_eq!(mcp.len(), 1, "master ignored, mcp.ok projected");
-        let _ = std::fs::remove_dir_all(&root);
 
         // A structurally invalid TOML → empty (never panics).
         let root2 = scratch_project_root();
         std::fs::write(root2.join(".muta/config.toml"), "this is = = not toml").unwrap();
         assert!(Config::load_project_mcp(&root2).is_empty());
-        let _ = std::fs::remove_dir_all(&root2);
     }
 
     #[test]
@@ -1802,9 +1872,8 @@ name = "DeepSeek"
         assert!(
             hooks
                 .iter()
-                .all(|hook| hook.sandbox_root.as_deref() == Some(root.as_path()))
+                .all(|hook| hook.sandbox_root.as_deref() == Some(root.0.path()))
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1812,7 +1881,6 @@ name = "DeepSeek"
         let root = scratch_project_root();
         // No config.toml written.
         assert!(Config::load_project_hooks(&root).is_empty());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1833,13 +1901,11 @@ name = "DeepSeek"
         .unwrap();
         let hooks = Config::load_project_hooks(&root);
         assert_eq!(hooks.len(), 1, "mcp ignored, one hook projected");
-        let _ = std::fs::remove_dir_all(&root);
 
         // Structurally invalid TOML → empty (never panics).
         let root2 = scratch_project_root();
         std::fs::write(root2.join(".muta/config.toml"), "this is = = not toml").unwrap();
         assert!(Config::load_project_hooks(&root2).is_empty());
-        let _ = std::fs::remove_dir_all(&root2);
     }
 
     #[test]

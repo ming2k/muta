@@ -31,8 +31,8 @@ Project and user-defined commands are covered under
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/init [path]` | Initialize a `.muta/` config tree |
-| `/trust [trust|untrust|status]` | Trust or quarantine workspace-supplied contributions (skills, MCP, hooks, AGENTS.md) |
-| `/extensions` | Inspect or trust project-authored extensions |
+| `/trust [all\|mcp\|skills\|status\|revoke]` | Trust content-attested project asset domains; bare `/trust` means all |
+| `/untrust` | Revoke all project asset-domain grants and unload their contributions |
 
 
 | `/skills [list\|reload]` | List or reload available skills |
@@ -264,37 +264,32 @@ recalling earlier decisions inside one long session; cross-session recall is
 |------|--------|
 | `/init [path]` | Initialize a `.muta/` config tree; `path` defaults to `.` |
 
-### `/extensions`
+### `/trust` and `/untrust`
 
 | Form | Effect |
 |------|--------|
-| `/extensions` or `/extensions status` | Show whether project-authored extensions are absent, quarantined, trusted, or changed |
-| `/extensions trust` | Trust and load the exact current extension content |
-| `/extensions untrust` | Quarantine extensions immediately; disconnect project MCP and unload project hooks, skills, and commands |
+| `/trust` or `/trust all` | Trust and load every present project asset domain |
+| `/trust mcp` | Trust only project MCP definitions |
+| `/trust skills` | Trust only project skills |
+| `/trust status` | Show `mcp`, `skills`, `hooks`, and `rules` states plus a display-only aggregate |
+| `/trust revoke` or `/untrust` | Revoke all domain grants; disconnect project MCP and unload project hooks, skills, rules, and commands |
 
-Extension trust gates every project-supplied capability. While extensions are
-quarantined, the workspace's
-`.muta/config.toml` `[mcp.*]` servers and `[[hooks]]`, its project skills
-(`.muta/skills`, `.agents/skills`, `.claude/skills`), and its project
-slash commands (`.muta/commands/`) are not loaded. The content-bound state
-is consulted at scan time, so every path (startup, periodic refresh, and
-`/skills reload`) is gated identically. `/extensions trust` applies
-immediately: project skills rescan in, and project slash commands become
-runnable through an extension-checked dispatcher fallback. When a trusted
-project's skill or command reuses the name of a user-scope entry, the
-project entry wins by priority and the harness emits a one-time warning
-notice naming the winner. Trust is keyed to the canonical exact workspace root
-and stores a digest of the contribution paths. Any content change moves the
-state to `changed` and quarantines it until it is inspected and trusted again.
-The digest includes paths, file bytes, and permission modes. Symlinks are
-rejected because their mutable targets cannot be content-attested; special
-files and enumeration/read failures also quarantine the contribution. Project MCP
-servers and hooks run read-only and offline in the workspace sandbox with no
-ambient credentials. Integrations requiring network or workspace writes belong
-in explicit user-global configuration. Hooks and MCP calls re-attest the digest
-immediately before execution, so changing content cannot continue under a stale
-startup grant.
-Execution authority and extension trust never imply one another.
+The four domains are attested independently. MCP covers `.muta/mcp.json` and
+the `[mcp]` projection of `.muta/config.toml`; Skills covers `.muta/skills`,
+`.agents/skills`, `.claude/skills`, and `skills`; Hooks covers `.muta/hooks`
+and project `[[hooks]]`; Rules covers project instructions and
+`.muta/commands`. Changing one domain moves only that domain to `changed`.
+
+Trust is keyed to the canonical workspace root. Each domain digest includes
+paths, file bytes, and relevant permission modes; symlinks and unreadable or
+unsupported entries fail closed. A trust or revoke command applies live to
+every consumer. Project skills and MCP/hooks re-attest before use so changed
+content cannot execute under a stale catalog entry.
+
+Asset trust does not grant file access or runtime execution permission.
+Likewise, linked workspace roots and runtime permission rules do not load
+project assets. `/trust workspace`, `/trust extensions`, and `/extensions`
+have been removed rather than retained as ambiguous aliases.
 
 ### `/export`
 

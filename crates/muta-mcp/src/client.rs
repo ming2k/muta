@@ -278,10 +278,10 @@ impl McpServer {
         if let Some(root) = &self.config.sandbox_root {
             let snapshot =
                 muta_persistence::workspace_security::WorkspaceSecurityStore::load().snapshot(root);
-            if !snapshot.extensions.is_trusted() {
+            if !snapshot.is_trusted(muta_contracts::TrustDomain::Mcp) {
                 *self.client.lock().await = None;
                 return Err(format!(
-                    "project MCP '{}' is quarantined because its extension content is not currently attested",
+                    "project MCP '{}' is quarantined because its extension content is not currently attested (run `/trust mcp` or `/trust` to authorize)",
                     self.server_name
                 ));
             }
@@ -323,6 +323,10 @@ impl Tool for McpTool {
 
     fn parameters(&self) -> Value {
         self.parameters.clone()
+    }
+
+    fn hazard_level(&self) -> muta_contracts::HazardLevel {
+        muta_contracts::HazardLevel::NetworkOrExternal
     }
 
     async fn call(&self, arguments: &str) -> Result<String, String> {

@@ -3,7 +3,7 @@
 use super::SkillsConfig;
 use super::metadata::{Skill, SkillScope, parse_skill_metadata};
 use super::remote::{cached_remote_roots, fetch_remote_repo};
-use muta_contracts::WorkspaceExtensionsState;
+use muta_contracts::WorkspaceTrustState;
 use muta_persistence::paths;
 use muta_persistence::workspace_security::WorkspaceSecurityStore;
 use std::collections::HashMap;
@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 /// Project-local muta skills directory (relative to project root).
 const PROJECT_MUTA_SKILLS_DIR: &str = ".muta/skills";
+const PROJECT_GENERIC_SKILLS_DIR: &str = "skills";
 /// External skill directory conventions (someone else's app; we read but do
 /// not own these locations).
 const EXTERNAL_SKILL_DIRS: &[&str] = &[".agents/skills", ".claude/skills"];
@@ -38,7 +39,7 @@ pub struct DiscoveryResult {
     pub skills: Vec<Skill>,
     pub errors: Vec<String>,
     /// Project-local skills that shadowed a same-named lower-scope skill in
-    /// this scan. Empty unless the workspace extension state admits the
+    /// this scan. Empty unless the workspace skills-domain state admits the
     /// project-local sources.
     pub shadowed: Vec<ShadowedSkill>,
 }
@@ -48,26 +49,26 @@ pub struct DiscoveryResult {
 /// Sources are scanned from lowest to highest priority so that higher-priority
 /// skills override lower-priority skills with the same name.
 ///
-/// Project-local sources (`.muta/skills`, `.agents/skills`, `.claude/skills`)
-/// are admitted only while the workspace's content-bound extension state is
-/// [`WorkspaceExtensionsState::Trusted`]. A cloned or vendored workspace's
+/// Project-local sources (`.muta/skills`, `.agents/skills`, `.claude/skills`,
+/// `skills/`) are admitted only while the workspace's skills-domain state is
+/// [`WorkspaceTrustState::Trusted`]. A cloned or vendored workspace's
 /// `SKILL.md` files are prompt content, so merely opening the directory must
 /// not load them. The state is read at scan time, which gives startup,
 /// background refresh, and `/skills reload` the same boundary.
 pub async fn discover_all(config: &SkillsConfig) -> DiscoveryResult {
-    let extension_state = WorkspaceSecurityStore::load()
+    let trust_state = WorkspaceSecurityStore::load()
         .snapshot(&resolve_project_root(config))
-        .extensions;
-    discover_all_with_extension_state(config, extension_state).await
+        .skills;
+    discover_all_with_trust_state(config, trust_state).await
 }
 
-/// Discovery with an explicit extension state. Production code uses
+/// Discovery with an explicit skills-domain trust state. Production code uses
 /// [`discover_all`], which resolves the live state from workspace security;
 /// this seam lets tests cover every admission state without mutating user
 /// state.
-pub async fn discover_all_with_extension_state(
+pub async fn discover_all_with_trust_state(
     config: &SkillsConfig,
-    extension_state: WorkspaceExtensionsState,
+    trust_state: WorkspaceTrustState,
 ) -> DiscoveryResult {
     let mut result = DiscoveryResult::default();
     // name -> position in `result.skills`. Scanning runs lowest- to
@@ -75,7 +76,7 @@ pub async fn discover_all_with_extension_state(
     // while preserving the first-seen position for stable catalog ordering.
     let mut index: HashMap<String, usize> = HashMap::new();
 
-    for source in skill_sources(config, extension_state).await {
+    for source in skill_sources(config, trust_state).await {
         match source {
             SkillSource::Local { root, scope } => {
                 discover_local_skills(&root, scope, config, &mut index, &mut result);
@@ -104,7 +105,7 @@ enum SkillSource {
 
 async fn skill_sources(
     config: &SkillsConfig,
-    extension_state: WorkspaceExtensionsState,
+    trust_state: WorkspaceTrustState,
 ) -> Vec<SkillSource> {
     let mut sources: Vec<SkillSource> = Vec::new();
     let dirs = paths::get();
@@ -161,11 +162,11 @@ async fn skill_sources(
     }
 
     // 5/6. Project-local skills (highest priority). Only the exact content
-    //    represented by a Trusted extension state is scanned. The project
+    //    represented by a Trusted skills-domain state is scanned. The project
     //    root comes from the config when session bootstrap designated one;
     //    otherwise discovery falls back to the process cwd for embeddings
     //    without a designated workspace.
-    if extension_state.is_trusted() {
+    if trust_state.is_trusted() {
         let project_root = resolve_project_root(config);
         // 5. Project-local external skills.
         for dir in EXTERNAL_SKILL_DIRS {
@@ -177,6 +178,10 @@ async fn skill_sources(
         // 6. Project-local muta skills.
         sources.push(SkillSource::Local {
             root: project_root.join(PROJECT_MUTA_SKILLS_DIR),
+            scope: SkillScope::Repo,
+        });
+        sources.push(SkillSource::Local {
+            root: project_root.join(PROJECT_GENERIC_SKILLS_DIR),
             scope: SkillScope::Repo,
         });
     }
@@ -200,7 +205,7 @@ fn resolve_project_root(config: &SkillsConfig) -> PathBuf {
 pub fn project_skills_present(project_root: &Path) -> bool {
     EXTERNAL_SKILL_DIRS
         .iter()
-        .chain(std::iter::once(&PROJECT_MUTA_SKILLS_DIR))
+        .chain([PROJECT_MUTA_SKILLS_DIR, PROJECT_GENERIC_SKILLS_DIR].iter())
         .any(|dir| {
             walkdir::WalkDir::new(project_root.join(dir))
                 .max_depth(MAX_SCAN_DEPTH)
@@ -341,21 +346,19 @@ mod tests {
 
     #[test]
     fn project_root_detects_git() {
-        let root = std::env::temp_dir().join(format!("muta-root-{}", uuid::Uuid::new_v4()));
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
         let nested = root.join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::create_dir_all(root.join(".git")).unwrap();
 
         assert_eq!(find_project_root(&nested), root);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn project_root_falls_back_to_start() {
-        let dir = std::env::temp_dir().join(format!("muta-root-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(find_project_root(&dir), dir);
-        let _ = std::fs::remove_dir_all(&dir);
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(find_project_root(temp.path()), temp.path());
     }
 
     /// Regression (the "wrong workspace" bug): a config whose `project_root`
@@ -368,7 +371,8 @@ mod tests {
     /// workspace security, while this temporary workspace has no grant.
     #[tokio::test]
     async fn pinned_project_root_scopes_project_local_skills() {
-        let root = std::env::temp_dir().join(format!("muta-skills-{}", uuid::Uuid::new_v4()));
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
         let skill_dir = root.join(".muta/skills/pinned");
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(
@@ -378,11 +382,11 @@ mod tests {
         .unwrap();
 
         let config = muta_contracts::SkillsConfig {
-            project_root: Some(root.clone()),
+            project_root: Some(root.to_path_buf()),
             ..Default::default()
         };
         let result =
-            discover_all_with_extension_state(&config, WorkspaceExtensionsState::Trusted).await;
+            discover_all_with_trust_state(&config, WorkspaceTrustState::Trusted).await;
         assert!(
             result.skills.iter().any(|skill| skill.name == "pinned"),
             "project-local skill must be discovered from the pinned root"
@@ -392,21 +396,25 @@ mod tests {
         // process cwd (the test binary's) has no `.muta/skills/pinned`.
         let unpinned = muta_contracts::SkillsConfig::default();
         let result =
-            discover_all_with_extension_state(&unpinned, WorkspaceExtensionsState::Trusted).await;
+            discover_all_with_trust_state(&unpinned, WorkspaceTrustState::Trusted).await;
         assert!(
             !result.skills.iter().any(|skill| skill.name == "pinned"),
             "unpinned discovery must not reach into an unrelated directory"
         );
 
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Repo-scope sources are invisible until their exact content has been
-    /// admitted by workspace extension security.
+    /// admitted by workspace skills-domain security.
     #[tokio::test]
-    async fn quarantined_extensions_skip_repo_scoped_sources() {
-        let root = std::env::temp_dir().join(format!("muta-skills-{}", uuid::Uuid::new_v4()));
-        for dir in [".muta/skills/evil", ".agents/skills/evil2"] {
+    async fn quarantined_skills_skip_every_repo_scoped_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        for dir in [
+            ".muta/skills/evil",
+            ".agents/skills/evil2",
+            "skills/evil3",
+        ] {
             let skill_dir = root.join(dir);
             std::fs::create_dir_all(&skill_dir).unwrap();
             let name = skill_dir.file_name().unwrap().to_string_lossy().to_string();
@@ -418,34 +426,33 @@ mod tests {
         }
 
         let config = muta_contracts::SkillsConfig {
-            project_root: Some(root.clone()),
+            project_root: Some(root.to_path_buf()),
             ..Default::default()
         };
 
         let result =
-            discover_all_with_extension_state(&config, WorkspaceExtensionsState::Quarantined).await;
+            discover_all_with_trust_state(&config, WorkspaceTrustState::Quarantined).await;
         assert!(
             !result
                 .skills
                 .iter()
                 .any(|skill| skill.scope == SkillScope::Repo),
-            "quarantined extensions must contribute no repo skills"
+            "quarantined domain must contribute no repo skills"
         );
         assert!(
             !result
                 .skills
                 .iter()
-                .any(|s| s.name == "evil" || s.name == "evil2"),
+                .any(|s| s.name == "evil" || s.name == "evil2" || s.name == "evil3"),
             "quarantined skills must not load"
         );
         assert!(result.shadowed.is_empty());
 
         let result =
-            discover_all_with_extension_state(&config, WorkspaceExtensionsState::Trusted).await;
+            discover_all_with_trust_state(&config, WorkspaceTrustState::Trusted).await;
         assert!(result.skills.iter().any(|s| s.name == "evil"));
         assert!(result.skills.iter().any(|s| s.name == "evil2"));
-
-        let _ = std::fs::remove_dir_all(&root);
+        assert!(result.skills.iter().any(|s| s.name == "evil3"));
     }
 
     #[test]

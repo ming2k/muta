@@ -29,24 +29,20 @@ allow, or treats an unrestricted operation scope as authority. This keeps
 unattended execution deterministic and prevents a UI convenience flag from
 becoming a privilege escalation mechanism.
 
-## Workspace preflight
+## Workspace security planes
 
-Opening a directory creates a workspace identity but grants no execution
-profile. A workspace starts as `unknown`; the operator chooses one of two
-explicit profiles:
+Opening a directory establishes a primary filesystem root but grants no
+runtime authority and loads no quarantined project assets. Those decisions are
+independent:
 
-- `restricted` is read-oriented. Each side effect needs a narrow explicit
-  grant.
-- `development` pre-authorizes ordinary development operations.
+- `/trust` controls content-attested project asset domains only;
+- `[workspace].additional_roots` controls the user-owned native-file boundary;
+- runtime permission rules control concrete hazardous calls.
 
-No agent round or direct-shell command can start while the profile is `unknown`,
-whether autopilot is on or off. Preflight fails before provider or process launch
-and guides the operator to `/trust` (for full development) or `/trust readonly`.
-
-Project-authored MCP servers, hooks, skills, and commands use a separate
-content-bound extension decision. `/trust workspace` authorizes execution
-while leaving project extensions quarantined, while `/trust` (or `/trust all`)
-attests and loads both. See [Security and trust architecture](security-and-trust.md).
+Autopilot consults the same three planes as an attended session. It does not
+provide a workspace execution profile, and there is no preflight mode that
+converts ordinary development work into implicit authority. See
+[Security and trust architecture](security-and-trust.md).
 
 ## Non-interactive surfaces
 
@@ -64,17 +60,14 @@ terminal or model-visible results.
 
 ## Bash and dependency installation
 
-Package installation is an ordinary development action, not a proxy for
-project-extension trust. In a `development` workspace, commands such as
-`pnpm install` may run without a permission prompt, but they run inside the
-workspace sandbox: only the workspace and a fresh temporary directory are
-writable; the process otherwise sees a minimal read-only system runtime and
-public DNS/TLS configuration. HOME is isolated, inherited credentials are
-scrubbed, and user-home toolchain shims are not admitted.
+Package installation is a command execution action, not a proxy for project
+asset trust. A command such as `pnpm install` runs only when its exact runtime
+scope is authorized and still passes the bash safety policy. Autopilot returns
+`[permission required]` immediately when that authority is absent.
 
-Project MCP servers and hooks are narrower still: after content trust they run
+Project MCP servers and hooks are narrower still: after asset trust they run
 with a read-only workspace, no network, and no ambient credentials. A project
-cannot turn extension trust into workspace mutation or network authority.
+cannot turn asset trust into workspace mutation or network authority.
 
 High-risk actions remain distinct. Destructive commands, publishing,
 infrastructure mutation, and remote-content pipe-to-shell patterns retain
@@ -83,11 +76,10 @@ result is a missing grant and therefore fails immediately.
 
 ## Persistence and visibility
 
-Autopilot remains session-persisted as defined by ADR-0132. Workspace security
-is persisted separately in `workspace_security.json`, keyed by the canonical
-exact workspace root. Every harness snapshot carries both fields, so a
-frontend can show the interaction posture and authority state without deriving
-either from transcript messages.
+Autopilot remains session-persisted as defined by ADR-0132. Project asset
+trust is persisted separately in `workspace_security.json`, keyed by the
+canonical exact workspace root and concrete domain. Runtime `Always` rules use
+the per-project permission store, while Session rules remain in memory.
 
-See [ADR-0140](../../adr/0140-workspace-authority-and-content-bound-extension-trust.md)
-for the authority model and physical enforcement decision.
+See [ADR-0147](../../adr/0147-orthogonal-workspace-security-planes.md) for the
+three-plane security model.

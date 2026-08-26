@@ -381,7 +381,7 @@ impl PermissionPolicy for BashPolicy {
         "bash-policy"
     }
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if ctx.call_name != "bash" {
+        if !matches!(ctx.call_name, "bash" | "sandbox_bash") {
             return PolicyDecision::Pass;
         }
         let command = match &ctx.scope_target {
@@ -1237,4 +1237,3 @@ mod tests {
         assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::MissingAuthority { .. }));
     }
 }
-

@@ -1,6 +1,6 @@
 # 0142. Additional workspace roots: the cross-project escape hatch
 
-- **Status:** Accepted
+- **Status:** Partially superseded by ADR-0147 (root admission is user-owned global policy)
 - **Date:** 2026-06-30
 
 ## Context

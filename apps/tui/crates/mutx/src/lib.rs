@@ -1938,6 +1938,9 @@ pub async fn run_tui(
                     // persisted state, discarding any optimistic local edit.
                     *websearch_config_clone.lock().await = Some(snapshot);
                 }
+                AgentResponse::CopyToClipboard { text } => {
+                    let _ = crate::clipboard::copy(&text).await;
+                }
             }
         }
     });

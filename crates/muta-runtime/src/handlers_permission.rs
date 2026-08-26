@@ -13,32 +13,6 @@ use muta_persistence::session::SessionStore;
 use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
-/// Option labels of the workspace-trust question (see `serve.rs`'s
-/// `workspace_trust_prompt` and the `/trust` flows).
-pub(crate) const SECURITY_TRUST_OPTION_TRUST: &str =
-    "Trust workspace (load skills, MCP, hooks, AGENTS.md)";
-pub(crate) const SECURITY_TRUST_OPTION_QUARANTINE: &str =
-    "Keep quarantined (do not load workspace contributions)";
-
-/// Apply a trust-prompt answer to the durable security store.
-pub fn apply_trust_decision(
-    workspace_security: &muta_persistence::workspace_security::WorkspaceSecurityStore,
-    project_root: &std::path::Path,
-    chosen: &str,
-) -> &'static str {
-    match chosen {
-        SECURITY_TRUST_OPTION_TRUST => {
-            let _ = workspace_security.trust_workspace(project_root);
-            "✓ Workspace contributions trusted (skills, MCP, hooks, AGENTS.md). Decision persisted."
-        }
-        _ => {
-            let _ = workspace_security.untrust_workspace(project_root);
-            "✓ Workspace contributions kept quarantined. Decision persisted."
-        }
-    }
-}
-
-
 use crate::side::SideRegistry;
 
 /// `AgentRequest::Interrupt` — reject every pending permission, question, and
@@ -135,42 +109,11 @@ pub async fn reply_question(
     agent: &Agent,
     runner_registry: &Arc<RunnerRegistry>,
     side: &Arc<AsyncRwLock<SideRegistry>>,
-    workspace_security: &Arc<muta_persistence::workspace_security::WorkspaceSecurityStore>,
-    project_root: &std::path::Path,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    session_id: &str,
     request_id: String,
     answers: Vec<Vec<String>>,
     parent_call_id: Option<String>,
 ) {
-    if request_id.starts_with("trust-") {
-        let chosen = answers
-            .first()
-            .and_then(|row| row.first())
-            .map(|s| s.as_str())
-            .unwrap_or(SECURITY_TRUST_OPTION_QUARANTINE);
-        let msg = apply_trust_decision(workspace_security, project_root, chosen);
-
-
-        let snapshot = workspace_security.snapshot(project_root);
-        agent.set_workspace_security(snapshot);
-        let _ = resp_tx.send(muta_agent::orchestration::round_response(
-            session_id,
-            muta_contracts::RoundEvent::Notice(
-                muta_contracts::AgentNotice::new(
-                    muta_contracts::NoticeKind::ReviewAlert,
-                    muta_contracts::NoticeSeverity::Info,
-                    "Workspace trust decision recorded",
-                    muta_contracts::NoticeSource::Harness,
-                )
-                .with_surface(muta_contracts::NoticeSurface::Toast)
-                .with_body(msg),
-            ),
-        ));
-        send_harness_state(resp_tx, session_id, agent, LoopStatus::Idle);
-        return;
-    }
-
     let resolved = if let Some(parent) = &parent_call_id {
         runner_registry
             .get(parent)

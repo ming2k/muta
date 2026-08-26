@@ -38,7 +38,7 @@ User-edited configuration. Lossy; back it up.
 
 | Path | Purpose | Lossy? |
 |------|---------|--------|
-| `config.toml` | User-edited configuration — **daemon & core behavior only** (`default_connection` / `default_model`, `[compaction]`, `[permissions]`, `[bash_policy]`, `[tool_variants]`, `[[hooks]]`, `[skills]`, `[websearch]`, `[mcp.<server>]`, `[daemon]`, `[master]`, ...). Connection *instances* live in `connections.toml`, secrets in `credentials.toml` | Yes |
+| `config.toml` | User-edited configuration — **daemon & core behavior only** (`default_connection` / `default_model`, `[compaction]`, `[permissions]`, `[workspace]`, `[bash_policy]`, `[tool_variants]`, `[[hooks]]`, `[skills]`, `[websearch]`, `[mcp.<server>]`, `[daemon]`, `[master]`, ...). Connection *instances* live in `connections.toml`, secrets in `credentials.toml` | Yes |
 | `credentials.toml` | Token-auth secrets, split out of `config.toml` (written `rw-------`), keyed by **connection instance**: `[connections.<id>] api_key`. OAuth logins do not live here — see the note below. | Yes |
 
 Default location: `~/.config/muta/`.
@@ -97,7 +97,7 @@ re-prompts; no conversation is lost.
 | `history.json` | Slash-command input history | Rebuildable |
 | `providers.toml` | **Provider instances** — the program-managed "who I connect to" records: id/name, `template_id`, `auth`, optional `api_key_env`, and a pure-custom instance's declared transport/endpoint/models. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each instance's template + the discovery cache, never persisted | No (user-managed connections) |
 | `route_settings.json` | The user's per-(instance, model) reasoning overrides — set from the model `e` editor. State, not cache: deleting it loses user configuration no endpoint can re-derive (migrated out of `models_discovery.json`) | No |
-| `workspace_security.json` | Versioned workspace execution profiles plus content digests for trusted project extensions | Rebuildable (authority choices and extension trust must be granted again) |
+| `workspace_security.json` | Versioned, canonical-workspace-keyed SHA-256 grants for the concrete `mcp`, `skills`, `hooks`, and `rules` project asset domains | Rebuildable (project asset trust must be granted again) |
 | `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |
 | `auth.toml` | OAuth token sets per provider id (`[tokens.<provider>]`, 0600) — access/refresh/expiry for SuperGrok, ChatGPT, Copilot, and Google Antigravity logins. Rebuildable only by re-logging in (the refresh tokens are the durable secret; losing the file means re-auth, so back it up if rotating logins is costly) | Re-auth on loss |
 | `muta.lock` | Cross-process advisory lock when no runtime directory is available | Rebuildable |
@@ -156,8 +156,11 @@ Lives with the project root; travels with the repository.
 | Path | Purpose |
 |------|---------|
 | `.muta/skills/<name>/SKILL.md` | Project-local skills (highest discovery priority) |
+| `skills/<name>/SKILL.md` | Top-level project-local skill convention |
 | `.muta/commands/<name>.md` | Project-local slash commands (highest discovery priority) |
-| `.muta/config.toml` | Project-scope configuration (MCP servers + hooks); loaded only after the project is trusted (ADR-0085) |
+| `.muta/mcp.json` | Project MCP definitions; loaded only while the MCP asset domain is trusted |
+| `.muta/hooks/` | Project hook scripts included in the Hooks-domain digest |
+| `.muta/config.toml` | Project-scope MCP and hook definitions; each narrow table projection is loaded only while its own domain is trusted. A project `[workspace]` table cannot widen filesystem admission |
 | `session.json`, `events.jsonl` | Legacy in-project session storage at the project root (transitional; superseded by `projects/<bucket>/sessions/`) |
 | `.agents/skills/`, `.claude/skills/` | External application conventions (read-only) |
 | `.agents/commands/` | External application conventions (read-only) |

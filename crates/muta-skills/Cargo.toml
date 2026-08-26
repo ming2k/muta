@@ -20,6 +20,7 @@ dirs = { workspace = true }
 inventory = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 uuid = { workspace = true }
 
 [lints]

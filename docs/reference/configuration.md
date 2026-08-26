@@ -158,7 +158,10 @@ broker and the bash command guard.
 
 ```toml
 [permissions]
-allow = [ { tool = "bash", scope = "git status" } ]
+allow = [
+  { tool = "bash", scope = "git status" },
+  { tool = "hook", scope = ".muta/hooks/lint.sh" },
+]
 
 [bash_policy]
 enabled = true
@@ -178,26 +181,26 @@ variant a model receives for a capability with several implementations.
 
 ## Additional workspace roots
 
-The optional `[workspace]` table lives in the **project-local**
-`.muta/config.toml` (not the global file) and widens the session's admitted
-filesystem boundary for cross-project work — the escape hatch from
-single-workspace containment.
+The optional `[workspace]` table lives in the user-owned global `config.toml`
+and widens native file tools' admitted boundary for cross-project work. A
+repository's `.muta/config.toml` is deliberately ignored for this setting:
+project-authored content cannot widen its own containment boundary.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `workspace.additional_roots` | `[]` | Extra directories admitted alongside the project root. Relative paths resolve against the **project root** (never the process cwd); `~` expands to the user's home |
 
 ```toml
-# .muta/config.toml in the project root
+# $XDG_CONFIG_HOME/muta/config.toml
 [workspace]
 additional_roots = ["../backend", "~/projects/design-kit"]
 ```
 
-Admission is enforced at every layer: file tools may read and write under any
-admitted root, and the bash sandbox bind-mounts each root read-write while
-keeping the rest of the host invisible. Everything else stays bound to the
-primary root — relative paths, the shell's cwd, and project-bound discovery
-(skills, extensions, `.muta/config.toml` itself).
+Native read, edit, write, directory, and metadata operations may address any
+admitted root. Relative file paths, the shell's cwd, and project-bound asset
+discovery stay anchored to the primary root. Shell commands are a separate
+runtime-permission concern; linked roots neither authorize a command nor
+attempt to contain arbitrary host-shell path access.
 
 Entries are validated at session start. An entry that does not exist, is not
 a directory, is the workspace root itself, or nests inside the workspace is
@@ -311,7 +314,7 @@ which event honours which.
 |-----|---------|---------|
 | `hooks[].event` | — | The lifecycle event: `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `PreCompact`, `PostCompact`, `Turn` (ADR-0030, turn end), `TurnStart` (turn start), `PermissionRequest` (agent blocked on an approval prompt), `UserQuestion` (agent blocked on an `ask_user` question). `Turn`/`TurnStart` are `Deny`-forbidden (inject or observe only); `PermissionRequest`/`UserQuestion` are observe-only (fire-and-forget, ideal for desktop notifications). `PermissionRequest` honours a tool-name matcher. `RoundStart` is accepted only as the legacy alias for `TurnStart` |
 | `hooks[].matcher` | `*` | Tool-name filter. A `|`-separated list of exact names (`Write|Edit`) when only letters/digits/`_`/`|`; otherwise a regular expression. Only the tool events honour it |
-| `hooks[].command` | — | Shell command run when the event matches. Receives the event JSON on stdin; replies via exit code / stdout JSON |
+| `hooks[].command` | — | Shell command run when the event matches. Receives the event JSON on stdin; replies via exit code / stdout JSON. Its exact command must already be allowed as `tool = "hook"`; hooks fail closed instead of recursively opening a permission prompt from inside agent control flow |
 
 The flat JSON for `Turn` and `TurnStart` includes `round` (one-based),
 `turn` (zero-based within that round), and `consecutive_readonly`. A provider

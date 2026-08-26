@@ -29,7 +29,7 @@ use muta_agent::orchestration::{
 };
 use muta_contracts::{
     AgentNotice, AgentRequest, AgentResponse, CommandRecord, CommandResult, CronExpr, LoopStatus,
-    Message, Provider, RoundEvent, Schedule, ScheduledJob, Tool, estimate_tokens,
+    Message, Provider, RoundEvent, Schedule, ScheduledJob, Tool, TrustDomain, estimate_tokens,
     repeat::parse_schedule_arg,
 };
 use muta_mcp::McpRuntime;
@@ -55,12 +55,58 @@ fn live_custom_commands(
     store: &WorkspaceSecurityStore,
     root: &std::path::Path,
 ) -> HashMap<String, CustomCommand> {
-    let extension_state = runtime_workspace_security(store, root).extensions;
-    crate::commands::discover_commands_with_extensions(root, extension_state)
+    let rules_state = runtime_workspace_security(store, root).rules;
+    crate::commands::discover_commands_with_trust(root, rules_state)
         .commands
         .into_iter()
         .map(|command| (command.name.clone(), command))
         .collect()
+}
+
+struct AssetReloadReport {
+    snapshot: muta_contracts::WorkspaceSecuritySnapshot,
+    connected_mcp: Vec<String>,
+    removed_mcp: Vec<String>,
+}
+
+/// Rebuild every project-asset consumer from one freshly attested snapshot.
+/// This is the only live apply/unload path for `/trust` and `/untrust`.
+async fn reload_trusted_assets(
+    agent: &Arc<Agent>,
+    mcp_runtime: &Arc<McpRuntime>,
+    workspace_security: &WorkspaceSecurityStore,
+    project_root: &std::path::Path,
+    skills_registry: &SkillRegistry,
+) -> Result<AssetReloadReport, String> {
+    let snapshot = workspace_security.snapshot(project_root);
+    let mut effective = Config::load();
+    if snapshot.mcp.is_trusted() {
+        effective.merge_project_mcp(Config::load_project_mcp(project_root));
+    }
+    if snapshot.hooks.is_trusted() {
+        effective.merge_project_hooks(Config::load_project_hooks(project_root));
+    }
+
+    let mcp_report = mcp_runtime.reconfigure(effective.mcp.clone()).await;
+    agent.set_hooks(crate::hooks::build_hook_registry(&effective.hooks, agent));
+    skills_registry.reload().await;
+    let rules = if snapshot.rules.is_trusted() {
+        crate::project::load_project_rules(project_root)?
+    } else {
+        String::new()
+    };
+    agent.set_project_rules(rules);
+    agent.set_workspace_security(snapshot.clone());
+
+    Ok(AssetReloadReport {
+        snapshot,
+        connected_mcp: mcp_report
+            .connected
+            .into_iter()
+            .filter_map(|(name, ok)| ok.then_some(name))
+            .collect(),
+        removed_mcp: mcp_report.removed,
+    })
 }
 
 use crate::agent_setup::active_context_window;
@@ -440,9 +486,10 @@ async fn record_ack_with_duration(
     }
 }
 
-/// Record a failed slash-command invocation and surface the error. The error
-/// keeps its existing `AgentResponse::Error` surface; the ledger records the
-/// failure (status `Error`) for audit.
+/// Record a failed slash-command invocation and surface the error as a
+/// typed `CommandResult::Error` (ADR-0091, ADR-0108). The command component in
+/// the transcript settles in place with the error message rather than emitting
+/// a separate notification.
 async fn record_error(
     session: &Arc<SessionStore>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
@@ -462,14 +509,18 @@ async fn record_error_with_duration(
     duration_ms: Option<u64>,
 ) {
     let message = message.into();
-    let mut record = CommandRecord::new(name, args).with_error(message.clone(), None);
-    if let Some(ms) = duration_ms {
-        record = record.with_duration_ms(ms);
-    }
-    if let Err(error) = session.mutate_commands(|c| c.push(record)).await {
-        tracing::warn!(?error, name, "could not persist command error record");
-    }
-    let _ = resp_tx.send(AgentResponse::Error(message));
+    record_command_with_duration(
+        session,
+        resp_tx,
+        name,
+        args,
+        CommandResult::Error {
+            message,
+            detail: None,
+        },
+        duration_ms,
+    )
+    .await;
 }
 
 /// Where a `/sessions`-family invocation routes. `/sessions` and the retired
@@ -509,6 +560,35 @@ fn session_route<'a>(name: &str, parts: &'a [&str]) -> Result<SessionRoute<'a>, 
         unknown => Err(format!(
             "Unknown session command '{unknown}'. /session is retired: use /sessions to browse \
              or open, /new, or /fork."
+        )),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrustRoute {
+    GrantAll,
+    Grant(TrustDomain),
+    Revoke,
+    Status,
+}
+
+fn trust_route(name: &str, parts: &[&str]) -> Result<TrustRoute, String> {
+    if name == "untrust" {
+        return if parts.len() == 1 {
+            Ok(TrustRoute::Revoke)
+        } else {
+            Err("/untrust accepts no arguments.".to_string())
+        };
+    }
+    match parts.get(1).copied() {
+        None | Some("all") => Ok(TrustRoute::GrantAll),
+        Some("mcp") => Ok(TrustRoute::Grant(TrustDomain::Mcp)),
+        Some("skills") => Ok(TrustRoute::Grant(TrustDomain::Skills)),
+        Some("status") => Ok(TrustRoute::Status),
+        Some("revoke") => Ok(TrustRoute::Revoke),
+        Some(other) => Err(format!(
+            "Unknown /trust subcommand '{other}'. Use `/trust`, `/trust all`, `/trust mcp`, \
+             `/trust skills`, `/trust status`, or `/trust revoke`."
         )),
     }
 }
@@ -582,21 +662,17 @@ pub async fn dispatch(
             // fs-watch): only the user knows when their edit is complete, and
             // a half-written file would otherwise tear down live sessions.
             let mut reloaded = Config::load();
-            // Re-apply the project-scope MCP AND hooks layer (ADR-0085 §2/§3 +
-            // hooks extension): a project `.muta/config.toml` edit is exactly
-            // the kind of change `/reload` exists to surface without a restart.
-            // Both are still content-gated (§5): quarantined extensions load
-            // nothing here.
-            let extensions_trusted =
-                runtime_workspace_security(workspace_security, project_root_for_side)
-                    .extensions
-                    .is_trusted();
+            // Re-apply project assets from one domain-specific trust snapshot.
+            // No aggregate extension flag exists: each consumer checks only
+            // the content it is about to load.
+            let security_snapshot =
+                runtime_workspace_security(workspace_security, project_root_for_side);
             let project_mcp = Config::load_project_mcp(project_root_for_side);
-            if extensions_trusted && !project_mcp.is_empty() {
+            if security_snapshot.mcp.is_trusted() && !project_mcp.is_empty() {
                 reloaded.merge_project_mcp(project_mcp);
             }
             let project_hooks = Config::load_project_hooks(project_root_for_side);
-            if extensions_trusted && !project_hooks.is_empty() {
+            if security_snapshot.hooks.is_trusted() && !project_hooks.is_empty() {
                 reloaded.merge_project_hooks(project_hooks);
             }
             // MCP: diff + (re)connect/disconnect. The next request picks up the
@@ -612,7 +688,18 @@ pub async fn dispatch(
             agent.set_doom_guard_config(reloaded.master.doom_guard);
             agent.set_allow_model_stdin(reloaded.master.allow_model_stdin);
             agent.set_skip_interactive_input(reloaded.master.skip_interactive_input);
-            agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
+            agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks, agent));
+            skills_registry.reload().await;
+            let project_rules = if security_snapshot.rules.is_trusted() {
+                crate::project::load_project_rules(project_root_for_side).unwrap_or_else(|err| {
+                    tracing::warn!(error = %err, "project rules reload failed; unloading rules");
+                    String::new()
+                })
+            } else {
+                String::new()
+            };
+            agent.set_project_rules(project_rules);
+            agent.set_workspace_security(security_snapshot);
             agent.seed_permissions_from_config(&reloaded.permissions.allow);
             crate::agent_setup::reseed_prune_threshold(agent, &reloaded);
             crate::agent_setup::reseed_tool_variants(agent, &reloaded);
@@ -1491,238 +1578,134 @@ pub async fn dispatch(
                 }
             }
         }
-        Some(BuiltinCmd::Trust) => {
-
-            let sub = parts.get(1).copied().unwrap_or("trust");
-            match sub {
-                "trust" | "yes" | "all" | "extensions" | "ext" | "" => {
-                    let ext_trusted =
-                        match workspace_security.trust_workspace(project_root_for_side) {
-                            Ok(trusted) => trusted,
-                            Err(error) => {
-                                record_error(session, resp_tx, name, args, error).await;
-                                return;
-                            }
-                        };
-                    let ext_info = if ext_trusted {
-                        let mut reloaded = Config::load();
-                        reloaded.merge_project_mcp(Config::load_project_mcp(project_root_for_side));
-                        reloaded
-                            .merge_project_hooks(Config::load_project_hooks(project_root_for_side));
-                        let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
-                        agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
-                        agent.set_bash_policy(&reloaded.bash_policy);
-                        skills_registry_for_commands.reload().await;
-                        let connected = report
-                            .connected
-                            .iter()
-                            .filter(|(_, ok)| *ok)
-                            .map(|(server, _)| server.as_str())
-                            .collect::<Vec<_>>();
-                        if connected.is_empty() {
-                            " (project skills, hooks, and AGENTS.md loaded)".to_string()
-                        } else {
-                            format!(" (MCP connected: {}, skills/hooks/rules loaded)", connected.join(", "))
-                        }
-                    } else {
-                        " (no project-level contributions found in workspace)".to_string()
+        Some(BuiltinCmd::Trust) | Some(BuiltinCmd::Untrust) => {
+            let route = match trust_route(name, &parts) {
+                Ok(route) => route,
+                Err(error) => {
+                    record_error(session, resp_tx, name, args, error).await;
+                    return;
+                }
+            };
+            match route {
+                TrustRoute::Status => {
+                    let snapshot = workspace_security.snapshot(project_root_for_side);
+                    agent.set_workspace_security(snapshot.clone());
+                    let message = format!(
+                        "Workspace Asset Trust\n\
+                         • Root: {}\n\
+                         • MCP: {}\n\
+                         • Skills: {}\n\
+                         • Hooks: {}\n\
+                         • Rules: {}\n\
+                         • Aggregate: {}\n\
+                         Asset trust does not grant filesystem scope or runtime execution permission.",
+                        snapshot.root,
+                        snapshot.mcp.as_str(),
+                        snapshot.skills.as_str(),
+                        snapshot.hooks.as_str(),
+                        snapshot.rules.as_str(),
+                        snapshot.aggregate().as_str(),
+                    );
+                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
+                        .await;
+                }
+                TrustRoute::GrantAll | TrustRoute::Grant(_) => {
+                    let domains: &[TrustDomain] = match route {
+                        TrustRoute::GrantAll => &TrustDomain::ALL,
+                        TrustRoute::Grant(ref domain) => std::slice::from_ref(domain),
+                        _ => unreachable!(),
                     };
-                    let snapshot =
-                        runtime_workspace_security(workspace_security, project_root_for_side);
-                    agent.set_workspace_security(snapshot.clone());
-                    let message = format!(
-                        "✓ Workspace contributions trusted{ext_info}.\n\
-                         • Root: {}\n\
-                         • Trust: {}\n\
-                         • Decision persisted for this workspace path.",
-                        snapshot.root,
-                        snapshot.trust.as_str(),
-                    );
-                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
-                        .await;
-                    send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
-                }
-                "untrust" | "revoke" | "quarantine" | "reset" => {
-                    let _ = workspace_security.untrust_workspace(project_root_for_side);
-                    let reloaded = Config::load();
-                    let _ = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
-                    agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
-                    agent.set_bash_policy(&reloaded.bash_policy);
-                    skills_registry_for_commands.reload().await;
-                    let snapshot =
-                        runtime_workspace_security(workspace_security, project_root_for_side);
-                    agent.set_workspace_security(snapshot.clone());
-                    let message = format!(
-                        "✓ Workspace trust revoked (quarantined).\n\
-                         • Root: {}\n\
-                         • Trust: quarantined\n\
-                         • Project skills, MCP servers, hooks, and AGENTS.md are disabled.",
-                        snapshot.root,
-                    );
-                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
-                        .await;
-                    send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
-                }
-                "status" => {
-                    let snapshot =
-                        runtime_workspace_security(workspace_security, project_root_for_side);
-                    agent.set_workspace_security(snapshot.clone());
-                    let message = format!(
-                        "Workspace Asset Trust Status:\n\
-                         • Root: {}\n\
-                         • Trust: {}\n\
-                         • Note: Tool hazard permissions are governed independently by the Permission Handler.",
-                        snapshot.root,
-                        snapshot.trust.as_str(),
-                    );
-                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
-                        .await;
-                    send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
-                }
-                other => {
-                    record_error(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        format!("Unknown /trust subcommand '{other}'. Use `/trust`, `/trust untrust`, or `/trust status`."),
-                    )
-                    .await;
-                }
-            }
-        }
-
-        Some(BuiltinCmd::Extensions) => {
-            let sub = parts.get(1).copied().unwrap_or("status");
-            match sub {
-                "status" => {
-                    let snapshot =
-                        runtime_workspace_security(workspace_security, project_root_for_side);
-                    agent.set_workspace_security(snapshot.clone());
-                    record_command(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        CommandResult::Text(format!(
-                            "Project extensions: {}\nTrust is bound to the exact current content.",
-                            snapshot.extensions.as_str()
-                        )),
-                    )
-                    .await;
-                }
-                "trust" => {
-                    let trusted = match workspace_security.trust_extensions(project_root_for_side) {
-                        Ok(trusted) => trusted,
+                    let granted = match workspace_security
+                        .trust_domains(project_root_for_side, domains)
+                    {
+                        Ok(granted) => granted,
                         Err(error) => {
                             record_error(session, resp_tx, name, args, error).await;
                             return;
                         }
                     };
-                    if !trusted {
-                        record_command(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            CommandResult::Text(
-                                "This workspace declares no project MCP servers, hooks, skills, or slash commands."
-                                    .to_string(),
-                            ),
-                        )
-                        .await;
-                    } else {
-                        let attested =
-                            runtime_workspace_security(workspace_security, project_root_for_side);
-                        if !attested.extensions.is_trusted() {
-                            agent.set_workspace_security(attested);
-                            record_error(
-                                session,
-                                resp_tx,
-                                name,
-                                args,
-                                "Project extension content changed while it was being attested; nothing was loaded. Inspect the current content and retry `/extensions trust`.",
-                            )
-                            .await;
+                    let report = match reload_trusted_assets(
+                        agent,
+                        mcp_runtime,
+                        workspace_security,
+                        project_root_for_side,
+                        skills_registry_for_commands,
+                    )
+                    .await
+                    {
+                        Ok(report) => report,
+                        Err(error) => {
+                            record_error(session, resp_tx, name, args, error).await;
                             return;
                         }
-                        let mut reloaded = Config::load();
-                        reloaded.merge_project_mcp(Config::load_project_mcp(project_root_for_side));
-                        reloaded
-                            .merge_project_hooks(Config::load_project_hooks(project_root_for_side));
-                        let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
-                        agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
-                        agent.set_bash_policy(&reloaded.bash_policy);
-                        skills_registry_for_commands.reload().await;
-                        let snapshot =
-                            runtime_workspace_security(workspace_security, project_root_for_side);
-                        agent.set_workspace_security(snapshot);
-                        let connected = report
-                            .connected
+                    };
+                    let granted = if granted.is_empty() {
+                        "none (the selected domains have no project assets)".to_string()
+                    } else {
+                        granted
                             .iter()
-                            .filter(|(_, ok)| *ok)
-                            .map(|(server, _)| server.as_str())
-                            .collect::<Vec<_>>();
-                        let mcp = if connected.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" Connected MCP: {}.", connected.join(", "))
-                        };
-                        record_command(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            CommandResult::Text(format!(
-                                "Trusted the exact current project-extension content.{mcp} Hooks, skills, and commands loaded."
-                            )),
-                        )
+                            .map(|domain| domain.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    let mcp = if report.connected_mcp.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\n• MCP connected: {}", report.connected_mcp.join(", "))
+                    };
+                    let message = format!(
+                        "Project asset trust recorded.\n\
+                         • Root: {}\n\
+                         • Granted: {}\n\
+                         • MCP: {}; Skills: {}; Hooks: {}; Rules: {}{}",
+                        report.snapshot.root,
+                        granted,
+                        report.snapshot.mcp.as_str(),
+                        report.snapshot.skills.as_str(),
+                        report.snapshot.hooks.as_str(),
+                        report.snapshot.rules.as_str(),
+                        mcp,
+                    );
+                    record_command(session, resp_tx, name, args, CommandResult::Text(message))
                         .await;
-                    }
                 }
-                "untrust" => {
-                    let revoked = match workspace_security.untrust_extensions(project_root_for_side)
-                    {
+                TrustRoute::Revoke => {
+                    let revoked = match workspace_security.revoke_workspace(project_root_for_side) {
                         Ok(revoked) => revoked,
                         Err(error) => {
                             record_error(session, resp_tx, name, args, error).await;
                             return;
                         }
                     };
-                    let reloaded = Config::load();
-                    let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
-                    agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
-                    agent.set_bash_policy(&reloaded.bash_policy);
-                    skills_registry_for_commands.reload().await;
-                    agent.set_workspace_security(runtime_workspace_security(
+                    let report = match reload_trusted_assets(
+                        agent,
+                        mcp_runtime,
                         workspace_security,
                         project_root_for_side,
-                    ));
-                    let removed = if report.removed.is_empty() {
+                        skills_registry_for_commands,
+                    )
+                    .await
+                    {
+                        Ok(report) => report,
+                        Err(error) => {
+                            record_error(session, resp_tx, name, args, error).await;
+                            return;
+                        }
+                    };
+                    let removed = if report.removed_mcp.is_empty() {
                         String::new()
                     } else {
-                        format!(" Disconnected MCP: {}.", report.removed.join(", "))
+                        format!(" Disconnected MCP: {}.", report.removed_mcp.join(", "))
                     };
                     let message = if revoked {
                         format!(
-                            "Project extensions quarantined.{removed} Hooks, skills, and commands unloaded."
+                            "Project asset trust revoked. MCP, skills, hooks, rules, and project commands were unloaded.{removed}"
                         )
                     } else {
-                        "Project extensions were already quarantined.".to_string()
+                        "No project asset grants were recorded for this workspace.".to_string()
                     };
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))
                         .await;
-                }
-                _ => {
-                    record_error(
-                        session,
-                        resp_tx,
-                        name,
-                        args,
-                        "Usage: /extensions [status|trust|untrust]",
-                    )
-                    .await;
-                    return;
                 }
             }
             send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
@@ -1867,16 +1850,21 @@ pub async fn dispatch(
                     )
                     .await;
                 }
-                Err(error) => {
-                    record_error(
+                Err(_) => {
+                    let _ = resp_tx.send(AgentResponse::CopyToClipboard {
+                        text: markdown,
+                    });
+                    record_command(
                         session,
                         resp_tx,
                         name,
                         args,
-                        format!(
-                            "Export built ({} chars) but clipboard copy failed: {}",
-                            char_count, error
-                        ),
+                        CommandResult::Text(format!(
+                            "Session exported to clipboard ({} messages, {} chars). \
+                             Paste it into another agent to continue this work.",
+                            messages.len(),
+                            char_count
+                        )),
                     )
                     .await;
                 }
@@ -2194,8 +2182,8 @@ pub async fn dispatch(
         }
         None => {
             // Rebuild from the live content-bound state on every dispatch.
-            // This makes `/extensions trust`, `/extensions untrust`, and a
-            // digest mismatch take effect without a restart or stale cache.
+            // This makes `/trust`, `/untrust`, and a digest mismatch take
+            // effect without a restart or stale cache.
             let live_commands = live_custom_commands(workspace_security, project_root_for_side);
             // Application-registered Rust handlers (extension point): try the
             // extra-commands registry before the markdown-template path. A
@@ -2664,6 +2652,60 @@ mod session_route_tests {
             err.contains("/session is retired"),
             "error should steer away from the retired command: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod trust_route_tests {
+    use super::{TrustRoute, trust_route};
+    use muta_contracts::TrustDomain;
+
+    fn parts(command: &str) -> Vec<&str> {
+        command.split_whitespace().collect()
+    }
+
+    #[test]
+    fn canonical_trust_grammar_is_closed() {
+        assert_eq!(trust_route("trust", &parts("/trust")), Ok(TrustRoute::GrantAll));
+        assert_eq!(
+            trust_route("trust", &parts("/trust all")),
+            Ok(TrustRoute::GrantAll)
+        );
+        assert_eq!(
+            trust_route("trust", &parts("/trust mcp")),
+            Ok(TrustRoute::Grant(TrustDomain::Mcp))
+        );
+        assert_eq!(
+            trust_route("trust", &parts("/trust skills")),
+            Ok(TrustRoute::Grant(TrustDomain::Skills))
+        );
+        assert_eq!(
+            trust_route("trust", &parts("/trust status")),
+            Ok(TrustRoute::Status)
+        );
+        assert_eq!(
+            trust_route("trust", &parts("/trust revoke")),
+            Ok(TrustRoute::Revoke)
+        );
+        assert_eq!(
+            trust_route("untrust", &parts("/untrust")),
+            Ok(TrustRoute::Revoke)
+        );
+    }
+
+    #[test]
+    fn retired_or_ambiguous_trust_spellings_are_rejected() {
+        for command in [
+            "/trust workspace",
+            "/trust extensions",
+            "/trust readonly",
+            "/trust yes",
+            "/untrust mcp",
+        ] {
+            let parsed = parts(command);
+            let name = parsed[0].trim_start_matches('/');
+            assert!(trust_route(name, &parsed).is_err(), "{command} must be rejected");
+        }
     }
 }
 

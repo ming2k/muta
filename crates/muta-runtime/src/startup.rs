@@ -371,26 +371,25 @@ define_builtin_commands! {
         category: Project,
     },
     Trust = "/trust" : {
-        summary: "Record the workspace execution decision and manage project extensions",
-        description: "Decide this workspace's execution authority (development or restricted), trust project extensions (MCP, hooks, skills) independently, or inspect status.",
-        usage: ["/trust", "/trust [workspace|extensions|all|readonly|status|revoke]"],
+        summary: "Trust project-authored asset domains",
+        description: "Trust the exact current content of project MCP, skills, hooks, and rules independently from filesystem boundaries and runtime permissions.",
+        usage: ["/trust", "/trust [all|mcp|skills|status|revoke]"],
         examples: [
-            ("/trust", "Trust workspace and its project extensions"),
-            ("/trust workspace", "Trust workspace execution only"),
-            ("/trust extensions", "Trust project MCP servers and hooks"),
-            ("/trust readonly", "Set workspace to restricted read-only mode"),
-            ("/trust status", "Show workspace trust and security status"),
-            ("/trust revoke", "Revoke trust decision for this workspace"),
+            ("/trust", "Trust every present project asset domain"),
+            ("/trust mcp", "Trust project MCP definitions only"),
+            ("/trust skills", "Trust project skills only"),
+            ("/trust status", "Show trust state for every asset domain"),
+            ("/trust revoke", "Revoke every asset-domain grant for this workspace"),
         ],
-        intent_keywords: ["trust", "untrust", "authorize", "workspace-trust", "security", "permission"],
+        intent_keywords: ["trust", "authorize", "asset-trust", "project-assets", "security"],
         category: Project,
     },
-    Extensions = "/extensions" : {
-        summary: "Inspect or trust project-authored extensions",
-        description: "Manage content-bound trust for project MCP servers, hooks, skills, and slash commands independently from execution authority.",
-        usage: ["/extensions", "/extensions [status|trust|untrust]"],
-        examples: [("/extensions", "Show extension trust state"), ("/extensions trust", "Trust and load the exact current contribution content")],
-        intent_keywords: ["extensions", "trust", "untrust", "mcp", "hooks", "project-skills"],
+    Untrust = "/untrust" : {
+        summary: "Revoke project asset trust",
+        description: "Revoke every content-bound project asset grant and unload project MCP, skills, hooks, rules, and commands.",
+        usage: ["/untrust"],
+        examples: [("/untrust", "Revoke all project asset trust")],
+        intent_keywords: ["untrust", "revoke", "quarantine", "asset-trust"],
         category: Project,
     },
     Export = "/export" : {
@@ -463,7 +462,6 @@ impl BuiltinCmd {
             // config-scoped, so it now lives under `/settings reload`; the bare
             // old spelling keeps working.
             "/reload" => Some(BuiltinCmd::Settings),
-            "/untrust" => Some(BuiltinCmd::Trust),
             _ => None,
         }
     }

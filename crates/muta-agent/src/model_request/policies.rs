@@ -105,6 +105,27 @@ impl SystemPromptSection for ProviderGuidance {
     }
 }
 
+/// Project-authored instruction files admitted by the Rules asset domain.
+/// The runtime supplies source delimiters and replaces this value atomically
+/// when trust changes, so a revoked or changed domain disappears before the
+/// next provider request.
+struct ProjectRulesGuidance;
+
+impl SystemPromptSection for ProjectRulesGuidance {
+    fn id(&self) -> &'static str {
+        "system.project_rules"
+    }
+    fn rank(&self) -> u32 {
+        30
+    }
+    fn is_active(&self, ctx: &SystemPromptContext) -> bool {
+        !ctx.project_rules.is_empty()
+    }
+    fn render(&self, ctx: &SystemPromptContext) -> Option<String> {
+        Some(format!("\n# Trusted Project Rules\n{}", ctx.project_rules))
+    }
+}
+
 /// Task-completion ethos: see the work through to a real result in one round
 /// instead of stopping at analysis or a partial fix. Always active. Mirrors
 /// codex's "Autonomy and Persistence" section, condensed.
@@ -360,6 +381,7 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(ToneGuidance);
     registry.register(ModelGuidance);
     registry.register(ProviderGuidance);
+    registry.register(ProjectRulesGuidance);
     registry.register(PersistenceGuidance);
     registry.register(AutopilotGuidance);
     registry.register(DelegationGuidance);

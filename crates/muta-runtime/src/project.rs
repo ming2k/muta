@@ -5,6 +5,32 @@
 
 use std::path::Path;
 
+const PROJECT_RULE_FILES: &[&str] = &["AGENTS.md", ".cursorrules", ".windsurfrules"];
+
+/// Load the trusted project instruction files into one explicitly delimited
+/// system-prompt section. Slash-command templates share the Rules trust domain
+/// but are discovered by `commands` rather than copied into the prompt.
+pub fn load_project_rules(base: &Path) -> Result<String, String> {
+    let mut sections = Vec::new();
+    for relative in PROJECT_RULE_FILES {
+        let path = base.join(relative);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to read project rule file '{}': {error}",
+                    path.display()
+                ));
+            }
+        };
+        sections.push(format!(
+            "[BEGIN PROJECT RULES: {relative}]\n{text}\n[END PROJECT RULES: {relative}]"
+        ));
+    }
+    Ok(sections.join("\n\n"))
+}
+
 /// Materialize a `.muta/` tree. Returns the list of newly created relative
 /// paths (existing files are left untouched and not reported).
 pub fn init_muta_config(base: &Path) -> Result<Vec<String>, String> {
@@ -99,12 +125,22 @@ mod tests {
 
     #[test]
     fn init_muta_is_idempotent() {
-        let dir = std::env::temp_dir().join(format!("muta-init-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let first = init_muta_config(&dir).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        let first = init_muta_config(dir).unwrap();
         assert!(first.iter().any(|p| p == "AGENTS.md"));
-        let second = init_muta_config(&dir).unwrap();
+        let second = init_muta_config(dir).unwrap();
         assert!(second.is_empty());
-        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn project_rules_are_delimited_by_source() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("AGENTS.md"), "Run nextest.").unwrap();
+        std::fs::write(temp.path().join(".cursorrules"), "Keep changes small.").unwrap();
+        let rules = load_project_rules(temp.path()).unwrap();
+        assert!(rules.contains("[BEGIN PROJECT RULES: AGENTS.md]"));
+        assert!(rules.contains("Run nextest."));
+        assert!(rules.contains("[BEGIN PROJECT RULES: .cursorrules]"));
     }
 }

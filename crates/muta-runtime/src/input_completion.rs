@@ -583,32 +583,15 @@ mod tests {
     async fn slash_subcommand_options_expand_and_filter() {
         let engine = InputCompletionEngine::new(catalog(), PathBuf::from("."));
 
-        // /extensions with space offers all 3 options
+        // Retired command has no completion surface.
         let AgentResponse::InputCompletions { items, .. } =
             engine.complete(10, "/extensions ".into(), 12).await
         else {
             panic!("unexpected response")
         };
-        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(
-            labels,
-            vec![
-                "/extensions status",
-                "/extensions trust",
-                "/extensions untrust"
-            ]
-        );
+        assert!(items.is_empty());
 
-        // /extensions t filters to /extensions trust
-        let AgentResponse::InputCompletions { items, .. } =
-            engine.complete(11, "/extensions t".into(), 13).await
-        else {
-            panic!("unexpected response")
-        };
-        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(labels, vec!["/extensions trust"]);
-
-        // /trust offers all 6 options
+        // /trust offers only the closed asset-domain grammar.
         let AgentResponse::InputCompletions { items, .. } =
             engine.complete(12, "/trust ".into(), 7).await
         else {
@@ -618,23 +601,22 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "/trust workspace",
-                "/trust extensions",
                 "/trust all",
-                "/trust readonly",
+                "/trust mcp",
+                "/trust skills",
                 "/trust status",
                 "/trust revoke"
             ]
         );
 
-        // /trust w filters to /trust workspace
+        // Removed subcommands stay absent.
         let AgentResponse::InputCompletions { items, .. } =
             engine.complete(13, "/trust w".into(), 8).await
         else {
             panic!("unexpected response")
         };
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(labels, vec!["/trust workspace"]);
+        assert!(labels.is_empty());
 
         // /debug trace offers on and off
         let AgentResponse::InputCompletions { items, .. } =
@@ -675,12 +657,11 @@ mod tests {
     #[test]
     fn expand_usage_options_handles_bracketed_and_raw_pipes() {
         assert_eq!(
-            expand_usage_options("/trust [workspace|extensions|all|readonly|status|revoke]"),
+            expand_usage_options("/trust [all|mcp|skills|status|revoke]"),
             vec![
-                "/trust workspace",
-                "/trust extensions",
                 "/trust all",
-                "/trust readonly",
+                "/trust mcp",
+                "/trust skills",
                 "/trust status",
                 "/trust revoke"
             ]
@@ -692,14 +673,6 @@ mod tests {
         assert_eq!(
             expand_usage_options("/debug trace on|off"),
             vec!["/debug trace on", "/debug trace off"]
-        );
-        assert_eq!(
-            expand_usage_options("/extensions [status|trust|untrust]"),
-            vec![
-                "/extensions status",
-                "/extensions trust",
-                "/extensions untrust"
-            ]
         );
         assert_eq!(
             expand_usage_options("/repeat cancel <id>"),

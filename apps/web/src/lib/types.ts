@@ -152,6 +152,7 @@ export type AgentResponse =
   // the store).
   | { ConversationCleared: null }
   | { ConversationReplaced: ConversationReplacedPayload }
+  | { CopyToClipboard: { text: string } }
   | { WebSearchConfigSnapshot: WebSearchConfigView }
   | { WebSearchConfigUpdated: WebSearchConfigView }
   | { Error: string }

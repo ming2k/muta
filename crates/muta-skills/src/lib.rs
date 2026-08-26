@@ -200,6 +200,17 @@ impl SkillRegistry {
         }
     }
 
+    /// Workspace root pinned into this registry's discovery configuration.
+    /// Project-scope consumers use it for live content re-attestation.
+    pub fn project_root(&self) -> Option<std::path::PathBuf> {
+        self.inner
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .config
+            .project_root
+            .clone()
+    }
+
     /// Replace the registry contents directly, used during tests or when the
     /// caller wants to build a registry without disk discovery.
     pub fn replace(&self, skills: Vec<Skill>) {

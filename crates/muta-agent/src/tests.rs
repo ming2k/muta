@@ -1989,12 +1989,9 @@ async fn bash_policy_confirm_requires_authority_under_autopilot() {
         .iter()
         .find(|m| m.role == Role::Tool)
         .expect("policy refusal should be recorded as the bash tool result");
-    assert!(tool_message.content.contains("[authority required]"));
-    assert!(
-        tool_message
-            .content
-            .contains("Autopilot controls interaction only")
-    );
+    assert!(tool_message.content.contains("[permission required]"));
+    assert!(tool_message.content.contains("runtime grant"));
+    assert!(tool_message.content.contains("approve interactively"));
     assert!(tool_message.content.contains("git reset --hard"));
     assert!(outcome.unwrap().message.content.contains("done"));
 }

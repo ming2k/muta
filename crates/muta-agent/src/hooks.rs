@@ -18,6 +18,10 @@ use muta_contracts::{
     PermissionRequest, RestorePoint, SessionSource, UserQuestionRequest,
 };
 
+/// Read-only permission check used before a hook with runtime side effects is
+/// fired. The closure receives the hook's structured hazard submission.
+pub type HookAuthorizer = Arc<dyn Fn(&muta_contracts::ToolPermissionSubmission) -> bool + Send + Sync>;
+
 /// Evaluate a Claude-Code-style tool-name matcher against a tool name.
 ///
 /// A matcher made only of `[a-zA-Z0-9_|]` is a `|`-separated list of exact
@@ -80,9 +84,18 @@ impl HookSideEffects {
 /// The set of hooks installed on an [`crate::Agent`]. Built once at startup
 /// (from the `[hooks]` config, by the CLI) and read at every lifecycle point,
 /// so it is shared cheaply as `Arc<HookRegistry>`.
-#[derive(Default)]
 pub struct HookRegistry {
     hooks: Vec<Arc<dyn Hook>>,
+    authorizer: Option<HookAuthorizer>,
+}
+
+impl Default for HookRegistry {
+    fn default() -> Self {
+        Self {
+            hooks: Vec::new(),
+            authorizer: None,
+        }
+    }
 }
 
 impl HookRegistry {
@@ -91,7 +104,19 @@ impl HookRegistry {
     }
 
     pub fn new(hooks: Vec<Arc<dyn Hook>>) -> Self {
-        Self { hooks }
+        Self {
+            hooks,
+            authorizer: None,
+        }
+    }
+
+    /// Install hooks with a runtime permission checker. A side-effecting hook
+    /// is skipped unless its exact submitted scope is already authorized.
+    pub fn with_authorizer(hooks: Vec<Arc<dyn Hook>>, authorizer: HookAuthorizer) -> Self {
+        Self {
+            hooks,
+            authorizer: Some(authorizer),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -115,6 +140,21 @@ impl HookRegistry {
                 && !matcher_matches(matcher, tool)
             {
                 continue;
+            }
+            if let Some(submission) = hook.permission_submission(ctx) {
+                let allowed = self
+                    .authorizer
+                    .as_ref()
+                    .is_some_and(|authorize| authorize(&submission));
+                if !allowed {
+                    tracing::warn!(
+                        scope = %submission.scope,
+                        hazard = ?submission.hazard_level,
+                        "hook skipped: runtime permission required"
+                    );
+                    outcomes.push(HookOutcome::Pass);
+                    continue;
+                }
             }
             outcomes.push(hook.fire(ctx).await);
         }
@@ -537,6 +577,59 @@ mod tests {
 
     fn registry_of(hooks: Vec<Arc<dyn Hook>>) -> HookRegistry {
         HookRegistry::new(hooks)
+    }
+
+    struct HazardHook {
+        fires: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl Hook for HazardHook {
+        fn kind(&self) -> HookEventKind {
+            HookEventKind::TurnStart
+        }
+
+        fn permission_submission(
+            &self,
+            _ctx: &HookContext,
+        ) -> Option<muta_contracts::ToolPermissionSubmission> {
+            Some(muta_contracts::ToolPermissionSubmission {
+                hazard_level: muta_contracts::HazardLevel::CommandExecution,
+                label: "test hook".to_string(),
+                description: "test command hook".to_string(),
+                scope: "echo gated".to_string(),
+                payload: muta_contracts::ToolPermissionPayload::Generic {
+                    summary: "test hook".to_string(),
+                    details: serde_json::Value::Null,
+                },
+            })
+        }
+
+        async fn fire(&self, _ctx: &HookContext) -> HookOutcome {
+            self.fires
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            HookOutcome::Pass
+        }
+    }
+
+    #[tokio::test]
+    async fn side_effecting_hooks_fail_closed_without_exact_runtime_authority() {
+        let fires = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hook: Arc<dyn Hook> = Arc::new(HazardHook {
+            fires: fires.clone(),
+        });
+        HookRegistry::new(vec![hook.clone()])
+            .run_turn_start(1, 0, 0, "s", None)
+            .await;
+        assert_eq!(fires.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+        HookRegistry::with_authorizer(
+            vec![hook],
+            Arc::new(|submission| submission.scope == "echo gated"),
+        )
+        .run_turn_start(1, 0, 0, "s", None)
+        .await;
+        assert_eq!(fires.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     /// `TurnStart` honours `Inject` like `Turn` does — the symmetric turn

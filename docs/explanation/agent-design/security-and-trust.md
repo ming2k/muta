@@ -1,164 +1,106 @@
-# Workspace Security and Trust Architecture
+# Security and trust architecture
 
-Muta's security architecture enforces safe autonomous agent operations through
-three strictly orthogonal domains: **Authority & Trust**, **Interaction Posture**,
-and **Execution Runtime & Containment**.
+Muta treats workspace security as three independent decisions. They are
+orthogonal: satisfying one never satisfies either of the others.
 
-```text
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│ 1. Authority & Trust Domain  ──  Canonical Command: /trust                               │
-│    • What authority does this project have?                                             │
-│    • Split into Workspace Execution Authority and Content-Bound Extension Trust         │
-├─────────────────────────────────────────────────────────────────────────────────────────┤
-│ 2. Interaction Posture Domain  ──  Canonical Command: /autopilot [on|off]               │
-│    • How does the agent interact with humans during tool execution?                     │
-│    • Decides whether missing authority prompts interactively or fails immediately       │
-├─────────────────────────────────────────────────────────────────────────────────────────┤
-│ 3. Execution Runtime & Containment Domain  ──  Runtime Environment                      │
-│    • How does the underlying operating system spawn and isolate process execution?      │
-│    • Host execution (Native Shell) vs. Physical Sandbox (Linux bubblewrap)              │
-└─────────────────────────────────────────────────────────────────────────────────────────┘
-```
+| Plane | Question | State owner |
+|------|----------|-------------|
+| Project asset trust | May this repository's instructions and extension definitions be loaded? | Content-bound domain grants |
+| Spatial workspace boundary | Which physical directories may native file tools address? | Primary and linked roots |
+| Runtime permission gate | May this concrete hazardous operation execute now? | Hazard policy and permission rules |
 
----
+This separation prevents a common category error: trusting a repository's
+Skill or MCP definition is not permission to edit files or run arbitrary
+commands, and allowing an edit does not make repository-authored prompt
+content trustworthy.
 
-## 1. The Three Orthogonal Domains
+## Project asset trust
 
-### Domain 1: Authority & Trust (`/trust`)
-Authority determines **what resources and actions are permitted**. Muta decouples
-authority into two independent axes:
-- **Workspace Execution Authority**: Governs file modifications, test runs,
-  compilation, and dependency management within the workspace root.
-- **Project Extension Trust**: Governs whether project-authored control-plane
-  contributions (`.muta/config.toml` MCP servers and hooks, `.muta/skills/`,
-  `.agents/skills/`, `.claude/skills/`, and `.muta/commands/`) are loaded.
+Project asset trust protects input that travels with a repository. It is split
+into four concrete domains:
 
-Authority decisions are durable and persisted in `workspace_security.json`, keyed
-by the canonical exact workspace root.
+- **MCP** — project MCP server definitions;
+- **Skills** — project-local Skills;
+- **Hooks** — project lifecycle hook definitions and scripts;
+- **Rules** — project instructions and slash-command templates.
 
-### Domain 2: Interaction Posture (`/autopilot`)
-Interaction posture determines **whether human intervention is solicited**.
-- In **attended mode** (`/autopilot off`), missing grants prompt the human
-  operator via interactive modals (once/always/reject).
-- In **autopilot mode** (`/autopilot on`), the agent advances autonomously
-  through approved tools; missing grants fail immediately without deadlocking
-  the unattended run.
+Each domain has its own SHA-256 attestation. The digest covers names, bytes,
+and relevant permission modes. A change to Hooks therefore quarantines Hooks
+without disturbing an unchanged MCP grant. Symlinks and content that cannot be
+enumerated or read fail closed because their effective bytes cannot be
+attested reliably.
 
-> **Core Invariant**: Autopilot is an interaction modifier, **never** an authority
-> grant. An operation that is denied or unauthorized in attended mode remains
-> denied in autopilot mode.
+The states are `absent`, `quarantined`, `trusted`, and `changed`. Grants are
+durable for the canonical workspace root, so reopening the same unchanged
+repository restores only the domains that were explicitly trusted.
 
-### Domain 3: Execution Runtime & Containment
-Execution runtime determines **how processes execute at the OS level**:
-- **Host Execution (Native Shell)**: The default for trusted workspace development.
-  Commands execute in the workspace root with access to the developer's installed
-  toolchains (`rustup`, `cargo`, `nvm`, `python`, `pnpm`), global package caches,
-  and local daemons.
-- **Physical Workspace Sandbox (bubblewrap)**: An optional fail-closed physical
-  process sandbox on Linux using unprivileged user/PID/IPC/network namespaces,
-  dropped capabilities, and an ephemeral home directory.
+`/trust` and `/trust all` trust every present domain. `/trust mcp` and
+`/trust skills` are deliberately narrow. `/trust status` reports every domain;
+`/trust revoke` and `/untrust` revoke all of them. There is no aggregate grant
+and no `/trust workspace` or `/extensions` compatibility surface.
 
----
+A mutation reloads all asset consumers from one new snapshot. Consumers that
+can act later, such as project Skills, MCP tools, and Hooks, re-attest before
+use so a changed working tree cannot keep using a stale catalog grant.
 
-## 2. Two-Axis Authority Model
+## Spatial workspace boundary
 
-Traditional IDEs (e.g. VS Code Workspace Trust) rely on binary, path-only trust.
-If a developer trusts a folder, any script or task introduced later via a `git pull`
-or malicious PR receives unconditional execution privileges.
+The spatial boundary limits native file reads, edits, writes, directory
+operations, and metadata queries. The primary workspace is admitted by
+default. A user may add linked roots for cross-repository work in global
+configuration.
 
-Muta eliminates this vulnerability by separating execution authority from
-content-bound extension trust:
+Paths are resolved from the primary workspace, canonicalized through their
+existing ancestor, and checked against the admitted root set before I/O. This
+blocks `..` traversal and symlink escapes, including dangling-link
+destinations. Invalid linked-root configuration fails closed to the primary
+workspace.
 
-```text
-                        ┌───────────────────────────────┐
-                        │   Workspace Security Model    │
-                        └───────────────┬───────────────┘
-                                        │
-             ┌──────────────────────────┴──────────────────────────┐
-             ▼                                                     ▼
-┌─────────────────────────────┐                       ┌─────────────────────────────┐
-│ Workspace Execution Profile │                       │  Project Extension Trust    │
-├─────────────────────────────┤                       ├─────────────────────────────┤
-│ • unknown     (unconfigured)│                       │ • absent       (no ext)     │
-│ • restricted  (read-only)   │                       │ • quarantined  (untrusted)  │
-│ • development (full dev)    │                       │ • trusted      (attested)   │
-│                             │                       │ • changed      (hash drift) │
-└─────────────────────────────┘                       └─────────────────────────────┘
-```
+The linked-root list is user-owned. Repository configuration cannot expand it;
+otherwise an unreviewed checkout could name a sensitive host directory and
+widen its own containment. Linked roots affect file placement only. They do
+not trust the linked repository's assets and do not authorize shell commands.
 
-### Axis 1: Workspace Execution Profiles
-1. **`unknown`**: Initial state for newly opened directories. Preflight check
-   prevents model rounds or direct-shell executions until the user makes an
-   explicit choice (`/trust` or `/trust readonly`).
-2. **`restricted`**: Read-oriented posture. Safe for surveying codebases.
-   Modifications or command executions require explicit individual permission.
-3. **`development`**: Standard development posture. File writes, dependency
-   installation, and test execution within the workspace are pre-authorized.
+## Runtime permission gate
 
-### Axis 2: Content-Bound Extension Trust
-Project-authored extensions (MCP servers, lifecycle hooks, custom skills, prompt
-commands) can alter the agent's core decision loop. Muta binds extension trust to
-a cryptographic **SHA-256 content digest**:
-- **Cryptographic Attestation**: The hash includes all files, permissions, and
-  contents across `.muta/`, `.agents/skills/`, and `.claude/skills/`. Symlinks are
-  rejected to prevent target escape.
-- **Automatic Quarantine on Drift**: If a team member or upstream PR modifies a
-  hook or MCP configuration, Muta detects the digest mismatch upon the next run
-  and automatically transitions from `trusted` to `changed` (quarantined).
+Runtime policy evaluates what an operation will do now. Safe inspection can
+proceed without a grant. File modification, command execution, process
+lifecycle changes, and network or external calls submit a structured hazard
+description with an exact scope.
 
----
+The broker can satisfy that scope in three ways:
 
-## 3. The `/trust` Command Reference
+- **Once** approves only the pending invocation;
+- **Session** keeps an in-memory rule until the session ends;
+- **Always** persists the exact rule for the workspace.
 
-The `/trust` command provides an ergonomic, unified interface to manage workspace
-security without exposing low-level container details:
+Both native and sandboxed shell commands pass through the same command policy.
+MCP tool calls are external operations and also require runtime authority.
+Lifecycle Hook commands require an existing exact Hook rule; because Hooks run
+inside agent control flow, they fail closed rather than recursively opening a
+permission prompt.
 
-| Command | Action & Scope |
-| :--- | :--- |
-| **`/trust`** (or `/trust all`) | **Full Development Trust**: Sets execution profile to `development` and trusts project extensions if present. |
-| **`/trust workspace`** | **Execution Only**: Pre-authorizes development while keeping project MCP servers, hooks, and skills quarantined. |
-| **`/trust extensions`** | **Extensions Only**: Attests and trusts the exact current content of project MCP servers, hooks, and skills. |
-| **`/trust readonly`** | **Restricted Mode**: Sets workspace to restricted read-only analysis without execution authority. |
-| **`/trust status`** | **Security Panel**: Displays comprehensive status (root path, execution profile, extension digest state, and sandbox capability). |
-| **`/trust revoke`** (or `/untrust`) | **Revoke All**: Resets execution profile to `unknown` and revokes extension trust. |
+Autopilot is an interaction posture, not a fourth grant. An already-authorized
+operation behaves the same in attended and autopilot sessions. A missing grant
+opens an approval prompt when a human is reachable and returns a clear
+`[permission required]` failure when no approver is available. The remedy is a
+runtime permission rule or interactive approval, never an asset-trust command.
 
----
+## How the planes compose
 
-## 4. Execution Runtime: Host Execution vs Physical Sandbox
+For a project MCP call, the decisions are evaluated in order:
 
-### Why Host Execution is the Default for Trusted Projects
-When a developer works on their own trusted codebase, they require seamless
-integration with local developer tooling:
-- Toolchain binaries installed in user homes (`~/.cargo/bin/rustc`, `~/.nvm`,
-  `~/.local/bin`) are immediately accessible.
-- Global compilation and package caches (`~/.cargo/registry`, `~/.npm`,
-  `~/.cache`) prevent redundant, expensive re-downloads.
-- Local communication with development services (Docker daemons, local databases,
-  test runners) operates natively.
+1. the MCP domain must still match its trusted content digest before the
+   project definition is available;
+2. any native file path used by Muta's file tools must remain within an
+   admitted root;
+3. the concrete MCP call must have runtime authority for its submitted scope.
 
-### The Physical Sandbox Containment Layer
-On Linux hosts supporting `bubblewrap` (`bwrap`), Muta provides a hard physical
-boundary:
-- **Filesystem Isolation**: Starts from an empty `tmpfs` root; binds `/usr`
-  and minimal system libraries as read-only; mounts only the exact workspace
-  root as writable; sets `$HOME` to an ephemeral `/tmp/muta-home`.
-- **Process & Capability Stripping**: Unshares User, PID, IPC, UTS, and cgroup
-  namespaces; drops all Linux capabilities (`--cap-drop ALL`); disables user
-  namespace nesting.
-- **Environment Cleansing**: Runs `--clearenv` to scrub ambient host environment
-  variables and blocks injection of `LD_PRELOAD`, `LD_LIBRARY_PATH`, or `BASH_ENV`.
+No step inherits a decision from another. The same composition applies to
+project Hooks and Skills: content admission decides whether Muta may load the
+asset, the spatial boundary controls native file placement, and runtime policy
+controls hazardous effects.
 
----
-
-## 5. Persistence and Zero-Friction Workflow
-
-1. **Atomic Persistence**:
-   Trust records are stored at `~/.local/share/muta/workspace_security.json` with
-   file-level locking (`fsutil::FileLock`) to prevent cross-session race conditions.
-2. **First-Run Consultation (No Silent Blockers)**:
-   When entering an unconfigured workspace (`unknown` profile), Muta presents a
-   friendly startup trust banner inviting the developer to run `/trust`.
-3. **Subsequent Frictionless Sessions**:
-   Once trusted, subsequent launches in the same workspace automatically resolve
-   the `development` profile from disk, passing preflight immediately without
-   repeated manual confirmations.
+See [ADR-0147](../../adr/0147-orthogonal-workspace-security-planes.md) for the
+decision record and [Slash commands](../../reference/commands.md#trust-and-untrust)
+for the command grammar.

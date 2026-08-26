@@ -2,10 +2,10 @@
 //!
 //! Commands are markdown files stored in:
 //!   - Project-local: `.muta/commands/` (highest priority; loaded only while
-//!     the exact extension content is attested)
+//!     the exact Rules-domain content is attested)
 //!   - User-global (XDG): `$XDG_DATA_HOME/muta/commands/`
 
-use muta_contracts::WorkspaceExtensionsState;
+use muta_contracts::WorkspaceTrustState;
 use muta_persistence::paths;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -55,40 +55,40 @@ pub struct CommandDiscovery {
 }
 
 /// Discover commands for a session rooted at `project_root`, gating the
-/// *project-local* directory (`.muta/commands`) behind content-bound extension
+/// *project-local* directory (`.muta/commands`) behind content-bound Rules
 /// trust. User-global commands (`$XDG_DATA_HOME/muta/commands`) always
 /// load — they live on the user's own machine and are trusted
 /// unconditionally, mirroring the global-config rule.
 ///
-/// Unless `extension_state` is [`WorkspaceExtensionsState::Trusted`],
+/// Unless `trust_state` is [`WorkspaceTrustState::Trusted`],
 /// project-local slash commands are not discovered, completed, or runnable.
 ///
 /// The project root is passed explicitly (not derived from the process cwd):
 /// under the unified daemon (ADR-0096) one process hosts sessions for many
 /// projects, so the cwd belongs to whichever client spawned it.
-pub fn discover_commands_with_extensions(
+pub fn discover_commands_with_trust(
     project_root: &Path,
-    extension_state: WorkspaceExtensionsState,
+    trust_state: WorkspaceTrustState,
 ) -> CommandDiscovery {
     merge_command_scopes(
         &project_commands_dir(project_root),
         &paths::get().user_commands_dir(),
-        extension_state,
+        trust_state,
     )
 }
 
 /// Merge the project and user command scopes (testable core of
-/// [`discover_commands_with_extensions`]). Order encodes priority: project (highest)
+/// [`discover_commands_with_trust`]). Order encodes priority: project (highest)
 /// → user. A project command claiming a name a user command also holds is a
 /// shadow event the user must see — a cloned repo could be overriding their
 /// own `/<name>`.
 fn merge_command_scopes(
     project_dir: &Path,
     user_dir: &Path,
-    extension_state: WorkspaceExtensionsState,
+    trust_state: WorkspaceTrustState,
 ) -> CommandDiscovery {
     let user_commands = discover_commands_in(&[user_dir.to_path_buf()]);
-    if !extension_state.is_trusted() {
+    if !trust_state.is_trusted() {
         return CommandDiscovery {
             commands: user_commands,
             shadowed: Vec::new(),
@@ -323,7 +323,7 @@ mod tests {
 
         // Quarantined: project command must not appear (user commands do).
         let quarantined =
-            merge_command_scopes(&project, &user, WorkspaceExtensionsState::Quarantined);
+            merge_command_scopes(&project, &user, WorkspaceTrustState::Quarantined);
         assert_eq!(quarantined.commands.len(), 1);
         assert_eq!(
             quarantined.commands[0].name, "safe",
@@ -335,7 +335,7 @@ mod tests {
         );
 
         // Trusted: both project and user commands appear.
-        let trusted = merge_command_scopes(&project, &user, WorkspaceExtensionsState::Trusted);
+        let trusted = merge_command_scopes(&project, &user, WorkspaceTrustState::Trusted);
         assert_eq!(trusted.commands.len(), 2);
         assert!(
             trusted.commands.iter().any(|c| c.name == "danger"),
@@ -359,7 +359,7 @@ mod tests {
         std::fs::write(user.join("review.md"), "user version").unwrap();
         std::fs::write(user.join("unique.md"), "only mine").unwrap();
 
-        let discovery = merge_command_scopes(&project, &user, WorkspaceExtensionsState::Trusted);
+        let discovery = merge_command_scopes(&project, &user, WorkspaceTrustState::Trusted);
         assert_eq!(discovery.commands.len(), 2, "clash must not duplicate");
         let review = discovery
             .commands

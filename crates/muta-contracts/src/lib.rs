@@ -108,9 +108,7 @@ pub use execution::{
     DirEntry, ExecutionEnvironment, FsError, FsMetadata, FsProvider, ProcessOutput, ProcessRunner,
     ShellIsolation, ToolMiddleware,
 };
-pub use security::{
-    WorkspaceExtensionsState, WorkspaceSecuritySnapshot, WorkspaceTrustState,
-};
+pub use security::{TrustDomain, WorkspaceSecuritySnapshot, WorkspaceTrustState};
 
 pub mod session_title;
 

@@ -51,6 +51,29 @@ impl Hook for CommandHook {
         self.matcher.as_deref()
     }
 
+    fn permission_submission(
+        &self,
+        ctx: &HookContext,
+    ) -> Option<muta_contracts::ToolPermissionSubmission> {
+        let first_word = self.command.split_whitespace().next().unwrap_or("sh");
+        Some(muta_contracts::ToolPermissionSubmission {
+            hazard_level: muta_contracts::HazardLevel::CommandExecution,
+            label: format!("Execute lifecycle hook: `{}`", self.command),
+            description: "Runs a configured lifecycle hook command.".to_string(),
+            scope: self.command.clone(),
+            payload: muta_contracts::ToolPermissionPayload::Command {
+                command: self.command.clone(),
+                cwd: ctx.cwd.as_ref().map(|path| path.display().to_string()),
+                kill_spec: muta_contracts::ProcessKillSpec {
+                    command: first_word.to_string(),
+                    process_group_killable: true,
+                    pkill_target: format!("pkill -f '{first_word}'"),
+                    cwd: ctx.cwd.as_ref().map(|path| path.display().to_string()),
+                },
+            },
+        })
+    }
+
     async fn fire(&self, ctx: &HookContext) -> HookOutcome {
         let stdin_json = context_to_json(ctx);
         let cwd = ctx.cwd.as_deref().unwrap_or_else(|| Path::new("."));
@@ -58,8 +81,8 @@ impl Hook for CommandHook {
         let mut command = if let Some(root) = &self.sandbox_root {
             let snapshot =
                 muta_persistence::workspace_security::WorkspaceSecurityStore::load().snapshot(root);
-            if !snapshot.extensions.is_trusted() {
-                tracing::warn!(command = %self.command, workspace = %root.display(), "project hook quarantined after extension attestation changed");
+            if !snapshot.hooks.is_trusted() {
+                tracing::warn!(command = %self.command, workspace = %root.display(), "project hook quarantined after hook-domain attestation changed");
                 return HookOutcome::Pass;
             }
             // Project hooks are executable extensions. They may inspect the
@@ -361,7 +384,10 @@ fn event_name(event: &HookEvent) -> &'static str {
 
 /// Build the hook registry from the `[hooks]` config. Unknown/invalid specs
 /// are skipped with a warning rather than aborting startup.
-pub fn build_hook_registry(specs: &[HookSpec]) -> muta_agent::HookRegistry {
+pub fn build_hook_registry(
+    specs: &[HookSpec],
+    agent: &std::sync::Arc<muta_agent::Agent>,
+) -> muta_agent::HookRegistry {
     let hooks: Vec<std::sync::Arc<dyn Hook>> = specs
         .iter()
         .map(|spec| {
@@ -375,7 +401,13 @@ pub fn build_hook_registry(specs: &[HookSpec]) -> muta_agent::HookRegistry {
             hook
         })
         .collect();
-    muta_agent::HookRegistry::new(hooks)
+    let weak_agent = std::sync::Arc::downgrade(agent);
+    let authorizer: muta_agent::hooks::HookAuthorizer = std::sync::Arc::new(move |submission| {
+        weak_agent
+            .upgrade()
+            .is_some_and(|agent| agent.is_permission_allowed("hook", &submission.scope))
+    });
+    muta_agent::HookRegistry::with_authorizer(hooks, authorizer)
 }
 
 #[cfg(test)]

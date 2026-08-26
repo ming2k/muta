@@ -58,10 +58,9 @@ async fn prehosted_with_catalog(
     let (req_tx, req_rx) = mpsc::unbounded_channel::<AgentRequest>();
     let (bc_tx, _) = broadcast::channel::<AgentResponse>(1024);
     let registry = Arc::new(SessionRegistry::prehost_only());
-    // Pre-configure the workspace decision so the attach path's trust push
-    // (unconfigured workspaces only) stays out of these tests' frames.
-    // `unconfigured_workspace_pushes_trust_prompt_on_attach` covers that
-    // branch end-to-end. The state file needs its own directory: the
+    // The synthetic project has no contributed assets, so the attach path has
+    // no quarantine notice to add to these tests' frames. The state file
+    // needs its own directory: the
     // atomic-write path chmods the *parent* private (0700), which fails
     // with EPERM on the shared root-owned /tmp itself.
     let state_dir = std::env::temp_dir().join(format!("muta-serve-it-{}", uuid::Uuid::new_v4()));
@@ -71,7 +70,6 @@ async fn prehosted_with_catalog(
             state_dir.join("security.json"),
         ),
     );
-    let _ = security.trust_workspace(std::path::Path::new("/tmp/muta-test-project"));
     let base = idle_base(session.id().await);
 
 
@@ -1866,15 +1864,11 @@ async fn control_suspend_session_parks_a_contentful_session() {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace-trust attach push (regression: the trust question used to be
-// emitted during bootstrap, before the session's broadcast channel had any
-// subscriber, so the broadcast silently dropped it and no client ever saw
-// it. The WS attach path now pushes the prompt to each attaching client
-// while the workspace stays unconfigured.)
+// Workspace asset-trust attach notice.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn unconfigured_workspace_pushes_trust_prompt_on_attach() {
+async fn unconfigured_workspace_pushes_trust_notice_on_attach() {
     let tmp = tempfile::tempdir().unwrap();
     let security_file = tmp.path().join("workspace_security.json");
     let session = Arc::new(SessionStore::for_path(tmp.path().join("session.json")));
@@ -1936,10 +1930,8 @@ async fn unconfigured_workspace_pushes_trust_prompt_on_attach() {
     .await
     .unwrap();
 
-    // Welcome, then the attach-sync snapshots, then — for an unconfigured
-    // workspace with project contributions — the banner notice and the `trust-` question.
+    // Welcome, then attach-sync snapshots and the quarantine banner.
     let mut saw_notice = false;
-    let mut question: Option<muta_contracts::UserQuestionRequest> = None;
     for _ in 0..12 {
         let raw = tokio::time::timeout(Duration::from_secs(2), ws.next())
             .await
@@ -1961,22 +1953,11 @@ async fn unconfigured_workspace_pushes_trust_prompt_on_attach() {
             {
                 saw_notice = true
             }
-            RoundEvent::UserQuestionRequest(q) if q.id.starts_with("trust-") => question = Some(q),
             _ => {}
         }
-        if saw_notice && question.is_some() {
+        if saw_notice {
             break;
         }
     }
-    let question = question.expect("trust question never pushed to attaching client");
     assert!(saw_notice, "trust banner notice never pushed");
-    assert_eq!(question.questions.len(), 1);
-    assert_eq!(question.questions[0].options.len(), 2);
-
-
-    // (The reply -> persistence half is covered by the driver harness in
-    // `lifecycle_integration`; this test pins the *delivery* regression:
-    // the prompt must reach the attaching client at all. Before the fix,
-    // the question was broadcast before any subscriber existed and was
-    // silently dropped.)
 }

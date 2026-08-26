@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced aggregate workspace trust with independent content-bound `mcp`,
+  `skills`, `hooks`, and `rules` grants. `/trust` now has the closed grammar
+  `/trust [all|mcp|skills|status|revoke]`; `/untrust` revokes all domains, and
+  the ambiguous `/extensions` and `/trust workspace` surfaces are removed.
+- Separated linked filesystem roots from project asset trust. Additional roots
+  now come only from the user-owned global `[workspace].additional_roots`
+  setting; repository configuration cannot widen its own file boundary.
+- Routed sandbox shell, MCP calls, and lifecycle Hook commands through the
+  runtime hazard/permission model. Missing unattended authority now reports
+  `[permission required]` with runtime-only guidance.
+
+### Added
+
+- Project MCP definitions in `.muta/mcp.json`, top-level `skills/` discovery,
+  trusted project rules in model context, and live reload/unload of every asset
+  domain (ADR-0147).
+
 ## [0.35.1] - 2026-08-26
 
 ### Added

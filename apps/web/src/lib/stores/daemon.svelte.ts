@@ -885,6 +885,10 @@ export class DaemonStore {
         resp.ConversationReplaced.commands ?? [],
         resp.ConversationReplaced.round_interrupts ?? [],
       );
+    } else if ("CopyToClipboard" in resp) {
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        navigator.clipboard.writeText(resp.CopyToClipboard.text).catch(() => {});
+      }
     } else if ("Error" in resp) {
       this.sessionError = resp.Error;
       this.pushToast("error", "Agent error", resp.Error);

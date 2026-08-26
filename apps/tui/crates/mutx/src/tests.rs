@@ -295,6 +295,26 @@ fn command_ledger_restores_as_non_conversational_command_rows() {
     assert_eq!(shell.command_result_text(), None);
 }
 
+#[test]
+fn command_error_settles_pending_command_in_place() {
+    use crate::model::document::{CommandPhase, TranscriptMessage};
+
+    let mut message = TranscriptMessage::pending_command("trust", "workspace");
+    assert_eq!(message.command_result_phase(), Some(CommandPhase::Pending));
+    assert_eq!(message.command_result_text(), None);
+
+    let settled = message.settle_command_result(muta_contracts::CommandResult::Error {
+        message: "Unknown /trust subcommand 'workspace'.".to_string(),
+        detail: None,
+    });
+    assert!(settled);
+    assert_eq!(message.command_result_phase(), Some(CommandPhase::Completed));
+    assert_eq!(
+        message.command_result_text().as_deref(),
+        Some("Error: Unknown /trust subcommand 'workspace'.")
+    );
+}
+
 /// ADR-0106 §2: on resume, command rows merge at their turn seams — a
 /// command issued between two prompts renders between those rounds, exactly
 /// where it appeared live — instead of all appending to the dialogue's tail.
@@ -1901,32 +1921,16 @@ fn completions_autopilot_subcommand_offers_on_off() {
 }
 
 #[test]
-fn completions_extensions_and_trust_subcommands_expand_options() {
+fn completions_expose_only_canonical_trust_subcommands() {
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
 
-    // /extensions <space> offers all discrete subcommands
+    // Retired extension command is not suggested.
     app.input = "/extensions ".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
-    assert_eq!(app.completion_kind(), CompletionKind::Slash);
-    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    assert_eq!(
-        labels,
-        vec![
-            "/extensions status",
-            "/extensions trust",
-            "/extensions untrust"
-        ]
-    );
+    assert!(completions.is_empty());
 
-    // Typing prefix narrows candidate
-    app.input = "/extensions tr".to_string();
-    app.cursor_position = app.input.chars().count();
-    let completions = app.completions();
-    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    assert_eq!(labels, vec!["/extensions trust"]);
-
-    // /trust <space> offers all 6 discrete subcommands
+    // /trust <space> offers only the closed asset-domain grammar.
     app.input = "/trust ".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
@@ -1934,21 +1938,20 @@ fn completions_extensions_and_trust_subcommands_expand_options() {
     assert_eq!(
         labels,
         vec![
-            "/trust workspace",
-            "/trust extensions",
             "/trust all",
-            "/trust readonly",
+            "/trust mcp",
+            "/trust skills",
             "/trust status",
             "/trust revoke"
         ]
     );
 
-    // /trust w narrows to /trust workspace
+    // Removed subcommands do not reappear through prefix matching.
     app.input = "/trust w".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    assert_eq!(labels, vec!["/trust workspace"]);
+    assert!(labels.is_empty());
 }
 
 /// The official OpenAI template (Name / Token) seeds OpenAI text models directly.

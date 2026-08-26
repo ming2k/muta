@@ -73,9 +73,11 @@ The architecture defines a three-tier agent hierarchy: **`Supervisor`**, **`Mast
 | Term | Definition |
 |------|------------|
 | **`ToolPool`** | Unified catalog and declaration pool of all available system, built-in, dynamic (MCP), and user-injected tools. |
-| **`HazardLevel`** | Explicit hazard classification on tools: `FileWrite` (mutates files), `CommandExecution` (executes shell commands), `ProcessLifecycle` (process management). |
+| **`HazardLevel`** | Explicit operation classification: `Safe`, `FileModification`, `CommandExecution`, `ProcessLifecycle`, or `NetworkOrExternal`. Hazardous calls submit an exact runtime permission scope. |
 | **`PermissionStore`** | The single source of truth for runtime tool authority. Evaluates approval scopes: `Once` (single call), `Session` (in-memory per session), `Always` (persisted per workspace). |
-| **workspace asset trust** | Content-bound SHA-256 digest trust for project-supplied static assets (skills, MCP servers, hooks, AGENTS.md, config.toml). Decoupled from runtime tool execution. |
+| **workspace asset trust** | Canonical-workspace-keyed SHA-256 trust for the independent `mcp`, `skills`, `hooks`, and `rules` project asset domains. It controls loading only. |
+| **spatial workspace boundary** | The canonical primary workspace plus user-configured linked roots within which native file operations may occur. It does not load assets or authorize runtime operations. |
+| **runtime permission grant** | Authority for one concrete hazardous operation scope, granted Once, for the Session, or Always. It does not trust project assets or widen filesystem roots. |
 | **sandbox bash tool** | Dedicated `sandbox_bash` tool providing physical workspace containment for isolated testing and analysis. |
 | **autopilot** | A persisted interaction posture: never wait for confirmations, questions, or stdin. Missing grants fail immediately. [Autopilot operation](../explanation/agent-design/autopilot.md) |
 | **`tool_call_id` pairing** | The wire requirement that every result message references a preceding call id; preserved across pruning and fallback. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |

@@ -197,6 +197,9 @@ pub struct Agent {
     /// Workspace authority is orthogonal to interaction posture. Shared with
     /// spawned runners so delegation cannot silently widen the parent's grant.
     workspace_security: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
+    /// Content-attested project instructions from the Rules asset domain.
+    /// Replaced live when `/trust` or `/untrust` changes admission.
+    project_rules: Arc<std::sync::RwLock<String>>,
     /// Parked interactive-input requests (L3.5 β). Mirrors `ask_user`.
     pub(crate) skills_registry: skills::SkillRegistry,
     thread_id: Arc<std::sync::Mutex<Option<String>>>,
@@ -947,6 +950,7 @@ impl Agent {
             workspace_security: Arc::new(std::sync::Mutex::new(
                 muta_contracts::WorkspaceSecuritySnapshot::default(),
             )),
+            project_rules: Arc::new(std::sync::RwLock::new(String::new())),
             skills_registry,
             thread_id,
             accounting_actor_id: std::sync::Mutex::new("master".to_string()),
@@ -1092,6 +1096,11 @@ impl Agent {
             provider_guidance,
             autopilot: self.get_autopilot(),
             available_skills,
+            project_rules: self
+                .project_rules
+                .read()
+                .map(|rules| rules.clone())
+                .unwrap_or_default(),
             additional_workspace_roots: self
                 .additional_workspace_roots
                 .iter()
@@ -1656,6 +1665,12 @@ impl Agent {
             .unwrap_or_else(|error| error.into_inner()) = snapshot;
     }
 
+    pub fn set_project_rules(&self, rules: impl Into<String>) {
+        if let Ok(mut current) = self.project_rules.write() {
+            *current = rules.into();
+        }
+    }
+
     pub fn workspace_security(&self) -> muta_contracts::WorkspaceSecuritySnapshot {
         self.workspace_security
             .lock()
@@ -2193,6 +2208,17 @@ impl Agent {
         rules: &[muta_persistence::config::PermissionRuleConfig],
     ) {
         self.permissions.seed_from_config(rules);
+    }
+
+    /// Check an exact runtime permission scope without prompting. Used by
+    /// lifecycle hooks, which execute inside agent control flow and therefore
+    /// must fail closed rather than recursively opening a permission prompt.
+    pub fn is_permission_allowed(&self, tool: &str, scope: &str) -> bool {
+        self.permissions
+            .is_allowed(&crate::permission_store::PermissionRule {
+                tool: tool.to_string(),
+                scope: scope.to_string(),
+            })
     }
 
     /// Replace the complete tool snapshot published by one dynamic source.
@@ -3809,13 +3835,7 @@ impl Agent {
             }
             crate::permission_policy::PolicyDecision::MissingAuthority { request, rule } => {
                 if self.get_autopilot() {
-                    return ToolOutput::Text(format!(
-                        "[authority required] Tool '{}' is not authorised for scope '{}'. \
-                         Autopilot controls interaction only and cannot create grants. \
-                         Run `/trust workspace` to authorise ordinary workspace work, \
-                         or add a narrow permission rule.",
-                        request.tool, request.scope
-                    ));
+                    return permission_required_output(&request);
                 }
                 // The single interactive-park path. Both the broker (a
                 // write/execute the user must approve) and the bash
@@ -3839,9 +3859,7 @@ impl Agent {
                         tool = %request.tool,
                         "autonomous posture: permission refused (fail closed)"
                     );
-                    return ToolOutput::PermissionDenied {
-                        tool: tool.name().to_string(),
-                    };
+                    return permission_required_output(&request);
                 }
                 let receiver = self
                     .human_broker
@@ -4102,6 +4120,38 @@ fn scope_target_to_rule(target: &muta_contracts::ScopeTarget) -> String {
     }
 }
 
+/// Render a missing runtime grant without conflating it with project asset
+/// trust. This is returned when no interactive approver is available.
+fn permission_required_output(request: &muta_contracts::PermissionRequest) -> ToolOutput {
+    use muta_contracts::ToolPermissionPayload;
+
+    let operation = match request.submission.as_ref().map(|s| &s.payload) {
+        Some(ToolPermissionPayload::Command { command, .. }) => {
+            format!("Command '{command}' requires runtime execution grant.")
+        }
+        Some(ToolPermissionPayload::FileEdit { paths, operation }) => format!(
+            "File operation '{operation}' on '{}' requires runtime file-modification grant.",
+            paths.join(", ")
+        ),
+        Some(ToolPermissionPayload::Process { target, action }) => format!(
+            "Process operation '{action}' on '{target}' requires runtime lifecycle grant."
+        ),
+        Some(ToolPermissionPayload::Generic { summary, .. }) => {
+            format!("External operation '{summary}' requires runtime grant.")
+        }
+        None => format!(
+            "Tool '{}' for scope '{}' requires runtime grant.",
+            request.tool, request.scope
+        ),
+    };
+    ToolOutput::Error {
+        message: format!(
+            "[permission required] {operation}\nAdd a permission rule in settings or approve interactively."
+        ),
+        detail: None,
+    }
+}
+
 fn valid_assistant_response(message: &Message) -> bool {
     !message.content.is_empty()
         || message
@@ -4214,7 +4264,50 @@ impl crate::permission_policy::PermissionContext for Agent {
 }
 #[cfg(test)]
 mod tests {
-    use super::{RoundState, ScopedToolDisable, checkpoint_tool_signature, runner_result_text};
+    use super::{
+        RoundState, ScopedToolDisable, checkpoint_tool_signature, permission_required_output,
+        runner_result_text,
+    };
+
+    #[test]
+    fn missing_command_authority_has_runtime_only_guidance() {
+        let command = "pwd; ls -la".to_string();
+        let request = muta_contracts::PermissionRequest {
+            id: String::new(),
+            tool: "bash".to_string(),
+            label: "run command".to_string(),
+            description: String::new(),
+            arguments: String::new(),
+            scope: command.clone(),
+            elevation: false,
+            one_off: false,
+            origin: None,
+            hazard: Some(muta_contracts::HazardLevel::CommandExecution),
+            submission: Some(muta_contracts::ToolPermissionSubmission {
+                hazard_level: muta_contracts::HazardLevel::CommandExecution,
+                label: "run command".to_string(),
+                description: String::new(),
+                scope: command.clone(),
+                payload: muta_contracts::ToolPermissionPayload::Command {
+                    command: command.clone(),
+                    cwd: None,
+                    kill_spec: muta_contracts::ProcessKillSpec {
+                        command: "pwd".to_string(),
+                        process_group_killable: true,
+                        pkill_target: "pkill -f pwd".to_string(),
+                        cwd: None,
+                    },
+                },
+            }),
+        };
+
+        let output = permission_required_output(&request).to_text();
+        assert!(output.contains(
+            "[permission required] Command 'pwd; ls -la' requires runtime execution grant."
+        ));
+        assert!(output.contains("Add a permission rule in settings or approve interactively."));
+        assert!(!output.contains("/trust"));
+    }
 
     fn tool_call(id: &str, arguments: &str) -> muta_contracts::ToolCall {
         muta_contracts::ToolCall {

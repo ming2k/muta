@@ -87,6 +87,7 @@ pub fn schema_key_tree() -> BTreeMap<String, BTreeMap<String, String>> {
     root.insert("hidden_models".to_string(), BTreeMap::new());
     root.insert("skills".to_string(), BTreeMap::new());
     root.insert("permissions".to_string(), BTreeMap::new());
+    root.insert("workspace".to_string(), BTreeMap::new());
     root.insert("bash_policy".to_string(), BTreeMap::new());
     root.insert("websearch".to_string(), BTreeMap::new());
     root.insert("master".to_string(), BTreeMap::new());
@@ -110,6 +111,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "hidden_models",
     "skills",
     "permissions",
+    "workspace",
     "bash_policy",
     "websearch",
     "master",

@@ -41,6 +41,9 @@ pub struct SystemPromptContext {
     pub autopilot: bool,
     /// Available skills formatted as XML metadata for progressive disclosure.
     pub available_skills: String,
+    /// Content-attested project instructions. Empty while the Rules asset
+    /// domain is absent, quarantined, or changed.
+    pub project_rules: String,
     /// Canonicalized additional workspace roots admitted alongside the
     /// primary (ADR-0142). Empty for the default single-root session;
     /// `WorkspaceRootsGuidance` renders the cross-project admission notice
