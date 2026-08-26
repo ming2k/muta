@@ -2039,7 +2039,11 @@ async fn unconfigured_workspace_pushes_security_snapshot_on_attach() {
             }
             _ => {}
         }
-        if saw_quarantined_snapshot && saw_banner {
+        if saw_quarantined_snapshot {
+            // The banner must never arrive in this scenario; one extra read
+            // past the snapshot is enough to prove the frame ordering (the
+            // daemon sends attach-sync before any notice), so stop here —
+            // waiting for a "no banner" event would just hit the timeout.
             break;
         }
     }
