@@ -124,7 +124,7 @@ pub use capability::{
 pub use catalog::{Channel, ProviderEntry, Transport};
 pub use channel_auth::{ChannelAuth, LoginMethod};
 pub use doom_guard_config::DoomGuardConfig;
-pub use dynamic::{DynamicCatalog, DynamicToolSink};
+pub use dynamic::{DynamicCatalog, DynamicToolSink, DynamicToolSource};
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,
     ConnectionPickerRow, ConnectionPickerSnapshot, ContextTokenSnapshot, ContextTokenSource,

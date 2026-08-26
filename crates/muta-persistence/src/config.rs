@@ -1056,6 +1056,12 @@ impl Config {
             enabled: bool,
             #[serde(default)]
             read_only: bool,
+            /// Config-time tool scoping (ADR-0085 follow-up): original-name
+            /// allow/deny lists, same semantics as `[mcp.<name>]` TOML.
+            #[serde(default)]
+            allow_tools: Vec<String>,
+            #[serde(default)]
+            deny_tools: Vec<String>,
         }
         fn default_true() -> bool {
             true
@@ -1072,10 +1078,13 @@ impl Config {
                         servers.insert(
                             name,
                             McpServerConfig {
+                                url: None,
                                 command,
                                 environment: entry.environment,
                                 enabled: entry.enabled,
                                 read_only: entry.read_only,
+                                allow_tools: entry.allow_tools,
+                                deny_tools: entry.deny_tools,
                                 sandbox_root: None,
                             },
                         );
@@ -1181,10 +1190,11 @@ impl Config {
                     }
                 }
             } else {
-                std::path::Path::new(raw)
-                    .starts_with("/")
-                    .then(|| std::path::PathBuf::from(raw))
-                    .unwrap_or_else(|| canonical_root.join(raw))
+                if std::path::Path::new(raw).starts_with("/") {
+                    std::path::PathBuf::from(raw)
+                } else {
+                    canonical_root.join(raw)
+                }
             };
             let expanded = if expanded.is_absolute() {
                 expanded

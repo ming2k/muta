@@ -71,6 +71,19 @@ impl DynamicToolSink for DynamicToolRegistry {
     }
 }
 
+impl muta_contracts::DynamicToolSource for DynamicToolRegistry {
+    fn snapshot_tools(&self) -> Vec<Arc<dyn Tool>> {
+        // First-wins on cross-source name collision, mirroring the sink-side
+        // advertisement order (`ToolManager::installed` dedupes the same way).
+        let mut seen = HashSet::new();
+        self.snapshot()
+            .into_iter()
+            .filter(|entry| seen.insert(entry.tool.name().to_string()))
+            .map(|entry| entry.tool)
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

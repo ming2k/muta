@@ -7,8 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **MCP Streamable HTTP transport:** `[mcp.<name>]` now accepts a `url` key
+  (e.g. `url = "https://example.com/mcp"`) alongside the existing `command`
+  stdio form; `url` wins when both are present. Responses are parsed in both
+  legal shapes (plain JSON and SSE `data:` frames), a server-issued
+  `Mcp-Session-Id` is captured at initialize and echoed on every request,
+  and HTTP-level connection failures classify as retry-safe transport errors
+  while delivered 4xx/5xx bodies are never retried. `muta mcp ls` displays
+  the endpoint for `url` servers.
+- **MCP config-time tool scoping (ADR-0085 follow-up):** `[mcp.<name>]` and
+  project `.muta/mcp.json` entries accept `allow_tools` / `deny_tools`,
+  matched against the server's original (unsanitized) tool names. Deny wins
+  over allow; an empty allow-list admits everything. Filtered tools are never
+  advertised to the model.
+- **mcp_specialist runner delegation wired (ADR-0138):** the `mcp_specialist`
+  runner preset now receives the session's live MCP tools at spawn — runner
+  dispatch reads the master's dynamic-tool registry through the new
+  `DynamicToolSource` port, so the 10-minute re-discovery loop and `/mcp`
+  reconnects reach later children without re-binding. Only this profile
+  consults the source; `explore` / `code` / `title` children still see no MCP
+  tools, profile runtime hard rules still apply to injected tools, and static
+  tools win name collisions.
+
 ### Changed
 
+- **MCP protocol negotiation:** the client now offers `2025-06-18` and
+  accepts any server answer in the supported set (`2025-06-18`,
+  `2025-03-26`, `2024-11-05`); a server replying with a revision outside
+  that set fails the connection instead of continuing in an undefined
+  dialect.
 - Shell execution: the idle watchdog's no-output budget now scales with the
   caller's `timeout` (one third, clamped to [5s, 60s]) instead of a fixed 10s,
   so an explicitly larger `timeout` grants proportionally more idle tolerance

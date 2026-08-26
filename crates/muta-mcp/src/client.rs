@@ -30,7 +30,13 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 use tokio::time::{Duration, timeout};
 
-const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+/// Protocol revisions this client can speak, newest first. The client sends
+/// its newest and steps down to the newest revision the server offered, per
+/// the MCP version-negotiation rule ("the client sends the version it
+/// supports; if the server does not support it, the server responds with the
+/// version it supports, and the client either downgrades or disconnects").
+/// Over stdio the 2024-11-05 baseline remains the guaranteed common tongue.
+const MCP_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 const MCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 /// Per-call timeout for a single JSON-RPC request over an established
 /// connection. A server that accepts the request but never responds (or streams
@@ -90,78 +96,120 @@ struct McpTransport {
     stdout: BufReader<ChildStdout>,
 }
 
-impl Drop for McpTransport {
+/// One open connection to an MCP server: either a spawned stdio child or a
+/// Streamable-HTTP endpoint. Both speak the same JSON-RPC message grammar, so
+/// [`McpClient::request`] normalizes over this enum.
+enum McpConnection {
+    Stdio(McpTransport),
+    Http {
+        endpoint: reqwest::Url,
+        client: reqwest::Client,
+        /// Session id issued by the server (`Mcp-Session-Id` on initialize),
+        /// echoed on every subsequent request. `None` until (and unless) the
+        /// server assigns one.
+        session_id: Option<String>,
+    },
+}
+
+impl Drop for McpConnection {
     fn drop(&mut self) {
         // `kill_on_drop` signals only the direct child. Native tree
         // containment also takes down wrapped servers (`npx`/`uvx`), so a
         // reconfigured or disabled MCP source cannot leak its grandchild.
-        let _ = self.process_tree.terminate();
+        if let McpConnection::Stdio(transport) = self {
+            let _ = transport.process_tree.terminate();
+        }
     }
 }
 
 struct McpClient {
-    transport: Mutex<McpTransport>,
+    transport: Mutex<McpConnection>,
     next_id: AtomicU64,
 }
 
 impl McpClient {
     async fn connect(config: &McpServerConfig) -> Result<Arc<Self>, String> {
-        let (program, args) = config
-            .command
-            .split_first()
-            .ok_or_else(|| "MCP command must not be empty".to_string())?;
-
-        let mut command = if let Some(root) = &config.sandbox_root {
-            // Project-authored servers are untrusted executable extensions.
-            // Extension trust permits loading their exact declaration, but it
-            // never grants ambient host or workspace-write/network authority.
-            muta_platform::workspace_sandbox::command_with_environment(
-                program,
-                args,
-                &config.environment,
-                root,
-                muta_platform::workspace_sandbox::WorkspaceAccess::ReadOnly,
-                muta_platform::workspace_sandbox::NetworkAccess::Disabled,
-            )?
+        // Transport selection: a configured `url` reaches the server over
+        // Streamable HTTP; otherwise `command` spawns a local stdio child.
+        // (`url` wins when both are set, mirroring the common MCP client
+        // configuration shape.)
+        let connection = if let Some(url) = config.url.as_deref() {
+            let endpoint: reqwest::Url = url
+                .parse()
+                .map_err(|error| format!("invalid MCP url '{url}': {error}"))?;
+            if !matches!(endpoint.scheme(), "http" | "https") {
+                return Err(format!(
+                    "MCP url '{url}' must use http or https (got '{}')",
+                    endpoint.scheme()
+                ));
+            }
+            McpConnection::Http {
+                endpoint,
+                client: reqwest::Client::builder()
+                    .timeout(MCP_REQUEST_TIMEOUT)
+                    .build()
+                    .map_err(|error| format!("failed to build MCP HTTP client: {error}"))?,
+                session_id: None,
+            }
         } else {
-            let mut command = Command::new(program);
-            command.args(args).envs(&config.environment);
-            command
-        };
-        // MCP servers are usually wrappers (`npx`, `uvx`) around a real
-        // server process. Native owned-tree containment ensures teardown
-        // reaches the wrapped process too.
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
+            let (program, args) = config
+                .command
+                .split_first()
+                .ok_or_else(|| "MCP command must not be empty".to_string())?;
 
-        let (mut child, process_tree) = muta_platform::process::spawn_owned(&mut command)
-            .map_err(|error| format!("failed to spawn '{}': {}", program, error))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "MCP server stdin is unavailable".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "MCP server stdout is unavailable".to_string())?;
-        let client = Arc::new(Self {
-            transport: Mutex::new(McpTransport {
+            let mut command = if let Some(root) = &config.sandbox_root {
+                // Project-authored servers are untrusted executable extensions.
+                // Extension trust permits loading their exact declaration, but it
+                // never grants ambient host or workspace-write/network authority.
+                muta_platform::workspace_sandbox::command_with_environment(
+                    program,
+                    args,
+                    &config.environment,
+                    root,
+                    muta_platform::workspace_sandbox::WorkspaceAccess::ReadOnly,
+                    muta_platform::workspace_sandbox::NetworkAccess::Disabled,
+                )?
+            } else {
+                let mut command = Command::new(program);
+                command.args(args).envs(&config.environment);
+                command
+            };
+            // MCP servers are usually wrappers (`npx`, `uvx`) around a real
+            // server process. Native owned-tree containment ensures teardown
+            // reaches the wrapped process too.
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true);
+
+            let (mut child, process_tree) = muta_platform::process::spawn_owned(&mut command)
+                .map_err(|error| format!("failed to spawn '{}': {}", program, error))?;
+            let stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| "MCP server stdin is unavailable".to_string())?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| "MCP server stdout is unavailable".to_string())?;
+            McpConnection::Stdio(McpTransport {
                 process_tree,
                 _child: child,
                 stdin,
                 stdout: BufReader::new(stdout),
-            }),
+            })
+        };
+        let client = Arc::new(Self {
+            transport: Mutex::new(connection),
             next_id: AtomicU64::new(1),
         });
 
-        client
+        let response = client
             .request(
                 "initialize",
                 json!({
-                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "protocolVersion": MCP_PROTOCOL_VERSIONS[0],
                     "capabilities": {},
                     "clientInfo": {
                         "name": "muta",
@@ -170,6 +218,23 @@ impl McpClient {
                 }),
             )
             .await?;
+        // Version negotiation: a compliant server echoes a version it
+        // supports. If it answered with an older revision we still speak,
+        // we stay on our newest common revision for the connection's
+        // lifetime — a mismatch here is informational only for stdio, since
+        // all revisions share the same JSON-RPC framing. A revision we
+        // cannot speak at all fails the connection rather than continuing
+        // in an undefined dialect. (A missing field is the pre-2024-11-05
+        // legacy shape; the baseline revision covers it.)
+        if let Some(server_version) = response.get("protocolVersion").and_then(Value::as_str)
+            && !MCP_PROTOCOL_VERSIONS.contains(&server_version)
+        {
+            return Err(format!(
+                "MCP server speaks unsupported protocol revision {server_version} \
+                     (client supports: {})",
+                MCP_PROTOCOL_VERSIONS.join(", ")
+            ));
+        }
         client
             .notify("notifications/initialized", json!({}))
             .await?;
@@ -185,35 +250,88 @@ impl McpClient {
             "params": params,
         });
 
-        let mut transport = self.transport.lock().await;
-        write_message(&mut transport.stdin, &payload)
-            .await
-            .map_err(|msg| McpError::Transport(format!("MCP {method} write failed: {msg}")))?;
-
-        // Bound how long a single request can hang the agent: a server that
-        // keeps the pipe open without answering is released rather than
-        // pinning the transport lock forever.
-        let response = timeout(MCP_REQUEST_TIMEOUT, async {
-            loop {
-                let response = read_message(&mut transport.stdout).await.map_err(|msg| {
-                    McpError::Transport(format!("MCP {method} read failed: {msg}"))
-                })?;
-                if response.get("id").and_then(Value::as_u64) != Some(id) {
-                    // An unrelated notification/async reply: skip, keep reading
-                    // for *our* id.
-                    continue;
-                }
-                // Our reply — break out of the async block with it.
-                break Ok(response);
+        let mut connection = self.transport.lock().await;
+        let response = match &mut *connection {
+            McpConnection::Stdio(transport) => {
+                write_message(&mut transport.stdin, &payload)
+                    .await
+                    .map_err(|msg| {
+                        McpError::Transport(format!("MCP {method} write failed: {msg}"))
+                    })?;
+                // Bound how long a single request can hang the agent: a server that
+                // keeps the pipe open without answering is released rather than
+                // pinning the transport lock forever.
+                timeout(MCP_REQUEST_TIMEOUT, async {
+                    loop {
+                        let response =
+                            read_message(&mut transport.stdout).await.map_err(|msg| {
+                                McpError::Transport(format!("MCP {method} read failed: {msg}"))
+                            })?;
+                        if response.get("id").and_then(Value::as_u64) != Some(id) {
+                            // An unrelated notification/async reply: skip, keep reading
+                            // for *our* id.
+                            continue;
+                        }
+                        // Our reply — break out of the async block with it.
+                        break Ok(response);
+                    }
+                })
+                .await
+                .map_err(|_| {
+                    McpError::Transport(format!(
+                        "MCP {method} timed out after {}s",
+                        MCP_REQUEST_TIMEOUT.as_secs()
+                    ))
+                })??
             }
-        })
-        .await
-        .map_err(|_| {
-            McpError::Transport(format!(
-                "MCP {method} timed out after {}s",
-                MCP_REQUEST_TIMEOUT.as_secs()
-            ))
-        })??;
+            McpConnection::Http {
+                endpoint,
+                client,
+                session_id,
+            } => {
+                let mut request = client
+                    .post(endpoint.clone())
+                    .header("Accept", "application/json, text/event-stream")
+                    .json(&payload);
+                if let Some(session) = session_id.as_deref() {
+                    request = request.header("Mcp-Session-Id", session);
+                }
+                // The reqwest client carries the per-request timeout; a
+                // connection-level failure (DNS, refused, TLS, HTTP/2 reset)
+                // is transport-class and safe to reconnect-retry, while any
+                // delivered body is parsed below and classified as protocol.
+                let http = request.send().await.map_err(|error| {
+                    McpError::Transport(format!("MCP {method} HTTP failed: {error}"))
+                })?;
+                let status = http.status();
+                if !status.is_success() {
+                    // 4xx/5xx: the server answered and refused — a protocol
+                    // result, not a broken pipe.
+                    return Err(McpError::Protocol(format!(
+                        "MCP {method} HTTP {status}: {}",
+                        http.text().await.unwrap_or_default()
+                    )));
+                }
+                if session_id.is_none() {
+                    *session_id = http
+                        .headers()
+                        .get("Mcp-Session-Id")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_string);
+                }
+                let content_type = http
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                let body = http
+                    .text()
+                    .await
+                    .map_err(|error| McpError::Transport(format!("MCP {method} body: {error}")))?;
+                parse_http_message(&body, &content_type, method)?
+            }
+        };
 
         // At this point the response is well-formed and carries our id: a
         // JSON-RPC `error` object is a *protocol* result, not a transport
@@ -233,11 +351,62 @@ impl McpClient {
             "method": method,
             "params": params,
         });
-        let mut transport = self.transport.lock().await;
-        write_message(&mut transport.stdin, &payload)
-            .await
-            .map_err(|msg| McpError::Transport(format!("MCP {method} notify failed: {msg}")))
+        let mut connection = self.transport.lock().await;
+        match &mut *connection {
+            McpConnection::Stdio(transport) => write_message(&mut transport.stdin, &payload)
+                .await
+                .map_err(|msg| McpError::Transport(format!("MCP {method} notify failed: {msg}"))),
+            McpConnection::Http {
+                endpoint,
+                client,
+                session_id,
+            } => {
+                let mut request = client
+                    .post(endpoint.clone())
+                    .header("Accept", "application/json, text/event-stream")
+                    .json(&payload);
+                if let Some(session) = session_id.as_deref() {
+                    request = request.header("Mcp-Session-Id", session);
+                }
+                // Notifications have no id and thus no reply to correlate:
+                // spec-compliant servers answer 202 with (possibly) an empty
+                // body. Transport failure still classifies as reconnect-safe.
+                let http = request.send().await.map_err(|error| {
+                    McpError::Transport(format!("MCP {method} notify failed: {error}"))
+                })?;
+                let _ = http.text().await;
+                Ok(())
+            }
+        }
     }
+}
+
+/// Parse a Streamable-HTTP response body into a JSON-RPC reply for `method`.
+/// A 200/201 may deliver either `application/json` (a single object) or
+/// `text/event-stream` (SSE `data:` frames; per spec the *last* `message`
+/// event carrying our id is the reply — but practical servers send exactly
+/// one, so the first id-matching frame wins).
+fn parse_http_message(body: &str, content_type: &str, method: &str) -> Result<Value, McpError> {
+    if content_type.starts_with("text/event-stream") {
+        // Collect every `data:` frame into candidate JSON-RPC messages.
+        for frame in body.lines().filter_map(|line| {
+            let trimmed = line.trim();
+            trimmed
+                .starts_with("data:")
+                .then(|| trimmed["data:".len()..].trim())
+        }) {
+            if let Ok(value) = serde_json::from_str::<Value>(frame)
+                && value.get("jsonrpc").is_some()
+            {
+                return Ok(value);
+            }
+        }
+        return Err(McpError::Protocol(format!(
+            "MCP {method} SSE body carried no JSON-RPC message"
+        )));
+    }
+    serde_json::from_str::<Value>(body)
+        .map_err(|error| McpError::Protocol(format!("MCP {method} invalid JSON body: {error}")))
 }
 
 struct McpTool {
@@ -308,6 +477,13 @@ impl McpServer {
 
     pub fn read_only(&self) -> bool {
         self.read_only
+    }
+
+    /// Whether a server-advertised tool (original name) passes this server's
+    /// `allow_tools`/`deny_tools` configuration — see
+    /// [`McpServerConfig::admits_tool`].
+    pub fn admits_tool(&self, original_name: &str) -> bool {
+        self.config.admits_tool(original_name)
     }
 }
 
@@ -516,6 +692,17 @@ async fn build_tools_from_server(server: &Arc<McpServer>) -> Result<Vec<Arc<dyn 
     let mut taken = HashSet::new();
     definitions
         .iter()
+        // Config-time scoping (ADR-0085 follow-up): `allow_tools`/`deny_tools`
+        // filter on the *original* server-declared name, before sanitization
+        // can collapse distinct names. Denied tools are never adapted, so the
+        // model never sees them and cannot call them.
+        .filter(|definition| {
+            definition
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|name| server.admits_tool(name))
+                .unwrap_or(true)
+        })
         .map(|definition| {
             let original_name = definition
                 .get("name")

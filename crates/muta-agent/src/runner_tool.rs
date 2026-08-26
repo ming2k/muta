@@ -10,6 +10,7 @@
 //! — the single source of truth for the read-only / non-interactive /
 //! non-recursive policy. See ADR-0011.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -180,6 +181,12 @@ pub struct RunnerTool {
     active_cancels: std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
     /// Master preset delegation policy gating which runner presets may be dispatched.
     parent_delegation: std::sync::Mutex<Option<muta_contracts::MasterPresetDelegation>>,
+    /// Live source of MCP tools published to the parent's dynamic sink (ADR-0138).
+    /// `None` (tests, MCP-less sessions) means the mcp_specialist runner sees no
+    /// MCP tools. Bound by bootstrap after the MCP runtime publishes its first
+    /// snapshot; consulted when the runner spawns so the child always sees the
+    /// *current* toolset, not a stale bootstrap-time copy.
+    mcp_tool_source: std::sync::Mutex<Option<Arc<dyn muta_contracts::DynamicToolSource>>>,
     /// The session's workspace root, captured at bootstrap so the child's
     /// operation scope resolves relative `write_paths` against the session's
     /// project — not the daemon process's cwd (ADR-0096). `None` falls back
@@ -274,6 +281,7 @@ impl RunnerTool {
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
             parent_delegation: std::sync::Mutex::new(None),
+            mcp_tool_source: std::sync::Mutex::new(None),
             workspace_root: std::sync::Mutex::new(None),
             retry_config: std::sync::Mutex::new(RunnerRetryConfig::default()),
         }
@@ -303,6 +311,7 @@ impl RunnerTool {
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
             parent_delegation: std::sync::Mutex::new(None),
+            mcp_tool_source: std::sync::Mutex::new(None),
             workspace_root: std::sync::Mutex::new(None),
             retry_config: std::sync::Mutex::new(RunnerRetryConfig::default()),
         }
@@ -314,6 +323,19 @@ impl RunnerTool {
             .parent_delegation
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(delegation);
+    }
+
+    /// Bind a live source of the parent's dynamic (MCP) tools, consulted when
+    /// an mcp_specialist runner spawns (ADR-0138 §2). The snapshot is read at
+    /// spawn — not at bind — so periodic MCP re-discovery (McpCatalog's 10-min
+    /// refresh, `/mcp` reconnects) reaches subsequent children without
+    /// re-binding. `None`-bound (the default) also leaves the mcp_specialist
+    /// runner with no MCP tools.
+    pub fn bind_dynamic_tool_source(&self, source: Arc<dyn muta_contracts::DynamicToolSource>) {
+        *self
+            .mcp_tool_source
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(source);
     }
 
     /// Pin the session's workspace root so spawned runners resolve relative
@@ -603,13 +625,12 @@ impl RunnerTool {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
+            && !delegation.admits_runner(profile.name)
         {
-            if !delegation.admits_runner(profile.name) {
-                return Err(format!(
-                    "Master preset '{}' does not admit runner preset '{}'. Admitted presets: {:?}",
-                    delegation.preset_id, profile.name, delegation.runner_presets
-                ));
-            }
+            return Err(format!(
+                "Master preset '{}' does not admit runner preset '{}'. Admitted presets: {:?}",
+                delegation.preset_id, profile.name, delegation.runner_presets
+            ));
         }
 
         // Announce the bound profile name first so the parent harness / TUI
@@ -629,7 +650,33 @@ impl RunnerTool {
         let model = muta_contracts::resolve_model(&self.provider.model());
         let model_sel =
             muta_contracts::ToolSelection::unrestricted().with_variants(self.variant_snapshot());
-        let sub_tools = profile.resolve_tools(&self.toolset, &model, &model_sel);
+        let mut sub_tools = profile.resolve_tools(&self.toolset, &model, &model_sel);
+
+        // ADR-0138 §2: the mcp_specialist envoy receives the session's live
+        // dynamic (MCP) toolset on top of the static snapshot. Reading the
+        // source at spawn (not at bind) means McpCatalog's periodic
+        // re-discovery and `/mcp` reconnects reach later children without
+        // re-binding. The admission filter still applies: a recursive or
+        // control-flow dynamic tool would be silently dropped here, mirroring
+        // `resolve_tools`'s hard rules for static tools.
+        if profile.name == "mcp_specialist"
+            && let Some(source) = self
+                .mcp_tool_source
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .cloned()
+        {
+            let dynamic = source.snapshot_tools();
+            if !dynamic.is_empty() {
+                let static_names: HashSet<String> =
+                    sub_tools.iter().map(|t| t.name().to_string()).collect();
+                sub_tools.extend(dynamic.into_iter().filter(|tool| {
+                    !static_names.contains(tool.name())
+                        && profile.tool_policy.admits_runtime(tool.as_ref())
+                }));
+            }
+        }
 
         // The runner's identity *is* its profile's system prompt — that is the
         // persona/mission framing for this role (e.g. RUNNER_EXPLORE's research
@@ -1515,6 +1562,98 @@ mod tests {
     /// A non-whitelisted stub, used to prove the explore profile rejects tools
     /// by name (it is not in READ_ONLY_TOOLS).
     struct StubWriteTool;
+
+    /// A dynamic-source stub shaped like an MCP tool the master's sink
+    /// published — used to prove the mcp_specialist child receives live
+    /// dynamic tools (ADR-0138 §2) while other profiles do not.
+    struct DynamicMcpTool(&'static str);
+
+    #[async_trait::async_trait]
+    impl Tool for DynamicMcpTool {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn description(&self) -> &str {
+            "dynamic MCP test tool"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            json!({"type": "object"})
+        }
+        async fn call(&self, _arguments: &str) -> Result<String, String> {
+            Ok("mcp".to_string())
+        }
+    }
+
+    /// A minimal [`muta_contracts::DynamicToolSource`] serving a fixed list —
+    /// stands in for the master's `DynamicToolRegistry` read port.
+    struct FixedSource(Vec<std::sync::Arc<dyn Tool>>);
+
+    impl muta_contracts::DynamicToolSource for FixedSource {
+        fn snapshot_tools(&self) -> Vec<std::sync::Arc<dyn Tool>> {
+            self.0.clone()
+        }
+    }
+
+    /// ADR-0138 §2: an mcp_specialist runner spawned with a bound dynamic
+    /// source receives its MCP tools alongside the static capability set, and
+    /// the injection reads the source *at spawn* — a tool published after
+    /// binding still reaches a later child. Static-name collisions are
+    /// resolved first-wins (static wins), matching sink-side advertisement.
+    #[tokio::test]
+    async fn mcp_specialist_runner_receives_live_dynamic_tools() {
+        // A provider that records every ModelRequest it serves, so the test can
+        // assert on the tool_specs the *child* actually received.
+        #[derive(Default)]
+        struct RecordingProvider {
+            specs: std::sync::Mutex<Vec<String>>,
+        }
+        #[async_trait::async_trait]
+        impl Provider for RecordingProvider {
+            async fn chat(&self, request: muta_contracts::ModelRequest) -> Result<Message, String> {
+                self.record(&request);
+                Ok(Message::new(Role::Assistant, "done"))
+            }
+            async fn stream_chat(
+                &self,
+                request: muta_contracts::ModelRequest,
+            ) -> Result<BoxStream<'static, Result<String, String>>, String> {
+                self.record(&request);
+                Ok(Box::pin(stream::once(async { Ok("done".to_string()) })))
+            }
+        }
+        impl RecordingProvider {
+            fn record(&self, request: &muta_contracts::ModelRequest) {
+                self.specs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend(request.tool_specs.iter().map(|s| s.name.clone()));
+            }
+        }
+
+        let provider = std::sync::Arc::new(RecordingProvider::default());
+        let live = std::sync::Arc::new(FixedSource(vec![
+            std::sync::Arc::new(DynamicMcpTool("mcp__github__create_issue")) as Arc<dyn Tool>,
+            // Collides with a static tool name: static must win.
+            std::sync::Arc::new(DynamicMcpTool("read_text")) as Arc<dyn Tool>,
+        ]));
+        let tool = RunnerTool::new(
+            provider.clone(),
+            muta_contracts::ToolSet::default(),
+            &muta_contracts::RUNNER_MCP_SPECIALIST,
+        );
+        tool.bind_dynamic_tool_source(live as Arc<dyn muta_contracts::DynamicToolSource>);
+
+        let _summary = tool
+            .call(r#"{"description":"mcp","prompt":"use the dynamic tools","role":"mcp"}"#)
+            .await
+            .expect("runner dispatch succeeds");
+
+        let specs = provider.specs.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            specs.iter().any(|name| name == "mcp__github__create_issue"),
+            "dynamic MCP tool must reach the child's tool_specs, got: {specs:?}"
+        );
+    }
 
     #[async_trait::async_trait]
     impl Tool for StubWriteTool {

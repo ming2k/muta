@@ -24,10 +24,13 @@ fn fixture() -> PathBuf {
 
 fn server_config(python: &str) -> McpServerConfig {
     McpServerConfig {
+        url: None,
         command: vec![python.to_string(), fixture().to_string_lossy().into_owned()],
         environment: HashMap::new(),
         enabled: true,
         read_only: false,
+        allow_tools: Vec::new(),
+        deny_tools: Vec::new(),
         sandbox_root: None,
     }
 }

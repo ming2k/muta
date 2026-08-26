@@ -466,6 +466,12 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // orthogonal scope axis.
     runner_tool_handle.bind_variant_selection(agent.variant_selection_handle());
     runner_tool_handle.bind_workspace_security(agent.workspace_security_handle());
+    // ADR-0138 §2: expose the master's live dynamic (MCP) tool registry to
+    // runner dispatch. The mcp_specialist child resolves its toolset from this
+    // source at spawn time, so McpCatalog re-discovery reaches later children
+    // without re-binding. Other profiles are unaffected — only mcp_specialist
+    // consults the source.
+    runner_tool_handle.bind_dynamic_tool_source(agent.dynamic_tool_source());
     // ADR-0141: runners inherit the session's live human channel.
     if let Some(accountant) = human_channel.as_ref() {
         runner_tool_handle.bind_human_channel(Arc::clone(accountant));

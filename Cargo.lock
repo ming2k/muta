@@ -1536,6 +1536,7 @@ dependencies = [
  "muta-contracts",
  "muta-persistence",
  "muta-platform",
+ "reqwest",
  "serde_json",
  "tokio",
  "tracing",

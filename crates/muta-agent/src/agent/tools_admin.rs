@@ -71,6 +71,14 @@ impl Agent {
         self.dynamic_tools.clone()
     }
 
+    /// The runner-dispatch-facing read port of the same registry (ADR-0138):
+    /// an mcp_specialist child's toolset is resolved from the *live* snapshot
+    /// at spawn time, so periodic re-discovery reaches later children without
+    /// re-binding.
+    pub fn dynamic_tool_source(&self) -> Arc<dyn muta_contracts::DynamicToolSource> {
+        self.dynamic_tools.clone()
+    }
+
     /// Set the session-level enabled flag for a tool. No-op when the name is
     /// unknown (so a stale toggle from the modal cannot poison the dispatch
     /// table). Returns whether the flag actually changed.

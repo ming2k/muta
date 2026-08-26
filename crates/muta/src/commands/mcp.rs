@@ -22,15 +22,24 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             "Disabled"
         };
-        let cmd = server
-            .command
-            .first()
-            .map(String::as_str)
-            .unwrap_or("(none)");
-        let args = if server.command.len() > 1 {
-            server.command[1..].join(" ")
+        // A `url` server displays its endpoint; a stdio server displays its
+        // command line. (The two transports are mutually exclusive — `url`
+        // wins — so there is never both to show.)
+        let (cmd, args) = if let Some(url) = server.url.as_deref() {
+            (url.to_string(), String::new())
         } else {
-            String::new()
+            let cmd = server
+                .command
+                .first()
+                .map(String::as_str)
+                .unwrap_or("(none)")
+                .to_string();
+            let args = if server.command.len() > 1 {
+                server.command[1..].join(" ")
+            } else {
+                String::new()
+            };
+            (cmd, args)
         };
         println!("{:<18} {:<10} {:<24} {}", name, status, cmd, args);
     }

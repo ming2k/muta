@@ -41,6 +41,17 @@ pub trait DynamicToolSink: Send + Sync {
     fn remove(&self, source: &str);
 }
 
+/// Read-side counterpart of [`DynamicToolSink`]: a live view of everything
+/// dynamic sources currently publish. The master agent's registry implements
+/// this; runner dispatch consults it at spawn time so an mcp_specialist child
+/// sees the *current* MCP toolset, not a stale bootstrap-time copy (ADR-0138).
+pub trait DynamicToolSource: Send + Sync {
+    /// Every currently published tool across all sources, in deterministic
+    /// (source, name) order. Duplicate names across sources are preserved;
+    /// consumers apply their own collision policy.
+    fn snapshot_tools(&self) -> Vec<Arc<dyn Tool>>;
+}
+
 /// A dynamically-discoverable list that refreshes from a source of truth.
 ///
 /// Implementations:
