@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: muta session-host WebSocket API
-  version: 0.35.1
+  version: 0.35.2
   description: |
     Machine-readable contract for the unified session-daemon transport
     (`muta daemon start --fg`; ADR-0081/0089/0093/0094/0096/0119).
@@ -225,7 +225,7 @@ components:
         - name: controlShutdown
           payload:
             type: Select
-            version: 0.35.1
+            version: 0.35.2
             action:
               control:
                 verb: shutdown

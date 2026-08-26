@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.2] - 2026-08-26
+
 ### Changed
 
 - Replaced aggregate workspace trust with independent content-bound `mcp`,
@@ -4868,7 +4870,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.35.1...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.35.2...HEAD
+[0.35.2]: https://github.com/ming2k/muta/compare/v0.35.1...v0.35.2
 [0.35.1]: https://github.com/ming2k/muta/compare/v0.35.0...v0.35.1
 [0.35.0]: https://github.com/ming2k/muta/compare/v0.34.5...v0.35.0
 [0.34.5]: https://github.com/ming2k/muta/compare/v0.34.4...v0.34.5
