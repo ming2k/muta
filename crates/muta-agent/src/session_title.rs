@@ -26,7 +26,7 @@ use std::time::Duration;
 
 #[cfg(test)]
 use muta_contracts::Provider;
-use muta_contracts::{Message, ModelRequest, Role, RUNNER_TITLE, clean_title};
+use muta_contracts::{Message, ModelRequest, RUNNER_TITLE, Role, clean_title};
 
 use crate::agent::Agent;
 

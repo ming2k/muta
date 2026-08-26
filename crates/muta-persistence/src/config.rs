@@ -107,7 +107,6 @@ pub struct MasterConfig {
     pub doom_guard: DoomGuardConfig,
 }
 
-
 // `DoomGuardConfig` is defined in `muta_contracts::doom_guard_config` and re-exported
 // above via `use muta_contracts::DoomGuardConfig`. It is the `[master.doom_guard]`
 // TOML table and the wire type for `AgentRequest::UpdateDoomGuardConfig`. See
@@ -1092,8 +1091,8 @@ impl Config {
             }
         }
 
-        let root = std::fs::canonicalize(project_root)
-            .unwrap_or_else(|_| project_root.to_path_buf());
+        let root =
+            std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
         for config in servers.values_mut() {
             config.sandbox_root = Some(root.clone());
         }
@@ -1365,7 +1364,6 @@ mod tests {
         assert_eq!(legacy.master.doom_guard, canonical.master.doom_guard);
         assert!(!canonical.master.doom_guard.enabled);
         assert_eq!(canonical.master.doom_guard.window, 24);
-
 
         // Save always writes the canonical key; the alias is load-only.
         let serialized = toml::to_string(&canonical).unwrap();
@@ -1662,10 +1660,12 @@ name = "DeepSeek"
     #[test]
     fn resolve_workspace_additional_roots_empty_when_table_absent() {
         let root = scratch_project_root();
-        assert!(Config::default()
-            .resolve_workspace_additional_roots(&root)
-            .unwrap()
-            .is_empty());
+        assert!(
+            Config::default()
+                .resolve_workspace_additional_roots(&root)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1756,7 +1756,6 @@ name = "DeepSeek"
             mcp["project-db"].sandbox_root.as_deref(),
             Some(root.canonicalize().unwrap().as_path())
         );
-
     }
 
     #[test]

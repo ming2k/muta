@@ -56,10 +56,9 @@ impl Tool for UseSkillTool {
         // the live domain digest before reading any filenames or body bytes;
         // on mismatch, rescan so the stale entry disappears from the registry.
         if scope == SkillScope::Repo {
-            let project_root = self
-                .registry
-                .project_root()
-                .ok_or_else(|| "Project skill has no workspace root for trust attestation.".to_string())?;
+            let project_root = self.registry.project_root().ok_or_else(|| {
+                "Project skill has no workspace root for trust attestation.".to_string()
+            })?;
             let state = muta_persistence::workspace_security::WorkspaceSecurityStore::load()
                 .snapshot(&project_root)
                 .skills;

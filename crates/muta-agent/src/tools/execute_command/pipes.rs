@@ -6,8 +6,7 @@ use tokio::process::{ChildStderr, ChildStdout};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tokio::task::JoinHandle;
 
-pub const SHELL_COLLECT_MAX_CHARS: usize =
-    muta_contracts::tool_output::SHELL_MAX_OUTPUT_CHARS * 8;
+pub const SHELL_COLLECT_MAX_CHARS: usize = muta_contracts::tool_output::SHELL_MAX_OUTPUT_CHARS * 8;
 pub const SHELL_COLLECT_MAX_LINES: usize = 5_000;
 
 /// Background reader tasks draining child stdout and stderr concurrently into a merged channel.
@@ -129,8 +128,12 @@ impl OutputCollector {
         }
 
         let truncated = collection_truncated
-            || muta_contracts::tool_output::shell_inner_text(&self.stdout_buf, &self.stderr_buf, exit)
-                .len()
+            || muta_contracts::tool_output::shell_inner_text(
+                &self.stdout_buf,
+                &self.stderr_buf,
+                exit,
+            )
+            .len()
                 > muta_contracts::tool_output::SHELL_MAX_OUTPUT_CHARS;
 
         (self.stdout_buf, self.stderr_buf, self.lines, truncated)

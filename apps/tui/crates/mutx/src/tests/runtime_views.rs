@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 #[test]
 fn activity_modal_renders_provider_retry_failure() {
     let now = std::time::Instant::now();
@@ -36,7 +35,6 @@ fn activity_modal_renders_provider_retry_failure() {
     );
     assert!(rect.width > 0 && rect.height > 0);
 }
-
 
 #[test]
 fn activity_modal_todos_align_with_header() {
@@ -85,7 +83,6 @@ fn activity_modal_todos_align_with_header() {
     assert_eq!(buffer.get(inner_x + 2, body_y).unwrap().symbol(), "F");
 }
 
-
 #[test]
 fn activity_modal_expands_to_fit_multiline_prompt_without_scrolling() {
     let long_prompt = "This is a very long prompt submitted by the user that will wrap across multiple visual lines when displayed inside the modal body in an eighty column terminal viewport.";
@@ -131,7 +128,6 @@ fn activity_modal_expands_to_fit_multiline_prompt_without_scrolling() {
     // The top scrollbar cap is not "▲"
     assert_ne!(buffer.get(track_x, track_y).map(|c| c.symbol()), Some("▲"));
 }
-
 
 /// Regression for the wiring itself: the event loop feeds the input layer the
 /// **unsuppressed** `completion_kind` (the dismissal latch travels as its own
@@ -197,7 +193,6 @@ fn tab_after_esc_reopens_through_the_event_loop_context_shape() {
     assert!(!app.completion_dismissed);
 }
 
-
 #[test]
 fn relay_left_arrow_breaks_selection_at_head_then_steps() {
     let mut app = app_with_input_selection("hello world");
@@ -216,7 +211,6 @@ fn relay_left_arrow_breaks_selection_at_head_then_steps() {
     );
 }
 
-
 #[test]
 fn relay_right_arrow_clamps_at_buffer_end() {
     let mut app = app_with_input_selection("abc");
@@ -225,7 +219,6 @@ fn relay_right_arrow_clamps_at_buffer_end() {
     assert_eq!(app.cursor_position, 3, "→ past the end clamps");
     assert_eq!(app.selection, SelectionState::None);
 }
-
 
 #[test]
 fn relay_up_and_down_restore_hidden_caret() {
@@ -252,7 +245,6 @@ fn relay_up_and_down_restore_hidden_caret() {
     assert_eq!(app.selection, SelectionState::None);
 }
 
-
 #[test]
 fn relay_backspace_and_delete_replace_selection() {
     for code in [
@@ -272,7 +264,6 @@ fn relay_backspace_and_delete_replace_selection() {
     }
 }
 
-
 #[test]
 fn relay_ignores_keys_without_selection_or_outside_family() {
     // No selection: the probe must miss so ordinary input handling runs.
@@ -291,7 +282,6 @@ fn relay_ignores_keys_without_selection_or_outside_family() {
     );
 }
 
-
 #[tokio::test]
 async fn console_bare_text_prompts_the_selection() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -309,7 +299,6 @@ async fn console_bare_text_prompts_the_selection() {
         other => panic!("expected one dispatch line, got {other:?}"),
     }
 }
-
 
 #[tokio::test]
 async fn console_bare_text_from_n_creates_instead() {
@@ -332,7 +321,6 @@ async fn console_bare_text_from_n_creates_instead() {
     }
 }
 
-
 #[tokio::test]
 async fn console_unknown_address_is_a_notice_not_a_dispatch() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -345,7 +333,6 @@ async fn console_unknown_address_is_a_notice_not_a_dispatch() {
         other => panic!("expected one notice, got {other:?}"),
     }
 }
-
 
 #[tokio::test]
 async fn console_verb_without_selection_is_a_notice() {
@@ -360,7 +347,6 @@ async fn console_verb_without_selection_is_a_notice() {
         other => panic!("expected one notice, got {other:?}"),
     }
 }
-
 
 #[tokio::test]
 async fn console_help_lists_the_grammar() {
@@ -380,7 +366,6 @@ async fn console_help_lists_the_grammar() {
         assert!(joined.contains(verb), "help must mention {verb}: {joined}");
     }
 }
-
 
 #[tokio::test]
 async fn console_kill_key_arms_then_confirms() {
@@ -402,7 +387,6 @@ async fn console_kill_key_arms_then_confirms() {
         Some(crate::overlays::ConsoleLine::Dispatch { action, .. }) if *action == "kill"
     ));
 }
-
 
 #[tokio::test]
 async fn console_kill_arm_cancels_on_selection_move() {

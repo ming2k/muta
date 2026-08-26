@@ -104,7 +104,9 @@ impl Agent {
             Arc::clone(&scoped_disabled_tools),
         );
 
-        let pool = Arc::new(std::sync::RwLock::new(muta_contracts::ToolPool::new(toolset.clone())));
+        let pool = Arc::new(std::sync::RwLock::new(muta_contracts::ToolPool::new(
+            toolset.clone(),
+        )));
 
         Self {
             provider,
@@ -301,7 +303,9 @@ impl Agent {
             .assemble(&enriched, &context, &tools)
     }
 
-    pub(super) fn estimate_model_request(request: &muta_contracts::ModelRequest) -> RequestTokenEstimate {
+    pub(super) fn estimate_model_request(
+        request: &muta_contracts::ModelRequest,
+    ) -> RequestTokenEstimate {
         // Per-message wire weight (not `estimate_tokens`, which intentionally
         // includes persisted runner children the provider never sees), with
         // each message tokenized exactly once — a prior version tokenized the
@@ -460,7 +464,6 @@ impl Agent {
     pub fn skip_interactive_input(&self) -> bool {
         self.interaction.skip_interactive_input()
     }
-
 
     /// Install (or clear with `None`) the mid-turn model-context projection gate.
     pub fn set_context_projection_gate(&self, gate: Option<Arc<dyn ContextProjectionGate>>) {

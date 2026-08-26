@@ -112,7 +112,6 @@ pub use security::{TrustDomain, WorkspaceSecuritySnapshot, WorkspaceTrustState};
 
 pub mod session_title;
 
-
 pub mod session_tree;
 pub use session_tree::{SessionEntry, SessionEntryId, SessionEntryKind, SessionTree};
 pub mod skills_config;
@@ -126,31 +125,36 @@ pub use catalog::{Channel, ProviderEntry, Transport};
 pub use channel_auth::{ChannelAuth, LoginMethod};
 pub use doom_guard_config::DoomGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink};
-pub use runner::{
-    RUNNER_CODE, RUNNER_EXPLORE, RUNNER_MCP_SPECIALIST, RUNNER_TITLE, RunnerPreset,
-    RunnerPresetPool, ToolPolicy,
-};
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,
     ConnectionPickerRow, ConnectionPickerSnapshot, ContextTokenSnapshot, ContextTokenSource,
-    RunnerEvent, HarnessSnapshot, InputReply, InputRequest, LoopStatus, McpServerInfo, ModelInfo,
-    NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface, ParentStatus, PermissionDecision,
+    HarnessSnapshot, InputReply, InputRequest, LoopStatus, McpServerInfo, ModelInfo, NoticeKind,
+    NoticeSeverity, NoticeSource, NoticeSurface, ParentStatus, PermissionDecision,
     PermissionRequest, PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow,
     ProviderPickerSnapshot, QueueMode, QueuedMessage, RetryPoint, RoundEvent, RoundInterrupt,
-    RoundInterruptReason, RoundSummary, SessionContextSnapshot, SessionDetail, SessionForkKind,
-    SessionOverview, SessionSnapshot, SkillInfo, ToolInfo, UserQuestion, UserQuestionOption,
-    UserQuestionReply, UserQuestionRequest, WebSearchConfigUpdate, WebSearchConfigView,
+    RoundInterruptReason, RoundSummary, RunnerEvent, SessionContextSnapshot, SessionDetail,
+    SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, ToolInfo, UserQuestion,
+    UserQuestionOption, UserQuestionReply, UserQuestionRequest, WebSearchConfigUpdate,
+    WebSearchConfigView,
+};
+pub use runner::{
+    RUNNER_CODE, RUNNER_EXPLORE, RUNNER_MCP_SPECIALIST, RUNNER_TITLE, RunnerPreset,
+    RunnerPresetPool, ToolPolicy,
 };
 pub mod monitor;
 pub use hooks::{
     Hook, HookContext, HookEvent, HookEventKind, HookOutcome, RestorePoint, SessionSource,
 };
 pub use identity::AgentIdentity;
+pub use master::{
+    MASTER_CODE_ANALYST, MASTER_DEVELOPER, MasterPreset, MasterPresetDelegation, MasterPresetId,
+    MasterRuntimeConfig,
+};
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
-    BaselineModels, CapabilityOverrides, FittedModel, Model, ModelCapabilities, RemoteModelEndpoint,
-    RemoteModelMetadata, WireFormat, baseline_models, model_by_id, register_fitted_models,
-    resolve as resolve_model, sanitize_model_id,
+    BaselineModels, CapabilityOverrides, FittedModel, Model, ModelCapabilities,
+    RemoteModelEndpoint, RemoteModelMetadata, WireFormat, baseline_models, model_by_id,
+    register_fitted_models, resolve as resolve_model, sanitize_model_id,
 };
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,
@@ -159,10 +163,6 @@ pub use pressure::{
     CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PruneOutcome, RequestTokenEstimate,
     estimate_bytes, estimate_draft_tokens, estimate_message_tokens, estimate_semantic_json_tokens,
     estimate_tokens, prune_tool_results,
-};
-pub use master::{
-    MasterPreset, MasterPresetDelegation, MasterPresetId, MasterRuntimeConfig, MASTER_CODE_ANALYST,
-    MASTER_DEVELOPER,
 };
 pub use secret::SecretString;
 pub use session_title::{TITLE_MAX_LEN, clean_title};

@@ -172,9 +172,7 @@ pub struct ModelCapabilities {
 /// This lives in `muta-contracts` (not persistence) so the merge function can
 /// live beside the structure it overrides -- persistence keys it per
 /// `(instance_id, model_id)` inside `RouteSettings` and owns only storage.
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS,
-)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(default)]
 pub struct CapabilityOverrides {
     /// Force the family tag used for family-scoped wire behavior (cache
@@ -289,7 +287,6 @@ impl ModelCapabilities {
         }
         self
     }
-
 
     /// Coarse reasoning capability used by picker and request construction.
     pub const fn reasoning(&self) -> bool {
@@ -573,8 +570,8 @@ mod tests {
             thinking: None,
             max_output_tokens: Some(4_096),
         };
-        let caps = ModelCapabilities::for_channel("fixture-alpha", Some(&remote))
-            .apply_overrides(&user);
+        let caps =
+            ModelCapabilities::for_channel("fixture-alpha", Some(&remote)).apply_overrides(&user);
         // Layer 1 wins:
         assert!(!caps.vision, "user Some(false) must beat remote Some(true)");
         assert_eq!(caps.family, "user-family");
@@ -587,11 +584,12 @@ mod tests {
     #[test]
     fn empty_capability_overrides_are_a_noop() {
         let caps = ModelCapabilities::for_channel("fixture-alpha", None);
-        let overridden = caps.clone().apply_overrides(&CapabilityOverrides::default());
+        let overridden = caps
+            .clone()
+            .apply_overrides(&CapabilityOverrides::default());
         assert_eq!(caps, overridden);
         assert!(CapabilityOverrides::default().is_empty());
     }
-
 
     // Fixture baselines. Core's own tests must not depend on real vendor data
     // (that lives with the provider crates), so they register small tables of

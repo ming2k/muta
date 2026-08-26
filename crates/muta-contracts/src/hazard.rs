@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Distinguishes harmless read-only inspection from destructive mutations,
 /// command executions, and process lifecycle operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum HazardLevel {
@@ -77,10 +79,7 @@ pub enum ToolPermissionPayload {
         kill_spec: ProcessKillSpec,
     },
     /// Process lifecycle submission.
-    Process {
-        target: String,
-        action: String,
-    },
+    Process { target: String, action: String },
     /// Generic / external tool submission (e.g. MCP tools).
     Generic {
         summary: String,

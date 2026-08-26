@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 #[test]
 fn restored_history_hides_harness_messages() {
     assert!(transcript_message_from_core(Message::hidden(Role::User, "internal")).is_none());
@@ -17,7 +16,6 @@ fn restored_history_uses_command_display_content() {
     assert_eq!(restored.raw, "/review working-tree");
 }
 
-
 #[test]
 fn restored_user_message_uses_exact_or_legacy_timestamp() {
     let exact = Message::new(Role::User, "hi").with_sent_at_ms(1_700_000_000_123);
@@ -30,7 +28,6 @@ fn restored_user_message_uses_exact_or_legacy_timestamp() {
     let restored = transcript_message_from_core(legacy).unwrap();
     assert_eq!(restored.sent_at_ms, Some(1_700_000_001_000));
 }
-
 
 #[test]
 fn restored_assistant_tool_step_uses_message_timestamp_for_turn_header() {
@@ -48,7 +45,6 @@ fn restored_assistant_tool_step_uses_message_timestamp_for_turn_header() {
     assert_eq!(restored[0].round, Some(1));
     assert_eq!(restored[0].turn, Some(1));
 }
-
 
 #[test]
 fn restored_assistant_components_share_their_round_and_turn() {
@@ -68,7 +64,6 @@ fn restored_assistant_components_share_their_round_and_turn() {
     assert!(restored.iter().all(|message| message.round == Some(1)));
     assert!(restored.iter().all(|message| message.turn == Some(1)));
 }
-
 
 #[test]
 fn restored_user_message_origin_inferred_from_shape() {
@@ -95,7 +90,6 @@ fn restored_user_message_origin_inferred_from_shape() {
     assert_eq!(path_like.origin, UserMessageOrigin::Chat);
 }
 
-
 #[test]
 fn restored_user_insert_keeps_mid_round_origin_without_opening_a_turn() {
     use crate::model::document::UserMessageOrigin;
@@ -113,7 +107,6 @@ fn restored_user_insert_keeps_mid_round_origin_without_opening_a_turn() {
     assert_eq!(restored[2].round, Some(1));
     assert_eq!(restored[2].turn, Some(2));
 }
-
 
 #[test]
 fn restored_command_echo_origin_from_durable_provenance() {
@@ -143,7 +136,6 @@ fn restored_command_echo_origin_from_durable_provenance() {
     let restored_shell = transcript_message_from_core(shell_echo).unwrap();
     assert_eq!(restored_shell.origin, UserMessageOrigin::Slash);
 }
-
 
 /// ADR-0108: a restored slash/shell echo folds into the command ledger
 /// projection — the invocation renders once, on the `⌘` command component,
@@ -184,7 +176,6 @@ fn restored_slash_echoes_fold_into_command_components() {
     assert_eq!(echo.origin, UserMessageOrigin::Slash);
 }
 
-
 #[test]
 fn restored_assistant_carries_provider_and_model_attribution() {
     // A persisted assistant message stamped by the harness keeps its
@@ -222,7 +213,6 @@ fn restored_assistant_carries_provider_and_model_attribution() {
     );
 }
 
-
 #[test]
 fn restored_reasoning_is_not_shown_as_running() {
     let message = Message {
@@ -259,7 +249,6 @@ fn restored_reasoning_is_not_shown_as_running() {
     );
 }
 
-
 #[test]
 fn restored_native_tool_calls_are_visible() {
     let message = Message {
@@ -290,7 +279,6 @@ fn restored_native_tool_calls_are_visible() {
     let restored = transcript_message_from_core(message).unwrap();
     assert!(restored.raw.contains("read_text"));
 }
-
 
 #[test]
 fn restored_tool_results_merge_into_steps_in_fifo_order() {
@@ -353,7 +341,6 @@ fn restored_tool_results_merge_into_steps_in_fifo_order() {
     assert!(restored[1].raw.contains("second"));
 }
 
-
 #[test]
 fn history_rows_lists_newest_first_then_ranks_search() {
     // The App-level view of the Ctrl+R panel. With no query the whole
@@ -410,7 +397,6 @@ fn history_rows_lists_newest_first_then_ranks_search() {
     assert!(app.history_rows().is_empty());
 }
 
-
 #[test]
 fn history_modal_is_click_dismissable_and_restores_draft() {
     use crate::Modal;
@@ -456,7 +442,6 @@ fn history_modal_is_click_dismissable_and_restores_draft() {
     assert_eq!(app.active_modal(), crate::Modal::None);
 }
 
-
 #[test]
 fn recall_queued_is_lifo_and_restores_input() {
     // Every queued dispatch is a next-round item, so recall pops the newest
@@ -494,7 +479,6 @@ fn recall_queued_is_lifo_and_restores_input() {
     );
 }
 
-
 #[test]
 fn recall_queued_restores_staged_images() {
     // Images staged with the queued message (Ctrl+V before pressing
@@ -521,7 +505,6 @@ fn recall_queued_restores_staged_images() {
     );
     assert_eq!(app.pending_images[0].data, image.data);
 }
-
 
 /// The interrupt → ↑/↓ → resend bug: a message sent with pasted images is
 /// recorded to input history as text-only, so recalling it via ↑/↓ (or
@@ -568,7 +551,6 @@ async fn history_recall_restores_staged_images_and_pastes() {
     assert_eq!(app.pending_text_pastes.len(), 1);
 }
 
-
 /// Recalling a text-only entry (no cached payloads) must clear the staged
 /// vectors so a resend never inherits an attachment that belonged to a
 /// different entry — e.g. one restored by a Phase-1 unsend that the user then
@@ -596,7 +578,6 @@ async fn history_recall_clears_staged_attachments_for_plain_entries() {
     );
     assert!(app.pending_text_pastes.is_empty());
 }
-
 
 /// The ↓-past-newest branch restores the draft the user was composing before
 /// the first ↑ — including any staged attachments — so an accidental ↑/↓
@@ -628,7 +609,6 @@ fn history_draft_round_trip_keeps_attachments() {
     assert_eq!(app.pending_images[0].data, "draft-img");
     assert!(app.pending_text_pastes.is_empty());
 }
-
 
 /// The in-memory cache is bounded so a long session of image-heavy sends
 /// cannot balloon the process's memory with base64 payloads.
@@ -673,7 +653,6 @@ async fn history_attachment_cache_is_capped() {
     );
 }
 
-
 /// `[input_history] dedup` (default on): the same prompt text sent twice —
 /// even in a different session — stays a single entry, and re-sending bumps
 /// its timestamp so it bubbles to the top of the newest-first picker.
@@ -708,7 +687,6 @@ async fn record_input_history_dedups_globally_by_text() {
     assert_eq!(app.input_history[order[0]].text, "build the thing");
 }
 
-
 /// With dedup off (`[input_history] dedup = false`) the same words typed in
 /// two sessions stay two entries, each with its own origin.
 #[tokio::test]
@@ -721,7 +699,6 @@ async fn record_input_history_without_dedup_keeps_per_session_entries() {
     app.record_input_history("hello".to_string(), Vec::new(), Vec::new());
     assert_eq!(app.input_history.len(), 2);
 }
-
 
 #[tokio::test]
 async fn resumed_session_backfills_prompt_rows_from_transcript() {
@@ -778,7 +755,6 @@ async fn resumed_session_backfills_prompt_rows_from_transcript() {
     assert_eq!(app.session_history_backfill.len(), 2);
 }
 
-
 /// The ↑/↓ rows follow the **live** session id, not the id the client started
 /// with: `current_session_id` is what stamps new entries, so a prompt sent
 /// after a mid-run `/session open` is tagged with the switched-to session.
@@ -808,7 +784,6 @@ async fn history_rows_are_scoped_by_the_live_session_id() {
     assert_eq!(texts, vec!["typed after the switch"]);
 }
 
-
 /// `/command` invocations are not prompt history: by default they are skipped
 /// entirely (`[input_history] record_commands = false`).
 #[tokio::test]
@@ -828,7 +803,6 @@ async fn record_input_history_skips_slash_commands_by_default() {
     assert_eq!(app.input_history.len(), 1);
     assert_eq!(app.input_history[0].text, "/model");
 }
-
 
 /// The clear-history action wipes the in-memory list and the attachment cache
 /// so a fresh recall starts empty.
@@ -853,7 +827,6 @@ async fn clear_input_history_wipes_list_and_cache() {
     assert!(app.history_attachments.is_empty());
     assert!(!app.history_clear_confirm);
 }
-
 
 /// `App`'s test constructor keeps disk persistence off, so exercising the
 /// record/clear paths must never touch the *real* `history.json` under
@@ -886,7 +859,6 @@ async fn test_app_does_not_touch_disk_history() {
         "the real history file at {path:?} changed while running with persistence disabled"
     );
 }
-
 
 /// History rows are read-only snapshots: editing one is temporary and is
 /// discarded the moment the pointer moves — coming back reloads the original
@@ -922,7 +894,6 @@ async fn history_rows_are_readonly_snapshots() {
     assert_eq!(app.input, app.history_draft);
 }
 
-
 /// Queue recall adopts the recalled content as the draft (text + attachments
 /// mirrored into both the pending slots and the remembered-draft stash).
 #[test]
@@ -950,7 +921,6 @@ fn recall_queued_adopts_content_as_draft() {
     assert_eq!(app.pending_images.len(), 1);
 }
 
-
 #[test]
 fn recall_queued_always_restores_locally() {
     // With the insert/next-round distinction gone there is no agent-side
@@ -972,7 +942,6 @@ fn recall_queued_always_restores_locally() {
         "recalled item must be removed from the outbox"
     );
 }
-
 
 #[test]
 fn recall_queued_latches_completion_dismissal() {
@@ -1005,7 +974,6 @@ fn recall_queued_latches_completion_dismissal() {
         "`/help` should have candidates"
     );
 }
-
 
 #[test]
 fn recall_queued_at_targets_selected_index_not_newest() {

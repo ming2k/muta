@@ -156,7 +156,6 @@ pub struct PolicyContext<'a> {
     pub ctx: &'a dyn PermissionContext,
 }
 
-
 impl<'a> PolicyContext<'a> {
     pub fn is_name_disabled(&self) -> bool {
         self.disabled.contains(self.call_name) || self.scoped_disabled.contains(self.call_name)
@@ -476,7 +475,6 @@ impl PermissionPolicy for BrokerPolicy {
     }
 }
 
-
 fn scope_target_to_rule(tool: &str, target: &ScopeTarget) -> PermissionRule {
     let scope = match target {
         ScopeTarget::Unspecified => "*".to_string(),
@@ -588,7 +586,6 @@ mod tests {
             ctx: ctxr,
         }
     }
-
 
     /// Native absolute paths for scope-policy tests. Unix-looking paths such
     /// as `/home/user` are drive-relative on Windows and therefore test a
@@ -799,10 +796,7 @@ mod tests {
             &ctxr,
         );
         let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
-        assert!(matches!(
-            chain.evaluate(&c).await,
-            PolicyDecision::Approve
-        ));
+        assert!(matches!(chain.evaluate(&c).await, PolicyDecision::Approve));
     }
 
     #[tokio::test]
@@ -862,7 +856,6 @@ mod tests {
             PolicyDecision::Approve
         ));
     }
-
 
     #[tokio::test]
     async fn broker_reports_missing_authority_when_not_allowed() {
@@ -1084,31 +1077,51 @@ mod tests {
             &ctxr,
         );
         let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
-        assert!(matches!(
-            chain.evaluate(&c).await,
-            PolicyDecision::Approve
-        ));
+        assert!(matches!(chain.evaluate(&c).await, PolicyDecision::Approve));
     }
 
     struct SafeTool;
     #[async_trait]
     impl Tool for SafeTool {
-        fn name(&self) -> &str { "view_file" }
-        fn description(&self) -> &str { "View file content" }
-        fn parameters(&self) -> serde_json::Value { serde_json::json!({}) }
-        fn hazard_level(&self) -> muta_contracts::HazardLevel { muta_contracts::HazardLevel::Safe }
-        async fn call(&self, _args: &str) -> Result<String, String> { Ok("ok".into()) }
+        fn name(&self) -> &str {
+            "view_file"
+        }
+        fn description(&self) -> &str {
+            "View file content"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        fn hazard_level(&self) -> muta_contracts::HazardLevel {
+            muta_contracts::HazardLevel::Safe
+        }
+        async fn call(&self, _args: &str) -> Result<String, String> {
+            Ok("ok".into())
+        }
     }
 
     struct DangerousCommandTool;
     #[async_trait]
     impl Tool for DangerousCommandTool {
-        fn name(&self) -> &str { "execute_command" }
-        fn description(&self) -> &str { "Run shell command" }
-        fn parameters(&self) -> serde_json::Value { serde_json::json!({}) }
-        fn hazard_level(&self) -> muta_contracts::HazardLevel { muta_contracts::HazardLevel::CommandExecution }
-        fn scope_target(&self, args: &str) -> ScopeTarget { ScopeTarget::Command(args.to_string()) }
-        fn permission_submission(&self, args: &str) -> Option<muta_contracts::ToolPermissionSubmission> {
+        fn name(&self) -> &str {
+            "execute_command"
+        }
+        fn description(&self) -> &str {
+            "Run shell command"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        fn hazard_level(&self) -> muta_contracts::HazardLevel {
+            muta_contracts::HazardLevel::CommandExecution
+        }
+        fn scope_target(&self, args: &str) -> ScopeTarget {
+            ScopeTarget::Command(args.to_string())
+        }
+        fn permission_submission(
+            &self,
+            args: &str,
+        ) -> Option<muta_contracts::ToolPermissionSubmission> {
             Some(muta_contracts::ToolPermissionSubmission {
                 hazard_level: muta_contracts::HazardLevel::CommandExecution,
                 label: format!("Execute command: `{args}`"),
@@ -1126,13 +1139,17 @@ mod tests {
                 },
             })
         }
-        async fn call(&self, _args: &str) -> Result<String, String> { Ok("ok".into()) }
+        async fn call(&self, _args: &str) -> Result<String, String> {
+            Ok("ok".into())
+        }
     }
 
     #[tokio::test]
     async fn broker_passes_safe_tools_automatically() {
         let tool: Arc<dyn Tool> = Arc::new(SafeTool);
-        let ctxr = StubCtx { perms: PermissionStore::new() };
+        let ctxr = StubCtx {
+            perms: PermissionStore::new(),
+        };
         let c = pctx(
             &tool,
             "view_file",
@@ -1144,15 +1161,19 @@ mod tests {
             ScopedToolDisable::default(),
             &ctxr,
         );
-        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::Pass));
+        assert!(matches!(
+            BrokerPolicy.evaluate(&c).await,
+            PolicyDecision::Pass
+        ));
     }
 
     #[tokio::test]
     async fn broker_submits_hazard_and_kill_spec_for_dangerous_commands() {
         let tool: Arc<dyn Tool> = Arc::new(DangerousCommandTool);
-        let ctxr = StubCtx { perms: PermissionStore::new() };
+        let ctxr = StubCtx {
+            perms: PermissionStore::new(),
+        };
         let c = pctx(
-
             &tool,
             "execute_command",
             "cargo test",
@@ -1164,12 +1185,14 @@ mod tests {
             &ctxr,
         );
 
-
         let decision = BrokerPolicy.evaluate(&c).await;
 
         match decision {
             PolicyDecision::MissingAuthority { request, .. } => {
-                assert_eq!(request.hazard, Some(muta_contracts::HazardLevel::CommandExecution));
+                assert_eq!(
+                    request.hazard,
+                    Some(muta_contracts::HazardLevel::CommandExecution)
+                );
                 assert!(request.submission.is_some());
                 let sub = request.submission.unwrap();
                 match sub.payload {
@@ -1203,7 +1226,10 @@ mod tests {
         );
 
         // Initially requires permission
-        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::MissingAuthority { .. }));
+        assert!(matches!(
+            BrokerPolicy.evaluate(&c).await,
+            PolicyDecision::MissingAuthority { .. }
+        ));
 
         // Grant session permission
         ctxr.permissions().add_session(PermissionRule {
@@ -1212,10 +1238,16 @@ mod tests {
         });
 
         // Now approved
-        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::Approve));
+        assert!(matches!(
+            BrokerPolicy.evaluate(&c).await,
+            PolicyDecision::Approve
+        ));
 
         // After clearing session, requires permission again
         ctxr.permissions().clear_session();
-        assert!(matches!(BrokerPolicy.evaluate(&c).await, PolicyDecision::MissingAuthority { .. }));
+        assert!(matches!(
+            BrokerPolicy.evaluate(&c).await,
+            PolicyDecision::MissingAuthority { .. }
+        ));
     }
 }

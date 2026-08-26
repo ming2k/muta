@@ -21,18 +21,16 @@
 use crate::commands::{CustomCommand, discover_commands_with_trust};
 use muta_agent::catalog;
 use muta_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round_response};
-use muta_agent::{Agent, AgentIdentity, RunnerTool, MasterPreset, RoundLifecycle};
+use muta_agent::{Agent, AgentIdentity, MasterPreset, RoundLifecycle, RunnerTool};
 use muta_contracts::{
-    AgentNotice, AgentRequest, AgentResponse, RUNNER_EXPLORE, Message, NoticeKind, NoticeSeverity,
-    NoticeSource, NoticeSurface, Provider, RoundEvent, ToolContextBuilder, ToolSet,
+    AgentNotice, AgentRequest, AgentResponse, Message, NoticeKind, NoticeSeverity, NoticeSource,
+    NoticeSurface, Provider, RUNNER_EXPLORE, RoundEvent, ToolContextBuilder, ToolSet,
     WorkspaceTrustState, collect_toolset,
 };
 
 use muta_mcp::{McpCatalog, McpRuntime};
 use muta_persistence::{
-    config::Config,
-    connection_usage, embedding, paths,
-    session::SessionStore,
+    config::Config, connection_usage, embedding, paths, session::SessionStore,
     workspace_security::WorkspaceSecurityStore,
 };
 use muta_skills::{SkillCatalog, SkillRegistry};
@@ -380,8 +378,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 eprintln!("muta: additional workspace roots unavailable: {reason}");
                 Vec::new()
             }
-        }
-    ;
+        };
     // Hot-reloadable `[websearch]` handle: the web tools hold the same `Arc`
     // (via the tool context below), and `UpdateWebSearchConfig` /
     // `/settings reload` write into it, so backend/reader/proxy changes
@@ -518,8 +515,11 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     ]
     .into_iter()
     .filter_map(|(domain, state)| {
-        matches!(state, WorkspaceTrustState::Quarantined | WorkspaceTrustState::Changed)
-            .then_some(format!("{domain} ({})", state.as_str()))
+        matches!(
+            state,
+            WorkspaceTrustState::Quarantined | WorkspaceTrustState::Changed
+        )
+        .then_some(format!("{domain} ({})", state.as_str()))
     })
     .collect::<Vec<_>>();
     if !gated.is_empty() {

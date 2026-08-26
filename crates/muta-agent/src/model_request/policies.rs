@@ -262,9 +262,9 @@ impl SystemPromptSection for WebUntrustedContentGuidance {
         57
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
-        ctx.tool_names
-            .iter()
-            .any(|name| name == "fetch_url" || name == "search_web" || name == "webfetch" || name == "websearch")
+        ctx.tool_names.iter().any(|name| {
+            name == "fetch_url" || name == "search_web" || name == "webfetch" || name == "websearch"
+        })
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(WEB_UNTRUSTED))
@@ -324,7 +324,6 @@ impl SystemPromptSection for WorkspaceRootsGuidance {
     }
 }
 
-
 /// Specialized, hyper-compact system prompt section for an autonomous
 /// runner. `preset` is a runner preset name; known presets map to curated
 /// guidance, unknown ones to the generic mission framing.
@@ -359,7 +358,7 @@ impl SystemPromptSection for RunnerRoleGuidance {
             other => {
                 return Some(format!(
                     "You are a specialized autonomous runner assigned mission: {other}. Focus strictly on your assigned task and provide a concise, high-signal final answer."
-                ))
+                ));
             }
         };
         Some(text.to_string())
@@ -392,7 +391,9 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
 pub fn runner_system_prompt_registry(preset: &str) -> SystemPromptRegistry {
     let mut registry = SystemPromptRegistry::new();
     registry.register(IdentityPreamble);
-    registry.register(RunnerRoleGuidance { preset: preset.to_string() });
+    registry.register(RunnerRoleGuidance {
+        preset: preset.to_string(),
+    });
     registry.register(ToneGuidance);
     registry.register(ModelGuidance);
     registry.register(FileEditingGuidance);

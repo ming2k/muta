@@ -322,8 +322,7 @@ mod tests {
         std::fs::write(user.join("safe.md"), "safe $ARGUMENTS").unwrap();
 
         // Quarantined: project command must not appear (user commands do).
-        let quarantined =
-            merge_command_scopes(&project, &user, WorkspaceTrustState::Quarantined);
+        let quarantined = merge_command_scopes(&project, &user, WorkspaceTrustState::Quarantined);
         assert_eq!(quarantined.commands.len(), 1);
         assert_eq!(
             quarantined.commands[0].name, "safe",

@@ -98,8 +98,8 @@ pub use task_fault_tolerance as supervise;
 pub mod supervisor;
 pub mod ui_bridge;
 
-pub use supervisor::Supervisor;
 pub use session_driver::SessionDriver;
+pub use supervisor::Supervisor;
 pub use ui_bridge::{CopyOutcome, UiBridge};
 
 // NOTE: identity (`MUTA_NAME`/`MUTA_MISSION`/`muta_identity`/

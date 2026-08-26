@@ -451,8 +451,6 @@ impl RunnerPresetPool {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,14 +542,22 @@ mod tests {
     fn explore_rejects_a_whitelisted_tool_that_requires_user() {
         // ask_user is not whitelisted, but even a whitelisted name is rejected
         // when requires_user is set and the profile disallows interaction.
-        assert!(!RUNNER_EXPLORE.tool_policy.admits(&with_user(make("read_text"))));
+        assert!(
+            !RUNNER_EXPLORE
+                .tool_policy
+                .admits(&with_user(make("read_text")))
+        );
     }
 
     #[test]
     fn explore_rejects_dispatch_tool_even_if_named_like_a_read() {
         // Recursion is absolute: even a whitelisted name is excluded when it
         // spawns an runner.
-        assert!(!RUNNER_EXPLORE.tool_policy.admits(&with_spawn(make("read_text"))));
+        assert!(
+            !RUNNER_EXPLORE
+                .tool_policy
+                .admits(&with_spawn(make("read_text")))
+        );
     }
 
     #[test]
@@ -661,9 +667,11 @@ mod tests {
         assert!(!RUNNER_CODE.tool_policy.admits(&make("market_data")));
         assert!(!RUNNER_CODE.tool_policy.admits(&make("place_order")));
         // Recursion and control-flow remain absolute.
-        assert!(!RUNNER_CODE
-            .tool_policy
-            .admits(&with_spawn(make("run_command"))));
+        assert!(
+            !RUNNER_CODE
+                .tool_policy
+                .admits(&with_spawn(make("run_command")))
+        );
         assert!(!RUNNER_CODE.tool_policy.admits(&make_control()));
     }
 
@@ -708,10 +716,7 @@ mod tests {
             RunnerPresetPool::find("explore").map(|p| p.name),
             Some("explore")
         );
-        assert_eq!(
-            RunnerPresetPool::find("code").map(|p| p.name),
-            Some("code")
-        );
+        assert_eq!(RunnerPresetPool::find("code").map(|p| p.name), Some("code"));
         assert_eq!(RunnerPresetPool::find("nonexistent"), None);
 
         let dev_delegation = crate::MASTER_DEVELOPER;

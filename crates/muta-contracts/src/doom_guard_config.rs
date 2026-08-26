@@ -107,7 +107,10 @@ mod tests {
         let cfg = DoomGuardConfig::default();
         assert!(cfg.enabled, "on by default: the variant-loop defense");
         assert_eq!(cfg.window, 16);
-        assert_eq!(cfg.threshold, 3, "one same-signature re-run tolerated (ADR-0148)");
+        assert_eq!(
+            cfg.threshold, 3,
+            "one same-signature re-run tolerated (ADR-0148)"
+        );
     }
 
     #[test]
@@ -151,6 +154,9 @@ mod tests {
         let parsed: DoomGuardConfig = toml::from_str(s).unwrap();
         assert!(parsed.enabled);
         assert_eq!(parsed.window, 16);
-        assert_eq!(parsed.threshold, 2, "threshold is a live key again (ADR-0148)");
+        assert_eq!(
+            parsed.threshold, 2,
+            "threshold is a live key again (ADR-0148)"
+        );
     }
 }

@@ -38,7 +38,11 @@ pub struct MeshAddress {
 
 impl MeshAddress {
     pub fn new(tier: AgentTier, session: impl Into<String>, agent: impl Into<String>) -> Self {
-        Self { tier, session: session.into(), agent: agent.into() }
+        Self {
+            tier,
+            session: session.into(),
+            agent: agent.into(),
+        }
     }
 
     /// Supervisor address for the daemon.
@@ -57,12 +61,15 @@ impl MeshAddress {
         Self::new(AgentTier::Runner, session, agent)
     }
 
-
     /// The address of this agent's parent in the mesh (same session, one
     /// tier up). `None` for the supervisor — the root has no parent.
     pub fn parent(&self) -> Option<MeshAddress> {
         let tier = self.tier.parent_tier()?;
-        Some(Self { tier, session: self.session.clone(), agent: self.session.clone() })
+        Some(Self {
+            tier,
+            session: self.session.clone(),
+            agent: self.session.clone(),
+        })
     }
 
     /// Compact debug form `tier:session:agent`, used in logs and UI chips.
@@ -179,11 +186,7 @@ pub struct MeshEnvelope {
 }
 
 impl MeshEnvelope {
-    pub fn new(
-        sender: Option<MeshAddress>,
-        recipient: MeshAddress,
-        message: MeshMessage,
-    ) -> Self {
+    pub fn new(sender: Option<MeshAddress>, recipient: MeshAddress, message: MeshMessage) -> Self {
         let id = crate::mesh_ids::next_message_id();
         Self {
             id,
@@ -209,11 +212,12 @@ impl MeshEnvelope {
 
     /// Lawfulness check bundling the sender's tier (when present).
     pub fn lawful(&self) -> bool {
-        let Some(sender) = &self.sender else { return true };
+        let Some(sender) = &self.sender else {
+            return true;
+        };
         self.message.lawful_for(sender.tier, self.recipient.tier)
     }
 }
-
 
 /// Identifiers for mesh envelopes. Module-private helper so the id format can
 /// evolve without touching the envelope shape.
@@ -257,7 +261,9 @@ mod tests {
         assert!(instr.lawful_for(AgentTier::Master, AgentTier::Runner));
         assert!(!instr.lawful_for(AgentTier::Runner, AgentTier::Master));
 
-        let report = MeshMessage::Report { body: "done".into() };
+        let report = MeshMessage::Report {
+            body: "done".into(),
+        };
         assert!(report.lawful_for(AgentTier::Runner, AgentTier::Master));
         assert!(!report.lawful_for(AgentTier::Master, AgentTier::Runner));
     }
@@ -272,7 +278,9 @@ mod tests {
 
     #[test]
     fn progress_notes_only_go_up() {
-        let note = MeshMessage::ProgressNote { body: "halfway".into() };
+        let note = MeshMessage::ProgressNote {
+            body: "halfway".into(),
+        };
         assert!(note.lawful_for(AgentTier::Runner, AgentTier::Master));
         assert!(!note.lawful_for(AgentTier::Master, AgentTier::Runner));
         assert!(!note.lawful_for(AgentTier::Runner, AgentTier::Runner));
@@ -283,7 +291,9 @@ mod tests {
         let bad = MeshEnvelope::new(
             Some(runner("s", "r1")),
             master("s"),
-            MeshMessage::Instruction { body: "usurp".into() },
+            MeshMessage::Instruction {
+                body: "usurp".into(),
+            },
         );
         assert!(!bad.lawful());
 
@@ -307,7 +317,9 @@ mod tests {
         let e = MeshEnvelope::new(
             Some(master("s")),
             runner("s", "r1"),
-            MeshMessage::Report { body: "findings".into() },
+            MeshMessage::Report {
+                body: "findings".into(),
+            },
         );
         let s = serde_json::to_string(&e).unwrap();
         let back: MeshEnvelope = serde_json::from_str(&s).unwrap();

@@ -90,9 +90,7 @@ pub enum ReplyProvenance {
     /// Policy decided because no human channel existed. The payload names
     /// the policy so metrics can distinguish fail-closed refusals from
     /// labeled recommendations.
-    Policy {
-        policy: AutonomousFallbackPolicy,
-    },
+    Policy { policy: AutonomousFallbackPolicy },
 }
 
 /// The settlement payload for any parked request, unified so one broker map
@@ -113,7 +111,6 @@ impl HumanReply {
         ReplyProvenance::User
     }
 }
-
 
 /// Session-level OR-accounting of attached clients' postures
 /// (ADR-0141). One [`HumanChannelPosture::Interactive`] client keeps the
@@ -138,10 +135,7 @@ impl HumanChannelAccountant {
 
     /// Record an attaching client's declaration. Returns the effective
     /// posture after the attach.
-    pub fn attach(
-        &self,
-        posture: HumanChannelPosture,
-    ) -> HumanChannelPosture {
+    pub fn attach(&self, posture: HumanChannelPosture) -> HumanChannelPosture {
         self.connections
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         if posture == HumanChannelPosture::Interactive {
@@ -188,7 +182,6 @@ impl HumanChannelAccountant {
 
     /// Total attachments right now.
     pub fn connection_count(&self) -> usize {
-        self.connections
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.connections.load(std::sync::atomic::Ordering::Acquire)
     }
 }

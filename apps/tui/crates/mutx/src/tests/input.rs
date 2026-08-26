@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 #[test]
 fn focused_tool_steps_mut_only_touches_focused_runner_children() {
     let mut messages = conversation_with_runners();
@@ -28,7 +27,6 @@ fn focused_tool_steps_mut_only_touches_focused_runner_children() {
     assert_eq!(tool_steps, 2);
 }
 
-
 #[test]
 fn paste_in_readonly_modal_is_dropped_silently() {
     // Read-only / non-text modals (Help, Sessions, Permission, ...) drop a
@@ -51,7 +49,6 @@ fn paste_in_readonly_modal_is_dropped_silently() {
     assert!(app.pending_text_pastes.is_empty());
 }
 
-
 // ── Caret ownership / visibility (IME anchor) ─────────────────────────────
 // `App::caret_owner` / `App::caret_visible` are the single source of truth for
 // which surface holds the terminal cursor. The IME anchors its composition
@@ -69,7 +66,6 @@ fn caret_owner_composer_by_default() {
     );
 }
 
-
 #[test]
 fn caret_owner_none_when_step_focused() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -81,7 +77,6 @@ fn caret_owner_none_when_step_focused() {
     );
 }
 
-
 #[test]
 fn caret_owner_none_in_runner_view() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -92,7 +87,6 @@ fn caret_owner_none_in_runner_view() {
         "runner zoom has no input line → cursor hidden, IME unanchored"
     );
 }
-
 
 #[test]
 fn caret_owner_modal_for_caret_modals() {
@@ -110,7 +104,6 @@ fn caret_owner_modal_for_caret_modals() {
         );
     }
 }
-
 
 #[test]
 fn caret_owner_none_for_read_only_and_decision_modals() {
@@ -141,7 +134,6 @@ fn caret_owner_none_for_read_only_and_decision_modals() {
         );
     }
 }
-
 
 #[test]
 fn caret_owner_question_owns_caret_only_on_other() {
@@ -212,7 +204,6 @@ fn caret_owner_question_owns_caret_only_on_other() {
     );
 }
 
-
 #[test]
 fn caret_hidden_while_selection_active_even_for_composer() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -230,7 +221,6 @@ fn caret_hidden_while_selection_active_even_for_composer() {
         "an active selection hides the cursor regardless of ownership",
     );
 }
-
 
 #[test]
 fn has_input_selection_detects_both_block_and_range() {
@@ -261,7 +251,6 @@ fn has_input_selection_detects_both_block_and_range() {
     };
     assert!(!app.has_input_selection());
 }
-
 
 #[test]
 fn input_selection_relays_arrows_only_when_composer_owns_caret() {

@@ -8,7 +8,9 @@
 //! [`execution`] (tool tail + hooks).
 
 use super::*;
-use muta_contracts::human_request::{AutonomousFallbackPolicy, HumanChannelPosture, HumanReply, HumanRequestKind};
+use muta_contracts::human_request::{
+    AutonomousFallbackPolicy, HumanChannelPosture, HumanReply, HumanRequestKind,
+};
 
 use futures::future::BoxFuture;
 
@@ -68,7 +70,6 @@ pub(crate) fn runner_result_text(
     };
     format!("[{name} result]:\n{summary}\n\n{reanchor}")
 }
-
 
 /// In-memory only mask of tools a hook has temporarily disabled via a
 /// [`muta_contracts::HookOutcome::ScopeTools`] outcome, partitioned by the
@@ -556,7 +557,9 @@ impl PendingMessageQueue {
     pub fn drain(&mut self) -> Vec<muta_contracts::QueuedMessage> {
         match self.mode {
             muta_contracts::QueueMode::All => self.messages.drain(..).collect(),
-            muta_contracts::QueueMode::OneAtATime => self.messages.pop_front().into_iter().collect(),
+            muta_contracts::QueueMode::OneAtATime => {
+                self.messages.pop_front().into_iter().collect()
+            }
         }
     }
 
@@ -565,7 +568,10 @@ impl PendingMessageQueue {
     }
 
     pub fn cancel(&mut self, input_id: &str) -> Option<muta_contracts::QueuedMessage> {
-        let position = self.messages.iter().position(|input| input.id == input_id)?;
+        let position = self
+            .messages
+            .iter()
+            .position(|input| input.id == input_id)?;
         self.messages.remove(position)
     }
 
@@ -931,9 +937,9 @@ fn permission_required_output(request: &muta_contracts::PermissionRequest) -> To
             "File operation '{operation}' on '{}' requires runtime file-modification grant.",
             paths.join(", ")
         ),
-        Some(ToolPermissionPayload::Process { target, action }) => format!(
-            "Process operation '{action}' on '{target}' requires runtime lifecycle grant."
-        ),
+        Some(ToolPermissionPayload::Process { target, action }) => {
+            format!("Process operation '{action}' on '{target}' requires runtime lifecycle grant.")
+        }
         Some(ToolPermissionPayload::Generic { summary, .. }) => {
             format!("External operation '{summary}' requires runtime grant.")
         }

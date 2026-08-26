@@ -385,8 +385,7 @@ mod tests {
             project_root: Some(root.to_path_buf()),
             ..Default::default()
         };
-        let result =
-            discover_all_with_trust_state(&config, WorkspaceTrustState::Trusted).await;
+        let result = discover_all_with_trust_state(&config, WorkspaceTrustState::Trusted).await;
         assert!(
             result.skills.iter().any(|skill| skill.name == "pinned"),
             "project-local skill must be discovered from the pinned root"
@@ -395,13 +394,11 @@ mod tests {
         // Without a pinned root the same config discovers nothing here: the
         // process cwd (the test binary's) has no `.muta/skills/pinned`.
         let unpinned = muta_contracts::SkillsConfig::default();
-        let result =
-            discover_all_with_trust_state(&unpinned, WorkspaceTrustState::Trusted).await;
+        let result = discover_all_with_trust_state(&unpinned, WorkspaceTrustState::Trusted).await;
         assert!(
             !result.skills.iter().any(|skill| skill.name == "pinned"),
             "unpinned discovery must not reach into an unrelated directory"
         );
-
     }
 
     /// Repo-scope sources are invisible until their exact content has been
@@ -410,11 +407,7 @@ mod tests {
     async fn quarantined_skills_skip_every_repo_scoped_source() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
-        for dir in [
-            ".muta/skills/evil",
-            ".agents/skills/evil2",
-            "skills/evil3",
-        ] {
+        for dir in [".muta/skills/evil", ".agents/skills/evil2", "skills/evil3"] {
             let skill_dir = root.join(dir);
             std::fs::create_dir_all(&skill_dir).unwrap();
             let name = skill_dir.file_name().unwrap().to_string_lossy().to_string();
@@ -430,8 +423,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result =
-            discover_all_with_trust_state(&config, WorkspaceTrustState::Quarantined).await;
+        let result = discover_all_with_trust_state(&config, WorkspaceTrustState::Quarantined).await;
         assert!(
             !result
                 .skills
@@ -448,8 +440,7 @@ mod tests {
         );
         assert!(result.shadowed.is_empty());
 
-        let result =
-            discover_all_with_trust_state(&config, WorkspaceTrustState::Trusted).await;
+        let result = discover_all_with_trust_state(&config, WorkspaceTrustState::Trusted).await;
         assert!(result.skills.iter().any(|s| s.name == "evil"));
         assert!(result.skills.iter().any(|s| s.name == "evil2"));
         assert!(result.skills.iter().any(|s| s.name == "evil3"));

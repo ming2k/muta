@@ -122,11 +122,7 @@ impl Agent {
                 if !self.drain_inbox(&mut round.inbox_rx, messages) {
                     return Err(HarnessError::Interrupted);
                 }
-                if self.drain_steering(
-                    round.session_queue_generation,
-                    messages,
-                    &mut on_event,
-                ) > 0
+                if self.drain_steering(round.session_queue_generation, messages, &mut on_event) > 0
                 {
                     self.fire_turn_persist(messages).await?;
                 }

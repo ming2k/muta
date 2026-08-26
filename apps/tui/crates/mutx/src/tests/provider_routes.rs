@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 #[test]
 fn provider_retry_state_formats_summary_and_timing() {
     let now = std::time::Instant::now();
@@ -25,7 +24,6 @@ fn provider_retry_state_formats_summary_and_timing() {
     assert_eq!(running_summary, "retry 3/15 (running for 1.2s)");
 }
 
-
 #[test]
 fn completions_trigger_word_pins_suggestion_on_top() {
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
@@ -45,7 +43,6 @@ fn completions_trigger_word_pins_suggestion_on_top() {
     // No built-in starts with `/clear`, so the suggestion is the only row.
     assert_eq!(completions.len(), 1);
 }
-
 
 #[test]
 fn completions_trigger_word_suggestion_precedes_prefix_matches() {
@@ -70,7 +67,6 @@ fn completions_trigger_word_suggestion_precedes_prefix_matches() {
     );
 }
 
-
 #[test]
 fn completions_continue_trigger_suggests_sessions() {
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
@@ -82,7 +78,6 @@ fn completions_continue_trigger_suggests_sessions() {
         Some("/sessions")
     );
 }
-
 
 #[test]
 fn completions_settings_triggers_and_subcommands() {
@@ -121,7 +116,6 @@ fn completions_settings_triggers_and_subcommands() {
     assert_eq!(labels, vec!["/settings reload"]);
 }
 
-
 #[test]
 fn completions_subcommand_argument_never_triggers_suggestion() {
     // `clear` is a trigger word at the top level, but as a `/permissions`
@@ -133,7 +127,6 @@ fn completions_subcommand_argument_never_triggers_suggestion() {
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     assert_eq!(labels, vec!["/permissions clear"]);
 }
-
 
 #[test]
 fn completions_intent_keywords_suggest_canonical_command() {
@@ -168,7 +161,6 @@ fn completions_intent_keywords_suggest_canonical_command() {
     assert!(labels.contains(&"/master"));
 }
 
-
 #[test]
 fn completions_candidates_carry_rich_doc_for_inspector() {
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
@@ -188,7 +180,6 @@ fn completions_candidates_carry_rich_doc_for_inspector() {
     assert_eq!(doc.category.as_deref(), Some("Model"));
 }
 
-
 #[test]
 fn completions_returns_empty_when_input_does_not_trigger() {
     // Plain text without `@` or `/` produces no completions.
@@ -198,7 +189,6 @@ fn completions_returns_empty_when_input_does_not_trigger() {
     assert!(app.completions().is_empty());
     assert_eq!(app.completion_kind(), CompletionKind::None);
 }
-
 
 #[test]
 fn completions_classifies_slash_input_as_slash_kind() {
@@ -214,7 +204,6 @@ fn completions_classifies_slash_input_as_slash_kind() {
         assert_eq!(c.replace_end, app.input.len());
     }
 }
-
 
 #[test]
 fn completions_yolo_subcommand_offers_on_off() {
@@ -246,7 +235,6 @@ fn completions_yolo_subcommand_offers_on_off() {
     app.cursor_position = app.input.chars().count();
     assert!(app.completions().is_empty());
 }
-
 
 #[test]
 fn completions_expose_only_canonical_trust_subcommands() {
@@ -282,7 +270,6 @@ fn completions_expose_only_canonical_trust_subcommands() {
     assert!(labels.is_empty());
 }
 
-
 #[test]
 fn add_provider_row_opens_the_template_chooser() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -296,7 +283,6 @@ fn add_provider_row_opens_the_template_chooser() {
     app.move_template_choice(true);
     assert_eq!(app.template_choice, 0, "wraps back to the first");
 }
-
 
 #[test]
 fn custom_provider_editor_opens_empty_on_name_field() {
@@ -316,7 +302,6 @@ fn custom_provider_editor_opens_empty_on_name_field() {
     assert!(!app.custom_fields.contains(&crate::CustomField::Model));
 }
 
-
 #[test]
 fn anthropic_template_seeds_the_claude_family_without_a_model_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -328,7 +313,6 @@ fn anthropic_template_seeds_the_claude_family_without_a_model_field() {
     // …and there is no Model field (models are fixed by the template).
     assert!(!app.custom_fields.contains(&crate::CustomField::Model));
 }
-
 
 #[test]
 fn antigravity_template_prefills_url_and_seeds_relay_models() {
@@ -346,7 +330,6 @@ fn antigravity_template_prefills_url_and_seeds_relay_models() {
     assert!(app.custom_name.is_empty());
     assert!(app.custom_token.is_empty());
 }
-
 
 #[test]
 fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
@@ -372,7 +355,6 @@ fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
     app.cycle_custom_field(false); // 0 -> n-1 (wrap)
     assert_eq!(app.custom_field, n - 1);
 }
-
 
 #[test]
 fn custom_provider_model_filter_commits_and_offers_custom_id() {
@@ -405,7 +387,6 @@ fn custom_provider_model_filter_commits_and_offers_custom_id() {
     app.on_custom_filter_changed();
     assert_eq!(app.custom_model, "my-custom-private-model");
 }
-
 
 #[test]
 fn custom_openai_template_submits_with_the_typed_model_and_url() {
@@ -459,7 +440,6 @@ fn custom_openai_template_submits_with_the_typed_model_and_url() {
     );
 }
 
-
 #[test]
 fn completions_path_returns_top_level_for_bare_at() {
     // A bare `@` lists top-level entries only: the file plus the
@@ -485,7 +465,6 @@ fn completions_path_returns_top_level_for_bare_at() {
     }
 }
 
-
 #[test]
 fn completions_path_descends_into_subdirectory() {
     // `@src/` triggers directory descend: only paths under `src/` match.
@@ -505,7 +484,6 @@ fn completions_path_descends_into_subdirectory() {
     assert!(!labels.iter().any(|l| l.contains("tests")));
 }
 
-
 #[test]
 fn completions_path_substring_match_picks_files_across_dirs() {
     // `@main` finds `src/main.rs` via substring match.
@@ -517,7 +495,6 @@ fn completions_path_substring_match_picks_files_across_dirs() {
     assert!(labels.contains(&"src/main.rs"));
     assert!(!labels.iter().any(|l| l.contains("other.rs")));
 }
-
 
 #[test]
 fn completions_path_skips_dotgit_directory() {
@@ -536,7 +513,6 @@ fn completions_path_skips_dotgit_directory() {
     assert!(!labels.iter().any(|l| l.starts_with(".git")));
 }
 
-
 #[test]
 fn model_editor_owns_caret_only_for_provider_key_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -549,7 +525,6 @@ fn model_editor_owns_caret_only_for_provider_key_field() {
     app.editor_field = 1;
     assert_eq!(app.caret_owner(), CaretOwner::None);
 }
-
 
 /// Deleting the highlighted row from the sessions picker must leave the cursor
 /// on the **same line** (the next session slides up into the removed slot), not
@@ -590,7 +565,6 @@ fn sessions_picker_delete_keeps_cursor_on_the_same_line() {
         "deleting the last row clamps to the new last row, not the top"
     );
 }
-
 
 /// Regression: after a delete the backend pushes a fresh `SessionsOverview`,
 /// and the event loop used to treat *every* such push as an "open the picker"
@@ -635,7 +609,6 @@ fn sessions_picker_data_refresh_does_not_reset_cursor_when_already_open() {
     assert_eq!(app.modal_index, 0, "a genuine open resets the cursor");
     assert_eq!(app.session_scroll, 0, "a genuine open resets the scroll");
 }
-
 
 // ---------------------------------------------------------------------------
 // Unified surface router: transient stack, per-view drafts, queue hook,

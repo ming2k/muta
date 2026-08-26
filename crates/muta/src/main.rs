@@ -10,7 +10,7 @@ mod status;
 /// This CLI's identity, handed to the engine as its opening system prompt.
 /// Lives here (not in `muta-agent`) so the engine stays identity-agnostic
 /// and a different frontend could reuse it as another agent.
-use crate::identity::{DaemonUiBridge, muta_identity, master_code};
+use crate::identity::{DaemonUiBridge, master_code, muta_identity};
 use cli::{CliArgs, DaemonAction, McpAction, Mode, SkillAction};
 
 use std::path::PathBuf;

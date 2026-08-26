@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 // ----- `@path` completion tests -----
 
 #[test]
@@ -10,7 +9,6 @@ fn mention_range_detects_at_start_of_input() {
     // Cursor at end of `@src`: range covers the whole token.
     assert_eq!(mention_range_at("@src", 4), Some((0, 4)));
 }
-
 
 #[test]
 fn completion_anchor_aligns_slash_menu_with_composer_text_start() {
@@ -22,7 +20,6 @@ fn completion_anchor_aligns_slash_menu_with_composer_text_start() {
     assert_eq!(x, rect.x + 2);
 }
 
-
 #[test]
 fn completion_anchor_aligns_path_menu_with_the_at_trigger() {
     // `look at @sr` — the `@` sits at display column 8 of the input, so the
@@ -32,7 +29,6 @@ fn completion_anchor_aligns_path_menu_with_the_at_trigger() {
     let x = completion_anchor_x(input, input.len(), rect, CompletionKind::Path);
     assert_eq!(x, rect.x + 2 + 8);
 }
-
 
 #[test]
 fn completion_anchor_follows_the_at_trigger_across_wraps() {
@@ -46,7 +42,6 @@ fn completion_anchor_follows_the_at_trigger_across_wraps() {
     assert_eq!(x, rect.x + 2);
 }
 
-
 #[test]
 fn completion_anchor_keeps_column_when_token_stays_on_one_row() {
     // No wrap: the `@` at display column 10 keeps its column even on a
@@ -56,7 +51,6 @@ fn completion_anchor_keeps_column_when_token_stays_on_one_row() {
     let x = completion_anchor_x(input, input.len(), rect, CompletionKind::Path);
     assert_eq!(x, rect.x + 2 + 10);
 }
-
 
 // ----- resolved `/command` highlight tests -----
 
@@ -68,7 +62,6 @@ fn resolved_slash_len_matches_builtin_command_without_args() {
     );
 }
 
-
 #[test]
 fn resolved_slash_len_covers_only_the_command_token_not_args() {
     // `/sessions abc` — only `/sessions` (9 bytes) is the resolved command;
@@ -79,7 +72,6 @@ fn resolved_slash_len_covers_only_the_command_token_not_args() {
     );
 }
 
-
 #[test]
 fn resolved_slash_len_matches_custom_command() {
     let customs = vec![("/deploy".to_string(), "Deploy the app".to_string())];
@@ -89,7 +81,6 @@ fn resolved_slash_len_matches_custom_command() {
         Some(7)
     );
 }
-
 
 #[test]
 fn resolved_slash_len_rejects_partial_prefix_and_unknown_commands() {
@@ -107,7 +98,6 @@ fn resolved_slash_len_rejects_partial_prefix_and_unknown_commands() {
     assert_eq!(resolved_slash_command_len("hello", &catalog), None);
     assert_eq!(resolved_slash_command_len("@src/main.rs", &catalog), None);
 }
-
 
 /// The anchor pass is what makes "popup visible ⇒ first row selected" true:
 /// with no prior highlight it seeds `Some(0)`, so the band, the details
@@ -129,7 +119,6 @@ fn anchor_seeds_the_first_candidate_when_the_menu_opens() {
     );
 }
 
-
 /// A visible menu keeps exactly one highlighted row even when the candidate
 /// list shrinks under a stale index: the highlight clamps into range rather
 /// than pointing past the list (which would render no band and no flyout).
@@ -150,7 +139,6 @@ fn anchor_clamps_a_stale_highlight_into_range() {
         "an out-of-range highlight must clamp to the last candidate"
     );
 }
-
 
 /// A resolved composer (the text exactly equals a candidate) renders no
 /// menu, so the anchor must clear the highlight — otherwise a lingering
@@ -176,7 +164,6 @@ fn anchor_clears_the_highlight_when_no_menu_is_rendered() {
     );
 }
 
-
 /// Tab's re-open gesture keys off trigger text that survived Esc: a partial
 /// slash command qualifies, a resolved exact command does not (its popup is
 /// hidden on purpose), and plain prose never does.
@@ -196,7 +183,6 @@ fn completion_trigger_text_present_matches_the_composer_state() {
     app.cursor_position = app.input.chars().count();
     assert!(!app.completion_trigger_text_present());
 }
-
 
 /// The Esc → Tab round trip, driven through the same `App` state the action
 /// arms mutate (`CloseCompletion` latches the dismissal + clears the
@@ -233,7 +219,6 @@ fn esc_then_tab_round_trip_restores_a_highlighted_menu() {
     );
 }
 
-
 #[test]
 fn mention_range_detects_inline_after_whitespace() {
     // `look at @src`: the `@` follows a space, so the range starts at the
@@ -241,13 +226,11 @@ fn mention_range_detects_inline_after_whitespace() {
     assert_eq!(mention_range_at("look at @src", 12), Some((8, 12)));
 }
 
-
 #[test]
 fn mention_range_rejects_email_style_at() {
     // `user@host` — the char before `@` is non-whitespace, so no mention.
     assert_eq!(mention_range_at("user@host", 9), None);
 }
-
 
 #[test]
 fn mention_range_rejects_whitespace_between_at_and_cursor() {
@@ -256,13 +239,11 @@ fn mention_range_rejects_whitespace_between_at_and_cursor() {
     assert_eq!(mention_range_at("@src foo", 8), None);
 }
 
-
 #[test]
 fn mention_range_rejects_cursor_before_at() {
     // Cursor before the `@`: nothing to walk back to.
     assert_eq!(mention_range_at("look @src", 4), None);
 }
-
 
 #[test]
 fn mention_range_handles_multibyte_before_at() {
@@ -277,7 +258,6 @@ fn mention_range_handles_multibyte_before_at() {
         Some((at_byte, cursor_byte))
     );
 }
-
 
 /// `Shift+D` on a custom provider must STAGE the deletion (open the confirm
 /// overlay with default focus = Cancel) rather than deleting immediately. This
@@ -325,7 +305,6 @@ fn delete_provider_stages_overlay_without_deleting() {
     );
 }
 
-
 /// Built-in providers are not deletable: `Shift+D` on one is a no-op (the
 /// overlay must not open, nothing staged).
 #[test]
@@ -360,7 +339,6 @@ fn delete_provider_ignores_builtin() {
         "built-in provider is never staged for deletion"
     );
 }
-
 
 #[test]
 fn accept_slash_completion_does_not_append_trailing_space() {
@@ -397,7 +375,6 @@ fn accept_slash_completion_does_not_append_trailing_space() {
     );
 }
 
-
 #[test]
 fn accept_path_dir_completion_stays_live_for_descend() {
     // `@path` *directory* accepts stay live so Tab can keep descending the
@@ -427,7 +404,6 @@ fn accept_path_dir_completion_stays_live_for_descend() {
     );
 }
 
-
 #[test]
 fn accept_path_file_completion_is_terminal_and_drops_at() {
     // `@path` *file* accepts are terminal: the `@` is only a completion
@@ -451,7 +427,6 @@ fn accept_path_file_completion_is_terminal_and_drops_at() {
     );
 }
 
-
 #[test]
 fn accept_path_file_completion_inline_preserves_surrounding_text() {
     // An inline `@mention` mid-sentence: accepting a file must drop the `@`
@@ -473,7 +448,6 @@ fn accept_path_file_completion_inline_preserves_surrounding_text() {
     // preserved; the existing space before it is reused (no double space).
     assert_eq!(app.input, "look at Cargo.toml please");
 }
-
 
 /// Esc back-out must respect modal hierarchy: a drill-in sub-page backs out to
 /// its parent view *before* any close/quit logic runs. Regression for a bug
@@ -540,7 +514,6 @@ fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
     assert!(app.should_quit.load(Ordering::SeqCst));
 }
 
-
 /// Ctrl+C at the `mutx attach` startup picker must quit the program — the
 /// same as Esc and an outside click — NOT drop into an empty session. Regression
 /// for a bug where Ctrl+C closed the modal (`active_modal = None`) but never set
@@ -579,7 +552,6 @@ fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
     assert_ne!(app.active_modal(), Modal::None, "quit path wins over close");
 }
 
-
 /// `mutx dashboard` opens the session dashboard (`Modal::Host`) over a
 /// carrier session at startup. The user asked for a dashboard, not a
 /// conversation, so leaving the screen must quit the whole TUI — the
@@ -615,7 +587,6 @@ fn esc_at_startup_dashboard_quits_instead_of_dropping_to_carrier_chat() {
     );
 }
 
-
 #[test]
 fn ctrl_c_at_startup_dashboard_arms_then_quits_never_opens_chat() {
     use std::sync::atomic::Ordering;
@@ -645,7 +616,6 @@ fn ctrl_c_at_startup_dashboard_arms_then_quits_never_opens_chat() {
     );
 }
 
-
 #[test]
 fn ctrl_c_at_startup_dashboard_after_window_expires_rearms_not_opens_chat() {
     use std::sync::atomic::Ordering;
@@ -666,7 +636,6 @@ fn ctrl_c_at_startup_dashboard_after_window_expires_rearms_not_opens_chat() {
     assert_eq!(app.active_modal(), Modal::Host);
     assert!(!app.should_quit.load(Ordering::SeqCst));
 }
-
 
 /// The in-session dashboard (`/dashboard` typed in a conversation) keeps the
 /// same double-Ctrl+C UX, but its second press is the client-declared
@@ -697,7 +666,6 @@ fn ctrl_c_at_in_session_dashboard_double_press_ends_session() {
     assert!(!app.should_quit.load(Ordering::SeqCst));
 }
 
-
 /// The dashboard's inline prompt (`p` / `n`) borrows the composer buffer.
 /// Ctrl+C with text staged there clears it first — the same two-press
 /// shape as the conversation composer — and only then arms toward quit.
@@ -726,7 +694,6 @@ fn ctrl_c_at_dashboard_inline_prompt_clears_text_before_arming() {
     assert!(app.should_quit.load(Ordering::SeqCst));
     assert_eq!(app.active_modal(), Modal::Host);
 }
-
 
 /// The double-Esc interrupt confirmation is a real wall-clock window, not a
 /// frame counter. Regression: `esc_armed_ticks` decremented once per loop
@@ -762,7 +729,6 @@ fn esc_interrupt_window_is_wall_clock_not_frame_counted() {
     assert!(!app.esc_press(), "the post-lapse press re-arms");
     assert!(app.esc_armed());
 }
-
 
 /// The armed Esc window's keep-alive must follow the *viewed* session's
 /// running round — the same `running_sessions` predicate the keymap uses to
@@ -805,7 +771,6 @@ fn esc_interrupt_window_survives_idle_primary_while_aside_runs() {
     );
 }
 
-
 /// The second Esc inside the window fires the interrupt and disarms; the
 /// request targets the viewed session (main view → `Interrupt`, aside view
 /// → `InterruptSide`), and a third press re-arms rather than re-firing.
@@ -844,7 +809,6 @@ fn esc_interrupt_fires_on_second_press_and_rearms_after() {
     ));
 }
 
-
 #[test]
 fn delete_input_selection_clears_buffer_and_selection() {
     let mut app = app_with_input_selection("hello world");
@@ -867,7 +831,6 @@ fn delete_input_selection_clears_buffer_and_selection() {
     assert_eq!(app.cursor_position, 6);
     assert_eq!(app.selection, SelectionState::None);
 }
-
 
 #[test]
 fn range_selection_left_arrow_breaks_selection_at_release_position() {
@@ -912,7 +875,6 @@ fn range_selection_left_arrow_breaks_selection_at_release_position() {
     );
 }
 
-
 #[test]
 fn range_selection_right_arrow_breaks_selection_at_release_position() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -937,7 +899,6 @@ fn range_selection_right_arrow_breaks_selection_at_release_position() {
     );
 }
 
-
 #[test]
 fn range_selection_up_and_down_restore_caret_at_release_position() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -953,7 +914,6 @@ fn range_selection_up_and_down_restore_caret_at_release_position() {
     assert_eq!(app.selection, SelectionState::None);
     assert_eq!(app.cursor_position, 6, "↑ restores caret at release point");
 }
-
 
 #[test]
 fn range_selection_home_and_end_jump_to_selection_edges() {
@@ -979,7 +939,6 @@ fn range_selection_home_and_end_jump_to_selection_edges() {
     assert_eq!(app.selection, SelectionState::None);
     assert_eq!(app.cursor_position, 11, "End jumps to end of range");
 }
-
 
 #[test]
 fn range_selection_cjk_left_arrow_snaps_grapheme() {

@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 #[test]
 fn only_high_frequency_stream_updates_are_coalesced() {
     let stream_delta = AgentResponse::Round {
@@ -31,7 +30,6 @@ fn only_high_frequency_stream_updates_are_coalesced() {
     assert!(!is_coalescible_stream_update(&stream_end));
 }
 
-
 #[test]
 fn transcript_patch_updates_only_the_live_message() {
     let mut messages = vec![
@@ -52,7 +50,6 @@ fn transcript_patch_updates_only_the_live_message() {
     assert_eq!(messages[0].raw, "frozen history");
     assert_eq!(messages[1].raw, "live tail");
 }
-
 
 #[test]
 fn streamed_text_is_appended_only_to_the_current_turn() {
@@ -81,7 +78,6 @@ fn streamed_text_is_appended_only_to_the_current_turn() {
     assert_eq!(messages[1].raw, "first second");
 }
 
-
 #[test]
 fn hidden_reasoning_needs_no_assistant_placeholder() {
     // StreamStart is lifecycle-only. If a hidden-chain reasoning delta is
@@ -94,7 +90,6 @@ fn hidden_reasoning_needs_no_assistant_placeholder() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].id, before);
 }
-
 
 #[test]
 fn command_ledger_restores_as_non_conversational_command_rows() {
@@ -141,7 +136,6 @@ fn command_ledger_restores_as_non_conversational_command_rows() {
     assert_eq!(shell.command_result_text(), None);
 }
 
-
 #[test]
 fn command_error_settles_pending_command_in_place() {
     use crate::model::document::{CommandPhase, TranscriptMessage};
@@ -164,7 +158,6 @@ fn command_error_settles_pending_command_in_place() {
         Some("Error: Unknown /trust subcommand 'workspace'.")
     );
 }
-
 
 /// ADR-0106 §2: on resume, command rows merge at their turn seams — a
 /// command issued between two prompts renders between those rounds, exactly
@@ -217,7 +210,6 @@ fn command_rows_merge_at_their_turn_seams_on_restore() {
     );
 }
 
-
 /// ADR-0106 §2: dialogue with no user timestamps is never reordered — the
 /// command rows keep ledger order at the tail rather than guessing.
 #[test]
@@ -238,7 +230,6 @@ fn command_rows_tail_when_dialogue_has_no_timestamps() {
     let texts: Vec<&str> = merged.iter().map(|m| m.raw.as_str()).collect();
     assert_eq!(texts, vec!["prompt", "reply", "/compact"]);
 }
-
 
 #[test]
 fn command_result_message_expands_and_round_trips_display() {
@@ -267,7 +258,6 @@ fn command_result_message_expands_and_round_trips_display() {
     message.pin_command_result_expanded(true);
     assert_eq!(message.command_result_expanded(), Some(true));
 }
-
 
 /// ADR-0106: the command row's layout follows the shape of the reply — a
 /// a short single line joins inline with whitespace, anything longer discloses, and a
@@ -317,7 +307,6 @@ fn command_row_layout_classifies_by_result_shape() {
     );
 }
 
-
 #[test]
 fn tool_activity_is_semantic_and_loop_progress_is_preserved() {
     assert_eq!(
@@ -342,7 +331,6 @@ fn tool_activity_is_semantic_and_loop_progress_is_preserved() {
     );
 }
 
-
 #[test]
 fn queued_dispatch_carries_text_and_images() {
     // Smoke-check the struct's fields are wired as expected by the
@@ -365,7 +353,6 @@ fn queued_dispatch_carries_text_and_images() {
     assert_eq!(d.images[0].mime, "image/png");
 }
 
-
 #[test]
 fn outbox_count_and_fifo_dispatch_are_session_scoped() {
     // Every staged message is a next-round item (the insert/next-round
@@ -385,7 +372,6 @@ fn outbox_count_and_fifo_dispatch_are_session_scoped() {
     assert_eq!(dispatch.id, "a-next");
     assert_eq!(app.pending_dispatch[0].id, "b-next");
 }
-
 
 /// The pointer model's "newest slot = unsent input" invariant: once a draft
 /// is successfully sent it is historicised, so the remembered draft slot is
@@ -426,7 +412,6 @@ async fn sending_clears_the_remembered_draft() {
     assert!(!app.history_next(&rows));
     assert_eq!(app.input, "", "no stale draft may return after a send");
 }
-
 
 /// The Phase-1 unsend restore is asynchronous, not a user gesture: it must
 /// never clobber a draft the user is composing while the round ran. The

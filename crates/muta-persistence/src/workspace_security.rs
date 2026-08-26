@@ -19,12 +19,7 @@ const CURRENT_VERSION: u32 = 2;
 
 const MCP_PATHS: &[&str] = &[".muta/mcp.json"];
 
-const SKILLS_PATHS: &[&str] = &[
-    ".muta/skills",
-    ".agents/skills",
-    ".claude/skills",
-    "skills",
-];
+const SKILLS_PATHS: &[&str] = &[".muta/skills", ".agents/skills", ".claude/skills", "skills"];
 
 const HOOK_PATHS: &[&str] = &[".muta/hooks"];
 
@@ -82,7 +77,10 @@ impl WorkspaceSecurityStore {
         });
         let record = state.workspaces.get(&key).cloned().unwrap_or_default();
         let state_for = |domain| match domain_digest(&root, domain) {
-            Ok(current) => trust_state(current.as_deref(), record.domain_digests.get(domain.as_str())),
+            Ok(current) => trust_state(
+                current.as_deref(),
+                record.domain_digests.get(domain.as_str()),
+            ),
             Err(error) => {
                 tracing::warn!(
                     %error,
@@ -331,10 +329,7 @@ fn compute_files_digest(
 /// Serialize only one project-config table into the domain digest. This keeps
 /// a hook-only edit from invalidating an MCP grant (and vice versa) even though
 /// both declarations share `.muta/config.toml`.
-fn project_config_projection(
-    workspace: &Path,
-    key: &str,
-) -> Result<Option<Vec<u8>>, String> {
+fn project_config_projection(workspace: &Path, key: &str) -> Result<Option<Vec<u8>>, String> {
     let path = workspace.join(".muta/config.toml");
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -434,10 +429,7 @@ mod tests {
             WorkspaceTrustState::Quarantined
         );
         assert!(store.trust_domain(root, TrustDomain::Skills).unwrap());
-        assert_eq!(
-            store.snapshot(root).skills,
-            WorkspaceTrustState::Trusted
-        );
+        assert_eq!(store.snapshot(root).skills, WorkspaceTrustState::Trusted);
 
         std::fs::write(root.join(".muta/skills/demo/SKILL.md"), "two").unwrap();
         assert_eq!(store.snapshot(root).skills, WorkspaceTrustState::Changed);
@@ -512,7 +504,10 @@ mod tests {
         assert_eq!(snap.skills, WorkspaceTrustState::Quarantined);
 
         let granted = store.trust_domains(root, &TrustDomain::ALL).unwrap();
-        assert_eq!(granted, vec![TrustDomain::Mcp, TrustDomain::Skills, TrustDomain::Hooks]);
+        assert_eq!(
+            granted,
+            vec![TrustDomain::Mcp, TrustDomain::Skills, TrustDomain::Hooks]
+        );
         let reloaded = WorkspaceSecurityStore::load_from(file);
         let snap = reloaded.snapshot(root);
         assert_eq!(snap.aggregate(), WorkspaceTrustState::Trusted);

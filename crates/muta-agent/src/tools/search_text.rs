@@ -42,9 +42,7 @@ struct SearchTextArgs {
         desc = "File or directory to search; relative paths use the primary workspace (default '.')"
     )]
     path: Option<String>,
-    #[tool(
-        desc = "File globs relative to path; pass alternatives as separate array items (OR)"
-    )]
+    #[tool(desc = "File globs relative to path; pass alternatives as separate array items (OR)")]
     include: Option<Vec<String>>,
     #[tool(desc = "File globs to exclude from the search")]
     exclude: Option<Vec<String>>,

@@ -51,7 +51,6 @@ Delegate a specialized integration task (e.g. database operations, external API 
 or third-party MCP tool interactions) to a dedicated runner. The runner runs in an isolated \
 sandbox with access to dynamic/MCP tools and returns a high-signal summary of the results.";
 
-
 /// Retry settings for an runner subagent, inherited from the session's provider retry configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunnerRetryConfig {
@@ -189,7 +188,6 @@ pub struct RunnerTool {
     retry_config: std::sync::Mutex<RunnerRetryConfig>,
 }
 
-
 #[derive(Clone)]
 struct RunnerAccountingContext {
     ledger: Arc<muta_contracts::TokenSourceLedger>,
@@ -207,7 +205,13 @@ impl RunnerTool {
         toolset: muta_contracts::ToolSet,
         profile: &'static RunnerPreset,
     ) -> Self {
-        Self::named(provider, toolset, profile, "spawn_runner", RUNNER_TOOL_DESCRIPTION)
+        Self::named(
+            provider,
+            toolset,
+            profile,
+            "spawn_runner",
+            RUNNER_TOOL_DESCRIPTION,
+        )
     }
 
     /// Like [`new`](Self::new) but shares an existing [`RunnerRegistry`] instead
@@ -243,7 +247,6 @@ impl RunnerTool {
             registry,
         )
     }
-
 
     /// Build a dispatch tool under an explicit name and description. This is
     /// how a second, write-capable runner dispatch tool is constructed: a
@@ -313,7 +316,6 @@ impl RunnerTool {
             .unwrap_or_else(|e| e.into_inner()) = Some(delegation);
     }
 
-
     /// Pin the session's workspace root so spawned runners resolve relative
     /// `write_paths` (ADR-0028) against the session's project rather than the
     /// daemon process's cwd (ADR-0096). Called by the bootstrap right after
@@ -335,11 +337,12 @@ impl RunnerTool {
         session_id: Arc<std::sync::Mutex<Option<String>>>,
         round_counter: Arc<std::sync::Mutex<u64>>,
     ) {
-        *self.accounting.lock().unwrap_or_else(|e| e.into_inner()) = Some(RunnerAccountingContext {
-            ledger,
-            session_id,
-            round_counter,
-        });
+        *self.accounting.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(RunnerAccountingContext {
+                ledger,
+                session_id,
+                round_counter,
+            });
     }
 
     /// Bind the parent agent's variant-selection handle (the **override** axis)
@@ -369,7 +372,9 @@ impl RunnerTool {
             .unwrap_or_else(|error| error.into_inner()) = Some(handle);
     }
 
-    fn parent_human_channel(&self) -> Option<Arc<muta_contracts::human_request::HumanChannelAccountant>> {
+    fn parent_human_channel(
+        &self,
+    ) -> Option<Arc<muta_contracts::human_request::HumanChannelAccountant>> {
         self.parent_human_channel
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -441,7 +446,6 @@ impl Tool for RunnerTool {
             "required": ["description", "prompt"]
         })
     }
-
 
     /// `task` spawns an runner; runner profiles exclude it to prevent
     /// unbounded recursion.
@@ -591,16 +595,19 @@ impl RunnerTool {
             .or_else(|| args.get("preset"))
             .and_then(|p| p.as_str())
             .unwrap_or(self.profile.name);
-        let profile = muta_contracts::RunnerPresetPool::find(requested_preset)
-            .unwrap_or(self.profile);
+        let profile =
+            muta_contracts::RunnerPresetPool::find(requested_preset).unwrap_or(self.profile);
 
-        if let Some(delegation) = self.parent_delegation.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some(delegation) = self
+            .parent_delegation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
             if !delegation.admits_runner(profile.name) {
                 return Err(format!(
                     "Master preset '{}' does not admit runner preset '{}'. Admitted presets: {:?}",
-                    delegation.preset_id,
-                    profile.name,
-                    delegation.runner_presets
+                    delegation.preset_id, profile.name, delegation.runner_presets
                 ));
             }
         }
@@ -622,15 +629,13 @@ impl RunnerTool {
         let model = muta_contracts::resolve_model(&self.provider.model());
         let model_sel =
             muta_contracts::ToolSelection::unrestricted().with_variants(self.variant_snapshot());
-        let sub_tools = profile
-            .resolve_tools(&self.toolset, &model, &model_sel);
+        let sub_tools = profile.resolve_tools(&self.toolset, &model, &model_sel);
 
         // The runner's identity *is* its profile's system prompt — that is the
         // persona/mission framing for this role (e.g. RUNNER_EXPLORE's research
         let identity = crate::AgentIdentity::from_persona(profile.system_prompt);
         let mut runner = Agent::new(self.provider.clone(), sub_tools, identity);
         runner.set_tier(muta_contracts::AgentTier::Runner);
-
 
         if let Some(handle) = self
             .parent_workspace_security
@@ -639,7 +644,6 @@ impl RunnerTool {
             .as_ref()
             .cloned()
         {
-
             runner.bind_workspace_security_handle(handle);
         }
         let runner = Arc::new(runner);
@@ -949,7 +953,9 @@ impl RunnerTool {
         arguments: &str,
         on_event: Box<dyn FnMut(muta_contracts::RunnerEvent) + Send + 'a>,
     ) -> Result<String, String> {
-        let outcome = self.run_runner_outcome(call_id, arguments, on_event).await?;
+        let outcome = self
+            .run_runner_outcome(call_id, arguments, on_event)
+            .await?;
         let content = outcome.final_content.trim().to_string();
         if content.is_empty() {
             Ok("(runner returned no answer)".to_string())
@@ -1073,7 +1079,7 @@ impl RunnerTool {
 mod tests {
     use super::*;
     use futures::stream::{self, BoxStream};
-    use muta_contracts::{RUNNER_EXPLORE, Message, Provider, ProviderStreamEvent, Role};
+    use muta_contracts::{Message, Provider, ProviderStreamEvent, RUNNER_EXPLORE, Role};
 
     struct CannedProvider;
 
@@ -1214,7 +1220,11 @@ mod tests {
             std::sync::Arc::new(TerseReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(StubWriteTool) as std::sync::Arc<dyn Tool>,
         ]);
-        let tool = RunnerTool::new(std::sync::Arc::new(CannedProvider), toolset, &RUNNER_EXPLORE);
+        let tool = RunnerTool::new(
+            std::sync::Arc::new(CannedProvider),
+            toolset,
+            &RUNNER_EXPLORE,
+        );
 
         let resolve = |tool: &RunnerTool| {
             let model = muta_contracts::resolve_model(&CannedProvider.model());

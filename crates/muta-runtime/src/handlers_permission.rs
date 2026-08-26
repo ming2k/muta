@@ -7,7 +7,7 @@
 //! it did inline.
 
 use muta_agent::orchestration::send_harness_state;
-use muta_agent::{Agent, RunnerRegistry, RoundLifecycle};
+use muta_agent::{Agent, RoundLifecycle, RunnerRegistry};
 use muta_contracts::{AgentResponse, LoopStatus, PermissionDecision};
 use muta_persistence::session::SessionStore;
 use std::sync::Arc;

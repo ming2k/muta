@@ -116,7 +116,6 @@ pub struct BoundSession {
     pub security: Arc<muta_persistence::workspace_security::WorkspaceSecurityStore>,
 }
 
-
 impl BoundSession {
     /// The canonical project root this session is bound to (ADR-0096).
     pub fn project_root(&self) -> &std::path::Path {

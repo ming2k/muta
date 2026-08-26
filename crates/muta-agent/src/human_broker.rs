@@ -33,12 +33,12 @@
 //! as a decision.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use muta_contracts::human_request::{HumanReply, HumanRequestKind, ReplyProvenance};
 use muta_contracts::PermissionDecision;
+use muta_contracts::human_request::{HumanReply, HumanRequestKind, ReplyProvenance};
 
 /// One parked request's oneshot plus bookkeeping.
 struct Parked {
@@ -242,7 +242,10 @@ impl HumanRequestBroker {
     /// cancelled request settles with its kind's cancellation payload
     /// (`None` for Question / Input, `Reject` for Permission).
     pub fn cancel_all(&self) {
-        let entries: Vec<Parked> = lock(&self.parked).drain().map(|(_id, parked)| parked).collect();
+        let entries: Vec<Parked> = lock(&self.parked)
+            .drain()
+            .map(|(_id, parked)| parked)
+            .collect();
         for Parked {
             sender,
             kind,
@@ -275,7 +278,15 @@ impl HumanRequestBroker {
         for (id, parked) in kept {
             lock(&self.parked).insert(id, parked);
         }
-        for (_id, Parked { sender, kind, parked_at: _ }) in matching {
+        for (
+            _id,
+            Parked {
+                sender,
+                kind,
+                parked_at: _,
+            },
+        ) in matching
+        {
             self.metrics[Self::kind_index(kind)]
                 .cancelled
                 .fetch_add(1, Ordering::Relaxed);
@@ -393,10 +404,7 @@ mod tests {
             block_on_settled(p).reply,
             HumanReply::Permission(PermissionDecision::Reject)
         ));
-        assert!(matches!(
-            block_on_settled(i).reply,
-            HumanReply::Input(None)
-        ));
+        assert!(matches!(block_on_settled(i).reply, HumanReply::Input(None)));
         for kind in [
             HumanRequestKind::Permission,
             HumanRequestKind::Question,

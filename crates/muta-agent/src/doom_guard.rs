@@ -388,9 +388,7 @@ impl DoomLoopGuard {
         // before the block lands.
         let repeated: Vec<String> = signatures
             .iter()
-            .filter(|sig| {
-                self.window.iter().filter(|w| *w == *sig).count() + 1 >= threshold
-            })
+            .filter(|sig| self.window.iter().filter(|w| *w == *sig).count() + 1 >= threshold)
             .cloned()
             .collect();
         // Record every signature now, so the window reflects what has been
@@ -605,21 +603,39 @@ mod tests {
     #[test]
     fn exact_edit_thrash_collides_distinct_edits_do_not() {
         // Same payload twice (exact A→B→A thrash) → collides.
-        let a = doom_signature("edit_file", r#"{"path":"a.rs","old_string":"x","new_string":"y"}"#);
-        let b = doom_signature("edit_file", r#"{"path":"a.rs","old_string":"x","new_string":"y"}"#);
+        let a = doom_signature(
+            "edit_file",
+            r#"{"path":"a.rs","old_string":"x","new_string":"y"}"#,
+        );
+        let b = doom_signature(
+            "edit_file",
+            r#"{"path":"a.rs","old_string":"x","new_string":"y"}"#,
+        );
         assert_eq!(a, b, "an identical edit payload must collide with itself");
 
         // Same path, different payload (sequential distinct edits) → distinct
         // signatures, so the second edit to a file is not a "repeat" (ADR-0148).
-        let c = doom_signature("edit_file", r#"{"path":"a.rs","old_string":"y","new_string":"z"}"#);
+        let c = doom_signature(
+            "edit_file",
+            r#"{"path":"a.rs","old_string":"y","new_string":"z"}"#,
+        );
         assert_ne!(a, c, "distinct edits to one file must not collide");
 
         // A true A→B→A thrash re-issues the *identical* payload; that
         // collides even though it is the third edit to the same file.
-        let d = doom_signature("edit_file", r#"{"path":"a.rs","old_string":"y","new_string":"x"}"#);
+        let d = doom_signature(
+            "edit_file",
+            r#"{"path":"a.rs","old_string":"y","new_string":"x"}"#,
+        );
         assert_ne!(a, d);
-        let back = doom_signature("edit_file", r#"{"path":"a.rs","old_string":"y","new_string":"x"}"#);
-        assert_eq!(d, back, "the identical payload recurring is the thrash signal");
+        let back = doom_signature(
+            "edit_file",
+            r#"{"path":"a.rs","old_string":"y","new_string":"x"}"#,
+        );
+        assert_eq!(
+            d, back,
+            "the identical payload recurring is the thrash signal"
+        );
     }
 
     #[test]
@@ -768,7 +784,10 @@ mod tests {
         );
         // Same intent, different noise → same signature. The first variant
         // re-run is the tolerated one.
-        let variant = doom_signature("execute_command", r#"{"command":"FOO=1 sleep 99; make test"}"#);
+        let variant = doom_signature(
+            "execute_command",
+            r#"{"command":"FOO=1 sleep 99; make test"}"#,
+        );
         assert_eq!(variant, s, "precondition: normalization collapses them");
         assert_eq!(
             g.check_ahead(std::slice::from_ref(&variant)),

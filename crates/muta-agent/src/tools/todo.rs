@@ -267,7 +267,8 @@ impl Tool for TodoUpdateTool {
         let mut list = self.context.todos();
         if list.is_empty() {
             return Ok(
-                "No todos to update. Use the `write_todos` tool to create the list first.".to_string(),
+                "No todos to update. Use the `write_todos` tool to create the list first."
+                    .to_string(),
             );
         }
         let changed = list.update(key, status, now, turn);

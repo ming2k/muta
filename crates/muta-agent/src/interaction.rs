@@ -5,12 +5,12 @@
 //! and `autonomous_fallback`) into a coherent, single-source-of-truth interaction
 //! state machine.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Mutex;
 use muta_contracts::human_request::{
     AutonomousFallbackPolicy, HumanChannelAccountant, HumanChannelPosture,
 };
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 /// Interaction configuration parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +76,6 @@ impl InteractionController {
             HumanChannelPosture::Interactive
         }
     }
-
 
     pub fn set_human_posture(&self, posture: HumanChannelPosture) {
         self.posture.store(posture as u8, Ordering::Relaxed);
@@ -149,7 +148,10 @@ mod tests {
         assert!(!c.yolo());
         assert!(!c.allow_model_stdin());
         assert!(!c.skip_interactive_input());
-        assert_eq!(c.autonomous_fallback_policy(), AutonomousFallbackPolicy::FailClosed);
+        assert_eq!(
+            c.autonomous_fallback_policy(),
+            AutonomousFallbackPolicy::FailClosed
+        );
     }
 
     #[test]
@@ -164,6 +166,9 @@ mod tests {
         c.set_human_posture(HumanChannelPosture::Autonomous);
         assert_eq!(c.human_posture(), HumanChannelPosture::Autonomous);
         c.set_autonomous_fallback_policy(AutonomousFallbackPolicy::RecommendedLabeled);
-        assert_eq!(c.autonomous_fallback_policy(), AutonomousFallbackPolicy::RecommendedLabeled);
+        assert_eq!(
+            c.autonomous_fallback_policy(),
+            AutonomousFallbackPolicy::RecommendedLabeled
+        );
     }
 }

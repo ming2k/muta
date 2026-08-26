@@ -205,7 +205,11 @@ struct SessionData {
     retry_pending: Option<muta_contracts::RetryPoint>,
     /// Session-scoped YOLO posture: `true` means the agent
     /// runs in full auto-approve mode (bypasses tool permission prompts).
-    #[serde(default, alias = "autopilot", skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        default,
+        alias = "autopilot",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     yolo: bool,
     /// Native DAG session tree (Schema v12).
     #[serde(default)]
@@ -815,7 +819,6 @@ pub struct SessionStore {
     /// reserve persistence in the same order they leave their state mutation.
     persist_gate: Mutex<()>,
 }
-
 
 /// Write `data` to `path`, creating its parent directory first.
 fn persist_to(path: &Path, data: &SessionData, blob_store: &BlobStore) -> Result<(), String> {
@@ -1574,7 +1577,8 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
         if let Some(children) = &message.children
             && !children.is_empty()
         {
-            let nested = serialize_runner_transcript_for_summary(children, SUMMARY_RUNNER_CAP_TOKENS);
+            let nested =
+                serialize_runner_transcript_for_summary(children, SUMMARY_RUNNER_CAP_TOKENS);
             if !nested.is_empty() {
                 body.push_str("\n[runner transcript]\n");
                 body.push_str(&nested);
@@ -1615,7 +1619,6 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
 /// its key tool calls, and its conclusion; small enough that a turn with
 /// five runners cannot crowd out the rest of the conversation.
 const SUMMARY_RUNNER_CAP_TOKENS: usize = 500;
-
 
 /// Render an runner's nested transcript as a compact summarizer-facing view.
 /// Recursive: an runner's own `task` results (sub-runners) are rendered

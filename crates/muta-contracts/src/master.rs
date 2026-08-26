@@ -140,7 +140,6 @@ impl MasterPreset {
         .with_selection(MASTER_CODE_ANALYST.selection())
     }
 
-
     /// Narrow the capability scope (the scope axis of ADR-0041). Builder-style.
     pub fn with_selection(mut self, selection: ToolSelection) -> Self {
         self.agent_selection = selection;
@@ -242,14 +241,15 @@ impl MasterPresetId {
     pub fn description(self) -> &'static str {
         match self {
             MasterPresetId::Code => "the default developer master (full native capabilities)",
-            MasterPresetId::CodeAnalyst => "code analyst (read-only analysis & sandboxed execution)",
+            MasterPresetId::CodeAnalyst => {
+                "code analyst (read-only analysis & sandboxed execution)"
+            }
             MasterPresetId::Architect => "architecture & design focus (analysis-first)",
             MasterPresetId::Reviewer => "read-only code review",
             MasterPresetId::Security => "read-only security audit (command-confined)",
         }
     }
 }
-
 
 /// The developer master preset: native toolchain authority (ADR-0144 §3).
 ///
@@ -281,7 +281,10 @@ pub const MASTER_DEVELOPER: MasterPresetDelegation = MasterPresetDelegation {
 /// regain the write authority its own preset denies.
 pub const MASTER_CODE_ANALYST: MasterPresetDelegation = MasterPresetDelegation {
     preset_id: "code_analyst",
-    runner_presets: &[crate::runner::RUNNER_EXPLORE.name, crate::runner::RUNNER_TITLE.name],
+    runner_presets: &[
+        crate::runner::RUNNER_EXPLORE.name,
+        crate::runner::RUNNER_TITLE.name,
+    ],
     tool_scope: ToolScope::All,
 };
 
@@ -310,8 +313,7 @@ impl MasterPresetDelegation {
     }
 
     /// All shipping master delegations, developer first (the default).
-    pub const ALL: &'static [MasterPresetDelegation] =
-        &[MASTER_DEVELOPER, MASTER_CODE_ANALYST];
+    pub const ALL: &'static [MasterPresetDelegation] = &[MASTER_DEVELOPER, MASTER_CODE_ANALYST];
 
     /// The code-analyst's tool declaration: the full read/analyze surface
     /// plus the workspace-contained `execute_command` variant.
@@ -385,7 +387,6 @@ impl MasterPreset {
                 preset
             }
             MasterPresetId::Architect => {
-
                 let identity = AgentIdentity::new(
                     base.name.clone(),
                     "an expert software architect — evaluates design tradeoffs, \

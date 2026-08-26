@@ -5,7 +5,7 @@
 use crate::tool_access::ToolAccesses;
 use crate::tool_output::StdinPolicy;
 use crate::usage::TokenUsage;
-use crate::{RunnerEvent, Message, ToolOutput, ToolStream};
+use crate::{Message, RunnerEvent, ToolOutput, ToolStream};
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
 use serde::{Deserialize, Serialize};
@@ -492,7 +492,10 @@ pub trait Tool: Send + Sync {
     /// Safe tools return `None` (no permission evaluation or prompt needed).
     /// Dangerous tools (file modification, command execution) submit their structured
     /// intent payload (file paths, command line + process kill spec).
-    fn permission_submission(&self, arguments: &str) -> Option<crate::hazard::ToolPermissionSubmission> {
+    fn permission_submission(
+        &self,
+        arguments: &str,
+    ) -> Option<crate::hazard::ToolPermissionSubmission> {
         if !self.hazard_level().requires_permission() {
             return None;
         }
@@ -513,7 +516,6 @@ pub trait Tool: Send + Sync {
     }
 
     async fn call(&self, arguments: &str) -> Result<String, String>;
-
 
     /// Structured result. Default delegates to [`call`](Self::call), wrapping
     /// the text as [`ToolOutput::Text`]. Tools override this to return richer

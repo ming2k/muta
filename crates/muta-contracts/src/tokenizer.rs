@@ -931,7 +931,7 @@ mod tests {
     #[test]
     fn corpus_file_counts_within_tolerance() {
         let cases: &[(&str, usize)] = &[
-            ("../../crates/muta-agent/src/agent.rs", 10_478),
+            ("../../crates/muta-agent/src/agent/mod.rs", 10_478),
             ("../../crates/muta-contracts/src/pressure.rs", 11_207),
             ("../../README.zh-CN.md", 2_588),
             ("../../CHANGELOG.md", 10_083),

@@ -598,8 +598,8 @@ mod tests {
             },
             inner_child,
         ];
-        let parent =
-            Message::tool_result(&call, "[task result]:\nfound it").with_children(runner_transcript);
+        let parent = Message::tool_result(&call, "[task result]:\nfound it")
+            .with_children(runner_transcript);
 
         let json = serde_json::to_string_pretty(&parent).unwrap();
         let restored: Message = serde_json::from_str(&json).unwrap();

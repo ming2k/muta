@@ -58,7 +58,10 @@ impl Tool for WriteFileTool {
     fn hazard_level(&self) -> muta_contracts::HazardLevel {
         muta_contracts::HazardLevel::FileModification
     }
-    fn permission_submission(&self, arguments: &str) -> Option<muta_contracts::ToolPermissionSubmission> {
+    fn permission_submission(
+        &self,
+        arguments: &str,
+    ) -> Option<muta_contracts::ToolPermissionSubmission> {
         let path = json_string(arguments, "path");
         Some(muta_contracts::ToolPermissionSubmission {
             hazard_level: muta_contracts::HazardLevel::FileModification,

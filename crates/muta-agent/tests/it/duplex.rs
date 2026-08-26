@@ -32,9 +32,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use muta_agent::{
-    Agent, AgentEvent, AgentOp, RunnerEvent, RunnerTool, Message, Provider, ProviderStreamEvent, Role,
+    Agent, AgentEvent, AgentOp, Message, Provider, ProviderStreamEvent, Role, RunnerEvent,
+    RunnerTool,
 };
-use muta_contracts::{RunnerPreset, PermissionDecision, Tool, ToolOutput, ToolPolicy};
+use muta_contracts::{PermissionDecision, RunnerPreset, Tool, ToolOutput, ToolPolicy};
 
 /// `stream_chat` emits "done" with no tool calls (the default
 /// `stream_chat_events` wraps it into one `TextDelta`). Used by the inject

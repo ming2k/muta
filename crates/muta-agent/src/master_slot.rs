@@ -95,7 +95,10 @@ impl MasterSlot {
     /// Cancels all child cancellation tokens, sweeps child mesh mailboxes from the tracker,
     /// and ensures no background execution continues.
     pub fn drain_runners(&self) -> usize {
-        let mut cancels = self.runner_cancels.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cancels = self
+            .runner_cancels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let count = cancels.len();
         for (_, token) in cancels.drain() {
             token.cancel();
@@ -109,7 +112,6 @@ impl MasterSlot {
 
         count
     }
-
 
     /// Replace the session's active master agent and preset atomically.
     ///
@@ -151,10 +153,7 @@ mod tests {
         async fn stream_chat(
             &self,
             _request: muta_contracts::ModelRequest,
-        ) -> Result<
-            futures::stream::BoxStream<'static, Result<String, String>>,
-            String,
-        > {
+        ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
             use futures::stream;
             Ok(Box::pin(stream::once(async { Ok("ok".to_string()) })))
         }
@@ -213,4 +212,3 @@ mod tests {
         assert_eq!(slot.delegation().preset_id, "code_analyst");
     }
 }
-

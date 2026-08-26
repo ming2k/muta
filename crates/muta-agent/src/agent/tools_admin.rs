@@ -111,7 +111,10 @@ impl Agent {
     /// Apply hook-fired [`HookOutcome::ScopeTools`] disables: record each name
     /// (only known tools, matching the user-mask contract) under its restore
     /// point. Idempotent across repeated fires via refcounting.
-    pub(super) fn apply_scoped_disables(&self, disables: &[(String, muta_contracts::RestorePoint)]) {
+    pub(super) fn apply_scoped_disables(
+        &self,
+        disables: &[(String, muta_contracts::RestorePoint)],
+    ) {
         if disables.is_empty() {
             return;
         }
@@ -258,5 +261,4 @@ impl Agent {
             })
             .collect()
     }
-
 }

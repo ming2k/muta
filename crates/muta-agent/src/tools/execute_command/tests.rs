@@ -158,10 +158,7 @@ async fn execute_command_timeout_kills_grandchildren() {
         "muta-grandchild-{}.txt",
         uuid::Uuid::new_v4().simple()
     ));
-    let command = format!(
-        "sleep 60 & echo $! > {}; echo started",
-        marker.display()
-    );
+    let command = format!("sleep 60 & echo $! > {}; echo started", marker.display());
     let out = tool
         .call_structured(&format!(
             r#"{{"command":{}, "timeout": 2}}"#,
@@ -357,9 +354,7 @@ async fn workspace_shell_sees_only_runtime_and_exact_workspace() {
 async fn test_persistent_terminal_preserves_state() {
     let tool = ExecuteCommandTool::new(None);
     let res1 = tool
-        .call_structured(
-            r#"{"command":"export MUTA_TEST_VAR=12345", "terminal_id": "test_sess"}"#,
-        )
+        .call_structured(r#"{"command":"export MUTA_TEST_VAR=12345", "terminal_id": "test_sess"}"#)
         .await
         .expect("set env");
     assert!(matches!(res1, muta_contracts::ToolOutput::Shell { .. }));
@@ -391,4 +386,3 @@ fn execute_command_schema_documents_300s_default_timeout() {
         "schema description should state default 300s: {desc}"
     );
 }
-

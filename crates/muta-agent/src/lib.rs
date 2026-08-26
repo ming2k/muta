@@ -65,15 +65,15 @@ pub use muta_contracts::*;
 // the Agent struct expects at the crate root have to be listed here by name.
 // Keep this list in sync with `muta_contracts`'s lib.rs re-exports.
 pub use muta_contracts::{
-    AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, DirEntry, RUNNER_EXPLORE, RunnerEvent,
-    RunnerPreset, ExecutionEnvironment, FsError, FsMetadata, FsProvider, HarnessError,
-    HarnessSnapshot, ImagePart, InjectionKind, InjectionOrigin, InputReply, InputRequest,
-    McpConnectionStatus, McpServerConfig, Message, ModelRequest, PatchOp, PermissionDecision,
-    PermissionRequest, ProcessOutput, ProcessRunner, Provider, ProviderEntry, ProviderPickerRow,
-    ProviderPickerSnapshot, ProviderStreamEvent, PruneOutcome, RetryableError, Role,
-    SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, RUNNER_TITLE, TodoId, TodoItem,
-    TodoList, TodoStatus, TokenUsage, Tool, ToolCall, ToolMiddleware, ToolOutput, ToolPolicy,
-    ToolResult, ToolStream, Transport, UserQuestion, UserQuestionOption, UserQuestionReply,
+    AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, DirEntry, ExecutionEnvironment,
+    FsError, FsMetadata, FsProvider, HarnessError, HarnessSnapshot, ImagePart, InjectionKind,
+    InjectionOrigin, InputReply, InputRequest, McpConnectionStatus, McpServerConfig, Message,
+    ModelRequest, PatchOp, PermissionDecision, PermissionRequest, ProcessOutput, ProcessRunner,
+    Provider, ProviderEntry, ProviderPickerRow, ProviderPickerSnapshot, ProviderStreamEvent,
+    PruneOutcome, RUNNER_EXPLORE, RUNNER_TITLE, RetryableError, Role, RunnerEvent, RunnerPreset,
+    SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, TodoId, TodoItem, TodoList,
+    TodoStatus, TokenUsage, Tool, ToolCall, ToolMiddleware, ToolOutput, ToolPolicy, ToolResult,
+    ToolStream, Transport, UserQuestion, UserQuestionOption, UserQuestionReply,
     UserQuestionRequest, WebSearchConfig, estimate_bytes, estimate_tokens, is_context_overflow,
     parse_retryable_error, prune_tool_results, public_error_message, retryable_error,
     truncate_utf8,
@@ -129,7 +129,6 @@ const RUNNER_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5
 pub mod agent;
 pub use agent::{Agent, AgentBuilder, RequestTokenEstimate, RoundOutcome};
 
-pub mod mesh;
 mod bash_policy;
 pub mod budget;
 pub mod catalog;
@@ -141,6 +140,7 @@ pub mod dynamic;
 mod dynamic_tools;
 pub mod hooks;
 pub mod interaction;
+pub mod mesh;
 pub use interaction::{InteractionConfig, InteractionController};
 
 pub mod human_broker;
@@ -148,8 +148,8 @@ pub use hooks::{HookRegistry, UserPromptVerdict, matcher_matches};
 pub mod inflight;
 pub use inflight::Inflight;
 mod dispatch_pipeline;
-pub mod runner_tool;
 pub mod master_slot;
+pub mod runner_tool;
 pub use master_slot::MasterSlot;
 mod hook_runner;
 pub mod loop_guard;
@@ -172,12 +172,12 @@ mod tool_scheduler;
 pub mod tools;
 
 pub use context_projection::ContextProjectionGate;
-pub use runner_tool::{RunnerRegistry, RunnerTool};
 pub use model_request::policies::runner_system_prompt_registry;
 pub use model_request::system_prompt::{
     SystemPromptContext, SystemPromptRegistry, SystemPromptRegistryError, SystemPromptSection,
 };
 pub use no_provider::{NO_PROVIDER_ID, NoProvider};
+pub use runner_tool::{RunnerRegistry, RunnerTool};
 
 #[cfg(test)]
 mod tests;

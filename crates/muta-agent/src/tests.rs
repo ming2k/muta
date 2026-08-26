@@ -1942,7 +1942,10 @@ async fn doom_guard_suppressed_when_disabled() {
             cmd(),
             text_turn("done"),
         ])),
-        vec![Arc::new(RecordingTool::read("execute_command", "COMMAND-OUT"))],
+        vec![Arc::new(RecordingTool::read(
+            "execute_command",
+            "COMMAND-OUT",
+        ))],
         crate::AgentIdentity::default(),
     ));
     agent.set_doom_guard_config(muta_contracts::DoomGuardConfig::disabled());
@@ -2890,9 +2893,9 @@ async fn interrupted_batch_records_runner_drain_and_cancels_unproduced_calls() {
     // The runner drained within the grace period: its ToolResult landed and no
     // ToolCancelled was emitted for it.
     assert!(
-        recorded
-            .iter()
-            .any(|event| matches!(event, AgentEvent::ToolResult { name, .. } if name == "spawn_runner")),
+        recorded.iter().any(
+            |event| matches!(event, AgentEvent::ToolResult { name, .. } if name == "spawn_runner")
+        ),
         "drained runner must emit ToolResult"
     );
     assert!(

@@ -23,10 +23,9 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::{Agent, ConcurrentOutcome, RoundState};
 use crate::tool_scheduler::{ToolCallTask, ToolScheduler};
 use crate::{
-    AgentEvent, AgentNotice, RUNNER_DRAIN_GRACE, HarnessError, InjectionKind, Message, NoticeKind,
-    NoticeSeverity, NoticeSource, NoticeSurface, ToolCall, ToolOutput,
+    AgentEvent, AgentNotice, HarnessError, InjectionKind, Message, NoticeKind, NoticeSeverity,
+    NoticeSource, NoticeSurface, RUNNER_DRAIN_GRACE, ToolCall, ToolOutput,
 };
-
 
 /// The product of [`Agent::dispatch_preflight`]: everything `schedule` and
 /// `finalize` need to finish the batch.

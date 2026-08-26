@@ -19,9 +19,7 @@ use muta_agent::orchestration::{
     send_harness_state, start_interactive_round,
 };
 use muta_agent::{Agent, AgentIdentity, NoProvider, RoundLifecycle};
-use muta_contracts::{
-    AgentResponse, BtwAsideSummary, LoopStatus, ParentStatus, Provider, Tool,
-};
+use muta_contracts::{AgentResponse, BtwAsideSummary, LoopStatus, ParentStatus, Provider, Tool};
 
 use muta_persistence::config::Config;
 use muta_persistence::session::SessionStore;
@@ -428,7 +426,6 @@ pub async fn start_active_turn(
     }
 
     start_resolved_turn(
-
         master, tx, config, agent, session, lifecycle, session_id, input,
     )
     .await;
@@ -506,7 +503,6 @@ pub async fn start_session_turn(
     }
 
     start_resolved_turn(
-
         master, tx, config, agent, session, lifecycle, session_id, input,
     )
     .await;
@@ -548,8 +544,7 @@ async fn start_resolved_turn(
         // handler read the primary's, which may differ from an aside target.
         input = RoundInput::resume(pending);
     }
-    let projection =
-        ContextProjectionSettings::from_config(config, active_context_window(master));
+    let projection = ContextProjectionSettings::from_config(config, active_context_window(master));
     let retry_max_attempts = config.connection_retry_max_attempts;
     let retry_base_ms = config.connection_retry_base_ms;
     let retry_max_ms = config.connection_retry_max_ms;

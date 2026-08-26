@@ -9,7 +9,6 @@
 use super::*;
 use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
 
-
 fn enter(input: &mut String, exact: bool) -> InputAction {
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();

@@ -14,7 +14,7 @@
 use crate::commands::CustomCommand;
 use muta_agent::catalog;
 use muta_agent::orchestration::{round_response, send_harness_state};
-use muta_agent::{Agent, RunnerRegistry, RoundLifecycle};
+use muta_agent::{Agent, RoundLifecycle, RunnerRegistry};
 use muta_contracts::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use muta_mcp::McpRuntime;
 use muta_persistence::{
@@ -1200,20 +1200,8 @@ mod tests {
         // reply must not be counted into round 2.
         store
             .set_request_usage_records(vec![
-                usage_record(
-                    &session_id,
-                    "master",
-                    1,
-                    1,
-                    RequestUsageStatus::Completed,
-                ),
-                usage_record(
-                    &session_id,
-                    "master",
-                    2,
-                    1,
-                    RequestUsageStatus::Completed,
-                ),
+                usage_record(&session_id, "master", 1, 1, RequestUsageStatus::Completed),
+                usage_record(&session_id, "master", 2, 1, RequestUsageStatus::Completed),
                 usage_record(&session_id, "master", 2, 2, RequestUsageStatus::InFlight),
                 usage_record(&session_id, "runner:c1", 2, 5, RequestUsageStatus::InFlight),
             ])
@@ -1271,23 +1259,11 @@ mod tests {
         let session_id = store.id().await;
         store
             .set_request_usage_records(vec![
-                usage_record(
-                    &session_id,
-                    "master",
-                    1,
-                    1,
-                    RequestUsageStatus::Completed,
-                ),
+                usage_record(&session_id, "master", 1, 1, RequestUsageStatus::Completed),
                 // Round 2 still in flight — but round 3 has since completed,
                 // so 2 is history: the counter guard must retire it.
                 usage_record(&session_id, "master", 2, 1, RequestUsageStatus::InFlight),
-                usage_record(
-                    &session_id,
-                    "master",
-                    3,
-                    1,
-                    RequestUsageStatus::Completed,
-                ),
+                usage_record(&session_id, "master", 3, 1, RequestUsageStatus::Completed),
             ])
             .await
             .unwrap();

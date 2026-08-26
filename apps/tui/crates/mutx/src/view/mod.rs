@@ -900,6 +900,5 @@ pub fn draw_transcript(
     }
 }
 
-
 #[cfg(test)]
 mod tests;

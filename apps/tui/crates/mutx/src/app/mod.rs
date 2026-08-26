@@ -1089,7 +1089,6 @@ pub struct App {
     pub logo: Option<Vec<String>>,
 }
 
-
 mod composer;
 mod history;
 mod providers;

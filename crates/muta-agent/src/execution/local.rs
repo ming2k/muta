@@ -449,7 +449,6 @@ impl ExecutionEnvironment for WorkspaceExecutionEnvironment {
     }
 }
 
-
 #[cfg(test)]
 mod workspace_tests {
     use super::*;
@@ -471,19 +470,18 @@ mod workspace_tests {
             .await
             .unwrap();
         assert_eq!(
-            env.fs().read(&root.path().join("inside.txt")).await.unwrap(),
+            env.fs()
+                .read(&root.path().join("inside.txt"))
+                .await
+                .unwrap(),
             b"ok"
         );
         assert!(matches!(
             env.fs().read(&outside).await,
             Err(FsError::PermissionDenied(_))
         ));
-        assert_eq!(
-            env.shell_isolation(),
-            ShellIsolation::Host
-        );
+        assert_eq!(env.shell_isolation(), ShellIsolation::Host);
     }
-
 
     #[cfg(unix)]
     #[tokio::test]
@@ -507,7 +505,10 @@ mod workspace_tests {
             .await
             .unwrap();
         assert_eq!(
-            env.fs().read(&root.path().join("primary.txt")).await.unwrap(),
+            env.fs()
+                .read(&root.path().join("primary.txt"))
+                .await
+                .unwrap(),
             b"ok"
         );
         // The admitted sibling root is now readable and writable...
@@ -629,7 +630,10 @@ mod workspace_tests {
 
         assert!(
             find_files
-                .call(&serde_json::json!({ "patterns": ["*"], "path": outside_root.path() }).to_string())
+                .call(
+                    &serde_json::json!({ "patterns": ["*"], "path": outside_root.path() })
+                        .to_string()
+                )
                 .await
                 .unwrap_err()
                 .contains("outside the admitted workspace roots")

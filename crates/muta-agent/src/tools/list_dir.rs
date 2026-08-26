@@ -5,9 +5,7 @@ use muta_contracts::{ExecutionEnvironment, Tool, ToolAccesses};
 use muta_tool_derive::ToolSchema;
 use serde::Deserialize;
 
-use crate::tools::file_search::{
-    resolve_search_root, search_limit, search_path_argument,
-};
+use crate::tools::file_search::{resolve_search_root, search_limit, search_path_argument};
 use crate::tools::helpers::{WorkspaceBase, env_from_root, execution_environment};
 
 /// Shallow directory browsing with no search semantics.

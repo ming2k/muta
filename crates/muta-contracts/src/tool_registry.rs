@@ -782,10 +782,11 @@ impl ToolPool {
                 reason,
             });
         }
-        ToolPoolSnapshot { capabilities: audits }
+        ToolPoolSnapshot {
+            capabilities: audits,
+        }
     }
 }
-
 
 /// Register a self-contained tool at its definition site.
 ///

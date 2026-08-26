@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::json;
+use std::sync::Arc;
 
 use muta_agent::mesh::{MeshListPeersTool, MeshSendTool, MeshTracker};
 use muta_agent::{Agent, AgentIdentity};
@@ -30,8 +30,10 @@ impl Supervisor {
         let address = MeshAddress::supervisor("supervisor");
 
         let send_tool = Arc::new(MeshSendTool::new((*tracker).clone(), Some(address.clone())));
-        let list_peers_tool =
-            Arc::new(MeshListPeersTool::new((*tracker).clone(), Some(address.clone())));
+        let list_peers_tool = Arc::new(MeshListPeersTool::new(
+            (*tracker).clone(),
+            Some(address.clone()),
+        ));
         let list_sessions_tool = Arc::new(SupervisorListSessionsTool::new(registry.clone()));
         let inspect_session_tool = Arc::new(SupervisorInspectSessionTool::new(registry.clone()));
         let instruct_session_tool = Arc::new(SupervisorInstructSessionTool::new(
@@ -60,7 +62,6 @@ impl Supervisor {
 
         let agent = Arc::new(Agent::new(provider, tools, identity));
         agent.set_tier(muta_contracts::AgentTier::Supervisor);
-
 
         Self {
             agent,
@@ -183,9 +184,7 @@ impl Tool for SupervisorInspectSessionTool {
     async fn call(&self, arguments: &str) -> Result<String, String> {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {e}"))?;
-        let session_id = args["session_id"]
-            .as_str()
-            .ok_or("Missing 'session_id'")?;
+        let session_id = args["session_id"].as_str().ok_or("Missing 'session_id'")?;
 
         let snapshot = self
             .registry
@@ -258,9 +257,7 @@ impl Tool for SupervisorInstructSessionTool {
     async fn call(&self, arguments: &str) -> Result<String, String> {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {e}"))?;
-        let session_id = args["session_id"]
-            .as_str()
-            .ok_or("Missing 'session_id'")?;
+        let session_id = args["session_id"].as_str().ok_or("Missing 'session_id'")?;
         let instruction = args["instruction"]
             .as_str()
             .ok_or("Missing 'instruction'")?;
@@ -338,12 +335,13 @@ impl Tool for SupervisorCoordinateDebugTool {
     }
 
     async fn call(&self, arguments: &str) -> Result<String, String> {
-        let args: serde_json::Value =
-            serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+        let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
 
-        let requested_sessions: Option<Vec<String>> = args["session_ids"]
-            .as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+        let requested_sessions: Option<Vec<String>> = args["session_ids"].as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
 
         let instruction = args["instruction"].as_str();
 
@@ -395,8 +393,8 @@ impl Tool for SupervisorCoordinateDebugTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_bridge::{CopyOutcome, UiBridge};
     use crate::registry::HostParams;
+    use crate::ui_bridge::{CopyOutcome, UiBridge};
     use muta_contracts::{AgentTier, MasterPreset, Message, ModelRequest, Provider, Role};
 
     struct DummyUi;
@@ -418,7 +416,9 @@ mod tests {
             _request: ModelRequest,
         ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String> {
             use futures::stream;
-            Ok(Box::pin(stream::once(async { Ok("supervisor response".to_string()) })))
+            Ok(Box::pin(stream::once(async {
+                Ok("supervisor response".to_string())
+            })))
         }
     }
 

@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 #[test]
 fn finalize_streaming_reasoning_freezes_orphaned_traces() {
     // An interrupt mid-reasoning leaves the in-flight Thinking message
@@ -61,7 +60,6 @@ fn finalize_streaming_reasoning_freezes_orphaned_traces() {
     );
 }
 
-
 #[test]
 fn enumerate_explicit_path_completion_expands_to_absolute() {
     // `@../` from a temp project lists the parent directory's children as
@@ -112,7 +110,6 @@ fn enumerate_explicit_path_completion_expands_to_absolute() {
     assert!(app.completion_dismissed, "explicit accept is terminal");
 }
 
-
 #[test]
 fn picker_connections_count_matches_provider_rows_no_add_row() {
     // Adding a connection is a footer shortcut (`a`) now, not a synthetic list
@@ -146,7 +143,6 @@ fn picker_connections_count_matches_provider_rows_no_add_row() {
     assert_eq!(app.picker_row_count(), providers);
 }
 
-
 /// Confirming the overlay dispatches exactly one `DeleteProvider` request and
 /// tears the overlay down, so a stray second confirm cannot re-delete.
 #[test]
@@ -174,7 +170,6 @@ fn confirm_provider_delete_dispatches_once_and_clears() {
     );
 }
 
-
 /// Cancelling the overlay drops the staged id and resets focus to the safe
 /// default (Cancel), so reopening the overlay later starts fresh.
 #[test]
@@ -195,7 +190,6 @@ fn cancel_provider_delete_clears_and_resets_focus() {
         "cancel resets focus to the safe default"
     );
 }
-
 
 // ── Queue pointer navigation (ADR-0126) ─────────────────────────────────────
 
@@ -226,7 +220,6 @@ fn queue_pointer_walks_without_removing_items() {
     assert_eq!(app.pending_count("session-a"), 2);
 }
 
-
 #[test]
 fn queue_pointer_down_restores_the_draft() {
     // ↓ walks back toward newer items and, past the newest, dissolves the
@@ -254,7 +247,6 @@ fn queue_pointer_down_restores_the_draft() {
     // An unarmed ↓ is inert (the caller falls through to history).
     assert!(!app.queue_pointer_next("session-a"));
 }
-
 
 #[test]
 fn queue_pointer_commit_edits_in_place() {
@@ -287,7 +279,6 @@ fn queue_pointer_commit_edits_in_place() {
     assert_eq!(app.pending_count("session-a"), 3, "queue length unchanged");
 }
 
-
 #[test]
 fn queue_pointer_vanished_target_sends_as_new_message() {
     // If the pointed-at item shipped while the user was editing, the pointer
@@ -306,7 +297,6 @@ fn queue_pointer_vanished_target_sends_as_new_message() {
     assert!(app.queue_pointer.is_none());
     assert_eq!(app.input, "edited", "the edit must survive the race");
 }
-
 
 /// Switching the viewed session must not carry composer state across the
 /// boundary: the ↑/↓ cursor, the stashed draft, staged attachments, and the
@@ -353,7 +343,6 @@ async fn switching_sessions_resets_navigation_and_backfill() {
     assert!(rows.is_empty(), "session-b has no recallable rows yet");
     assert!(!app.history_prev(&rows), "↑ is a no-op with no rows");
 }
-
 
 /// ↑ walks toward older entries and ↓ walks back toward the newest,
 /// restoring the stashed draft past the newest entry. Regression: the two
@@ -413,7 +402,6 @@ async fn inline_history_arrows_walk_old_then_new() {
     assert!(!app.history_next(&rows));
 }
 
-
 /// The ↑/↓ round-trip preserves staged attachments end to end: they are
 /// stashed on the first ↑, and restored when ↓ walks back past the newest
 /// entry — so an accidental ↑/↓ never drops a pasted image.
@@ -444,7 +432,6 @@ async fn inline_history_round_trip_keeps_staged_attachments() {
     assert_eq!(app.pending_images.len(), 1);
     assert_eq!(app.pending_images[0].data, "abc");
 }
-
 
 /// The pointer model's "unsent restore = new draft" invariant: an input put
 /// back by a Phase-1 unsend (or Ctrl+R insert / queue recall) becomes the
@@ -488,7 +475,6 @@ async fn adopt_as_draft_replaces_stale_draft_and_is_restored() {
     assert_eq!(app.input, "interrupted input");
     assert_eq!(app.pending_images.len(), 1);
 }
-
 
 /// ADR-0110: dispatching a slash command must not arm the activity bar's
 /// liveness surface. A command is a synchronous control-plane operation
@@ -534,7 +520,6 @@ async fn slash_dispatch_never_arms_activity_state() {
     );
 }
 
-
 #[test]
 fn toggle_queue_block_flips_state_and_blocks_dispatch() {
     // `F3` / queue-modal block is the hard "send nothing" override. While a
@@ -573,7 +558,6 @@ fn toggle_queue_block_flips_state_and_blocks_dispatch() {
     assert!(!app.is_queue_blocked("session-a"));
 }
 
-
 #[test]
 fn block_and_resume_helpers_are_idempotent() {
     // `block_queue` forces the block on; `resume_queue` forces it off. Both
@@ -593,7 +577,6 @@ fn block_and_resume_helpers_are_idempotent() {
     app.resume_queue("session-a"); // idempotent
     assert!(!app.is_queue_blocked("session-a"));
 }
-
 
 #[test]
 fn remove_queued_at_deletes_by_index_and_clamps() {
@@ -620,7 +603,6 @@ fn remove_queued_at_deletes_by_index_and_clamps() {
     assert!(app.remove_queued_at("session-a", 5).is_none());
     assert_eq!(app.pending_count("session-a"), 1);
 }
-
 
 #[test]
 fn move_queued_swaps_within_session_and_clamps_at_edges() {
@@ -681,7 +663,6 @@ fn move_queued_swaps_within_session_and_clamps_at_edges() {
     assert_eq!(order, vec!["c", "b", "a"]);
 }
 
-
 #[test]
 fn inserts_are_transcript_owned_not_outbox_items() {
     // A live busy-Enter steer never enters the outbox. It
@@ -736,7 +717,6 @@ fn inserts_are_transcript_owned_not_outbox_items() {
     );
 }
 
-
 #[test]
 fn modal_paste_splices_text_inline_stripping_newlines() {
     // Pasting into a free-text modal field (here the provider editor's
@@ -767,7 +747,6 @@ fn modal_paste_splices_text_inline_stripping_newlines() {
     );
 }
 
-
 #[test]
 fn modal_paste_inserts_at_cursor_not_at_end() {
     // The splice honors the cursor position, so a paste in the middle of
@@ -791,7 +770,6 @@ fn modal_paste_inserts_at_cursor_not_at_end() {
         "cursor lands just past the inserted text"
     );
 }
-
 
 #[test]
 fn modal_paste_applies_to_provider_picker_and_history_search() {
@@ -817,7 +795,6 @@ fn modal_paste_applies_to_provider_picker_and_history_search() {
         assert!(app.pending_text_pastes.is_empty());
     }
 }
-
 
 #[test]
 fn modal_paste_drops_image_with_failure_toast() {
@@ -849,7 +826,6 @@ fn modal_paste_drops_image_with_failure_toast() {
     assert!(app.copy_toast_until.is_some());
 }
 
-
 #[test]
 fn picker_caret_owner_exists_only_in_search_mode() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -869,7 +845,6 @@ fn picker_caret_owner_exists_only_in_search_mode() {
         );
     }
 }
-
 
 #[test]
 fn modal_owns_caret_lists_only_unconditional_input_surfaces() {
@@ -912,7 +887,6 @@ fn modal_owns_caret_lists_only_unconditional_input_surfaces() {
         assert!(!m.owns_caret(), "{m:?} must not own the caret");
     }
 }
-
 
 /// `modal_scroll_field` is the single source of truth that every `Scroll*`
 /// action consults: it must resolve each scrollable modal to its own scroll
@@ -1002,7 +976,6 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
     }
 }
 
-
 /// The page step follows the captured modal body height (when known) and
 /// falls back to the transcript `view_height` before the first render. It must
 /// always be at least 1 so a page key never no-ops on a zero capture.
@@ -1033,7 +1006,6 @@ fn modal_page_step_tracks_body_height_and_floors_at_one() {
     app.modal_body_height = 1;
     assert_eq!(modal_page_step(&app), 1);
 }
-
 
 /// `mutx attach` (no id) opens the sessions picker at startup instead of
 /// loading any session, so the `startup_overlay` state must gate quit-on-close.
@@ -1074,7 +1046,6 @@ fn startup_picker_flag_governs_sessions_modal_quit_and_resets_on_open() {
         "opening a session drops the startup gate"
     );
 }
-
 
 /// `resolve_scroll` is the pure scroll-resolution core factored out of
 /// `render_body`, now also used by the windowed sessions picker. It must keep
@@ -1120,7 +1091,6 @@ fn resolve_scroll_follows_selection_and_clamps_to_max_scroll() {
     assert_eq!(start, 90, "out-of-range scroll clamps to max_scroll");
 }
 
-
 /// Leaving the aside view (Ctrl+C detach, `SideViewSignal::Closed`) must
 /// drop any armed Esc confirmation: it targets the aside's round, and a
 /// carried arm could fire the *primary's* interrupt on the next Esc.
@@ -1149,7 +1119,6 @@ fn leaving_side_view_drops_the_armed_esc_confirmation() {
     assert!(!app.esc_press());
     assert!(app.esc_armed(), "a fresh arm works inside the view");
 }
-
 
 /// The disclosure-toggle scroll settle: expanding a step must latch
 /// `scroll_settle_pending` so the event loop stages its next frame (measure
@@ -1202,7 +1171,6 @@ fn disclosure_toggle_latches_scroll_settle() {
     assert_eq!(app.scroll_settle_pending, before);
 }
 
-
 /// The default configuration (`[tui] expand_auto_scroll = false`, the
 /// shipping default): a disclosure toggle is a pure read interaction. The
 /// card flips its expansion, but the scroll offset and the follow/pin state
@@ -1244,7 +1212,6 @@ fn disclosure_toggle_disabled_by_default_leaves_scroll_untouched() {
         "scroll must not move on collapse"
     );
 }
-
 
 #[test]
 fn adopt_caret_head_and_tail_break_selection() {
@@ -1288,7 +1255,6 @@ fn adopt_caret_head_and_tail_break_selection() {
     assert!(!app.adopt_caret_from_input_selection(SelectionEdge::Head));
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // View-scoped chrome for `/btw` aside views (ADR-0103 fix): an aside view must
 // render its own session's activity bar, never inherit the primary's, and the
@@ -1330,7 +1296,6 @@ fn aside_view_does_not_inherit_the_primary_activity_bar() {
     assert!(parked.round_started_at.is_some());
 }
 
-
 #[test]
 fn exiting_an_aside_restores_the_primary_chrome_exactly() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -1369,7 +1334,6 @@ fn exiting_an_aside_restores_the_primary_chrome_exactly() {
     assert!(chrome.round_started_at.is_some());
 }
 
-
 #[test]
 fn reentering_a_running_aside_shows_its_own_chrome() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -1400,7 +1364,6 @@ fn reentering_a_running_aside_shows_its_own_chrome() {
     );
 }
 
-
 #[test]
 fn todos_and_activity_are_separate_places() {
     // Two view ids share the Activity modal but keep their own tab —
@@ -1414,7 +1377,6 @@ fn todos_and_activity_are_separate_places() {
     app.open_panel(crate::surfaces::PanelId::Activity);
     assert_eq!(app.activity_tab, ActivityTab::Activity);
 }
-
 
 #[test]
 fn config_view_reopen_keeps_pane_and_category() {
@@ -1443,7 +1405,6 @@ fn config_view_reopen_keeps_pane_and_category() {
     );
 }
 
-
 #[test]
 fn switching_picker_view_preserves_query_and_chat_draft_separately() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -1468,7 +1429,6 @@ fn switching_picker_view_preserves_query_and_chat_draft_separately() {
     assert_eq!(app.input, "unsent chat");
 }
 
-
 #[test]
 fn transient_sheet_returns_to_exact_todos_view() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -1478,7 +1438,6 @@ fn transient_sheet_returns_to_exact_todos_view() {
     assert_eq!(app.active_panel(), Some(crate::surfaces::PanelId::Todos));
     assert_eq!(app.activity_tab, ActivityTab::Todos);
 }
-
 
 #[test]
 fn backend_navigation_waits_for_transient_and_drill_in_surfaces() {
@@ -1502,7 +1461,6 @@ fn backend_navigation_waits_for_transient_and_drill_in_surfaces() {
     );
 }
 
-
 #[test]
 fn explicit_view_close_discards_retained_state_and_payload() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -1515,7 +1473,6 @@ fn explicit_view_close_discards_retained_state_and_payload() {
     assert_eq!(app.usage_stats_scroll, 0);
     assert!(app.open_panel(crate::surfaces::PanelId::UsageStats));
 }
-
 
 #[test]
 fn switching_away_from_queue_runs_exit_hook() {
@@ -1530,7 +1487,6 @@ fn switching_away_from_queue_runs_exit_hook() {
     assert!(!app.is_queue_blocked(sid));
     assert!(app.queue_exit_session.is_none());
 }
-
 
 #[test]
 fn queue_view_hide_releases_the_auto_block() {
@@ -1548,7 +1504,6 @@ fn queue_view_hide_releases_the_auto_block() {
         "exit hook resumed the outbox"
     );
 }
-
 
 #[test]
 fn pop_sublayer_steps_back_one_level_at_a_time() {
@@ -1578,7 +1533,6 @@ fn pop_sublayer_steps_back_one_level_at_a_time() {
     assert!(!app.host_prompting);
     assert!(!app.pop_sublayer());
 }
-
 
 #[test]
 fn dashboard_reopen_keeps_selection_and_log() {

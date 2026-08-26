@@ -146,7 +146,10 @@ impl Tool for ExecuteCommandTool {
     fn hazard_level(&self) -> muta_contracts::HazardLevel {
         muta_contracts::HazardLevel::CommandExecution
     }
-    fn permission_submission(&self, arguments: &str) -> Option<muta_contracts::ToolPermissionSubmission> {
+    fn permission_submission(
+        &self,
+        arguments: &str,
+    ) -> Option<muta_contracts::ToolPermissionSubmission> {
         let command = json_string(arguments, "command");
         let first_word = command.split_whitespace().next().unwrap_or("sh");
         let sandboxed = self.shell_isolation() == muta_contracts::ShellIsolation::Workspace;
@@ -154,13 +157,25 @@ impl Tool for ExecuteCommandTool {
             hazard_level: muta_contracts::HazardLevel::CommandExecution,
             label: format!(
                 "Execute{}: `{}`",
-                if sandboxed { " in workspace" } else { " command" },
-                if command.len() > 50 { format!("{}...", &command[..47]) } else { command.clone() }
+                if sandboxed {
+                    " in workspace"
+                } else {
+                    " command"
+                },
+                if command.len() > 50 {
+                    format!("{}...", &command[..47])
+                } else {
+                    command.clone()
+                }
             ),
             description: if sandboxed {
-                format!("Runs command `{command}` inside the isolated workspace with network access disabled.")
+                format!(
+                    "Runs command `{command}` inside the isolated workspace with network access disabled."
+                )
             } else {
-                format!("Runs host shell command `{command}`. May modify system state or execute arbitrary binaries.")
+                format!(
+                    "Runs host shell command `{command}`. May modify system state or execute arbitrary binaries."
+                )
             },
             scope: command.clone(),
             payload: muta_contracts::ToolPermissionPayload::Command {

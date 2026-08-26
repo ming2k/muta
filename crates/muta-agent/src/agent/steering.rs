@@ -78,7 +78,6 @@ impl Agent {
         self.interaction.set_human_posture(posture);
     }
 
-
     pub fn set_yolo(&self, enabled: bool) {
         self.permissions.set_yolo(enabled);
         self.interaction.set_yolo(enabled);
@@ -146,7 +145,10 @@ impl Agent {
     ///
     /// The position of this agent in the hierarchy (Supervisor, Master, Runner).
     pub fn tier(&self) -> muta_contracts::AgentTier {
-        self.tier.read().map(|t| *t).unwrap_or(muta_contracts::AgentTier::Master)
+        self.tier
+            .read()
+            .map(|t| *t)
+            .unwrap_or(muta_contracts::AgentTier::Master)
     }
 
     /// Set this agent's position in the hierarchy.
@@ -198,7 +200,6 @@ impl Agent {
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
         self.set_yolo(profile.yolo);
     }
-
 
     /// Replace this agent's identity (name + mission, or a persona override).
     /// Feeds the system-prompt preamble, so the next request reflects the new
@@ -418,17 +419,26 @@ impl Agent {
 
     /// Set the steering mode.
     pub fn set_steering_mode(&self, mode: muta_contracts::QueueMode) {
-        *self.steering_mode.write().unwrap_or_else(|e| e.into_inner()) = mode;
+        *self
+            .steering_mode
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = mode;
     }
 
     /// Follow-up mode currently configured on this agent.
     pub fn follow_up_mode(&self) -> muta_contracts::QueueMode {
-        *self.follow_up_mode.read().unwrap_or_else(|e| e.into_inner())
+        *self
+            .follow_up_mode
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// Set the follow-up mode.
     pub fn set_follow_up_mode(&self, mode: muta_contracts::QueueMode) {
-        *self.follow_up_mode.write().unwrap_or_else(|e| e.into_inner()) = mode;
+        *self
+            .follow_up_mode
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = mode;
     }
 
     /// Open fresh, cancellable steering and follow-up queues for one interactive round.
@@ -438,10 +448,14 @@ impl Agent {
         &self,
         session_id: impl Into<String>,
         generation: u64,
-    ) -> (Vec<muta_contracts::QueuedMessage>, Vec<muta_contracts::QueuedMessage>) {
+    ) -> (
+        Vec<muta_contracts::QueuedMessage>,
+        Vec<muta_contracts::QueuedMessage>,
+    ) {
         let steering_mode = self.steering_mode();
         let follow_up_mode = self.follow_up_mode();
-        let previous = self.session_queues
+        let previous = self
+            .session_queues
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .replace(SessionQueues {
@@ -459,19 +473,12 @@ impl Agent {
 
     /// Queue human-authored steering input for the next safe turn boundary. Returns
     /// `false` once the round has atomically closed its admission gate.
-    pub fn steer(
-        &self,
-        session_id: &str,
-        input: muta_contracts::QueuedMessage,
-    ) -> bool {
+    pub fn steer(&self, session_id: &str, input: muta_contracts::QueuedMessage) -> bool {
         let mut queues = self
             .session_queues
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let Some(open) = queues
-            .as_mut()
-            .filter(|q| q.session_id == session_id)
-        else {
+        let Some(open) = queues.as_mut().filter(|q| q.session_id == session_id) else {
             return false;
         };
         open.steering.enqueue(input);
@@ -480,19 +487,12 @@ impl Agent {
 
     /// Queue follow-up input to run when the agent finishes active work. Returns
     /// `false` once the round has atomically closed its admission gate.
-    pub fn follow_up(
-        &self,
-        session_id: &str,
-        input: muta_contracts::QueuedMessage,
-    ) -> bool {
+    pub fn follow_up(&self, session_id: &str, input: muta_contracts::QueuedMessage) -> bool {
         let mut queues = self
             .session_queues
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let Some(open) = queues
-            .as_mut()
-            .filter(|q| q.session_id == session_id)
-        else {
+        let Some(open) = queues.as_mut().filter(|q| q.session_id == session_id) else {
             return false;
         };
         open.follow_up.enqueue(input);
@@ -511,9 +511,7 @@ impl Agent {
             .session_queues
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let open = queues
-            .as_mut()
-            .filter(|q| q.session_id == session_id)?;
+        let open = queues.as_mut().filter(|q| q.session_id == session_id)?;
         open.steering.cancel(input_id)
     }
 
@@ -527,9 +525,7 @@ impl Agent {
             .session_queues
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let open = queues
-            .as_mut()
-            .filter(|q| q.session_id == session_id)?;
+        let open = queues.as_mut().filter(|q| q.session_id == session_id)?;
         open.follow_up.cancel(input_id)
     }
 
@@ -569,15 +565,18 @@ impl Agent {
 
     /// Stop accepting inserts and return anything that never crossed a turn
     /// boundary. Used on interrupted/error/blocked terminal paths.
-    pub fn close_session_queues(&self, generation: u64) -> (Vec<muta_contracts::QueuedMessage>, Vec<muta_contracts::QueuedMessage>) {
+    pub fn close_session_queues(
+        &self,
+        generation: u64,
+    ) -> (
+        Vec<muta_contracts::QueuedMessage>,
+        Vec<muta_contracts::QueuedMessage>,
+    ) {
         let mut queues = self
             .session_queues
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if queues
-            .as_ref()
-            .is_none_or(|q| q.generation != generation)
-        {
+        if queues.as_ref().is_none_or(|q| q.generation != generation) {
             return (Vec::new(), Vec::new());
         }
         if let Some(mut open) = queues.take() {
@@ -610,10 +609,7 @@ impl Agent {
                 .session_queues
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            let Some(open) = queues
-                .as_mut()
-                .filter(|q| Some(q.generation) == generation)
-            else {
+            let Some(open) = queues.as_mut().filter(|q| Some(q.generation) == generation) else {
                 return 0;
             };
             open.steering.drain()
@@ -656,10 +652,7 @@ impl Agent {
                 .session_queues
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            let Some(open) = queues
-                .as_mut()
-                .filter(|q| Some(q.generation) == generation)
-            else {
+            let Some(open) = queues.as_mut().filter(|q| Some(q.generation) == generation) else {
                 return 0;
             };
             if open.follow_up.is_empty() {

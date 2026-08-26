@@ -4,7 +4,6 @@
 use super::*;
 
 impl Agent {
-
     /// Fire PostToolUse (success) or PostToolUseFailure (error) hooks and append
     /// any injected context as hidden user messages (ADR-0025). No-op when the
     /// registry is empty, which is the common case (runners, tests, no
@@ -79,7 +78,12 @@ impl Agent {
     /// `Inject` context into hidden user messages. `Deny` is already discarded
     /// by [`HookRegistry::run_turn`], so a turn hook cannot abort the round.
     /// `ScopeTools` disables are applied to the scoped mask.
-    pub(super) async fn run_turn_hooks(&self, messages: &mut Vec<Message>, state: &RoundState, turn: usize) {
+    pub(super) async fn run_turn_hooks(
+        &self,
+        messages: &mut Vec<Message>,
+        state: &RoundState,
+        turn: usize,
+    ) {
         let registry = self.hooks();
         if registry.is_empty() {
             return;
@@ -201,7 +205,10 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        if matches!(call.name.as_str(), "write_todos" | "update_todo" | "todo" | "todo_update") {
+        if matches!(
+            call.name.as_str(),
+            "write_todos" | "update_todo" | "todo" | "todo_update"
+        ) {
             on_event(AgentEvent::TodosUpdated(self.todos()));
         }
     }
@@ -510,80 +517,80 @@ impl Agent {
                 if self.get_yolo() {
                     // Under YOLO mode, missing authority is auto-approved.
                 } else {
-                // The single interactive-park path. Both the broker (a
-                // write/execute the user must approve) and the bash
-                // dangerous-command confirm reach here; `request.one_off`
-                // distinguishes them. Fill the request id, emit, fire
-                // observe hooks, await the user's decision.
-                let one_off = request.one_off;
-                let request = muta_contracts::PermissionRequest {
-                    id: format!("permission_{}", uuid::Uuid::new_v4()),
-                    ..request
-                };
-                // ADR-0141 posture gate: permissions fail closed when no
-                // human channel exists — a missing human cannot grant
-                // authority. (Autopilot sessions reach this arm only with
-                // an interactive watcher attached, so this is the belt to
-                // that braces.)
-                if self.human_posture() == HumanChannelPosture::Autonomous {
-                    self.human_broker
-                        .metrics_note_refused(HumanRequestKind::Permission);
-                    tracing::warn!(
-                        tool = %request.tool,
-                        "autonomous posture: permission refused (fail closed)"
-                    );
-                    return permission_required_output(&request);
-                }
-                let receiver = self
-                    .human_broker
-                    .park(request.id.clone(), HumanRequestKind::Permission);
-                let parked_at = std::time::Instant::now();
-                tracing::info!(tool = %request.tool, scope = %request.scope, one_off, "permission requested");
-                let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
-                self.fire_permission_request_hooks(&request).await;
-                let decision = match receiver.await.ok().map(|s| s.reply) {
-                    Some(HumanReply::Permission(decision)) => decision,
-                    _ => PermissionDecision::Reject,
-                };
-                // Charge the human-thinking pause to the round so the exit
-                // gate can subtract it for an honest tokens/sec.
-                self.book_pause(parked_at.elapsed().as_millis() as u64);
-                match decision {
-                    PermissionDecision::Once => {
-                        tracing::info!(tool = %tool.name(), decision = "once", "permission granted for single invocation");
+                    // The single interactive-park path. Both the broker (a
+                    // write/execute the user must approve) and the bash
+                    // dangerous-command confirm reach here; `request.one_off`
+                    // distinguishes them. Fill the request id, emit, fire
+                    // observe hooks, await the user's decision.
+                    let one_off = request.one_off;
+                    let request = muta_contracts::PermissionRequest {
+                        id: format!("permission_{}", uuid::Uuid::new_v4()),
+                        ..request
+                    };
+                    // ADR-0141 posture gate: permissions fail closed when no
+                    // human channel exists — a missing human cannot grant
+                    // authority. (Autopilot sessions reach this arm only with
+                    // an interactive watcher attached, so this is the belt to
+                    // that braces.)
+                    if self.human_posture() == HumanChannelPosture::Autonomous {
+                        self.human_broker
+                            .metrics_note_refused(HumanRequestKind::Permission);
+                        tracing::warn!(
+                            tool = %request.tool,
+                            "autonomous posture: permission refused (fail closed)"
+                        );
+                        return permission_required_output(&request);
                     }
-                    PermissionDecision::Session => {
-                        tracing::info!(tool = %tool.name(), decision = "session", "permission granted for current session");
-                        self.permissions.add_session(rule);
-                    }
-                    PermissionDecision::Always => {
-                        if one_off {
-                            // A bash dangerous-command confirm: honour the
-                            // grant for this one call but do NOT persist it.
-                            // A dangerous-command confirmation is sharper
-                            // than ordinary tool permission and must stay
-                            // one-off unless the user writes an explicit
-                            // `[bash_policy.rules] action = "allow"` override.
-                            tracing::info!(
-                                tool = %tool.name(),
-                                decision = "always",
-                                "one-off permission granted (not persisted)"
-                            );
-                        } else {
-                            tracing::info!(tool = %tool.name(), decision = "always", "permission granted permanently for workspace");
-                            self.permissions.add_always(rule);
+                    let receiver = self
+                        .human_broker
+                        .park(request.id.clone(), HumanRequestKind::Permission);
+                    let parked_at = std::time::Instant::now();
+                    tracing::info!(tool = %request.tool, scope = %request.scope, one_off, "permission requested");
+                    let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
+                    self.fire_permission_request_hooks(&request).await;
+                    let decision = match receiver.await.ok().map(|s| s.reply) {
+                        Some(HumanReply::Permission(decision)) => decision,
+                        _ => PermissionDecision::Reject,
+                    };
+                    // Charge the human-thinking pause to the round so the exit
+                    // gate can subtract it for an honest tokens/sec.
+                    self.book_pause(parked_at.elapsed().as_millis() as u64);
+                    match decision {
+                        PermissionDecision::Once => {
+                            tracing::info!(tool = %tool.name(), decision = "once", "permission granted for single invocation");
                         }
-                    }
-                    PermissionDecision::Reject => {
-                        tracing::warn!(tool = %tool.name(), "permission denied");
-                        return ToolOutput::PermissionDenied {
-                            tool: tool.name().to_string(),
-                        };
+                        PermissionDecision::Session => {
+                            tracing::info!(tool = %tool.name(), decision = "session", "permission granted for current session");
+                            self.permissions.add_session(rule);
+                        }
+                        PermissionDecision::Always => {
+                            if one_off {
+                                // A bash dangerous-command confirm: honour the
+                                // grant for this one call but do NOT persist it.
+                                // A dangerous-command confirmation is sharper
+                                // than ordinary tool permission and must stay
+                                // one-off unless the user writes an explicit
+                                // `[bash_policy.rules] action = "allow"` override.
+                                tracing::info!(
+                                    tool = %tool.name(),
+                                    decision = "always",
+                                    "one-off permission granted (not persisted)"
+                                );
+                            } else {
+                                tracing::info!(tool = %tool.name(), decision = "always", "permission granted permanently for workspace");
+                                self.permissions.add_always(rule);
+                            }
+                        }
+                        PermissionDecision::Reject => {
+                            tracing::warn!(tool = %tool.name(), "permission denied");
+                            return ToolOutput::PermissionDenied {
+                                tool: tool.name().to_string(),
+                            };
+                        }
                     }
                 }
             }
         }
-    }
 
         if call.name == "ask_user" {
             if self.get_yolo() {

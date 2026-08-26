@@ -50,7 +50,11 @@ impl std::fmt::Display for MeshError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MeshError::Unroutable(a) => write!(f, "no agent at mesh address {a}"),
-            MeshError::Unlawful { message_kind, sender, recipient } => write!(
+            MeshError::Unlawful {
+                message_kind,
+                sender,
+                recipient,
+            } => write!(
                 f,
                 "unlawful mesh route {message_kind} from {sender} to {recipient}"
             ),
@@ -123,10 +127,14 @@ impl MeshTracker {
                 pe.token.child_token();
             }
         }
-        self.entries
-            .lock()
-            .unwrap()
-            .insert(address, MeshEntry { sender, token, master });
+        self.entries.lock().unwrap().insert(
+            address,
+            MeshEntry {
+                sender,
+                token,
+                master,
+            },
+        );
     }
 
     /// Deregister an address (graceful shutdown). Idempotent.
@@ -191,7 +199,12 @@ impl MeshTracker {
     /// surface exposed to the supervisor.
     pub fn live_addresses(&self) -> Vec<MeshAddress> {
         self.reap_cancelled();
-        self.entries.lock().unwrap().keys().cloned().collect::<Vec<_>>()
+        self.entries
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
     }
 
     /// Addresses at one tier, in one session (peer discovery).
@@ -217,7 +230,6 @@ impl MeshTracker {
             .cloned()
             .collect()
     }
-
 
     /// Sweep entries whose token has fired.
     fn reap_cancelled(&self) {
@@ -249,15 +261,16 @@ pub struct MeshMailbox {
 impl MeshMailbox {
     /// Create and register a mailbox for `address`, owned by `master` when
     /// the address is a runner.
-    pub fn spawn(
-        tracker: MeshTracker,
-        address: MeshAddress,
-        master: Option<MeshAddress>,
-    ) -> Self {
+    pub fn spawn(tracker: MeshTracker, address: MeshAddress, master: Option<MeshAddress>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let token = CancellationToken::new();
         tracker.register(address.clone(), tx, token.clone(), master);
-        Self { address, tracker, rx, token }
+        Self {
+            address,
+            tracker,
+            rx,
+            token,
+        }
     }
 
     pub fn address(&self) -> &MeshAddress {
@@ -313,12 +326,19 @@ mod tests {
             .send(MeshEnvelope::new(
                 Some(sender),
                 master("s"),
-                MeshMessage::Instruction { body: "begin".into() },
+                MeshMessage::Instruction {
+                    body: "begin".into(),
+                },
             ))
             .expect("supervisor may instruct master");
 
         let got = mb.recv().await.expect("envelope arrives");
-        assert_eq!(got.message, MeshMessage::Instruction { body: "begin".into() });
+        assert_eq!(
+            got.message,
+            MeshMessage::Instruction {
+                body: "begin".into()
+            }
+        );
     }
 
     #[tokio::test]
@@ -330,18 +350,19 @@ mod tests {
             .send(MeshEnvelope::new(
                 Some(runner("s", "r1")),
                 master("s"),
-                MeshMessage::Instruction { body: "usurp".into() },
+                MeshMessage::Instruction {
+                    body: "usurp".into(),
+                },
             ))
             .expect_err("runner cannot command master");
 
         assert!(matches!(err, MeshError::Unlawful { .. }));
         // And nothing was delivered.
-        assert!(tokio::time::timeout(
-            std::time::Duration::from_millis(10),
-            mb.recv()
-        )
-        .await
-        .is_err());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), mb.recv())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -356,7 +377,11 @@ mod tests {
         assert!(r1.token().is_cancelled());
         assert!(!r2.token().is_cancelled());
 
-        let live: Vec<String> = tracker.live_addresses().iter().map(|a| a.display()).collect();
+        let live: Vec<String> = tracker
+            .live_addresses()
+            .iter()
+            .map(|a| a.display())
+            .collect();
         assert!(!live.contains(&runner("s1", "r1").display()));
         assert!(live.contains(&runner("s2", "r2").display()));
     }

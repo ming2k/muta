@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 #[test]
 fn resolve_focused_mut_indexes_root_when_unfocused() {
     let mut messages = conversation_with_runners();
@@ -10,7 +9,6 @@ fn resolve_focused_mut_indexes_root_when_unfocused() {
     let resolved = event_loop::resolve_focused_mut(&mut messages, &focus, 2);
     assert_eq!(resolved.map(|m| m.raw.clone()).as_deref(), Some("ok"));
 }
-
 
 #[test]
 fn resolve_focused_mut_indexes_children_when_focused() {
@@ -25,7 +23,6 @@ fn resolve_focused_mut_indexes_children_when_focused() {
     // Indexing task_a's children via task_b focus returns none / out of range.
     assert!(event_loop::resolve_focused_mut(&mut messages, &focus, 5).is_none());
 }
-
 
 #[test]
 fn composer_paste_still_chips_large_text_on_main_prompt() {
@@ -50,7 +47,6 @@ fn composer_paste_still_chips_large_text_on_main_prompt() {
     assert_eq!(app.pending_text_pastes.len(), 1);
     assert_eq!(app.pending_text_pastes[0], big);
 }
-
 
 #[test]
 fn composer_image_paste_rejected_when_model_lacks_vision() {
@@ -85,7 +81,6 @@ fn composer_image_paste_rejected_when_model_lacks_vision() {
     );
     assert!(app.copy_toast_until.is_some());
 }
-
 
 #[test]
 fn composer_image_paste_accepted_when_model_has_vision() {
@@ -122,7 +117,6 @@ fn composer_image_paste_accepted_when_model_has_vision() {
     assert!(app.copy_toast_until.is_some());
 }
 
-
 /// The view reset that follows a focus change (runner zoom enter/exit) must
 /// drop a pending settle: the staged frame it was computed for belongs to a
 /// transcript slice that is no longer displayed.
@@ -136,7 +130,6 @@ fn view_reset_clears_pending_scroll_settle() {
         "reset_view_state must clear a pending settle"
     );
 }
-
 
 // ---------------------------------------------------------------------------
 // ADR-0133: retained, buffer-like view state.
@@ -164,7 +157,6 @@ fn browse_view_reopen_restores_scroll_and_selection() {
     assert_eq!(app.help_scroll, 42, "scroll retained across hide");
 }
 
-
 #[test]
 fn browse_view_state_is_per_view() {
     // Two views keep independent retained state — the buffer analogy: each
@@ -186,7 +178,6 @@ fn browse_view_state_is_per_view() {
     assert_eq!((app.modal_index, app.usage_stats_scroll), (1, 9));
 }
 
-
 #[test]
 fn view_follow_mode_is_restored_per_view() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -202,7 +193,6 @@ fn view_follow_mode_is_restored_per_view() {
         "shared live fields must restore the selected view's retained mode"
     );
 }
-
 
 #[test]
 fn view_state_is_forgotten_on_session_change() {
@@ -220,7 +210,6 @@ fn view_state_is_forgotten_on_session_change() {
     assert_eq!(app.help_scroll, 0);
     assert_eq!(app.modal_index, 0);
 }
-
 
 #[test]
 fn view_switcher_restore_roundtrip() {
@@ -252,7 +241,6 @@ fn view_switcher_restore_roundtrip() {
     assert_eq!(app.modal_index, 4, "retained selection intact");
 }
 
-
 #[test]
 fn per_view_drafts_do_not_clobber_each_other() {
     // The phase-3 reason per-view drafts exist: parking for Models used to
@@ -273,7 +261,6 @@ fn per_view_drafts_do_not_clobber_each_other() {
     assert!(app.dismiss_surface());
     assert_eq!(app.input, "history draft");
 }
-
 
 #[test]
 fn switcher_enter_hides_origin_and_restores_target_state() {
@@ -316,7 +303,6 @@ fn switcher_enter_hides_origin_and_restores_target_state() {
         "hidden origin remains an initialized MRU buffer"
     );
 }
-
 
 #[test]
 fn switcher_filter_narrows_rows_and_matches_labels_and_hints() {

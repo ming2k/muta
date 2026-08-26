@@ -30,7 +30,8 @@ pub enum AgentTier {
 
 impl AgentTier {
     /// All tiers, root first.
-    pub const ALL: &'static [AgentTier] = &[AgentTier::Supervisor, AgentTier::Master, AgentTier::Runner];
+    pub const ALL: &'static [AgentTier] =
+        &[AgentTier::Supervisor, AgentTier::Master, AgentTier::Runner];
 
     /// Depth from the root: supervisor `0`, master `1`, runner `2`.
     pub fn depth(self) -> usize {

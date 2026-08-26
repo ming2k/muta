@@ -15,10 +15,8 @@ use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::shell::run_shell_command;
 use crate::side::{
-    SideRegistry, refuse_if_no_provider, start_active_turn,
-    start_session_turn, target_agent,
+    SideRegistry, refuse_if_no_provider, start_active_turn, start_session_turn, target_agent,
 };
-
 
 /// `AgentRequest::Chat` — start an interactive round against whichever session
 /// the user is currently composing into (primary or `/btw` side).

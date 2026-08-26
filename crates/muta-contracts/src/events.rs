@@ -1779,7 +1779,6 @@ pub struct PermissionRequest {
     pub submission: Option<crate::hazard::ToolPermissionSubmission>,
 }
 
-
 /// One option offered to the user inside an `ask_user` question.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 // `description` skips serialization when `None`: absent on the wire, never `null`.

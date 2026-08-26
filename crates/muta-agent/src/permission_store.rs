@@ -10,7 +10,6 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-
 /// Internal lock-guard helper: poison-immune (recovers via `into_inner`).
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -59,7 +58,6 @@ struct PermissionState {
     /// `add_always` removes from it, `revoke_allowed` adds to it. See #3.
     revoked: HashSet<PermissionRule>,
 }
-
 
 /// In-memory permission state: the "always allow" allowlist, the pending
 /// request channels, and the optional project root for on-disk persistence.
@@ -149,7 +147,6 @@ impl PermissionStore {
         state.session.clear();
     }
 
-
     /// Add a rule to the "always allow" set and persist. Re-approving a rule
     /// also clears it from the `revoked` set (the user has reversed their
     /// earlier revocation), so a subsequent `seed_from_config` will re-grant
@@ -162,7 +159,6 @@ impl PermissionStore {
         }
         self.persist();
     }
-
 
     pub fn allowed_tools(&self) -> Vec<String> {
         let mut tools = lock(&self.state)

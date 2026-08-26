@@ -44,7 +44,9 @@ impl WorkspaceTrustState {
 /// `all` is deliberately not a domain. It is a command-layer selection that
 /// expands to [`TrustDomain::ALL`]. Persisting an aggregate grant would create
 /// a second source of truth and make a concrete domain impossible to revoke.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum TrustDomain {
@@ -129,9 +131,7 @@ impl WorkspaceSecuritySnapshot {
             .all(|state| *state == WorkspaceTrustState::Trusted)
         {
             WorkspaceTrustState::Trusted
-        } else if present
-            .contains(&WorkspaceTrustState::Changed)
-        {
+        } else if present.contains(&WorkspaceTrustState::Changed) {
             WorkspaceTrustState::Changed
         } else {
             WorkspaceTrustState::Quarantined

@@ -403,7 +403,6 @@ async fn handle_permission_request(
         _ => PermissionDecision::Reject,
     };
 
-
     let _ = tx.send(AgentRequest::PermissionReply {
         request_id: req.id,
         decision,

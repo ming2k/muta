@@ -452,4 +452,3 @@ async fn idle_suspension_spares_sessions_with_armed_schedules() {
         "a schedule-free idle session should still suspend (suspended: {suspended:?})"
     );
 }
-

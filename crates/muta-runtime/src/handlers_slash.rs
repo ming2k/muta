@@ -50,7 +50,6 @@ fn runtime_workspace_security(
     store.snapshot(root)
 }
 
-
 fn live_custom_commands(
     store: &WorkspaceSecurityStore,
     root: &std::path::Path,
@@ -213,10 +212,7 @@ async fn start_fresh_session(
             let fresh_posture = session.yolo().await;
             if agent.get_yolo() != fresh_posture {
                 agent.set_yolo(fresh_posture);
-                let _ = resp_tx.send(round_response(
-                    &id,
-                    RoundEvent::YoloChanged(fresh_posture),
-                ));
+                let _ = resp_tx.send(round_response(&id, RoundEvent::YoloChanged(fresh_posture)));
             }
             agent.restore_round_count(session.round_counter().await);
             // C6: a fresh session has no provider pin, so the live provider
@@ -1584,15 +1580,14 @@ pub async fn dispatch(
                         TrustRoute::Grant(ref domain) => std::slice::from_ref(domain),
                         _ => unreachable!(),
                     };
-                    let granted = match workspace_security
-                        .trust_domains(project_root_for_side, domains)
-                    {
-                        Ok(granted) => granted,
-                        Err(error) => {
-                            record_error(session, resp_tx, name, args, error).await;
-                            return;
-                        }
-                    };
+                    let granted =
+                        match workspace_security.trust_domains(project_root_for_side, domains) {
+                            Ok(granted) => granted,
+                            Err(error) => {
+                                record_error(session, resp_tx, name, args, error).await;
+                                return;
+                            }
+                        };
                     let report = match reload_trusted_assets(
                         agent,
                         mcp_runtime,
@@ -1820,9 +1815,7 @@ pub async fn dispatch(
                     .await;
                 }
                 Err(_) => {
-                    let _ = resp_tx.send(AgentResponse::CopyToClipboard {
-                        text: markdown,
-                    });
+                    let _ = resp_tx.send(AgentResponse::CopyToClipboard { text: markdown });
                     record_command(
                         session,
                         resp_tx,
@@ -2635,7 +2628,10 @@ mod trust_route_tests {
 
     #[test]
     fn canonical_trust_grammar_is_closed() {
-        assert_eq!(trust_route("trust", &parts("/trust")), Ok(TrustRoute::GrantAll));
+        assert_eq!(
+            trust_route("trust", &parts("/trust")),
+            Ok(TrustRoute::GrantAll)
+        );
         assert_eq!(
             trust_route("trust", &parts("/trust all")),
             Ok(TrustRoute::GrantAll)
@@ -2673,7 +2669,10 @@ mod trust_route_tests {
         ] {
             let parsed = parts(command);
             let name = parsed[0].trim_start_matches('/');
-            assert!(trust_route(name, &parsed).is_err(), "{command} must be rejected");
+            assert!(
+                trust_route(name, &parsed).is_err(),
+                "{command} must be rejected"
+            );
         }
     }
 }

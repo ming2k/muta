@@ -21,7 +21,10 @@ impl MeshSendTool {
     }
 
     pub fn bind_sender(&self, address: MeshAddress) {
-        *self.sender_address.lock().unwrap_or_else(|e| e.into_inner()) = Some(address);
+        *self
+            .sender_address
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(address);
     }
 }
 
@@ -148,7 +151,10 @@ impl MeshListPeersTool {
     }
 
     pub fn bind_sender(&self, address: MeshAddress) {
-        *self.sender_address.lock().unwrap_or_else(|e| e.into_inner()) = Some(address);
+        *self
+            .sender_address
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(address);
     }
 }
 
@@ -176,8 +182,7 @@ impl Tool for MeshListPeersTool {
     }
 
     async fn call(&self, arguments: &str) -> Result<String, String> {
-        let args: serde_json::Value =
-            serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+        let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
         let scope = args["scope"].as_str().unwrap_or("same_tier");
 
         let sender = self
@@ -277,7 +282,10 @@ mod tests {
             .unwrap();
         assert!(send_peer.contains("delivered"));
 
-        let received_by_b = mb_b.recv().await.expect("master b should receive peer note");
+        let received_by_b = mb_b
+            .recv()
+            .await
+            .expect("master b should receive peer note");
         assert_eq!(
             received_by_b.message,
             MeshMessage::PeerNote {
