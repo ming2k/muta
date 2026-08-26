@@ -9,10 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Consolidated filesystem discovery into `find_files`, renamed content search
-  to `search_text`, and made `list_dir` shallow-only. Tool policies that name
-  `glob`, `find`, or `grep` must use `find_files` or `search_text`; recursive
-  discovery now passes one or more glob strings in `find_files.patterns`.
+- Consolidated filesystem search into three single-purpose tools (ADR 0143):
+  `find_files` takes an explicit `patterns` array (OR, ripgrep-style gitignore
+  globs) for recursive discovery, `search_text` runs content search in-process
+  (Rust `regex` + ripgrep's `ignore` walker — no external `rg` dependency), and
+  `list_dir` is shallow-only. Retired `glob`, `find`, and `grep` with no
+  aliases; tool policies naming them must use `find_files` or `search_text`.
+- Widened workspace admission (ADR 0142): a project may declare
+  `[workspace].additional_roots` in `.muta/config.toml`; roots load only when
+  the project's extensions are content-trusted, widen filesystem confinement
+  and sandbox bind mounts, and surface in the system prompt.
 - Simplified TUI context accounting: the hint bar now shows only committed
   context, while Context Usage folds a draft into its projected total and
   breaks the draft down into composer text and approximate message framing.
