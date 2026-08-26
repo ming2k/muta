@@ -5,10 +5,10 @@
 //! commands, project-file discovery, and explicit-path expansion all live here
 //! so terminal and browser apps cannot drift into separate completion products.
 
+use ignore::WalkBuilder;
 use muta_contracts::{
     AgentResponse, CommandCatalog, CommandSpec, InputCompletion, InputCompletionKind,
 };
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use tokio::sync::OnceCell;
 
@@ -418,78 +418,55 @@ fn resolve_explicit_dir(query: &str, cwd: &Path) -> Option<(PathBuf, String)> {
 }
 
 fn scan_project_files(root: &Path) -> Vec<String> {
-    try_ripgrep_scan(root).unwrap_or_else(|| manual_walk(root))
-}
-
-fn try_ripgrep_scan(root: &Path) -> Option<Vec<String>> {
-    let output = std::process::Command::new("rg")
-        .args([
-            "--files",
-            "--hidden",
-            "--glob=!.git",
-            "--color=never",
-            "--no-messages",
-        ])
-        .current_dir(root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let files = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(|line| line.replace('\\', "/"))
-        .collect::<Vec<_>>();
-    let mut dirs = BTreeSet::new();
-    for path in &files {
-        let mut current = String::new();
-        let parts = path.split('/').collect::<Vec<_>>();
-        for part in &parts[..parts.len().saturating_sub(1)] {
-            if !current.is_empty() {
-                current.push('/');
-            }
-            current.push_str(part);
-            dirs.insert(format!("{current}/"));
-        }
-    }
-    let mut entries = files;
-    entries.extend(dirs);
-    sort_paths(&mut entries);
-    entries.dedup();
-    Some(entries)
-}
-
-fn manual_walk(root: &Path) -> Vec<String> {
-    let mut output = Vec::new();
-    let mut stack = vec![(root.to_path_buf(), String::new())];
-    while let Some((directory, prefix)) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(directory) else {
+    // In-process traversal with ripgrep's `ignore` walker: identical
+    // gitignore and hidden-file semantics on every machine, with no
+    // dependency on an installed `rg` executable. `MAX_SCAN_RESULTS` bounds
+    // the walk so huge trees cannot stall composer completion.
+    const MAX_SCAN_RESULTS: usize = 2_000;
+    let mut paths: Vec<String> = Vec::new();
+    let walker = WalkBuilder::new(root)
+        .hidden(false)
+        .require_git(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .parents(true)
+        .ignore(true)
+        .sort_by_file_path(|left, right| left.cmp(right))
+        .build();
+    for entry in walker.flatten() {
+        let Some(path) = entry
+            .path()
+            .strip_prefix(root)
+            .ok()
+            .and_then(|relative| relative.to_str().map(str::to_string))
+        else {
             continue;
         };
-        for entry in entries.flatten() {
-            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
-                continue;
-            };
-            if name == ".git" {
-                continue;
-            }
-            let path = if prefix.is_empty() {
-                name
-            } else {
-                format!("{prefix}{name}")
-            };
-            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                let directory_path = format!("{path}/");
-                stack.push((entry.path(), directory_path.clone()));
-                output.push(directory_path);
-            } else {
-                output.push(path);
+        if path.is_empty() {
+            continue;
+        }
+        if Path::new(&path)
+            .components()
+            .any(|component| component.as_os_str().to_str() == Some(".git"))
+        {
+            continue;
+        }
+        if entry.file_type().is_some_and(|kind| kind.is_dir()) {
+            paths.push(format!("{path}/"));
+        } else {
+            paths.push(path.clone());
+            if let Some(index) = path.rfind('/') {
+                paths.push(format!("{}/", &path[..index]));
             }
         }
+        if paths.len() >= MAX_SCAN_RESULTS {
+            break;
+        }
     }
-    sort_paths(&mut output);
-    output
+    sort_paths(&mut paths);
+    paths.dedup();
+    paths
 }
 
 fn sort_paths(paths: &mut [String]) {
@@ -677,9 +654,9 @@ mod tests {
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(labels, vec!["/debug trace off"]);
 
-        // /principal offers 4 roles
+        // /master offers 4 roles
         let AgentResponse::InputCompletions { items, .. } =
-            engine.complete(16, "/principal ".into(), 11).await
+            engine.complete(16, "/master ".into(), 8).await
         else {
             panic!("unexpected response")
         };
@@ -687,10 +664,10 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "/principal code",
-                "/principal architect",
-                "/principal reviewer",
-                "/principal security"
+                "/master code",
+                "/master architect",
+                "/master reviewer",
+                "/master security"
             ]
         );
     }
@@ -748,6 +725,20 @@ mod tests {
             panic!("unexpected response")
         };
         assert!(items.iter().any(|item| item.label == "src/main.rs"));
+    }
+
+    #[test]
+    fn project_scan_honors_gitignore_in_process() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join(".gitignore"), "target/\n").unwrap();
+        std::fs::create_dir_all(temp.path().join("target/debug")).unwrap();
+        std::fs::write(temp.path().join("target/debug/artifact"), "junk").unwrap();
+        std::fs::create_dir(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("src/main.rs"), "fn main() {}").unwrap();
+        let paths = scan_project_files(temp.path());
+        assert!(paths.iter().any(|path| path == "src/main.rs"));
+        assert!(paths.iter().any(|path| path == "src/"));
+        assert!(paths.iter().all(|path| !path.starts_with("target/")));
     }
 
     #[test]

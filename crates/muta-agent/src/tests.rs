@@ -412,17 +412,17 @@ fn system_prompt_registry_reproduces_legacy_layout() {
 }
 
 #[test]
-fn apply_principal_profile_switches_identity_into_the_system_prompt() {
-    // Plan §3.3 acceptance: switching the principal role live re-rolls the
+fn apply_master_profile_switches_identity_into_the_system_prompt() {
+    // Plan §3.3 acceptance: switching the master role live re-rolls the
     // system-prompt preamble, so the next request speaks with the new persona.
     let agent = agent();
     agent.set_identity(crate::AgentIdentity::new("muta", "a coding assistant"));
 
-    let architect = muta_contracts::PrincipalProfile::for_role(
-        muta_contracts::PrincipalRole::Architect,
+    let architect = muta_contracts::MasterPreset::for_role(
+        muta_contracts::MasterPresetId::Architect,
         &crate::AgentIdentity::new("muta", "a coding assistant"),
     );
-    agent.apply_principal_profile(&architect);
+    agent.apply_master_profile(&architect);
 
     // The next assembled request must open with the architect preamble, not
     // the original coding one.
@@ -1198,11 +1198,11 @@ async fn rejected_permission_does_not_execute_tool() {
     );
 }
 
-/// A read-only tool for the envoy child in the drain test.
-struct EnvoyReadTool;
+/// A read-only tool for the runner child in the drain test.
+struct RunnerReadTool;
 
 #[async_trait]
-impl Tool for EnvoyReadTool {
+impl Tool for RunnerReadTool {
     fn name(&self) -> &str {
         "read_text"
     }
@@ -1218,15 +1218,15 @@ impl Tool for EnvoyReadTool {
 }
 
 /// A provider whose first request returns a `read_text` tool call and whose
-/// second request flips the gate and then stalls forever — so the envoy is
+/// second request flips the gate and then stalls forever — so the runner is
 /// parked mid-flight and can only stop when its cancellation token fires.
-struct GatedEnvoyProvider {
+struct GatedRunnerProvider {
     requests: AtomicUsize,
     gate: tokio::sync::watch::Sender<bool>,
 }
 
 #[async_trait]
-impl Provider for GatedEnvoyProvider {
+impl Provider for GatedRunnerProvider {
     async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<Message, String> {
         Ok(Message::new(Role::Assistant, "gated"))
     }
@@ -1258,46 +1258,46 @@ impl Provider for GatedEnvoyProvider {
 }
 
 /// The executor's cooperative drain: when the user cancels a turn while an
-/// envoy is in flight, `execute_tool_evented` signals the envoy, waits for it
+/// runner is in flight, `execute_tool_evented` signals the runner, waits for it
 /// to return its partial transcript, and reports the recovered result with
 /// `interrupted: true` — instead of dropping the future and losing the work.
 #[tokio::test]
-async fn execute_tool_evented_drains_interrupted_envoy() {
+async fn execute_tool_evented_drains_interrupted_runner() {
     let (gate_tx, gate_rx) = tokio::sync::watch::channel(false);
-    let envoy: Arc<crate::EnvoyTool> = Arc::new(crate::EnvoyTool::new(
-        Arc::new(GatedEnvoyProvider {
+    let runner: Arc<crate::RunnerTool> = Arc::new(crate::RunnerTool::new(
+        Arc::new(GatedRunnerProvider {
             requests: AtomicUsize::new(0),
             gate: gate_tx,
         }),
-        muta_contracts::ToolSet::from_tools(vec![Arc::new(EnvoyReadTool) as Arc<dyn Tool>]),
-        &muta_contracts::EXPLORE,
+        muta_contracts::ToolSet::from_tools(vec![Arc::new(RunnerReadTool) as Arc<dyn Tool>]),
+        &muta_contracts::RUNNER_EXPLORE,
     ));
     let agent = Arc::new(Agent::new(
         Arc::new(TestProvider),
-        vec![envoy.clone() as Arc<dyn Tool>],
+        vec![runner.clone() as Arc<dyn Tool>],
         crate::AgentIdentity::default(),
     ));
 
     let cancel = CancellationToken::new();
     let call = ToolCall {
-        id: "call_envoy".to_string(),
-        name: "envoy".to_string(),
+        id: "call_runner".to_string(),
+        name: "runner".to_string(),
         arguments: r#"{"description":"d","prompt":"p"}"#.to_string(),
     };
     let agent_for_run = agent.clone();
     let cancel_for_run = cancel.clone();
     let task = tokio::spawn(async move {
         agent_for_run
-            .execute_tool_evented(&call, "call_envoy", &cancel_for_run, &mut |_event| {})
+            .execute_tool_evented(&call, "call_runner", &cancel_for_run, &mut |_event| {})
             .await
     });
 
-    // Wait until the envoy is genuinely mid-flight, then interrupt the turn.
+    // Wait until the runner is genuinely mid-flight, then interrupt the turn.
     let mut gate_rx = gate_rx;
     gate_rx
         .changed()
         .await
-        .expect("envoy reached second request");
+        .expect("runner reached second request");
     cancel.cancel();
 
     let outcome = task
@@ -1307,13 +1307,13 @@ async fn execute_tool_evented_drains_interrupted_envoy() {
     assert!(outcome.interrupted, "interruption must be reported");
     let result = outcome.result.expect("drained result must be recovered");
     match result {
-        ToolOutput::Envoy {
+        ToolOutput::Runner {
             interrupted,
             failed,
             messages,
             ..
         } => {
-            assert!(interrupted, "recovered envoy must be flagged interrupted");
+            assert!(interrupted, "recovered runner must be flagged interrupted");
             assert!(!failed, "interruption is not a failure");
             assert_eq!(
                 messages.iter().filter(|m| m.role == Role::Tool).count(),
@@ -1321,7 +1321,7 @@ async fn execute_tool_evented_drains_interrupted_envoy() {
                 "the child's completed tool call must survive the drain"
             );
         }
-        other => panic!("expected a drained Envoy output, got {other:?}"),
+        other => panic!("expected a drained Runner output, got {other:?}"),
     }
 }
 
@@ -1663,7 +1663,7 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
                     request.command, request.secret
                 )
             }
-            AgentEvent::Envoy { .. } => "subtask".to_string(),
+            AgentEvent::Runner { .. } => "subtask".to_string(),
             AgentEvent::TodosUpdated(list) => {
                 format!("todos {} items", list.len())
             }
@@ -1918,7 +1918,7 @@ async fn doom_block_is_surgical_across_files() {
 }
 
 /// The doom guard is gated by `set_nudge_config`: disabled (the default), a
-/// repeating call is neither blocked nor injected — envoys and the review
+/// repeating call is neither blocked nor injected — runners and the review
 /// diagnostic rely on this. The test is explicit about the disabled state
 /// rather than relying on the default so the assertion stays meaningful if the
 /// default ever flips.
@@ -2259,7 +2259,7 @@ async fn autopilot_preserves_schema_and_intercepts_ask_user_at_runtime() {
 // Verifies the per-project `Always` allowlist round-trips through disk:
 // approving `Always` on one agent is visible to a fresh agent constructed
 // against the same project root, and revoking is mirrored to disk too.
-// Envoys (no project root) stay ephemeral and never touch the file.
+// Runners (no project root) stay ephemeral and never touch the file.
 
 #[tokio::test]
 async fn always_permission_persists_across_agents_for_same_project() {
@@ -2377,7 +2377,7 @@ async fn agent_without_project_root_never_writes_permissions_file() {
     let perms_path = dirs.project_permissions(&project_root);
 
     // No set_project_root call: the agent stays ephemeral, so an Always
-    // approval must not write any file (envoys behave the same way).
+    // approval must not write any file (runners behave the same way).
     let agent = Arc::new(Agent::new(
         Arc::new(TestProvider),
         vec![Arc::new(WriteTestTool)],
@@ -2500,8 +2500,8 @@ fn agent_config_defaults_match_runtime_constants() {
     // The config struct's defaults must match the seeds the agent uses when
     // no config is loaded, so a missing `[agent]` table is indistinguishable
     // from one that explicitly sets the defaults (ADR-0018).
-    use muta_persistence::config::PrincipalConfig;
-    let cfg = PrincipalConfig::default();
+    use muta_persistence::config::MasterConfig;
+    let cfg = MasterConfig::default();
     assert_eq!(cfg.hard_stop_turns, 0);
     // The agent seeds the same hard-stop budget by default (uncapped).
     let agent = agent();
@@ -2801,11 +2801,11 @@ async fn scheduler_records_results_in_input_order_despite_completion_order() {
     );
 }
 
-/// A turn interrupted mid-batch records the drained envoy's partial result
+/// A turn interrupted mid-batch records the drained runner's partial result
 /// and pairs the never-produced sibling call with `ToolCancelled` — the
-/// batch-level counterpart of `execute_tool_evented_drains_interrupted_envoy`.
+/// batch-level counterpart of `execute_tool_evented_drains_interrupted_runner`.
 #[tokio::test]
-async fn interrupted_batch_records_envoy_drain_and_cancels_unproduced_calls() {
+async fn interrupted_batch_records_runner_drain_and_cancels_unproduced_calls() {
     use std::future::pending;
 
     struct BlockingTool {
@@ -2831,25 +2831,25 @@ async fn interrupted_batch_records_envoy_drain_and_cancels_unproduced_calls() {
     }
 
     let (gate_tx, gate_rx) = tokio::sync::watch::channel(false);
-    let envoy: Arc<crate::EnvoyTool> = Arc::new(crate::EnvoyTool::new(
-        Arc::new(GatedEnvoyProvider {
+    let runner: Arc<crate::RunnerTool> = Arc::new(crate::RunnerTool::new(
+        Arc::new(GatedRunnerProvider {
             requests: AtomicUsize::new(0),
             gate: gate_tx,
         }),
-        muta_contracts::ToolSet::from_tools(vec![Arc::new(EnvoyReadTool) as Arc<dyn Tool>]),
-        &muta_contracts::EXPLORE,
+        muta_contracts::ToolSet::from_tools(vec![Arc::new(RunnerReadTool) as Arc<dyn Tool>]),
+        &muta_contracts::RUNNER_EXPLORE,
     ));
     let started = Arc::new(tokio::sync::Notify::new());
     let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
             turn(&[
-                ("c1", "envoy", r#"{"description":"d","prompt":"p"}"#),
+                ("c1", "runner", r#"{"description":"d","prompt":"p"}"#),
                 ("c2", "stream_read", "{}"),
             ]),
             text_turn("done"),
         ])),
         vec![
-            envoy as Arc<dyn Tool>,
+            runner as Arc<dyn Tool>,
             Arc::new(BlockingTool {
                 started: started.clone(),
             }),
@@ -2879,7 +2879,7 @@ async fn interrupted_batch_records_envoy_drain_and_cancels_unproduced_calls() {
     gate_rx
         .changed()
         .await
-        .expect("envoy reached its stalled second request");
+        .expect("runner reached its stalled second request");
     started.notified().await;
     token.cancel();
 
@@ -2890,17 +2890,17 @@ async fn interrupted_batch_records_envoy_drain_and_cancels_unproduced_calls() {
     );
 
     let recorded = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    // The envoy drained within the grace period: its ToolResult landed and no
+    // The runner drained within the grace period: its ToolResult landed and no
     // ToolCancelled was emitted for it.
     assert!(
         recorded
             .iter()
-            .any(|event| matches!(event, AgentEvent::ToolResult { name, .. } if name == "envoy")),
-        "drained envoy must emit ToolResult"
+            .any(|event| matches!(event, AgentEvent::ToolResult { name, .. } if name == "runner")),
+        "drained runner must emit ToolResult"
     );
     assert!(
         !recorded.iter().any(
-            |event| matches!(event, AgentEvent::ToolCancelled { name, .. } if name == "envoy")
+            |event| matches!(event, AgentEvent::ToolCancelled { name, .. } if name == "runner")
         ),
         "a produced (drained) call must never be paired with ToolCancelled"
     );
@@ -2918,7 +2918,7 @@ async fn interrupted_batch_records_envoy_drain_and_cancels_unproduced_calls() {
         messages
             .iter()
             .any(|m| m.role == Role::Tool && m.content.contains("interrupted mid-task")),
-        "drained envoy result must be recorded: {messages:?}"
+        "drained runner result must be recorded: {messages:?}"
     );
     assert!(
         !messages

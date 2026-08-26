@@ -5,7 +5,7 @@
 use crate::tool_access::ToolAccesses;
 use crate::tool_output::StdinPolicy;
 use crate::usage::TokenUsage;
-use crate::{EnvoyEvent, Message, ToolOutput, ToolStream};
+use crate::{RunnerEvent, Message, ToolOutput, ToolStream};
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Per-model (and per-envoy-profile) variant selection: a map from a
+/// Per-model (and per-runner-profile) variant selection: a map from a
 /// capability name (a [`Tool::name`]) to the [`Tool::variant`] id chosen for
 /// it. When the agent resolves its toolset for the active model, a capability
 /// listed here is realized by its named variant; capabilities absent from the
@@ -24,8 +24,8 @@ use std::sync::Arc;
 ///
 /// Configured per model id under `[tool_variants."<model-id>"]` in
 /// `config.toml`; the agent selects the map matching `Provider::model()`.
-/// Envoy profiles carry their own static selection (see
-/// [`crate::EnvoyProfile`]).
+/// Runner profiles carry their own static selection (see
+/// [`crate::RunnerProfile`]).
 pub type VariantSelection = HashMap<String, String>;
 
 /// Narrow prompt hints exposed by a concrete provider implementation.
@@ -316,7 +316,7 @@ pub trait Tool: Send + Sync {
     /// implementation uses the default; multiple variants of one capability
     /// share `name()` and differ only in `variant()`. The variant id never
     /// reaches the model — it is the selection key under
-    /// `[tool_variants."<model-id>"]` config and in envoy profiles, by which
+    /// `[tool_variants."<model-id>"]` config and in runner profiles, by which
     /// a model or profile picks which implementation of a capability it sees.
     fn variant(&self) -> &str {
         "default"
@@ -331,18 +331,18 @@ pub trait Tool: Send + Sync {
 
     /// Whether executing this tool may block awaiting a live human decision
     /// (e.g. `ask_user`, an approval-gated mode switch). Non-interactive
-    /// execution contexts — envoys spawned for autonomous research — have
-    /// no user reachable to answer, so a [`crate::envoy::ToolPolicy`] with
+    /// execution contexts — runners spawned for autonomous research — have
+    /// no user reachable to answer, so a [`crate::runner::ToolPolicy`] with
     /// `allow_user_interaction: false` excludes these. See ADR-0011.
     fn requires_user(&self) -> bool {
         false
     }
 
-    /// Whether invoking this tool spawns a nested agent. Envoy profiles
+    /// Whether invoking this tool spawns a nested agent. Runner profiles
     /// exclude these unconditionally to prevent unbounded recursion — the
     /// outermost dispatch tool (`task`) and wrappers around it
     /// (`verify_plan_execution`) override to `true`. See ADR-0011.
-    fn spawns_envoy(&self) -> bool {
+    fn spawns_runner(&self) -> bool {
         false
     }
 
@@ -396,7 +396,7 @@ pub trait Tool: Send + Sync {
     /// Whether this tool exercises control over the harness itself (e.g. the
     /// abort/exit escape hatch), as opposed to the workspace/filesystem. This
     /// is orthogonal to [`Tool::scope_target`]: `scope_target` classifies *what
-    /// the call touches*, while this classifies *process control*. Envoy
+    /// the call touches*, while this classifies *process control*. Runner
     /// profiles exclude control tools unconditionally — a spawned agent must
     /// never be able to tear down the whole program. A control tool bypasses
     /// the permission broker and scope gate entirely: it declares no
@@ -493,7 +493,7 @@ pub trait Tool: Send + Sync {
     /// Structured, event-emitting execution — the method the harness actually
     /// invokes so typed output reaches the transcript. Default delegates to
     /// [`call_structured`](Self::call_structured) and emits no events. Tools
-    /// that spawn envoys (e.g. `task`) override this to forward child
+    /// that spawn runners (e.g. `task`) override this to forward child
     /// events while still returning a [`ToolOutput`] (typically [`ToolOutput::Text`]).
     ///
     /// `stdin` is the **execution contract** for the child process's stdin
@@ -508,7 +508,7 @@ pub trait Tool: Send + Sync {
         &self,
         _call_id: &str,
         arguments: &str,
-        _on_event: Box<dyn FnMut(EnvoyEvent) + Send + 'a>,
+        _on_event: Box<dyn FnMut(RunnerEvent) + Send + 'a>,
         _on_stream: &mut (dyn FnMut(ToolStream) + Send + 'a),
         _stdin: StdinPolicy,
     ) -> Result<ToolOutput, String> {
@@ -516,16 +516,16 @@ pub trait Tool: Send + Sync {
         self.call_structured(arguments).await
     }
 
-    /// Execute the tool while optionally emitting events (e.g. envoy steps).
+    /// Execute the tool while optionally emitting events (e.g. runner steps).
     ///
     /// The default implementation simply calls `call()` and emits no events.
-    /// Tools that spawn envoys can override this to stream child events back
+    /// Tools that spawn runners can override this to stream child events back
     /// to the parent harness.
     async fn call_with_events<'a>(
         &self,
         _call_id: &str,
         arguments: &str,
-        _on_event: Box<dyn FnMut(EnvoyEvent) + Send + 'a>,
+        _on_event: Box<dyn FnMut(RunnerEvent) + Send + 'a>,
     ) -> Result<String, String> {
         self.call(arguments).await
     }
@@ -630,7 +630,7 @@ fn leading_program(command: &str) -> String {
 /// two axes.
 ///
 /// The main agent carries an unconstrained scope (the broker is still the
-/// interactive layer inside it); an envoy carries the scope resolved from its
+/// interactive layer inside it); an runner carries the scope resolved from its
 /// profile's `write_paths` and `command_allowlist` grants.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OperationScope {

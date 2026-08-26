@@ -149,16 +149,16 @@ pub(super) async fn handle_send_chat(
             });
         }
     } else if let Some((start, end)) = app.selection.active_normalized_range() {
-        // Enter on a selected step: navigate into an envoy
+        // Enter on a selected step: navigate into an runner
         // task, otherwise toggle that step's expansion.
         if start.message_idx == end.message_idx {
             let mi = start.message_idx;
             let mut messages = runtime.messages.write().await;
-            // An envoy task navigates into its view instead
+            // An runner task navigates into its view instead
             // of expanding.
             let enter_id =
                 resolve_focused_mut(&mut messages, &app.focus_stack, mi).and_then(|message| {
-                    if message.is_envoy_task() {
+                    if message.is_runner_task() {
                         message.tool_step_call_id().map(String::from)
                     } else {
                         None
@@ -166,7 +166,7 @@ pub(super) async fn handle_send_chat(
                 });
             if let Some(id) = enter_id {
                 drop(messages);
-                app.enter_envoy(id);
+                app.enter_runner(id);
             } else {
                 let toggled = app.toggle_step_pinned(&mut messages, mi);
                 drop(messages);

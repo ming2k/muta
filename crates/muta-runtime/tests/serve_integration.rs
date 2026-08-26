@@ -113,6 +113,9 @@ async fn prehosted_with_catalog(
     registry
         .host(HostedSession {
             project_root: std::path::PathBuf::from("/tmp/muta-test-project"),
+            human_channel: std::sync::Arc::new(
+                muta_contracts::human_request::HumanChannelAccountant::new(),
+            ),
             security,
             session,
             req_tx,
@@ -158,6 +161,7 @@ async fn completion_catalog_and_edits_round_trip_over_websocket() {
             version: None,
             action: AttachAction::Attach(None),
             project: None,
+            posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
             protocol: Some(muta_contracts::PROTOCOL_VERSION),
         })
         .unwrap()
@@ -276,6 +280,9 @@ async fn host_with_project(registry: &SessionRegistry, project: std::path::PathB
     registry
         .host(HostedSession {
             project_root: project,
+            human_channel: std::sync::Arc::new(
+                muta_contracts::human_request::HumanChannelAccountant::new(),
+            ),
             security: std::sync::Arc::new(
                 muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
             ),
@@ -317,6 +324,7 @@ async fn test_select_then_attach_round_trip() {
         version: None,
         action: AttachAction::Attach(None),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -448,6 +456,7 @@ async fn attach_receives_restored_todos_after_welcome() {
         version: None,
         action: AttachAction::Attach(None),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -523,6 +532,7 @@ async fn attach_receives_buffered_provider_state_after_welcome() {
             version: None,
             action: AttachAction::Attach(None),
             project: None,
+            posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
             protocol: None,
         })
         .unwrap()
@@ -580,6 +590,7 @@ async fn unknown_id_is_an_error() {
         version: None,
         action: AttachAction::Attach(Some("nope".into())),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -623,6 +634,7 @@ async fn select_project_scopes_auto_attach() {
         version: None,
         action: AttachAction::Attach(None),
         project: Some(project_a),
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -703,6 +715,7 @@ async fn declared_project_is_never_auto_bound_to_a_foreign_session() {
         version: None,
         action: AttachAction::Attach(None),
         project: Some(project_a),
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -749,6 +762,7 @@ async fn monitor_handshake_yields_snapshot_then_diffs() {
             include_idle: true,
         }),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -885,6 +899,7 @@ async fn monitor_one_shot_closes_after_snapshot() {
             include_idle: false,
         }),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -942,6 +957,7 @@ async fn attach_end_session_tears_down_and_notifies() {
             include_idle: true,
         }),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -973,6 +989,7 @@ async fn attach_end_session_tears_down_and_notifies() {
         version: None,
         action: AttachAction::Attach(Some(id.clone())),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -1060,6 +1077,7 @@ async fn control_create_observe_kill_roundtrip() {
             prompt: None,
         }),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -1088,6 +1106,7 @@ async fn control_create_observe_kill_roundtrip() {
             session_id: "nope".into(),
         }),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -1162,6 +1181,7 @@ async fn native_local_ipc_serves_same_protocol_without_token() {
             include_idle: true,
         }),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -1250,6 +1270,9 @@ async fn host_bare(
     registry
         .host(HostedSession {
             project_root: std::env::temp_dir().join("muta-reaper-project"),
+            human_channel: std::sync::Arc::new(
+                muta_contracts::human_request::HumanChannelAccountant::new(),
+            ),
             security: std::sync::Arc::new(
                 muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
             ),
@@ -1468,6 +1491,7 @@ async fn shutdown_control_verb_replies_then_stops_accepting() {
         version: None,
         action: AttachAction::Control(serve::ControlRequest::Shutdown),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -1520,6 +1544,7 @@ async fn version_skew_is_refused_with_both_versions() {
             version: version.map(str::to_string),
             action: AttachAction::Attach(Some("definitely-not-a-session".into())),
             project: None,
+            posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
             protocol: None,
         })
         .unwrap();
@@ -1629,6 +1654,7 @@ async fn protocol_window_governs_when_declared() {
             protocol,
             action: AttachAction::Attach(Some("definitely-not-a-session".into())),
             project: None,
+            posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         })
         .unwrap();
         ws.send(WsMessage::Text(select.into())).await.unwrap();
@@ -1705,6 +1731,7 @@ async fn control_roundtrip(port: u16, request: serve::ControlRequest) -> Result<
         version: None,
         action: AttachAction::Control(request),
         project: None,
+        posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
     })
     .unwrap();
@@ -1801,6 +1828,9 @@ async fn control_suspend_session_parks_a_contentful_session() {
     registry
         .host(HostedSession {
             project_root: tmp.path().to_path_buf(),
+            human_channel: std::sync::Arc::new(
+                muta_contracts::human_request::HumanChannelAccountant::new(),
+            ),
             security: std::sync::Arc::new(
                 muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
             ),
@@ -1869,6 +1899,9 @@ async fn unconfigured_workspace_pushes_trust_prompt_on_attach() {
     registry
         .host(HostedSession {
             project_root: tmp.path().to_path_buf(),
+            human_channel: std::sync::Arc::new(
+                muta_contracts::human_request::HumanChannelAccountant::new(),
+            ),
             security,
             session,
             req_tx,
@@ -1896,6 +1929,7 @@ async fn unconfigured_workspace_pushes_trust_prompt_on_attach() {
             version: None,
             action: AttachAction::Attach(None),
             project: None,
+            posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
             protocol: Some(muta_contracts::PROTOCOL_VERSION),
         })
         .unwrap()

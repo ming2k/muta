@@ -261,13 +261,13 @@ fn cached_height(cache: &HeightCache, message: &TranscriptMessage) -> Option<usi
 /// step; final prose-only responses retain the ordinary transcript shape.
 fn is_turn_component(message: &TranscriptMessage) -> bool {
     message.is_tool_step()
-        || message.is_envoy_task()
+        || message.is_runner_task()
         || message.is_thinking()
         || (message.role == muta_contracts::Role::Assistant && !message.is_provider_retry())
 }
 
 fn is_tool_like(message: &TranscriptMessage) -> bool {
-    message.is_tool_step() || message.is_envoy_task()
+    message.is_tool_step() || message.is_runner_task()
 }
 
 fn default_group_start(messages: &[TranscriptMessage], index: usize) -> bool {
@@ -395,7 +395,7 @@ impl<'a, 'f> Stream<'a, 'f> {
     pub fn badge(&mut self, _mi: usize) {}
 
     /// Dispatch a single message to its per-kind drawer, honoring the
-    /// height-cache fast path for every settled message. Running tool/envoy/
+    /// height-cache fast path for every settled message. Running tool/runner/
     /// reasoning steps retain their live renderer because their visible height
     /// can still change; completed expanded steps are safe to cache and can be
     /// skipped wholesale when fully off-screen.
@@ -411,7 +411,7 @@ impl<'a, 'f> Stream<'a, 'f> {
         let skippable = !msg.is_provider_retry()
             && (msg.is_notice()
                 || msg.is_round_interrupt()
-                || (!msg.is_envoy_task()
+                || (!msg.is_runner_task()
                     && if msg.is_tool_step() {
                         !msg.tool_step_status()
                             .is_some_and(|status| status.is_running())
@@ -463,8 +463,8 @@ impl<'a, 'f> Stream<'a, 'f> {
                 self.hovered_step == Some(mi),
                 self.focused_target == Some(InteractiveTarget::notice(mi)),
             );
-        } else if msg.is_envoy_task() {
-            super::disclosure::draw_envoy_inline_step(
+        } else if msg.is_runner_task() {
+            super::disclosure::draw_runner_inline_step(
                 self.frame,
                 self.band,
                 msg,

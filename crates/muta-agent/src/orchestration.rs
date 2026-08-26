@@ -963,7 +963,7 @@ pub async fn execute_round(
         retry_max_ms,
         emit_round_completed,
     } = context;
-    // Bind accounting to the session that admitted this round. The principal
+    // Bind accounting to the session that admitted this round. The master
     // agent survives `/session open` and `/resume`, so its construction-time
     // thread id is not sufficient for attribution.
     agent.set_thread_id(session_id.clone());
@@ -1669,12 +1669,12 @@ pub fn relay_agent_event(
         AgentEvent::InputRequest(request) => {
             round_response(session_id, RoundEvent::InputRequest(request))
         }
-        AgentEvent::Envoy {
+        AgentEvent::Runner {
             parent_call_id,
             event,
         } => round_response(
             session_id,
-            RoundEvent::Envoy {
+            RoundEvent::EnvoyCompat {
                 parent_call_id,
                 event,
             },
@@ -2187,7 +2187,7 @@ mod title_tests {
     use muta_contracts::{Message, ModelRequest, ProviderStreamEvent, Role};
 
     /// A provider that answers only the non-streaming `chat` (the title
-    /// envoy's path) with a fixed title.
+    /// runner's path) with a fixed title.
     struct TitleProvider;
 
     #[async_trait]

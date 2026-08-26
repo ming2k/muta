@@ -3,11 +3,21 @@
 
   let inputText = $state("");
   let selected: number[][] = $state([]);
+  // ADR-0141 web/TUI parity: free-text "Other" per question, mirroring the
+  // TUI picker. An "other" answer replaces the option selection: the wire
+  // carries the raw text as that question's single answer label.
+  let otherText: string[] = $state([]);
+  let otherActive: boolean[] = $state([]);
+  let answerError = $state("");
 
   $effect(() => {
     // Reset the local answer state whenever a new question arrives.
     if (daemon.pendingQuestion) {
+      const n = daemon.pendingQuestion.request.questions.length;
       selected = daemon.pendingQuestion.request.questions.map(() => []);
+      otherText = Array.from({ length: n }, () => "");
+      otherActive = Array.from({ length: n }, () => false);
+      answerError = "";
     }
     if (daemon.pendingInput) {
       inputText = "";
@@ -29,13 +39,52 @@
     selected = [...selected];
   }
 
+  function toggleOther(qi: number) {
+    otherActive[qi] = !otherActive[qi];
+    otherActive = [...otherActive];
+    if (otherActive[qi]) selected[qi] = [];
+    selected = [...selected];
+  }
+
+  /** A question is answered iff it has ≥1 selected option or non-blank Other. */
+  function answered(qi: number): boolean {
+    const picks = selected[qi] ?? [];
+    if (otherActive[qi] && (otherText[qi] ?? "").trim() !== "") return true;
+    return picks.length > 0;
+  }
+
   function submitQuestion() {
     const req = daemon.pendingQuestion?.request;
     if (!req) return;
+    // Zero-selection validation (ADR-0141): a non-empty outer array with
+    // empty inner arrays is undefined in the parked-question protocol — the
+    // reserved cancellation shape is an empty OUTER array. Refuse to send
+    // an undefined payload; the operator must answer or explicitly cancel.
+    const missing = req.questions
+      .map((_, qi) => qi)
+      .filter((qi) => !answered(qi));
+    if (missing.length > 0) {
+      answerError =
+        missing.length === 1
+          ? `Question ${missing[0] + 1} needs an answer — pick an option, write an Other answer, or cancel.`
+          : `Questions ${missing.map((i) => i + 1).join(", ")} need answers — pick options, write Other answers, or cancel.`;
+      return;
+    }
+    answerError = "";
     const answers = req.questions.map((_, qi) =>
-      (selected[qi] ?? []).map((oi) => req.questions[qi].options[oi]?.label ?? ""),
+      otherActive[qi] && (otherText[qi] ?? "").trim() !== ""
+        ? [otherText[qi].trim()]
+        : (selected[qi] ?? []).map((oi) => req.questions[qi].options[oi]?.label ?? ""),
     );
     daemon.answerQuestion(answers);
+  }
+
+  function cancelQuestion() {
+    // The reserved cancellation shape: empty OUTER array. Settles the
+    // parked question as cancelled; the model is told the operator declined
+    // to answer.
+    answerError = "";
+    daemon.answerQuestion([]);
   }
 
   function submitInput() {
@@ -54,7 +103,7 @@
         {daemon.pendingPermission.request.label || daemon.pendingPermission.request.tool}
       </span>
       {#if daemon.pendingPermission.origin.label}
-        <span class="origin">envoy: {daemon.pendingPermission.origin.label}</span>
+        <span class="origin">runner: {daemon.pendingPermission.origin.label}</span>
       {/if}
     </div>
     {#if daemon.pendingPermission.request.description}
@@ -84,7 +133,7 @@
       <span class="icon">❓</span>
       <span class="title">The agent needs your answer</span>
       {#if daemon.pendingQuestion.origin.label}
-        <span class="origin">envoy: {daemon.pendingQuestion.origin.label}</span>
+        <span class="origin">runner: {daemon.pendingQuestion.origin.label}</span>
       {/if}
     </div>
     {#each daemon.pendingQuestion.request.questions as q, qi (qi)}
@@ -105,10 +154,33 @@
             </button>
           {/each}
         </div>
+        <div class="other-row">
+          <button
+            class="option other-toggle"
+            class:selected={otherActive[qi]}
+            onclick={() => toggleOther(qi)}
+          >Other…</button>
+          {#if otherActive[qi]}
+            <input
+              class="other-input"
+              type="text"
+              bind:value={otherText[qi]}
+              placeholder="Type a free-text answer"
+              onkeydown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  submitQuestion();
+                }
+              }}
+            />
+          {/if}
+        </div>
       </div>
     {/each}
+    {#if answerError}<p class="answer-error">{answerError}</p>{/if}
     <div class="actions">
       <button class="btn allow-once" onclick={submitQuestion}>Answer</button>
+      <button class="btn deny" onclick={cancelQuestion}>Cancel</button>
     </div>
   </div>
 {:else if daemon.pendingInput}
@@ -117,7 +189,7 @@
       <span class="icon">⌨</span>
       <span class="title">{daemon.pendingInput.request.prompt}</span>
       {#if daemon.pendingInput.origin.label}
-        <span class="origin">envoy: {daemon.pendingInput.origin.label}</span>
+        <span class="origin">runner: {daemon.pendingInput.origin.label}</span>
       {/if}
     </div>
     <p class="desc mono">{daemon.pendingInput.request.command}</p>
@@ -139,6 +211,24 @@
 {/if}
 
 <style>
+  .other-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-top: 0.5rem;
+  }
+  .other-toggle {
+    flex: 0 0 auto;
+    font-style: italic;
+  }
+  .other-input {
+    flex: 1;
+  }
+  .answer-error {
+    color: var(--danger, #e5484d);
+    margin: 0.5rem 0 0;
+    font-size: 0.85rem;
+  }
   .banner {
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-md);

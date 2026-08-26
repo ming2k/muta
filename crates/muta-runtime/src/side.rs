@@ -87,8 +87,8 @@ impl SideSession {
         // `ProxyProvider` holder as the primary, which clones the inner
         // `Arc<dyn Provider>` per call and is safe under concurrency
         // (ADR-0017 §2). Tools come from the cached static snapshot (no
-        // `EnvoyTool` and no session-scoped dynamic connector sources), so a
-        // side chat neither recurses nor implicitly acquires the principal's
+        // `RunnerTool` and no session-scoped dynamic connector sources), so a
+        // side chat neither recurses nor implicitly acquires the master's
         // external connections. Dynamic capability propagation must be an
         // explicit policy decision (ADR-0060).
         let side_provider: Arc<dyn Provider> =
@@ -103,7 +103,7 @@ impl SideSession {
         // An aside is a quick aside; run it autopilot — without human
         // intervention — so it never raises a permission modal whose reply
         // could not be routed back to the side `Agent` through the shared
-        // permission channel. This mirrors the envoy policy (`envoy_tool.rs`
+        // permission channel. This mirrors the runner policy (`runner_tool.rs`
         // sets `autopilot`).
         agent.set_autopilot(true);
 
@@ -379,7 +379,7 @@ pub async fn publish_btw_list(
 #[allow(clippy::too_many_arguments)]
 pub async fn start_active_turn(
     side: &Arc<AsyncRwLock<SideRegistry>>,
-    principal: &Arc<Agent>,
+    master: &Arc<Agent>,
     primary_session: &Arc<SessionStore>,
     primary_lifecycle: &Arc<RoundLifecycle>,
     tx: &mpsc::UnboundedSender<AgentResponse>,
@@ -399,7 +399,7 @@ pub async fn start_active_turn(
                 s.id.clone(),
             ),
             None => (
-                principal.clone(),
+                master.clone(),
                 primary_session.clone(),
                 primary_lifecycle.clone(),
                 primary_session.id().await,
@@ -431,22 +431,22 @@ pub async fn start_active_turn(
     }
 
     start_resolved_turn(
-        principal, tx, config, agent, session, lifecycle, session_id, input,
+        master, tx, config, agent, session, lifecycle, session_id, input,
     )
     .await;
 }
 
-/// Resolve a live principal or aside agent by its stable session id. Keeping
+/// Resolve a live master or aside agent by its stable session id. Keeping
 /// this lookup explicit prevents an outbox action from following a later view
 /// switch into the wrong conversation.
 pub async fn target_agent(
     side: &Arc<AsyncRwLock<SideRegistry>>,
-    principal: &Arc<Agent>,
+    master: &Arc<Agent>,
     primary_session: &Arc<SessionStore>,
     target_session_id: &str,
 ) -> Option<Arc<Agent>> {
     if primary_session.id().await == target_session_id {
-        return Some(principal.clone());
+        return Some(master.clone());
     }
     side.read()
         .await
@@ -460,7 +460,7 @@ pub async fn target_agent(
 pub async fn start_session_turn(
     target_session_id: &str,
     side: &Arc<AsyncRwLock<SideRegistry>>,
-    principal: &Arc<Agent>,
+    master: &Arc<Agent>,
     primary_session: &Arc<SessionStore>,
     primary_lifecycle: &Arc<RoundLifecycle>,
     tx: &mpsc::UnboundedSender<AgentResponse>,
@@ -471,7 +471,7 @@ pub async fn start_session_turn(
     let is_primary = primary_id == target_session_id;
     let resolved = if is_primary {
         Some((
-            principal.clone(),
+            master.clone(),
             primary_session.clone(),
             primary_lifecycle.clone(),
             primary_id.clone(),
@@ -511,7 +511,7 @@ pub async fn start_session_turn(
     }
 
     start_resolved_turn(
-        principal, tx, config, agent, session, lifecycle, session_id, input,
+        master, tx, config, agent, session, lifecycle, session_id, input,
     )
     .await;
     true
@@ -519,7 +519,7 @@ pub async fn start_session_turn(
 
 #[allow(clippy::too_many_arguments)]
 async fn start_resolved_turn(
-    principal: &Arc<Agent>,
+    master: &Arc<Agent>,
     tx: &mpsc::UnboundedSender<AgentResponse>,
     config: &Config,
     agent: Arc<Agent>,
@@ -553,7 +553,7 @@ async fn start_resolved_turn(
         input = RoundInput::resume(pending);
     }
     let projection =
-        ContextProjectionSettings::from_config(config, active_context_window(principal));
+        ContextProjectionSettings::from_config(config, active_context_window(master));
     let retry_max_attempts = config.connection_retry_max_attempts;
     let retry_base_ms = config.connection_retry_base_ms;
     let retry_max_ms = config.connection_retry_max_ms;

@@ -566,7 +566,7 @@ pub async fn dispatch(
             // `/config reload` / `/reload` aliases): re-read config.toml and apply the diff live
             // (ADR-0085 §6) — MCP servers (diff + reconnect), project
             // MCP/hooks (trust-gated), bash policy, hooks registry,
-            // permissions, principal settings, tool variants, and the prune
+            // permissions, master settings, tool variants, and the prune
             // threshold. User-triggered, no fs-watch.
             if parts.get(1) != Some(&"reload") {
                 record_error(
@@ -613,10 +613,10 @@ pub async fn dispatch(
             // re-run; permissions seeding is additive (new allow-rules take
             // effect; removed rules are noted but not revoked this session).
             agent.set_bash_policy(&reloaded.bash_policy);
-            agent.set_hard_stop_turns(reloaded.principal.hard_stop_turns);
-            agent.set_doom_guard_config(reloaded.principal.nudge);
-            agent.set_allow_model_stdin(reloaded.principal.allow_model_stdin);
-            agent.set_skip_interactive_input(reloaded.principal.skip_interactive_input);
+            agent.set_hard_stop_turns(reloaded.master.hard_stop_turns);
+            agent.set_doom_guard_config(reloaded.master.nudge);
+            agent.set_allow_model_stdin(reloaded.master.allow_model_stdin);
+            agent.set_skip_interactive_input(reloaded.master.skip_interactive_input);
             agent.set_hooks(crate::hooks::build_hook_registry(&reloaded.hooks));
             agent.seed_permissions_from_config(&reloaded.permissions.allow);
             crate::agent_setup::reseed_prune_threshold(agent, &reloaded);
@@ -671,7 +671,7 @@ pub async fn dispatch(
                     lines.push(format!("MCP removed: {}", report.removed.join(", ")));
                 }
             }
-            lines.push("Re-applied bash policy, hooks, principal, and permissions.".to_string());
+            lines.push("Re-applied bash policy, hooks, master, and permissions.".to_string());
             record_command_with_duration(
                 session,
                 resp_tx,
@@ -768,15 +768,15 @@ pub async fn dispatch(
             // mid-turn. The `AutopilotChanged` event above already mirrors
             // the new value into the TUI snapshot without that side effect.
         }
-        Some(BuiltinCmd::Principal) => {
-            // /principal <role> — switch the live principal role (plan §3.3).
+        Some(BuiltinCmd::Master) => {
+            // /master <role> — switch the live master role (plan §3.3).
             // Resolves the role onto the current identity, applies the
             // resulting profile (identity preamble, capability scope, operation
             // boundary), and surfaces a confirmation. With no argument, lists
             // the available roles.
             match parts.get(1) {
                 None | Some(&"") => {
-                    let roles: Vec<&'static str> = muta_contracts::PrincipalRole::ALL
+                    let roles: Vec<&'static str> = muta_contracts::MasterPresetId::ALL
                         .iter()
                         .map(|r| r.as_str())
                         .collect();
@@ -786,16 +786,16 @@ pub async fn dispatch(
                         name,
                         args,
                         CommandResult::Text(format!(
-                            "Available principal roles: {}. Usage: `/principal <role>` or \
-                             mention `@principal:<role>` in a message.",
+                            "Available master roles: {}. Usage: `/master <role>` or \
+                             mention `@master:<role>` in a message.",
                             roles.join(", ")
                         )),
                     )
                     .await;
                 }
-                Some(role) => match agent.apply_principal_role(role) {
+                Some(role) => match agent.apply_master_role(role) {
                     Some(resolved) => {
-                        // A principal profile carries its own autopilot
+                        // A master profile carries its own autopilot
                         // posture; the apply above already flipped the live
                         // flag. Mirror it onto the session (ADR-0132) so the
                         // role's posture survives a restart instead of
@@ -807,7 +807,7 @@ pub async fn dispatch(
                             name,
                             args,
                             CommandResult::Text(format!(
-                                "Principal role switched to `{}` — {}. The next response will \
+                                "Master role switched to `{}` — {}. The next response will \
                                  speak with this role's perspective and capability scope.",
                                 resolved.as_str(),
                                 resolved.description()
@@ -822,9 +822,9 @@ pub async fn dispatch(
                             name,
                             args,
                             format!(
-                                "Unknown principal role `{}`. Available roles: {}.",
+                                "Unknown master role `{}`. Available roles: {}.",
                                 role,
-                                muta_contracts::PrincipalRole::ALL
+                                muta_contracts::MasterPresetId::ALL
                                     .iter()
                                     .map(|r| r.as_str())
                                     .collect::<Vec<_>>()
@@ -2075,8 +2075,8 @@ pub async fn dispatch(
                     // serializes) to disk, with a simulated `This is a test.`
                     // probe user message appended so the snapshot reflects
                     // "what the LLM context would look like if the user sent
-                    // this now". Out-of-band fields (nested envoy children,
-                    // envoy_meta, attribution, origin, hidden) are stripped via
+                    // this now". Out-of-band fields (nested runner children,
+                    // runner_meta, attribution, origin, hidden) are stripped via
                     // `Message::to_wire` — the dump shows what the model
                     // actually sees, not the internal `Message` struct that
                     // also carries durable-session sidecars. NO provider call

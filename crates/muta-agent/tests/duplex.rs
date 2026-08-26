@@ -8,18 +8,18 @@
 //! These run as a standalone integration binary (`cargo test --test duplex`)
 //! so they compile against the crate's public API only and do not depend on
 //! the in-`lib` unit-test module. They prove the two directions of the
-//! parent↔envoy channel at the agent layer:
+//! parent↔runner channel at the agent layer:
 //!
 //! 1. **Down (steering):** an `AgentOp::InjectUserMessage` submitted through a
-//!    `EnvoyHandle` lands in the live transcript before the next model
+//!    `RunnerHandle` lands in the live transcript before the next model
 //!    round.
 //! 2. **Down (reply) + Up (request):** a write tool's permission broker
 //!    surfaces `AgentEvent::PermissionRequest` up through
 //!    `run_streaming_with_events`, and a `reply_permission` submitted through
 //!    the handle resolves the parked oneshot so the tool actually runs.
 //!
-//! The end-to-end path through `EnvoyTool` (registry lookup keyed by
-//! `parent_call_id`, nested `EnvoyEvent::PermissionRequest` rendered in the
+//! The end-to-end path through `RunnerTool` (registry lookup keyed by
+//! `parent_call_id`, nested `RunnerEvent::PermissionRequest` rendered in the
 //! TUI) is the harness↔TUI integration step that follows; these tests cover
 //! the substrate it will be built on.
 
@@ -32,9 +32,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use muta_agent::{
-    Agent, AgentEvent, AgentOp, EnvoyEvent, EnvoyTool, Message, Provider, ProviderStreamEvent, Role,
+    Agent, AgentEvent, AgentOp, RunnerEvent, RunnerTool, Message, Provider, ProviderStreamEvent, Role,
 };
-use muta_contracts::{EnvoyProfile, PermissionDecision, Tool, ToolOutput, ToolPolicy};
+use muta_contracts::{RunnerPreset, PermissionDecision, Tool, ToolOutput, ToolPolicy};
 
 /// `stream_chat` emits "done" with no tool calls (the default
 /// `stream_chat_events` wraps it into one `TextDelta`). Used by the inject
@@ -147,7 +147,7 @@ async fn handle_reply_permission_unblocks_parked_write_tool() {
         .await
         .expect("permission request must surface up via on_event")
         .expect("channel not closed before a request arrived");
-    // The envoy is parked on the broker oneshot at this point.
+    // The runner is parked on the broker oneshot at this point.
     assert!(!task.is_finished(), "child must be parked awaiting reply");
     assert_eq!(request.tool, "gated_write");
 
@@ -173,7 +173,7 @@ async fn handle_reply_permission_unblocks_parked_write_tool() {
 async fn handle_reply_is_noop_after_agent_dropped() {
     // When the child's dispatcher has ended and dropped its `Arc`, every handle
     // method degrades to a no-op rather than erroring — so a late UI reply
-    // after the envoy already finished can never panic or wedgelock state.
+    // after the runner already finished can never panic or wedgelock state.
     let agent = Arc::new(Agent::new(
         Arc::new(IdleProvider),
         Vec::new(),
@@ -194,7 +194,7 @@ async fn handle_reply_is_noop_after_agent_dropped() {
 
 /// Streaming provider: turn 0 emits a tool-call for `gated_write`; turn 1
 /// emits plain text "done". Drives both the direct
-/// `run_streaming_with_events` loop test and the EnvoyTool end-to-end path
+/// `run_streaming_with_events` loop test and the RunnerTool end-to-end path
 /// (which runs the child via `run_streaming_with_events`).
 struct StreamWriteCallProvider(AtomicUsize);
 
@@ -231,9 +231,9 @@ impl Provider for StreamWriteCallProvider {
 /// A test-only profile that admits write tools *and* leaves the permission
 /// broker on (`autopilot: false`), so the child's write call surfaces a
 /// `PermissionRequest` — the shape needed to exercise the full up→down
-/// round-trip through `EnvoyTool` + the registry. Declared `const` because
-/// `EnvoyTool::new` borrows the profile for `'static`.
-const INTERACTIVE: EnvoyProfile = EnvoyProfile {
+/// round-trip through `RunnerTool` + the registry. Declared `const` because
+/// `RunnerTool::new` borrows the profile for `'static`.
+const INTERACTIVE: RunnerPreset = RunnerPreset {
     name: "test_interactive",
     system_prompt: "test",
     tool_policy: ToolPolicy {
@@ -251,7 +251,7 @@ const INTERACTIVE: EnvoyProfile = EnvoyProfile {
 async fn streaming_loop_fires_permission_broker_direct() {
     // Isolation: does run_streaming_with_events itself surface a permission
     // request for a write tool when autopilot is false? Decouples the
-    // streaming driver from the EnvoyTool wrapping.
+    // streaming driver from the RunnerTool wrapping.
     let ran = Arc::new(AtomicUsize::new(0));
     let agent = Arc::new(Agent::new(
         Arc::new(StreamWriteCallProvider(AtomicUsize::new(0))),
@@ -288,25 +288,25 @@ async fn streaming_loop_fires_permission_broker_direct() {
 }
 
 #[tokio::test]
-async fn envoy_tool_registry_routes_reply_into_live_envoy() {
-    // End-to-end through EnvoyTool with an interactive profile
+async fn runner_tool_registry_routes_reply_into_live_runner() {
+    // End-to-end through RunnerTool with an interactive profile
     // (`autopilot: false`): the child's execute-tier tool surfaces a
-    // permission request UP as `EnvoyEvent::PermissionRequest`, the tool
+    // permission request UP as `RunnerEvent::PermissionRequest`, the tool
     // registers the child's handle by the parent `call_id`, and a reply pulled
     // from the registry resolves the parked oneshot so the tool runs. This is
     // the agent-layer contract the session driver and TUI rely on.
     let ran = Arc::new(AtomicUsize::new(0));
-    let envoy_tool = Arc::new(EnvoyTool::new(
+    let runner_tool = Arc::new(RunnerTool::new(
         Arc::new(StreamWriteCallProvider(AtomicUsize::new(0))),
         muta_contracts::ToolSet::from_tools([
             Arc::new(BrokerGatedTool(Arc::clone(&ran))) as Arc<dyn Tool>
         ]),
         &INTERACTIVE,
     ));
-    let registry = envoy_tool.registry();
+    let registry = runner_tool.registry();
 
-    let (evt_tx, mut evt_rx) = mpsc::unbounded_channel::<EnvoyEvent>();
-    let tool = Arc::clone(&envoy_tool);
+    let (evt_tx, mut evt_rx) = mpsc::unbounded_channel::<RunnerEvent>();
+    let tool = Arc::clone(&runner_tool);
     let task = tokio::spawn(async move {
         let mut on_stream = |_: muta_agent::ToolStream| ();
         tool.call_structured_with_events(
@@ -321,17 +321,17 @@ async fn envoy_tool_registry_routes_reply_into_live_envoy() {
         .await
     });
 
-    // Drain EnvoyEvents until the permission request surfaces.
+    // Drain RunnerEvents until the permission request surfaces.
     let mut request = None;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while request.is_none() && std::time::Instant::now() < deadline {
-        if let Ok(Some(EnvoyEvent::PermissionRequest(r))) =
+        if let Ok(Some(RunnerEvent::PermissionRequest(r))) =
             tokio::time::timeout(std::time::Duration::from_millis(200), evt_rx.recv()).await
         {
             request = Some(r);
         }
     }
-    let request = request.expect("envoy permission request must surface up via EnvoyEvent");
+    let request = request.expect("runner permission request must surface up via RunnerEvent");
     assert_eq!(request.tool, "gated_write");
     assert!(!task.is_finished(), "child parked awaiting reply");
 

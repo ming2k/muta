@@ -417,36 +417,36 @@ describe("DaemonStore wire protocol", () => {
     });
   });
 
-  describe("envoy flow", () => {
-    const envoyEvent = (ws: FakeWebSocket, event: unknown, parentCallId = "call-1") =>
-      roundEvent(ws, { Envoy: { parent_call_id: parentCallId, event } });
+  describe("runner flow", () => {
+    const runnerEvent = (ws: FakeWebSocket, event: unknown, parentCallId = "call-1") =>
+      roundEvent(ws, { Runner: { parent_call_id: parentCallId, event } });
 
-    it("folds envoy Started/Stream/Tool events into the parent tool", () => {
+    it("folds runner Started/Stream/Tool events into the parent tool", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
       roundEvent(session, { ToolCall: { id: "call-1", name: "task", arguments: "{}" } });
-      envoyEvent(session, { Started: { profile: "explore" } });
-      envoyEvent(session, { StreamDelta: "partial " });
-      envoyEvent(session, { StreamDelta: "text" });
-      expect(store.liveTools["call-1"].envoy?.streamingText).toBe("partial text");
+      runnerEvent(session, { Started: { profile: "explore" } });
+      runnerEvent(session, { StreamDelta: "partial " });
+      runnerEvent(session, { StreamDelta: "text" });
+      expect(store.liveTools["call-1"].runner?.streamingText).toBe("partial text");
 
-      envoyEvent(session, { StreamEnd: "partial text" });
-      envoyEvent(session, {
+      runnerEvent(session, { StreamEnd: "partial text" });
+      runnerEvent(session, {
         ToolCall: { id: "e1", name: "read", arguments: "{}", round: 1, turn: 0 },
       });
-      envoyEvent(session, {
+      runnerEvent(session, {
         ToolResult: { id: "e1", name: "read", output: "file contents", duration_ms: 1 },
       });
-      envoyEvent(session, { Activity: "reading files" });
+      runnerEvent(session, { Activity: "reading files" });
 
-      const envoy = store.liveTools["call-1"].envoy;
-      expect(envoy?.profile).toBe("explore");
-      expect(envoy?.text).toBe("partial text");
-      expect(envoy?.streamingText).toBe("");
-      expect(envoy?.activity).toBe("reading files");
-      expect(envoy?.tools).toHaveLength(1);
-      expect(envoy?.tools[0]).toMatchObject({
+      const runner = store.liveTools["call-1"].runner;
+      expect(runner?.profile).toBe("explore");
+      expect(runner?.text).toBe("partial text");
+      expect(runner?.streamingText).toBe("");
+      expect(runner?.activity).toBe("reading files");
+      expect(runner?.tools).toHaveLength(1);
+      expect(runner?.tools[0]).toMatchObject({
         id: "e1",
         name: "read",
         status: "completed",
@@ -455,13 +455,13 @@ describe("DaemonStore wire protocol", () => {
       });
     });
 
-    it("routes envoy PermissionRequest replies with parent_call_id", () => {
+    it("routes runner PermissionRequest replies with parent_call_id", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
       roundEvent(session, { ToolCall: { id: "call-1", name: "task", arguments: "{}" } });
-      envoyEvent(session, { Started: { profile: "explore" } });
-      envoyEvent(session, {
+      runnerEvent(session, { Started: { profile: "explore" } });
+      runnerEvent(session, {
         PermissionRequest: {
           id: "p1",
           tool: "bash",
@@ -511,12 +511,12 @@ describe("DaemonStore wire protocol", () => {
       });
     });
 
-    it("routes envoy UserQuestionRequest replies with parent_call_id", () => {
+    it("routes runner UserQuestionRequest replies with parent_call_id", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
       roundEvent(session, { ToolCall: { id: "call-1", name: "task", arguments: "{}" } });
-      envoyEvent(session, {
+      runnerEvent(session, {
         UserQuestionRequest: {
           id: "q1",
           questions: [{ question: "?", options: [{ label: "a" }], multi_select: false }],
@@ -533,12 +533,12 @@ describe("DaemonStore wire protocol", () => {
       });
     });
 
-    it("routes envoy InputRequest replies with parent_call_id", () => {
+    it("routes runner InputRequest replies with parent_call_id", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
       roundEvent(session, { ToolCall: { id: "call-1", name: "task", arguments: "{}" } });
-      envoyEvent(session, {
+      runnerEvent(session, {
         InputRequest: { id: "i1", command: "sudo x", prompt: "password", secret: true },
       });
       expect(store.pendingInput?.request.id).toBe("i1");

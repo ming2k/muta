@@ -1,39 +1,39 @@
-//! Envoy profiles: declarative tool-permission roles for autonomous
-//! envoys spawned by the `task` tool (and wrappers like
+//! Runner profiles: declarative tool-permission roles for autonomous
+//! runners spawned by the `task` tool (and wrappers like
 //! `verify_plan_execution`).
 //!
 //! ## Why this exists
 //!
-//! Before ADR-0011 the envoy's toolset was a hardcoded filter inside
+//! Before ADR-0011 the runner's toolset was a hardcoded filter inside
 //! the dispatch tool (`access() == Read` plus a name exclusion for itself).
 //! That had two problems:
 //!
 //! 1. **It was name-driven, not semantic.** `ask_user` is `Read`, so it
-//!    passed the filter and reached the envoy. But an envoy is
+//!    passed the filter and reached the runner. But an runner is
 //!    autonomous and non-interactive — its `UserQuestionRequest` events are
-//!    dropped by the envoy tool's event forwarder, so the request deadlocks
+//!    dropped by the runner tool's event forwarder, so the request deadlocks
 //!    until the parent turn is cancelled. The user could see the call but
 //!    could not answer it.
 //! 2. **The policy was buried in orchestration code.** Adding a second
-//!    envoy role (or tightening the existing one) meant editing the
+//!    runner role (or tightening the existing one) meant editing the
 //!    dispatch tool rather than declaring intent.
 //!
 //! The fix is a profile primitive that expresses the tool policy in terms of
 //! [`Tool`] capability axes — [`Tool::scope_target`], [`Tool::requires_user`],
-//! [`Tool::spawns_envoy`] — so admission is data-driven and generalizes to
+//! [`Tool::spawns_runner`] — so admission is data-driven and generalizes to
 //! future tools without touching the dispatch path.
 //!
 //! ## The capability axes
 //!
 //! - [`Tool::scope_target`] — what the call touches (`Read` vs `Write` path). Existing.
 //! - [`Tool::requires_user`] — may block on a live human (e.g. `ask_user`).
-//! - [`Tool::spawns_envoy`] — dispatches a nested agent (e.g. `task`).
+//! - [`Tool::spawns_runner`] — dispatches a nested agent (e.g. `task`).
 //!
-//! Recursion is unconditionally forbidden in any envoy: a tool that
-//! `spawns_envoy` is never admitted, regardless of profile. User
+//! Recursion is unconditionally forbidden in any runner: a tool that
+//! `spawns_runner` is never admitted, regardless of profile. User
 //! interaction is a per-profile knob ([`ToolPolicy::allow_user_interaction`])
 //! so a future interactive role could opt in once the plumbing surfaces the
-//! request; the built-in [`EXPLORE`] profile leaves it off.
+//! request; the built-in [`RUNNER_EXPLORE`] profile leaves it off.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -41,60 +41,60 @@ use std::sync::Arc;
 use crate::model::Model;
 use crate::{CommandScope, OperationScope, Tool, ToolScope, ToolSelection, ToolSet};
 
-/// Ceiling on what an envoy may do. There is no capability ladder — a tool is
-/// admitted purely by name. [`Tool::spawns_envoy`] and
+/// Ceiling on what an runner may do. There is no capability ladder — a tool is
+/// admitted purely by name. [`Tool::spawns_runner`] and
 /// [`Tool::affects_control_flow`] tools are always excluded (recursion and
 /// program teardown are absolute, not per-profile toggles). See ADR-0011/0028.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolPolicy {
-    /// Which tools an envoy under this policy may use, by name. `None` admits
+    /// Which tools an runner under this policy may use, by name. `None` admits
     /// the full parent toolset (the main agent's shape); `Some(set)` admits only
     /// tools whose `name()` is in the set. This is the sole admission axis —
     /// there is no capability ladder, so adding a new side-effecting tool to the
-    /// parent does *not* silently widen an envoy unless its name is listed.
+    /// parent does *not* silently widen an runner unless its name is listed.
     pub allowed_tools: Option<&'static [&'static str]>,
     /// Whether tools that block on a human ([`Tool::requires_user`]) may run.
     pub allow_user_interaction: bool,
     /// Declarative write grant: directory specs (relative or absolute) a
-    /// envoy under this policy may write to. Empty (the default) leaves write
+    /// runner under this policy may write to. Empty (the default) leaves write
     /// paths unconstrained; set to e.g. `&["./src"]` to confine writes there. At
-    /// spawn, [`EnvoyProfile::resolve_operation_scope`] canonicalizes these
+    /// spawn, [`RunnerPreset::resolve_operation_scope`] canonicalizes these
     /// against the cwd into a runtime path constraint the agent enforces. See
     /// ADR-0028.
     pub write_paths: &'static [&'static str],
-    /// Declarative command grant: program-name prefixes an envoy under this
+    /// Declarative command grant: program-name prefixes an runner under this
     /// policy may run via `bash`. Empty (the default) means "no command
     /// constraint" — any command is allowed up to the broker. Set to e.g.
-    /// `&["git", "cargo"]` to restrict the envoy to those programs. Resolved
-    /// at spawn by [`EnvoyProfile::resolve_operation_scope`] into a
+    /// `&["git", "cargo"]` to restrict the runner to those programs. Resolved
+    /// at spawn by [`RunnerPreset::resolve_operation_scope`] into a
     /// [`CommandScope`].
     pub command_allowlist: &'static [&'static str],
 }
 
 impl ToolPolicy {
-    /// Returns `true` if a tool may be handed to an envoy under this policy.
+    /// Returns `true` if a tool may be handed to an runner under this policy.
     /// Combines the **name scope** ([`allowed_tools`](Self::allowed_tools)) with
     /// the **runtime hard rules** ([`admits_runtime`](Self::admits_runtime)).
     pub fn admits(&self, tool: &dyn Tool) -> bool {
         self.admits_runtime(tool) && self.scope().admits(tool.name())
     }
 
-    /// The envoy hard rules that are independent of the name whitelist:
-    /// recursion ([`Tool::spawns_envoy`]) and program teardown
+    /// The runner hard rules that are independent of the name whitelist:
+    /// recursion ([`Tool::spawns_runner`]) and program teardown
     /// ([`Tool::affects_control_flow`]) are absolute, and human-blocking tools
     /// ([`Tool::requires_user`]) are gated by
     /// [`allow_user_interaction`](Self::allow_user_interaction). These are not
     /// expressible as a capability *name* scope, so the pool resolver (which
     /// handles name scope + the model-capability filter) cannot apply them — the
-    /// envoy resolution applies this as a post-filter. See
-    /// [`EnvoyProfile::resolve_tools`].
+    /// runner resolution applies this as a post-filter. See
+    /// [`RunnerPreset::resolve_tools`].
     pub fn admits_runtime(&self, tool: &dyn Tool) -> bool {
-        // Recursion is unconditionally forbidden in envoys.
-        if tool.spawns_envoy() {
+        // Recursion is unconditionally forbidden in runners.
+        if tool.spawns_runner() {
             return false;
         }
         // Control-flow tools (e.g. the abort/exit escape hatch) are
-        // unconditionally forbidden in envoys — a spawned agent must never
+        // unconditionally forbidden in runners — a spawned agent must never
         // be able to tear down the whole program.
         if tool.affects_control_flow() {
             return false;
@@ -118,14 +118,14 @@ impl ToolPolicy {
     }
 }
 
-/// A declarative envoy role: a name, the system-prompt fragment that
+/// A declarative runner role: a name, the system-prompt fragment that
 /// frames the role, and the [`ToolPolicy`] that scopes what it may touch.
 ///
 /// Profiles live in `muta-contracts` (domain vocabulary) so dispatch tools in
 /// `muta-agent` resolve them without re-implementing admission logic. The
-/// built-in [`EXPLORE`] profile is what `task` binds to today.
+/// built-in [`RUNNER_EXPLORE`] profile is what `task` binds to today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EnvoyProfile {
+pub struct RunnerPreset {
     pub name: &'static str,
     pub system_prompt: &'static str,
     pub tool_policy: ToolPolicy,
@@ -137,8 +137,8 @@ pub struct EnvoyProfile {
     /// *down* by the model's hard capability limit if the pinned variant is
     /// unusable. See [`ToolSet::resolve_for`].
     pub variant_pins: &'static [(&'static str, &'static str)],
-    /// Whether the spawned envoy runs **autopilot**: without human
-    /// intervention — no permission confirmations, no questions, the envoy
+    /// Whether the spawned runner runs **autopilot**: without human
+    /// intervention — no permission confirmations, no questions, the runner
     /// proceeds on its own authority. Concretely this bypasses the permission
     /// broker, but the intent is broader autonomy, not just prompt-skipping.
     /// Full-duplex (ADR-0029): the built-in profiles keep this `true` to
@@ -147,21 +147,21 @@ pub struct EnvoyProfile {
     /// historically had no path to answer it). Now that the up-direction
     /// (forwarding) and down-direction (registry → handle →
     /// `reply_permission`) are wired, a future interactive profile can set
-    /// this `false` so an envoy's tool calls prompt the user through the
+    /// this `false` so an runner's tool calls prompt the user through the
     /// same modal a top-level call uses, and the reply routes back down.
     pub autopilot: bool,
-    /// Whether an envoy spawned under this profile may have the **model**
+    /// Whether an runner spawned under this profile may have the **model**
     /// supply stdin bytes for a `bash` call it emits (the opt-in automatic-
     /// flow path). Default `false` for every built-in profile: autonomous
-    /// envoys run non-interactively (the L1 hard floor + L2 idle watchdog
+    /// runners run non-interactively (the L1 hard floor + L2 idle watchdog
     /// keep them from hanging); a profile aimed at autopilot CI/batch flows
     /// where no human is reachable can set this `true` so the model can feed
     /// a command's stdin directly. Without it, stdin is structurally
-    /// unreachable from the model's arguments even inside an envoy.
+    /// unreachable from the model's arguments even inside an runner.
     pub allow_model_stdin: bool,
 }
 
-impl EnvoyProfile {
+impl RunnerPreset {
     /// This profile's [`ToolSelection`] — the agent-identity selector it hands
     /// the pool: the capability **name scope** from its [`ToolPolicy`], plus its
     /// own variant pins (the **override** axis, agent side). Built-in profiles
@@ -179,14 +179,14 @@ impl EnvoyProfile {
         }
     }
 
-    /// Resolve the pool down to the toolset a spawned envoy on `model` actually
-    /// gets. This is the envoy's whole admission story in one call:
+    /// Resolve the pool down to the toolset a spawned runner on `model` actually
+    /// gets. This is the runner's whole admission story in one call:
     ///
     /// 1. [`ToolSet::resolve_for`] composes this profile's [`selection`](Self::selection)
     ///    with the model's selection (`model_sel`) — scope by intersection,
     ///    variants by agent-over-model precedence, the model's capability limits
     ///    applied hard.
-    /// 2. The envoy **runtime hard rules** ([`ToolPolicy::admits_runtime`]) are
+    /// 2. The runner **runtime hard rules** ([`ToolPolicy::admits_runtime`]) are
     ///    applied as a post-filter: recursion, control-flow, and (unless the
     ///    profile opts in) human-blocking tools are stripped regardless of name.
     ///
@@ -252,7 +252,7 @@ impl EnvoyProfile {
     }
 }
 
-/// Tools a read-only envoy (EXPLORE / REVIEW / TITLE) may use: pure
+/// Tools a read-only runner (RUNNER_EXPLORE / REVIEW / RUNNER_TITLE) may use: pure
 /// inspection with no side effects. Listed by name so adding a new
 /// side-effecting tool to the parent never silently widens these profiles.
 const READ_ONLY_TOOLS: &[&str] = &[
@@ -270,10 +270,10 @@ const READ_ONLY_TOOLS: &[&str] = &[
 /// Read-only, non-interactive, non-recursive. This is the profile the `task`
 /// tool binds to; declaring additional profiles (and exposing a role selector
 /// on `task`) is a future extension that needs no changes here.
-pub const EXPLORE: EnvoyProfile = EnvoyProfile {
+pub const RUNNER_EXPLORE: RunnerPreset = RunnerPreset {
     name: "explore",
     system_prompt: "\
-You are a focused research envoy. Your single job is to answer the assigned \
+You are a focused research runner. Your single job is to answer the assigned \
 task accurately and concisely. Explore the workspace or the web as needed, \
 then write a clear, complete final answer with the key findings (file paths, \
 signatures, relevant snippets, conclusions). The toolset handed to you is the \
@@ -298,11 +298,11 @@ handful of turns, then answer.",
 /// all. The runner (`Agent::generate_title`) makes a single `provider.chat()`
 /// framed by this prompt and normalizes the reply via `clean_title`. Declared as
 /// a profile (not an ad-hoc call) so the capability-axis vocabulary stays the
-/// single source of truth for what a bounded envoy may do, per ADR-0011.
-pub const TITLE: EnvoyProfile = EnvoyProfile {
+/// single source of truth for what a bounded runner may do, per ADR-0011.
+pub const RUNNER_TITLE: RunnerPreset = RunnerPreset {
     name: "title",
     system_prompt: "\
-You are a session-titling envoy. You are shown an excerpt of a conversation \
+You are a session-titling runner. You are shown an excerpt of a conversation \
 and asked for a short title that captures what the session is about. Reply with \
 only the title — 3 to 7 words, plain text, no quotes, no markdown, no trailing \
 punctuation, no preamble. Name the concrete subject of the work (a feature, \
@@ -319,16 +319,16 @@ the title in the same language as the conversation.",
     allow_model_stdin: false,
 };
 
-/// Tools a coding envoy may use: the generic read-only inspection tools
-/// (shared with [`EXPLORE`]) plus the workspace-mutating tools — `bash` for
+/// Tools a coding runner may use: the generic read-only inspection tools
+/// (shared with [`RUNNER_EXPLORE`]) plus the workspace-mutating tools — `bash` for
 /// running builds/tests/git, `edit_file` and `write_file` for code, and the
 /// `todo*` pair so a long delegation can track its own progress. Listed by
 /// name so adding a new side-effecting tool to the parent never silently
-/// widens this profile — the only tools a CODE envoy can touch are the ones
-/// enumerated here. Recursion (`envoy`) and control-flow escapes are excluded
+/// widens this profile — the only tools a RUNNER_CODE runner can touch are the ones
+/// enumerated here. Recursion (`runner`) and control-flow escapes are excluded
 /// absolutely by [`ToolPolicy::admits_runtime`], independent of this list.
 const CODING_TOOLS: &[&str] = &[
-    // Generic read-only inspection (shared with EXPLORE).
+    // Generic read-only inspection (shared with RUNNER_EXPLORE).
     "read_text",
     "read_image",
     "find_files",
@@ -340,25 +340,25 @@ const CODING_TOOLS: &[&str] = &[
     "bash",
     "edit_file",
     "write_file",
-    // Self-contained task tracking (the envoy's own todo list, not the
+    // Self-contained task tracking (the runner's own todo list, not the
     // parent's).
     "todo",
     "todo_update",
 ];
 
-/// The coding envoy role. Unlike [`EXPLORE`] (read-only, autonomous), this is
+/// The coding runner role. Unlike [`RUNNER_EXPLORE`] (read-only, autonomous), this is
 /// a **write-capable** sub-agent: it can edit files and run commands to
 /// implement a delegated task end-to-end, then hand back a technically
 /// complete summary. It is the analogue of kimi-code's `coder` subagent.
 ///
-/// Like every built-in envoy, the role is **autonomous** (`autopilot: true`):
-/// the principal's act of delegating a task via the `envoy_code` tool *is* the
+/// Like every built-in runner, the role is **autonomous** (`autopilot: true`):
+/// the principal's act of delegating a task via the `runner_code` tool *is* the
 /// authorization — the child runs its writes and commands on its own authority,
 /// without routing each one back through the permission broker. The broker
 /// (the TUI permission sheet, `/permissions`, the `Always` allowlist) is the
-/// principal's gate, not the envoy's: it gates the top-level call that spawns
-/// the envoy, and the principal stays accountable for the result via the
-/// envoy's final handoff. See ADR-0087.
+/// principal's gate, not the runner's: it gates the top-level call that spawns
+/// the runner, and the principal stays accountable for the result via the
+/// runner's final handoff. See ADR-0087.
 /// - `allow_user_interaction: true` admits `ask_user` (and any future
 ///   approval-gated tool), so an ambiguous requirement can be surfaced rather
 ///   than guessed; that path still uses the full-duplex channel
@@ -368,15 +368,15 @@ const CODING_TOOLS: &[&str] = &[
 ///
 /// ADR-0086 originally shipped this profile with `autopilot: false` (every
 /// write/command user-approved); ADR-0087 reverses that to keep the
-/// delegation-as-authorization contract uniform across envoys.
+/// delegation-as-authorization contract uniform across runners.
 ///
 /// This is the built-in profile with side effects that a dispatch tool can bind to
 /// for delegated *implementation* work. The read-only research contract of
-/// [`EXPLORE`] is untouched.
-pub const CODE: EnvoyProfile = EnvoyProfile {
+/// [`RUNNER_EXPLORE`] is untouched.
+pub const RUNNER_CODE: RunnerPreset = RunnerPreset {
     name: "code",
     system_prompt: "\
-You are a coding envoy. You are delegated a well-scoped software-engineering \
+You are a coding runner. You are delegated a well-scoped software-engineering \
 task: implement the change end to end. Read the relevant code first, then edit \
 files and run commands (builds, tests, git) to land the change and verify it. \
 Prefer the narrowest change that satisfies the task, and run commands only \
@@ -401,11 +401,11 @@ of turns, then answer.",
     allow_model_stdin: false,
 };
 
-/// The MCP specialist envoy role for running external and dynamic MCP tools in an isolated sandbox (ADR-0138).
-pub const MCP_SPECIALIST: EnvoyProfile = EnvoyProfile {
+/// The MCP specialist runner role for running external and dynamic MCP tools in an isolated sandbox (ADR-0138).
+pub const RUNNER_MCP_SPECIALIST: RunnerPreset = RunnerPreset {
     name: "mcp_specialist",
     system_prompt: "\
-You are a specialized integration envoy. Your mission is to execute tasks \
+You are a specialized integration runner. Your mission is to execute tasks \
 using external and specialized MCP tools (such as database queries, GitHub operations, \
 or third-party API integrations) in an isolated sandbox. Focus on calling the necessary tools, \
 analyzing the raw outputs, and returning a concise, high-signal summary of the results \
@@ -432,7 +432,7 @@ mod tests {
     struct Stub {
         name: &'static str,
         requires_user: bool,
-        spawns_envoy: bool,
+        spawns_runner: bool,
         affects_control_flow: bool,
     }
 
@@ -450,8 +450,8 @@ mod tests {
         fn requires_user(&self) -> bool {
             self.requires_user
         }
-        fn spawns_envoy(&self) -> bool {
-            self.spawns_envoy
+        fn spawns_runner(&self) -> bool {
+            self.spawns_runner
         }
         fn affects_control_flow(&self) -> bool {
             self.affects_control_flow
@@ -467,7 +467,7 @@ mod tests {
         Stub {
             name,
             requires_user: false,
-            spawns_envoy: false,
+            spawns_runner: false,
             affects_control_flow: false,
         }
     }
@@ -478,7 +478,7 @@ mod tests {
     }
 
     fn with_spawn(mut t: Stub) -> Stub {
-        t.spawns_envoy = true;
+        t.spawns_runner = true;
         t
     }
 
@@ -488,43 +488,43 @@ mod tests {
         Stub {
             name: "control-stub",
             requires_user: false,
-            spawns_envoy: false,
+            spawns_runner: false,
             affects_control_flow: true,
         }
     }
 
     #[test]
     fn explore_admits_a_whitelisted_read_tool() {
-        assert!(EXPLORE.tool_policy.admits(&make("read_text")));
-        assert!(EXPLORE.tool_policy.admits(&make("search_text")));
+        assert!(RUNNER_EXPLORE.tool_policy.admits(&make("read_text")));
+        assert!(RUNNER_EXPLORE.tool_policy.admits(&make("search_text")));
     }
 
     #[test]
     fn explore_rejects_a_non_whitelisted_tool() {
         // write_file is not in READ_ONLY_TOOLS — a research explorer must not
         // mutate files.
-        assert!(!EXPLORE.tool_policy.admits(&make("write_file")));
+        assert!(!RUNNER_EXPLORE.tool_policy.admits(&make("write_file")));
         // bash is also not whitelisted.
-        assert!(!EXPLORE.tool_policy.admits(&make("bash")));
+        assert!(!RUNNER_EXPLORE.tool_policy.admits(&make("bash")));
     }
 
     #[test]
     fn explore_rejects_a_whitelisted_tool_that_requires_user() {
         // ask_user is not whitelisted, but even a whitelisted name is rejected
         // when requires_user is set and the profile disallows interaction.
-        assert!(!EXPLORE.tool_policy.admits(&with_user(make("read_text"))));
+        assert!(!RUNNER_EXPLORE.tool_policy.admits(&with_user(make("read_text"))));
     }
 
     #[test]
     fn explore_rejects_dispatch_tool_even_if_named_like_a_read() {
         // Recursion is absolute: even a whitelisted name is excluded when it
-        // spawns an envoy.
-        assert!(!EXPLORE.tool_policy.admits(&with_spawn(make("read_text"))));
+        // spawns an runner.
+        assert!(!RUNNER_EXPLORE.tool_policy.admits(&with_spawn(make("read_text"))));
     }
 
     #[test]
     fn explore_rejects_control_flow_tool() {
-        assert!(!EXPLORE.tool_policy.admits(&make_control()));
+        assert!(!RUNNER_EXPLORE.tool_policy.admits(&make_control()));
     }
 
     #[test]
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn resolve_tools_applies_scope_and_runtime_rules() {
         // `search_text` is whitelisted → admitted. `bash` is not whitelisted → dropped
-        // by scope. `read_text` is whitelisted *but spawns an envoy* → dropped
+        // by scope. `read_text` is whitelisted *but spawns an runner* → dropped
         // by the runtime recursion rule despite passing the name scope.
         let toolset = ToolSet::from_tools(vec![
             Arc::new(make("search_text")) as Arc<dyn Tool>,
@@ -578,7 +578,7 @@ mod tests {
             Arc::new(with_spawn(make("read_text"))) as Arc<dyn Tool>,
         ]);
         let selected =
-            EXPLORE.resolve_tools(&toolset, &test_model(), &ToolSelection::unrestricted());
+            RUNNER_EXPLORE.resolve_tools(&toolset, &test_model(), &ToolSelection::unrestricted());
         let names: Vec<&str> = selected.iter().map(|t| t.name()).collect();
         assert_eq!(names, vec!["search_text"]);
     }
@@ -596,73 +596,73 @@ mod tests {
         assert!(open.admits(&make("write_file")));
     }
 
-    /// EXPLORE (the research role) excludes unlisted tools (e.g. trading,
+    /// RUNNER_EXPLORE (the research role) excludes unlisted tools (e.g. trading,
     /// write/execute tools). Only explicit READ_ONLY_TOOLS are admitted.
     #[test]
     fn explore_profile_excludes_unlisted_tools() {
-        assert!(!EXPLORE.tool_policy.admits(&make("market_data")));
-        assert!(!EXPLORE.tool_policy.admits(&make("backtest")));
-        assert!(!EXPLORE.tool_policy.admits(&make("place_order")));
-        assert!(!EXPLORE.tool_policy.admits(&make("cancel_order")));
-        assert!(!EXPLORE.tool_policy.admits(&make("list_positions")));
+        assert!(!RUNNER_EXPLORE.tool_policy.admits(&make("market_data")));
+        assert!(!RUNNER_EXPLORE.tool_policy.admits(&make("backtest")));
+        assert!(!RUNNER_EXPLORE.tool_policy.admits(&make("place_order")));
+        assert!(!RUNNER_EXPLORE.tool_policy.admits(&make("cancel_order")));
+        assert!(!RUNNER_EXPLORE.tool_policy.admits(&make("list_positions")));
     }
 
-    /// CODE is the write-capable coding role. It admits the full edit surface
+    /// RUNNER_CODE is the write-capable coding role. It admits the full edit surface
     /// (bash, edit_file, write_file) and the shared read-only tools, but — like
-    /// every envoy — it still excludes recursion and control-flow escapes
+    /// every runner — it still excludes recursion and control-flow escapes
     /// absolutely, and unlisted tools stay out.
     #[test]
     fn code_profile_admits_edit_surface_but_not_recursion_or_unlisted() {
-        use crate::CODE;
+        use crate::RUNNER_CODE;
         // Write/execute surface: admitted.
-        assert!(CODE.tool_policy.admits(&make("bash")));
-        assert!(CODE.tool_policy.admits(&make("edit_file")));
-        assert!(CODE.tool_policy.admits(&make("write_file")));
-        assert!(CODE.tool_policy.admits(&make("todo")));
+        assert!(RUNNER_CODE.tool_policy.admits(&make("bash")));
+        assert!(RUNNER_CODE.tool_policy.admits(&make("edit_file")));
+        assert!(RUNNER_CODE.tool_policy.admits(&make("write_file")));
+        assert!(RUNNER_CODE.tool_policy.admits(&make("todo")));
         // Shared read-only inspection: admitted.
-        assert!(CODE.tool_policy.admits(&make("read_text")));
-        assert!(CODE.tool_policy.admits(&make("search_text")));
+        assert!(RUNNER_CODE.tool_policy.admits(&make("read_text")));
+        assert!(RUNNER_CODE.tool_policy.admits(&make("search_text")));
         // A non-whitelisted tool is excluded (name scope is real — adding a
-        // new tool to the parent never silently widens CODE).
-        assert!(!CODE.tool_policy.admits(&make("some_new_tool")));
-        assert!(!CODE.tool_policy.admits(&make("market_data")));
-        assert!(!CODE.tool_policy.admits(&make("place_order")));
+        // new tool to the parent never silently widens RUNNER_CODE).
+        assert!(!RUNNER_CODE.tool_policy.admits(&make("some_new_tool")));
+        assert!(!RUNNER_CODE.tool_policy.admits(&make("market_data")));
+        assert!(!RUNNER_CODE.tool_policy.admits(&make("place_order")));
         // Recursion and control-flow remain absolute.
-        assert!(!CODE.tool_policy.admits(&with_spawn(make("bash"))));
-        assert!(!CODE.tool_policy.admits(&make_control()));
+        assert!(!RUNNER_CODE.tool_policy.admits(&with_spawn(make("bash"))));
+        assert!(!RUNNER_CODE.tool_policy.admits(&make_control()));
     }
 
-    /// ADR-0087: the principal's act of delegating via `envoy_code` *is* the
-    /// authorization, so CODE runs autonomous like every other built-in
+    /// ADR-0087: the principal's act of delegating via `runner_code` *is* the
+    /// authorization, so RUNNER_CODE runs autonomous like every other built-in
     /// profile — the permission broker is the principal's gate, not the
-    /// envoy's. Pins the value so ADR-0086's `autopilot: false` cannot
+    /// runner's. Pins the value so ADR-0086's `autopilot: false` cannot
     /// silently come back.
-    // The assertion is constant by design: it pins the compiled-in `CODE`
+    // The assertion is constant by design: it pins the compiled-in `RUNNER_CODE`
     // profile value (see the doc comment above), not a computed property.
     #[allow(clippy::assertions_on_constants)]
     #[test]
     fn code_profile_runs_autopilot() {
-        use crate::CODE;
-        assert!(CODE.autopilot);
+        use crate::RUNNER_CODE;
+        assert!(RUNNER_CODE.autopilot);
     }
 
     #[test]
     fn mcp_specialist_profile_admits_dynamic_tools_and_excludes_recursion() {
-        use crate::MCP_SPECIALIST;
-        assert!(MCP_SPECIALIST.autopilot);
+        use crate::RUNNER_MCP_SPECIALIST;
+        assert!(RUNNER_MCP_SPECIALIST.autopilot);
         // Dynamic / external tools admitted
         assert!(
-            MCP_SPECIALIST
+            RUNNER_MCP_SPECIALIST
                 .tool_policy
                 .admits(&make("mcp__postgres__query"))
         );
-        assert!(MCP_SPECIALIST.tool_policy.admits(&make("read_text")));
+        assert!(RUNNER_MCP_SPECIALIST.tool_policy.admits(&make("read_text")));
         // Recursion and control-flow strictly forbidden
         assert!(
-            !MCP_SPECIALIST
+            !RUNNER_MCP_SPECIALIST
                 .tool_policy
                 .admits(&with_spawn(make("read_text")))
         );
-        assert!(!MCP_SPECIALIST.tool_policy.admits(&make_control()));
+        assert!(!RUNNER_MCP_SPECIALIST.tool_policy.admits(&make_control()));
     }
 }

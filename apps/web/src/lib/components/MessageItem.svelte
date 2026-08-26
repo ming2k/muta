@@ -66,9 +66,9 @@
     </div>
 
     {#if message.children && message.children.length > 0}
-      <details class="envoy-children">
-        <summary>envoy transcript ({message.children.length})</summary>
-        <div class="envoy-inner">
+      <details class="runner-children">
+        <summary>runner transcript ({message.children.length})</summary>
+        <div class="runner-inner">
           {#each message.children as child, i (i)}
             <Self message={child} compact={true} />
           {/each}
@@ -188,20 +188,20 @@
     margin: 0;
   }
 
-  .envoy-children {
+  .runner-children {
     margin-top: 8px;
     border-left: 2px solid var(--border-strong);
     padding-left: 10px;
   }
 
-  .envoy-children summary {
+  .runner-children summary {
     font-size: 11px;
     color: var(--text-muted);
     cursor: pointer;
     font-family: var(--font-mono);
   }
 
-  .envoy-inner {
+  .runner-inner {
     padding-top: 6px;
   }
 

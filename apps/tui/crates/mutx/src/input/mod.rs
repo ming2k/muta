@@ -36,8 +36,8 @@ pub struct InputContext {
     /// whether ↑/↓ in the compose zone scroll the details body or the
     /// transcript behind it.
     pub permission_show_details: bool,
-    /// Whether the view is zoomed into an envoy task (focus stack non-empty).
-    pub in_envoy_view: bool,
+    /// Whether the view is zoomed into an runner task (focus stack non-empty).
+    pub in_runner_view: bool,
     /// Whether the view is inside a `/btw` aside view (ADR-0103). Esc
     /// interrupts the viewed aside's round; Ctrl+C detaches to the primary
     /// transcript.
@@ -664,8 +664,8 @@ pub enum InputAction {
         x: u16,
         y: u16,
     },
-    /// Leave the current envoy view and return to the parent.
-    ExitEnvoy,
+    /// Leave the current runner view and return to the parent.
+    ExitRunner,
     /// Detach from the `/btw` aside view and return to the primary transcript
     /// (ADR-0103). Non-destructive: the aside keeps running. Mapped from
     /// Ctrl+C while the aside view is focused.
@@ -699,9 +699,9 @@ pub enum InputAction {
     /// Interrupt the viewed aside's in-flight round (Esc inside an aside
     /// view, ADR-0103 §2). Interrupting never closes the aside.
     InterruptSide,
-    /// Move to the previous sibling envoy task.
+    /// Move to the previous sibling runner task.
     PrevSibling,
-    /// Move to the next sibling envoy task.
+    /// Move to the next sibling runner task.
     NextSibling,
     /// Terminal was resized (SIGWINCH). The event loop forces a redraw and
     /// re-emits `EnableMouseCapture` so the crossterm parser's internal state
@@ -1373,12 +1373,12 @@ pub fn process_event(
                         // job. Takes priority over focus clearing and
                         // completion so the interrupt intent is unambiguous.
                         InputAction::InterruptSide
-                    } else if context.in_envoy_view {
-                        // Envoy zoom: Esc returns to the parent view.
+                    } else if context.in_runner_view {
+                        // Runner zoom: Esc returns to the parent view.
                         // Takes priority over focus clearing so one Esc
                         // always exits the zoom, even if a step inside the
-                        // envoy is keyboard-focused.
-                        InputAction::ExitEnvoy
+                        // runner is keyboard-focused.
+                        InputAction::ExitRunner
                     } else if context.has_focused_target {
                         // A transcript step is focused: Esc clears the focus
                         // and hands every key back to the input box.
@@ -1876,11 +1876,11 @@ pub fn process_event(
                     if context.modal_keymap_open && supports_keymap_page(context.active_modal) {
                         return InputAction::None;
                     }
-                    // Sibling envoy navigation works in both zones (it is a
-                    // envoy view feature, not a typing-navigation thing)
+                    // Sibling runner navigation works in both zones (it is a
+                    // runner view feature, not a typing-navigation thing)
                     // but only when no text is being composed.
                     if context.active_modal == super::Modal::None
-                        && context.in_envoy_view
+                        && context.in_runner_view
                         && input.is_empty()
                     {
                         match c {

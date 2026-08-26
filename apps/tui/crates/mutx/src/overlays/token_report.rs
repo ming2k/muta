@@ -277,7 +277,7 @@ fn list_body(
     // Session-average model output rate: every settled attempt's output
     // tokens divided by the total time the model actually spent generating
     // (excluding tool execution, hooks, and human-decision pauses, but
-    // including any envoy's generation once its output tokens are counted
+    // including any runner's generation once its output tokens are counted
     // too), so this reflects the server's real efficiency rather than how
     // long tools ran or how long the user deliberated. "Output rate" is more
     // honest than "Throughput" — throughput implies end-to-end processing
@@ -504,8 +504,8 @@ fn detail_body(
     body.push(Line::from(""));
     body.push(section_heading("Turns", theme));
 
-    // The table is one flat list of the principal's own attempts, newest-first.
-    // (Envoy sub-conversations are forks — their usage belongs to the fork's own
+    // The table is one flat list of the master's own attempts, newest-first.
+    // (Runner sub-conversations are forks — their usage belongs to the fork's own
     // context, so they are not shown here.) One row per attempt: a single-
     // attempt turn shows a bare ordinal ("1st"); a retried turn shows its later
     // attempts as "<turn> - <attempt>" ("1st - 2nd").
@@ -817,7 +817,7 @@ fn fmt_round_rate(round: &RoundUsage) -> String {
 }
 
 /// Whole-session average output rate across every terminal attempt in the
-/// report, including envoy sub-conversations (symmetrically: their output
+/// report, including runner sub-conversations (symmetrically: their output
 /// tokens and their generation spans both count, so a delegating round is
 /// not inflated). Σ tokens / Σ ms over the *entire* session rather than a
 /// mean of per-round rates, so one long streaming request carries the
@@ -960,7 +960,7 @@ impl RoundUsage {
 
     fn add_record(&mut self, record: &RequestUsageRecord) {
         let actor = record.key.actor_id.clone();
-        let key = (actor != "principal", actor.clone(), record.key.turn);
+        let key = (actor != "master", actor.clone(), record.key.turn);
         let turn = self.turns.entry(key).or_insert_with(|| TurnUsage {
             actor,
             number: record.key.turn,
@@ -982,7 +982,7 @@ impl RoundUsage {
         let number = if turn.turn == 0 {
             self.turns
                 .keys()
-                .filter(|(_, actor, _)| actor == "principal")
+                .filter(|(_, actor, _)| actor == "master")
                 .map(|(_, _, number)| *number)
                 .max()
                 .unwrap_or(0)
@@ -992,9 +992,9 @@ impl RoundUsage {
         };
         let item = self
             .turns
-            .entry((false, "principal".to_string(), number))
+            .entry((false, "master".to_string(), number))
             .or_insert_with(|| TurnUsage {
-                actor: "principal".to_string(),
+                actor: "master".to_string(),
                 number,
                 ..Default::default()
             });
@@ -1049,7 +1049,7 @@ struct TurnUsage {
 impl Default for TurnUsage {
     fn default() -> Self {
         Self {
-            actor: "principal".to_string(),
+            actor: "master".to_string(),
             number: 0,
             totals: UsageTotals::default(),
             attempt_count: 0,
@@ -1081,11 +1081,11 @@ impl TurnUsage {
 /// hierarchy. Lifecycle records are authoritative when present; `turns` is
 /// retained as a fallback for legacy in-memory bookings.
 ///
-/// Only the principal actor's requests are counted here — an `envoy` tool
+/// Only the master actor's requests are counted here — an `runner` tool
 /// call is a forked sub-conversation whose usage belongs to the fork's own
-/// context, not to this main round's usage. So envoy attempts (`actor_id !=
-/// "principal"`) are dropped before aggregation, keeping the round totals,
-/// the round-list table, and the detail table all principal-only.
+/// context, not to this main round's usage. So runner attempts (`actor_id !=
+/// "master"`) are dropped before aggregation, keeping the round totals,
+/// the round-list table, and the detail table all master-only.
 fn usage_rounds(report: &TokenSourceReport) -> Vec<RoundUsage> {
     let mut rounds = BTreeMap::<u64, RoundUsage>::new();
     for row in &report.rows {
@@ -1104,7 +1104,7 @@ fn usage_rounds(report: &TokenSourceReport) -> Vec<RoundUsage> {
             }
         } else {
             for record in &row.requests {
-                if record.key.actor_id != "principal" {
+                if record.key.actor_id != "master" {
                     continue;
                 }
                 rounds
@@ -1123,7 +1123,7 @@ fn usage_rounds(report: &TokenSourceReport) -> Vec<RoundUsage> {
 
 /// One per-attempt row in the flattened detail table: the record plus its turn
 /// and attempt numbers, enough to render a `<turn>` / `<turn> - <attempt>`
-/// label. Principal-only (envoy attempts are filtered upstream in
+/// label. Master-only (runner attempts are filtered upstream in
 /// [`usage_rounds`]).
 #[derive(Debug)]
 struct FlatAttempt<'a> {
@@ -1132,7 +1132,7 @@ struct FlatAttempt<'a> {
     record: &'a RequestUsageRecord,
 }
 
-/// Collect every principal per-attempt record for `round`, newest-first. One
+/// Collect every master per-attempt record for `round`, newest-first. One
 /// row per attempt rather than the aggregated `TurnUsage`, so a retried turn
 /// shows `1st - 2nd` after `1st` instead of a collapsed `1st ×2`.
 fn flat_attempts<'a>(report: &'a TokenSourceReport, round: u64) -> Vec<FlatAttempt<'a>> {
@@ -1140,7 +1140,7 @@ fn flat_attempts<'a>(report: &'a TokenSourceReport, round: u64) -> Vec<FlatAttem
         .rows
         .iter()
         .flat_map(|row| row.requests.iter())
-        .filter(|r| r.key.round == round && r.key.actor_id == "principal")
+        .filter(|r| r.key.round == round && r.key.actor_id == "master")
         .map(|r| FlatAttempt {
             turn: r.key.turn,
             attempt: r.key.attempt,
@@ -1476,7 +1476,7 @@ mod tests {
         // (3rd at index 0).
         let detail = detail_body(&report, 1, 80, &theme);
         let detail_text = body_text(&detail);
-        // The table is flattened: one row per attempt, principal-only. Turn 1
+        // The table is flattened: one row per attempt, master-only. Turn 1
         // was retried (attempt 1 interrupted, attempt 2 completed). A turn's
         // first attempt shows a bare ordinal; later attempts show
         // "<turn> - <attempt>".
@@ -1909,25 +1909,25 @@ mod tests {
         }
     }
 
-    /// Envoy sub-conversations are forks: their usage belongs to the fork's own
-    /// context, so the round usage view is principal-only. Envoy attempts must
+    /// Runner sub-conversations are forks: their usage belongs to the fork's own
+    /// context, so the round usage view is master-only. Runner attempts must
     /// not appear in the detail table, and their tokens must not leak into the
     /// round's totals.
     #[test]
-    fn detail_excludes_envoy_attempts_and_totals() {
+    fn detail_excludes_runner_attempts_and_totals() {
         let theme = Theme::default();
         let ledger = muta_contracts::TokenSourceLedger::new();
 
-        // Principal turns 1 and 2.
+        // Master turns 1 and 2.
         let p1 = ledger.begin_request("session", "relay", "model-a", 2, 1, 0);
         ledger.settle_request(&p1, RequestUsageStatus::Completed, None, 40, 0);
         let p2 = ledger.begin_request("session", "relay", "model-a", 2, 2, 0);
         ledger.settle_request(&p2, RequestUsageStatus::Completed, None, 60, 0);
-        // An envoy sub-turn (turn 1 of the envoy actor) in the same round,
+        // An runner sub-turn (turn 1 of the runner actor) in the same round,
         // with its own token spend that must NOT count toward the round.
         let e1 = ledger.begin_request_for_actor(
             "session",
-            "envoy:call_xyz",
+            "runner:call_xyz",
             "relay",
             "model-a",
             2,
@@ -1940,17 +1940,17 @@ mod tests {
         let detail = detail_body(&report, 0, 80, &theme);
         let detail_text = body_text(&detail);
 
-        // No envoy section, no envoy attempts, no arrow glyph.
-        assert!(!detail_text.contains("Envoy"));
+        // No runner section, no runner attempts, no arrow glyph.
+        assert!(!detail_text.contains("Runner"));
         assert!(!detail_text.contains('↳'));
-        // The envoy's token spend (120) does not appear — the round total is
-        // the principal-only sum (40 + 60 = 100).
+        // The runner's token spend (120) does not appear — the round total is
+        // the master-only sum (40 + 60 = 100).
         assert!(!detail_text.contains("120"));
         assert!(detail_text.contains("100"));
-        // Principal turns are the only rows; newest-first as bare ordinals.
+        // Master turns are the only rows; newest-first as bare ordinals.
         let pos_2nd = detail_text.find("2nd").expect("2nd turn");
         let pos_1st = detail_text.find("1st").expect("1st turn");
-        assert!(pos_2nd < pos_1st, "principal turns newest-first");
+        assert!(pos_2nd < pos_1st, "master turns newest-first");
     }
 
     /// Throughput is shown at three scopes — per attempt (the drill-in's

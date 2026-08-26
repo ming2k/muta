@@ -101,18 +101,48 @@ it does not increment the turn.
 
 ## Parked request protocols
 
-Permission, `ask_user`, and interactive stdin each store a one-shot sender
-under a request id. Their shared settlement rule is exactly once:
+Permission, `ask_user`, and interactive stdin each park a one-shot sender
+under a request id — owned since ADR-0141 by one
+`muta_agent::human_broker::HumanRequestBroker`, not three per-protocol
+maps. Their shared settlement rule is exactly once:
 
 ```text
 requested/parked --> replied | cancelled
 ```
 
-- A permission reply carries once/always/reject.
+- A permission reply carries once/always/reject. A reject settles the whole
+  concurrent permission batch (the caller `join_all`s siblings).
 - A question reply carries one answer array per question. An empty **outer**
-  array is reserved for cancellation.
+  array is reserved for cancellation; a non-empty outer array with empty
+  inner arrays is undefined and refused by the UIs.
 - An interactive-input reply carries text; interrupt/supersession rejects the
   waiter.
+
+### Provenance and the human channel (ADR-0141)
+
+Every settlement carries a source. Only a reply that crossed a client
+connection is `User`; anything the harness generated itself is `Policy` and
+must be labeled as such in the model-visible tool result — a labeled
+recommendation may never masquerade as a human decision.
+
+Whether a request may park at all is decided by the **human channel**:
+each attaching client declares a posture (`Interactive` or `Autonomous`) in
+its `Select` frame; the session folds declarations with OR (one interactive
+watcher suffices); envoys inherit their parent's channel. Parking on the
+user requires an interactive channel:
+
+- **Permission / interactive input** with no interactive channel: fail
+  closed (a missing human cannot grant authority; the command runs with
+  closed stdin).
+- **`ask_user`** with no interactive channel: per
+  `[principal] ask_user_fallback` — `fail_closed` (default) refuses the
+  question and tells the model to resolve the ambiguity itself;
+  `recommended_labeled` answers each question with its first option,
+  prefixed `[answered by policy, not by user]`.
+
+Per-kind metrics (parked / user-replied / cancelled / policy-settled /
+refused / average wait) are kept on the broker for `/metrics` and the
+monitor.
 
 The TUI queue and modal are projections of these waiters. Closing a modal must
 settle or deliberately retain its waiter; it must never only remove the UI

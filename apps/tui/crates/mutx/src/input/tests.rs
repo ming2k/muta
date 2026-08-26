@@ -31,7 +31,7 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -86,7 +86,7 @@ fn enter_with_completion(
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -272,7 +272,7 @@ fn tab_stays_inert_when_no_trigger_text_survives() {
 #[test]
 fn esc_closes_slash_completion_menu() {
     // When a slash completion popup is open, Esc dismisses it rather
-    // than falling through to envoy exit / interrupt / no-op.
+    // than falling through to runner exit / interrupt / no-op.
     let mut input = "/mc".to_string();
     let mut cursor = 3;
     let mut drag = SelectionDrag::default();
@@ -297,7 +297,7 @@ fn esc_closes_slash_completion_menu() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -347,7 +347,7 @@ fn esc_closes_path_completion_menu() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -396,7 +396,7 @@ fn esc_falls_through_when_no_completion_is_open() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -442,7 +442,7 @@ fn typing_in_compose_returns_insert_char() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -488,7 +488,7 @@ fn backspace_in_compose_returns_backspace_action() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -538,7 +538,7 @@ fn backspace_atomically_deletes_an_image_chip() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -588,7 +588,7 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -633,7 +633,7 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -710,7 +710,7 @@ fn enter_shell(input: &mut String) -> InputAction {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -756,7 +756,7 @@ fn escape_returns_from_always_confirmation() {
             has_trigger_text: false,
             permission_confirm_always: true,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -798,7 +798,7 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -843,7 +843,7 @@ fn star_in_models_modal_toggles_model_favorite() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -886,7 +886,7 @@ fn a_in_connections_modal_opens_template_chooser() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -931,7 +931,7 @@ fn enter_in_connections_modal_is_inert_no_activate_concept() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -975,7 +975,7 @@ fn esc_in_models_browse_closes_the_modal() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -1018,7 +1018,7 @@ fn esc_in_connections_browse_closes_the_modal() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -1063,7 +1063,7 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -1108,7 +1108,7 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -1149,7 +1149,7 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
         has_trigger_text: false,
         permission_confirm_always: false,
         permission_show_details: false,
-        in_envoy_view: false,
+        in_runner_view: false,
         in_side_view: false,
         has_focused_target: false,
         has_queued: false,
@@ -1212,7 +1212,7 @@ fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -1250,7 +1250,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
         has_trigger_text: false,
         permission_confirm_always: false,
         permission_show_details: false,
-        in_envoy_view: false,
+        in_runner_view: false,
         in_side_view: false,
         has_focused_target: false,
         has_queued: false,
@@ -1299,7 +1299,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -1320,9 +1320,9 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
     assert_eq!(action, InputAction::None);
 }
 
-fn key_in_view(code: KeyCode, in_envoy_view: bool, input: &mut String) -> InputAction {
+fn key_in_view(code: KeyCode, in_runner_view: bool, input: &mut String) -> InputAction {
     key_in_side_view_with(code, input, move |ctx| {
-        ctx.in_envoy_view = in_envoy_view;
+        ctx.in_runner_view = in_runner_view;
         ctx.in_side_view = false;
     })
 }
@@ -1348,7 +1348,7 @@ fn key_in_side_view_with(
         has_trigger_text: false,
         permission_confirm_always: false,
         permission_show_details: false,
-        in_envoy_view: false,
+        in_runner_view: false,
         in_side_view: true,
         has_focused_target: false,
         has_queued: false,
@@ -1398,7 +1398,7 @@ fn key_with_focus(code: KeyCode) -> InputAction {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: true,
             has_queued: false,
@@ -1468,7 +1468,7 @@ fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -1599,13 +1599,13 @@ fn q_while_focused_inserts_instead_of_quitting() {
 }
 
 #[test]
-fn escape_exits_envoy_view() {
+fn escape_exits_runner_view() {
     let mut input = String::new();
     assert_eq!(
         key_in_view(KeyCode::Esc, true, &mut input),
-        InputAction::ExitEnvoy
+        InputAction::ExitRunner
     );
-    // Outside an envoy view, Esc does nothing when idle (no modal).
+    // Outside an runner view, Esc does nothing when idle (no modal).
     assert_eq!(
         key_in_view(KeyCode::Esc, false, &mut input),
         InputAction::None
@@ -1660,7 +1660,7 @@ fn escape_in_btw_modal_closes_the_modal() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: true,
             has_focused_target: false,
             has_queued: false,
@@ -1706,7 +1706,7 @@ fn enter_in_btw_modal_focuses_the_selected_aside() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: true,
             has_focused_target: false,
             has_queued: false,
@@ -1740,12 +1740,12 @@ fn bracket_keys_cycle_siblings_only_when_typing_is_empty() {
     );
 
     // While typing (non-empty input), the brackets insert as characters,
-    // not navigation, even inside an envoy view.
+    // not navigation, even inside an runner view.
     let mut typing = "x".to_string();
     key_in_view(KeyCode::Char('['), true, &mut typing);
     assert_eq!(typing, "x[");
 
-    // Outside an envoy view, brackets always insert.
+    // Outside an runner view, brackets always insert.
     let mut other = String::new();
     key_in_view(KeyCode::Char(']'), false, &mut other);
     assert_eq!(other, "]");
@@ -1784,7 +1784,7 @@ fn run_key(
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: has_focus,
             has_queued: false,
@@ -2136,7 +2136,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 has_trigger_text: false,
                 permission_confirm_always: false,
                 permission_show_details: false,
-                in_envoy_view: false,
+                in_runner_view: false,
                 in_side_view: false,
                 has_focused_target: false,
                 has_queued: false,
@@ -2833,7 +2833,7 @@ fn run_history_key(
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -2980,7 +2980,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -3021,7 +3021,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -3066,7 +3066,7 @@ fn up_with_queued(has_queued: bool) -> InputAction {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued,
@@ -3132,7 +3132,7 @@ fn compose_key_with_completion(
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -3238,7 +3238,7 @@ fn queue_modal_char(c: char) -> InputAction {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: true,
@@ -3286,7 +3286,7 @@ fn queue_modal_key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> Inp
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: true,
@@ -3376,7 +3376,7 @@ fn up_arrow_in_browse_does_not_recall_queued() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: true,
             has_queued: true,
@@ -3423,7 +3423,7 @@ fn run_paste(
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -3563,7 +3563,7 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -3851,7 +3851,7 @@ fn oauth_key(c: char) -> InputAction {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -3896,7 +3896,7 @@ fn oauth_keycode(code: KeyCode) -> InputAction {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -4026,7 +4026,7 @@ fn mouse_ctx_for(modal: crate::Modal) -> InputContext {
         has_trigger_text: false,
         permission_confirm_always: false,
         permission_show_details: false,
-        in_envoy_view: false,
+        in_runner_view: false,
         in_side_view: false,
         has_focused_target: false,
         has_queued: false,
@@ -4109,7 +4109,7 @@ fn ctrl_x_outside_history_modal_is_a_noop() {
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -4154,7 +4154,7 @@ fn run_history_clear_key(
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -4250,7 +4250,7 @@ fn editor_key(code: KeyCode, editor_field: u8, input: &mut String) -> InputActio
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,
@@ -4327,7 +4327,7 @@ fn compose_key(
             has_trigger_text: false,
             permission_confirm_always: false,
             permission_show_details: false,
-            in_envoy_view: false,
+            in_runner_view: false,
             in_side_view: false,
             has_focused_target: false,
             has_queued: false,

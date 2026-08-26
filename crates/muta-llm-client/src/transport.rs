@@ -332,7 +332,7 @@ mod tests {
         // in `Kind::Decode` (its `map_err(crate::error::decode)`), which is
         // exactly how a cut-off SSE generation surfaces. Before the
         // `is_decode()` arm this classified as terminal, so one truncated
-        // stream killed the whole envoy sub-task with no retry.
+        // stream killed the whole runner sub-task with no retry.
         use std::io::Write;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

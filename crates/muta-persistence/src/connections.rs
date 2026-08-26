@@ -1,6 +1,6 @@
 //! Connections — the persisted "who I connect to" records.
 //!
-//! A connection is the **security principal** of provider connectivity: it
+//! A connection is the **security master** of provider connectivity: it
 //! declares which preset (if any) it is created from, how it authenticates,
 //! its client identity (impersonation / User-Agent), and — for pure-custom
 //! connections with no preset — the transport/endpoint and model ids it serves.

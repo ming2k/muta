@@ -4,7 +4,7 @@
 //!
 //! ## Grouping model
 //! A "turn group" is a maximal run of consecutive assistant-side messages
-//! (tool steps, reasoning traces, envoy tasks, assistant text) that share the
+//! (tool steps, reasoning traces, runner tasks, assistant text) that share the
 //! same `(round, turn)` stamp and contain at least one tool-like step. User messages
 //! and notices are *not* grouped and act as group terminators.
 //!

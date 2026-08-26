@@ -1,12 +1,12 @@
 //! Principal profiles: declarative top-level agent roles. The principal-side
-//! mirror of [`crate::envoy::EnvoyProfile`] (ADR-0053).
+//! mirror of [`crate::runner::RunnerPreset`] (ADR-0053).
 //!
 //! ## Why this exists
 //!
 //! Before ADR-0053 the principal role was *imperative*: `muta`'s
 //! `main.rs` hand-assembled the identity, left the capability scope at the
 //! constructor default, left the write/command boundary unrestricted, and
-//! seeded the runtime knobs from a single `[principal]` config table. There was
+//! seeded the runtime knobs from a single `[master]` config table. There was
 //! no first-class object that *named* a principal role. Meanwhile the envoy
 //! side has been declarative since ADR-0011: a role is a `const EnvoyProfile`,
 //! and `EnvoyTool` binds it.
@@ -14,31 +14,31 @@
 //! That asymmetry meant adding a principal instance (a new binary, a new
 //! persona) duplicated assembly logic instead of binding a profile.
 //!
-//! `PrincipalProfile` closes the gap: a principal role is a value the embedding
-//! binds via `Agent::apply_principal_profile` (re-exported
+//! `MasterPreset` closes the gap: a principal role is a value the embedding
+//! binds via `Agent::apply_master_preset` (re-exported
 //! through the agent crate), exactly as `EnvoyTool` binds an
-//! [`crate::EnvoyProfile`]. Both live in core as vocabulary so the engine stays
+//! [`crate::RunnerPreset`]. Both live in core as vocabulary so the engine stays
 //! role-agnostic and ADR-0042's role taxonomy is declared in one place.
 
-use crate::{AgentIdentity, CommandScope, OperationScope, ToolSelection};
+use crate::{AgentIdentity, CommandScope, OperationScope, ToolScope, ToolSelection};
 
 /// User-tunable principal *runtime* behaviour — the declarative form of the
 /// values `muta`'s `main.rs` used to seed imperatively from the
-/// `[principal]` config table. Mirrors the subset of [`crate::EnvoyProfile`]
+/// `[master]` config table. Mirrors the subset of [`crate::RunnerPreset`]
 /// that concerns execution knobs (hard stop, doom-loop guard, model-stdin)
 /// rather than capability scope, which lives directly on
-/// [`PrincipalProfile::agent_selection`] / [`PrincipalProfile::operation_scope`].
+/// [`MasterPreset::agent_selection`] / [`MasterPreset::operation_scope`].
 ///
 /// Defaults match [`crate::DoomGuardConfig`] / the constructor's built-in values
-/// so a profile with [`PrincipalRuntimeConfig::default`] is a no-op over the
+/// so a profile with [`MasterRuntimeConfig::default`] is a no-op over the
 /// agent constructor's defaults.
 ///
 /// `Copy` because every field is (`DoomGuardConfig` is `Copy`, the two scalars
 /// trivially so) — a profile can be read and re-seeded cheaply.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct PrincipalRuntimeConfig {
+pub struct MasterRuntimeConfig {
     /// Opt-in hard-stop budget: abort a round after this many ReAct turns.
-    /// `0` (the default) means uncapped. Mirrors `[principal] hard_stop_turns`
+    /// `0` (the default) means uncapped. Mirrors `[master] hard_stop_turns`
     /// and `Agent::set_hard_stop_turns`.
     pub hard_stop_turns: usize,
     /// Doom-loop guard config. Mirrors `[principal.doom_guard]` (the
@@ -46,27 +46,27 @@ pub struct PrincipalRuntimeConfig {
     /// `Agent::set_doom_guard_config`. Default disabled.
     pub nudge: crate::DoomGuardConfig,
     /// Whether the model may supply stdin bytes for a `bash` call it emits.
-    /// Mirrors `[principal] allow_model_stdin` and
+    /// Mirrors `[master] allow_model_stdin` and
     /// `Agent::set_allow_model_stdin`. Default `false`.
     pub allow_model_stdin: bool,
     /// Whether an interactive `bash` command skips the inline input panel and
     /// instead runs with stdin closed (fast failure + non-interactive remedy).
-    /// Mirrors `[principal] skip_interactive_input` and
+    /// Mirrors `[master] skip_interactive_input` and
     /// `Agent::set_skip_interactive_input`. Default `false`.
     pub skip_interactive_input: bool,
 }
 
 /// A declarative principal role: an identity, the capability scope it admits,
 /// the write/command boundary it enforces, and its runtime knobs. The
-/// principal-side mirror of [`crate::EnvoyProfile`] (ADR-0053).
+/// principal-side mirror of [`crate::RunnerPreset`] (ADR-0053).
 ///
 /// A profile is a value the embedding binds after constructing the agent via
-/// `Agent::apply_principal_profile` (re-exported through the
+/// `Agent::apply_master_preset` (re-exported through the
 /// agent crate). The built-in coding principal lives in the application layer
-/// (`muta`'s `identity` module, `principal_code()` — ADR-0054); a future
+/// (`muta`'s `identity` module, `master_developer()` — ADR-0054); a future
 /// quant/research/ops principal is another value.
 ///
-/// Unlike [`crate::EnvoyProfile`] (a `Copy` `const` of `&'static` slices), this
+/// Unlike [`crate::RunnerPreset`] (a `Copy` `const` of `&'static` slices), this
 /// owns `String`s / `Vec`s because [`AgentIdentity`] and [`OperationScope`] do.
 /// That is fine — a principal is constructed once at startup, not per-spawn.
 ///
@@ -74,11 +74,11 @@ pub struct PrincipalRuntimeConfig {
 ///
 /// [`AgentIdentity`] feeds the system-prompt preamble and is immutable past the
 /// `Agent` constructor, so it is passed to `Agent::new` / `from_toolset`, not
-/// set by `Agent::apply_principal_profile`. A role whose
+/// set by `Agent::apply_master_preset`. A role whose
 /// identity should differ per instance (side conversations, group chat) composes
 /// the profile with [`Self::with_identity`] before construction.
 #[derive(Debug, Clone)]
-pub struct PrincipalProfile {
+pub struct MasterPreset {
     /// The profile's name, e.g. `"code"`. For logs / pickers / a future
     /// principal registry.
     pub name: &'static str,
@@ -96,13 +96,13 @@ pub struct PrincipalProfile {
     /// open; a sandboxed principal pins `write_paths` / `command_allowlist`.
     pub operation_scope: OperationScope,
     /// Runtime execution knobs (hard stop, doom guard, model stdin).
-    pub config: PrincipalRuntimeConfig,
+    pub config: MasterRuntimeConfig,
     /// Whether this principal runs on autopilot (no human confirmations). Default
     /// `false` — a top-level principal is interactive by contract.
     pub autopilot: bool,
 }
 
-impl PrincipalProfile {
+impl MasterPreset {
     /// Build a profile from an identity with full default scope and attended
     /// behaviour — the common case for a new coding-class principal. Compose
     /// further with the `with_*` builders.
@@ -112,7 +112,7 @@ impl PrincipalProfile {
             identity,
             agent_selection: ToolSelection::unrestricted(),
             operation_scope: OperationScope::unrestricted(),
-            config: PrincipalRuntimeConfig::default(),
+            config: MasterRuntimeConfig::default(),
             autopilot: false,
         }
     }
@@ -130,7 +130,7 @@ impl PrincipalProfile {
     }
 
     /// Attach the runtime knobs. Builder-style.
-    pub fn with_runtime_config(mut self, config: PrincipalRuntimeConfig) -> Self {
+    pub fn with_runtime_config(mut self, config: MasterRuntimeConfig) -> Self {
         self.config = config;
         self
     }
@@ -154,10 +154,10 @@ impl PrincipalProfile {
 /// mission/persona shifts, so a switched role is still recognizably the same
 /// product, just wearing a different hat.
 ///
-/// Use [`PrincipalProfile::for_role`] to materialize a role onto a base
+/// Use [`MasterPreset::for_role`] to materialize a role onto a base
 /// identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrincipalRole {
+pub enum MasterPresetId {
     /// The default coding principal — full capabilities, unrestricted writes,
     /// the product's own mission. Identical in effect to the profile the
     /// embedding binds at startup, so switching back to `code` after another
@@ -177,34 +177,34 @@ pub enum PrincipalRole {
     Security,
 }
 
-impl PrincipalRole {
+impl MasterPresetId {
     /// Every role in its canonical display order, for pickers and `/help`.
-    pub const ALL: &[PrincipalRole] = &[
-        PrincipalRole::Code,
-        PrincipalRole::Architect,
-        PrincipalRole::Reviewer,
-        PrincipalRole::Security,
+    pub const ALL: &[MasterPresetId] = &[
+        MasterPresetId::Code,
+        MasterPresetId::Architect,
+        MasterPresetId::Reviewer,
+        MasterPresetId::Security,
     ];
 
     /// The stable string name used in `@principal:{name}` / `/principal <name>`.
     pub fn as_str(self) -> &'static str {
         match self {
-            PrincipalRole::Code => "code",
-            PrincipalRole::Architect => "architect",
-            PrincipalRole::Reviewer => "reviewer",
-            PrincipalRole::Security => "security",
+            MasterPresetId::Code => "code",
+            MasterPresetId::Architect => "architect",
+            MasterPresetId::Reviewer => "reviewer",
+            MasterPresetId::Security => "security",
         }
     }
 
     /// Parse a role name (case-insensitive). Returns `None` for an unknown
     /// name so the caller can surface a clear "unknown role" error listing
-    /// [`PrincipalRole::ALL`].
+    /// [`MasterPresetId::ALL`].
     pub fn parse(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
-            "code" | "coder" | "default" => Some(PrincipalRole::Code),
-            "architect" | "architecture" => Some(PrincipalRole::Architect),
-            "reviewer" | "review" => Some(PrincipalRole::Reviewer),
-            "security" | "audit" | "auditor" => Some(PrincipalRole::Security),
+            "code" | "coder" | "default" => Some(MasterPresetId::Code),
+            "architect" | "architecture" => Some(MasterPresetId::Architect),
+            "reviewer" | "review" => Some(MasterPresetId::Reviewer),
+            "security" | "audit" | "auditor" => Some(MasterPresetId::Security),
             _ => None,
         }
     }
@@ -212,29 +212,131 @@ impl PrincipalRole {
     /// A short human description of what this role does, for confirmations.
     pub fn description(self) -> &'static str {
         match self {
-            PrincipalRole::Code => "the default coding principal (full capabilities)",
-            PrincipalRole::Architect => "architecture & design focus (analysis-first)",
-            PrincipalRole::Reviewer => "read-only code review",
-            PrincipalRole::Security => "read-only security audit (command-confined)",
+            MasterPresetId::Code => "the default coding principal (full capabilities)",
+            MasterPresetId::Architect => "architecture & design focus (analysis-first)",
+            MasterPresetId::Reviewer => "read-only code review",
+            MasterPresetId::Security => "read-only security audit (command-confined)",
         }
     }
 }
 
-impl PrincipalProfile {
-    /// Materialize a [`PrincipalRole`] onto a product's base [`AgentIdentity`].
+/// The developer master preset: native toolchain authority (ADR-0144 §3).
+///
+/// This is the *default* master — identical in capability to the historical
+/// `Code` principal: unrestricted scope, host `bash`, the full runner
+/// catalog. What it adds over `for_role(Code, …)` is the explicit runner
+/// delegation set, which the master-facing runner dispatch consults to decide
+/// which [`crate::RunnerPreset`]s may be loaded.
+pub const MASTER_DEVELOPER: MasterPresetDelegation = MasterPresetDelegation {
+    preset_id: "developer",
+    // Runner presets a developer master may load: the full catalog, since the
+    // developer owns host execution and may spawn write-capable runners.
+    runner_presets: &[
+        crate::runner::RUNNER_EXPLORE.name,
+        crate::runner::RUNNER_TITLE.name,
+        crate::runner::RUNNER_CODE.name,
+        crate::runner::RUNNER_MCP_SPECIALIST.name,
+    ],
+    // Declared tools: everything (host `bash` included).
+    tool_scope: ToolScope::All,
+};
+
+/// The code-analyst master preset: no native command line (ADR-0144 §3).
+///
+/// The analyst swaps host `bash` for `sandbox_bash`: contained execution good
+/// for `cargo metadata`-class probes and basic functional tests, never host
+/// writes. Its runner delegation is restricted to read-only presets — an
+/// analyst must not be able to spawn a write-capable runner and thereby
+/// regain the write authority its own preset denies.
+pub const MASTER_CODE_ANALYST: MasterPresetDelegation = MasterPresetDelegation {
+    preset_id: "code_analyst",
+    runner_presets: &[crate::runner::RUNNER_EXPLORE.name, crate::runner::RUNNER_TITLE.name],
+    tool_scope: ToolScope::All,
+};
+
+/// The delegation face of a master preset (ADR-0144 §3): which runner
+/// presets it may load, and the tool scope it declares against the pool.
+///
+/// The persona/identity half of a master lives in [`MasterPreset`] (via
+/// [`MasterPreset::for_role`]); this half answers the tier question — *what
+/// may this master delegate downwards* — which the identity object has no
+/// field for. Binding both halves together happens at session assembly.
+#[derive(Debug, Clone)]
+pub struct MasterPresetDelegation {
+    /// Stable id (also the `[master] preset = "…"` config value).
+    pub preset_id: &'static str,
+    /// Runner preset names this master may load, in preference order.
+    pub runner_presets: &'static [&'static str],
+    /// The tool scope this master declares against the pool.
+    pub tool_scope: ToolScope,
+}
+
+impl MasterPresetDelegation {
+    /// Whether a master bound to this preset may load the runner preset
+    /// named `name`.
+    pub fn admits_runner(&self, name: &str) -> bool {
+        self.runner_presets.contains(&name)
+    }
+
+    /// All shipping master delegations, developer first (the default).
+    pub const ALL: &'static [MasterPresetDelegation] =
+        &[MASTER_DEVELOPER, MASTER_CODE_ANALYST];
+
+    /// The code-analyst's tool declaration: the full read/analyze surface
+    /// plus **contained** execution (`sandbox_bash`), minus host `bash`.
+    ///
+    /// `ToolScope::Only` holds a `BTreeSet` and cannot be spelled in a
+    /// `const`, so the flat names live here; [`Self::selection`] builds the
+    /// [`ToolScope`] lazily from them.
+    pub const CODE_ANALYST_TOOLS: &'static [&'static str] = &[
+        "read_text",
+        "find_files",
+        "list_dir",
+        "read_image",
+        "search_text",
+        "sandbox_bash",
+        "edit_file",
+        "write_file",
+        "webfetch",
+        "websearch",
+        "todo",
+        "ask_user",
+    ];
+
+    /// The concrete tool names this preset declares against the pool:
+    /// `None` for [`ToolScope::All`] (the pool's whole catalog), `Some`
+    /// for an explicit list. Introspected by the pool resolver and the UI.
+    pub fn declared_tools(&self) -> Option<&'static [&'static str]> {
+        match self.preset_id {
+            "code_analyst" => Some(Self::CODE_ANALYST_TOOLS),
+            _ => None,
+        }
+    }
+
+    /// The [`ToolSelection`] this preset declares to the pool resolver.
+    pub fn selection(&self) -> ToolSelection {
+        match self.declared_tools() {
+            None => ToolSelection::unrestricted(),
+            Some(names) => ToolSelection::only(names.iter().copied()),
+        }
+    }
+}
+
+impl MasterPreset {
+    /// Materialize a [`MasterPresetId`] onto a product's base [`AgentIdentity`].
     ///
     /// The base identity's `name` is preserved (the agent is still called
     /// "muta"); only the mission — and, for focused roles, a persona
     /// override — shifts to match the role. Capability scope and operation
-    /// boundary narrow per the role's contract (see [`PrincipalRole`]).
+    /// boundary narrow per the role's contract (see [`MasterPresetId`]).
     ///
     /// Runtime config and the attended flag are left at defaults; the live
-    /// `[principal]` config overlay and the current attended setting are not
+    /// `[master]` config overlay and the current attended setting are not
     /// disturbed by a role switch.
-    pub fn for_role(role: PrincipalRole, base: &AgentIdentity) -> Self {
+    pub fn for_role(role: MasterPresetId, base: &AgentIdentity) -> Self {
         match role {
-            PrincipalRole::Code => Self::with_identity("code", base.clone()),
-            PrincipalRole::Architect => {
+            MasterPresetId::Code => Self::with_identity("code", base.clone()),
+            MasterPresetId::Architect => {
                 let identity = AgentIdentity::new(
                     base.name.clone(),
                     "an expert software architect — evaluates design tradeoffs, \
@@ -242,7 +344,7 @@ impl PrincipalProfile {
                 );
                 Self::with_identity("architect", identity)
             }
-            PrincipalRole::Reviewer => {
+            MasterPresetId::Reviewer => {
                 // Read-only inspection tools. `bash` is excluded: a reviewer
                 // reports findings, it does not execute arbitrary commands.
                 let identity = AgentIdentity::new(
@@ -262,7 +364,7 @@ impl PrincipalProfile {
                     "ask_user",
                 ]))
             }
-            PrincipalRole::Security => {
+            MasterPresetId::Security => {
                 // Read-only, plus a confined command allowlist for audit-style
                 // inspection (version control, search, dependency audit).
                 let identity = AgentIdentity::new(
@@ -309,7 +411,7 @@ mod tests {
 
     #[test]
     fn with_identity_is_unrestricted_and_attended() {
-        let p = PrincipalProfile::with_identity("code", AgentIdentity::new("n", "m"));
+        let p = MasterPreset::with_identity("code", AgentIdentity::new("n", "m"));
         assert_eq!(p.name, "code");
         assert!(!p.autopilot);
         // unrestricted selection ⇒ All scope, empty variant pins
@@ -327,9 +429,9 @@ mod tests {
 
     #[test]
     fn builders_override_defaults() {
-        let p = PrincipalProfile::with_identity("ops", AgentIdentity::default())
+        let p = MasterPreset::with_identity("ops", AgentIdentity::default())
             .with_autopilot(true)
-            .with_runtime_config(PrincipalRuntimeConfig {
+            .with_runtime_config(MasterRuntimeConfig {
                 hard_stop_turns: 7,
                 ..Default::default()
             });
@@ -339,36 +441,36 @@ mod tests {
 
     #[test]
     fn runtime_config_is_copy() {
-        let c = PrincipalRuntimeConfig::default();
+        let c = MasterRuntimeConfig::default();
         let _copy = c; // Copy: no move
         let _again = c;
     }
 
     #[test]
     fn role_round_trips_through_parse() {
-        for role in PrincipalRole::ALL {
-            let parsed = PrincipalRole::parse(role.as_str());
+        for role in MasterPresetId::ALL {
+            let parsed = MasterPresetId::parse(role.as_str());
             assert_eq!(parsed, Some(*role), "{} should parse back", role.as_str());
         }
         // Aliases.
-        assert_eq!(PrincipalRole::parse("Coder"), Some(PrincipalRole::Code));
+        assert_eq!(MasterPresetId::parse("Coder"), Some(MasterPresetId::Code));
         assert_eq!(
-            PrincipalRole::parse("REVIEW"),
-            Some(PrincipalRole::Reviewer)
+            MasterPresetId::parse("REVIEW"),
+            Some(MasterPresetId::Reviewer)
         );
         assert_eq!(
-            PrincipalRole::parse("auditor"),
-            Some(PrincipalRole::Security)
+            MasterPresetId::parse("auditor"),
+            Some(MasterPresetId::Security)
         );
         // Unknown.
-        assert!(PrincipalRole::parse("wizard").is_none());
+        assert!(MasterPresetId::parse("wizard").is_none());
     }
 
     #[test]
     fn for_role_preserves_product_name() {
         let base = AgentIdentity::new("muta", "an expert AI coding assistant");
-        for role in PrincipalRole::ALL {
-            let profile = PrincipalProfile::for_role(*role, &base);
+        for role in MasterPresetId::ALL {
+            let profile = MasterPreset::for_role(*role, &base);
             // The product name survives a role switch; only the mission shifts.
             assert_eq!(profile.identity.name, "muta", "{:?} kept the name", role);
             assert!(!profile.identity.mission.is_empty());
@@ -379,7 +481,7 @@ mod tests {
     #[test]
     fn code_role_is_unrestricted_baseline() {
         let base = AgentIdentity::new("muta", "coding assistant");
-        let code = PrincipalProfile::for_role(PrincipalRole::Code, &base);
+        let code = MasterPreset::for_role(MasterPresetId::Code, &base);
         assert_eq!(code.agent_selection.scope, crate::ToolScope::All);
         assert!(code.operation_scope.paths.is_none());
         assert!(code.operation_scope.commands.is_none());
@@ -388,7 +490,7 @@ mod tests {
     #[test]
     fn reviewer_role_is_read_only() {
         let base = AgentIdentity::new("muta", "coding assistant");
-        let reviewer = PrincipalProfile::for_role(PrincipalRole::Reviewer, &base);
+        let reviewer = MasterPreset::for_role(MasterPresetId::Reviewer, &base);
         // Scoped: write/edit/bash are NOT admitted.
         let crate::ToolScope::Only(names) = &reviewer.agent_selection.scope else {
             panic!("reviewer must be scoped, not unrestricted");
@@ -402,7 +504,7 @@ mod tests {
     #[test]
     fn security_role_confines_commands() {
         let base = AgentIdentity::new("muta", "coding assistant");
-        let security = PrincipalProfile::for_role(PrincipalRole::Security, &base);
+        let security = MasterPreset::for_role(MasterPresetId::Security, &base);
         // bash IS admitted (for audit commands) but the command scope narrows it.
         let crate::ToolScope::Only(names) = &security.agent_selection.scope else {
             panic!("security must be scoped");

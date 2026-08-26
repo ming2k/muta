@@ -179,9 +179,9 @@ fn is_coalescible_stream_update(response: &AgentResponse) -> bool {
             event: RoundEvent::StreamDelta(_)
                 | RoundEvent::StreamReasoningDelta(_)
                 | RoundEvent::ToolStream { .. }
-                | RoundEvent::Envoy {
-                    event: muta_contracts::EnvoyEvent::StreamDelta(_)
-                        | muta_contracts::EnvoyEvent::StreamReasoningDelta(_),
+                | RoundEvent::EnvoyCompat {
+                    event: muta_contracts::RunnerEvent::StreamDelta(_)
+                        | muta_contracts::RunnerEvent::StreamReasoningDelta(_),
                     ..
                 },
             ..
@@ -321,13 +321,13 @@ pub async fn run_tui(
     let pending_question_clone = pending_question.clone();
     let pending_input = Arc::new(Mutex::new(VecDeque::<muta_contracts::InputRequest>::new()));
     let pending_input_clone = pending_input.clone();
-    // Full-duplex (ADR-0029): side-tables recording which envoy (by parent
+    // Full-duplex (ADR-0029): side-tables recording which runner (by parent
     // tool-call id) surfaced a given permission / ask_user request, so the
     // modal's reply can be tagged with `parent_call_id` for down-routing.
-    let envoy_permission_parent = Arc::new(Mutex::new(HashMap::<String, String>::new()));
-    let subtask_permission_parent_clone = envoy_permission_parent.clone();
-    let envoy_question_parent = Arc::new(Mutex::new(HashMap::<String, String>::new()));
-    let subtask_question_parent_clone = envoy_question_parent.clone();
+    let runner_permission_parent = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+    let subtask_permission_parent_clone = runner_permission_parent.clone();
+    let runner_question_parent = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+    let subtask_question_parent_clone = runner_question_parent.clone();
     let key_status = Arc::new(Mutex::new(HashMap::<String, bool>::new()));
     let key_status_clone = key_status.clone();
     // Effective `[websearch]` config (presence-only view), fetched when the
@@ -1344,7 +1344,7 @@ pub async fn run_tui(
                         }
                         RoundEvent::ToolCancelled { id, .. } => {
                             // Convergence: an in-flight call was aborted by an
-                            // interrupt. Flip its step (and any nested envoy
+                            // interrupt. Flip its step (and any nested runner
                             // children) to Cancelled so it never stays "running".
                             let mut msgs = buf.write().await;
                             let mut cancelled = false;
@@ -1392,11 +1392,11 @@ pub async fn run_tui(
                                 // have been dropped with an aborted turn.
                             }
                         }
-                        RoundEvent::Envoy {
+                        RoundEvent::EnvoyCompat {
                             parent_call_id,
                             event,
                         } => {
-                            // Full-duplex (ADR-0029): an envoy's permission broker
+                            // Full-duplex (ADR-0029): an runner's permission broker
                             // or `ask_user` request bubbles up nested under this
                             // `parent_call_id`. Surface it in the SAME modal the
                             // top-level path uses (so the user answers it inline) and
@@ -1405,7 +1405,7 @@ pub async fn run_tui(
                             // transcript rendering below for the ordinary
                             // stream/tool-call events.
                             match &event {
-                                muta_contracts::EnvoyEvent::PermissionRequest(req) => {
+                                muta_contracts::RunnerEvent::PermissionRequest(req) => {
                                     subtask_permission_parent_clone
                                         .lock()
                                         .await
@@ -1417,7 +1417,7 @@ pub async fn run_tui(
                                         ir_clone.store(true, Ordering::SeqCst);
                                     }
                                 }
-                                muta_contracts::EnvoyEvent::UserQuestionRequest(req) => {
+                                muta_contracts::RunnerEvent::UserQuestionRequest(req) => {
                                     subtask_question_parent_clone
                                         .lock()
                                         .await
@@ -1437,8 +1437,8 @@ pub async fn run_tui(
                             // height-cache entry.
                             let mut msgs = if matches!(
                                 &event,
-                                muta_contracts::EnvoyEvent::StreamDelta(_)
-                                    | muta_contracts::EnvoyEvent::StreamReasoningDelta(_)
+                                muta_contracts::RunnerEvent::StreamDelta(_)
+                                    | muta_contracts::RunnerEvent::StreamReasoningDelta(_)
                             ) {
                                 buf.write_streaming().await
                             } else {
@@ -1447,15 +1447,15 @@ pub async fn run_tui(
                             let applied = msgs
                                 .iter_mut()
                                 .find(|m| m.is_tool_step() && matches!(&m.kind, crate::model::document::MessageKind::ToolStep { id, .. } if id == &parent_call_id))
-                                .is_some_and(|message| message.push_envoy_event(&event));
+                                .is_some_and(|message| message.push_runner_event(&event));
                             if applied
                                 && matches!(
                                     &event,
-                                    muta_contracts::EnvoyEvent::StreamDelta(_)
-                                        | muta_contracts::EnvoyEvent::StreamReasoningDelta(_)
+                                    muta_contracts::RunnerEvent::StreamDelta(_)
+                                        | muta_contracts::RunnerEvent::StreamReasoningDelta(_)
                                 )
                             {
-                                msgs.record_envoy_event(parent_call_id, event);
+                                msgs.record_runner_event(parent_call_id, event);
                             }
                         }
                         RoundEvent::PermissionRequest(request) => {
@@ -2203,8 +2203,8 @@ pub async fn run_tui(
             dirty,
             dirty_notify,
             completion_signal,
-            envoy_permission_parent,
-            envoy_question_parent,
+            runner_permission_parent,
+            runner_question_parent,
             messages: messages_for_loop,
             side_messages,
             parent_status,

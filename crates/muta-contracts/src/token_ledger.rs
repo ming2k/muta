@@ -75,7 +75,7 @@ pub struct RequestUsageKey {
 }
 
 fn default_request_actor() -> String {
-    "principal".to_string()
+    "master".to_string()
 }
 
 /// One request attempt's lifecycle and token accounting. This is the durable
@@ -364,7 +364,7 @@ impl TokenSourceLedger {
     ) -> RequestUsageKey {
         self.begin_request_for_actor(
             session_id,
-            "principal",
+            "master",
             provider,
             model,
             round,
@@ -705,7 +705,7 @@ impl TokenSourceLedger {
 fn request_display_order(record: &RequestUsageRecord) -> (u64, u8, u32, u32, &str) {
     (
         record.key.round,
-        u8::from(record.key.actor_id != "principal"),
+        u8::from(record.key.actor_id != "master"),
         record.key.turn,
         record.key.attempt,
         record.key.actor_id.as_str(),
@@ -885,7 +885,7 @@ mod tests {
         let ledger = TokenSourceLedger::new();
         let key = RequestUsageKey {
             session_id: "old".to_string(),
-            actor_id: "principal".to_string(),
+            actor_id: "master".to_string(),
             round: 4,
             turn: 2,
             attempt: 1,
@@ -966,7 +966,7 @@ mod tests {
         let poisoned = RequestUsageRecord {
             key: RequestUsageKey {
                 session_id: "old".to_string(),
-                actor_id: "principal".to_string(),
+                actor_id: "master".to_string(),
                 round: 1,
                 turn: 44,
                 attempt: 1,
@@ -993,7 +993,7 @@ mod tests {
         let plausible = RequestUsageRecord {
             key: RequestUsageKey {
                 session_id: "old".to_string(),
-                actor_id: "principal".to_string(),
+                actor_id: "master".to_string(),
                 round: 2,
                 turn: 1,
                 attempt: 1,
@@ -1019,7 +1019,7 @@ mod tests {
         let reported = RequestUsageRecord {
             key: RequestUsageKey {
                 session_id: "old".to_string(),
-                actor_id: "principal".to_string(),
+                actor_id: "master".to_string(),
                 round: 3,
                 turn: 1,
                 attempt: 1,

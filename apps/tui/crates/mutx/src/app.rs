@@ -108,14 +108,14 @@ pub enum RecallQueued {
 /// composition window to, so the owner must be exactly the one text-input
 /// surface the user is typing into — or [`Self::None`] when no such surface
 /// exists (a transcript step has keyboard focus, the view is zoomed into an
-/// envoy task, or a read-only / decision modal is open). In the `None` case
+/// runner task, or a read-only / decision modal is open). In the `None` case
 /// the cursor is hidden so the IME has no stale anchor to bind to, which is
 /// the bug that previously let the IME "drift" when a disclosure was
 /// clicked mid-composition: the caret left the composer but the cursor
 /// stayed visible at its old coordinate.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CaretOwner {
-    /// The live composer (no modal, no envoy zoom, no transcript-step focus).
+    /// The live composer (no modal, no runner zoom, no transcript-step focus).
     Composer,
     /// A modal that renders its own caret (`Modal::owns_caret`).
     Modal,
@@ -141,7 +141,7 @@ pub struct ScrollSnapshot {
     pub follow_bottom: bool,
 }
 
-/// One frame on the focus stack: the envoy task call-id plus the parent
+/// One frame on the focus stack: the runner task call-id plus the parent
 /// view's scroll snapshot, restored verbatim when the frame is popped.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ZoomFrame {
@@ -315,7 +315,7 @@ pub struct App {
     pub sticky_rect: Option<mutx_engine::Rect>,
     /// Screen rect of the activity bar for the current frame, so clicks inside
     /// it open the Activity modal. `None` when no activity bar is shown (idle,
-    /// streaming, envoy view, or chrome hidden).
+    /// streaming, runner view, or chrome hidden).
     pub activity_rect: Option<mutx_engine::Rect>,
     /// Screen rect of the context-meter segment in the hint bar (the
     /// `89.2k (8%)` indicator), so a click on it opens the TokenReport modal.
@@ -355,7 +355,7 @@ pub struct App {
     pub todos_rect: Option<mutx_engine::Rect>,
     /// Screen rect of the persistent queue bar (the one-row outbox summary),
     /// so a click anywhere on it expands the full Queue modal. `None` when the
-    /// bar is hidden (chrome hidden or envoy zoom).
+    /// bar is hidden (chrome hidden or runner zoom).
     pub queue_rect: Option<mutx_engine::Rect>,
     /// Screen rect of the currently-open dismissable overlay modal (the
     /// centered panel, not the full-screen backdrop), so a click that lands
@@ -402,7 +402,7 @@ pub struct App {
     /// manual scroll, and by view resets — the same lifecycle as
     /// [`Self::pin_summary_line`].
     pub scroll_settle_pending: bool,
-    /// Stack of nested zoom frames (envoy tasks). Empty means the root
+    /// Stack of nested zoom frames (runner tasks). Empty means the root
     /// conversation is shown; the top frame is the currently focused view.
     /// Each frame carries the parent's scroll snapshot, restored on exit.
     pub focus_stack: Vec<ZoomFrame>,
@@ -1089,7 +1089,7 @@ impl App {
     }
 
     /// The full-screen view the user stands in (ADR-0141) — the terminal is
-    /// this view. Single source of truth behind `in_envoy_view()` /
+    /// this view. Single source of truth behind `in_runner_view()` /
     /// `in_side_view()`, replacing the bare `focus_stack` emptiness check
     /// and the bare `in_side_view` boolean.
     pub(crate) fn current_view(&self) -> crate::surfaces::View {
@@ -1097,7 +1097,7 @@ impl App {
     }
 
     /// Navigate to a full-screen view, remembering a scoped view
-    /// (`Envoy`/`Side`) so closing the destination returns to it.
+    /// (`Runner`/`Side`) so closing the destination returns to it.
     pub(crate) fn show_view_surface(&mut self, view: crate::surfaces::View) {
         self.surfaces.show_view(view);
     }
@@ -1479,7 +1479,7 @@ impl App {
             // field) owns the caret while this surface is open. This is why
             // `HistorySearch` is deliberately absent from `Modal::owns_caret`.
             if self.active_modal() == Modal::HistorySearch {
-                return if self.in_envoy_view() {
+                return if self.in_runner_view() {
                     CaretOwner::None
                 } else {
                     CaretOwner::Composer
@@ -1526,9 +1526,9 @@ impl App {
             };
         }
         // No modal: the composer owns the caret unless a transcript step has
-        // keyboard focus or we are zoomed into an envoy task (which has no
+        // keyboard focus or we are zoomed into an runner task (which has no
         // input line at all — its footer collapses to zero height).
-        if self.focused_target.is_some() || self.in_envoy_view() {
+        if self.focused_target.is_some() || self.in_runner_view() {
             CaretOwner::None
         } else {
             CaretOwner::Composer
@@ -2330,7 +2330,7 @@ impl App {
                 }
             }
             crate::surfaces::View::Session
-            | crate::surfaces::View::Envoy
+            | crate::surfaces::View::Runner
             | crate::surfaces::View::Side => {}
         }
     }
@@ -2377,14 +2377,14 @@ impl App {
             true
         } else if self.current_view() != crate::surfaces::View::Session {
             // Esc from a full-screen destination returns to the scoped view
-            // it was opened over (envoy/side), else home — not a hard reset,
+            // it was opened over (runner/side), else home — not a hard reset,
             // which would drop the zoom/side return frames.
             let leaving = self.current_view();
             self.surfaces.back_view();
-            // Leaving Envoy/Side via the router must also drop their frame
+            // Leaving Runner/Side via the router must also drop their frame
             // data, or `focus_stack`/`in_side_view` would dangle past the
             // surface that gave them meaning.
-            if leaving == crate::surfaces::View::Envoy {
+            if leaving == crate::surfaces::View::Runner {
                 self.focus_stack.clear();
                 self.reset_view_state();
             }
@@ -2826,7 +2826,7 @@ impl App {
                 InteractiveTarget::thinking(message_idx)
             } else if message.is_provider_retry() {
                 InteractiveTarget::provider_retry(message_idx)
-            } else if message.is_tool_step() || message.is_envoy_task() {
+            } else if message.is_tool_step() || message.is_runner_task() {
                 InteractiveTarget::tool_step(message_idx)
             } else {
                 return targets;
@@ -2873,16 +2873,16 @@ impl App {
         self.drag.cancel();
     }
 
-    /// Whether the view is currently zoomed into an envoy task.
-    /// Whether the view is currently zoomed into an envoy task. Derived
+    /// Whether the view is currently zoomed into an runner task.
+    /// Whether the view is currently zoomed into an runner task. Derived
     /// from the router (ADR-0141), not from zoom-stack emptiness: a
     /// dashboard opened over the zoom keeps the zoom alive underneath.
-    pub fn in_envoy_view(&self) -> bool {
-        self.current_view() == crate::surfaces::View::Envoy
+    pub fn in_runner_view(&self) -> bool {
+        self.current_view() == crate::surfaces::View::Runner
     }
 
     /// The message slice currently in view: the `/btw` side transcript when
-    /// the side view is active (ADR-0017), the focused envoy task's child
+    /// the side view is active (ADR-0017), the focused runner task's child
     /// messages when zoomed, or the root conversation otherwise.
     pub fn focused_messages(&self) -> &[TranscriptMessage] {
         if self.in_side_view {
@@ -2894,10 +2894,10 @@ impl App {
         self.messages
             .iter()
             .find_map(|message| {
-                if message.is_envoy_task()
+                if message.is_runner_task()
                     && message.tool_step_call_id() == Some(frame.call_id.as_str())
                 {
-                    message.envoy_children()
+                    message.runner_children()
                 } else {
                     None
                 }
@@ -2942,10 +2942,10 @@ impl App {
         }
     }
 
-    /// Zoom into an envoy task's child messages. The zoom frame (call id +
+    /// Zoom into an runner task's child messages. The zoom frame (call id +
     /// saved scroll) stays on `App` as data; the surface is the router's
-    /// [`View::Envoy`](crate::surfaces::View::Envoy) (ADR-0141).
-    pub fn enter_envoy(&mut self, call_id: String) {
+    /// [`View::Runner`](crate::surfaces::View::Runner) (ADR-0141).
+    pub fn enter_runner(&mut self, call_id: String) {
         let saved_scroll = ScrollSnapshot {
             offset: self.scroll,
             follow_bottom: self.follow_bottom,
@@ -2954,22 +2954,22 @@ impl App {
             call_id,
             saved_scroll,
         });
-        if self.current_view() != crate::surfaces::View::Envoy {
-            self.surfaces.show_view(crate::surfaces::View::Envoy);
+        if self.current_view() != crate::surfaces::View::Runner {
+            self.surfaces.show_view(crate::surfaces::View::Runner);
         }
         self.reset_view_state();
     }
 
-    /// Return from the current envoy view to its parent. Returns true if a
+    /// Return from the current runner view to its parent. Returns true if a
     /// view was actually popped. When the last frame pops, the surface
-    /// leaves `View::Envoy` through the router's return path (which also
+    /// leaves `View::Runner` through the router's return path (which also
     /// drains a destination view opened over the zoom, e.g. the dashboard).
-    pub fn exit_envoy(&mut self) -> bool {
+    pub fn exit_runner(&mut self) -> bool {
         if let Some(frame) = self.focus_stack.pop() {
             self.reset_view_state();
             self.scroll = frame.saved_scroll.offset;
             self.follow_bottom = frame.saved_scroll.follow_bottom;
-            if self.focus_stack.is_empty() && self.in_envoy_view() {
+            if self.focus_stack.is_empty() && self.in_runner_view() {
                 self.surfaces.back_view();
             }
             true
@@ -2982,7 +2982,7 @@ impl App {
     /// ([`App::side_messages`]) becomes the viewed stream and the aside page
     /// header reports the primary session's coarse status. The buffer itself
     /// was already back-filled from `SideViewOpened`'s payload by the
-    /// listener (ADR-0103 §6), so entering never clears it. Reuses the envoy
+    /// listener (ADR-0103 §6), so entering never clears it. Reuses the runner
     /// zoom's `reset_view_state` so the swap feels identical to focusing a
     /// task step.
     pub fn enter_side_view(&mut self, side_id: String) {
@@ -3079,8 +3079,8 @@ impl App {
         self.current_turn = chrome.current_turn;
     }
 
-    /// Cycle to the previous (`dir < 0`) or next (`dir > 0`) sibling envoy
-    /// task at the current focus level. No-op when not in an envoy view or
+    /// Cycle to the previous (`dir < 0`) or next (`dir > 0`) sibling runner
+    /// task at the current focus level. No-op when not in an runner view or
     /// when there are no siblings.
     pub fn cycle_sibling(&mut self, dir: i8) {
         let Some(current) = self.focus_stack.last() else {
@@ -3091,7 +3091,7 @@ impl App {
             .messages
             .iter()
             .filter_map(|message| {
-                if message.is_envoy_task() {
+                if message.is_runner_task() {
                     message.tool_step_call_id().map(String::from)
                 } else {
                     None

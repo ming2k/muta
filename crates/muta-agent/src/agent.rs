@@ -1,49 +1,50 @@
 use super::*;
+use muta_contracts::human_request::{AutonomousFallbackPolicy, HumanChannelPosture, HumanReply, HumanRequestKind};
 
 use futures::future::BoxFuture;
 
-/// Role-reanchoring note appended to a successful envoy's tool-result text in
-/// the principal's transcript. Counters "role bleed": after a run of read-only
-/// delegations the model may over-generalize the envoy's read-only framing onto
-/// the principal itself. The note pins the boundary explicitly and
+/// Role-reanchoring note appended to a successful runner's tool-result text in
+/// the master's transcript. Counters "role bleed": after a run of read-only
+/// delegations the model may over-generalize the runner's read-only framing onto
+/// the master itself. The note pins the boundary explicitly and
 /// unconditionally — it does not rely on a `[hooks]` entry, so the guarantee is
 /// structural.
 const ENVOY_REANCHOR_OK: &str = "\
-[system] The read-only / toolset-scoped framing above applies to the envoy only. \
-You (the principal agent) retain your full toolset — including write and edit tools \
+[system] The read-only / toolset-scoped framing above applies to the runner only. \
+You (the master agent) retain your full toolset — including write and edit tools \
 and the shell — across this delegation. Perform any edits or writes yourself; the \
-envoy cannot.";
+runner cannot.";
 
-/// Same role-reanchoring for a *failed* envoy. Reaffirms the boundary and nudges
-/// the principal toward acting directly rather than re-delegating a failing
+/// Same role-reanchoring for a *failed* runner. Reaffirms the boundary and nudges
+/// the master toward acting directly rather than re-delegating a failing
 /// sub-task.
 const ENVOY_REANCHOR_FAILED: &str = "\
-[system] That envoy could not complete its sub-task. Its read-only / toolset-scoped \
-framing does not transfer to you: you (the principal agent) retain your full toolset \
+[system] That runner could not complete its sub-task. Its read-only / toolset-scoped \
+framing does not transfer to you: you (the master agent) retain your full toolset \
 — including write and edit tools and the shell. Act directly on the findings above, \
 or re-delegate with a narrower scope.";
 
-/// Same role-reanchoring for an *interrupted* envoy: stopped by the user, not
-/// failed. The partial findings above are real work; the principal may continue
+/// Same role-reanchoring for an *interrupted* runner: stopped by the user, not
+/// failed. The partial findings above are real work; the master may continue
 /// them directly or re-delegate, and stays accountable for the outcome.
 const ENVOY_REANCHOR_INTERRUPTED: &str = "\
-[system] That envoy was interrupted mid-task (stopped by the user before it finished). \
+[system] That runner was interrupted mid-task (stopped by the user before it finished). \
 Its partial findings above are real work, and its read-only / toolset-scoped framing \
-does not transfer to you: you (the principal agent) retain your full toolset — \
+does not transfer to you: you (the master agent) retain your full toolset — \
 including write and edit tools and the shell. Continue the work directly from where \
 it stopped, or re-delegate with a narrower scope.";
 
-/// Build the model-visible text for an envoy tool result: the envoy's summary
+/// Build the model-visible text for an runner tool result: the runner's summary
 /// wrapped in the standard `[<tool> result]:` header, followed by a
 /// deterministic role-reanchoring note (`ENVOY_REANCHOR_OK` on success,
 /// `ENVOY_REANCHOR_FAILED` on `failed`, `ENVOY_REANCHOR_INTERRUPTED` on
 /// `interrupted`). This is the single choke point where
-/// an envoy's read-only framing enters the principal's transcript, so the
+/// an runner's read-only framing enters the master's transcript, so the
 /// re-anchor is applied here unconditionally — it cannot be forgotten by a
 /// missing `[hooks]` config. Extracted from [`Agent::record_tool_result`] so the
 /// contract (the anchor is present, and its tone tracks the failure flag) is
 /// unit-testable without a full `Agent` fixture.
-pub(crate) fn envoy_result_text(
+pub(crate) fn runner_result_text(
     name: &str,
     summary: &str,
     failed: bool,
@@ -132,19 +133,9 @@ pub use muta_contracts::RequestTokenEstimate;
 // `muta_agent::AgentIdentity` / `crate::AgentIdentity` references keep
 // resolving unchanged.
 
-#[derive(Default)]
-struct AskUserState {
-    pending: HashMap<String, oneshot::Sender<Option<UserQuestionReply>>>,
-}
-
 /// Parked oneshots for in-flight interactive-input requests (L3.5 β): a
 /// `bash` command classified interactive blocks here until the operator's
 /// [`InputReply`] arrives (or `None` on cancel/turn-end).
-#[derive(Default)]
-struct InputState {
-    pending: HashMap<String, oneshot::Sender<Option<InputReply>>>,
-}
-
 pub struct Agent {
     pub provider: Arc<dyn Provider>,
     /// The full capability set: every tool keyed by capability, with all its
@@ -198,11 +189,9 @@ pub struct Agent {
     /// never re-reads the project config mid-session.
     additional_workspace_roots: Vec<std::path::PathBuf>,
     /// Workspace authority is orthogonal to interaction posture. Shared with
-    /// spawned envoys so delegation cannot silently widen the parent's grant.
+    /// spawned runners so delegation cannot silently widen the parent's grant.
     workspace_security: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
-    ask_user: std::sync::Mutex<AskUserState>,
     /// Parked interactive-input requests (L3.5 β). Mirrors `ask_user`.
-    input: std::sync::Mutex<InputState>,
     pub(crate) skills_registry: skills::SkillRegistry,
     thread_id: Arc<std::sync::Mutex<Option<String>>>,
     accounting_actor_id: std::sync::Mutex<String>,
@@ -214,22 +203,22 @@ pub struct Agent {
     /// Optional mid-turn model-context projection gate.
     context_projection_gate: Arc<std::sync::Mutex<Option<Arc<dyn ContextProjectionGate>>>>,
     /// Opt-in hard-stop budget (ADR-0018): abort a round after this many ReAct
-    /// turns. Seeded from `Config::principal.hard_stop_turns` (default `0`
+    /// turns. Seeded from `Config::master.hard_stop_turns` (default `0`
     /// = uncapped, matching ADR-0009) and mutated at runtime via
     /// `set_hard_stop_turns`. This is the sole execution cap; session review
     /// is on-demand (`/review`) and never aborts a round.
     hard_stop_turns: Arc<std::sync::Mutex<usize>>,
     /// Advanced pre-dispatch doom-loop guard configuration. Default
     /// **disabled** ([`muta_contracts::DoomGuardConfig::default`]); seeded from
-    /// `[principal.doom_guard]` in `config.toml` and forced to
-    /// [`muta_contracts::DoomGuardConfig::disabled`] for envoys and the review
-    /// diagnostic. Held behind an `Arc<RwLock>` because principal-profile
+    /// `[master.doom_guard]` in `config.toml` and forced to
+    /// [`muta_contracts::DoomGuardConfig::disabled`] for runners and the review
+    /// diagnostic. Held behind an `Arc<RwLock>` because master-profile
     /// overlays can replace the configuration atomically; the per-round guard
     /// reads it when `RoundState` is constructed.
     doom_guard_config: Arc<std::sync::RwLock<muta_contracts::DoomGuardConfig>>,
     /// Whether the model may supply stdin bytes for a `bash` call it emits
     /// (the opt-in automatic-flow path, L3.5 α). Default `false`; seeded from
-    /// `[principal] allow_model_stdin`. Lock-free so the dispatch site reads
+    /// `[master] allow_model_stdin`. Lock-free so the dispatch site reads
     /// it without contention. When `false` the bash schema exposes no `stdin`
     /// parameter (structurally unreachable from the model); when `true` it
     /// does, and a model-supplied `stdin` is threaded as
@@ -237,19 +226,37 @@ pub struct Agent {
     allow_model_stdin: Arc<std::sync::atomic::AtomicBool>,
     /// Whether an interactive `bash` command skips the operator input panel
     /// (the L3.5 β path). Default `false`; seeded from
-    /// `[principal] skip_interactive_input`. Lock-free so the dispatch site
+    /// `[master] skip_interactive_input`. Lock-free so the dispatch site
     /// reads it without contention. When `true`, a command the interactive
     /// classifier matches never pops the inline input panel and instead runs
     /// with stdin closed — fast failure + non-interactive remedy, exactly as
-    /// under autopilot mode, but without turning the principal itself
+    /// under autopilot mode, but without turning the master itself
     /// autopilot.
     skip_interactive_input: Arc<std::sync::atomic::AtomicBool>,
+    /// ADR-0141: the single owner of parked human-decision oneshots
+    /// (permission / ask_user / interactive input). The legacy per-protocol
+    /// maps (`ask_user` / `input` / `PermissionState.pending`) are being
+    /// migrated onto it; the wire surface (`reply_user_question`, …) now
+    /// delegates here.
+    human_broker: crate::human_broker::HumanRequestBroker,
+    /// ADR-0141: the human-channel posture for this agent. `Interactive`
+    /// until a client declares otherwise; autonomous contexts (runners with
+    /// `allow_user_interaction: false`, headless no-TTY) read it before
+    /// parking so they can settle by labeled policy instead of deadlocking.
+    human_posture: Arc<std::sync::atomic::AtomicU8>,
+    /// ADR-0141: live channel source when this agent belongs to a hosted
+    /// session. When set, [`Agent::human_posture`] reads the accountant's
+    /// effective OR over attached clients instead of the static flag.
+    human_channel: std::sync::Mutex<Option<std::sync::Arc<muta_contracts::human_request::HumanChannelAccountant>>>,
+    /// ADR-0141: the fallback applied when the posture is Autonomous and a
+    /// tool parks a question. Mirrors `[master] ask_user_fallback`.
+    autonomous_fallback: std::sync::Mutex<AutonomousFallbackPolicy>,
     /// Command-aware safety policy for `bash`. This sits above the ordinary
     /// permission broker so broad approvals such as `bash *` cannot silently
     /// authorize destructive commands like `git reset --hard`.
     bash_policy: std::sync::RwLock<crate::bash_policy::BashPolicy>,
     /// Runtime operation boundary for this agent (ADR-0028). The main agent is
-    /// unrestricted ([`muta_contracts::OperationScope::unrestricted`]); an envoy
+    /// unrestricted ([`muta_contracts::OperationScope::unrestricted`]); an runner
     /// carries the scope resolved from its profile's `write_paths` and
     /// `command_allowlist` grants. Enforced at the `execute_tool` funnel for
     /// every admitted tool whose [`muta_contracts::ScopeTarget`] falls outside the
@@ -257,7 +264,7 @@ pub struct Agent {
     /// prompt.
     operation_scope: std::sync::Mutex<muta_contracts::OperationScope>,
     /// Lifecycle event hooks (ADR-0025). Installed once at startup from the
-    /// `[hooks]` config by the CLI; empty by default (envoys, tests). Read
+    /// `[hooks]` config by the CLI; empty by default (runners, tests). Read
     /// at the PreToolUse / PostToolUse / Stop insertion points. Held as a
     /// swappable `Arc` behind a `Mutex` so [`Agent::set_hooks`] can replace the
     /// whole registry without the insertion points holding the lock across the
@@ -266,8 +273,8 @@ pub struct Agent {
     /// Inbound steering inbox — the down-direction of full-duplex (ADR-0029).
     /// `None` for agents that were never given a handle (the top-level agent
     /// driven directly by the harness, legacy tests); lazily created by
-    /// [`Agent::install_inbox`], which a spawned envoy's dispatcher
-    /// (`EnvoyTool`) calls so the parent can steer it mid-round. The driver loop
+    /// [`Agent::install_inbox`], which a spawned runner's dispatcher
+    /// (`RunnerTool`) calls so the parent can steer it mid-round. The driver loop
     /// `take`s the receiver at round entry and drains it at every ReAct-turn
     /// boundary (see [`Agent::drain_inbox`]). Carries only the
     /// "new-input / control" class ([`AgentOp`]); the request/reply class
@@ -276,8 +283,8 @@ pub struct Agent {
     /// reply must unblock a tool parked mid-round and cannot wait for the loop.
     inbox_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<AgentOp>>>,
     inbox_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<AgentOp>>>,
-    /// Human-authored inserts for the currently running principal/side round.
-    /// This is deliberately separate from the envoy `AgentOp` inbox: submit,
+    /// Human-authored inserts for the currently running master/side round.
+    /// This is deliberately separate from the runner `AgentOp` inbox: submit,
     /// cancel, and boundary admission all take this one mutex, which gives the
     /// UI an exact answer in the cancellation-vs-admission race. `None` means
     /// the round is not accepting inserts.
@@ -296,8 +303,8 @@ pub struct Agent {
     /// crate stays identity-agnostic and can be reused by frontends that are
     /// not "muta". See [`AgentIdentity`].
     ///
-    /// Behind a `RwLock` so a principal-role switch ([`Self::set_identity`],
-    /// driven by `/principal` / `@principal:`) can replace it live and the next
+    /// Behind a `RwLock` so a master-role switch ([`Self::set_identity`],
+    /// driven by `/master` / `@master:`) can replace it live and the next
     /// request's system prompt reflects the new preamble without rebuilding the
     /// agent. Readers ([`Self::identity`], system-prompt assembly) take a read
     /// lock and clone; writers take a write lock. Contention is negligible —
@@ -308,7 +315,7 @@ pub struct Agent {
     /// durably appends the round's new messages to the session log so a crash
     /// after a side-effecting tool call leaves the transcript in sync with the
     /// filesystem instead of rewinding to the previous turn. `None` for
-    /// envoys, the review diagnostic, and tests — they have no session of
+    /// runners, the review diagnostic, and tests — they have no session of
     /// their own to persist, so the turn boundary is a plain no-op there.
     turn_persist: std::sync::Mutex<Option<TurnPersistFn>>,
     /// Request-scoped projector. The agent owns its lifecycle and supplies live
@@ -319,17 +326,17 @@ pub struct Agent {
     /// `[tool_variants."<model-id>"]` config via
     /// [`Agent::set_variant_selection`] and re-seeded on model switch so the
     /// resolved toolset always tracks the live model. Held behind an `Arc` so a
-    /// spawned envoy — which is an agent on the *same* model — can inherit
+    /// spawned runner — which is an agent on the *same* model — can inherit
     /// the same overrides by sharing this handle (see
     /// [`Agent::variant_selection_handle`]); the agent decides scope, the
     /// model decides variant.
     variant_selection: Arc<std::sync::Mutex<muta_contracts::VariantSelection>>,
     /// This agent's **identity-side selection** of the pool (the agent half of
     /// the two-selector model): the capability scope it admits plus any variant
-    /// pins it forces. The principal agent is
+    /// pins it forces. The master agent is
     /// [`ToolSelection::unrestricted`](muta_contracts::ToolSelection::unrestricted)
     /// — every capability, model-chosen variants. A scoped agent (or a future
-    /// role-bound principal) narrows this. Composed with the live model's
+    /// role-bound master) narrows this. Composed with the live model's
     /// selection by [`muta_contracts::ToolSet::resolve_for`] every time the toolset
     /// is re-resolved: scope by intersection, variants by agent-over-model
     /// precedence, model capability limits applied hard.
@@ -337,7 +344,7 @@ pub struct Agent {
     /// Token-source accounting: running tally of how many tokens each
     /// provider+model reported authoritatively (upstream `usage`) vs. how many
     /// were filled in by the local estimator. Shared with the TUI so the
-    /// token-source report modal renders live. `None` for envoys/tests that
+    /// token-source report modal renders live. `None` for runners/tests that
     /// don't surface the report.
     token_ledger: std::sync::Mutex<Option<Arc<muta_contracts::TokenSourceLedger>>>,
 }
@@ -345,43 +352,43 @@ pub struct Agent {
 /// Capability handle for steering a running agent from the outside — the
 /// parent's down-direction of full-duplex (ADR-0029). Cheap to clone (one
 /// `Weak` + one `mpsc::Sender`); obtained from [`Agent::install_inbox`] on an
-/// `Arc<Agent>` (a spawned envoy) and typically lodged in a
-/// [`crate::envoy_tool::EnvoyRegistry`] keyed by the parent tool-call id so
+/// `Arc<Agent>` (a spawned runner) and typically lodged in a
+/// [`crate::runner_tool::RunnerRegistry`] keyed by the parent tool-call id so
 /// the harness can look it up when a request surfaces.
 ///
 /// Two classes of operation, deliberately split:
 ///
-/// - **Steering** ([`AgentOp`], via [`EnvoyHandle::submit`]): inject a new
+/// - **Steering** ([`AgentOp`], via [`RunnerHandle::submit`]): inject a new
 ///   user message, a hidden inter-agent note, or interrupt/shutdown. Routed
 ///   through the agent's inbox and applied at the next ReAct-turn boundary —
 ///   safe to defer because nothing is blocked on it.
-/// - **Request/reply** ([`EnvoyHandle::reply_permission`] /
-///   [`EnvoyHandle::reply_user_question`]): resolve a permission broker or
-///   `ask_user` oneshot the envoy is parked on **right now**, mid-tool.
+/// - **Request/reply** ([`RunnerHandle::reply_permission`] /
+///   [`RunnerHandle::reply_user_question`]): resolve a permission broker or
+///   `ask_user` oneshot the runner is parked on **right now**, mid-tool.
 ///   These bypass the inbox and call the agent's shared-state resolvers
 ///   directly — a queued reply would deadlock the parked tool.
 ///
 /// The `Weak<Agent>` means the handle observes the agent's lifetime: once the
-/// envoy's round ends and the dispatcher drops its `Arc`, every method
+/// runner's round ends and the dispatcher drops its `Arc`, every method
 /// returns `false` / `None` instead of erroring, so a late reply from the UI
-/// after the envoy finished degrades gracefully.
+/// after the runner finished degrades gracefully.
 #[derive(Clone)]
-pub struct EnvoyHandle {
+pub struct RunnerHandle {
     weak: std::sync::Weak<Agent>,
     ops: mpsc::UnboundedSender<AgentOp>,
 }
 
-impl EnvoyHandle {
+impl RunnerHandle {
     /// Submit a steering [`AgentOp`] into the agent's inbox. Returns `false`
     /// if the agent has been dropped (receiver gone) — the op is discarded.
     pub fn submit(&self, op: AgentOp) -> bool {
         self.ops.send(op).is_ok()
     }
 
-    /// Resolve a permission broker request the envoy is parked on. Returns
+    /// Resolve a permission broker request the runner is parked on. Returns
     /// `false` if the agent was dropped or no matching pending request exists.
     /// This is the down-direction counterpart to an up-going
-    /// [`AgentEvent::PermissionRequest`] / [`EnvoyEvent::PermissionRequest`].
+    /// [`AgentEvent::PermissionRequest`] / [`RunnerEvent::PermissionRequest`].
     pub fn reply_permission(&self, request_id: &str, decision: PermissionDecision) -> bool {
         if let Some(agent) = self.weak.upgrade() {
             agent.reply_permission(request_id, decision)
@@ -390,10 +397,10 @@ impl EnvoyHandle {
         }
     }
 
-    /// Resolve an `ask_user` request the envoy is parked on. Returns
+    /// Resolve an `ask_user` request the runner is parked on. Returns
     /// `false` if the agent was dropped or no matching pending request exists.
     /// Down-direction counterpart to an up-going
-    /// [`AgentEvent::UserQuestionRequest`] / [`EnvoyEvent::UserQuestionRequest`].
+    /// [`AgentEvent::UserQuestionRequest`] / [`RunnerEvent::UserQuestionRequest`].
     /// An empty outer answer vector means the operator cancelled.
     pub fn reply_user_question(&self, request_id: &str, answers: Vec<Vec<String>>) -> bool {
         if let Some(agent) = self.weak.upgrade() {
@@ -403,9 +410,9 @@ impl EnvoyHandle {
         }
     }
 
-    /// Resolve an interactive-input request the envoy's `bash` is parked on
+    /// Resolve an interactive-input request the runner's `bash` is parked on
     /// (L3.5 β). Down-direction counterpart to an up-going
-    /// [`AgentEvent::InputRequest`] / [`EnvoyEvent::InputRequest`].
+    /// [`AgentEvent::InputRequest`] / [`RunnerEvent::InputRequest`].
     pub fn reply_input(&self, request_id: &str, text: String) -> bool {
         if let Some(agent) = self.weak.upgrade() {
             agent.reply_input(request_id, text)
@@ -533,10 +540,10 @@ struct UserInputRound {
 /// [`Agent::execute_tool_evented`]). The executors never return
 /// `Err(HarnessError::Interrupted)` themselves anymore: when the user
 /// interrupts a turn they signal cooperatively-cancellable in-flight calls
-/// (envoys), drain them within a bounded grace period, and report
+/// (runners), drain them within a bounded grace period, and report
 /// `interrupted: true` with whatever results were recovered. The caller
 /// ([`Agent::dispatch_finalize`]) records the recovered results, then
-/// propagates the interruption itself — so an interrupted envoy's partial
+/// propagates the interruption itself — so an interrupted runner's partial
 /// transcript survives into the persisted transcript even though the round
 /// ends as interrupted.
 pub(crate) struct ConcurrentOutcome {
@@ -870,7 +877,7 @@ impl Agent {
     /// Construct an agent from a flat tool list. The tools are grouped into a
     /// [`muta_contracts::ToolSet`] (one capability per [`Tool::name`], one variant
     /// per [`Tool::variant`]) — the common case for a single-variant toolset or
-    /// an already-resolved envoy toolset. Use [`Agent::from_toolset`] to
+    /// an already-resolved runner toolset. Use [`Agent::from_toolset`] to
     /// preserve a multi-variant set so per-model variant selection can switch
     /// between variants at runtime.
     pub fn new(
@@ -916,7 +923,7 @@ impl Agent {
 
         // Seed the model-visible view by resolving the pool for the live model
         // with no role restriction and no model variant overrides yet: the
-        // principal's identity selection (unrestricted) composed with the
+        // master's identity selection (unrestricted) composed with the
         // model's capability limits. `set_variant_selection` re-resolves once
         // the model's `[tool_variants]` selection is known and on every switch.
         let agent_selection = muta_contracts::ToolSelection::unrestricted();
@@ -957,11 +964,9 @@ impl Agent {
             workspace_security: Arc::new(std::sync::Mutex::new(
                 muta_contracts::WorkspaceSecuritySnapshot::default(),
             )),
-            ask_user: std::sync::Mutex::new(AskUserState::default()),
-            input: std::sync::Mutex::new(InputState::default()),
             skills_registry,
             thread_id,
-            accounting_actor_id: std::sync::Mutex::new("principal".to_string()),
+            accounting_actor_id: std::sync::Mutex::new("master".to_string()),
             context_prune_threshold_tokens: Arc::new(std::sync::Mutex::new(0)),
             context_projection_gate: Arc::new(std::sync::Mutex::new(None)),
             hard_stop_turns: Arc::new(std::sync::Mutex::new(0)),
@@ -970,6 +975,10 @@ impl Agent {
             )),
             allow_model_stdin: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             skip_interactive_input: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            human_broker: crate::human_broker::HumanRequestBroker::new(),
+            human_posture: Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            human_channel: std::sync::Mutex::new(None),
+            autonomous_fallback: std::sync::Mutex::new(AutonomousFallbackPolicy::FailClosed),
             bash_policy: std::sync::RwLock::new(crate::bash_policy::BashPolicy::default()),
             operation_scope: std::sync::Mutex::new(muta_contracts::OperationScope::unrestricted()),
             hooks: crate::hook_runner::HookRunner::new(),
@@ -1013,9 +1022,9 @@ impl Agent {
     }
 
     /// Replace this agent's identity-side selection (capability scope + variant
-    /// pins) and re-resolve the model-visible toolset. The principal is
+    /// pins) and re-resolve the model-visible toolset. The master is
     /// unrestricted by default; this narrows it (e.g. confining a role-bound
-    /// principal to a capability subset). The current per-model variant
+    /// master to a capability subset). The current per-model variant
     /// selection is preserved and re-composed.
     pub fn set_agent_selection(&self, selection: muta_contracts::ToolSelection) {
         *self
@@ -1033,7 +1042,7 @@ impl Agent {
     /// Re-resolve [`resolved_tools`](Self::resolved_tools) from the pool for the
     /// live model, composing this agent's identity selection with the model's
     /// selection (`model_variants` overrides + the model's hard capability
-    /// limits). The single choke point through which both the principal seed and
+    /// limits). The single choke point through which both the master seed and
     /// every model/selection switch flow, so the schema sent to the provider and
     /// the dispatch table always reflect `agent_scope ∩ model_caps`.
     fn reresolve_tools(&self, model_variants: &muta_contracts::VariantSelection) {
@@ -1129,7 +1138,7 @@ impl Agent {
 
     fn estimate_model_request(request: &muta_contracts::ModelRequest) -> RequestTokenEstimate {
         // Per-message wire weight (not `estimate_tokens`, which intentionally
-        // includes persisted envoy children the provider never sees), with
+        // includes persisted runner children the provider never sees), with
         // each message tokenized exactly once — a prior version tokenized the
         // non-system subset a second time (and cloned the whole message list
         // to build it), doubling the dominant cost of every estimate.
@@ -1183,7 +1192,7 @@ impl Agent {
     }
 
     /// A shared handle to this agent's live variant selection (the **override**
-    /// axis). Handed to a spawned envoy's dispatch tool so the envoy — an
+    /// axis). Handed to a spawned runner's dispatch tool so the runner — an
     /// agent on the same model — resolves its admitted capabilities to the same
     /// variants the parent uses, tracking model switches live. The profile still
     /// owns the orthogonal **scope** axis.
@@ -1193,9 +1202,9 @@ impl Agent {
         Arc::clone(&self.variant_selection)
     }
 
-    /// Override the opt-in hard-stop budget. Mirrors `[principal] hard_stop_turns`
+    /// Override the opt-in hard-stop budget. Mirrors `[master] hard_stop_turns`
     /// in `config.toml` but can be flipped at runtime. `0` (the default) leaves
-    /// the round uncapped, matching ADR-0009. The reviewer envoy gets a
+    /// the round uncapped, matching ADR-0009. The reviewer runner gets a
     /// tight non-zero bound so a runaway diagnostic cannot loop.
     pub fn set_hard_stop_turns(&self, turns: usize) {
         *self
@@ -1217,8 +1226,8 @@ impl Agent {
     /// reconstructs its per-round guard from the new settings; the current
     /// round, if any, keeps its already-built guard state.
     ///
-    /// Wired from `[principal.doom_guard]` in `config.toml` at startup and forced to
-    /// [`muta_contracts::DoomGuardConfig::disabled`] on envoys and the review
+    /// Wired from `[master.doom_guard]` in `config.toml` at startup and forced to
+    /// [`muta_contracts::DoomGuardConfig::disabled`] on runners and the review
     /// diagnostic so they run unobstructed regardless of user settings.
     pub fn set_doom_guard_config(&self, config: muta_contracts::DoomGuardConfig) {
         *self
@@ -1243,7 +1252,7 @@ impl Agent {
     }
 
     /// Enable or disable the model-supplied-stdin path for `bash` (L3.5 α).
-    /// Mirrors `[principal] allow_model_stdin` in `config.toml`. When off
+    /// Mirrors `[master] allow_model_stdin` in `config.toml`. When off
     /// (the default), the bash schema exposes no `stdin` parameter and a
     /// command needing input either gets it from a human (interactive
     /// classifier → input panel) or fails fast. When on, the model may feed
@@ -1272,12 +1281,12 @@ impl Agent {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Mirrors `[principal] skip_interactive_input` in `config.toml`. When on,
+    /// Mirrors `[master] skip_interactive_input` in `config.toml`. When on,
     /// an interactive `bash` command (matched by the interactive classifier)
     /// never pops the inline input panel and instead runs with stdin closed —
     /// fast failure with a non-interactive remedy, as under autopilot mode.
     /// Lets an operator who finds the prompt disruptive opt out of it without
-    /// turning the principal itself autopilot.
+    /// turning the master itself autopilot.
     pub fn set_skip_interactive_input(&self, enabled: bool) {
         self.skip_interactive_input
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
@@ -1302,7 +1311,7 @@ impl Agent {
     /// Install the shared token-source ledger so this agent books each turn's
     /// token counts (reported vs. estimated) into it. The embedding shares the
     /// same `Arc` with the TUI so the token-source report modal reads live.
-    /// No-op for envoys/tests that never call this (the ledger stays `None`
+    /// No-op for runners/tests that never call this (the ledger stays `None`
     /// and booking is skipped).
     pub fn install_token_ledger(&self, ledger: Arc<muta_contracts::TokenSourceLedger>) {
         *self.token_ledger.lock().unwrap_or_else(|e| e.into_inner()) = Some(ledger);
@@ -1380,7 +1389,7 @@ impl Agent {
 
     /// Install the lifecycle hook registry (ADR-0025). Replaces any prior
     /// registry; intended to be called once at startup after the `[hooks]`
-    /// config is parsed. Envoys and tests leave the default empty registry.
+    /// config is parsed. Runners and tests leave the default empty registry.
     pub fn set_hooks(&self, registry: crate::hooks::HookRegistry) {
         self.hooks.set(registry);
     }
@@ -1389,7 +1398,7 @@ impl Agent {
     /// (ADR-0048). The closure receives the current full round history and
     /// should durably append only the new tail (see
     /// `SessionStore::append_turn`). Called once by orchestration after the
-    /// agent is built and the session is open; envoys and the review
+    /// agent is built and the session is open; runners and the review
     /// diagnostic never call this, so the default `None` keeps their turn
     /// boundaries no-ops.
     pub fn set_turn_persist(&self, f: TurnPersistFn) {
@@ -1397,7 +1406,7 @@ impl Agent {
     }
 
     /// Fire the mid-round save point if installed. Returns `Ok(())` when no
-    /// closure is set (the envoy / review / test path) so the call site
+    /// closure is set (the runner / review / test path) so the call site
     /// stays unconditional. Invoked at the turn boundary — after a turn's
     /// tool results are in `messages` and before the next model request.
     async fn fire_turn_persist(&self, messages: &[Message]) -> Result<(), HarnessError> {
@@ -1432,7 +1441,7 @@ impl Agent {
 
     /// The persisted project root — the workspace sandbox for `@file:` injection
     /// and the base relative file-tool paths resolve against. `None` when no
-    /// project was designated (envoys, tests, or a detached session), in which
+    /// project was designated (runners, tests, or a detached session), in which
     /// case file injection is disabled.
     /// Record the session's additional workspace roots (ADR-0142). Called
     /// once by the assembling bootstrap after they validate; they surface to
@@ -1620,6 +1629,66 @@ impl Agent {
         self.permissions.autopilot()
     }
 
+    /// ADR-0141: whether a human can currently answer this agent's parked
+    /// requests. Interactive posture means yes; autonomous means no human
+    /// is reachable and parked requests settle by labeled policy. With a
+    /// channel accountant bound (hosted sessions), this is the live OR over
+    /// attached clients; otherwise the static declared posture.
+    pub fn human_posture(&self) -> muta_contracts::human_request::HumanChannelPosture {
+        if let Some(accountant) = self
+            .human_channel
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            return accountant.effective();
+        }
+        match self.human_posture.load(std::sync::atomic::Ordering::Relaxed) {
+            1 => muta_contracts::human_request::HumanChannelPosture::Autonomous,
+            _ => muta_contracts::human_request::HumanChannelPosture::Interactive,
+        }
+    }
+
+    /// ADR-0141: bind a live channel source (hosted sessions). The agent's
+    /// posture then tracks attached clients instead of a static flag.
+    pub fn set_human_channel_accountant(
+        &self,
+        accountant: std::sync::Arc<muta_contracts::human_request::HumanChannelAccountant>,
+    ) {
+        *self
+            .human_channel
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(accountant);
+    }
+
+    /// ADR-0141: how an autonomous session settles a parked question.
+    /// Sourced from `[master] ask_user_fallback` config; defaults to
+    /// fail-closed (a missing human is an error, not an opinion).
+    pub fn autonomous_fallback_policy(&self) -> AutonomousFallbackPolicy {
+        *self.autonomous_fallback
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// ADR-0141: configure the autonomous fallback policy (see
+    /// [`Self::autonomous_fallback_policy`]).
+    pub fn set_autonomous_fallback_policy(&self, policy: AutonomousFallbackPolicy) {
+        *self.autonomous_fallback
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = policy;
+    }
+
+    /// ADR-0141: declare this agent's human-channel posture. Attaching
+    /// clients' declarations are OR-ed at the session level; runners inherit
+    /// their parent's posture at spawn.
+    pub fn set_human_posture(&self, posture: muta_contracts::human_request::HumanChannelPosture) {
+        let code = match posture {
+            muta_contracts::human_request::HumanChannelPosture::Interactive => 0,
+            muta_contracts::human_request::HumanChannelPosture::Autonomous => 1,
+        };
+        self.human_posture.store(code, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn set_autopilot(&self, enabled: bool) {
         self.permissions.set_autopilot(enabled);
     }
@@ -1646,7 +1715,7 @@ impl Agent {
 
     /// Bind a child agent to the parent's live workspace authority cell. This
     /// is intentionally a construction-time operation: once an Agent is shared
-    /// through `Arc`, its authority principal cannot be swapped.
+    /// through `Arc`, its authority master cannot be swapped.
     pub fn bind_workspace_security_handle(
         &mut self,
         handle: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
@@ -1655,8 +1724,8 @@ impl Agent {
     }
 
     /// Set this agent's operation boundary (ADR-0028). The main agent leaves it
-    /// unrestricted; `EnvoyTool` sets the scope resolved from the bound
-    /// envoy profile on the child before it runs.
+    /// unrestricted; `RunnerTool` sets the scope resolved from the bound
+    /// runner profile on the child before it runs.
     pub fn set_operation_scope(&self, scope: muta_contracts::OperationScope) {
         *self
             .operation_scope
@@ -1664,10 +1733,10 @@ impl Agent {
             .unwrap_or_else(|e| e.into_inner()) = scope;
     }
 
-    /// Apply a declarative principal profile (ADR-0053) — set every knob a
-    /// [`muta_contracts::PrincipalProfile`] declares in one call. The
-    /// principal-side mirror of how `EnvoyTool` binds an
-    /// [`muta_contracts::EnvoyProfile`].
+    /// Apply a declarative master profile (ADR-0053) — set every knob a
+    /// [`muta_contracts::MasterPreset`] declares in one call. The
+    /// master-side mirror of how `RunnerTool` binds an
+    /// [`muta_contracts::RunnerProfile`].
     ///
     /// Sets: the capability scope ([`Self::set_agent_selection`]), the
     /// write/command boundary ([`Self::set_operation_scope`]), and the runtime
@@ -1676,15 +1745,15 @@ impl Agent {
     /// re-applied here — identity is immutable past construction (it feeds the
     /// system-prompt preamble), so the embedding supplies it to `Agent::new` /
     /// `from_toolset`. A role whose identity should differ per instance composes
-    /// [`muta_contracts::PrincipalProfile::with_identity`] before construction.
+    /// [`muta_contracts::MasterPreset::with_identity`] before construction.
     ///
     /// Idempotent over defaults: a profile built with
-    /// [`muta_contracts::PrincipalProfile::with_identity`] (no further narrowing)
+    /// [`muta_contracts::MasterPreset::with_identity`] (no further narrowing)
     /// reproduces the agent constructor's built-in values, so binding it is a
     /// no-op for an already-default agent.
-    pub fn apply_principal_profile(&self, profile: &muta_contracts::PrincipalProfile) {
+    pub fn apply_master_profile(&self, profile: &muta_contracts::MasterPreset) {
         // Identity is now live-mutable (plan §3.3): applying a profile re-rolls
-        // the system-prompt preamble too, so `/principal architect` changes the
+        // the system-prompt preamble too, so `/master architect` changes the
         // persona the model speaks with on the very next request. Previously
         // identity was immutable past construction; the role-switch feature
         // requires it to track the active profile.
@@ -1704,8 +1773,8 @@ impl Agent {
 
     /// Replace this agent's identity (name + mission, or a persona override).
     /// Feeds the system-prompt preamble, so the next request reflects the new
-    /// identity without rebuilding the agent. The principal-role switch
-    /// (`/principal`, `@principal:`) uses this to change personas live; an
+    /// identity without rebuilding the agent. The master-role switch
+    /// (`/master`, `@master:`) uses this to change personas live; an
     /// embedding may also call it directly to re-persona a reused agent.
     pub fn set_identity(&self, identity: AgentIdentity) {
         if let Ok(mut guard) = self.identity.write() {
@@ -1713,23 +1782,23 @@ impl Agent {
         }
     }
 
-    /// Switch the live agent into a named principal role (plan §3.3). Resolves
-    /// `role` (case-insensitive, alias-tolerant) to a [`PrincipalRole`],
+    /// Switch the live agent into a named master role (plan §3.3). Resolves
+    /// `role` (case-insensitive, alias-tolerant) to a [`MasterPresetId`],
     /// composes it onto the current identity, and applies the resulting
     /// profile. Returns the resolved role on success, or `None` when `role`
     /// does not name a known role (so the caller can surface the available
-    /// names). Used by both the `/principal` command and the `@principal:`
+    /// names). Used by both the `/master` command and the `@master:`
     /// inline directive.
     ///
     /// The role is composed onto the **current** identity snapshot, so a
     /// sequence of switches (`code` → `architect` → `reviewer`) each preserve
     /// the product name ("muta") rather than drifting toward the previous
     /// role's mission.
-    pub fn apply_principal_role(&self, role: &str) -> Option<muta_contracts::PrincipalRole> {
-        let resolved = muta_contracts::PrincipalRole::parse(role)?;
+    pub fn apply_master_role(&self, role: &str) -> Option<muta_contracts::MasterPresetId> {
+        let resolved = muta_contracts::MasterPresetId::parse(role)?;
         let base = self.identity();
-        let profile = muta_contracts::PrincipalProfile::for_role(resolved, &base);
-        self.apply_principal_profile(&profile);
+        let profile = muta_contracts::MasterPreset::for_role(resolved, &base);
+        self.apply_master_profile(&profile);
         Some(resolved)
     }
 
@@ -1744,7 +1813,7 @@ impl Agent {
 
     /// A snapshot of this agent's identity (name + mission, or a persona
     /// override). Feeds the system-prompt preamble. Returns a clone because
-    /// identity is now live-mutable behind a lock (so `/principal` can switch
+    /// identity is now live-mutable behind a lock (so `/master` can switch
     /// personas); callers that need a stable view across an await should take
     /// the snapshot once. Lets an embedding reuse the primary's identity (e.g.
     /// a `/btw` side session) instead of recomposing it.
@@ -1791,47 +1860,42 @@ impl Agent {
     }
 
     pub fn reply_permission(&self, request_id: &str, decision: PermissionDecision) -> bool {
-        self.permissions.reply(request_id, decision)
+        // ADR-0141: settles through the broker — wire replies carry
+        // provenance-User by construction.
+        self.human_broker
+            .reply_user(request_id, HumanReply::Permission(decision))
     }
 
     pub fn reject_pending_permissions(&self) {
-        self.permissions.reject_pending();
+        // ADR-0141: teardown cancels route through the broker for uniform
+        // metrics and exactly-once settlement.
+        self.human_broker.cancel_kind(HumanRequestKind::Permission);
     }
 
     /// Resolve a parked `ask_user` request. An empty outer vector means the
     /// operator cancelled; answered questions remain distinguishable because
     /// they carry one inner vector per question (which may itself be empty).
+    /// ADR-0141: settles through the human-request broker — wire replies are
+    /// `ReplyProvenance::User` by construction.
     pub fn reply_user_question(&self, request_id: &str, answers: Vec<Vec<String>>) -> bool {
-        let sender = self
-            .ask_user
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pending
-            .remove(request_id);
-        sender.is_some_and(|sender| {
-            let reply = if answers.is_empty() {
-                None
-            } else {
-                Some(UserQuestionReply {
-                    request_id: request_id.to_string(),
-                    answers,
-                })
-            };
-            sender.send(reply).is_ok()
-        })
+        let reply = if answers.is_empty() {
+            None
+        } else {
+            Some(UserQuestionReply {
+                request_id: request_id.to_string(),
+                answers,
+            })
+        };
+        self.human_broker
+            .reply_user(request_id, HumanReply::Question(reply))
     }
 
     pub fn reject_pending_user_questions(&self) {
-        let pending = std::mem::take(
-            &mut self
-                .ask_user
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .pending,
-        );
-        for (_, sender) in pending {
-            let _ = sender.send(None);
-        }
+        // ADR-0141: question cancels route through the broker so metrics and
+        // exactly-once settlement stay uniform across the three protocols.
+        // Only questions are drained here; permission/input teardowns have
+        // their own callers. `false` means nothing was parked.
+        self.human_broker.cancel_kind(HumanRequestKind::Question);
     }
 
     /// Resolve a parked interactive-input request (L3.5 β) with the operator's
@@ -1840,31 +1904,23 @@ impl Agent {
     /// An empty `text` is a valid "cancel" — the command then runs with
     /// closed stdin and fails fast.
     pub fn reply_input(&self, request_id: &str, text: String) -> bool {
-        let sender = self
-            .input
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pending
-            .remove(request_id);
-        sender.is_some_and(|sender| {
-            sender
-                .send(Some(InputReply {
-                    request_id: request_id.to_string(),
-                    text,
-                }))
-                .is_ok()
-        })
+        // ADR-0141: settles via the broker; wire replies are provenance-User.
+        self.human_broker.reply_user(
+            request_id,
+            HumanReply::Input(Some(InputReply {
+                request_id: request_id.to_string(),
+                text,
+            })),
+        )
     }
 
     /// Cancel every parked input request (e.g. on round end / interrupt),
     /// resolving each with `None` so the awaiting dispatch returns a
     /// cancelled result.
     pub fn reject_pending_inputs(&self) {
-        let pending =
-            std::mem::take(&mut self.input.lock().unwrap_or_else(|e| e.into_inner()).pending);
-        for (_, sender) in pending {
-            let _ = sender.send(None);
-        }
+        // ADR-0141: routed through the broker for uniform metrics and
+        // exactly-once settlement.
+        self.human_broker.cancel_kind(HumanRequestKind::Input);
     }
 
     pub fn allowed_tools(&self) -> Vec<String> {
@@ -1882,7 +1938,7 @@ impl Agent {
         self.permissions.revoke_allowed(tool, scope)
     }
 
-    /// Install (or reuse) the steering inbox and return a [`EnvoyHandle`]
+    /// Install (or reuse) the steering inbox and return a [`RunnerHandle`]
     /// the caller can steer the agent with mid-turn — the entry point of
     /// full-duplex (ADR-0029). Requires `Arc<Self>` because the handle holds a
     /// `Weak<Agent>` so it can observe the agent's lifetime without keeping it
@@ -1894,7 +1950,7 @@ impl Agent {
     /// directly by the harness never calls this and stays non-steerable by an
     /// inbox — its interrupt path is the `CancellationToken` passed to the run,
     /// and its permission/ask_user replies go through the harness directly.
-    pub fn install_inbox(self: &Arc<Self>) -> EnvoyHandle {
+    pub fn install_inbox(self: &Arc<Self>) -> RunnerHandle {
         let mut tx_guard = self.inbox_tx.lock().unwrap_or_else(|e| e.into_inner());
         let tx = match tx_guard.clone() {
             Some(existing) => existing,
@@ -1906,14 +1962,14 @@ impl Agent {
                 tx
             }
         };
-        EnvoyHandle {
+        RunnerHandle {
             weak: Arc::downgrade(self),
             ops: tx,
         }
     }
 
     /// Submit a steering [`AgentOp`] without going through a handle. Equivalent
-    /// to [`EnvoyHandle::submit`] but usable when the caller already holds a
+    /// to [`RunnerHandle::submit`] but usable when the caller already holds a
     /// reference to the agent rather than a handle (e.g. the top-level harness
     /// steering the primary session). Returns `false` if no inbox was ever
     /// installed ([`Agent::install_inbox`] was not called) or the receiver was
@@ -2093,7 +2149,7 @@ impl Agent {
             match op {
                 AgentOp::InjectUserMessage(text) => {
                     messages.push(crate::conversation_context::visible_user(
-                        InjectionKind::EnvoySteer,
+                        InjectionKind::RunnerSteer,
                         text,
                     ));
                 }
@@ -2121,7 +2177,7 @@ impl Agent {
 
     /// Designate the project whose bucket backs the persistent "always"
     /// allowlist, and load any rules already on disk into the in-memory set.
-    /// Pass `None` to disable persistence (envoys and most tests do this).
+    /// Pass `None` to disable persistence (runners and most tests do this).
     ///
     /// Loading is best-effort: a missing, unreadable, or unsupported file is
     /// silently ignored — the agent simply starts with an empty allowlist and
@@ -2281,10 +2337,10 @@ impl Agent {
 
     /// Structured view of every installed tool, for the session modal's Tools
     /// pane. `enabled` reflects the disabled mask; `source` classifies origin
-    /// (`builtin`, `envoy`, or the publisher-provided dynamic source id).
+    /// (`builtin`, `runner`, or the publisher-provided dynamic source id).
     pub fn snapshot_tools(&self) -> Vec<muta_contracts::ToolInfo> {
         // Classification delegates to the ToolManager's three-bucket
-        // authority for the builtin (with envoy broken out for display) and
+        // authority for the builtin (with runner broken out for display) and
         // user buckets; the mcp bucket keeps the publisher-provided dynamic
         // source id as its label. The source label is display-only; dispatch
         // treats all three buckets uniformly via name-clash priority
@@ -2297,11 +2353,11 @@ impl Agent {
         let mut seen: HashSet<String> = HashSet::new();
         let mut sourced_tools: Vec<(String, Arc<dyn Tool>)> = Vec::new();
 
-        // 1+2. builtin (with envoy broken out) and user, from the manager.
+        // 1+2. builtin (with runner broken out) and user, from the manager.
         for sourced in self.tool_manager.installed() {
             let label = match sourced.source {
-                crate::tool_manager::ToolSource::Builtin if sourced.tool.name() == "envoy" => {
-                    "envoy"
+                crate::tool_manager::ToolSource::Builtin if sourced.tool.name() == "runner" => {
+                    "runner"
                 }
                 crate::tool_manager::ToolSource::Builtin => "builtin",
                 crate::tool_manager::ToolSource::User => "user",
@@ -2782,7 +2838,7 @@ impl Agent {
                 provider_meta: self.provider.take_last_provider_meta(),
                 hidden: false,
                 children: None,
-                envoy_meta: None,
+                runner_meta: None,
                 origin: None,
                 timestamp: Some(muta_contracts::todos::unix_now()),
                 sent_at_ms: None,
@@ -2897,9 +2953,9 @@ impl Agent {
     /// (the caller should loop again), `false` when the round is complete.
     ///
     /// `cancel` makes tool execution cooperative: if the turn is interrupted
-    /// mid-flight, cooperatively-cancellable calls (envoys) are drained and
+    /// mid-flight, cooperatively-cancellable calls (runners) are drained and
     /// their partial results recorded into `messages` before this returns
-    /// `Err(HarnessError::Interrupted)` — so interrupted envoy work survives
+    /// `Err(HarnessError::Interrupted)` — so interrupted runner work survives
     /// into the persisted transcript. Every other already-announced
     /// [`AgentEvent::ToolCall`] is paired with a terminal
     /// [`AgentEvent::ToolCancelled`] before this returns.
@@ -3081,7 +3137,7 @@ impl Agent {
                     .execute_tool_evented(&call, &call_id, cancel, on_event)
                     .await?;
                 if outcome.interrupted {
-                    // Record a drained result (an interrupted envoy's partial
+                    // Record a drained result (an interrupted runner's partial
                     // transcript) before ending the round as interrupted.
                     if let Some(result) = outcome.result {
                         let duration_ms = std::time::Instant::now().elapsed().as_millis() as u64;
@@ -3163,27 +3219,27 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         let text = result.to_text();
-        // Cost attribution: an envoy's true token consumption can be 100x
+        // Cost attribution: an runner's true token consumption can be 100x
         // the byte-estimate of its final summary, so accumulate the real
         // `TokenUsage` it reported. For every other tool the byte-estimate
         // remains the only signal we have.
         if checkpoint_replay {
             // The short checkpoint reference is new model-visible context,
-            // but the original tool (especially an envoy) did no new work, so
+            // but the original tool (especially an runner) did no new work, so
             // do not attribute its nested usage a second time.
             state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);
-        } else if let Some((_sub_messages, sub_usage)) = result.envoy_payload() {
+        } else if let Some((_sub_messages, sub_usage)) = result.runner_payload() {
             state.token_usage.total_tokens += sub_usage.total_tokens;
             state.token_usage.prompt_tokens += sub_usage.prompt_tokens;
             state.token_usage.completion_tokens += sub_usage.completion_tokens;
-            // The envoy's output tokens are in the numerator above; fold its
+            // The runner's output tokens are in the numerator above; fold its
             // own generation time into the denominator too, so the round's
             // throughput stays scoped-consistent (no inflated tok/s for
-            // delegating rounds). Tool execution inside the envoy is already
+            // delegating rounds). Tool execution inside the runner is already
             // excluded from this figure.
             state.generation_ms = state
                 .generation_ms
-                .saturating_add(result.envoy_generation_ms());
+                .saturating_add(result.runner_generation_ms());
             // Still count the summary bytes that the parent model will
             // actually re-read on the next turn.
             state.token_usage.total_tokens += pressure::estimate_string_tokens(&text);
@@ -3209,38 +3265,38 @@ impl Agent {
                 duration_ms,
             });
         }
-        // For envoy results, attach the nested transcript as `children` on
-        // the persisted Tool-role message so resume can rebuild the envoy
+        // For runner results, attach the nested transcript as `children` on
+        // the persisted Tool-role message so resume can rebuild the runner
         // view without a live event stream. The nested `Message`s already
         // self-contain their own tool_calls / tool_call_id / children, so
-        // arbitrarily deep envoy trees round-trip through session.json.
-        // Sidecar `envoy_meta` captures what the live event stream knew but
+        // arbitrarily deep runner trees round-trip through session.json.
+        // Sidecar `runner_meta` captures what the live event stream knew but
         // the bare transcript cannot reconstruct on resume: duration, the
         // task description, the toolset size, and explicit failed /
-        // interrupted flags. The envoy result text is built by
-        // `envoy_result_text`, which appends a deterministic
+        // interrupted flags. The runner result text is built by
+        // `runner_result_text`, which appends a deterministic
         // role-reanchoring note at this single choke point (see its doc for
-        // the "role bleed" rationale). For non-envoy results the plain header
+        // the "role bleed" rationale). For non-runner results the plain header
         // is used unchanged.
-        let tool_message = match result.envoy_payload() {
+        let tool_message = match result.runner_payload() {
             Some((sub_messages, _)) => {
-                let meta = crate::message::EnvoyMeta {
+                let meta = crate::message::RunnerMeta {
                     duration_ms: Some(duration_ms),
                     failed: result.is_error(),
-                    interrupted: result.envoy_interrupted(),
+                    interrupted: result.runner_interrupted(),
                     ..Default::default()
                 };
                 Message::tool_result(
                     call,
-                    envoy_result_text(
+                    runner_result_text(
                         &call.name,
                         &text,
                         result.is_error(),
-                        result.envoy_interrupted(),
+                        result.runner_interrupted(),
                     ),
                 )
                 .with_children(sub_messages.to_vec())
-                .with_envoy_meta(meta)
+                .with_runner_meta(meta)
             }
             None => Message::tool_result(call, format!("[{} result]:\n{}", call.name, text)),
         };
@@ -3264,7 +3320,7 @@ impl Agent {
 
     /// Fire PostToolUse (success) or PostToolUseFailure (error) hooks and append
     /// any injected context as hidden user messages (ADR-0025). No-op when the
-    /// registry is empty, which is the common case (envoys, tests, no
+    /// registry is empty, which is the common case (runners, tests, no
     /// `[hooks]` config).
     pub(crate) async fn run_post_tool_hooks(
         &self,
@@ -3504,12 +3560,65 @@ impl Agent {
             questions,
             origin: None,
         };
-        let (sender, receiver) = oneshot::channel();
-        self.ask_user
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pending
-            .insert(request.id.clone(), sender);
+
+        // ADR-0141 posture gate: an ask_user call only parks when a human
+        // channel exists. Autonomous sessions (headless no-TTY, CI, runners
+        // with `allow_user_interaction: false`) never fabricate a user —
+        // they settle by the configured fallback policy, labeled as such.
+        let posture = self.human_posture();
+        if posture == muta_contracts::human_request::HumanChannelPosture::Autonomous {
+            return match self.autonomous_fallback_policy() {
+                muta_contracts::human_request::AutonomousFallbackPolicy::FailClosed => {
+                    self.human_broker
+                        .metrics_note_refused(HumanRequestKind::Question);
+                    ToolOutput::Text(
+                        "ask_user is unavailable: no human channel is attached to this \
+                         session, so nobody can answer. Resolve the ambiguity yourself — \
+                         choose the safest option, state the assumption in your reply, and \
+                         continue. Do not call ask_user again this turn."
+                            .to_string(),
+                    )
+                }
+                muta_contracts::human_request::AutonomousFallbackPolicy::RecommendedLabeled => {
+                    // Take each question's first option — the schema's
+                    // "recommended" convention — and label the source so the
+                    // model can never mistake it for a human decision.
+                    let answers: Vec<Vec<String>> = request
+                        .questions
+                        .iter()
+                        .map(|q| {
+                            q.options
+                                .first()
+                                .map(|opt| vec![opt.label.clone()])
+                                .unwrap_or_default()
+                        })
+                        .collect();
+                    let reply = UserQuestionReply {
+                        request_id: request.id.clone(),
+                        answers,
+                    };
+                    let settled = self.human_broker.settle_by_policy_owned(
+                        request.id.clone(),
+                        HumanReply::Question(Some(reply.clone())),
+                        muta_contracts::human_request::AutonomousFallbackPolicy::RecommendedLabeled,
+                    );
+                    debug_assert!(settled, "policy settlement on a fresh request must succeed");
+                    let _ = settled;
+                    let output = serde_json::to_string_pretty(&reply.answers)
+                        .unwrap_or_else(|_| format!("{:?}", reply.answers));
+                    ToolOutput::Text(format!(
+                        "[answered by policy, not by user] No human channel is attached. \
+                         Each question was answered with its first (recommended) option \
+                         per the session's autonomous fallback policy:\n{}",
+                        output
+                    ))
+                }
+            };
+        }
+
+        let receiver = self
+            .human_broker
+            .park(request.id.clone(), HumanRequestKind::Question);
         tracing::info!(questions = request.questions.len(), "asking user");
         let _ = event_tx.send(AgentEvent::UserQuestionRequest(request.clone()));
         // Observe-only interrupt hook: fire notifications (desktop/bell) so the
@@ -3518,7 +3627,13 @@ impl Agent {
         let parked_at = std::time::Instant::now();
         self.fire_user_question_hooks(&request).await;
 
-        let reply = receiver.await.unwrap_or(None);
+        let settled = receiver.await.ok().map(|s| s.reply);
+        let reply = match settled {
+            Some(HumanReply::Question(reply)) => reply,
+            // Channel closed without a settlement (agent teardown) or a
+            // mismatched kind (harness bug): treat as cancel.
+            _ => None,
+        };
         // Charge the human-thinking pause to the round so the exit gate can
         // subtract it for an honest tokens/sec.
         self.book_pause(parked_at.elapsed().as_millis() as u64);
@@ -3559,16 +3674,24 @@ impl Agent {
             prompt: prompt.to_string(),
             secret,
         };
-        let (sender, receiver) = oneshot::channel();
-        self.input
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pending
-            .insert(request.id.clone(), sender);
+        // ADR-0141 posture gate: with no human channel there is nobody to
+        // type into the panel. Do not park — run the command with closed
+        // stdin, exactly as if the operator had dismissed the prompt (the
+        // caller's non-interactive remedy path).
+        if self.human_posture() == HumanChannelPosture::Autonomous {
+            self.human_broker
+                .metrics_note_refused(HumanRequestKind::Input);
+            tracing::info!("autonomous posture: interactive stdin refused, running closed");
+            return None;
+        }
+        let receiver = self
+            .human_broker
+            .park(request.id.clone(), HumanRequestKind::Input);
         tracing::info!(%secret, "requesting operator input for interactive command");
         let _ = event_tx.send(AgentEvent::InputRequest(request.clone()));
-        match receiver.await.unwrap_or(None) {
-            Some(reply) if !reply.text.is_empty() => {
+        let settled = receiver.await.ok().map(|s| s.reply);
+        match settled {
+            Some(HumanReply::Input(Some(reply))) if !reply.text.is_empty() => {
                 Some(StdinPolicy::Prefilled { data: reply.text })
             }
             _ => None,
@@ -3716,11 +3839,33 @@ impl Agent {
                     id: format!("permission_{}", uuid::Uuid::new_v4()),
                     ..request
                 };
-                let (receiver, parked_at) = self.permissions.park_request(request.id.clone());
+                // ADR-0141 posture gate: permissions fail closed when no
+                // human channel exists — a missing human cannot grant
+                // authority. (Autopilot sessions reach this arm only with
+                // an interactive watcher attached, so this is the belt to
+                // that braces.)
+                if self.human_posture() == HumanChannelPosture::Autonomous {
+                    self.human_broker
+                        .metrics_note_refused(HumanRequestKind::Permission);
+                    tracing::warn!(
+                        tool = %request.tool,
+                        "autonomous posture: permission refused (fail closed)"
+                    );
+                    return ToolOutput::PermissionDenied {
+                        tool: tool.name().to_string(),
+                    };
+                }
+                let receiver = self
+                    .human_broker
+                    .park(request.id.clone(), HumanRequestKind::Permission);
+                let parked_at = std::time::Instant::now();
                 tracing::info!(tool = %request.tool, scope = %request.scope, one_off, "permission requested");
                 let _ = event_tx.send(AgentEvent::PermissionRequest(request.clone()));
                 self.fire_permission_request_hooks(&request).await;
-                let decision = receiver.await.unwrap_or(PermissionDecision::Reject);
+                let decision = match receiver.await.ok().map(|s| s.reply) {
+                    Some(HumanReply::Permission(decision)) => decision,
+                    _ => PermissionDecision::Reject,
+                };
                 // Charge the human-thinking pause to the round so the exit
                 // gate can subtract it for an honest tokens/sec.
                 self.book_pause(parked_at.elapsed().as_millis() as u64);
@@ -3786,11 +3931,11 @@ impl Agent {
             StdinPolicy::default()
         };
 
-        // The Envoy / ToolStream events must carry the same id as the
+        // The Runner / ToolStream events must carry the same id as the
         // up-front ToolCall event (the dispatch-generated `call_id`), not the
         // model's `call.id` — the UI keys its step off the ToolCall event id,
-        // so using `call.id` here would orphan every envoy child stream and
-        // every live tool stream, leaving the envoy view empty.
+        // so using `call.id` here would orphan every runner child stream and
+        // every live tool stream, leaving the runner view empty.
         let parent_call_id = call_id.to_string();
         let stream_call_id = call_id.to_string();
         let stream_tx = event_tx.clone();
@@ -3805,7 +3950,7 @@ impl Agent {
                 call_id,
                 &call.arguments,
                 Box::new(|event| {
-                    let _ = event_tx.send(AgentEvent::Envoy {
+                    let _ = event_tx.send(AgentEvent::Runner {
                         parent_call_id: parent_call_id.clone(),
                         event,
                     });
@@ -3827,7 +3972,7 @@ impl Agent {
     /// Used by text-fallback paths (one tool call at a time).
     ///
     /// Cancellation-aware: if `cancel` fires while the tool is in flight, a
-    /// cooperatively-cancellable tool (an envoy) is given a bounded grace
+    /// cooperatively-cancellable tool (an runner) is given a bounded grace
     /// period to drain and return its terminal result — the interrupted
     /// result is carried in [`SingleToolOutcome`] so the caller can record the
     /// partial work before ending the round. A non-cancellable tool keeps the
@@ -3868,7 +4013,7 @@ impl Agent {
                         });
                     }
                     // Cooperative drain: signal the tool, then race its
-                    // future against a bounded grace period. The envoy stops
+                    // future against a bounded grace period. The runner stops
                     // at its next safe boundary and returns its partial
                     // transcript as a terminal result.
                     if let Some(sourced) = self.tool_manager.find(&call.name) {
@@ -4076,7 +4221,7 @@ impl crate::permission_policy::PermissionContext for Agent {
 }
 #[cfg(test)]
 mod tests {
-    use super::{RoundState, ScopedToolDisable, checkpoint_tool_signature, envoy_result_text};
+    use super::{RoundState, ScopedToolDisable, checkpoint_tool_signature, runner_result_text};
 
     fn tool_call(id: &str, arguments: &str) -> muta_contracts::ToolCall {
         muta_contracts::ToolCall {
@@ -4109,36 +4254,36 @@ mod tests {
         assert!(!state.is_checkpoint_replay(&after_retry));
     }
 
-    /// The successful envoy result carries the `[<tool> result]:` header, the
+    /// The successful runner result carries the `[<tool> result]:` header, the
     /// original summary verbatim, and the success re-anchor note.
     #[test]
-    fn envoy_result_text_reanchors_on_success() {
-        let text = envoy_result_text("envoy", "Found the symbol in lib.rs", false, false);
+    fn runner_result_text_reanchors_on_success() {
+        let text = runner_result_text("runner", "Found the symbol in lib.rs", false, false);
         assert!(
-            text.starts_with("[envoy result]:\n"),
+            text.starts_with("[runner result]:\n"),
             "header present: {text}"
         );
         assert!(
             text.contains("Found the symbol in lib.rs"),
             "summary preserved verbatim: {text}"
         );
-        // The anchor must pin the principal's write capability back to the
-        // principal and call out the read-only scope as envoy-only.
+        // The anchor must pin the master's write capability back to the
+        // master and call out the read-only scope as runner-only.
         assert!(
-            text.contains("applies to the envoy only"),
+            text.contains("applies to the runner only"),
             "anchor scope pin missing: {text}"
         );
         assert!(
             text.contains("retain your full toolset"),
-            "principal re-anchor missing: {text}"
+            "master re-anchor missing: {text}"
         );
     }
 
-    /// A failed envoy carries a different (re-delegate-or-act-directly) anchor,
-    /// and still preserves the partial summary for the principal to act on.
+    /// A failed runner carries a different (re-delegate-or-act-directly) anchor,
+    /// and still preserves the partial summary for the master to act on.
     #[test]
-    fn envoy_result_text_reanchors_on_failure() {
-        let text = envoy_result_text("envoy", "partial findings before crash", true, false);
+    fn runner_result_text_reanchors_on_failure() {
+        let text = runner_result_text("runner", "partial findings before crash", true, false);
         assert!(
             text.contains("partial findings before crash"),
             "partial summary preserved: {text}"
@@ -4147,25 +4292,25 @@ mod tests {
             text.contains("could not complete its sub-task"),
             "failure anchor missing: {text}"
         );
-        // Both anchors must re-affirm the principal retains write capability.
+        // Both anchors must re-affirm the master retains write capability.
         assert!(
             text.contains("retain your full toolset"),
-            "principal re-anchor missing on failure: {text}"
+            "master re-anchor missing on failure: {text}"
         );
         // And must NOT carry the success-only phrasing (regression guard against
-        // the success anchor leaking onto a failed envoy).
+        // the success anchor leaking onto a failed runner).
         assert!(
-            !text.contains("applies to the envoy only"),
+            !text.contains("applies to the runner only"),
             "success anchor leaked onto failure: {text}"
         );
     }
 
-    /// The re-anchor is unconditional for any envoy result — a regression guard
+    /// The re-anchor is unconditional for any runner result — a regression guard
     /// that a future refactor cannot silently drop it.
     #[test]
-    fn envoy_result_text_anchor_is_unconditional() {
+    fn runner_result_text_anchor_is_unconditional() {
         for (failed, interrupted) in [(false, false), (true, false), (false, true)] {
-            let text = envoy_result_text("envoy", "x", failed, interrupted);
+            let text = runner_result_text("runner", "x", failed, interrupted);
             assert!(
                 text.contains("[system]"),
                 "system anchor tag present (failed={failed}, interrupted={interrupted}): {text}"
@@ -4173,12 +4318,12 @@ mod tests {
         }
     }
 
-    /// An interrupted envoy gets its own re-anchor: the partial findings are
+    /// An interrupted runner gets its own re-anchor: the partial findings are
     /// real work to continue, not an error to work around — and the read-only
-    /// framing still does not transfer to the principal.
+    /// framing still does not transfer to the master.
     #[test]
-    fn envoy_result_text_reanchors_interruption() {
-        let text = envoy_result_text("envoy", "found 2 of 5 handlers", false, true);
+    fn runner_result_text_reanchors_interruption() {
+        let text = runner_result_text("runner", "found 2 of 5 handlers", false, true);
         assert!(
             text.contains("found 2 of 5 handlers"),
             "partial summary preserved: {text}"
@@ -4193,7 +4338,7 @@ mod tests {
         );
         assert!(
             text.contains("retain your full toolset"),
-            "principal re-anchor missing: {text}"
+            "master re-anchor missing: {text}"
         );
     }
 
@@ -4342,21 +4487,21 @@ mod tests {
         handle.abort();
     }
 
-    /// `apply_principal_profile` must seed `skip_interactive_input` from the
+    /// `apply_master_profile` must seed `skip_interactive_input` from the
     /// profile's runtime config — the wiring the bootstrap path relies on.
     #[test]
-    fn apply_principal_profile_seeds_skip_interactive_input() {
+    fn apply_master_profile_seeds_skip_interactive_input() {
         let agent = stdin_test_agent();
         assert!(!agent.skip_interactive_input(), "default off");
-        let profile = muta_contracts::PrincipalProfile::with_identity(
+        let profile = muta_contracts::MasterPreset::with_identity(
             "code",
             muta_contracts::AgentIdentity::default(),
         )
-        .with_runtime_config(muta_contracts::PrincipalRuntimeConfig {
+        .with_runtime_config(muta_contracts::MasterRuntimeConfig {
             skip_interactive_input: true,
             ..Default::default()
         });
-        agent.apply_principal_profile(&profile);
+        agent.apply_master_profile(&profile);
         assert!(
             agent.skip_interactive_input(),
             "profile overlay took effect"

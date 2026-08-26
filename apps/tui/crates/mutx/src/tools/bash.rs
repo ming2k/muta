@@ -7,7 +7,7 @@ pub struct BashPresenter;
 impl ToolPresenter for BashPresenter {
     fn summary(&self, view: &ToolView) -> String {
         view.str("command")
-            .and_then(process_name)
+            .and_then(command_summary)
             .map(|name| format!("Run {}", truncate(&name, 64)))
             .unwrap_or_else(|| "Run command".to_string())
     }
@@ -19,18 +19,20 @@ impl ToolPresenter for BashPresenter {
     fn arg_layout(&self) -> ArgLayout {
         ArgLayout::Command
     }
+
+    fn default_expanded(&self) -> bool {
+        true
+    }
 }
 
-/// Best-effort process name for the compact header.
+/// Human-readable command summary for the header.
 ///
-/// The expanded body already shows the exact `$ command` plus its output, so
-/// repeating the invocation in the closed header wastes the disclosure. The
-/// executable basename is both a quieter identity and the useful name an
-/// operator would normally pass to `pkill` (`cargo`, not `cargo build`).
-/// Leading shell-only setup segments such as `cd … &&` are skipped.
-fn process_name(command: &str) -> Option<String> {
+/// Surfaces the executable and key arguments (e.g. `Run python3 test.py`,
+/// `Run cargo test`) while skipping shell setup boilerplate (`cd ... &&`,
+/// variable assignments). Multi-line scripts use their first executable segment.
+fn command_summary(command: &str) -> Option<String> {
     for words in shell_segments(command) {
-        let mut words = words.iter().skip_while(|word| is_assignment(word));
+        let mut words = words.into_iter().skip_while(|word| is_assignment(word));
         let Some(candidate) = words.next() else {
             continue;
         };
@@ -44,12 +46,21 @@ fn process_name(command: &str) -> Option<String> {
             continue;
         }
 
-        let name = candidate
+        let exec_name = candidate
             .rsplit(['/', '\\'])
             .find(|part| !part.is_empty())
-            .unwrap_or(candidate);
-        if !name.is_empty() {
-            return Some(name.to_string());
+            .unwrap_or(&candidate)
+            .to_string();
+
+        if exec_name.is_empty() {
+            continue;
+        }
+
+        let rest: Vec<String> = words.collect();
+        if rest.is_empty() {
+            return Some(exec_name);
+        } else {
+            return Some(format!("{} {}", exec_name, rest.join(" ")));
         }
     }
     None
@@ -139,29 +150,32 @@ fn is_assignment(word: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::process_name;
+    use super::command_summary;
 
     #[test]
-    fn process_name_is_the_executable_basename() {
-        assert_eq!(process_name("cargo build"), Some("cargo".into()));
+    fn command_summary_includes_executable_and_args() {
         assert_eq!(
-            process_name("/opt/local/bin/muta-server --listen 8080"),
-            Some("muta-server".into())
+            command_summary("cargo build"),
+            Some("cargo build".into())
         );
         assert_eq!(
-            process_name("'/opt/Long Path/worker' --serve"),
-            Some("worker".into())
+            command_summary("/opt/local/bin/muta-server --listen 8080"),
+            Some("muta-server --listen 8080".into())
+        );
+        assert_eq!(
+            command_summary("'/opt/Long Path/worker' --serve"),
+            Some("worker --serve".into())
         );
     }
 
     #[test]
-    fn process_name_skips_shell_setup_and_assignments() {
+    fn command_summary_skips_shell_setup_and_assignments() {
         assert_eq!(
-            process_name("cd '/tmp/work tree' && RUST_LOG=debug cargo run"),
-            Some("cargo".into())
+            command_summary("cd '/tmp/work tree' && RUST_LOG=debug cargo run --release"),
+            Some("cargo run --release".into())
         );
         assert_eq!(
-            process_name("export MODE=test; ./target/debug/worker | tee worker.log"),
+            command_summary("export MODE=test; ./target/debug/worker | tee worker.log"),
             Some("worker".into())
         );
     }

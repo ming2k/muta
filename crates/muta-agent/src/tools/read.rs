@@ -249,7 +249,7 @@ muta_contracts::register_tool!(ReadTextFactory => |ctx| ReadTextTool {
 /// (it delegates execution to [`ReadTextTool`]), but a stripped-down,
 /// instruction-light description and schema. Selected by the **model** under
 /// `[tool_variants."<model-id>"] read_text = "terse"` for models that follow a
-/// tight contract better than verbose usage guidance. An envoy on such a
+/// tight contract better than verbose usage guidance. An runner on such a
 /// model inherits this choice automatically (variant is the model's axis, not
 /// the profile's). This is the concrete demonstration that a capability can
 /// offer a genuinely different *presentation* of the same tool rather than a

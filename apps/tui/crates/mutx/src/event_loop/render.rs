@@ -131,12 +131,12 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     let recess = app.active_modal().recess();
     let chrome_hidden = recess == Recess::Takeover;
 
-    // When zoomed into an Envoy, render its child messages and
+    // When zoomed into an Runner, render its child messages and
     // show a contextual first-row header; otherwise render the
     // root conversation.
     let view_messages = app.focused_messages();
     // `/btw` aside page-header context (ADR-0017/0103): shown only while the
-    // aside view is active. Envoy zoom and the aside view are mutually
+    // aside view is active. Runner zoom and the aside view are mutually
     // exclusive, so the two modes never coexist.
     let side_banner = app.in_side_view.then_some(view::BtwHead {
         parent: app.parent_status,
@@ -158,8 +158,8 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     let page_hints = view::PageHints {
         kind: if side_banner.is_some() {
             view::PageKind::Btw
-        } else if app.in_envoy_view() {
-            view::PageKind::Envoy
+        } else if app.in_runner_view() {
+            view::PageKind::Runner
         } else {
             view::PageKind::Main
         },
@@ -170,18 +170,18 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         interruptible: viewed_running,
         parent_note: "",
     };
-    let envoy_bar = app.focus_stack.last().and_then(|current| {
+    let runner_bar = app.focus_stack.last().and_then(|current| {
         let tasks: Vec<&TranscriptMessage> = app
             .messages
             .iter()
-            .filter(|message| message.is_envoy_task())
+            .filter(|message| message.is_runner_task())
             .collect();
         let idx = tasks
             .iter()
             .position(|message| message.tool_step_call_id() == Some(current.call_id.as_str()))?;
-        Some(view::EnvoyBarInfo {
-            role: tasks.get(idx)?.envoy_role(),
-            label: tasks.get(idx)?.envoy_description(),
+        Some(view::RunnerBarInfo {
+            role: tasks.get(idx)?.runner_role(),
+            label: tasks.get(idx)?.runner_description(),
             index: idx + 1,
             total: tasks.len(),
         })
@@ -267,7 +267,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 blocked: app.pending_count(viewed_session_id) > 0
                     && app.is_queue_blocked(viewed_session_id),
             },
-            envoy_bar,
+            runner_bar,
             side_banner,
             page_hints: Some(page_hints),
             session_head: Some(view::SessionHead {
@@ -405,7 +405,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             // background. For the editor's key field the composer would
             // also panic: the masked key's byte cursor is computed
             // against the unmasked string.
-        } else if !app.in_envoy_view() {
+        } else if !app.in_runner_view() {
             // The composer stays mounted for the dim-recess modals
             // (Help / Session /
             // Activity) so the footer layout doesn't shift when the
@@ -420,8 +420,8 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             // `show_caret` comes straight from the single source of
             // truth (`App::caret_visible`): in this branch the composer
             // is the only possible caret surface (the caret-owning
-            // modals are handled by the `skip` branch above, and envoy
-            // zoom is excluded by the `!in_envoy_view` gate), so
+            // modals are handled by the `skip` branch above, and runner
+            // zoom is excluded by the `!in_runner_view` gate), so
             // `caret_visible` reduces to "no step focus, no selection"
             // — exactly the old hand-rolled condition, without the risk
             // of drifting from the hide/show state machine.

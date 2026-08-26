@@ -226,7 +226,7 @@ pub(super) async fn handle_selection_start(
             app.focused_target = app.focused_messages().get(mi).and_then(|message| {
                 if message.is_thinking() {
                     Some(InteractiveTarget::thinking(mi))
-                } else if message.is_tool_step() || message.is_envoy_task() {
+                } else if message.is_tool_step() || message.is_runner_task() {
                     Some(InteractiveTarget::tool_step(mi))
                 } else {
                     None
@@ -270,7 +270,7 @@ pub(super) async fn handle_selection_start(
                 );
             }
             ClickTarget::StepSummary { message_idx, kind } => {
-                // Clicked a step summary: navigate into an envoy
+                // Clicked a step summary: navigate into an runner
                 // task, otherwise toggle that step's disclosure.
                 let mi = message_idx;
                 app.focused_target = Some(kind.focus_target(mi));
@@ -279,7 +279,7 @@ pub(super) async fn handle_selection_start(
                     StepKind::ToolStep => {
                         let enter_id = resolve_focused_mut(&mut messages, &app.focus_stack, mi)
                             .and_then(|message| {
-                                if message.is_envoy_task() {
+                                if message.is_runner_task() {
                                     message.tool_step_call_id().map(String::from)
                                 } else {
                                     None
@@ -287,7 +287,7 @@ pub(super) async fn handle_selection_start(
                             });
                         if let Some(id) = enter_id {
                             drop(messages);
-                            app.enter_envoy(id);
+                            app.enter_runner(id);
                         } else {
                             app.toggle_step_pinned(&mut messages, mi);
                             drop(messages);
@@ -453,7 +453,7 @@ pub(super) fn handle_select_block(app: &mut App, x: u16, y: u16) {
 
 /// Loop stage (input dispatch): the `Hover` arm of the action match.
 pub(super) async fn handle_hover(app: &mut App, runtime: &UiRuntime, x: u16, y: u16) {
-    // Every step summary (tool step, envoy task, reasoning
+    // Every step summary (tool step, runner task, reasoning
     // trace) carries the same hover affordance. When the pointer
     // rests on one — either the inline summary or the sticky
     // pinned variant — record its message index so the next draw
@@ -469,7 +469,7 @@ pub(super) async fn handle_hover(app: &mut App, runtime: &UiRuntime, x: u16, y: 
                 .read()
                 .await
                 .get(mi)
-                .map(|m| m.is_thinking() || m.is_tool_step() || m.is_envoy_task())
+                .map(|m| m.is_thinking() || m.is_tool_step() || m.is_runner_task())
                 .unwrap_or(false);
             app.hovered_step = is_step.then_some(mi);
         }

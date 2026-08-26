@@ -1,13 +1,13 @@
 //! Session-level AI title runner (ADR-0022): the LLM-backed side of the
-//! [`TITLE`] profile.
+//! [`RUNNER_TITLE`] profile.
 //!
-//! Follows the bounded-envoy split (as the retired `session_review` did): the domain
+//! Follows the bounded-runner split (as the retired `session_review` did): the domain
 //! vocabulary and the pure post-processing ([`clean_title`]) live in
 //! `muta-contracts`, while the provider call lives here next to the `Agent`.
-//! This runs a bounded envoy of the primary agent,
+//! This runs a bounded runner of the primary agent,
 //! but the title task is pure text-in/text-out — it needs no tools and no
 //! ReAct loop — so the runner is a single `Provider::chat` call framed by
-//! the [`TITLE`] profile's system prompt, not a full
+//! the [`RUNNER_TITLE`] profile's system prompt, not a full
 //! [`Agent::run_streaming_with_events`] turn. The model is told to output
 //! only the title; any tool calls it (incorrectly) emits are ignored, since
 //! only [`Message::content`] is read.
@@ -20,17 +20,17 @@
 //! skip the write when the stored title is manual (ADR-0022's lock rule).
 //!
 //! [`clean_title`]: muta_contracts::clean_title
-//! [`TITLE`]: muta_contracts::TITLE
+//! [`RUNNER_TITLE`]: muta_contracts::RUNNER_TITLE
 
 use std::time::Duration;
 
 #[cfg(test)]
 use muta_contracts::Provider;
-use muta_contracts::{Message, ModelRequest, Role, TITLE, clean_title};
+use muta_contracts::{Message, ModelRequest, Role, RUNNER_TITLE, clean_title};
 
 use crate::agent::Agent;
 
-/// Character budget for the transcript excerpt handed to the title envoy.
+/// Character budget for the transcript excerpt handed to the title runner.
 /// Generous enough to show the opening request and the recent arc (so an
 /// on-demand regen after a topic shift sees the new direction), bounded enough
 /// that the call stays cheap. The opening user message is always included in
@@ -41,12 +41,12 @@ const TRANSCRIPT_BUDGET_CHARS: usize = 2_000;
 /// stalled endpoint must not leak a background task forever. On timeout the
 /// caller simply gets `None` and the session keeps whatever title it had (or
 /// the first-user-message fallback).
-const TITLE_CALL_TIMEOUT: Duration = Duration::from_secs(45);
+const RUNNER_TITLE_CALL_TIMEOUT: Duration = Duration::from_secs(45);
 
 impl Agent {
     /// Generate a session title from `transcript`, or `None` on failure.
     ///
-    /// A single `Provider::chat` call framed by the `TITLE` profile's
+    /// A single `Provider::chat` call framed by the `RUNNER_TITLE` profile's
     /// system prompt. The transcript is condensed to a compact excerpt
     /// (`serialize_for_title`); the model's free-form answer is normalized
     /// by [`clean_title`]. Best-effort throughout: provider errors, timeouts,
@@ -62,7 +62,7 @@ impl Agent {
             return None;
         }
         let messages = vec![
-            Message::new(Role::System, TITLE.system_prompt),
+            Message::new(Role::System, RUNNER_TITLE.system_prompt),
             Message::new(
                 Role::User,
                 format!("Generate a title for this conversation:\n\n{excerpt}"),
@@ -74,20 +74,20 @@ impl Agent {
         // The atomic request deliberately carries no tools, independent of
         // whatever schemas the primary agent used on its preceding turn.
         let response = match tokio::time::timeout(
-            TITLE_CALL_TIMEOUT,
+            RUNNER_TITLE_CALL_TIMEOUT,
             self.provider.chat(ModelRequest::ephemeral(messages)),
         )
         .await
         {
             Ok(Ok(message)) => message,
             Ok(Err(error)) => {
-                tracing::warn!(error = %error, "title envoy provider call failed");
+                tracing::warn!(error = %error, "title runner provider call failed");
                 return None;
             }
             Err(_elapsed) => {
                 tracing::warn!(
-                    timeout_secs = TITLE_CALL_TIMEOUT.as_secs(),
-                    "title envoy call timed out"
+                    timeout_secs = RUNNER_TITLE_CALL_TIMEOUT.as_secs(),
+                    "title runner call timed out"
                 );
                 return None;
             }
@@ -255,7 +255,7 @@ mod tests {
             .iter()
             .find(|m| m.role == Role::System)
             .expect("system message present");
-        assert_eq!(system.content, TITLE.system_prompt);
+        assert_eq!(system.content, RUNNER_TITLE.system_prompt);
         assert!(
             provider.last_tool_specs.lock().unwrap().is_empty(),
             "title requests must not inherit the agent's tool catalog"

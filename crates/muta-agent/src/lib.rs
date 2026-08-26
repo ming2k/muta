@@ -35,7 +35,7 @@
 //! (`agent -> skills`); orchestration-native tools that
 //! construct or control agents remain in this crate.
 //!
-//! ## Why catalog and EnvoyTool live here (not in store / tools)
+//! ## Why catalog and RunnerTool live here (not in store / tools)
 //!
 //! Both got relocated here from their intuitive homes to keep the
 //! dependency graph strictly layered (see ADR-0005):
@@ -45,11 +45,11 @@
 //!   `muta-providers` — an inversion, since store is otherwise a peer
 //!   of providers. The catalog is fundamentally a factory consumed by
 //!   orchestration, so it lives where orchestration lives.
-//! - **`EnvoyTool`** spawns envoys via `Agent::new`. It used to live
+//! - **`RunnerTool`** spawns runners via `Agent::new`. It used to live
 //!   in the former `muta-tools` crate, which forced tools to depend on
 //!   this crate —
 //!   another inversion, since tools are below the agent layer. The
-//!   envoy tool is fundamentally an orchestration primitive that
+//!   runner tool is fundamentally an orchestration primitive that
 //!   happens to satisfy the `Tool` trait, so it lives here too.
 //!
 //! Everything `muta-contracts` exports is re-exported here so consumers can
@@ -65,13 +65,13 @@ pub use muta_contracts::*;
 // the Agent struct expects at the crate root have to be listed here by name.
 // Keep this list in sync with `muta_contracts`'s lib.rs re-exports.
 pub use muta_contracts::{
-    AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, DirEntry, EXPLORE, EnvoyEvent,
-    EnvoyProfile, ExecutionEnvironment, FsError, FsMetadata, FsProvider, HarnessError,
+    AgentEvent, AgentOp, AgentRequest, AgentResponse, Channel, DirEntry, RUNNER_EXPLORE, RunnerEvent,
+    RunnerPreset, ExecutionEnvironment, FsError, FsMetadata, FsProvider, HarnessError,
     HarnessSnapshot, ImagePart, InjectionKind, InjectionOrigin, InputReply, InputRequest,
     McpConnectionStatus, McpServerConfig, Message, ModelRequest, PatchOp, PermissionDecision,
     PermissionRequest, ProcessOutput, ProcessRunner, Provider, ProviderEntry, ProviderPickerRow,
     ProviderPickerSnapshot, ProviderStreamEvent, PruneOutcome, RetryableError, Role,
-    SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, TITLE, TodoId, TodoItem,
+    SessionOverview, ShellTermination, SkillsConfig, StdinPolicy, RUNNER_TITLE, TodoId, TodoItem,
     TodoList, TodoStatus, TokenUsage, Tool, ToolCall, ToolMiddleware, ToolOutput, ToolPolicy,
     ToolResult, ToolStream, Transport, UserQuestion, UserQuestionOption, UserQuestionReply,
     UserQuestionRequest, WebSearchConfig, estimate_bytes, estimate_tokens, is_context_overflow,
@@ -84,7 +84,7 @@ pub use muta_contracts::{
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// Maximum interval between consecutive stream events (text/reasoning/tool-call
@@ -117,8 +117,8 @@ const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 pub(crate) const FINISH_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(750);
 
 /// How long the tool executors wait for a cooperatively-cancelled in-flight
-/// call (an envoy) to drain after the user interrupts a turn, before falling
-/// back to dropping its future. The envoy observes its token at the next safe
+/// call (an runner) to drain after the user interrupts a turn, before falling
+/// back to dropping its future. The runner observes its token at the next safe
 /// boundary (the current provider stream or tool call, both bounded by their
 /// own timeouts) and returns its partial transcript — normally in well under
 /// a second. This is the backstop for pathological cases (a child parked on a
@@ -129,7 +129,7 @@ const ENVOY_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5)
 pub mod agent;
 pub use agent::{Agent, AgentBuilder, RequestTokenEstimate, RoundOutcome};
 
-pub mod actor;
+pub mod mesh;
 mod bash_policy;
 pub mod budget;
 pub mod catalog;
@@ -140,11 +140,13 @@ pub mod doom_guard;
 pub mod dynamic;
 mod dynamic_tools;
 pub mod hooks;
+
+pub mod human_broker;
 pub use hooks::{HookRegistry, UserPromptVerdict, matcher_matches};
 pub mod inflight;
 pub use inflight::Inflight;
 mod dispatch_pipeline;
-pub mod envoy_tool;
+pub mod runner_tool;
 mod hook_runner;
 pub mod loop_guard;
 mod model_request;
@@ -164,11 +166,10 @@ mod tool_integration;
 mod tool_manager;
 mod tool_scheduler;
 pub mod tools;
-pub mod worktree;
 
 pub use context_projection::ContextProjectionGate;
-pub use envoy_tool::{EnvoyRegistry, EnvoyTool};
-pub use model_request::policies::subagent_system_prompt_registry;
+pub use runner_tool::{RunnerRegistry, RunnerTool};
+pub use model_request::policies::runner_system_prompt_registry;
 pub use model_request::system_prompt::{
     SystemPromptContext, SystemPromptRegistry, SystemPromptRegistryError, SystemPromptSection,
 };

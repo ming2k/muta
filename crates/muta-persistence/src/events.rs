@@ -127,7 +127,7 @@ pub enum SessionEvent {
     /// (crash, kill, upgrade, reboot) restores the session in the same
     /// attended/unattended posture it died in instead of silently
     /// de-escalating to attended. Written by the `/autopilot` handler, the
-    /// `--autopilot` startup path, and `/principal` role switches; read on
+    /// `--autopilot` startup path, and `/master` role switches; read on
     /// every resume/rehost.
     AutopilotSet { enabled: bool },
 }

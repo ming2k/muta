@@ -1,7 +1,7 @@
 //! Step rendering implementation: the summary primitives, the per-tool body
 //! content renderers (code, listing, matches, bash, diff), and the top-level
 //! orchestrators (`draw_tool_step`, `draw_reasoning_trace`, and
-//! `draw_envoy_inline_step`) that compose them. Also
+//! `draw_runner_inline_step`) that compose them. Also
 //! produces the sticky pinned-step summary that
 //! [`super::super::draw_transcript`] overlays while a step body is scrolled
 //! into view. State and color resolution live in [`super`] (re-exported from
@@ -315,7 +315,7 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
     out
 }
 
-/// Build the summary line for a tool/envoy step: an optional expand marker
+/// Build the summary line for a tool/runner step: an optional expand marker
 /// followed by the summary text, padded to `full_width`.
 ///
 /// The focus affordance is carried entirely by color (resolved upstream through
@@ -1519,15 +1519,15 @@ fn fmt_no(no: Option<usize>, width: usize) -> String {
     }
 }
 
-/// Render an envoy `task` tool step as a compact, non-expandable step.
-/// Activating it (click / Enter) navigates into a dedicated envoy view
+/// Render an runner `task` tool step as a compact, non-expandable step.
+/// Activating it (click / Enter) navigates into a dedicated runner view
 /// rather than expanding a body inline. The step is exactly two rows: a
 /// summary line carrying the `[profile]` role badge + task description, and
 /// a single `└`-edged second row that shows the live "peek" (current
 /// activity + elapsed) while running and is replaced in place by the
-/// one-line conclusion when the envoy terminates.
+/// one-line conclusion when the runner terminates.
 #[allow(clippy::too_many_arguments)]
-pub fn draw_envoy_inline_step(
+pub fn draw_runner_inline_step(
     frame: &mut Frame,
     transcript_area: Rect,
     msg: &TranscriptMessage,
@@ -1589,7 +1589,7 @@ pub fn draw_envoy_inline_step(
     // and survives narrow terminals. Two plain spaces separate badge and
     // summary (R2 same-rank peers on the join ladder).
     let badge = msg
-        .envoy_profile()
+        .runner_profile()
         .map(|role| format!("[{}]", role.to_uppercase()))
         .unwrap_or_else(|| "[ENVOY]".to_string());
     let summary_row = {
@@ -1626,14 +1626,14 @@ pub fn draw_envoy_inline_step(
     }
 
     // Row 2: the `└`-edged live row. While running it carries the peek
-    // (current activity + elapsed); once the envoy terminates it is replaced
+    // (current activity + elapsed); once the runner terminates it is replaced
     // in place by the one-line conclusion. The `└` is constant — the step is
     // always exactly two rows, so the second row is always the leaf — and the
     // running/terminated distinction is carried by color and content, not by
     // the glyph.
-    let (row_text, row_color) = if let Some(peek) = msg.envoy_status_line() {
+    let (row_text, row_color) = if let Some(peek) = msg.runner_status_line() {
         (peek, theme.info())
-    } else if let Some(outcome) = msg.envoy_outcome_line() {
+    } else if let Some(outcome) = msg.runner_outcome_line() {
         (outcome, theme.muted())
     } else {
         (String::new(), theme.muted())
@@ -1653,7 +1653,7 @@ pub fn draw_envoy_inline_step(
                 Span::styled(padded_tail(ctx.full_width, used), bg_style),
             ]);
             // Make the whole second row part of the same clickable summary so
-            // clicking anywhere on the step enters the envoy view.
+            // clicking anywhere on the step enters the runner view.
             if let Some(rect) = ctx.paint(line) {
                 ctx.layout_map.push(BlockRegion {
                     message_idx: mi,
@@ -1837,14 +1837,12 @@ pub fn draw_tool_step(
                 }
 
                 // Tool-specific content (label-free). bash renders `$ cmd` +
-                // output; others their block. A streaming bash step may have no
-                // composed output yet but a partial structured stdout.
+                // output; others their block. A streaming or freshly-spawned bash
+                // step renders its `$ cmd` and live streaming output.
                 let has_output = output.as_deref().is_some_and(|s| !s.is_empty());
-                let bash_streaming = matches!(
-                    structured.as_deref(),
-                    Some(muta_contracts::ToolOutput::Shell { stdout, .. }) if !stdout.is_empty()
-                );
-                if has_output || bash_streaming {
+                let is_bash = name == "bash";
+                let has_structured = structured.is_some();
+                if has_output || is_bash || has_structured {
                     draw_tool_result(
                         &mut ctx,
                         mi,
@@ -1862,7 +1860,7 @@ pub fn draw_tool_step(
             }
         }
 
-        // ── Nested envoy children ──.
+        // ── Nested runner children ──.
         if let crate::model::document::MessageKind::ToolStep { children, .. } = &msg.kind {
             if !children.is_empty() {
                 let mut ctx = RenderCtx::from_cursor(

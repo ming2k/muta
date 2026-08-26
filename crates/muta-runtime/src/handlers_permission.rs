@@ -3,11 +3,11 @@
 //!
 //! Each handler is one match arm, lifted unchanged. Parameters are named to
 //! match the original loop locals (`agent`, `session`, `resp_tx`,
-//! `lifecycle`, `side`, `envoy_registry`, …) so the body reads exactly as
+//! `lifecycle`, `side`, `runner_registry`, …) so the body reads exactly as
 //! it did inline.
 
 use muta_agent::orchestration::send_harness_state;
-use muta_agent::{Agent, EnvoyRegistry, RoundLifecycle};
+use muta_agent::{Agent, RunnerRegistry, RoundLifecycle};
 use muta_contracts::{AgentResponse, LoopStatus, PermissionDecision};
 use muta_persistence::session::SessionStore;
 use std::sync::Arc;
@@ -109,24 +109,40 @@ pub async fn interrupt(
 }
 
 /// `AgentRequest::PermissionReply` — full-duplex routing (ADR-0029): a reply
-/// tagged with a `parent_call_id` targets an envoy's parked oneshot via the
+/// tagged with a `parent_call_id` targets an runner's parked oneshot via the
 /// registry handle; `None` keeps the legacy top-level (/btw side) path. A late
 /// reply after the child finished finds no handle and falls through to the
 /// "no longer pending" error.
 pub async fn reply(
     agent: &Agent,
-    envoy_registry: &Arc<EnvoyRegistry>,
+    runner_registry: &Arc<RunnerRegistry>,
+    side: &Arc<AsyncRwLock<SideRegistry>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     request_id: String,
     decision: PermissionDecision,
     parent_call_id: Option<String>,
 ) {
+    // Three-level routing, mirroring `reply_question` / `reply_input`: a
+    // `parent_call_id` targets an runner; otherwise the primary, then a
+    // `/btw` side agent. (The side fallback was missing here — a side
+    // agent's permission banner reply used to fall through to "no longer
+    // pending" and park forever. ADR-0141 makes all three reply handlers
+    // uniform.)
     let resolved = if let Some(parent) = &parent_call_id {
-        envoy_registry
+        runner_registry
             .get(parent)
             .is_some_and(|handle| handle.reply_permission(&request_id, decision))
+    } else if agent.reply_permission(&request_id, decision) {
+        true
     } else {
-        agent.reply_permission(&request_id, decision)
+        let mut routed = false;
+        for s in side.read().await.iter() {
+            if s.agent.reply_permission(&request_id, decision) {
+                routed = true;
+                break;
+            }
+        }
+        routed
     };
     if !resolved {
         let _ = resp_tx.send(AgentResponse::Error(
@@ -136,12 +152,12 @@ pub async fn reply(
 }
 
 /// `AgentRequest::UserQuestionReply` — mirror the permission arm: a
-/// `parent_call_id` targets the envoy; otherwise try the primary, then a
+/// `parent_call_id` targets the runner; otherwise try the primary, then a
 /// `/btw` side agent (ADR-0017).
 #[allow(clippy::too_many_arguments)]
 pub async fn reply_question(
     agent: &Agent,
-    envoy_registry: &Arc<EnvoyRegistry>,
+    runner_registry: &Arc<RunnerRegistry>,
     side: &Arc<AsyncRwLock<SideRegistry>>,
     workspace_security: &Arc<muta_persistence::workspace_security::WorkspaceSecurityStore>,
     project_root: &std::path::Path,
@@ -179,7 +195,7 @@ pub async fn reply_question(
     }
 
     let resolved = if let Some(parent) = &parent_call_id {
-        envoy_registry
+        runner_registry
             .get(parent)
             .is_some_and(|handle| handle.reply_user_question(&request_id, answers.clone()))
     } else if agent.reply_user_question(&request_id, answers.clone()) {
@@ -202,11 +218,11 @@ pub async fn reply_question(
 }
 
 /// `AgentRequest::InputReply` (L3.5 β) — mirrors [`reply_question`]: a
-/// `parent_call_id` targets the envoy; otherwise try the primary, then a
+/// `parent_call_id` targets the runner; otherwise try the primary, then a
 /// `/btw` side agent.
 pub async fn reply_input(
     agent: &Agent,
-    envoy_registry: &Arc<EnvoyRegistry>,
+    runner_registry: &Arc<RunnerRegistry>,
     side: &Arc<AsyncRwLock<SideRegistry>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     request_id: String,
@@ -214,7 +230,7 @@ pub async fn reply_input(
     parent_call_id: Option<String>,
 ) {
     let resolved = if let Some(parent) = &parent_call_id {
-        envoy_registry
+        runner_registry
             .get(parent)
             .is_some_and(|handle| handle.reply_input(&request_id, text.clone()))
     } else if agent.reply_input(&request_id, text.clone()) {

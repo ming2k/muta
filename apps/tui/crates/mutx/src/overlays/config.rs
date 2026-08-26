@@ -191,7 +191,7 @@ pub fn draw_config_view(frame: &mut Frame, mut props: ConfigViewProps<'_>) -> Co
     let (category_body, detail_body) =
         draw_panels(frame, category_area, detail_area, &mut props, category);
 
-    // 3. Bottom Envoy-Style 3-Row Footer
+    // 3. Bottom Runner-Style 3-Row Footer
     draw_footer(
         frame,
         footer_rect,
@@ -1148,7 +1148,7 @@ fn draw_system_detail(
     render_scrollable(frame, body, lines, props.detail_scroll, None, props.theme);
 }
 
-// ── Footer (Envoy-Style 3-Row Footer) ──────────────────────────────────────
+// ── Footer (Runner-Style 3-Row Footer) ──────────────────────────────────────
 
 fn draw_footer(
     frame: &mut Frame,

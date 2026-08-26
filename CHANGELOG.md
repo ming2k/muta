@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Composer `@` path completion now scans project files in-process with
+  ripgrep's `ignore` walker instead of shelling out to a system-installed
+  `rg --files`. Machines without `rg` installed get identical gitignore and
+  hidden-file semantics (previously the fallback walked the tree without
+  ignore rules, surfacing `target/` and `node_modules/`); directories are
+  included alongside files so the trailing-`/` completion UX is preserved.
+  The walk is bounded at 2,000 entries and sorted deterministically.
+
 ## [0.34.5] - 2026-08-26
 
 ### Changed

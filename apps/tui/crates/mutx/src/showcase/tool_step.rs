@@ -93,7 +93,7 @@ pub fn run() -> io::Result<()> {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,

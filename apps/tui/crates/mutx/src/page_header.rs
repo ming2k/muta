@@ -1,12 +1,12 @@
-//! Contextual first-row header for every transcript page — plus the Envoy
+//! Contextual first-row header for every transcript page — plus the Runner
 //! page's permanent key-legend footer.
 //!
-//! Every view — Main (session), `/btw`, Envoy, and future focused pages —
+//! Every view — Main (session), `/btw`, Runner, and future focused pages —
 //! shares one layout rule for the head row: identity and page-specific
 //! context on the left, mode / index metadata on the right. Navigation
 //! shortcuts do **not** live on the head row; the aside view carries them on
-//! its second header row (ADR-0103 §3) and the Envoy page on its permanent
-//! three-row footer ([`draw_envoy_footer`]) instead. Row 2 is demand-driven
+//! its second header row (ADR-0103 §3) and the Runner page on its permanent
+//! three-row footer ([`draw_runner_footer`]) instead. Row 2 is demand-driven
 //! (ADR-0104): it exists only while the view has something to say that no
 //! other surface already says. Keeping this outside disclosure rendering
 //! also leaves one clear extension point for future focused pages.
@@ -14,7 +14,7 @@
 use mutx_engine::{Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{EnvoyBarInfo, STEP_MIN_WIDTH, TRANSCRIPT_H_INSET, Theme};
+use super::{RunnerBarInfo, STEP_MIN_WIDTH, TRANSCRIPT_H_INSET, Theme};
 
 pub(crate) enum PageHeader<'a> {
     /// The Main session view: `SESSION` identity, the session's persistent-id
@@ -24,7 +24,7 @@ pub(crate) enum PageHeader<'a> {
     /// The `/btw` aside view (ADR-0103): identity + parent status on row 1;
     /// its shortcuts live on row 2 via [`draw_page_header_hints`].
     Btw(BtwHead),
-    Envoy(&'a EnvoyBarInfo),
+    Runner(&'a RunnerBarInfo),
 }
 
 /// Row-1 content for the `/btw` aside view's head.
@@ -46,8 +46,8 @@ pub(crate) struct BtwHead {
 /// that are either global (`F1 help` — every modal footer and the Help modal
 /// own that discovery) or already carried by a *more specific* surface: the
 /// main view's interrupt lives on the activity bar (which spells the real
-/// double-Esc arming, `Esc Esc interrupt`), and the Envoy page's legend
-/// lives on its permanent footer ([`draw_envoy_footer`]).
+/// double-Esc arming, `Esc Esc interrupt`), and the Runner page's legend
+/// lives on its permanent footer ([`draw_runner_footer`]).
 pub(crate) struct PageHints<'a> {
     /// Which page the legend belongs to — decides the keycap set.
     pub kind: PageKind,
@@ -71,14 +71,14 @@ impl PageHints<'_> {
     ///   `F5 asides` are exactly the affordances this row exists for).
     /// - **Btw**: always — `Ctrl-C back` is the view's single exit, and
     ///   no other surface repeats it.
-    /// - **Envoy**: never — its permanent footer already carries the same
-    ///   legend (`draw_envoy_footer`), so a row-2 copy would duplicate the
+    /// - **Runner**: never — its permanent footer already carries the same
+    ///   legend (`draw_runner_footer`), so a row-2 copy would duplicate the
     ///   exact keycaps one screen apart.
     pub(crate) fn has_content(&self) -> bool {
         match self.kind {
             PageKind::Main => self.asides.is_some(),
             PageKind::Btw => true,
-            PageKind::Envoy => false,
+            PageKind::Runner => false,
         }
     }
 }
@@ -94,7 +94,7 @@ pub(crate) struct AsidesChip {
 pub(crate) enum PageKind {
     Main,
     Btw,
-    Envoy,
+    Runner,
 }
 
 impl From<&PageHeader<'_>> for PageKind {
@@ -102,7 +102,7 @@ impl From<&PageHeader<'_>> for PageKind {
         match header {
             PageHeader::Session(_) => PageKind::Main,
             PageHeader::Btw(_) => PageKind::Btw,
-            PageHeader::Envoy(_) => PageKind::Envoy,
+            PageHeader::Runner(_) => PageKind::Runner,
         }
     }
 }
@@ -127,7 +127,7 @@ struct HeaderContent {
     /// dimmed). Empty when the variant has none.
     tag: String,
     /// Optional `[ROLE]`-style tag rendered in the brand tone right after the
-    /// identity tag (the Envoy page's role). Empty when absent.
+    /// identity tag (the Runner page's role). Empty when absent.
     badge: String,
     primary: String,
     meta: String,
@@ -135,12 +135,12 @@ struct HeaderContent {
 }
 
 /// Draw a single contextual header row. The primary action is always retained
-/// on narrow terminals; descriptive text truncates first, while Envoy sibling
+/// on narrow terminals; descriptive text truncates first, while Runner sibling
 /// shortcuts appear when there is enough room for them to remain legible.
 ///
 /// The band's background spans the rect's full width — the head is top-level
 /// chrome pinned to the terminal's top edge, so its `body` surface reaches
-/// both edges like the Envoy key-legend band at the bottom edge. The *text*
+/// both edges like the Runner key-legend band at the bottom edge. The *text*
 /// keeps the shared [`TRANSCRIPT_H_INSET`] horizontal inset (rendered as pad
 /// spans) so it stays aligned with the transcript band below.
 pub(crate) fn draw_page_header(
@@ -167,7 +167,7 @@ pub(crate) fn draw_page_header(
                 String::new()
             },
         },
-        // Envoy and /btw are contextual pages that replace the session head.
+        // Runner and /btw are contextual pages that replace the session head.
         PageHeader::Btw(head) => HeaderContent {
             title: " /btw ",
             tag: String::new(),
@@ -178,12 +178,12 @@ pub(crate) fn draw_page_header(
             // the row-2 legend (ADR-0103 §3), so "Esc back" is gone here.
             action: String::new(),
         },
-        // The Envoy head shares the Session head's shape: uppercase identity
+        // The Runner head shares the Session head's shape: uppercase identity
         // + `[ROLE]` tag + task title on the left, and pure index metadata on
         // the right — the sibling count `(i/n)`, shown only when there is
-        // more than one sibling. Navigation shortcuts moved to the Envoy
-        // page's permanent footer (see `draw_envoy_footer`).
-        PageHeader::Envoy(bar) => HeaderContent {
+        // more than one sibling. Navigation shortcuts moved to the Runner
+        // page's permanent footer (see `draw_runner_footer`).
+        PageHeader::Runner(bar) => HeaderContent {
             title: " ENVOY ",
             tag: String::new(),
             badge: bar
@@ -210,7 +210,7 @@ pub(crate) fn draw_page_header(
     let meta_style = fill.fg(theme.muted());
     // The session mode flag (`autopilot`) reads as a persistent safety state,
     // so it takes the warning tone; every other variant's right side is quiet
-    // metadata (the `/btw` return hint, the Envoy sibling count).
+    // metadata (the `/btw` return hint, the Runner sibling count).
     let action_style = if matches!(header, PageHeader::Session(_)) {
         fill.fg(theme.warn()).add_modifier(Modifier::BOLD)
     } else {
@@ -288,7 +288,7 @@ pub(crate) fn draw_page_header(
 ///   and contradict it.
 /// - **Btw**: `Ctrl-C back`, `F5 asides`, `Esc interrupt aside`, with the
 ///   parent note as the leading descriptive segment when set.
-/// - **Envoy**: never rendered — the Envoy page's permanent footer already
+/// - **Runner**: never rendered — the Runner page's permanent footer already
 ///   carries the same legend, so the caller collapses the band to row 1.
 ///
 /// No global affordances (`F1 help`) live here: every modal footer already
@@ -326,7 +326,7 @@ pub(crate) fn draw_page_header_hints(
             let note = hints.parent_note.trim();
             (!note.is_empty()).then(|| note.to_string())
         }
-        PageKind::Envoy => None,
+        PageKind::Runner => None,
     };
 
     let pairs: Vec<(&'static str, &'static str)> = match hints.kind {
@@ -348,9 +348,9 @@ pub(crate) fn draw_page_header_hints(
             }
             pairs
         }
-        // The Envoy legend lives on the page's permanent footer
-        // (`draw_envoy_footer`); row 2 never renders for this page kind.
-        PageKind::Envoy => Vec::new(),
+        // The Runner legend lives on the page's permanent footer
+        // (`draw_runner_footer`); row 2 never renders for this page kind.
+        PageKind::Runner => Vec::new(),
     };
 
     let width = rect.width as usize;
@@ -403,21 +403,21 @@ pub(crate) fn draw_page_header_hints(
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
-/// Draw the Envoy page's permanent three-row footer. The band fills the
+/// Draw the Runner page's permanent three-row footer. The band fills the
 /// page-body background (`theme.body()`, the same tone the head row uses)
 /// across its full width; the middle row is the actual content area carrying
 /// the page's key shortcuts, and the top/bottom rows are blank padding, so
 /// the legend reads as one continuous surface pinned to the terminal's
 /// bottom edge.
 ///
-/// The legend carries only the Envoy-specific navigation — `Esc back`, and
-/// `[ prev` / `] next` when the focused envoy has siblings. No global
+/// The legend carries only the Runner-specific navigation — `Esc back`, and
+/// `[ prev` / `] next` when the focused runner has siblings. No global
 /// affordances (`F1 help`) live here either (ADR-0104): help is a global
 /// capability whose discovery every modal footer (`? help`) and the Help
 /// modal already own, not a property of *this* view — the same rule that
 /// keeps the head band's row 2 free of it. Content is horizontally centered
 /// with a minimum left margin.
-pub(crate) fn draw_envoy_footer(frame: &mut Frame, rect: Rect, info: &EnvoyBarInfo, theme: &Theme) {
+pub(crate) fn draw_runner_footer(frame: &mut Frame, rect: Rect, info: &RunnerBarInfo, theme: &Theme) {
     if rect.height == 0 || (rect.width as usize) < STEP_MIN_WIDTH {
         return;
     }
@@ -428,7 +428,7 @@ pub(crate) fn draw_envoy_footer(frame: &mut Frame, rect: Rect, info: &EnvoyBarIn
     let hint_style = fill.fg(theme.muted());
 
     // Build the legend as keycap + label pairs joined by a wide gap, all of
-    // them Envoy-specific: the page's own navigation (back, siblings). The
+    // them Runner-specific: the page's own navigation (back, siblings). The
     // global `F1 help` pair is deliberately absent (ADR-0104) — help is not
     // a view-level affordance; the modal footers' `? help` chip and the Help
     // modal own its discovery. On narrow rows the sibling pair drops first
@@ -491,7 +491,7 @@ pub(crate) fn draw_envoy_footer(frame: &mut Frame, rect: Rect, info: &EnvoyBarIn
     }
 }
 
-/// Gap between adjacent keycap+label pairs in the Envoy footer legend.
+/// Gap between adjacent keycap+label pairs in the Runner footer legend.
 const ENVOY_FOOTER_PAIR_GAP: usize = 4;
 /// Minimum left/right margin the legend keeps even on narrow rows.
 const ENVOY_FOOTER_MARGIN_MIN: usize = 2;
@@ -704,9 +704,9 @@ mod tests {
         assert!(mk(PageKind::Main, true).has_content());
         // Btw: always (its exit pair exists on no other surface).
         assert!(mk(PageKind::Btw, false).has_content());
-        // Envoy: never (the permanent footer owns the legend).
-        assert!(!mk(PageKind::Envoy, false).has_content());
-        assert!(!mk(PageKind::Envoy, true).has_content());
+        // Runner: never (the permanent footer owns the legend).
+        assert!(!mk(PageKind::Runner, false).has_content());
+        assert!(!mk(PageKind::Runner, true).has_content());
     }
 
     #[test]
@@ -760,14 +760,14 @@ mod tests {
     }
 
     #[test]
-    fn envoy_header_shows_identity_role_title_and_sibling_index() {
-        let info = EnvoyBarInfo {
+    fn runner_header_shows_identity_role_title_and_sibling_index() {
+        let info = RunnerBarInfo {
             role: Some("explore".to_string()),
             label: "inspect the renderer".to_string(),
             index: 1,
             total: 2,
         };
-        let row = rendered_row(80, PageHeader::Envoy(&info));
+        let row = rendered_row(80, PageHeader::Runner(&info));
         assert_eq!(
             row,
             "   ENVOY [EXPLORE] inspect the renderer                                 (1/2)   "
@@ -775,14 +775,14 @@ mod tests {
     }
 
     #[test]
-    fn envoy_header_omits_role_tag_until_known_and_index_when_single() {
-        let info = EnvoyBarInfo {
+    fn runner_header_omits_role_tag_until_known_and_index_when_single() {
+        let info = RunnerBarInfo {
             role: None,
             label: "a task without a role yet".to_string(),
             index: 1,
             total: 1,
         };
-        let row = rendered_row(48, PageHeader::Envoy(&info));
+        let row = rendered_row(48, PageHeader::Runner(&info));
         assert!(row.starts_with("   ENVOY a task without a role yet"));
         assert!(!row.contains('['));
         assert!(!row.contains("(1/1)"));
@@ -790,23 +790,23 @@ mod tests {
     }
 
     #[test]
-    fn narrow_envoy_header_preserves_identity_and_sibling_index() {
-        let info = EnvoyBarInfo {
+    fn narrow_runner_header_preserves_identity_and_sibling_index() {
+        let info = RunnerBarInfo {
             role: Some("plan".to_string()),
-            label: "a very long envoy task description that cannot fit".to_string(),
+            label: "a very long runner task description that cannot fit".to_string(),
             index: 12,
             total: 24,
         };
-        let row = rendered_row(36, PageHeader::Envoy(&info));
+        let row = rendered_row(36, PageHeader::Runner(&info));
         assert!(row.starts_with("   ENVOY [PLAN] "));
         assert!(row.contains("(12/24)"));
         assert_eq!(row.width(), 36);
     }
 
     #[test]
-    fn envoy_footer_centers_legend_on_a_solid_three_row_band() {
+    fn runner_footer_centers_legend_on_a_solid_three_row_band() {
         let theme = Theme::default();
-        let info = EnvoyBarInfo {
+        let info = RunnerBarInfo {
             role: Some("explore".to_string()),
             label: "inspect the renderer".to_string(),
             index: 1,
@@ -814,7 +814,7 @@ mod tests {
         };
         let mut terminal = mutx_engine::TestTerminal::new(40, 3);
         terminal.draw(|frame| {
-            draw_envoy_footer(frame, frame.area(), &info, &theme);
+            draw_runner_footer(frame, frame.area(), &info, &theme);
         });
         let buffer = terminal.buffer();
         let width = buffer.area().width as usize;
@@ -846,10 +846,10 @@ mod tests {
     }
 
     #[test]
-    fn envoy_footer_drops_affordances_as_the_row_narrows() {
+    fn runner_footer_drops_affordances_as_the_row_narrows() {
         let theme = Theme::default();
         let footer_text = |width: u16, total: usize| -> String {
-            let info = EnvoyBarInfo {
+            let info = RunnerBarInfo {
                 role: None,
                 label: String::new(),
                 index: 1,
@@ -857,7 +857,7 @@ mod tests {
             };
             let mut terminal = mutx_engine::TestTerminal::new(width, 3);
             terminal.draw(|frame| {
-                draw_envoy_footer(frame, frame.area(), &info, &theme);
+                draw_runner_footer(frame, frame.area(), &info, &theme);
             });
             let width = terminal.buffer().area().width as usize;
             terminal.buffer().content[width..2 * width]
@@ -866,7 +866,7 @@ mod tests {
                 .collect()
         };
         // No siblings: the prev/next pair never renders, and the legend is
-        // the exit pair alone — help is global, not an Envoy affordance
+        // the exit pair alone — help is global, not an Runner affordance
         // (ADR-0104).
         let single = footer_text(40, 1);
         assert!(

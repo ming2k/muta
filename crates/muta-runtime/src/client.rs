@@ -26,6 +26,30 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 pub use crate::serve::AttachAction;
 pub use crate::serve_discovery::Discovery as DaemonInfo;
 
+/// ADR-0141: the human-channel posture this process declares when attaching.
+/// Defaults to `Interactive` (a TUI is a human by construction). Headless
+/// entrypoints (`muta -p`, remote automation) call [`set_posture`] with
+/// `Autonomous` before connecting so the session knows no human can answer
+/// parked requests. Process-wide because one process plays one role.
+static POSTURE_OVERRIDE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Declare this client's human-channel posture (ADR-0141). Must be called
+/// before the first attach; later attaches of the same process inherit it.
+pub fn set_posture(posture: muta_contracts::human_request::HumanChannelPosture) {
+    let code = match posture {
+        muta_contracts::human_request::HumanChannelPosture::Interactive => 0,
+        muta_contracts::human_request::HumanChannelPosture::Autonomous => 1,
+    };
+    POSTURE_OVERRIDE.store(code, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn current_posture() -> muta_contracts::human_request::HumanChannelPosture {
+    match POSTURE_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => muta_contracts::human_request::HumanChannelPosture::Autonomous,
+        _ => muta_contracts::human_request::HumanChannelPosture::Interactive,
+    }
+}
+
 /// An explicitly named daemon endpoint (`--remote <addr>` + `--token
 /// <token>`): the operator supplied the coordinates, so no discovery
 /// record exists or is read. Distinct from [`DaemonInfo`] on purpose — a
@@ -875,6 +899,10 @@ where
     let select = serde_json::to_string(&Wire::Select {
         action,
         project,
+        // ADR-0141: the client's interactivity posture. The TUI is a human
+        // by construction; headless callers override this via
+        // [`crate::client::set_posture`] before connecting.
+        posture: current_posture(),
         // Product build: advisory identity on the wire since ADR-0134 (the
         // protocol number below is the gate), but still enforced against
         // pre-protocol daemons, which judge it by exact equality.
@@ -1070,6 +1098,7 @@ where
     let select = serde_json::to_string(&Wire::Select {
         action,
         project: None,
+        posture: current_posture(),
         // Same handshake contract as the attach path (ADR-0134): the
         // protocol number is the gate, the product version the advisory
         // identity still enforced by pre-protocol daemons.
@@ -1182,6 +1211,7 @@ where
         action: crate::serve::AttachAction::Monitor(action),
         // Monitor streams are host-wide; no project scope applies.
         project: None,
+        posture: current_posture(),
         version: Some(crate::serve::daemon_version().to_string()),
         protocol: Some(muta_contracts::PROTOCOL_VERSION),
     })

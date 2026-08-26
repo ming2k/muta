@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { EnvoyExecution, LiveToolExecution } from "../stores/daemon.svelte.js";
+  import type { RunnerExecution, LiveToolExecution } from "../stores/daemon.svelte.js";
 
   interface Props {
     tool: LiveToolExecution;
@@ -7,7 +7,7 @@
 
   let { tool }: Props = $props();
   let expanded = $state(true);
-  let envoyExpanded = $state(true);
+  let runnerExpanded = $state(true);
 
   let statusLabel = $derived.by(() => {
     switch (tool.status) {
@@ -26,11 +26,11 @@
     tool.status === "running" ? tool.stdout || tool.stderr : "",
   );
 
-  function envoySummary(envoy: EnvoyExecution): string {
+  function runnerSummary(runner: RunnerExecution): string {
     const parts: string[] = [];
-    if (envoy.profile) parts.push(envoy.profile);
-    if (envoy.activity) parts.push(envoy.activity);
-    const running = envoy.tools.filter((t) => t.status === "running").length;
+    if (runner.profile) parts.push(runner.profile);
+    if (runner.activity) parts.push(runner.activity);
+    const running = runner.tools.filter((t) => t.status === "running").length;
     if (running > 0) parts.push(`${running} tool${running > 1 ? "s" : ""} running`);
     return parts.join(" · ") || "working…";
   }
@@ -76,19 +76,19 @@
         </div>
       {/if}
 
-      {#if tool.envoy}
-        {@const envoy = tool.envoy}
-        <div class="envoy-block">
-          <button class="envoy-header" onclick={() => (envoyExpanded = !envoyExpanded)}>
-            <span class="envoy-icon">⎇</span>
-            <span class="envoy-title">envoy — {envoySummary(envoy)}</span>
-            <span class="chevron">{envoyExpanded ? "-" : "+"}</span>
+      {#if tool.runner}
+        {@const runner = tool.runner}
+        <div class="runner-block">
+          <button class="runner-header" onclick={() => (runnerExpanded = !runnerExpanded)}>
+            <span class="runner-icon">⎇</span>
+            <span class="runner-title">runner — {runnerSummary(runner)}</span>
+            <span class="chevron">{runnerExpanded ? "-" : "+"}</span>
           </button>
-          {#if envoyExpanded}
-            <div class="envoy-content">
-              {#each envoy.tools as sub (sub.id)}
-                <div class="envoy-tool">
-                  <div class="envoy-tool-head">
+          {#if runnerExpanded}
+            <div class="runner-content">
+              {#each runner.tools as sub (sub.id)}
+                <div class="runner-tool">
+                  <div class="runner-tool-head">
                     <span class="name">{sub.name}</span>
                     <span class="sub-status status-{sub.status}">
                       {sub.status === "running" ? "running…" : `done (${sub.durationMs ?? 0}ms)`}
@@ -99,23 +99,23 @@
                   {/if}
                 </div>
               {/each}
-              {#if envoy.streamingReasoning}
-                <details class="envoy-reasoning" open>
+              {#if runner.streamingReasoning}
+                <details class="runner-reasoning" open>
                   <summary>thinking…</summary>
-                  <pre class="envoy-reasoning-text">{envoy.streamingReasoning}</pre>
+                  <pre class="runner-reasoning-text">{runner.streamingReasoning}</pre>
                 </details>
               {/if}
-              {#each envoy.reasoning as trace, i (i)}
-                <details class="envoy-reasoning">
+              {#each runner.reasoning as trace, i (i)}
+                <details class="runner-reasoning">
                   <summary>thinking</summary>
-                  <pre class="envoy-reasoning-text">{trace}</pre>
+                  <pre class="runner-reasoning-text">{trace}</pre>
                 </details>
               {/each}
-              {#if envoy.streamingText}
-                <pre class="envoy-stream">{envoy.streamingText}</pre>
+              {#if runner.streamingText}
+                <pre class="runner-stream">{runner.streamingText}</pre>
               {/if}
-              {#if envoy.text}
-                <pre class="envoy-text">{envoy.text}</pre>
+              {#if runner.text}
+                <pre class="runner-text">{runner.text}</pre>
               {/if}
             </div>
           {/if}
@@ -222,13 +222,13 @@
     color: var(--text-primary);
   }
 
-  .envoy-block {
+  .runner-block {
     margin-top: 8px;
     border-left: 2px solid var(--border-strong);
     padding-left: 10px;
   }
 
-  .envoy-header {
+  .runner-header {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -242,11 +242,11 @@
     text-align: left;
   }
 
-  .envoy-icon {
+  .runner-icon {
     color: var(--accent-warning);
   }
 
-  .envoy-title {
+  .runner-title {
     color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -260,26 +260,26 @@
     flex-shrink: 0;
   }
 
-  .envoy-content {
+  .runner-content {
     padding: 6px 0 2px;
     display: flex;
     flex-direction: column;
     gap: 6px;
   }
 
-  .envoy-tool {
+  .runner-tool {
     background: var(--bg-surface-hover);
     border-radius: var(--radius-sm);
     padding: 6px 8px;
   }
 
-  .envoy-tool-head {
+  .runner-tool-head {
     display: flex;
     justify-content: space-between;
     gap: 8px;
   }
 
-  .envoy-tool pre {
+  .runner-tool pre {
     margin-top: 4px;
     max-height: 120px;
     overflow-y: auto;
@@ -290,13 +290,13 @@
     flex-shrink: 0;
   }
 
-  .envoy-stream {
+  .runner-stream {
     color: var(--text-muted);
     max-height: 140px;
     overflow-y: auto;
   }
 
-  .envoy-reasoning summary {
+  .runner-reasoning summary {
     cursor: pointer;
     color: var(--text-muted);
     font-size: 11px;
@@ -304,13 +304,13 @@
     user-select: none;
   }
 
-  .envoy-reasoning-text {
+  .runner-reasoning-text {
     color: var(--text-muted);
     max-height: 160px;
     overflow-y: auto;
   }
 
-  .envoy-text {
+  .runner-text {
     color: var(--text-secondary);
     max-height: 200px;
     overflow-y: auto;

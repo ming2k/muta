@@ -18,7 +18,7 @@ Project and user-defined commands are covered under
 | `/new` | Start a new session, keeping the current one in history. Typing the retired `/clear` (or `/reset`) suggests `/new` instead — it never wipes anything in place |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/autopilot [on\|off]` | Toggle autopilot mode (agent runs without human intervention) |
-| `/principal <code\|architect\|reviewer\|security>` | Switch the principal role — changes persona and capability scope |
+| `/master <code\|architect\|reviewer\|security>` | Switch the master preset — changes persona and capability scope |
 | `/search <query>` | Lexical search over the current session's transcript and command ledger |
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
 | `/fork` | Fork the current conversation into a child session |
@@ -191,26 +191,26 @@ session attended. For the design intent and every
 surface the flag enforces, see
 [Autopilot operation](../explanation/agent-design/autopilot.md).
 
-### `/principal`
+### `/master`
 
 | Form | Effect |
 |------|--------|
-| `/principal <role>` | Switch the active principal role (persona + capability scope) |
-| `/principal` | List the available roles and the current one |
+| `/master <role>` | Switch the active master preset (persona + capability scope) |
+| `/master` | List the available presets and the current one |
 
-Switches the live agent's principal role at runtime (ADR-0053). Each role is
-a preset over the product's base identity — the mission/persona shifts, the
-product identity stays. It can also be triggered mid-message with the
-`@principal:<role>` mention:
+Switches the session's master preset at runtime (ADR-0053, renamed by
+ADR-0144). Each preset is a value over the product's base identity — the
+mission/persona shifts, the product identity stays. It can also be triggered
+mid-message with the `@master:<role>` mention:
 
-| Role | Scope |
-|------|-------|
-| `code` | The default coding principal — full capabilities, unrestricted writes |
+| Preset | Scope |
+|--------|-------|
+| `code` | The default developer master — full capabilities, unrestricted writes |
 | `architect` | Design and review focus — full read, writes retained but the persona steers toward analysis and written rationale before changes |
 | `reviewer` | Read-only code review — read/search/inspect tools only (no `write_file`, `edit_file`, or `bash`) |
 | `security` | Read-only, command-confined security audit — read/search plus a narrow command allowlist |
 
-Unknown role names are rejected with the list of valid roles.
+Unknown preset names are rejected with the list of valid presets.
 
 ### `/btw`
 

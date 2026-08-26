@@ -1,6 +1,6 @@
 //! Shared domain and wire contracts for the muta agent stack: the `Provider`
 //! and `Tool` capability traits, conversation and tool-output types, the
-//! context-pressure model, repeat/todo values, envoy profiles,
+//! context-pressure model, repeat/todo values, runner profiles,
 //! skills/MCP config schemas, and the events exchanged by sessions and
 //! frontends.
 //!
@@ -76,16 +76,17 @@ pub mod mcp;
 pub mod model;
 pub mod todos;
 pub use todos::{MAX_TODOS, TodoId, TodoItem, TodoList, TodoStatus};
-pub mod actor;
-pub mod envoy;
-pub use actor::{
-    ActorEnvelope, ActorEvent, ActorId, ActorMessage, ActorRole, ActorState, WorktreeMode,
-};
+pub mod master;
+pub mod mesh;
+pub mod runner;
+pub mod tier;
+pub use mesh::{MeshAddress, MeshEnvelope, MeshMessage, MeshRoute, mesh_ids};
+pub use tier::AgentTier;
 pub mod history;
+pub mod human_request;
 pub use history::{HISTORY_CAP, HistoryEntry, merge_history};
 pub mod identity;
 pub mod pressure;
-pub mod principal;
 pub mod token_ledger;
 pub mod tokenizer;
 pub use token_ledger::{
@@ -123,13 +124,13 @@ pub use catalog::{Channel, ProviderEntry, Transport};
 pub use channel_auth::{ChannelAuth, LoginMethod};
 pub use doom_guard_config::DoomGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink};
-pub use envoy::{
-    CODE, EXPLORE, EnvoyProfile, MCP_SPECIALIST, TITLE, ToolPolicy,
+pub use runner::{
+    RUNNER_CODE, RUNNER_EXPLORE, RUNNER_MCP_SPECIALIST, RUNNER_TITLE, RunnerPreset, ToolPolicy,
 };
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,
     ConnectionPickerRow, ConnectionPickerSnapshot, ContextTokenSnapshot, ContextTokenSource,
-    EnvoyEvent, HarnessSnapshot, InputReply, InputRequest, LoopStatus, McpServerInfo, ModelInfo,
+    RunnerEvent, HarnessSnapshot, InputReply, InputRequest, LoopStatus, McpServerInfo, ModelInfo,
     NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface, ParentStatus, PermissionDecision,
     PermissionRequest, PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow,
     ProviderPickerSnapshot, QueuedUserInput, RetryPoint, RoundEvent, RoundInterrupt,
@@ -157,7 +158,10 @@ pub use pressure::{
     estimate_bytes, estimate_draft_tokens, estimate_message_tokens, estimate_semantic_json_tokens,
     estimate_tokens, prune_tool_results,
 };
-pub use principal::{PrincipalProfile, PrincipalRole, PrincipalRuntimeConfig};
+pub use master::{
+    MasterPreset, MasterPresetDelegation, MasterPresetId, MasterRuntimeConfig, MASTER_CODE_ANALYST,
+    MASTER_DEVELOPER,
+};
 pub use secret::SecretString;
 pub use session_title::{TITLE_MAX_LEN, clean_title};
 pub use skills_config::SkillsConfig;

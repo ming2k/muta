@@ -72,6 +72,15 @@ pub const fn protocol_accepts(client: u32) -> bool {
 pub enum Wire {
     Select {
         action: AttachAction,
+        /// The attaching client's human-interactivity declaration
+        /// (ADR-0141). `Interactive` (the default for legacy clients) means
+        /// a human can answer parked requests; `Autonomous` means none is
+        /// reachable (headless pipe, CI, cron). The session's effective
+        /// channel is the OR over attached clients; a client that detaches
+        /// may drop the session back to Autonomous if no interactive
+        /// watcher remains.
+        #[serde(default)]
+        posture: crate::human_request::HumanChannelPosture,
         /// The attaching client's working directory — the project scope for
         /// `New` creation, auto-attach, and lazy resume (ADR-0096). Optional
         /// for wire compatibility: a client predating the field sends none
@@ -261,6 +270,7 @@ mod tests {
                 include_idle: false,
             }),
             project: None,
+            posture: crate::human_request::HumanChannelPosture::Interactive,
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
             protocol: Some(PROTOCOL_VERSION),
         };

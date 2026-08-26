@@ -671,7 +671,7 @@ pub fn activity() -> io::Result<()> {
                         current_turn: 2,
                         current_model: "claude-sonnet-4-5",
                         round_started_at: Some(s.started),
-                        activity: "running envoy · exploring the codebase",
+                        activity: "running runner · exploring the codebase",
                         provider_retry: None,
                     },
                     &mut scroll,

@@ -182,7 +182,7 @@ impl SystemPromptSection for DelegationGuidance {
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
         ctx.tool_names
             .iter()
-            .any(|name| name == "envoy" || name == "task")
+            .any(|name| name == "runner" || name == "task")
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(DELEGATION))
@@ -309,14 +309,17 @@ impl SystemPromptSection for WorkspaceRootsGuidance {
     }
 }
 
-/// Specialized, hyper-compact system prompt section for an autonomous subagent role.
-struct SubagentRoleGuidance {
-    role: muta_contracts::ActorRole,
+
+/// Specialized, hyper-compact system prompt section for an autonomous
+/// runner. `preset` is a runner preset name; known presets map to curated
+/// guidance, unknown ones to the generic mission framing.
+struct RunnerRoleGuidance {
+    preset: String,
 }
 
-impl SystemPromptSection for SubagentRoleGuidance {
+impl SystemPromptSection for RunnerRoleGuidance {
     fn id(&self) -> &'static str {
-        "system.subagent_role"
+        "system.runner_role"
     }
     fn rank(&self) -> u32 {
         15
@@ -325,27 +328,23 @@ impl SystemPromptSection for SubagentRoleGuidance {
         true
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
-        let text = match &self.role {
-            muta_contracts::ActorRole::Principal => return None,
-            muta_contracts::ActorRole::Research => {
-                "You are an autonomous Research Subagent. Your goal is to thoroughly inspect, find, and analyze code, documentation, and architecture, then return a concise, high-signal, structured answer. You are read-only: do not propose file edits directly."
+        let text = match self.preset.as_str() {
+            "explore" => {
+                "You are an autonomous Research Runner. Your goal is to thoroughly inspect, find, and analyze code, documentation, and architecture, then return a concise, high-signal, structured answer. You are read-only: do not propose file edits directly."
             }
-            muta_contracts::ActorRole::CodeReview => {
-                "You are a specialized Code Review Subagent. Your goal is to inspect changed files, verify correctness, edge cases, type safety, and architectural consistency. Provide actionable feedback with exact file and line references."
+            "title" => {
+                "You are a Session Title Runner. Produce a short, specific, lowercase title for the conversation you are shown. Return only the title."
             }
-            muta_contracts::ActorRole::Coder => {
-                "You are an autonomous Implementation Subagent executing in an isolated workspace. Implement the requested changes cleanly, maintain codebase idioms, verify your edits, and return a comprehensive technical summary of modified files and verification results."
+            "code" => {
+                "You are an autonomous Implementation Runner. Implement the requested changes cleanly, maintain codebase idioms, verify your edits, and return a comprehensive technical summary of modified files and verification results."
             }
-            muta_contracts::ActorRole::Planner => {
-                "You are a Strategic Planning Subagent. Decompose complex objectives into clear, dependency-ordered, verifiable milestones. Be realistic, thorough, and explicit about constraints."
+            "mcp_specialist" => {
+                "You are a Specialized Integration Runner with access to dynamic MCP tools. Execute necessary API/tool interactions, handle errors gracefully, and summarize outputs succinctly."
             }
-            muta_contracts::ActorRole::McpSpecialist => {
-                "You are a Specialized Integration Subagent with access to dynamic MCP tools. Execute necessary API/tool interactions, handle errors gracefully, and summarize outputs succinctly."
-            }
-            muta_contracts::ActorRole::Custom(name) => {
+            other => {
                 return Some(format!(
-                    "You are a specialized autonomous subagent assigned to role: {name}. Focus strictly on your assigned task and provide a concise, high-signal final answer."
-                ));
+                    "You are a specialized autonomous runner assigned mission: {other}. Focus strictly on your assigned task and provide a concise, high-signal final answer."
+                ))
             }
         };
         Some(text.to_string())
@@ -371,11 +370,13 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry
 }
 
-/// Build a specialized, minimal system prompt registry for a subagent role.
-pub fn subagent_system_prompt_registry(role: &muta_contracts::ActorRole) -> SystemPromptRegistry {
+/// Build a specialized, minimal system prompt registry for a runner preset
+/// (ADR-0144): a known preset name gets curated mission guidance; anything
+/// else falls back to the generic framing with the preset name interpolated.
+pub fn runner_system_prompt_registry(preset: &str) -> SystemPromptRegistry {
     let mut registry = SystemPromptRegistry::new();
     registry.register(IdentityPreamble);
-    registry.register(SubagentRoleGuidance { role: role.clone() });
+    registry.register(RunnerRoleGuidance { preset: preset.to_string() });
     registry.register(ToneGuidance);
     registry.register(ModelGuidance);
     registry.register(FileEditingGuidance);

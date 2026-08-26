@@ -20,7 +20,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use muta_contracts::{EnvoyEvent, ToolStream};
+use muta_contracts::{RunnerEvent, ToolStream};
 use tokio::sync::{Mutex, MutexGuard};
 
 /// Shared state guarded by a mutex and tagged with a version that advances on
@@ -93,9 +93,9 @@ pub(super) enum TranscriptUpdate {
         id: String,
         stream: ToolStream,
     },
-    EnvoyEvent {
+    RunnerEvent {
         parent_call_id: String,
-        event: EnvoyEvent,
+        event: RunnerEvent,
     },
     /// One finalized message must be replaced wholesale (same position, same
     /// id) without disturbing its neighbors. Streaming boundaries emit this
@@ -297,9 +297,9 @@ impl<T> WriteGuard<'_, T> {
             .push_pending(TranscriptUpdate::ToolStream { id, stream });
     }
 
-    pub(super) fn record_envoy_event(&mut self, parent_call_id: String, event: EnvoyEvent) {
+    pub(super) fn record_runner_event(&mut self, parent_call_id: String, event: RunnerEvent) {
         self.transcript_patch
-            .push_pending(TranscriptUpdate::EnvoyEvent {
+            .push_pending(TranscriptUpdate::RunnerEvent {
                 parent_call_id,
                 event,
             });

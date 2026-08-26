@@ -97,7 +97,7 @@ pub fn schema_key_tree() -> BTreeMap<String, BTreeMap<String, String>> {
     root.insert("websearch".to_string(), BTreeMap::new());
     root.insert("tui".to_string(), BTreeMap::new());
     root.insert("input_history".to_string(), BTreeMap::new());
-    root.insert("principal".to_string(), BTreeMap::new());
+    root.insert("master".to_string(), BTreeMap::new());
     root.insert("hooks".to_string(), BTreeMap::new());
     root.insert("tool_variants".to_string(), BTreeMap::new());
     root.insert("daemon".to_string(), BTreeMap::new());
@@ -125,7 +125,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "websearch",
     "tui",
     "input_history",
-    "principal",
+    "master",
     "hooks",
     "tool_variants",
     "daemon",

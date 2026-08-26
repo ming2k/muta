@@ -31,7 +31,7 @@ use crate::registry::{HostParams, SessionRegistry};
 use crate::serve::{ServeExpose, ServeOptions, StartupParts, start_server};
 use crate::serve_discovery as discovery;
 use crate::shutdown::{DrainProbe, ShutdownGate, ShutdownReason, SignalGuard, TaskBook};
-use muta_agent::{AgentIdentity, PrincipalProfile};
+use muta_agent::{AgentIdentity, MasterPreset};
 use muta_persistence::config::Config;
 use muta_persistence::lock::ProcessLock;
 use std::sync::Arc;
@@ -54,7 +54,7 @@ pub struct HostOptions {
 
 pub struct HostIdentity {
     pub identity: AgentIdentity,
-    pub principal: PrincipalProfile,
+    pub master: MasterPreset,
     pub ui: Arc<dyn UiBridge>,
 }
 
@@ -189,7 +189,7 @@ async fn run_inner(
 ) -> RunOutcome {
     let HostIdentity {
         identity,
-        principal,
+        master,
         ui,
     } = identity;
     let _signals = SignalGuard::install(gate.clone());
@@ -205,7 +205,7 @@ async fn run_inner(
     let registry = registry.unwrap_or_else(|| {
         Arc::new(SessionRegistry::new(HostParams {
             identity,
-            principal,
+            master,
             ui,
         }))
     });

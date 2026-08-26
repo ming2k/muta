@@ -4,7 +4,7 @@
 //! so that selection and copy operate on semantic units (blocks) rather than
 //! terminal grid characters.
 
-use muta_contracts::{EnvoyEvent, Role};
+use muta_contracts::{RunnerEvent, Role};
 
 use crate::design::{COMMAND_CARD_LEAD_COLS, JOIN_MODIFY};
 use unicode_width::UnicodeWidthStr;
@@ -28,7 +28,7 @@ pub enum ToolStepStatus {
     /// like `Ok`/`Failed`: a later result or cancel event is ignored.
     Cancelled,
     /// Stopped by the user (the turn was interrupted) *after* producing real
-    /// work: the envoy's partial transcript was preserved. Distinct from
+    /// work: the runner's partial transcript was preserved. Distinct from
     /// [`ToolStepStatus::Cancelled`] (nothing recovered) and
     /// [`ToolStepStatus::Failed`] (the sub-task errored on its own): this is
     /// resumable work the user deliberately cut short.
@@ -48,10 +48,10 @@ pub enum MessageKind {
     ToolStep {
         id: String,
         name: String,
-        /// The bound envoy profile name (`explore` / `plan` / `verify` / …)
-        /// for an envoy-spawning tool step, populated from the first
-        /// `EnvoyEvent::Started` and used to label the step by its role.
-        /// `None` for non-envoy steps, or until the `Started` event lands.
+        /// The bound runner profile name (`explore` / `plan` / `verify` / …)
+        /// for an runner-spawning tool step, populated from the first
+        /// `RunnerEvent::Started` and used to label the step by its role.
+        /// `None` for non-runner steps, or until the `Started` event lands.
         profile: Option<String>,
         arguments: String,
         output: Option<String>,
@@ -65,7 +65,7 @@ pub enum MessageKind {
         /// fallback for restored sessions that predate the typed payload.
         ///
         /// Boxed to keep this enum variant small: `ToolOutput` (and especially
-        /// its `Envoy`/`Patch` variants) is large enough that an unboxed
+        /// its `Runner`/`Patch` variants) is large enough that an unboxed
         /// `Option<ToolOutput>` would dominate the `MessageKind` enum size
         /// (clippy::large_enum_variant). The indirection is transparent to
         /// callers — the surrounding accessors deref it as needed.
@@ -80,26 +80,26 @@ pub enum MessageKind {
         user_pinned: bool,
         duration_ms: Option<u64>,
         /// Wall-clock instant the step started, so the UI can show a live
-        /// elapsed time while the call (or envoy) is still running.
+        /// elapsed time while the call (or runner) is still running.
         /// `Instant` is cheap to capture at construction time and is not
         /// serialized — session restore reconstructs finished steps without it.
         started_at: Option<std::time::Instant>,
-        /// Set when this envoy surfaced a permission / user-input request that
+        /// Set when this runner surfaced a permission / user-input request that
         /// is still parked awaiting a human decision. The peek row reads it to
         /// show `awaiting approval` instead of the last tool activity, which
-        /// would misleadingly suggest the envoy is still making progress.
-        /// Cleared by the next progress event from this envoy (tool call,
+        /// would misleadingly suggest the runner is still making progress.
+        /// Cleared by the next progress event from this runner (tool call,
         /// tool result, or streamed text) and on any terminal transition.
         awaiting: bool,
-        /// Latest free-text activity line the envoy reported via
-        /// `EnvoyEvent::Activity` (`waiting for model`, `waiting to retry
+        /// Latest free-text activity line the runner reported via
+        /// `RunnerEvent::Activity` (`waiting for model`, `waiting to retry
         /// (3s)`, …). The peek row prefers it over the derived
         /// `starting`/`thinking` fallbacks while no child event has landed
         /// yet, so a long model call reads as alive instead of stuck on
         /// `starting`. Not serialized — restored sessions render terminal
         /// steps, which never show a peek.
         activity: Option<String>,
-        /// Child events emitted by an envoy spawned from this tool step.
+        /// Child events emitted by an runner spawned from this tool step.
         children: Vec<TranscriptMessage>,
     },
     Thinking {
@@ -864,9 +864,9 @@ impl TranscriptMessage {
         *awaiting = false;
         let output = output.into();
         // Classify from the structured result (data-level: a non-zero shell
-        // exit, an explicit `ToolOutput::Error`, a `failed` envoy). The
+        // exit, an explicit `ToolOutput::Error`, a `failed` runner). The
         // legacy `starts_with("Error")` text fallback was removed once tool
-        // error sites migrated to `ToolOutput::Error` and envoys carried
+        // error sites migrated to `ToolOutput::Error` and runners carried
         // an explicit `failed` flag — classification is now fully data-driven.
         // Permission denial gets its own status so the UI shows it distinctly
         // from a runtime error.
@@ -877,12 +877,12 @@ impl TranscriptMessage {
             ToolStepStatus::Denied
         } else if matches!(
             &structured,
-            muta_contracts::ToolOutput::Envoy {
+            muta_contracts::ToolOutput::Runner {
                 interrupted: true,
                 ..
             }
         ) {
-            // A cooperatively-drained envoy: the user interrupted the turn,
+            // A cooperatively-drained runner: the user interrupted the turn,
             // but the partial transcript was preserved. Classified before
             // `is_error()` because interruption is not a failure.
             ToolStepStatus::Interrupted
@@ -906,6 +906,7 @@ impl TranscriptMessage {
     pub fn push_tool_stream(&mut self, id: &str, stream: &muta_contracts::ToolStream) -> bool {
         let MessageKind::ToolStep {
             id: step_id,
+            arguments,
             structured,
             status,
             ..
@@ -920,8 +921,13 @@ impl TranscriptMessage {
             structured.as_deref(),
             Some(muta_contracts::ToolOutput::Shell { .. })
         ) {
+            let cmd = parse_arguments_kv(arguments)
+                .into_iter()
+                .find(|(k, _)| k == "command")
+                .map(|(_, v)| v)
+                .unwrap_or_default();
             *structured = Some(Box::new(muta_contracts::ToolOutput::Shell {
-                command: String::new(),
+                command: cmd,
                 stdout: String::new(),
                 stderr: String::new(),
                 lines: Vec::new(),
@@ -980,9 +986,9 @@ impl TranscriptMessage {
 
     /// Mark a still-running tool step as cancelled. Idempotent: a step that
     /// already reached a terminal state (`Ok` / `Failed` / `Cancelled`) is left
-    /// untouched and returns `false`. When the step is a `task` (envoy),
+    /// untouched and returns `false`. When the step is a `task` (runner),
     /// its still-running nested tool children are cancelled too, so an aborted
-    /// envoy never leaves a "running" child step behind.
+    /// runner never leaves a "running" child step behind.
     pub fn cancel_tool_step(&mut self, id: &str) -> bool {
         let MessageKind::ToolStep {
             id: step_id,
@@ -1002,7 +1008,7 @@ impl TranscriptMessage {
     }
 
     /// Recursively cancel every still-running tool step within this message
-    /// (used for envoy children and as a defensive sweep). Returns `true`
+    /// (used for runner children and as a defensive sweep). Returns `true`
     /// if anything transitioned.
     pub fn cancel_all_running(&mut self) -> bool {
         let (step_running, child_changed) = {
@@ -1050,10 +1056,10 @@ impl TranscriptMessage {
         }
     }
 
-    /// Append an envoy event as a nested child of this tool step.
+    /// Append an runner event as a nested child of this tool step.
     ///
     /// Returns `true` if this message is a tool step and the event was stored.
-    pub fn push_envoy_event(&mut self, event: &EnvoyEvent) -> bool {
+    pub fn push_runner_event(&mut self, event: &RunnerEvent) -> bool {
         let MessageKind::ToolStep {
             children,
             profile,
@@ -1068,37 +1074,37 @@ impl TranscriptMessage {
         // (permission / ask-user / input) park it, so the peek row can say
         // `awaiting approval` instead of replaying the last tool activity.
         match event {
-            EnvoyEvent::PermissionRequest(_)
-            | EnvoyEvent::UserQuestionRequest(_)
-            | EnvoyEvent::InputRequest(_) => *awaiting = true,
-            EnvoyEvent::ToolCall { .. }
-            | EnvoyEvent::ToolResult { .. }
-            | EnvoyEvent::StreamStart { .. }
-            | EnvoyEvent::StreamDelta(_)
-            | EnvoyEvent::StreamEnd(_)
-            | EnvoyEvent::StreamReasoningStart { .. }
-            | EnvoyEvent::StreamReasoningDelta(_)
-            | EnvoyEvent::StreamReasoningEnd(_) => *awaiting = false,
+            RunnerEvent::PermissionRequest(_)
+            | RunnerEvent::UserQuestionRequest(_)
+            | RunnerEvent::InputRequest(_) => *awaiting = true,
+            RunnerEvent::ToolCall { .. }
+            | RunnerEvent::ToolResult { .. }
+            | RunnerEvent::StreamStart { .. }
+            | RunnerEvent::StreamDelta(_)
+            | RunnerEvent::StreamEnd(_)
+            | RunnerEvent::StreamReasoningStart { .. }
+            | RunnerEvent::StreamReasoningDelta(_)
+            | RunnerEvent::StreamReasoningEnd(_) => *awaiting = false,
             _ => {}
         }
         match event {
-            // The envoy announced its role — stamp it on the step so the
-            // renderer can draw an `[EXPLORE]` / `[PLAN]` role badge in front
+            // The runner announced its role — stamp it on the step so the
+            // renderer can draw an `[RUNNER_EXPLORE]` / `[PLAN]` role badge in front
             // of the summary instead of a generic `[ENVOY]`.
             // No child message is produced.
-            EnvoyEvent::Started { profile: name } => {
+            RunnerEvent::Started { profile: name } => {
                 *profile = Some(name.clone());
             }
-            EnvoyEvent::StreamStart { round, turn } => {
+            RunnerEvent::StreamStart { round, turn } => {
                 children.push(
                     TranscriptMessage::new(Role::Assistant, "")
                         .with_round(*round)
-                        // `turn` is the envoy's 0-indexed model-request
+                        // `turn` is the runner's 0-indexed model-request
                         // position; the transcript's `turn` is 1-indexed.
                         .with_turn((*turn as u64) + 1),
                 );
             }
-            EnvoyEvent::StreamDelta(delta) => {
+            RunnerEvent::StreamDelta(delta) => {
                 // Identity-addressed (ADR-0114): fold the delta into the
                 // latest assistant-text child of the *same* stream turn, not
                 // merely the last child — a tool-call/result child can be
@@ -1115,7 +1121,7 @@ impl TranscriptMessage {
                     children.push(msg);
                 }
             }
-            EnvoyEvent::StreamEnd(content) => {
+            RunnerEvent::StreamEnd(content) => {
                 if let Some(last) = children
                     .iter_mut()
                     .rfind(|m| m.role == Role::Assistant && matches!(m.kind, MessageKind::Text))
@@ -1126,7 +1132,7 @@ impl TranscriptMessage {
                     children.push(TranscriptMessage::new(Role::Assistant, content.clone()));
                 }
             }
-            // The envoy's live reasoning chain, folded into the same
+            // The runner's live reasoning chain, folded into the same
             // `MessageKind::Thinking` message a resumed session restores from
             // `reasoning_content` — so a live drill-in and a reloaded one show
             // the same children. Placement mirrors the wire order the child
@@ -1134,14 +1140,14 @@ impl TranscriptMessage {
             // calls), so the trace lands in the right turn band. Disclosed
             // chains only: the sender gates hidden-chain models out at the
             // source, so no phantom summary trace can appear here.
-            EnvoyEvent::StreamReasoningStart { round, turn } => {
+            RunnerEvent::StreamReasoningStart { round, turn } => {
                 children.push(
                     TranscriptMessage::thinking("")
                         .with_round(*round)
                         .with_turn((*turn as u64) + 1),
                 );
             }
-            EnvoyEvent::StreamReasoningDelta(delta) => {
+            RunnerEvent::StreamReasoningDelta(delta) => {
                 // Identity-addressed (ADR-0114): fold into the latest still-
                 // streaming thinking child. `StreamReasoningStart` pushes a
                 // stamped Thinking child; a tool-call child landing between
@@ -1158,7 +1164,7 @@ impl TranscriptMessage {
                     children.push(TranscriptMessage::thinking(delta));
                 }
             }
-            EnvoyEvent::StreamReasoningEnd(content) => {
+            RunnerEvent::StreamReasoningEnd(content) => {
                 if let Some(last) = children
                     .iter_mut()
                     .rfind(|m| m.is_thinking() && m.is_thinking_streaming())
@@ -1180,7 +1186,7 @@ impl TranscriptMessage {
                     children.push(TranscriptMessage::thinking(content));
                 }
             }
-            EnvoyEvent::ToolCall {
+            RunnerEvent::ToolCall {
                 id,
                 name,
                 arguments,
@@ -1193,7 +1199,7 @@ impl TranscriptMessage {
                         .with_turn((*turn as u64) + 1),
                 );
             }
-            EnvoyEvent::ToolResult {
+            RunnerEvent::ToolResult {
                 id,
                 output,
                 duration_ms,
@@ -1229,29 +1235,29 @@ impl TranscriptMessage {
                     children.push(msg);
                 }
             }
-            EnvoyEvent::Notice(notice) => {
+            RunnerEvent::Notice(notice) => {
                 children.push(TranscriptMessage::notice(
                     notice_severity_from_core(notice.severity),
                     notice.render_text(),
                 ));
             }
-            // The envoy reported a free-text activity line (`waiting for
+            // The runner reported a free-text activity line (`waiting for
             // model`, `waiting to retry (3s)`). Stored for the peek row so a
             // stretch with no child events still reads as alive. No child
             // message is produced.
-            EnvoyEvent::Activity(text) => *activity = Some(text.clone()),
-            // Full-duplex (ADR-0029): an envoy surfaced a permission /
-            // ask_user request up through the envoy tool. The down-direction
+            RunnerEvent::Activity(text) => *activity = Some(text.clone()),
+            // Full-duplex (ADR-0029): an runner surfaced a permission /
+            // ask_user request up through the runner tool. The down-direction
             // reply (registry → handle → reply_permission / reply_user_question)
             // is wired at the agent layer; rendering the nested prompt in the
             // TUI and routing the user's answer back down is the harness↔TUI
             // integration step that follows. Until then these are observed but
             // not rendered as a nested child step (the request still reaches
-            // the harness via the `RoundEvent::Envoy` envelope, so a future
+            // the harness via the `RoundEvent::Runner` envelope, so a future
             // handler can attach without changing the event shape).
-            EnvoyEvent::PermissionRequest(_)
-            | EnvoyEvent::UserQuestionRequest(_)
-            | EnvoyEvent::InputRequest(_) => {}
+            RunnerEvent::PermissionRequest(_)
+            | RunnerEvent::UserQuestionRequest(_)
+            | RunnerEvent::InputRequest(_) => {}
         }
         true
     }
@@ -1388,22 +1394,22 @@ impl TranscriptMessage {
         }
     }
 
-    /// A tool step that spawns an envoy — the read-only `envoy` tool or the
-    /// write-capable `envoy_code` tool. Such steps render as a compact,
-    /// non-expandable line that navigates into a dedicated envoy view on
+    /// A tool step that spawns an runner — the read-only `runner` tool or the
+    /// write-capable `runner_code` tool. Such steps render as a compact,
+    /// non-expandable line that navigates into a dedicated runner view on
     /// activation (see the TUI focus stack) rather than expanding inline.
-    pub fn is_envoy_task(&self) -> bool {
+    pub fn is_runner_task(&self) -> bool {
         matches!(
             &self.kind,
-            MessageKind::ToolStep { name, .. } if name == "envoy" || name == "envoy_code"
+            MessageKind::ToolStep { name, .. } if name == "runner" || name == "runner_code"
         )
     }
 
-    /// The bound envoy profile name (`explore` / `plan` / `verify` / …), used
+    /// The bound runner profile name (`explore` / `plan` / `verify` / …), used
     /// by the inline step's role badge. `None` until the `Started` event lands
-    /// (or for non-envoy steps); the renderer falls back to a generic
+    /// (or for non-runner steps); the renderer falls back to a generic
     /// `[ENVOY]` badge then.
-    pub fn envoy_profile(&self) -> Option<&str> {
+    pub fn runner_profile(&self) -> Option<&str> {
         match &self.kind {
             MessageKind::ToolStep { profile, .. } => profile.as_deref(),
             _ => None,
@@ -1411,7 +1417,7 @@ impl TranscriptMessage {
     }
 
     /// The call id of a tool step, used as the addressable identity of a
-    /// envoy task for the focus stack.
+    /// runner task for the focus stack.
     pub fn tool_step_call_id(&self) -> Option<&str> {
         match &self.kind {
             MessageKind::ToolStep { id, .. } => Some(id),
@@ -1419,9 +1425,9 @@ impl TranscriptMessage {
         }
     }
 
-    /// The nested child messages emitted by an envoy task. Returns `None`
+    /// The nested child messages emitted by an runner task. Returns `None`
     /// for non-tool-step messages.
-    pub fn envoy_children(&self) -> Option<&[TranscriptMessage]> {
+    pub fn runner_children(&self) -> Option<&[TranscriptMessage]> {
         match &self.kind {
             MessageKind::ToolStep { children, .. } => Some(children),
             _ => None,
@@ -1429,49 +1435,49 @@ impl TranscriptMessage {
     }
 
     /// Mutable access to a tool step's child messages (used when the view is
-    /// zoomed into an envoy and its children are the active message stream).
-    pub fn envoy_children_mut(&mut self) -> Option<&mut Vec<TranscriptMessage>> {
+    /// zoomed into an runner and its children are the active message stream).
+    pub fn runner_children_mut(&mut self) -> Option<&mut Vec<TranscriptMessage>> {
         match &mut self.kind {
             MessageKind::ToolStep { children, .. } => Some(children),
             _ => None,
         }
     }
 
-    /// The envoy's role (`explore` / `plan` / `verify` / …), identified by
+    /// The runner's role (`explore` / `plan` / `verify` / …), identified by
     /// the `Started` event. `None` for non-task steps and before the role is
-    /// known. The Envoy page header renders this as the `[ROLE]` tag between
+    /// known. The Runner page header renders this as the `[ROLE]` tag between
     /// the `ENVOY` identity and the task title.
-    pub fn envoy_role(&self) -> Option<String> {
+    pub fn runner_role(&self) -> Option<String> {
         match &self.kind {
             MessageKind::ToolStep { profile, .. } => profile.clone(),
             _ => None,
         }
     }
 
-    /// The envoy's task description (the `description` argument), truncated
-    /// for display. Shown as the title of the Envoy page header.
-    pub fn envoy_description(&self) -> String {
+    /// The runner's task description (the `description` argument), truncated
+    /// for display. Shown as the title of the Runner page header.
+    pub fn runner_description(&self) -> String {
         let MessageKind::ToolStep { arguments, .. } = &self.kind else {
-            return "Envoy".to_string();
+            return "Runner".to_string();
         };
         let label = parse_arguments_kv(arguments)
             .into_iter()
             .find(|(k, _)| k == "description")
             .map(|(_, v)| v)
-            .unwrap_or_else(|| "Envoy".to_string());
+            .unwrap_or_else(|| "Runner".to_string());
         truncate(&label, 48)
     }
 
-    /// One-line live "peek" at the envoy's current activity, e.g.
+    /// One-line live "peek" at the runner's current activity, e.g.
     /// `running Grep "foo"  12s` or `running thinking  8s`. Shown as the
-    /// step's second row while the envoy runs and replaced in place by
-    /// [`Self::envoy_outcome_line`] when the step terminates. Returns `None`
+    /// step's second row while the runner runs and replaced in place by
+    /// [`Self::runner_outcome_line`] when the step terminates. Returns `None`
     /// for non-task steps and for terminal steps (the outcome row owns the
     /// second row then). The elapsed timer is derived from `started_at` at
     /// render time, so the line stays fresh on every animation tick without
     /// storing any ticking state.
-    pub fn envoy_status_line(&self) -> Option<String> {
-        if !self.is_envoy_task() {
+    pub fn runner_status_line(&self) -> Option<String> {
+        if !self.is_runner_task() {
             return None;
         }
         let MessageKind::ToolStep {
@@ -1499,9 +1505,9 @@ impl TranscriptMessage {
             }
         });
         // A parked human-decision wait outranks replaying the last tool
-        // activity: the envoy is blocked on the user, not making progress.
+        // activity: the runner is blocked on the user, not making progress.
         // It keeps the bare phrase — no `running` prefix — because nothing
-        // is moving while the envoy waits.
+        // is moving while the runner waits.
         let activity = if *awaiting {
             "awaiting approval".to_string()
         } else {
@@ -1520,15 +1526,15 @@ impl TranscriptMessage {
                     )
                 }
                 // Assistant text has streamed but no tool call followed it:
-                // the envoy is composing between tools. A bare `starting`
+                // the runner is composing between tools. A bare `starting`
                 // here read as "possibly stuck" during long model calls,
                 // which is exactly what the `running` prefix disambiguates.
                 Some(child) if child.role == Role::Assistant && !child.raw.is_empty() => {
                     Some("thinking".to_string())
                 }
-                // Nothing observable has landed yet. Prefer the envoy's own
+                // Nothing observable has landed yet. Prefer the runner's own
                 // reported activity (`waiting for model`, …) over the
-                // generic `starting`: it proves the envoy is alive during
+                // generic `starting`: it proves the runner is alive during
                 // the model call that precedes the first child event.
                 _ => activity.clone(),
             };
@@ -1545,13 +1551,13 @@ impl TranscriptMessage {
         })
     }
 
-    /// One-line outcome replacing the peek row once the envoy terminates: the
-    /// first non-empty line of its conclusion (`ToolOutput::Envoy.summary`,
+    /// One-line outcome replacing the peek row once the runner terminates: the
+    /// first non-empty line of its conclusion (`ToolOutput::Runner.summary`,
     /// falling back to the legacy `output` text for restored sessions).
     /// Returns `None` for non-task steps, running steps, and terminal steps
     /// with no conclusion text.
-    pub fn envoy_outcome_line(&self) -> Option<String> {
-        if !self.is_envoy_task() {
+    pub fn runner_outcome_line(&self) -> Option<String> {
+        if !self.is_runner_task() {
             return None;
         }
         let MessageKind::ToolStep {
@@ -1567,7 +1573,7 @@ impl TranscriptMessage {
             return None;
         }
         let source: &str = match structured.as_deref() {
-            Some(muta_contracts::ToolOutput::Envoy { summary, .. }) => summary,
+            Some(muta_contracts::ToolOutput::Runner { summary, .. }) => summary,
             _ => output.as_deref()?,
         };
         source
@@ -3212,40 +3218,40 @@ mod tests {
     }
 
     #[test]
-    fn envoy_task_is_detected_and_addressable() {
+    fn runner_task_is_detected_and_addressable() {
         let task = TranscriptMessage::tool_step(
             "call_42",
-            "envoy",
+            "runner",
             r#"{"description":"explore src","prompt":"..."}"#,
         );
-        assert!(task.is_envoy_task());
+        assert!(task.is_runner_task());
         assert_eq!(task.tool_step_call_id(), Some("call_42"));
-        assert_eq!(task.envoy_children().map(|c| c.len()), Some(0));
-        assert_eq!(task.envoy_description(), "explore src");
-        assert_eq!(task.envoy_role(), None);
+        assert_eq!(task.runner_children().map(|c| c.len()), Some(0));
+        assert_eq!(task.runner_description(), "explore src");
+        assert_eq!(task.runner_role(), None);
 
-        // A regular tool step is not an envoy task.
+        // A regular tool step is not an runner task.
         let read = TranscriptMessage::tool_step("call_1", "read_text", r#"{"path":"a"}"#);
-        assert!(!read.is_envoy_task());
-        assert!(read.envoy_status_line().is_none());
+        assert!(!read.is_runner_task());
+        assert!(read.runner_status_line().is_none());
     }
 
     #[test]
-    fn envoy_started_event_labels_step_by_role() {
+    fn runner_started_event_labels_step_by_role() {
         // A `Started` event stamps the bound profile name on the step so the
         // page header can read the role out as its `[ROLE]` tag.
         let mut task = TranscriptMessage::tool_step(
             "call_7",
-            "envoy",
+            "runner",
             r#"{"description":"write the plan","prompt":"..."}"#,
         );
-        assert_eq!(task.envoy_description(), "write the plan");
-        assert_eq!(task.envoy_role(), None);
-        assert!(task.push_envoy_event(&muta_contracts::EnvoyEvent::Started {
+        assert_eq!(task.runner_description(), "write the plan");
+        assert_eq!(task.runner_role(), None);
+        assert!(task.push_runner_event(&muta_contracts::RunnerEvent::Started {
             profile: "explore".to_string()
         }));
-        assert_eq!(task.envoy_role().as_deref(), Some("explore"));
-        assert_eq!(task.envoy_description(), "write the plan");
+        assert_eq!(task.runner_role().as_deref(), Some("explore"));
+        assert_eq!(task.runner_description(), "write the plan");
         // The collapsed header carries only the description — the role is
         // shown by the renderer's `[PROFILE]` badge in front of it.
         let header = task.tool_step_summary().expect("summary");
@@ -3253,43 +3259,43 @@ mod tests {
     }
 
     #[test]
-    fn envoy_status_reflects_children_and_completion() {
+    fn runner_status_reflects_children_and_completion() {
         let mut task =
-            TranscriptMessage::tool_step("call_9", "envoy", r#"{"description":"d","prompt":"p"}"#);
+            TranscriptMessage::tool_step("call_9", "runner", r#"{"description":"d","prompt":"p"}"#);
 
         // No children yet, still running — the peek row opens with the
-        // generic `running` state until the envoy reports more.
-        let running = task.envoy_status_line().expect("running status");
+        // generic `running` state until the runner reports more.
+        let running = task.runner_status_line().expect("running status");
         assert!(running.starts_with("running"), "got: {running}");
 
         // A reported activity line (e.g. during the first model call) is
         // surfaced so the row reads as alive, not stuck on a bare state.
-        task.push_envoy_event(&EnvoyEvent::Activity("waiting for model".into()));
-        let waiting = task.envoy_status_line().expect("waiting status");
+        task.push_runner_event(&RunnerEvent::Activity("waiting for model".into()));
+        let waiting = task.runner_status_line().expect("waiting status");
         assert!(
             waiting.starts_with("running waiting for model"),
             "got: {waiting}"
         );
 
         // Streaming assistant text => the peek row reports `thinking`.
-        task.push_envoy_event(&EnvoyEvent::StreamStart { round: 1, turn: 0 });
-        task.push_envoy_event(&EnvoyEvent::StreamDelta("partial".into()));
-        let thinking = task.envoy_status_line().expect("thinking status");
+        task.push_runner_event(&RunnerEvent::StreamStart { round: 1, turn: 0 });
+        task.push_runner_event(&RunnerEvent::StreamDelta("partial".into()));
+        let thinking = task.runner_status_line().expect("thinking status");
         assert!(thinking.starts_with("running thinking"), "got: {thinking}");
 
         // An in-flight child tool call surfaces the tool's header.
-        task.push_envoy_event(&EnvoyEvent::ToolCall {
+        task.push_runner_event(&RunnerEvent::ToolCall {
             id: "inner".into(),
             name: "search_text".into(),
             arguments: r#"{"query":"foo"}"#.into(),
             round: 1,
             turn: 0,
         });
-        let running = task.envoy_status_line().expect("running status");
+        let running = task.runner_status_line().expect("running status");
         assert!(running.contains("Search"), "got: {running}");
 
         // Completing the parent hides the peek row; the outcome row takes over
-        // with the envoy's one-line conclusion.
+        // with the runner's one-line conclusion.
         assert!(task.finish_tool_step(
             "call_9",
             "final answer",
@@ -3297,33 +3303,33 @@ mod tests {
             1500
         ));
         assert!(
-            task.envoy_status_line().is_none(),
-            "the peek row must disappear once the envoy terminates"
+            task.runner_status_line().is_none(),
+            "the peek row must disappear once the runner terminates"
         );
         assert_eq!(
-            task.envoy_outcome_line().as_deref(),
+            task.runner_outcome_line().as_deref(),
             Some("final answer"),
-            "the outcome row carries the envoy's conclusion"
+            "the outcome row carries the runner's conclusion"
         );
 
-        // Children are accessible for the dedicated envoy view.
-        assert_eq!(task.envoy_children().map(|c| c.len()), Some(2));
+        // Children are accessible for the dedicated runner view.
+        assert_eq!(task.runner_children().map(|c| c.len()), Some(2));
     }
 
     #[test]
-    fn envoy_failed_status_reports_failure() {
+    fn runner_failed_status_reports_failure() {
         let mut task =
-            TranscriptMessage::tool_step("c", "envoy", r#"{"description":"d","prompt":"p"}"#);
-        task.push_envoy_event(&EnvoyEvent::ToolCall {
+            TranscriptMessage::tool_step("c", "runner", r#"{"description":"d","prompt":"p"}"#);
+        task.push_runner_event(&RunnerEvent::ToolCall {
             id: "i".into(),
             name: "bash".into(),
             arguments: "{}".into(),
             round: 1,
             turn: 0,
         });
-        // The envoy failure is now signalled by the structured `failed`
-        // flag on `ToolOutput::Envoy`, not by an "Error:" text prefix.
-        let structured = muta_contracts::ToolOutput::Envoy {
+        // The runner failure is now signalled by the structured `failed`
+        // flag on `ToolOutput::Runner`, not by an "Error:" text prefix.
+        let structured = muta_contracts::ToolOutput::Runner {
             summary: "Error: boom".into(),
             messages: Vec::new(),
             usage: muta_contracts::TokenUsage::default(),
@@ -3333,18 +3339,18 @@ mod tests {
         };
         assert!(task.finish_tool_step("c", structured.to_text(), structured, 100));
         assert!(
-            task.envoy_status_line().is_none(),
-            "a terminal envoy hides the peek row"
+            task.runner_status_line().is_none(),
+            "a terminal runner hides the peek row"
         );
         // The outcome row surfaces the error summary's first line.
-        assert_eq!(task.envoy_outcome_line().as_deref(), Some("Error: boom"));
+        assert_eq!(task.runner_outcome_line().as_deref(), Some("Error: boom"));
     }
 
     #[test]
-    fn envoy_peek_reports_awaiting_approval_while_parked() {
+    fn runner_peek_reports_awaiting_approval_while_parked() {
         let mut task =
-            TranscriptMessage::tool_step("c", "envoy", r#"{"description":"d","prompt":"p"}"#);
-        task.push_envoy_event(&EnvoyEvent::ToolCall {
+            TranscriptMessage::tool_step("c", "runner", r#"{"description":"d","prompt":"p"}"#);
+        task.push_runner_event(&RunnerEvent::ToolCall {
             id: "i".into(),
             name: "bash".into(),
             arguments: r#"{"command":"rm -rf x"}"#.into(),
@@ -3352,12 +3358,12 @@ mod tests {
             turn: 0,
         });
         // The in-flight tool normally drives the peek row…
-        let peek = task.envoy_status_line().unwrap();
+        let peek = task.runner_status_line().unwrap();
         assert!(peek.starts_with("running Run rm"), "got: {peek}");
 
-        // …but a parked permission request takes over the row: the envoy is
+        // …but a parked permission request takes over the row: the runner is
         // blocked on a human, not making progress.
-        task.push_envoy_event(&EnvoyEvent::PermissionRequest(
+        task.push_runner_event(&RunnerEvent::PermissionRequest(
             muta_contracts::PermissionRequest {
                 id: "p1".into(),
                 tool: "bash".into(),
@@ -3370,44 +3376,44 @@ mod tests {
                 origin: None,
             },
         ));
-        let peek = task.envoy_status_line().unwrap();
+        let peek = task.runner_status_line().unwrap();
         assert!(peek.starts_with("awaiting approval"), "got: {peek}");
 
-        // The next progress event from the envoy clears the parked wait.
-        task.push_envoy_event(&EnvoyEvent::ToolResult {
+        // The next progress event from the runner clears the parked wait.
+        task.push_runner_event(&RunnerEvent::ToolResult {
             id: "i".into(),
             name: "bash".into(),
             output: "done".into(),
             duration_ms: 3,
         });
-        task.push_envoy_event(&EnvoyEvent::StreamStart { round: 1, turn: 0 });
-        task.push_envoy_event(&EnvoyEvent::StreamDelta("…".into()));
-        let peek = task.envoy_status_line().unwrap();
+        task.push_runner_event(&RunnerEvent::StreamStart { round: 1, turn: 0 });
+        task.push_runner_event(&RunnerEvent::StreamDelta("…".into()));
+        let peek = task.runner_status_line().unwrap();
         assert!(peek.starts_with("running thinking"), "got: {peek}");
     }
 
     #[test]
-    fn interrupted_envoy_status_reports_interrupted_not_failed() {
+    fn interrupted_runner_status_reports_interrupted_not_failed() {
         let mut task =
-            TranscriptMessage::tool_step("c", "envoy", r#"{"description":"d","prompt":"p"}"#);
-        task.push_envoy_event(&EnvoyEvent::ToolCall {
+            TranscriptMessage::tool_step("c", "runner", r#"{"description":"d","prompt":"p"}"#);
+        task.push_runner_event(&RunnerEvent::ToolCall {
             id: "i".into(),
             name: "read_text".into(),
             arguments: "{}".into(),
             round: 1,
             turn: 0,
         });
-        task.push_envoy_event(&EnvoyEvent::ToolResult {
+        task.push_runner_event(&RunnerEvent::ToolResult {
             id: "i".into(),
             name: "read_text".into(),
             output: "found 1 of 3 handlers".into(),
             duration_ms: 5,
         });
-        // An interrupted envoy carries `interrupted: true, failed: false`:
+        // An interrupted runner carries `interrupted: true, failed: false`:
         // the partial work was preserved, so it must classify as Interrupted
         // — never as Failed (it did not error) and never as Ok (it did not
         // finish).
-        let structured = muta_contracts::ToolOutput::Envoy {
+        let structured = muta_contracts::ToolOutput::Runner {
             summary: "Interrupted: stopped by the user".into(),
             messages: Vec::new(),
             usage: muta_contracts::TokenUsage::default(),
@@ -3419,14 +3425,14 @@ mod tests {
         assert_eq!(
             task.tool_step_status(),
             Some(ToolStepStatus::Interrupted),
-            "an interrupted envoy classifies as Interrupted"
+            "an interrupted runner classifies as Interrupted"
         );
         assert!(
-            task.envoy_status_line().is_none(),
-            "a terminal envoy hides the peek row"
+            task.runner_status_line().is_none(),
+            "a terminal runner hides the peek row"
         );
         assert_eq!(
-            task.envoy_outcome_line().as_deref(),
+            task.runner_outcome_line().as_deref(),
             Some("Interrupted: stopped by the user"),
             "the outcome row carries the interruption summary"
         );
@@ -3559,39 +3565,39 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_a_envoy_also_cancels_its_running_children() {
+    fn cancelling_a_runner_also_cancels_its_running_children() {
         let mut task =
-            TranscriptMessage::tool_step("task_1", "envoy", r#"{"description":"d","prompt":"p"}"#);
+            TranscriptMessage::tool_step("task_1", "runner", r#"{"description":"d","prompt":"p"}"#);
         // A nested tool call still in flight.
-        task.push_envoy_event(&EnvoyEvent::ToolCall {
+        task.push_runner_event(&RunnerEvent::ToolCall {
             id: "inner".into(),
             name: "search_text".into(),
             arguments: r#"{"query":"foo"}"#.into(),
             round: 1,
             turn: 0,
         });
-        let children = task.envoy_children().expect("has children");
+        let children = task.runner_children().expect("has children");
         assert_eq!(
             children[0].tool_step_status(),
             Some(ToolStepStatus::Running)
         );
 
         // Interrupting the parent task cancels it AND the nested running child,
-        // so the envoy view never shows a stuck "running" step.
+        // so the runner view never shows a stuck "running" step.
         assert!(task.cancel_tool_step("task_1"));
         assert_eq!(task.tool_step_status(), Some(ToolStepStatus::Cancelled));
-        let children = task.envoy_children().expect("has children");
+        let children = task.runner_children().expect("has children");
         assert_eq!(
             children[0].tool_step_status(),
             Some(ToolStepStatus::Cancelled),
             "nested child must converge with the parent"
         );
 
-        // A cancelled envoy is terminal: the peek row disappears and the
+        // A cancelled runner is terminal: the peek row disappears and the
         // outcome row falls back to the legacy output text (none was recorded
         // here, so the row hides entirely).
-        assert!(task.envoy_status_line().is_none());
-        assert!(task.envoy_outcome_line().is_none());
+        assert!(task.runner_status_line().is_none());
+        assert!(task.runner_outcome_line().is_none());
     }
 
     #[test]

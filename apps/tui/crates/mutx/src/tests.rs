@@ -536,7 +536,7 @@ fn restored_reasoning_is_not_shown_as_running() {
         effort: None,
         hidden: false,
         children: None,
-        envoy_meta: None,
+        runner_meta: None,
         origin: None,
         timestamp: None,
         sent_at_ms: None,
@@ -634,7 +634,7 @@ fn restored_native_tool_calls_are_visible() {
         effort: None,
         hidden: false,
         children: None,
-        envoy_meta: None,
+        runner_meta: None,
         origin: None,
         timestamp: None,
         sent_at_ms: None,
@@ -673,7 +673,7 @@ fn restored_tool_results_merge_into_steps_in_fifo_order() {
             effort: None,
             hidden: false,
             children: None,
-            envoy_meta: None,
+            runner_meta: None,
             origin: None,
             timestamp: None,
             sent_at_ms: None,
@@ -878,23 +878,23 @@ fn activity_modal_expands_to_fit_multiline_prompt_without_scrolling() {
     assert_ne!(buffer.get(track_x, track_y).map(|c| c.symbol()), Some("▲"));
 }
 
-/// Build a small conversation with two sibling envoy tasks, each with a
+/// Build a small conversation with two sibling runner tasks, each with a
 /// couple of child messages, for focus-navigation tests.
-fn conversation_with_envoys() -> Vec<TranscriptMessage> {
+fn conversation_with_runners() -> Vec<TranscriptMessage> {
     let mut a = TranscriptMessage::tool_step(
         "task_a",
-        "envoy",
+        "runner",
         r#"{"description":"explore a","prompt":"..."}"#,
     );
-    a.envoy_children_mut()
+    a.runner_children_mut()
         .unwrap()
         .push(TranscriptMessage::new(Role::Assistant, "child A1"));
     let mut b = TranscriptMessage::tool_step(
         "task_b",
-        "envoy",
+        "runner",
         r#"{"description":"explore b","prompt":"..."}"#,
     );
-    b.envoy_children_mut()
+    b.runner_children_mut()
         .unwrap()
         .push(TranscriptMessage::new(Role::Assistant, "child B1"));
     vec![
@@ -907,7 +907,7 @@ fn conversation_with_envoys() -> Vec<TranscriptMessage> {
 
 #[test]
 fn resolve_focused_mut_indexes_root_when_unfocused() {
-    let mut messages = conversation_with_envoys();
+    let mut messages = conversation_with_runners();
     let focus: Vec<crate::app::ZoomFrame> = Vec::new();
     let resolved = event_loop::resolve_focused_mut(&mut messages, &focus, 2);
     assert_eq!(resolved.map(|m| m.raw.clone()).as_deref(), Some("ok"));
@@ -915,7 +915,7 @@ fn resolve_focused_mut_indexes_root_when_unfocused() {
 
 #[test]
 fn resolve_focused_mut_indexes_children_when_focused() {
-    let mut messages = conversation_with_envoys();
+    let mut messages = conversation_with_runners();
     let focus = vec![crate::app::ZoomFrame {
         call_id: "task_b".to_string(),
         saved_scroll: crate::app::ScrollSnapshot::default(),
@@ -928,8 +928,8 @@ fn resolve_focused_mut_indexes_children_when_focused() {
 }
 
 #[test]
-fn focused_tool_steps_mut_only_touches_focused_envoy_children() {
-    let mut messages = conversation_with_envoys();
+fn focused_tool_steps_mut_only_touches_focused_runner_children() {
+    let mut messages = conversation_with_runners();
     // Focused on task_a: its single child is an assistant message (not a
     // tool step), so the focused stream has 1 message and 0 tool steps.
     let focus = vec![crate::app::ZoomFrame {
@@ -1361,13 +1361,13 @@ fn completions_intent_keywords_suggest_canonical_command() {
     assert_eq!(doc.name, "/schedule");
     assert_eq!(doc.category.as_deref(), Some("Automation"));
 
-    // /switch suggests /models and /principal
+    // /switch suggests /models and /master
     app.input = "/switch".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     assert!(labels.contains(&"/models"));
-    assert!(labels.contains(&"/principal"));
+    assert!(labels.contains(&"/master"));
 }
 
 #[test]
@@ -4081,13 +4081,13 @@ fn caret_owner_none_when_step_focused() {
 }
 
 #[test]
-fn caret_owner_none_in_envoy_view() {
+fn caret_owner_none_in_runner_view() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.enter_envoy("call-1".to_string());
+    app.enter_runner("call-1".to_string());
     assert_eq!(app.caret_owner(), CaretOwner::None);
     assert!(
         !app.caret_visible(),
-        "envoy zoom has no input line → cursor hidden, IME unanchored"
+        "runner zoom has no input line → cursor hidden, IME unanchored"
     );
 }
 
@@ -5083,7 +5083,7 @@ fn disclosure_toggle_disabled_by_default_leaves_scroll_untouched() {
     );
 }
 
-/// The view reset that follows a focus change (envoy zoom enter/exit) must
+/// The view reset that follows a focus change (runner zoom enter/exit) must
 /// drop a pending settle: the staged frame it was computed for belongs to a
 /// transcript slice that is no longer displayed.
 #[test]

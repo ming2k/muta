@@ -22,7 +22,7 @@ use crate::model::layout::{
 /// Which kind of step a pointer hit resolved to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StepKind {
-    /// A tool step or envoy task summary.
+    /// A tool step or runner task summary.
     ToolStep,
     /// A reasoning trace summary.
     Thinking,
@@ -51,7 +51,7 @@ impl StepKind {
 /// message index and kind. Returns `None` for non-summary regions (prose,
 /// code blocks, table cells, the input box, …).
 ///
-/// Drives click routing — toggle / envoy navigation / the detail overlay —
+/// Drives click routing — toggle / runner navigation / the detail overlay —
 /// and the hover affordance, so every call site shares one notion of "what
 /// counts as a step summary".
 pub fn summary_at(cursor: &SemanticCursor) -> Option<(usize, StepKind)> {
@@ -96,10 +96,10 @@ pub fn default_tool_expanded(
     density: bool,
 ) -> bool {
     match status {
-        ToolStepStatus::Running => false,
+        ToolStepStatus::Running => density || tool_default_expanded(config, name),
         ToolStepStatus::Failed | ToolStepStatus::Denied => true,
         ToolStepStatus::Cancelled => false,
-        // An interrupted envoy preserved partial work, but the user stopped
+        // An interrupted runner preserved partial work, but the user stopped
         // it deliberately — leave it collapsed (like Cancelled); the summary
         // line and the drill-in view surface the recovered findings.
         ToolStepStatus::Interrupted => false,
@@ -148,11 +148,18 @@ mod tests {
     }
 
     #[test]
-    fn tool_running_is_collapsed_failures_expand() {
+    fn tool_running_follows_per_tool_default_failures_expand() {
         let cfg = config(&[]);
-        assert!(!default_tool_expanded(
+        // bash and edit_file default expanded
+        assert!(default_tool_expanded(
             ToolStepStatus::Running,
             "bash",
+            &cfg,
+            false
+        ));
+        assert!(!default_tool_expanded(
+            ToolStepStatus::Running,
+            "read_text",
             &cfg,
             false
         ));
@@ -185,16 +192,22 @@ mod tests {
             &cfg,
             false
         ));
-        assert!(!default_tool_expanded(
+        assert!(default_tool_expanded(
             ToolStepStatus::Ok,
             "bash",
+            &cfg,
+            false
+        ));
+        assert!(!default_tool_expanded(
+            ToolStepStatus::Ok,
+            "read_text",
             &cfg,
             false
         ));
         // Comfortable density expands every Ok step regardless of per-tool default.
         assert!(default_tool_expanded(
             ToolStepStatus::Ok,
-            "bash",
+            "read_text",
             &cfg,
             true
         ));

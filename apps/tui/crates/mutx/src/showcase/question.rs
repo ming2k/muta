@@ -66,7 +66,7 @@ fn fixtures() -> Vec<UserQuestionRequest> {
                 ],
                 multi_select: true,
             }],
-            origin: Some("envoy #b4e1 · explore".into()),
+            origin: Some("runner #b4e1 · explore".into()),
         },
     ]
 }

@@ -53,19 +53,21 @@ mod tests {
     #[test]
     fn unlisted_tool_falls_back_to_presenter_default() {
         let cfg = TuiConfig::default();
-        // edit_file has a built-in default of expanded.
+        // edit_file and bash have built-in default of expanded.
         assert!(tool_default_expanded(&cfg, "edit_file"));
-        // bash collapses by default.
-        assert!(!tool_default_expanded(&cfg, "bash"));
+        assert!(tool_default_expanded(&cfg, "bash"));
+        // read_text collapses by default.
+        assert!(!tool_default_expanded(&cfg, "read_text"));
     }
 
     #[test]
     fn explicit_override_wins_over_presenter_default() {
-        let cfg = config(&[("edit_file", false), ("bash", true)]);
+        let cfg = config(&[("edit_file", false), ("bash", false), ("read_text", true)]);
         assert!(!tool_default_expanded(&cfg, "edit_file"));
-        assert!(tool_default_expanded(&cfg, "bash"));
+        assert!(!tool_default_expanded(&cfg, "bash"));
+        assert!(tool_default_expanded(&cfg, "read_text"));
         // Still falls back for unlisted tools.
-        assert!(!tool_default_expanded(&cfg, "read_text"));
+        assert!(!tool_default_expanded(&cfg, "search_text"));
     }
 
     #[test]

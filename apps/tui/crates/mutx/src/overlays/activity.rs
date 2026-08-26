@@ -11,7 +11,7 @@ use super::common::todo_status_glyph_color;
 use crate::components::selectable_body::{
     RowSegment, SelectableRow, render_selectable_body, selectable_body_desired_rows,
 };
-use crate::design::MODAL_TITLE_META_GAP;
+use crate::design::MODAL_RUNNER_TITLE_META_GAP;
 use crate::primitives::{
     ContentModalSpec, FooterHint, content_modal_area, keyvocab, modal_frame, render_modal_footer,
 };
@@ -226,7 +226,7 @@ pub fn draw_activity_modal(
             let done = list.count(TodoStatus::Completed);
             let total = list.items.len();
             header_spans.push(Span::styled(
-                format!("{}{done}/{total}", " ".repeat(MODAL_TITLE_META_GAP)),
+                format!("{}{done}/{total}", " ".repeat(MODAL_RUNNER_TITLE_META_GAP)),
                 Style::default().fg(muted),
             ));
         }

@@ -45,7 +45,7 @@ pub enum ToolStatus {
     Ok,
     /// Output present and the call failed. Failure is determined by the
     /// structured [`ToolStepStatus`] (set from `ToolOutput::is_error()` in
-    /// `document.rs`), not by string-sniffing the output text — envoy
+    /// `document.rs`), not by string-sniffing the output text — runner
     /// failures carry an explicit `failed` flag and tool errors use
     /// `ToolOutput::Error`.
     Failed,
@@ -55,7 +55,7 @@ pub enum ToolStatus {
     Cancelled,
     /// The user interrupted the turn while the call was in flight, but the
     /// call drained and its partial result was preserved (an interrupted
-    /// envoy). More alive than `Cancelled`: there is recovered work to
+    /// runner). More alive than `Cancelled`: there is recovered work to
     /// inspect and possibly resume.
     Interrupted,
 }
@@ -75,7 +75,7 @@ impl ToolStatus {
     }
 
     /// Theme color used for the status rail / step accent. Centralizes the
-    /// status→color mapping that step headers, sticky pins, and envoy steps
+    /// status→color mapping that step headers, sticky pins, and runner steps
     /// previously each duplicated.
     pub fn color(self, theme: &Theme) -> Color {
         match self {
@@ -93,7 +93,7 @@ impl ToolStatus {
             ToolStatus::Cancelled => theme.dim(),
             // Interrupted carries the same user-intervention tone as Denied,
             // but on a brighter accent: unlike a dropped call, an interrupted
-            // envoy preserved partial work worth noticing.
+            // runner preserved partial work worth noticing.
             ToolStatus::Interrupted => theme.warn(),
         }
     }
@@ -139,9 +139,9 @@ pub enum ArgLayout {
 pub struct ToolView<'a> {
     pub name: &'a str,
     pub args: &'a serde_json::Map<String, Value>,
-    /// The envoy profile name (`explore` / `plan` / …) when this step is a
-    /// envoy run that has announced its role; `None` otherwise. Lets the
-    /// `EnvoyPresenter` label the step by role instead of "Envoy".
+    /// The runner profile name (`explore` / `plan` / …) when this step is a
+    /// runner run that has announced its role; `None` otherwise. Lets the
+    /// `RunnerPresenter` label the step by role instead of "Runner".
     pub profile: Option<&'a str>,
 }
 
@@ -201,7 +201,7 @@ pub fn presenter_for(name: &str) -> &'static dyn ToolPresenter {
         "webfetch" => &web::WebFetchPresenter,
         "websearch" => &web::WebSearchPresenter,
         "todo" => &meta::TodoPresenter,
-        "envoy" | "envoy_code" => &meta::EnvoyPresenter,
+        "runner" | "runner_code" => &meta::RunnerPresenter,
         "use_skill" => &meta::UseSkillPresenter,
         _ => &fallback::FallbackPresenter,
     }
@@ -290,10 +290,10 @@ mod tests {
     }
 
     #[test]
-    fn bash_summary_uses_process_name() {
+    fn bash_summary_includes_executable_and_args() {
         assert_eq!(
             summary("bash", serde_json::json!({"command": "cargo build\nmore"})),
-            "Run cargo"
+            "Run cargo build"
         );
     }
 

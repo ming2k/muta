@@ -34,7 +34,7 @@
 //! # Relation to `NudgeConfig`
 //!
 //! The doom guard is gated by `NudgeConfig::enabled` for consistency with the
-//! read-loop guard: when nudging is off, neither guard runs. Envoy and review
+//! read-loop guard: when nudging is off, neither guard runs. Runner and review
 //! paths disable nudging, so they stay unobstructed.
 
 use std::collections::VecDeque;
@@ -45,7 +45,7 @@ use serde_json::Value;
 use crate::loop_guard::GuardAction;
 
 /// The tools this guard watches. Anything outside this set is passed through
-/// untouched — MCP tools, `ask_user`, `use_skill`, `todo_*`, envoy, etc. are
+/// untouched — MCP tools, `ask_user`, `use_skill`, `todo_*`, runner, etc. are
 /// either inherently unique or user-interactive, where a repeat is plausibly
 /// legitimate and blocking would be hostile.
 ///

@@ -8,8 +8,8 @@
 //! |---|---|
 //! | **preflight** ([`Agent::dispatch_preflight`], per turn) | turn classification (`consecutive_readonly_turns`), checkpoint-replay scan + `ProviderRetry` notice, doom-guard `check_doom_ahead` (signature masking + `NudgeInjected` notice + nudge capture), dispatch-id generation, the up-front `AgentEvent::ToolCall` events (all of them, before any `ToolResult`), and the short-circuits: checkpoint-replay and guard-blocked calls get their terminal `ToolResult(duration_ms = 0)` here and their result slot is filled without execution. |
 //! | **prepare** (per call, in-task) | the gate sequence inside [`Agent::execute_tool`]: tool resolution (builtin → user → mcp), the full [`PermissionChain`](crate::permission_policy::PermissionChain) evaluation (folding in hook/disabled/schema/scope/bash/broker), interaction-only handling, and the bash stdin policy. It deliberately runs *inside* each scheduled task, not as a separate serialised phase: PreToolUse hooks and permission parks keep their historical concurrency. |
-//! | **schedule** ([`Agent::schedule_tool_calls`], the batch) | the concurrent fan-out through [`ToolScheduler`]: per-call declared [`ToolAccesses`](muta_contracts::ToolAccesses) arbitrate which calls run concurrently (a write serializes against any other access to the same path; non-conflicting reads parallelize). A shared `mpsc` channel forwards `Envoy`/`ToolStream`/`PermissionRequest` events in real time; each task emits its terminal `ToolResult` the instant it finishes; a turn interrupt runs the two-tier cancel (cooperative drain with `ENVOY_DRAIN_GRACE`, then forced abort) and pairs every unproduced call with a terminal `AgentEvent::ToolCancelled`. |
-//! | **finalize** ([`Agent::dispatch_finalize`], per call, input order) | recovered results folded back into the input-ordered slots, `remember_completed_tool`, [`Agent::record_tool_result`] (token accounting, `TodosUpdated`, `Message::tool_result` with envoy children/meta, image peel-out), post-tool hooks unless replay, turn-level doom-nudge injection, `Ok(!denied)`. On interruption it records only the drained results and returns `Err(HarnessError::Interrupted)` — no hooks, no nudge, no `remember`. |
+//! | **schedule** ([`Agent::schedule_tool_calls`], the batch) | the concurrent fan-out through [`ToolScheduler`]: per-call declared [`ToolAccesses`](muta_contracts::ToolAccesses) arbitrate which calls run concurrently (a write serializes against any other access to the same path; non-conflicting reads parallelize). A shared `mpsc` channel forwards `Runner`/`ToolStream`/`PermissionRequest` events in real time; each task emits its terminal `ToolResult` the instant it finishes; a turn interrupt runs the two-tier cancel (cooperative drain with `ENVOY_DRAIN_GRACE`, then forced abort) and pairs every unproduced call with a terminal `AgentEvent::ToolCancelled`. |
+//! | **finalize** ([`Agent::dispatch_finalize`], per call, input order) | recovered results folded back into the input-ordered slots, `remember_completed_tool`, [`Agent::record_tool_result`] (token accounting, `TodosUpdated`, `Message::tool_result` with runner children/meta, image peel-out), post-tool hooks unless replay, turn-level doom-nudge injection, `Ok(!denied)`. On interruption it records only the drained results and returns `Err(HarnessError::Interrupted)` — no hooks, no nudge, no `remember`. |
 //!
 //! The text-fallback path (one call per turn) stays inside
 //! `dispatch_tool_calls`, driving [`Agent::execute_tool_evented`], which
@@ -304,7 +304,7 @@ impl Agent {
     ///
     /// Cancellation-aware, two-tier: an interrupt first cancels the batch
     /// cooperatively — queued tasks reject immediately, running tasks observe
-    /// their child token (a cooperatively-cancellable call, i.e. an envoy,
+    /// their child token (a cooperatively-cancellable call, i.e. an runner,
     /// drains to a terminal result) — within the bounded
     /// [`ENVOY_DRAIN_GRACE`]; whatever still has not settled is then aborted.
     /// The outcome reports `interrupted: true` with every drained result
@@ -343,14 +343,14 @@ impl Agent {
                 // One execution future, pinned: the cancel arm keeps driving
                 // the SAME future to its drained terminal result instead of
                 // dropping and re-entering the tool (dropping mid-permission park
-                // or mid-envoy and re-running would duplicate side effects).
+                // or mid-runner and re-running would duplicate side effects).
                 let fut = agent.execute_tool(&call, &call_id, &tx);
                 tokio::pin!(fut);
                 let output = tokio::select! {
                     biased;
                     _ = token.cancelled() => {
                         // Cooperative cancel: a tool that can stop at a safe
-                        // boundary (an envoy) is signalled and drains; anything
+                        // boundary (an runner) is signalled and drains; anything
                         // else is dropped here by returning early — its
                         // terminal ToolCancelled is emitted by the driver,
                         // which owns pairing for unproduced calls.
@@ -419,7 +419,7 @@ impl Agent {
             // Cooperative tier: reject every queued task immediately and
             // signal the running ones through their child tokens.
             scheduler.cancel_all().await;
-            // Bounded grace for cooperative tools (envoys) to drain to a
+            // Bounded grace for cooperative tools (runners) to drain to a
             // terminal result; events keep flowing while we wait.
             let grace = tokio::time::sleep(ENVOY_DRAIN_GRACE);
             tokio::pin!(grace);
@@ -509,7 +509,7 @@ impl Agent {
             } = outcome;
             if interrupted {
                 // The user interrupted this turn mid-flight. Record whatever
-                // real work drained (an interrupted envoy's partial
+                // real work drained (an interrupted runner's partial
                 // transcript), then end the round as interrupted — the caller
                 // commits the transcript so the recovered work survives into
                 // the session. Dropped calls already received their terminal

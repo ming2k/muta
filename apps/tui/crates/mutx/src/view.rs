@@ -55,7 +55,7 @@ pub use crate::overlays::{
 };
 use crate::page_header;
 pub(crate) use crate::page_header::{
-    AsidesChip, BtwHead, PageHeader, PageHints, PageKind, SessionHead, draw_envoy_footer,
+    AsidesChip, BtwHead, PageHeader, PageHints, PageKind, SessionHead, draw_runner_footer,
     draw_page_header, draw_page_header_hints,
 };
 pub use crate::primitives::recess_backdrop;
@@ -184,9 +184,9 @@ pub struct TranscriptView<'a> {
     /// slice renders a muted empty state so the bar is always present (the
     /// permanent home for queue affordances).
     pub queue_bar: QueueBarView<'a>,
-    /// When set, the view is zoomed into an envoy task: a contextual page
+    /// When set, the view is zoomed into an runner task: a contextual page
     /// header is rendered and `messages` is the focused task's child stream.
-    pub envoy_bar: Option<EnvoyBarInfo>,
+    pub runner_bar: Option<RunnerBarInfo>,
     /// When set, the view is inside a `/btw` aside (ADR-0017/0103): the
     /// contextual page header carries the coarse primary-session status on
     /// row 1 and the aside's affordance legend on row 2.
@@ -337,17 +337,17 @@ impl HeightCache {
     }
 }
 
-/// Page-header context for an Envoy view (shown when zoomed into a task).
-pub struct EnvoyBarInfo {
-    /// The envoy's role (`explore` / `plan` / …), when the `Started` event
+/// Page-header context for an Runner view (shown when zoomed into a task).
+pub struct RunnerBarInfo {
+    /// The runner's role (`explore` / `plan` / …), when the `Started` event
     /// has identified it. Rendered as the `[ROLE]` tag between the `ENVOY`
     /// identity and the title; omitted before the role is known.
     pub role: Option<String>,
-    /// Title of the focused envoy (its task description).
+    /// Title of the focused runner (its task description).
     pub label: String,
-    /// 1-based index of the focused envoy among its siblings.
+    /// 1-based index of the focused runner among its siblings.
     pub index: usize,
-    /// Total number of sibling envoy tasks.
+    /// Total number of sibling runner tasks.
     pub total: usize,
 }
 
@@ -418,7 +418,7 @@ pub fn draw_transcript(
         byte_cursor,
         chrome_hidden,
         queue_bar,
-        envoy_bar,
+        runner_bar,
         side_banner,
         page_hints,
         session_head,
@@ -469,14 +469,14 @@ pub fn draw_transcript(
 
     // Resolve every transcript page to one page-header model. The Main
     // session view always carries a head (its ambient session state — id
-    // tail, workspace, mode — replaces the old bottom status bar). Envoy
-    // and `/btw` keep their contextual headers. Envoy and `/btw` are
-    // mutually exclusive in the app; preferring Envoy here is a defensive
+    // tail, workspace, mode — replaces the old bottom status bar). Runner
+    // and `/btw` keep their contextual headers. Runner and `/btw` are
+    // mutually exclusive in the app; preferring Runner here is a defensive
     // fallback that keeps rendering deterministic if a malformed caller
     // supplies both.
-    let page_header = envoy_bar
+    let page_header = runner_bar
         .as_ref()
-        .map(PageHeader::Envoy)
+        .map(PageHeader::Runner)
         .or_else(|| side_banner.map(PageHeader::Btw))
         .or_else(|| session_head.as_ref().map(PageHeader::Session));
     // The row-2 affordance legend (ADR-0103 §3, demand-gated by ADR-0104).
@@ -495,13 +495,13 @@ pub fn draw_transcript(
     // has page-specific affordances to announce (ADR-0104; see
     // `PageHints::has_content`) — the view-affordance legend on row 2, both
     // carved off with one layout split. Without a head, the standard
-    // viewport margins apply. The Envoy page additionally owns the terminal's
+    // viewport margins apply. The Runner page additionally owns the terminal's
     // last rows for its permanent key-legend footer (three background-painted
     // rows whose middle row carries the shortcuts), so the transcript ends
     // above that band.
-    let (head_rect, hints_rect, envoy_footer_rect, viewport) = if page_header.is_some() {
+    let (head_rect, hints_rect, runner_footer_rect, viewport) = if page_header.is_some() {
         let full = frame.area();
-        let footer_rows = if envoy_bar.is_some() {
+        let footer_rows = if runner_bar.is_some() {
             ENVOY_FOOTER_ROWS
         } else {
             0
@@ -521,7 +521,7 @@ pub fn draw_transcript(
             .split(full);
         (
             // The head band spans the terminal's full width — it is top-level
-            // chrome pinned to the top edge, the counterpart of the Envoy
+            // chrome pinned to the top edge, the counterpart of the Runner
             // key-legend band at the bottom edge, not a transcript-area
             // component. Its *text* keeps the shared horizontal inset (applied
             // inside `draw_page_header` as pad spans) so it stays aligned with
@@ -544,10 +544,10 @@ pub fn draw_transcript(
 
     let size = viewport;
 
-    // When zoomed into an envoy task, the footer (status bar, plan panel,
+    // When zoomed into an runner task, the footer (status bar, plan panel,
     // input box, hint bar) is hidden: the task detail page is a read-only view
     // whose only chrome is its page header.
-    let in_envoy = envoy_bar.is_some();
+    let in_runner = runner_bar.is_some();
 
     // The activity bar (animated spinner + activity text) sits directly above the
     // input box, below the ambient todo/queue meta bars. It is shown for every
@@ -563,7 +563,7 @@ pub fn draw_transcript(
     // has nominally gone idle (e.g. right after an interrupt that rejects
     // permissions but before the stale round's terminal snapshot lands).
     let activity_active = !chrome_hidden
-        && !in_envoy
+        && !in_runner
         && (awaiting_permission || (!activity.is_empty() && activity != "idle"));
     // The activity bar is purely transient now: it shows only while a round is
     // active and hides when idle, so the row returns to the transcript (the
@@ -577,10 +577,10 @@ pub fn draw_transcript(
 
     // The todo bar leads the footer stack and surfaces the live task list —
     // a `TODOS d/t` identity and a preview of the current item. It is
-    // hidden only while an overlay owns the chrome, inside an envoy zoom, or
+    // hidden only while an overlay owns the chrome, inside an runner zoom, or
     // when the list is empty.
     let has_visible_todos = todos.map(|l| !l.items.is_empty()).unwrap_or(false);
-    let todo_row_needed = !chrome_hidden && !in_envoy && has_visible_todos;
+    let todo_row_needed = !chrome_hidden && !in_runner && has_visible_todos;
     let todo_height: u16 = if todo_row_needed { TODO_BAR_ROWS } else { 0 };
 
     // The queue bar surfaces pending outbox messages. It is hidden while the
@@ -588,7 +588,7 @@ pub fn draw_transcript(
     // session reclaims the row; it appears the moment a message is staged
     // and stays up until the outbox drains, so the user always has a glanceable
     // surface while there is pending work.
-    let queue_row_needed = !chrome_hidden && !in_envoy && !queue_bar.items.is_empty();
+    let queue_row_needed = !chrome_hidden && !in_runner && !queue_bar.items.is_empty();
     let queue_height: u16 = if queue_row_needed { QUEUE_BAR_ROWS } else { 0 };
 
     // The input box grows with its content: the typed text wraps onto new
@@ -600,7 +600,7 @@ pub fn draw_transcript(
     let input_wrapped_lines = composer::input_row_count(input, input_text_width, byte_cursor);
     let desired_input_height = input_wrapped_lines as u16 + COMPOSER_VERTICAL_CHROME_ROWS;
     let max_input_height = (size.height / COMPOSER_MAX_HEIGHT_DIVISOR).max(COMPOSER_MIN_HEIGHT);
-    let input_box_height = if in_envoy {
+    let input_box_height = if in_runner {
         0
     } else {
         desired_input_height.min(max_input_height)
@@ -610,7 +610,7 @@ pub fn draw_transcript(
     // separation it needs (COMPOSER_HINT_GAP_ROWS = 0). It carries the
     // next Enter action plus ambient model/context info. Hidden alongside the
     // rest of the chrome while an overlay is open.
-    let hint_height: u16 = if chrome_hidden || in_envoy {
+    let hint_height: u16 = if chrome_hidden || in_runner {
         0
     } else {
         HINT_BAR_ROWS
@@ -636,7 +636,7 @@ pub fn draw_transcript(
     // The zero-gap tokens (activity→composer, composer→hint) collapse to no
     // row at all rather than a zero-height placeholder: the stack lists only
     // rows that exist, and their flush-ness is a property of adjacency.
-    let footer_rows: Vec<FooterRow> = if chrome_hidden || in_envoy {
+    let footer_rows: Vec<FooterRow> = if chrome_hidden || in_runner {
         Vec::new()
     } else {
         vec![
@@ -686,11 +686,11 @@ pub fn draw_transcript(
         draw_page_header_hints(frame, rect, hints, theme);
     }
 
-    // 1b. Envoy key-legend footer — pinned to the terminal's last rows (its
+    // 1b. Runner key-legend footer — pinned to the terminal's last rows (its
     // rect came out of the same layout split as the head). Painted on the
     // page-body background with the shortcuts on its middle row.
-    if let (Some(info), Some(rect)) = (envoy_bar.as_ref(), envoy_footer_rect) {
-        draw_envoy_footer(frame, rect, info, theme);
+    if let (Some(info), Some(rect)) = (runner_bar.as_ref(), runner_footer_rect) {
+        draw_runner_footer(frame, rect, info, theme);
     }
 
     // 2. Transcript History — the transcript area is the whole `chunks[0]`
@@ -719,13 +719,13 @@ pub fn draw_transcript(
     let mut sticky_steps: Vec<StickyStep> = Vec::new();
 
     // Empty-state replacement (ADR-0033): when the session has no messages and
-    // no envoy/side view is open, the transcript is replaced by a centered
+    // no runner/side view is open, the transcript is replaced by a centered
     // logo hero rather than rendering an empty stream. This is a component
     // substitution, not transcript content — the hero never participates in
     // scroll, selection, or attribution, so the whole message-rendering
     // pipeline (loop, badges, sticky pinning) is skipped. The footer below
     // renders exactly as in a live session.
-    let show_empty_state = messages.is_empty() && envoy_bar.is_none() && side_banner.is_none();
+    let show_empty_state = messages.is_empty() && runner_bar.is_none() && side_banner.is_none();
 
     if show_empty_state {
         empty_state::draw_empty_state(
@@ -950,7 +950,7 @@ mod tests {
                             paused: false,
                             blocked: false,
                         },
-                        envoy_bar: None,
+                        runner_bar: None,
                         side_banner: None,
                         page_hints: None,
                     session_head: None,
@@ -1284,30 +1284,30 @@ mod tests {
         assert!(grid_row(&terminal, 0).contains("SETTINGS"));
     }
 
-    /// Render both the compact Envoy step (root view) and the zoomed-in
-    /// Envoy view with its page header, ensuring no layout panics.
-    /// Visual verification (run with MUTA_VISUAL=1 --nocapture): an envoy
+    /// Render both the compact Runner step (root view) and the zoomed-in
+    /// Runner view with its page header, ensuring no layout panics.
+    /// Visual verification (run with MUTA_VISUAL=1 --nocapture): an runner
     /// zoom view with two ReAct turns, each emitting a concurrent tool-call
     /// batch, groups into turn bands with flush same-turn calls and a blank
     /// line between turns — exactly like the main session.
     #[test]
-    fn envoy_view_groups_children_into_turn_bands() {
+    fn runner_view_groups_children_into_turn_bands() {
         let theme = Theme::default();
         let mut terminal = mutx_engine::TestTerminal::new(80, 30);
         let mut task = TranscriptMessage::tool_step(
             "task_1",
-            "envoy",
+            "runner",
             r#"{"description":"explore the codebase","prompt":"..."}"#,
         );
         let call =
-            |id: &str, name: &str, round: u64, turn: usize| muta_contracts::EnvoyEvent::ToolCall {
+            |id: &str, name: &str, round: u64, turn: usize| muta_contracts::RunnerEvent::ToolCall {
                 id: id.into(),
                 name: name.into(),
                 arguments: r#"{"p":"x"}"#.into(),
                 round,
                 turn,
             };
-        let result = |id: &str, name: &str| muta_contracts::EnvoyEvent::ToolResult {
+        let result = |id: &str, name: &str| muta_contracts::RunnerEvent::ToolResult {
             id: id.into(),
             name: name.into(),
             output: "done".into(),
@@ -1315,15 +1315,15 @@ mod tests {
         };
         // Turn 1: a 3-call concurrent batch.
         for (id, name) in [("a", "read_text"), ("b", "search_text"), ("c", "list_dir")] {
-            task.push_envoy_event(&call(id, name, 1, 0));
-            task.push_envoy_event(&result(id, name));
+            task.push_runner_event(&call(id, name, 1, 0));
+            task.push_runner_event(&result(id, name));
         }
         // Turn 2: a 2-call concurrent batch.
         for (id, name) in [("d", "websearch"), ("e", "webfetch")] {
-            task.push_envoy_event(&call(id, name, 1, 1));
-            task.push_envoy_event(&result(id, name));
+            task.push_runner_event(&call(id, name, 1, 1));
+            task.push_runner_event(&result(id, name));
         }
-        let children = task.envoy_children().unwrap().to_vec();
+        let children = task.runner_children().unwrap().to_vec();
         terminal.draw(|f| {
             let mut layout_map = LayoutMap::new();
             let _ = draw_transcript(
@@ -1345,7 +1345,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: Some(EnvoyBarInfo {
+                    runner_bar: Some(RunnerBarInfo {
                         role: Some("explore".to_string()),
                         label: "the codebase".to_string(),
                         index: 1,
@@ -1377,13 +1377,13 @@ mod tests {
             })
             .collect();
         if std::env::var("MUTA_VISUAL").is_ok() {
-            eprintln!("\n┌─ Envoy zoom (turn-banded) ─");
+            eprintln!("\n┌─ Runner zoom (turn-banded) ─");
             for r in &rows {
                 eprintln!("│{r}");
             }
             eprintln!("└────\n");
         }
-        // Two turn headers appear (turn 1 and turn 2 of the envoy's round 1).
+        // Two turn headers appear (turn 1 and turn 2 of the runner's round 1).
         let body = rows.join("\n");
         assert!(body.contains("turn 1"), "expected a `turn 1` band: {body}");
         assert!(body.contains("turn 2"), "expected a `turn 2` band: {body}");
@@ -1403,17 +1403,17 @@ mod tests {
     }
 
     #[test]
-    fn envoy_step_and_view_render_without_panicking() {
+    fn runner_step_and_view_render_without_panicking() {
         let theme = Theme::default();
         let mut terminal = mutx_engine::TestTerminal::new(80, 30);
 
-        // Root view: a completed envoy task renders as a compact step.
+        // Root view: a completed runner task renders as a compact step.
         let mut task = TranscriptMessage::tool_step(
             "task_1",
-            "envoy",
+            "runner",
             r#"{"description":"explore the codebase","prompt":"..."}"#,
         );
-        task.push_envoy_event(&muta_contracts::EnvoyEvent::ToolCall {
+        task.push_runner_event(&muta_contracts::RunnerEvent::ToolCall {
             id: "inner".into(),
             name: "search_text".into(),
             arguments: r#"{"pattern":"foo"}"#.into(),
@@ -1441,7 +1441,7 @@ mod tests {
                     scroll: 0,
                     selection: &SelectionState::None,
                     cell_selection: None,
-                    activity: "running envoy",
+                    activity: "running runner",
                     awaiting_permission: false,
                     spinner_phase: 0,
                     input: "",
@@ -1452,7 +1452,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -1470,9 +1470,9 @@ mod tests {
             );
         });
 
-        // Zoomed-in Envoy view: the task's children are the message stream
+        // Zoomed-in Runner view: the task's children are the message stream
         // and the contextual header is shown on the first row.
-        let children = root_messages[1].envoy_children().unwrap().to_vec();
+        let children = root_messages[1].runner_children().unwrap().to_vec();
         terminal.draw(|f| {
             let mut layout_map = LayoutMap::new();
             let _ = draw_transcript(
@@ -1494,7 +1494,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: Some(EnvoyBarInfo {
+                    runner_bar: Some(RunnerBarInfo {
                         role: Some("explore".to_string()),
                         label: "the codebase".to_string(),
                         index: 1,
@@ -1531,14 +1531,14 @@ mod tests {
         assert_eq!(
             head_row,
             "   ENVOY [EXPLORE] the codebase                                         (1/2)   ",
-            "Envoy identity, role tag, title and sibling index on the head row"
+            "Runner identity, role tag, title and sibling index on the head row"
         );
         // The permanent key legend occupies the last three terminal rows,
         // with the shortcuts on its middle row.
         let legend = row_text(28);
         assert!(
             legend.contains("Esc back") && legend.contains("[ prev") && legend.contains("] next"),
-            "Envoy shortcuts pinned on the footer's middle row: {legend:?}"
+            "Runner shortcuts pinned on the footer's middle row: {legend:?}"
         );
         assert!(
             row_text(27).trim().is_empty() && row_text(29).trim().is_empty(),
@@ -1598,7 +1598,7 @@ mod tests {
                             paused: false,
                             blocked: false,
                         },
-                        envoy_bar: None,
+                        runner_bar: None,
                         side_banner: None,
                         page_hints: None,
                         session_head: None,
@@ -1705,7 +1705,7 @@ mod tests {
                             paused: false,
                             blocked: false,
                         },
-                        envoy_bar: None,
+                        runner_bar: None,
                         side_banner: None,
                         page_hints: None,
                         session_head: None,
@@ -1925,7 +1925,7 @@ mod tests {
                             paused: false,
                             blocked: false,
                         },
-                        envoy_bar: None,
+                        runner_bar: None,
                         side_banner: None,
                         page_hints: None,
                         session_head: None,
@@ -1996,7 +1996,7 @@ mod tests {
                             paused: false,
                             blocked: false,
                         },
-                        envoy_bar: None,
+                        runner_bar: None,
                         side_banner: None,
                         page_hints: None,
                         session_head: None,
@@ -2091,7 +2091,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -2216,7 +2216,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -3160,7 +3160,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -3378,7 +3378,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -3464,7 +3464,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -3548,7 +3548,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -4186,7 +4186,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -4248,7 +4248,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -4319,7 +4319,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -4376,7 +4376,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: hints,
                     session_head: Some(SessionHead {
@@ -4456,13 +4456,13 @@ mod tests {
         assert!(!row1.contains("F1"), "no global help pair: {row1:?}");
     }
 
-    /// The Envoy page's row 2 never renders — its permanent footer already
+    /// The Runner page's row 2 never renders — its permanent footer already
     /// carries the same legend (ADR-0104), so a second copy one screen apart
     /// would be pure duplication.
     #[test]
-    fn envoy_view_omits_row2_entirely() {
+    fn runner_view_omits_row2_entirely() {
         let hints = PageHints {
-            kind: PageKind::Envoy,
+            kind: PageKind::Runner,
             asides: None,
             interruptible: true,
             parent_note: "",
@@ -4470,7 +4470,7 @@ mod tests {
         assert!(!hints.has_content());
         let terminal = render_full_view(80, 24, &[], Some(hints));
         let row1 = grid_row(&terminal, 1);
-        assert!(row1.trim().is_empty(), "row 2 blank on envoy: {row1:?}");
+        assert!(row1.trim().is_empty(), "row 2 blank on runner: {row1:?}");
     }
 
     /// The empty-state tour renders the current carousel page beneath the
@@ -4500,7 +4500,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -4568,7 +4568,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -4651,7 +4651,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -4730,7 +4730,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,
@@ -4811,7 +4811,7 @@ mod tests {
                         paused: false,
                         blocked: false,
                     },
-                    envoy_bar: None,
+                    runner_bar: None,
                     side_banner: None,
                     page_hints: None,
                     session_head: None,

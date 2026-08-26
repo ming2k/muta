@@ -12,6 +12,7 @@ muta-platform = { path = "../muta-platform" }
 muta-providers = { path = "../muta-providers" }
 muta-skills = { path = "../muta-skills" }
 muta-agent = { path = "../muta-agent" }
+ignore = { workspace = true }
 muta-mcp = { path = "../muta-mcp" }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time", "test-util"] }

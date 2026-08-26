@@ -45,6 +45,21 @@ pub async fn run_headless(
         }
     };
 
+    // ADR-0141: declare the human-channel posture before the attach. A
+    // headless run has no interactive UI by definition — `is_tty` below only
+    // distinguishes "can print a question and read a line" from a pipe. A
+    // TTY headless run declares Interactive (the operator is on the other
+    // end of stderr/stdin); a piped run declares Autonomous so the session's
+    // posture gate settles questions by labeled policy instead of letting
+    // this client fabricate answers below (the old `options.first()` bug).
+    {
+        use muta_runtime::client::set_posture;
+        set_posture(if io::stderr().is_terminal() {
+            muta_contracts::human_request::HumanChannelPosture::Interactive
+        } else {
+            muta_contracts::human_request::HumanChannelPosture::Autonomous
+        });
+    }
     let handshake = match &transport {
         Transport::Remote(daemon) => daemon.connect(AttachAction::New).await?,
         Transport::Local(info) => client::connect(info, AttachAction::New).await?,
@@ -406,32 +421,29 @@ async fn handle_user_question_request(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut all_answers = Vec::new();
 
-    for q in &req.questions {
-        if !is_tty {
-            // Non-interactive answering must fail closed. Blindly taking the
-            // first option silently granted full workspace trust (the prompt
-            // orders its options most-permissive-first for interactive
-            // convenience) to any piped/stdin-less invocation — a script or
-            // a cron wrapper would have "decided" trust on the operator's
-            // behalf. Security questions default to their least-privilege
-            // option instead, and we say so.
-            let default_answer = if req.id.starts_with("trust-") {
-                eprintln!(
-                    "mutx: workspace trust is unconfigured and stdin is not a TTY; \
-                     keeping the workspace restricted. Run an interactive session or \
-                     `/trust` to record a decision."
-                );
-                "Keep restricted".to_string()
-            } else {
-                q.options
-                    .first()
-                    .map(|opt| opt.label.clone())
-                    .unwrap_or_default()
-            };
-            all_answers.push(vec![default_answer]);
-            continue;
-        }
+    // ADR-0141: the non-TTY fabrication branch is gone. A piped run
+    // declares the Autonomous posture at attach, so the session's posture
+    // gate settles `ask_user` by labeled policy (fail-closed or
+    // recommended-labeled per `[master] ask_user_fallback`) *inside* the
+    // harness — this handler is only reached when an interactive human is
+    // on the other end of stdin/stderr. If one still slips through (e.g. a
+    // legacy daemon), fail closed rather than inventing an answer.
+    if !is_tty {
+        eprintln!(
+            "mutx: agent asked a question but stdin is not a TTY and no \
+             human channel is attached; cancelling the question. Run with a \
+             terminal, or configure `[master] ask_user_fallback` for \
+             autonomous answering."
+        );
+        let _ = tx.send(AgentRequest::UserQuestionReply {
+            request_id: req.id.clone(),
+            answers: Vec::new(),
+            parent_call_id: None,
+        });
+        return Ok(());
+    }
 
+    for q in &req.questions {
         eprintln!("\n\x1b[35m[Question]\x1b[0m {}", q.question);
         for (i, opt) in q.options.iter().enumerate() {
             if let Some(desc) = &opt.description {

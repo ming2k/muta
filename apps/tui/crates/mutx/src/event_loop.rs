@@ -251,13 +251,13 @@ pub(super) fn apply_transcript_patch(
             TranscriptUpdate::ToolStream { id, stream } => messages
                 .iter_mut()
                 .any(|message| message.push_tool_stream(&id, &stream)),
-            TranscriptUpdate::EnvoyEvent {
+            TranscriptUpdate::RunnerEvent {
                 parent_call_id,
                 event,
             } => messages
                 .iter_mut()
                 .find(|message| message.tool_step_call_id() == Some(parent_call_id.as_str()))
-                .is_some_and(|message| message.push_envoy_event(&event)),
+                .is_some_and(|message| message.push_runner_event(&event)),
             TranscriptUpdate::ReplaceMessage {
                 message_id,
                 message,
@@ -322,15 +322,15 @@ pub(super) struct UiRuntime {
     /// Latest daemon-produced composer completion response.
     pub completion_signal: Arc<Mutex<Option<CompletionSignal>>>,
     /// Full-duplex (ADR-0029): request_id → the parent tool-call id of the
-    /// envoy that surfaced a permission or `ask_user` request (carried up
-    /// as a `RoundEvent::Envoy`). When the user answers in the modal, the
+    /// runner that surfaced a permission or `ask_user` request (carried up
+    /// as a `RoundEvent::Runner`). When the user answers in the modal, the
     /// loop looks the id up here to tag the reply with `parent_call_id` so the
-    /// harness routes it down into the live child via the envoy registry.
+    /// harness routes it down into the live child via the runner registry.
     /// Top-level requests are absent here → `None` → legacy path. Kept as a
     /// side-table so the modal queue and rendering stay unchanged.
-    pub envoy_permission_parent: Arc<Mutex<HashMap<String, String>>>,
-    /// Companion to [`Self::envoy_permission_parent`] for `ask_user` replies.
-    pub envoy_question_parent: Arc<Mutex<HashMap<String, String>>>,
+    pub runner_permission_parent: Arc<Mutex<HashMap<String, String>>>,
+    /// Companion to [`Self::runner_permission_parent`] for `ask_user` replies.
+    pub runner_question_parent: Arc<Mutex<HashMap<String, String>>>,
     pub messages: Arc<Versioned<Vec<TranscriptMessage>>>,
     /// Side-conversation transcript buffer (ADR-0017). The listener appends
     /// per-turn events tagged with the side `session_id` here; the loop
@@ -498,8 +498,8 @@ impl UiRuntime {
             dirty: Arc::new(AtomicBool::new(false)),
             dirty_notify: Arc::new(tokio::sync::Notify::new()),
             completion_signal: Arc::new(Mutex::new(None)),
-            envoy_permission_parent: Arc::new(Mutex::new(HashMap::new())),
-            envoy_question_parent: Arc::new(Mutex::new(HashMap::new())),
+            runner_permission_parent: Arc::new(Mutex::new(HashMap::new())),
+            runner_question_parent: Arc::new(Mutex::new(HashMap::new())),
             messages: Arc::new(Versioned::new(Vec::new())),
             side_messages: Arc::new(Versioned::new(Vec::new())),
             parent_status: Arc::new(Mutex::new(ParentStatus::Idle)),
@@ -953,7 +953,7 @@ async fn handle_permission_submit(app: &mut App, runtime: &UiRuntime) {
         };
         let request_id = request.id;
         let parent_call_id = runtime
-            .envoy_permission_parent
+            .runner_permission_parent
             .lock()
             .await
             .remove(&request_id);
@@ -968,7 +968,7 @@ async fn handle_permission_submit(app: &mut App, runtime: &UiRuntime) {
             // futures stay blocked and the batch deadlocks.
             let queued: Vec<PermissionRequest> =
                 runtime.pending_permission.lock().await.drain(..).collect();
-            let mut parents = runtime.envoy_permission_parent.lock().await;
+            let mut parents = runtime.runner_permission_parent.lock().await;
             for pending in queued {
                 let parent_call_id = parents.remove(&pending.id);
                 let _ = app.tx.send(AgentRequest::PermissionReply {
@@ -2175,7 +2175,7 @@ pub(super) async fn run_app_loop(
             } else {
                 app.completion_kind()
             };
-            let in_envoy_view = app.in_envoy_view();
+            let in_runner_view = app.in_runner_view();
             // SGR leakage backstop: drop any stray mouse-sequence fragment
             // before it can reach `process_event` and be inserted as text.
             // `continue` keeps the drain loop alive (events_drained stays set)
@@ -2242,7 +2242,7 @@ pub(super) async fn run_app_loop(
                         has_trigger_text,
                         permission_confirm_always: app.permission_confirm_always,
                         permission_show_details: app.permission_show_details,
-                        in_envoy_view,
+                        in_runner_view,
                         in_side_view: app.in_side_view,
                         has_focused_target: app.focused_target.is_some(),
                         has_queued: app.pending_dispatch.iter().any(|item| {
@@ -2405,7 +2405,7 @@ pub(super) async fn picker_effort(
 
 /// Resolve a mutable reference to the message at index `mi` within the
 /// currently focused view: the root conversation when the focus stack is empty,
-/// or the focused envoy task's child stream otherwise. Selection and layout
+/// or the focused runner task's child stream otherwise. Selection and layout
 /// indices are recorded against whichever slice was rendered, so mutations must
 /// resolve through the same context.
 pub(super) fn resolve_focused_mut<'a>(
@@ -2417,13 +2417,13 @@ pub(super) fn resolve_focused_mut<'a>(
         return messages.get_mut(mi);
     };
     let task_idx = messages.iter().position(|message| {
-        message.is_envoy_task() && message.tool_step_call_id() == Some(current.call_id.as_str())
+        message.is_runner_task() && message.tool_step_call_id() == Some(current.call_id.as_str())
     })?;
-    messages[task_idx].envoy_children_mut()?.get_mut(mi)
+    messages[task_idx].runner_children_mut()?.get_mut(mi)
 }
 
 /// Iterate mutable messages in the currently focused view (the root
-/// conversation, or the focused envoy task's child stream) for bulk
+/// conversation, or the focused runner task's child stream) for bulk
 /// expand/collapse operations. Callers filter by kind as needed.
 #[cfg(test)]
 pub(super) fn focused_messages_mut<'a>(
@@ -2434,11 +2434,11 @@ pub(super) fn focused_messages_mut<'a>(
         None => Box::new(messages.iter_mut()),
         Some(current) => {
             let task_idx = messages.iter().position(|message| {
-                message.is_envoy_task()
+                message.is_runner_task()
                     && message.tool_step_call_id() == Some(current.call_id.as_str())
             });
             match task_idx {
-                Some(idx) => match messages[idx].envoy_children_mut() {
+                Some(idx) => match messages[idx].runner_children_mut() {
                     Some(children) => Box::new(children.iter_mut()),
                     None => Box::new(std::iter::empty()),
                 },
@@ -2712,7 +2712,7 @@ pub(super) fn display_status(
 ///
 /// This is the effect interpreter — the *only* place the question modal touches
 /// the agent channel, the pending-request queue, or the modal/queue sync. The
-/// `Reply` effect looks up the envoy parent routing key (so an envoy's
+/// `Reply` effect looks up the runner parent routing key (so an runner's
 /// answer routes back down to it), sends the reply, and removes the request
 /// from the queue; `Cancelled` sends the cancellation sentinel; `Closed`
 /// removes the settled request from the TUI queue. The per-frame queue sync
@@ -2732,7 +2732,7 @@ mod question_effects {
                     answers,
                 } => {
                     let parent_call_id = runtime
-                        .envoy_question_parent
+                        .runner_question_parent
                         .lock()
                         .await
                         .remove(request_id);
@@ -2744,7 +2744,7 @@ mod question_effects {
                 }
                 crate::question_model::QuestionEffect::Cancelled { request_id } => {
                     let parent_call_id = runtime
-                        .envoy_question_parent
+                        .runner_question_parent
                         .lock()
                         .await
                         .remove(request_id);

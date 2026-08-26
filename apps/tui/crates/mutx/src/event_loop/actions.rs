@@ -1356,7 +1356,7 @@ pub(super) async fn dispatch_action(
                             target.message_idx,
                         )
                         .and_then(|message| {
-                            if message.is_envoy_task() {
+                            if message.is_runner_task() {
                                 message.tool_step_call_id().map(String::from)
                             } else {
                                 None
@@ -1364,7 +1364,7 @@ pub(super) async fn dispatch_action(
                         });
                         if let Some(id) = enter_id {
                             drop(messages);
-                            app.enter_envoy(id);
+                            app.enter_runner(id);
                         } else {
                             // Enter mirrors the mouse click on a tool
                             // step's summary: toggle its inline
@@ -1433,8 +1433,8 @@ pub(super) async fn dispatch_action(
             // chip-or-inline logic as Ctrl+V without an async hop.
             clipboard_ops::apply_clipboard_paste(app, clipboard::ClipboardRead::Text(text));
         }
-        input::InputAction::ExitEnvoy => {
-            app.exit_envoy();
+        input::InputAction::ExitRunner => {
+            app.exit_runner();
         }
         input::InputAction::ExitSideView => {
             // `/btw`: detach from the aside view and return to the primary
@@ -1961,7 +1961,7 @@ pub(super) async fn dispatch_action(
                     // Drain the matching front so the per-frame sync
                     // closes the modal and restores the composer draft.
                     runtime.pending_input.lock().await.pop_front();
-                    let parent_call_id = runtime.envoy_question_parent.lock().await.remove(&req.id);
+                    let parent_call_id = runtime.runner_question_parent.lock().await.remove(&req.id);
                     let _ = app.tx.send(AgentRequest::InputReply {
                         request_id: req.id.clone(),
                         text,
@@ -1990,7 +1990,7 @@ pub(super) async fn dispatch_action(
                     queue.pop_front();
                     queue.front().cloned()
                 };
-                let parent_call_id = runtime.envoy_question_parent.lock().await.remove(&req.id);
+                let parent_call_id = runtime.runner_question_parent.lock().await.remove(&req.id);
                 let _ = app.tx.send(AgentRequest::InputReply {
                     request_id: req.id.clone(),
                     text: String::new(),
@@ -2047,7 +2047,7 @@ pub(super) async fn dispatch_action(
             app.modal_index = 0;
             app.permission_confirm_always = false;
             app.permission_show_details = false;
-            let mut parents = runtime.envoy_permission_parent.lock().await;
+            let mut parents = runtime.runner_permission_parent.lock().await;
             for pending in queued {
                 let parent_call_id = parents.remove(&pending.id);
                 let _ = app.tx.send(AgentRequest::PermissionReply {
@@ -2218,7 +2218,7 @@ pub(super) fn enter_view(app: &mut App, view: crate::surfaces::View, runtime: &U
             app.host_kill_confirm_id = None;
             None
         }
-        View::Session | View::Envoy | View::Side => None,
+        View::Session | View::Runner | View::Side => None,
     };
     if let Some(request) = request
         && app.tx.send(request).is_err()

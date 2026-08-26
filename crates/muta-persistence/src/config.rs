@@ -1,6 +1,6 @@
 //! User configuration schema and persistence.
 //!
-//! Deserializes/serializes the TOML config file (`principal`, `tui`, providers,
+//! Deserializes/serializes the TOML config file (`master`, `tui`, providers,
 //! channels, MCP servers, hooks, skills, web-search) via [`crate::fsutil`]'s
 //! atomic-write helpers, and loads/saves the input history. Config is state
 //! (recency-merged under a companion file lock, ADR-0018); the live
@@ -25,13 +25,13 @@ use std::path::PathBuf;
 /// Reasoning isn't a tool, so each frontend addresses it by name.
 pub const THINKING_KEY: &str = "thinking";
 
-/// User-tunable principal (top-level agent) behaviour, deserialized from the optional `[principal]`
+/// User-tunable master (top-level agent) behaviour, deserialized from the optional `[master]`
 /// table of `config.toml`. All fields default sensibly, so a
-/// `config.toml` with no `[principal]` table (or a partially specified one)
+/// `config.toml` with no `[master]` table (or a partially specified one)
 /// is valid.
 ///
 /// ```toml
-/// [principal]
+/// [master]
 /// # Hard-stop a round after this many total ReAct turns. 0 (the default)
 /// # means no hard stop — an opt-in execution budget only. This is the sole
 /// # per-round turn cap; the loop otherwise runs until the model stops, the user
@@ -41,18 +41,18 @@ pub const THINKING_KEY: &str = "thinking";
 /// # Never pop the interactive-input panel for a command needing stdin
 /// # (sudo/gpg/passwd/…). Instead run it with stdin closed so it fails fast
 /// # with a non-interactive remedy hint — like autopilot mode, but without
-/// # turning the principal itself autopilot.
+/// # turning the master itself autopilot.
 /// # skip_interactive_input = false
 ///
 /// # Doom-loop guard (variant-loop defense). On by default (ADR-0113 §5);
 /// opt out here. See [`DoomGuardConfig`]. The historical `nudge` key
 /// spelling still loads; saves write `doom_guard`.
-/// # [principal.doom_guard]
+/// # [master.doom_guard]
 /// # enabled = false
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct PrincipalConfig {
+pub struct MasterConfig {
     /// Opt-in hard-stop budget: abort a round after this many ReAct turns.
     /// `0` (the default) means uncapped. Mutated at runtime via
     /// `Agent::set_hard_stop_turns`.
@@ -82,18 +82,28 @@ pub struct PrincipalConfig {
     /// form). Wired through `Agent::set_skip_interactive_input`.
     ///
     /// Note: this only governs the *interactive-input* path; it does not turn
-    /// the principal autopilot, so ordinary tool confirmations still apply.
+    /// the master autopilot, so ordinary tool confirmations still apply.
     pub skip_interactive_input: bool,
+    /// ADR-0141: how an autonomous session (no human channel attached —
+    /// piped headless, CI, cron) settles an `ask_user` question. Wire
+    /// format: `"fail_closed"` (default) or `"recommended_labeled"`.
+    /// Fail-closed refuses the question and tells the model to resolve the
+    /// ambiguity itself; recommended-labeled answers each question with
+    /// its first (recommended) option, with an explicit
+    /// `[answered by policy, not by user]` label so the model cannot
+    /// mistake the recommendation for a human decision.
+    #[serde(default)]
+    pub ask_user_fallback: muta_contracts::human_request::AutonomousFallbackPolicy,
     /// Doom-loop guard configuration (`muta_agent::doom_guard`). Default
     /// **enabled** (`window: 16`, ADR-0113 §5) — opt out via
-    /// `[principal.doom_guard] enabled = false`. See [`DoomGuardConfig`]
+    /// `[master.doom_guard] enabled = false`. See [`DoomGuardConfig`]
     /// for the per-field semantics.
     #[serde(rename = "doom_guard", alias = "nudge")]
     pub nudge: DoomGuardConfig,
 }
 
 // `DoomGuardConfig` is defined in `muta_contracts::doom_guard_config` and re-exported
-// above via `use muta_contracts::DoomGuardConfig`. It is the `[principal.doom_guard]`
+// above via `use muta_contracts::DoomGuardConfig`. It is the `[master.doom_guard]`
 // TOML table and the wire type for `AgentRequest::UpdateDoomGuardConfig`. See
 // `muta_contracts::DoomGuardConfig` for the per-field semantics and defaults.
 
@@ -450,7 +460,7 @@ impl RouteSettings {
 /// version-controlled without leaking credentials.
 ///
 /// Credentials are keyed by **provider instance**, never by route — a route
-/// is a derived model path, not a security principal. One instance has
+/// is a derived model path, not a security master. One instance has
 /// exactly one API-key credential:
 ///
 /// ```toml
@@ -747,11 +757,11 @@ pub struct Config {
     /// slash-command recording. See [`InputHistoryConfig`].
     #[serde(default)]
     pub input_history: InputHistoryConfig,
-    /// Principal behaviour (`[principal]` table): opt-in hard-stop budget and the
-    /// doom-loop guard toggle. See [`PrincipalConfig`] for the per-field
+    /// Master behaviour (`[master]` table): opt-in hard-stop budget and the
+    /// doom-loop guard toggle. See [`MasterConfig`] for the per-field
     /// semantics and TOML examples.
     #[serde(default)]
-    pub principal: PrincipalConfig,
+    pub master: MasterConfig,
     /// Lifecycle event hooks (`[[hooks]]` array, ADR-0025). Each entry fires a
     /// shell command at one lifecycle point; see [`HookSpec`].
     #[serde(default)]
@@ -912,7 +922,7 @@ impl Default for Config {
             websearch: WebSearchConfig::default(),
             tui: TuiConfig::default(),
             input_history: InputHistoryConfig::default(),
-            principal: PrincipalConfig::default(),
+            master: MasterConfig::default(),
             hooks: Vec::new(),
             tool_variants: ToolVariantsConfig::default(),
             daemon: DaemonConfig::default(),
@@ -1342,20 +1352,20 @@ mod tests {
 
     #[test]
     fn agent_table_round_trips_through_toml() {
-        // The `[principal]` table must round-trip: partial TOML keeps defaults,
+        // The `[master]` table must round-trip: partial TOML keeps defaults,
         // full TOML preserves explicit overrides. Legacy `[agent.review]`
         // sub-tables (ADR-0016) are accepted but ignored — `hard_stop_turns`
-        // now lives directly under `[principal]` (ADR-0018).
+        // now lives directly under `[master]` (ADR-0018).
         let toml_full = r#"
-            [principal]
+            [master]
             hard_stop_turns = 40
         "#;
         let cfg: Config = toml::from_str(toml_full).unwrap();
-        assert_eq!(cfg.principal.hard_stop_turns, 40);
+        assert_eq!(cfg.master.hard_stop_turns, 40);
 
-        // Missing `[principal]` table → defaults match the documented values.
+        // Missing `[master]` table → defaults match the documented values.
         let cfg: Config = toml::from_str("").unwrap();
-        assert_eq!(cfg.principal.hard_stop_turns, 0);
+        assert_eq!(cfg.master.hard_stop_turns, 0);
 
         // A legacy `[agent.review]` block no longer maps to anything; it must
         // not break parsing (unknown sub-tables are ignored) and the new
@@ -1366,14 +1376,14 @@ mod tests {
             hard_stop_turns = 99
         "#;
         let cfg: Config = toml::from_str(toml_legacy).unwrap();
-        assert_eq!(cfg.principal.hard_stop_turns, 0);
+        assert_eq!(cfg.master.hard_stop_turns, 0);
 
         // Round-trip through save+load format (serialize then parse).
         let mut cfg = Config::default();
-        cfg.principal.hard_stop_turns = 99;
+        cfg.master.hard_stop_turns = 99;
         let serialised = toml::to_string(&cfg).unwrap();
         let parsed: Config = toml::from_str(&serialised).unwrap();
-        assert_eq!(parsed.principal.hard_stop_turns, 99);
+        assert_eq!(parsed.master.hard_stop_turns, 99);
     }
 
     #[test]
@@ -1399,17 +1409,17 @@ mod tests {
         // `enabled = false` under the old `nudge` key must survive — dropping
         // it would silently flip the user's opt-out back to blocking.
         let legacy: Config =
-            toml::from_str("[principal.nudge]\nenabled = false\nwindow = 24\n").unwrap();
+            toml::from_str("[master.nudge]\nenabled = false\nwindow = 24\n").unwrap();
         let canonical: Config =
-            toml::from_str("[principal.doom_guard]\nenabled = false\nwindow = 24\n").unwrap();
-        assert_eq!(legacy.principal.nudge, canonical.principal.nudge);
-        assert!(!canonical.principal.nudge.enabled);
-        assert_eq!(canonical.principal.nudge.window, 24);
+            toml::from_str("[master.doom_guard]\nenabled = false\nwindow = 24\n").unwrap();
+        assert_eq!(legacy.master.nudge, canonical.master.nudge);
+        assert!(!canonical.master.nudge.enabled);
+        assert_eq!(canonical.master.nudge.window, 24);
 
         // Save always writes the canonical key; the alias is load-only.
         let serialized = toml::to_string(&canonical).unwrap();
         assert!(
-            serialized.contains("[principal.doom_guard]"),
+            serialized.contains("[master.doom_guard]"),
             "got: {serialized}"
         );
         assert!(
@@ -1898,7 +1908,7 @@ name = "DeepSeek"
         std::fs::write(
             root.join(".muta/config.toml"),
             r#"
-                [principal]
+                [master]
                 hard_stop_turns = 7
 
                 [mcp.ok]
@@ -1907,7 +1917,7 @@ name = "DeepSeek"
         )
         .unwrap();
         let mcp = Config::load_project_mcp(&root);
-        assert_eq!(mcp.len(), 1, "principal ignored, mcp.ok projected");
+        assert_eq!(mcp.len(), 1, "master ignored, mcp.ok projected");
         let _ = std::fs::remove_dir_all(&root);
 
         // A structurally invalid TOML → empty (never panics).

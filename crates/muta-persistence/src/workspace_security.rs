@@ -212,7 +212,7 @@ impl WorkspaceSecurityStore {
 }
 
 /// Stable least-privilege workspace identity. Worktrees and explicitly opened
-/// subdirectories remain separate authority principals; a grant must never
+/// subdirectories remain separate authority masters; a grant must never
 /// widen itself to a larger repository merely because `.git` exists above it.
 pub fn workspace_identity(start: &Path) -> PathBuf {
     std::fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf())

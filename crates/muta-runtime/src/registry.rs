@@ -2,7 +2,7 @@ use crate::UiBridge;
 use crate::bootstrap::{self, BootstrapParams};
 use crate::monitor::MonitorTracker;
 use crate::serve::{ATTACH_SYNC_BUFFER_CAP, AttachAction, is_attach_sync_event};
-use muta_agent::{Agent, AgentIdentity, PrincipalProfile};
+use muta_agent::{Agent, AgentIdentity, MasterPreset};
 use muta_contracts::{
     AgentRequest, AgentResponse, MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession,
     PermissionDecision, SessionHosting, SessionOverview, SessionStatus, WipStatus,
@@ -27,13 +27,15 @@ pub(crate) fn unix_epoch_ms() -> u64 {
 #[derive(Clone)]
 pub struct HostParams {
     pub identity: AgentIdentity,
-    pub principal: PrincipalProfile,
+    pub master: MasterPreset,
     pub ui: Arc<dyn UiBridge>,
 }
 pub struct HostedSession {
     /// The project this session belongs to (ADR-0096 two-level indexing:
     /// sessions are queryable per project, hosted by one global daemon).
     pub project_root: PathBuf,
+    /// ADR-0141: channel accounting shared with the assembled agent.
+    pub human_channel: Arc<muta_contracts::human_request::HumanChannelAccountant>,
     pub session: Arc<SessionStore>,
     pub req_tx: mpsc::UnboundedSender<AgentRequest>,
     pub events: broadcast::Sender<AgentResponse>,
@@ -93,6 +95,11 @@ pub struct HostedSession {
 #[derive(Clone)]
 pub struct BoundSession {
     pub project_root: std::path::PathBuf,
+    /// ADR-0141: the human-channel accountant for this hosted session.
+    /// The WS attach layer ORs each client's declared posture in (attach /
+    /// detach); the assembled agent's posture gate reads the effective
+    /// value before parking any human request.
+    pub human_channel: Arc<muta_contracts::human_request::HumanChannelAccountant>,
     pub session: Arc<SessionStore>,
     pub req_tx: mpsc::UnboundedSender<AgentRequest>,
     pub events: broadcast::Sender<AgentResponse>,
@@ -908,6 +915,7 @@ impl SessionRegistry {
         let id = entry.session.id().await;
         let b = BoundSession {
             project_root: entry.project_root.clone(),
+            human_channel: entry.human_channel.clone(),
             session: entry.session.clone(),
             req_tx: entry.req_tx.clone(),
             events: entry.events.clone(),
@@ -1076,7 +1084,7 @@ impl SessionRegistry {
     ) -> Result<BoundSession, AssembleErr> {
         let HostParams {
             identity,
-            principal,
+            master,
             ui,
         } = self.params.as_ref().ok_or(AssembleErr::NoHost)?.clone();
         // The session's lifetime token (ADR-0125): shared by the driver
@@ -1090,13 +1098,17 @@ impl SessionRegistry {
         // persisted posture into the session store, and the assemble's
         // resume path restores it from there — so a rehosted session reopens
         // in the posture it died in without any rehost-specific wiring.
+        // ADR-0141: per-session channel accounting — attach/detach on the
+        // WS layer keeps this fresh; the agent reads it live.
+        let human_channel = Arc::new(muta_contracts::human_request::HumanChannelAccountant::new());
         let boot = bootstrap::assemble(BootstrapParams {
             identity,
-            principal,
+            master,
             ui,
             startup,
             project_root: Some(project_root.clone()),
             autopilot: false,
+            human_channel: Some(Arc::clone(&human_channel)),
             extra_session_tools: None,
             teardown_token: Some(cancel.clone()),
         })
@@ -1238,6 +1250,7 @@ impl SessionRegistry {
         let id = session.id().await;
         let bound = BoundSession {
             project_root: project_root.clone(),
+            human_channel: human_channel.clone(),
             session: session.clone(),
             req_tx: req_tx.clone(),
             events: events_tx.clone(),
@@ -1247,6 +1260,7 @@ impl SessionRegistry {
         };
         let hosted = Arc::new(HostedSession {
             project_root,
+            human_channel,
             security: boot.security.clone(),
             session,
             req_tx,
@@ -1275,6 +1289,7 @@ impl SessionRegistry {
     fn bound_from(&self, e: &Arc<HostedSession>) -> BoundSession {
         BoundSession {
             project_root: e.project_root.clone(),
+            human_channel: e.human_channel.clone(),
             session: e.session.clone(),
             req_tx: e.req_tx.clone(),
             events: e.events.clone(),

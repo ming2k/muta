@@ -99,7 +99,7 @@ impl Tool for BashTool {
         &self,
         _call_id: &str,
         arguments: &str,
-        _on_event: Box<dyn FnMut(muta_contracts::EnvoyEvent) + Send + 'a>,
+        _on_event: Box<dyn FnMut(muta_contracts::RunnerEvent) + Send + 'a>,
         on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + 'a),
         stdin_policy: muta_contracts::StdinPolicy,
     ) -> Result<muta_contracts::ToolOutput, String> {
@@ -274,10 +274,10 @@ impl Tool for BashTool {
                 ));
             }
         });
+        drop(tx); // drop the main sender so rx terminates when tasks finish
 
         // `kill_on_drop` guarantees the child is terminated when this future is
-        // dropped — on timeout (the `Timeout` wrapper drops the inner future)
-        // and on mid-run interrupt.
+        // dropped — on timeout and on mid-run interrupt.
         //
         // L2 idle watchdog: the drain races each `recv()` against an idle
         // deadline. A command that produces zero output for longer than the
@@ -289,137 +289,135 @@ impl Tool for BashTool {
         // resetting the deadline each time, so the idle timer never fires on
         // legitimate work.
         let idle_budget = Duration::from_secs(10);
-        // `child` stays owned *outside* the drain future (borrowed as
-        // `&mut`): this lets the wall-clock race below fire the group kill
-        // itself on timeout. A plain `timeout(run)` around a future that
-        // *owns* the child would drop it mid-await, delegating the kill to
-        // `kill_on_drop` — which signals only the direct child, letting
-        // grandchildren leak (`sh -c "server & echo hi"`).
-        let run = async {
-            stdout_task.await.ok();
-            stderr_task.await.ok();
-            drop(tx); // close so the drain below terminates
+        let timeout_deadline = tokio::time::Instant::now() + timeout_duration;
 
-            // Drain the merged channel in arrival order, racing each recv
-            // against the idle deadline. This is the only place the
-            // `&mut` stream sink fires, so it sees the same interleaving as
-            // the final `lines`. Rebuild the flat stdout/stderr strings the
-            // model-facing path expects alongside the ordered view.
-            let mut lines: Vec<ShellLine> = Vec::new();
-            let mut stdout_buf = String::new();
-            let mut stderr_buf = String::new();
-            let mut idle_blocked = false;
-            loop {
-                // Reset the idle deadline each iteration: any output in the
-                // last `idle_budget` keeps the command alive.
-                let idle = tokio::time::sleep(idle_budget);
-                tokio::pin!(idle);
-                tokio::select! {
-                    biased;
-                    _ = &mut idle => {
-                        // No output for the whole budget → assume stdin-blocked.
-                        idle_blocked = true;
-                        break;
-                    }
-                    msg = rx.recv() => {
-                        match msg {
-                            Some((stream, text)) => {
-                                match stream {
-                                    ShellStream::Out => {
-                                        stdout_buf.push_str(&text);
-                                        stdout_buf.push('\n');
-                                        on_stream(muta_contracts::ToolStream::Stdout(
-                                            format!("{}\n", text),
-                                        ));
-                                    }
-                                    ShellStream::Err => {
-                                        stderr_buf.push_str(&text);
-                                        stderr_buf.push('\n');
-                                        on_stream(muta_contracts::ToolStream::Stderr(
-                                            format!("{}\n", text),
-                                        ));
-                                    }
+        let mut lines: Vec<ShellLine> = Vec::new();
+        let mut stdout_buf = String::new();
+        let mut stderr_buf = String::new();
+        let mut idle_blocked = false;
+        let mut timed_out = false;
+
+        loop {
+            let idle = tokio::time::sleep(idle_budget);
+            let wall_timeout = tokio::time::sleep_until(timeout_deadline);
+            tokio::pin!(idle);
+            tokio::pin!(wall_timeout);
+
+            tokio::select! {
+                biased;
+                _ = &mut wall_timeout => {
+                    timed_out = true;
+                    break;
+                }
+                _ = &mut idle => {
+                    idle_blocked = true;
+                    break;
+                }
+                msg = rx.recv() => {
+                    match msg {
+                        Some((stream, text)) => {
+                            match stream {
+                                ShellStream::Out => {
+                                    stdout_buf.push_str(&text);
+                                    stdout_buf.push('\n');
+                                    on_stream(muta_contracts::ToolStream::Stdout(
+                                        format!("{}\n", text),
+                                    ));
                                 }
-                                lines.push(ShellLine { stream, text });
+                                ShellStream::Err => {
+                                    stderr_buf.push_str(&text);
+                                    stderr_buf.push('\n');
+                                    on_stream(muta_contracts::ToolStream::Stderr(
+                                        format!("{}\n", text),
+                                    ));
+                                }
                             }
-                            None => break, // channel closed → normal completion
+                            lines.push(ShellLine { stream, text });
                         }
+                        None => break, // channel closed -> normal completion
                     }
                 }
             }
-
-            // If we broke out on the idle deadline, the child is still alive;
-            // reap it (kill_on_drop would too, but reaping gives a real exit).
-            // A blocked child may not have exited, so don't block on wait()
-            // indefinitely — best-effort. The group kill also reaches
-            // grandchildren the child backgrounded (see kill_process_group).
-            // Head+tail cap on the collected buffers: keep both ends (the
-            // head shows what the command did first, the tail shows how it
-            // ended — errors cluster there) and drop the middle, mirroring
-            // how both the model view and the TUI fold already treat it.
-            let mut collection_truncated = false;
-            if stdout_buf.len() > SHELL_COLLECT_MAX_CHARS {
-                stdout_buf = head_tail(&stdout_buf, SHELL_COLLECT_MAX_CHARS / 2);
-                collection_truncated = true;
-            }
-            if stderr_buf.len() > SHELL_COLLECT_MAX_CHARS {
-                stderr_buf = head_tail(&stderr_buf, SHELL_COLLECT_MAX_CHARS / 2);
-                collection_truncated = true;
-            }
-            if lines.len() > SHELL_COLLECT_MAX_LINES {
-                let half = SHELL_COLLECT_MAX_LINES / 2;
-                let dropped = lines.len() - (half * 2);
-                let marker = ShellLine {
-                    stream: ShellStream::Err,
-                    text: format!("⋯ {dropped} lines dropped (collection cap)"),
-                };
-                let mut capped: Vec<ShellLine> = lines.drain(..half).collect();
-                capped.push(marker);
-                capped.extend(lines.drain(lines.len() - half..));
-                lines = capped;
-                collection_truncated = true;
-            }
-
-            let exit = if idle_blocked {
-                let _ = process_tree.terminate();
-                child.wait().await.ok().and_then(|s| s.code())
-            } else {
-                child.wait().await.ok().and_then(|s| s.code())
-            };
-
-            let termination = if idle_blocked {
-                muta_contracts::tool_output::ShellTermination::IdleBlocked
-            } else {
-                muta_contracts::tool_output::ShellTermination::Exited
-            };
-            let truncated = collection_truncated
-                || muta_contracts::tool_output::shell_inner_text(&stdout_buf, &stderr_buf, exit)
-                    .len()
-                    > muta_contracts::tool_output::SHELL_MAX_OUTPUT_CHARS;
-            Ok(muta_contracts::ToolOutput::Shell {
-                command: command.to_string(),
-                stdout: stdout_buf,
-                stderr: stderr_buf,
-                lines,
-                exit,
-                truncated,
-                termination,
-            }) as Result<muta_contracts::ToolOutput, String>
-        };
-
-        // The wall-clock timeout races the drain future; on timeout the
-        // future is cancelled mid-await and this side fires the group kill
-        // itself (descendants included), then reaps within a bounded
-        // grace so a wedged child cannot hang the tool.
-        let outcome = match tokio::time::timeout(timeout_duration, run).await {
-            Ok(step) => step,
-            Err(_) => Err(format!("Command timed out after {} seconds", timeout_secs)),
-        };
-        if outcome.is_err() {
-            let _ = process_tree.terminate();
-            let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
         }
-        outcome
+
+        if timed_out || idle_blocked {
+            let _ = process_tree.terminate();
+            stdout_task.abort();
+            stderr_task.abort();
+            while let Ok((stream, text)) = rx.try_recv() {
+                match stream {
+                    ShellStream::Out => {
+                        stdout_buf.push_str(&text);
+                        stdout_buf.push('\n');
+                    }
+                    ShellStream::Err => {
+                        stderr_buf.push_str(&text);
+                        stderr_buf.push('\n');
+                    }
+                }
+                lines.push(ShellLine { stream, text });
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+        } else {
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+        }
+
+        // Head+tail cap on the collected buffers: keep both ends (the
+        // head shows what the command did first, the tail shows how it
+        // ended — errors cluster there) and drop the middle, mirroring
+        // how both the model view and the TUI fold already treat it.
+        let mut collection_truncated = false;
+        if stdout_buf.len() > SHELL_COLLECT_MAX_CHARS {
+            stdout_buf = head_tail(&stdout_buf, SHELL_COLLECT_MAX_CHARS / 2);
+            collection_truncated = true;
+        }
+        if stderr_buf.len() > SHELL_COLLECT_MAX_CHARS {
+            stderr_buf = head_tail(&stderr_buf, SHELL_COLLECT_MAX_CHARS / 2);
+            collection_truncated = true;
+        }
+        if lines.len() > SHELL_COLLECT_MAX_LINES {
+            let half = SHELL_COLLECT_MAX_LINES / 2;
+            let dropped = lines.len() - (half * 2);
+            let marker = ShellLine {
+                stream: ShellStream::Err,
+                text: format!("⋯ {dropped} lines dropped (collection cap)"),
+            };
+            let mut capped: Vec<ShellLine> = lines.drain(..half).collect();
+            capped.push(marker);
+            capped.extend(lines.drain(lines.len() - half..));
+            lines = capped;
+            collection_truncated = true;
+        }
+
+        let exit = if timed_out || idle_blocked {
+            None
+        } else {
+            child.wait().await.ok().and_then(|s| s.code())
+        };
+
+        let termination = if timed_out {
+            muta_contracts::tool_output::ShellTermination::Timeout
+        } else if idle_blocked {
+            muta_contracts::tool_output::ShellTermination::IdleBlocked
+        } else {
+            muta_contracts::tool_output::ShellTermination::Exited
+        };
+
+        let truncated = collection_truncated
+            || muta_contracts::tool_output::shell_inner_text(&stdout_buf, &stderr_buf, exit)
+                .len()
+                > muta_contracts::tool_output::SHELL_MAX_OUTPUT_CHARS;
+
+        Ok(muta_contracts::ToolOutput::Shell {
+            command: command.to_string(),
+            stdout: stdout_buf,
+            stderr: stderr_buf,
+            lines,
+            exit,
+            truncated,
+            termination,
+        })
     }
 }
 
@@ -619,11 +617,15 @@ mod tests {
                 serde_json::to_string(&command).unwrap()
             ))
             .await;
-        // Must be a timeout error, not a hang.
-        assert!(
-            matches!(&out, Err(e) if e.contains("timed out")),
-            "expected timeout error, got {out:?}"
-        );
+        // Must be a timeout Shell outcome with is_error=true, not a hang.
+        assert!(matches!(
+            &out,
+            Ok(muta_contracts::ToolOutput::Shell {
+                termination: muta_contracts::tool_output::ShellTermination::Timeout,
+                ..
+            })
+        ));
+        assert!(out.as_ref().unwrap().is_error());
         // The pid file exists; the grandchild must be dead within a bounded
         // wait. Poll `kill(pid, 0)` via /proc to avoid libc in the test.
         let pid_txt = std::fs::read_to_string(&marker).unwrap_or_default();
@@ -670,10 +672,14 @@ mod tests {
         let out = tool
             .call_structured(&serde_json::json!({ "command": command, "timeout": 2 }).to_string())
             .await;
-        assert!(
-            matches!(&out, Err(error) if error.contains("timed out")),
-            "expected timeout error, got {out:?}"
-        );
+        assert!(matches!(
+            &out,
+            Ok(muta_contracts::ToolOutput::Shell {
+                termination: muta_contracts::tool_output::ShellTermination::Timeout,
+                ..
+            })
+        ));
+        assert!(out.as_ref().unwrap().is_error());
 
         let pid_text = std::fs::read_to_string(&marker).unwrap_or_default();
         let pid: u32 = pid_text.trim().parse().unwrap_or(0);
@@ -943,10 +949,15 @@ impl PersistentTerminalSession {
                 lines,
             }),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(format!(
-                "Persistent terminal command timed out after {}s",
-                timeout.as_secs()
-            )),
+            Err(_) => Ok(muta_contracts::ToolOutput::Shell {
+                command: command.to_string(),
+                stdout: stdout_str,
+                stderr: String::new(),
+                exit: None,
+                truncated: false,
+                termination: muta_contracts::ShellTermination::Timeout,
+                lines,
+            }),
         }
     }
 }

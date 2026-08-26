@@ -64,10 +64,10 @@ pub enum AgentRequest {
         request_id: String,
         decision: PermissionDecision,
         /// Full-duplex (ADR-0029): when the reply targets a permission
-        /// request surfaced by a *envoy* (carried up as a
-        /// [`RoundEvent::Envoy`] / [`EnvoyEvent::PermissionRequest`]),
+        /// request surfaced by a *runner* (carried up as a
+        /// [`RoundEvent::EnvoyCompat`] / [`RunnerEvent::PermissionRequest`]),
         /// this is the parent tool-call id the request was nested under. The
-        /// harness looks up the live child's `crate::EnvoyHandle` in the
+        /// harness looks up the live child's `crate::RunnerHandle` in the
         /// task registry by this id and resolves its parked oneshot directly.
         /// `None` means the request came from the top-level (or `/btw` side)
         /// agent and is resolved on `context.agent` as before.
@@ -77,15 +77,15 @@ pub enum AgentRequest {
         request_id: String,
         answers: Vec<Vec<String>>,
         /// Full-duplex (ADR-0029): the parent tool-call id when the answered
-        /// question came from an envoy's `ask_user`
-        /// ([`EnvoyEvent::UserQuestionRequest`]); `None` for a top-level /
+        /// question came from an runner's `ask_user`
+        /// ([`RunnerEvent::UserQuestionRequest`]); `None` for a top-level /
         /// side agent question. See [`AgentRequest::PermissionReply`] for the
         /// routing contract.
         parent_call_id: Option<String>,
     },
     /// Reply to an [`AgentEvent::InputRequest`] (L3.5 β): the operator's input
     /// for an interactive `bash` command, routed back to the parked oneshot.
-    /// `parent_call_id` mirrors the question/permission replies for envoy
+    /// `parent_call_id` mirrors the question/permission replies for runner
     /// routing.
     InputReply {
         request_id: String,
@@ -1207,10 +1207,15 @@ pub enum RoundEvent {
         prompt: String,
         images: Vec<crate::ImagePart>,
     },
-    /// An envoy event to render nested inside the parent tool step.
-    Envoy {
+    /// A runner event to render nested inside the parent tool step.
+    ///
+    /// Wire-compat (ADR-0144 §6): serializes under the historical `Envoy`
+    /// tag so transcripts and event streams recorded before the tier rename
+    /// keep decoding; `alias` admits both spellings on input.
+    #[serde(alias = "Runner")]
+    EnvoyCompat {
         parent_call_id: String,
-        event: EnvoyEvent,
+        event: RunnerEvent,
     },
 }
 
@@ -1503,57 +1508,57 @@ pub struct SessionSnapshot {
     pub provider_keys: Option<Vec<(String, bool)>>,
 }
 
-/// Events emitted by an envoy spawned through the `task` tool.
+/// Events emitted by an runner spawned through the `task` tool.
 ///
 /// These are forwarded from the child agent back to the parent harness so that
 /// the TUI can render nested tool steps and streaming output inside the parent
 /// tool step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub enum EnvoyEvent {
-    /// Emitted once at envoy start, carrying the bound profile's name
+pub enum RunnerEvent {
+    /// Emitted once at runner start, carrying the bound profile's name
     /// (e.g. `"explore"`, `"plan"`, `"verify"`). Lets the TUI label the
-    /// envoy by its role rather than a generic "Envoy", so a user can
-    /// tell a planning envoy from a research one at a glance.
+    /// runner by its role rather than a generic "Runner", so a user can
+    /// tell a planning runner from a research one at a glance.
     Started { profile: String },
-    /// A user-visible notice from the envoy.
+    /// A user-visible notice from the runner.
     Notice(AgentNotice),
-    /// The envoy started a new response stream. `round`/`turn` carry the
-    /// envoy's own ReAct position (1-indexed user round, 0-indexed
+    /// The runner started a new response stream. `round`/`turn` carry the
+    /// runner's own ReAct position (1-indexed user round, 0-indexed
     /// model-request position within it, mirroring
     /// [`AgentEvent::ModelRequestStarted`]) so the TUI can stamp the child
-    /// message and group the zoomed envoy view into turn bands exactly like
+    /// message and group the zoomed runner view into turn bands exactly like
     /// the main session view.
     StreamStart { round: u64, turn: usize },
-    /// New text token from the envoy.
+    /// New text token from the runner.
     StreamDelta(String),
-    /// The envoy response stream finished with the final accumulated text.
+    /// The runner response stream finished with the final accumulated text.
     StreamEnd(String),
-    /// The envoy started a reasoning (thinking) stream. `round`/`turn`
-    /// identify the envoy's own ReAct position (see
-    /// [`EnvoyEvent::StreamStart`]) so the child thinking trace joins the
+    /// The runner started a reasoning (thinking) stream. `round`/`turn`
+    /// identify the runner's own ReAct position (see
+    /// [`RunnerEvent::StreamStart`]) so the child thinking trace joins the
     /// same turn band as its sibling assistant text and tool calls. Emitted
-    /// before the first [`EnvoyEvent::StreamReasoningDelta`] of a trace, so
+    /// before the first [`RunnerEvent::StreamReasoningDelta`] of a trace, so
     /// frontends can place the trace without waiting for content.
     ///
-    /// This closes a visibility gap, not a new capability: the envoy's
+    /// This closes a visibility gap, not a new capability: the runner's
     /// reasoning is already captured in its persisted transcript
     /// (`Message::reasoning_content`) and renders after a session reload —
-    /// but before these events it was invisible while the envoy was actually
+    /// but before these events it was invisible while the runner was actually
     /// running, because the child's `AgentEvent::ReasoningDelta` had no
     /// forwarding arm. The design principle is that no agent behaviour is
-    /// hidden from the user: what the principal discloses live, an envoy
+    /// hidden from the user: what the principal discloses live, an runner
     /// discloses live too.
     StreamReasoningStart { round: u64, turn: usize },
-    /// New reasoning token from the envoy (a disclosed chain only — the
+    /// New reasoning token from the runner (a disclosed chain only — the
     /// sender gates hidden-chain models out at the source; see
     /// [`crate::ThinkingSupport::chain_disclosed`]).
     StreamReasoningDelta(String),
-    /// The envoy's reasoning stream finished with the final accumulated
+    /// The runner's reasoning stream finished with the final accumulated
     /// reasoning text.
     StreamReasoningEnd(String),
-    /// The envoy invoked a tool. `round`/`turn` identify the envoy's own
-    /// ReAct position (see [`EnvoyEvent::StreamStart`]) so the child tool
+    /// The runner invoked a tool. `round`/`turn` identify the runner's own
+    /// ReAct position (see [`RunnerEvent::StreamStart`]) so the child tool
     /// step joins the same turn band as its sibling calls.
     ToolCall {
         id: String,
@@ -1562,32 +1567,32 @@ pub enum EnvoyEvent {
         round: u64,
         turn: usize,
     },
-    /// A tool invoked by the envoy returned a result.
+    /// A tool invoked by the runner returned a result.
     ToolResult {
         id: String,
         name: String,
         output: String,
         duration_ms: u64,
     },
-    /// A status update from the envoy.
+    /// A status update from the runner.
     Activity(String),
-    /// The envoy's permission broker surfaced a write/execute tool call
+    /// The runner's permission broker surfaced a write/execute tool call
     /// that needs a human decision. Full-duplex (ADR-0029): this carries the
     /// request *up* to the parent harness so the user can answer it; the
-    /// reply travels back *down* through the envoy handle's
+    /// reply travels back *down* through the runner handle's
     /// `reply_permission` (resolving the parked oneshot directly), unblocking
-    /// the envoy's pending tool. Only fires when
-    /// the envoy's profile does not suppress the broker (e.g. via
+    /// the runner's pending tool. Only fires when
+    /// the runner's profile does not suppress the broker (e.g. via
     /// `autopilot`) — a read-only profile never produces one.
     PermissionRequest(PermissionRequest),
-    /// The envoy called `ask_user` and is blocked awaiting answers.
+    /// The runner called `ask_user` and is blocked awaiting answers.
     /// Full-duplex (ADR-0029): carries the questions *up*; the reply travels
-    /// back *down* through the envoy handle's `reply_user_question`. Only
+    /// back *down* through the runner handle's `reply_user_question`. Only
     /// fires for profiles with `allow_user_interaction: true`.
     UserQuestionRequest(UserQuestionRequest),
-    /// The envoy's `bash` tool classified a command interactive and needs
+    /// The runner's `bash` tool classified a command interactive and needs
     /// operator input (L3.5 β). Carries the request *up*; the reply travels
-    /// back *down* through the envoy handle's `reply_input`.
+    /// back *down* through the runner handle's `reply_input`.
     InputRequest(InputRequest),
 }
 
@@ -1603,14 +1608,14 @@ pub enum EnvoyEvent {
 /// Modeled on codex's `Op` (`codex-rs/protocol/src/protocol.rs`), trimmed to
 /// muta's driver shape: the agent owns an `mpsc` inbox whose receiver is
 /// drained at the top of every ReAct turn (and, for `Interrupt`, raced against
-/// the live stream). The top-level agent and spawned envoys share the same
-/// `Op` vocabulary — an envoy is just an agent whose inbox sender the
+/// the live stream). The top-level agent and spawned runners share the same
+/// `Op` vocabulary — an runner is just an agent whose inbox sender the
 /// parent holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentOp {
     /// Append a visible user message to the live transcript before the next
     /// model request, as if the user typed it. Lets a parent (or, for a
-    /// envoy, the orchestrating agent) steer a running round with new
+    /// runner, the orchestrating agent) steer a running round with new
     /// information without restarting it. codex `inject_if_running` analogue.
     InjectUserMessage(String),
     /// Append a hidden (system-level) steering note — like
@@ -1688,10 +1693,10 @@ pub enum AgentEvent {
     /// (L3.5 β). The TUI shows an inline input panel; the reply travels back
     /// as [`AgentRequest::InputReply`].
     InputRequest(InputRequest),
-    /// An envoy spawned by a tool (e.g. `task`) emitted an event.
-    Envoy {
+    /// An runner spawned by a tool (e.g. `task`) emitted an event.
+    Runner {
         parent_call_id: String,
-        event: EnvoyEvent,
+        event: RunnerEvent,
     },
 }
 
@@ -1735,8 +1740,8 @@ pub struct PermissionRequest {
     /// "Always" is honoured) for ordinary broker prompts.
     #[serde(default)]
     pub one_off: bool,
-    /// Origin label identifying which subagent/envoy produced this request (ADR-0138).
-    /// `None` for top-level principal calls; e.g. `Some("envoy #a1b2 · mcp_specialist")`.
+    /// Origin label identifying which subagent/runner produced this request (ADR-0138).
+    /// `None` for top-level principal calls; e.g. `Some("runner #a1b2 · mcp_specialist")`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
 }
@@ -1774,7 +1779,7 @@ pub struct UserQuestion {
 pub struct UserQuestionRequest {
     pub id: String,
     pub questions: Vec<UserQuestion>,
-    /// Origin label identifying which subagent/envoy produced this request (ADR-0138).
+    /// Origin label identifying which subagent/runner produced this request (ADR-0138).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
 }

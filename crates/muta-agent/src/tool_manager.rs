@@ -41,7 +41,7 @@ use crate::dynamic_tools::DynamicToolRegistry;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSource {
     /// Collected from the registry (`collect_toolset`) plus agent-owned
-    /// instances (todo, envoy). Resolved per active model/variant.
+    /// instances (todo, runner). Resolved per active model/variant.
     Builtin,
     /// SDK/RPC-injected tool. Future capability — the bucket exists so the
     /// classification and name-clash policy are stable from day one, even

@@ -24,7 +24,7 @@ import type {
   CommandRecord,
   CommandCatalog,
   CommandResult,
-  EnvoyEvent,
+  RunnerEvent,
   ImagePart,
   InputCompletion,
   InputRequest,
@@ -96,11 +96,11 @@ const TOKEN_STORAGE_KEY = "muta.ws-token";
 /** Connection state, distinct from any session's status. */
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
-/** Where a blocking request originated (top-level agent or an envoy). */
+/** Where a blocking request originated (top-level agent or an runner). */
 export interface RequestOrigin {
-  /** The envoy's parent tool-call id; `null` for top-level requests. */
+  /** The runner's parent tool-call id; `null` for top-level requests. */
   parentCallId: string | null;
-  /** Display label, e.g. the envoy profile name. */
+  /** Display label, e.g. the runner profile name. */
   label: string | null;
 }
 
@@ -130,8 +130,8 @@ export interface Toast {
   body?: string;
 }
 
-/** A tool run by an envoy, rendered nested inside the parent tool card. */
-export interface EnvoyTool {
+/** A tool run by an runner, rendered nested inside the parent tool card. */
+export interface RunnerTool {
   id: string;
   name: string;
   arguments: string;
@@ -140,17 +140,17 @@ export interface EnvoyTool {
   durationMs?: number;
 }
 
-/** UI-model envoy execution, folded from `RoundEvent::Envoy` sub-events. */
-export interface EnvoyExecution {
+/** UI-model runner execution, folded from `RoundEvent::Runner` sub-events. */
+export interface RunnerExecution {
   profile: string | null;
   activity: string | null;
-  /** Completed envoy response text (accumulated across `StreamEnd`s). */
+  /** Completed runner response text (accumulated across `StreamEnd`s). */
   text: string;
   streamingText: string;
-  /** Completed envoy reasoning traces (accumulated across `StreamReasoningEnd`s). */
+  /** Completed runner reasoning traces (accumulated across `StreamReasoningEnd`s). */
   reasoning: string[];
   streamingReasoning: string;
-  tools: EnvoyTool[];
+  tools: RunnerTool[];
 }
 
 /** UI-model tool execution, folded from ToolCall/ToolStream/ToolResult events. */
@@ -163,8 +163,8 @@ export interface LiveToolExecution {
   stderr: string;
   output?: string;
   durationMs?: number;
-  /** Nested envoy activity when this tool is a `task` spawn (ADR-0029). */
-  envoy?: EnvoyExecution;
+  /** Nested runner activity when this tool is a `task` spawn (ADR-0029). */
+  runner?: RunnerExecution;
 }
 
 /**
@@ -1092,8 +1092,8 @@ export class DaemonStore {
       this.pushToast("error", "Turn error", event.Error);
     } else if ("UnsentInput" in event) {
       this.handleUnsentInput(event.UnsentInput);
-    } else if ("Envoy" in event) {
-      this.handleEnvoyEvent(event.Envoy.parent_call_id, event.Envoy.event);
+    } else if ("Runner" in event) {
+      this.handleRunnerEvent(event.Runner.parent_call_id, event.Runner.event);
     }
     // UserInputCancelled / UserInputCancelFailed concern queued inserts this
     // client never issues; nothing to surface.
@@ -1167,14 +1167,14 @@ export class DaemonStore {
   }
 
   // -------------------------------------------------------------------------
-  // Envoy events (nested under a parent `task` tool call; ADR-0029)
+  // Runner events (nested under a parent `task` tool call; ADR-0029)
   // -------------------------------------------------------------------------
 
-  private handleEnvoyEvent(parentCallId: string, event: EnvoyEvent) {
+  private handleRunnerEvent(parentCallId: string, event: RunnerEvent) {
     const parent = this.liveTools[parentCallId];
     const origin: RequestOrigin = {
       parentCallId,
-      label: parent?.envoy?.profile ?? null,
+      label: parent?.runner?.profile ?? null,
     };
 
     if ("PermissionRequest" in event) {
@@ -1189,9 +1189,9 @@ export class DaemonStore {
       this.pendingInput = { request: event.InputRequest, origin };
       return;
     }
-    if (!parent) return; // stray envoy event for a tool we never saw
-    if (!parent.envoy) {
-      parent.envoy = {
+    if (!parent) return; // stray runner event for a tool we never saw
+    if (!parent.runner) {
+      parent.runner = {
         profile: null,
         activity: null,
         text: "",
@@ -1201,33 +1201,33 @@ export class DaemonStore {
         tools: [],
       };
     }
-    const envoy = parent.envoy;
+    const runner = parent.runner;
 
     if ("Started" in event) {
-      envoy.profile = event.Started.profile;
+      runner.profile = event.Started.profile;
     } else if ("Notice" in event) {
       this.handleNotice(event.Notice);
     } else if ("StreamStart" in event) {
-      envoy.streamingText = "";
+      runner.streamingText = "";
     } else if ("StreamDelta" in event) {
-      envoy.streamingText += event.StreamDelta;
+      runner.streamingText += event.StreamDelta;
     } else if ("StreamEnd" in event) {
-      const finalText = event.StreamEnd || envoy.streamingText;
-      envoy.text = envoy.text ? `${envoy.text}\n\n${finalText}` : finalText;
-      envoy.streamingText = "";
+      const finalText = event.StreamEnd || runner.streamingText;
+      runner.text = runner.text ? `${runner.text}\n\n${finalText}` : finalText;
+      runner.streamingText = "";
     } else if ("StreamReasoningStart" in event) {
-      envoy.streamingReasoning = "";
+      runner.streamingReasoning = "";
     } else if ("StreamReasoningDelta" in event) {
-      envoy.streamingReasoning += event.StreamReasoningDelta;
+      runner.streamingReasoning += event.StreamReasoningDelta;
     } else if ("StreamReasoningEnd" in event) {
-      const finalReasoning = event.StreamReasoningEnd || envoy.streamingReasoning;
+      const finalReasoning = event.StreamReasoningEnd || runner.streamingReasoning;
       if (finalReasoning.trim()) {
-        envoy.reasoning = [...envoy.reasoning, finalReasoning];
+        runner.reasoning = [...runner.reasoning, finalReasoning];
       }
-      envoy.streamingReasoning = "";
+      runner.streamingReasoning = "";
     } else if ("ToolCall" in event) {
       const call = event.ToolCall;
-      envoy.tools.push({
+      runner.tools.push({
         id: call.id,
         name: call.name,
         arguments: call.arguments,
@@ -1235,14 +1235,14 @@ export class DaemonStore {
       });
     } else if ("ToolResult" in event) {
       const r = event.ToolResult;
-      const tool = envoy.tools.find((t) => t.id === r.id);
+      const tool = runner.tools.find((t) => t.id === r.id);
       if (tool) {
         tool.status = "completed";
         tool.output = r.output;
         tool.durationMs = r.duration_ms;
       }
     } else if ("Activity" in event) {
-      envoy.activity = event.Activity;
+      runner.activity = event.Activity;
     }
   }
 

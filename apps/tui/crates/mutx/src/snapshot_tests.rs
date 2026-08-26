@@ -531,7 +531,7 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
                     paused: false,
                     blocked: false,
                 },
-                envoy_bar: None,
+                runner_bar: None,
                 side_banner: None,
                 page_hints: None,
                 session_head: None,

@@ -98,7 +98,7 @@ fn muta_home_redirects_the_daemon_footprint() {
 fn test_identity() -> HostIdentity {
     HostIdentity {
         identity: muta_contracts::AgentIdentity::new("probe", "lifecycle probe"),
-        principal: muta_contracts::PrincipalProfile::with_identity(
+        master: muta_contracts::MasterPreset::with_identity(
             "probe",
             muta_contracts::AgentIdentity::new("probe", "lifecycle probe"),
         ),
@@ -132,6 +132,9 @@ async fn host_one(registry: &Arc<SessionRegistry>, project: &str) {
     registry
         .host(HostedSession {
             project_root: project.into(),
+            human_channel: std::sync::Arc::new(
+                muta_contracts::human_request::HumanChannelAccountant::new(),
+            ),
             security: std::sync::Arc::new(
                 muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
             ),
@@ -380,6 +383,9 @@ async fn idle_suspension_spares_sessions_with_armed_schedules() {
         registry
             .host(HostedSession {
                 project_root: project_root.to_path_buf(),
+                human_channel: std::sync::Arc::new(
+                    muta_contracts::human_request::HumanChannelAccountant::new(),
+                ),
                 security: std::sync::Arc::new(
                     muta_persistence::workspace_security::WorkspaceSecurityStore::load(),
                 ),

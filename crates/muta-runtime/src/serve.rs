@@ -796,15 +796,16 @@ where
     .await
     .map_err(|e| format!("ws handshake: {e}"))?;
     let (mut ws_sink, mut ws_source) = ws_stream.split();
-    let (action, project, client_version, client_protocol) = loop {
+    let (action, project, client_posture, client_version, client_protocol) = loop {
         match ws_source.next().await {
             Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
                 Ok(Wire::Select {
                     action,
                     project,
+                    posture,
                     version,
                     protocol,
-                }) => break (action, project, version, protocol),
+                }) => break (action, project, posture, version, protocol),
                 Ok(_) => {
                     send_error(&mut ws_sink, "expected Select as the first frame").await?;
                     return Ok(());
@@ -977,6 +978,19 @@ where
     }
     let req_tx = bound.req_tx.clone();
     let mut rx = bound.events.subscribe();
+    // ADR-0141: fold this client's declared posture into the session's
+    // human channel. First interactive attach flips the session interactive;
+    // this never *removes* interactivity (only a detach can). The trust
+    // prompt below is additionally gated on the client itself being
+    // interactive — pushing a question to a pipe that cannot answer would
+    // park the security decision forever.
+    let after_attach = bound.human_channel.attach(client_posture);
+    let attached_session_id = bound.session.id().await;
+    tracing::info!(
+        session_id = %attached_session_id,
+        effective = ?after_attach,
+        "muta daemon: human channel accounted"
+    );
     // Replay the buffered attach-sync events (ADR-0096) so a client that
     // attached after the session began hydrates its picker/key/context
     // state immediately, before joining the live broadcast.
@@ -999,8 +1013,9 @@ where
     // clients re-receive it until a decision is persisted — correct: the
     // workspace is still unconfigured, and the operator is the one who
     // must configure it.
-    if bound.security.snapshot(bound.project_root()).execution
-        == muta_contracts::WorkspaceExecutionProfile::Unknown
+    if client_posture == muta_contracts::human_request::HumanChannelPosture::Interactive
+        && bound.security.snapshot(bound.project_root()).execution
+            == muta_contracts::WorkspaceExecutionProfile::Unknown
     {
         let session_id = bound.session.id().await;
         for response in workspace_trust_prompt(&session_id, bound.project_root()) {
@@ -1128,6 +1143,16 @@ where
             },
         }
     }
+    // ADR-0141: release this connection's channel hold. When the last
+    // interactive watcher leaves, the session drops to Autonomous and any
+    // request parked since resolves by labeled policy instead of hanging.
+    let after_detach = bound.human_channel.detach();
+    let detached_session_id = bound.session.id().await;
+    tracing::info!(
+        session_id = %detached_session_id,
+        effective = ?after_detach,
+        "muta daemon: human channel released"
+    );
     Ok(())
 }
 

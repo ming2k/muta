@@ -21,7 +21,7 @@
 //! handler receives the same dispatcher context the built-ins do, minus the
 //! parts that are built-in-specific.
 //!
-//! This is the principal-side analogue of how tools self-register via
+//! This is the master-side analogue of how tools self-register via
 //! `inventory`: capabilities (tools) and commands (slash handlers) are both
 //! supplied by the embedding, never hardcoded in the neutral server.
 

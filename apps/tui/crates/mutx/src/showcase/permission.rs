@@ -41,7 +41,7 @@ fn fixtures() -> Vec<PermissionRequest> {
             scope: "src/main.rs".into(),
             elevation: false,
             one_off: false,
-            origin: Some("envoy #9f8a · code".into()),
+            origin: Some("runner #9f8a · code".into()),
         },
         PermissionRequest {
             // An out-of-scope elevation: the broker surfaces this ⚠ prompt so
@@ -55,7 +55,7 @@ fn fixtures() -> Vec<PermissionRequest> {
             scope: "/etc/hosts".into(),
             elevation: true,
             one_off: false,
-            origin: Some("envoy #c3d4 · mcp_specialist".into()),
+            origin: Some("runner #c3d4 · mcp_specialist".into()),
         },
         PermissionRequest {
             // A one-off dangerous-command confirm: the bash policy matched a

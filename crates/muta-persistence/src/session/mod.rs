@@ -848,7 +848,7 @@ impl SessionStore {
     /// sibling session files (forks, archives) live in `path.parent()` — i.e.
     /// the parent directory plays the role of the project's `sessions/` dir.
     ///
-    /// This is the low-level constructor used by envoys / side
+    /// This is the low-level constructor used by runners / side
     /// conversations (ADR-0017) and by tests that want a throwaway file
     /// without wiring up the global paths table. Production startup uses
     /// [`Self::load_for_project`].
@@ -2477,7 +2477,7 @@ pub fn sessions_with_armed_schedules() -> Vec<ArmedSession> {
 /// [`Box<RawValue>`] — serde validates their JSON structure and records the
 /// byte range but defers the per-message deserialize. `list()` only needs the
 /// array *length* and the *first user message's* `content`, so a full decode of
-/// every message (content blobs, recursive envoy `children`, tool calls,
+/// every message (content blobs, recursive runner `children`, tool calls,
 /// provider meta, …) on every session file is pure waste. With hundreds of
 /// multi-megabyte snapshots this was the dominant cost of opening `/sessions`
 /// and the per-delete picker refresh (`build_sessions_overview`): each call
@@ -2970,18 +2970,18 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
             )
             .to_string();
         }
-        // Envoy transcripts: render a bounded view of the nested work so
+        // Runner transcripts: render a bounded view of the nested work so
         // the summarizer can capture what each `task` call actually did
         // (otherwise the LLM only sees "[task result]:\n<final text>" and
-        // cannot decide whether the envoy's tool usage is worth mentioning
+        // cannot decide whether the runner's tool usage is worth mentioning
         // in the anchored summary). The nested view is hard-capped to avoid
-        // blowing the budget on a single envoy that ran for 30 turns.
+        // blowing the budget on a single runner that ran for 30 turns.
         if let Some(children) = &message.children
             && !children.is_empty()
         {
-            let nested = serialize_envoy_transcript_for_summary(children, SUMMARY_ENVOY_CAP_TOKENS);
+            let nested = serialize_runner_transcript_for_summary(children, SUMMARY_ENVOY_CAP_TOKENS);
             if !nested.is_empty() {
-                body.push_str("\n[envoy transcript]\n");
+                body.push_str("\n[runner transcript]\n");
                 body.push_str(&nested);
             }
         }
@@ -3015,17 +3015,17 @@ pub fn serialize_for_summary(archived: &[Message], budget: usize) -> String {
     )
 }
 
-/// Per-envoy token cap when rendering the nested transcript into the
-/// summarizer prompt (ADR-0120). Large enough to surface the envoy's task,
+/// Per-runner token cap when rendering the nested transcript into the
+/// summarizer prompt (ADR-0120). Large enough to surface the runner's task,
 /// its key tool calls, and its conclusion; small enough that a turn with
-/// five envoys cannot crowd out the rest of the conversation.
+/// five runners cannot crowd out the rest of the conversation.
 const SUMMARY_ENVOY_CAP_TOKENS: usize = 500;
 
-/// Render an envoy's nested transcript as a compact summarizer-facing view.
-/// Recursive: an envoy's own `task` results (sub-envoys) are rendered
+/// Render an runner's nested transcript as a compact summarizer-facing view.
+/// Recursive: an runner's own `task` results (sub-runners) are rendered
 /// one level deeper with an even smaller cap. Depth is bounded in practice by
-/// the `EnvoyTool` excluding itself from the sub-toolset.
-fn serialize_envoy_transcript_for_summary(children: &[Message], budget: usize) -> String {
+/// the `RunnerTool` excluding itself from the sub-toolset.
+fn serialize_runner_transcript_for_summary(children: &[Message], budget: usize) -> String {
     let mut lines: Vec<String> = Vec::new();
     for message in children {
         let Some(label) = label_for(message.role) else {
@@ -3045,13 +3045,13 @@ fn serialize_envoy_transcript_for_summary(children: &[Message], budget: usize) -
             .to_string();
         }
         // One level deeper, with a much smaller cap, so we never spend more
-        // than ~25% of the parent envoy's budget on a single sub-envoy.
+        // than ~25% of the parent runner's budget on a single sub-runner.
         if let Some(nested) = &message.children
             && !nested.is_empty()
         {
-            let inner = serialize_envoy_transcript_for_summary(nested, (budget / 4).max(125));
+            let inner = serialize_runner_transcript_for_summary(nested, (budget / 4).max(125));
             if !inner.is_empty() {
-                body.push_str("\n[sub-envoy transcript]\n");
+                body.push_str("\n[sub-runner transcript]\n");
                 body.push_str(&inner);
             }
         }
@@ -3499,21 +3499,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_persists_envoy_children_round_trip() {
+    async fn session_persists_runner_children_round_trip() {
         // End-to-end persistence contract: a session that contains a `task`
-        // tool call must round-trip the envoy's nested transcript through
+        // tool call must round-trip the runner's nested transcript through
         // session.json, so a subsequent `SessionStore::load_for_project` (the
         // production resume path) restores the children intact. Before Phase 3
         // children were silently dropped because `Message::children` did not
         // exist and the harness only persisted the textual summary.
         let directory =
-            std::env::temp_dir().join(format!("muta-envoy-persist-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("muta-runner-persist-{}", uuid::Uuid::new_v4()));
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
 
         let call = muta_contracts::ToolCall {
             id: "call_sub1".to_string(),
-            name: "envoy".to_string(),
+            name: "runner".to_string(),
             arguments: r#"{"description":"d","prompt":"p"}"#.to_string(),
         };
         let assistant = Message::new(muta_contracts::Role::Assistant, "")
@@ -3522,13 +3522,13 @@ mod tests {
             tool_calls: Some(vec![call.clone()]),
             ..assistant
         };
-        let envoy_transcript = vec![
+        let runner_transcript = vec![
             Message::new(muta_contracts::Role::User, "find foo"),
             Message::new(muta_contracts::Role::Assistant, "looking..."),
             Message::new(muta_contracts::Role::Assistant, "foo is at src/foo.rs"),
         ];
         let tool = Message::tool_result(&call, "[task result]:\nfoo is at src/foo.rs")
-            .with_children(envoy_transcript);
+            .with_children(runner_transcript);
         store
             .replace_messages(vec![
                 Message::new(muta_contracts::Role::User, "where is foo?"),
@@ -3887,7 +3887,7 @@ mod tests {
     async fn list_reads_overview_and_count_without_decoding_message_bodies() {
         // `list()` builds the `/sessions` picker rows. It must extract the
         // message count and the first-user-message overview *without* decoding
-        // the full message bodies (which carry envoy `children`, tool calls,
+        // the full message bodies (which carry runner `children`, tool calls,
         // content blobs, …) — otherwise opening the picker or refreshing it
         // after a delete re-allocates the entire transcript of every session on
         // disk. The picker rows defer message bodies via `Box<RawValue>`; this
@@ -3899,14 +3899,14 @@ mod tests {
         let path = directory.join("session.json");
         let store = SessionStore::for_path(path.clone());
 
-        // A user turn carrying nested envoy children plus a tool result with a
+        // A user turn carrying nested runner children plus a tool result with a
         // large payload — the kind of content that made the old eager parse
         // expensive. The overview is the LAST effective user prompt ("nested
-        // envoy prompt"), not the System preamble and not the heavy payloads.
-        let mut envoy_child = Message::new(muta_contracts::Role::User, "nested envoy prompt");
-        envoy_child.children = Some(vec![Message::new(
+        // runner prompt"), not the System preamble and not the heavy payloads.
+        let mut runner_child = Message::new(muta_contracts::Role::User, "nested runner prompt");
+        runner_child.children = Some(vec![Message::new(
             muta_contracts::Role::Assistant,
-            "envoy reply",
+            "runner reply",
         )]);
         let mut heavy_tool = Message::new(muta_contracts::Role::Tool, "x".repeat(50_000));
         heavy_tool.tool_call_id = Some("call_heavy".to_string());
@@ -3916,7 +3916,7 @@ mod tests {
                 Message::new(muta_contracts::Role::User, "the real first prompt"),
                 Message::new(muta_contracts::Role::Assistant, "ack"),
                 heavy_tool,
-                envoy_child,
+                runner_child,
             ])
             .await
             .unwrap();
@@ -3930,7 +3930,7 @@ mod tests {
         assert_eq!(row.message_count, 5);
         // Overview is the LAST effective user prompt, not the System preamble
         // and not any of the heavy payloads.
-        assert_eq!(row.overview, "nested envoy prompt");
+        assert_eq!(row.overview, "nested runner prompt");
 
         let _ = fs::remove_dir_all(directory);
     }
@@ -4974,7 +4974,7 @@ mod tests {
         let record = muta_contracts::RequestUsageRecord {
             key: muta_contracts::RequestUsageKey {
                 session_id,
-                actor_id: "principal".to_string(),
+                actor_id: "master".to_string(),
                 round: 2,
                 turn: 1,
                 attempt: 1,

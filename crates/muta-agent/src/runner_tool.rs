@@ -1,12 +1,12 @@
-//! `EnvoyTool` — spawns a read-only exploration envoy for research subtasks.
+//! `RunnerTool` — spawns a read-only exploration runner for research subtasks.
 //!
 //! Lives in `muta-agent` proper (not the [`crate::tools`] module) because it
 //! constructs an
-//! [`crate::Agent`] internally: spawning an envoy is an orchestration
+//! [`crate::Agent`] internally: spawning an runner is an orchestration
 //! concern, not a domain-tool concern. The other tools (Bash/Read/Web/…)
 //! stay in [`crate::tools`] and remain pure trait implementations.
 //!
-//! Admission of tools to the envoy is driven by [`muta_contracts::EXPLORE`]
+//! Admission of tools to the runner is driven by [`muta_contracts::RUNNER_EXPLORE`]
 //! — the single source of truth for the read-only / non-interactive /
 //! non-recursive policy. See ADR-0011.
 
@@ -14,55 +14,55 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use muta_contracts::{EnvoyProfile, Tool};
+use muta_contracts::{RunnerPreset, Tool};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::{Agent, EnvoyHandle};
+use crate::agent::{Agent, RunnerHandle};
 
-/// Description of the default (read-only, EXPLORE) `envoy` dispatch tool,
+/// Description of the default (read-only, RUNNER_EXPLORE) `runner` dispatch tool,
 /// surfaced to the model. Kept as a `const` so a sibling write-capable tool
 /// can declare its own parallel description without duplicating this string.
 const ENVOY_TOOL_DESCRIPTION: &str = "\
-Launch a focused, read-only envoy to research or explore part of the codebase \
+Launch a focused, read-only runner to research or explore part of the codebase \
 (or the web) and return a concise written answer. Use it to parallelize \
 investigation: finding where code lives, summarizing files, gathering \
-context. The envoy cannot modify files — you perform any edits after \
+context. The runner cannot modify files — you perform any edits after \
 reviewing its findings.";
 
-/// Description of the write-capable `envoy_code` dispatch tool (bound to the
-/// [`muta_contracts::CODE`] profile). Distinct from `ENVOY_TOOL_DESCRIPTION` so
+/// Description of the write-capable `runner_code` dispatch tool (bound to the
+/// [`muta_contracts::RUNNER_CODE`] profile). Distinct from `ENVOY_TOOL_DESCRIPTION` so
 /// the model understands this is the delegation path for *implementation*
-/// work, not exploration, and that every write/command the envoy makes is
+/// work, not exploration, and that every write/command the runner makes is
 /// user-approved. Paired with the code-profile system prompt, it frames the
 /// coder-subagent role (the analogue of kimi-code's `coder` subagent).
 pub const ENVOY_CODE_TOOL_DESCRIPTION: &str = "\
-Delegate a well-scoped software-engineering task to a coding envoy that \
+Delegate a well-scoped software-engineering task to a coding runner that \
 implements the change end to end — it reads the relevant code, edits files, \
 and runs builds/tests/git, then returns a technically complete summary of what \
 it changed and how it verified the change. Use it for substantial, \
 self-contained implementation work you want isolated in its own context \
-window. Unlike the read-only `envoy`, this one CAN modify files and run \
+window. Unlike the read-only `runner`, this one CAN modify files and run \
 commands — but every write and command it attempts is presented to the user \
 for approval before it executes, just like a top-level call. Do not use it \
 for trivial edits you can make directly, and once it is running, leave the \
 scope to it (do not redo its work in parallel).";
 
-/// Description of the MCP-specialist dispatch tool (bound to the [`muta_contracts::MCP_SPECIALIST`] profile).
+/// Description of the MCP-specialist dispatch tool (bound to the [`muta_contracts::RUNNER_MCP_SPECIALIST`] profile).
 pub const ENVOY_MCP_TOOL_DESCRIPTION: &str = "\
 Delegate a specialized integration task (e.g. database operations, external API calls, \
-or third-party MCP tool interactions) to a dedicated envoy. The envoy runs in an isolated \
+or third-party MCP tool interactions) to a dedicated runner. The runner runs in an isolated \
 sandbox with access to dynamic/MCP tools and returns a high-signal summary of the results.";
 
-/// Retry settings for an envoy subagent, inherited from the session's provider retry configuration.
+/// Retry settings for an runner subagent, inherited from the session's provider retry configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EnvoyRetryConfig {
+pub struct RunnerRetryConfig {
     pub max_attempts: usize,
     pub base_ms: u64,
     pub max_ms: u64,
 }
 
-impl Default for EnvoyRetryConfig {
+impl Default for RunnerRetryConfig {
     fn default() -> Self {
         Self {
             max_attempts: 30,
@@ -72,26 +72,26 @@ impl Default for EnvoyRetryConfig {
     }
 }
 
-/// Live envoy handles keyed by the parent tool-call id — the lookup table
+/// Live runner handles keyed by the parent tool-call id — the lookup table
 /// that lets the harness route a down-direction reply (a permission decision
 /// or `ask_user` answer the user gave in the TUI) back into the specific
-/// running envoy that surfaced the request. Full-duplex (ADR-0029).
+/// running runner that surfaced the request. Full-duplex (ADR-0029).
 ///
 /// The `task` tool populates this when it spawns a child (and clears the entry
 /// when the child finishes); the harness reads it when it needs to reply to a
-/// `EnvoyEvent::PermissionRequest` / `UserQuestionRequest` that arrived
+/// `RunnerEvent::PermissionRequest` / `UserQuestionRequest` that arrived
 /// nested under a given `parent_call_id`. Entries are best-effort: a late reply
 /// after the child already finished finds no entry (or a dead handle) and
 /// degrades to a no-op rather than erroring.
 #[derive(Default)]
-pub struct EnvoyRegistry {
-    map: std::sync::Mutex<std::collections::HashMap<String, EnvoyHandle>>,
+pub struct RunnerRegistry {
+    map: std::sync::Mutex<std::collections::HashMap<String, RunnerHandle>>,
 }
 
-impl EnvoyRegistry {
-    /// Register a steering handle for the envoy spawned by the
+impl RunnerRegistry {
+    /// Register a steering handle for the runner spawned by the
     /// `parent_call_id` tool call. Replaces any prior entry for that id.
-    pub fn register(&self, parent_call_id: &str, handle: EnvoyHandle) {
+    pub fn register(&self, parent_call_id: &str, handle: RunnerHandle) {
         // Poison-recovery idiom (codebase convention): a panic in another
         // holder poisoned the lock; recover the inner data rather than
         // panicking on a second, downstream error.
@@ -101,10 +101,10 @@ impl EnvoyRegistry {
             .insert(parent_call_id.to_string(), handle);
     }
 
-    /// Look up the handle for a live envoy by its parent tool-call id.
+    /// Look up the handle for a live runner by its parent tool-call id.
     /// Returns a cloned handle (cheap) so the caller can reply without holding
     /// the lock.
-    pub fn get(&self, parent_call_id: &str) -> Option<EnvoyHandle> {
+    pub fn get(&self, parent_call_id: &str) -> Option<RunnerHandle> {
         self.map
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -112,7 +112,7 @@ impl EnvoyRegistry {
             .cloned()
     }
 
-    /// Remove the entry for a finished envoy. Called when the `task` tool
+    /// Remove the entry for a finished runner. Called when the `task` tool
     /// returns, so the registry never accumulates dead handles for completed
     /// calls (a handle whose `Weak` already expired is harmless but useless).
     pub fn remove(&self, parent_call_id: &str) {
@@ -123,21 +123,21 @@ impl EnvoyRegistry {
     }
 }
 
-/// Spawn a read-only exploration envoy to handle a research sub-task.
+/// Spawn a read-only exploration runner to handle a research sub-task.
 ///
-/// The envoy runs the same provider with the tools admitted by the bound
-/// [`EnvoyProfile`] (today always [`muta_contracts::EXPLORE`]): read-only, non-interactive,
+/// The runner runs the same provider with the tools admitted by the bound
+/// [`RunnerPreset`] (today always [`muta_contracts::RUNNER_EXPLORE`]): read-only, non-interactive,
 /// non-recursive. Its final answer is returned to the calling agent, which
 /// stays in control of any write operations and any questions for the user.
-pub struct EnvoyTool {
+pub struct RunnerTool {
     provider: Arc<dyn muta_contracts::Provider>,
     toolset: muta_contracts::ToolSet,
-    profile: &'static EnvoyProfile,
+    profile: &'static RunnerPreset,
     /// The tool name the model calls this dispatch tool by. The default (set by
-    /// [`EnvoyTool::new`]) is `"envoy"` for the read-only research role; a
-    /// second instance bound to a write-capable profile (e.g. [`muta_contracts::CODE`]) takes a
-    /// distinct name like `"envoy_code"` so it registers as its own capability
-    /// alongside the read-only `envoy`, instead of colliding on the name.
+    /// [`RunnerTool::new`]) is `"runner"` for the read-only research role; a
+    /// second instance bound to a write-capable profile (e.g. [`muta_contracts::RUNNER_CODE`]) takes a
+    /// distinct name like `"runner_code"` so it registers as its own capability
+    /// alongside the read-only `runner`, instead of colliding on the name.
     tool_name: &'static str,
     /// Human-facing description surfaced to the model as the tool's purpose.
     /// Defaults to the read-only research framing; a write-capable instance
@@ -146,32 +146,38 @@ pub struct EnvoyTool {
     tool_description: &'static str,
     /// Shared handle to the parent agent's variant selection (the **override**
     /// axis). Bound after the parent agent is built (see
-    /// [`EnvoyTool::bind_variant_selection`]). At spawn the child resolves
+    /// [`RunnerTool::bind_variant_selection`]). At spawn the child resolves
     /// its scoped capabilities to the model's chosen variants by snapshotting
-    /// this, so an envoy — an agent on the same model — inherits the parent's
+    /// this, so an runner — an agent on the same model — inherits the parent's
     /// overrides. `None` (the default, e.g. in tests) means default variants.
     parent_variants:
         std::sync::Mutex<Option<Arc<std::sync::Mutex<muta_contracts::VariantSelection>>>>,
     /// Live workspace authority inherited from the parent. Delegation may
-    /// narrow this through the envoy's operation scope, never widen it.
+    /// narrow this through the runner's operation scope, never widen it.
     parent_workspace_security:
         std::sync::Mutex<Option<Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>>>,
-    /// Full-duplex handle registry (ADR-0029): each spawned envoy's
-    /// [`EnvoyHandle`] is lodged here keyed by the parent tool-call id, so
+    /// ADR-0141: the parent's human-channel accountant, inherited by every
+    /// spawned runner so a child's posture tracks the session's live OR over
+    /// attached clients (an interactive session's runner can ask the user;
+    /// an autonomous one's child never parks on a missing human).
+    parent_human_channel:
+        std::sync::Mutex<Option<Arc<muta_contracts::human_request::HumanChannelAccountant>>>,
+    /// Full-duplex handle registry (ADR-0029): each spawned runner's
+    /// [`RunnerHandle`] is lodged here keyed by the parent tool-call id, so
     /// the harness can route a user's permission / `ask_user` reply back down
     /// into the exact child that surfaced the request. Owned by the tool and
-    /// exposed via [`EnvoyTool::registry`] so the binary that constructs the
+    /// exposed via [`RunnerTool::registry`] so the binary that constructs the
     /// tool (and drives the harness) can hand the same `Arc` to the harness.
-    registry: Arc<EnvoyRegistry>,
-    accounting: std::sync::Mutex<Option<EnvoyAccountingContext>>,
+    registry: Arc<RunnerRegistry>,
+    accounting: std::sync::Mutex<Option<RunnerAccountingContext>>,
     /// Live child cancellation tokens keyed by the parent tool-call id — the
     /// cooperative-cancel arm of interruption (the counterpoint to dropping
     /// the child future). `call_structured_with_events` stores the token each
-    /// spawned envoy runs under; the harness's executor calls
+    /// spawned runner runs under; the harness's executor calls
     /// [`Tool::request_cancel`] when the user interrupts the turn, which
     /// cancels the stored token. The child's round loop observes it at its
     /// next safe boundary, returns its partial transcript through
-    /// `run_envoy_outcome`, and the parent records it instead of losing it.
+    /// `run_runner_outcome`, and the parent records it instead of losing it.
     /// Entries are removed when the child's run ends, so a late
     /// `request_cancel` for a finished call degrades to a no-op.
     active_cancels: std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
@@ -180,47 +186,47 @@ pub struct EnvoyTool {
     /// project — not the daemon process's cwd (ADR-0096). `None` falls back
     /// to the process cwd (tests, single-project processes).
     workspace_root: std::sync::Mutex<Option<std::path::PathBuf>>,
-    retry_config: std::sync::Mutex<EnvoyRetryConfig>,
+    retry_config: std::sync::Mutex<RunnerRetryConfig>,
 }
 
 #[derive(Clone)]
-struct EnvoyAccountingContext {
+struct RunnerAccountingContext {
     ledger: Arc<muta_contracts::TokenSourceLedger>,
     session_id: Arc<std::sync::Mutex<Option<String>>>,
     round_counter: Arc<std::sync::Mutex<u64>>,
 }
 
-impl EnvoyTool {
+impl RunnerTool {
     /// `toolset` should be the parent agent's full capability set; `profile`
-    /// declares what the spawned envoy may actually use (admission + variant
-    /// pins + framing). The caller binds the role explicitly — `&EXPLORE` for
-    /// the `envoy` tool.
+    /// declares what the spawned runner may actually use (admission + variant
+    /// pins + framing). The caller binds the role explicitly — `&RUNNER_EXPLORE` for
+    /// the `runner` tool.
     pub fn new(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static EnvoyProfile,
+        profile: &'static RunnerPreset,
     ) -> Self {
-        Self::named(provider, toolset, profile, "envoy", ENVOY_TOOL_DESCRIPTION)
+        Self::named(provider, toolset, profile, "runner", ENVOY_TOOL_DESCRIPTION)
     }
 
-    /// Like [`new`](Self::new) but shares an existing [`EnvoyRegistry`] instead
+    /// Like [`new`](Self::new) but shares an existing [`RunnerRegistry`] instead
     /// of creating a fresh one. Used when a second dispatch tool (e.g. a
-    /// coding-profile `envoy_code` alongside the read-only `envoy`) needs its
+    /// coding-profile `runner_code` alongside the read-only `runner`) needs its
     /// children reachable from the *same* harness reply path: the driver holds
-    /// one `Arc<EnvoyRegistry>`, and tool-call ids are globally unique, so two
+    /// one `Arc<RunnerRegistry>`, and tool-call ids are globally unique, so two
     /// dispatch tools lodging their children into one table never collide. See
     /// ADR-0029.
     pub fn with_registry(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static EnvoyProfile,
-        registry: Arc<EnvoyRegistry>,
+        profile: &'static RunnerPreset,
+        registry: Arc<RunnerRegistry>,
     ) -> Self {
         Self::named_with_registry(
             provider,
             toolset,
             profile,
-            "envoy",
+            "runner",
             ENVOY_TOOL_DESCRIPTION,
             registry,
         )
@@ -230,28 +236,28 @@ impl EnvoyTool {
     pub fn mcp_specialist(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        registry: Arc<EnvoyRegistry>,
+        registry: Arc<RunnerRegistry>,
     ) -> Self {
         Self::named_with_registry(
             provider,
             toolset,
-            &muta_contracts::MCP_SPECIALIST,
-            "envoy_mcp",
+            &muta_contracts::RUNNER_MCP_SPECIALIST,
+            "runner_mcp",
             ENVOY_MCP_TOOL_DESCRIPTION,
             registry,
         )
     }
 
     /// Build a dispatch tool under an explicit name and description. This is
-    /// how a second, write-capable envoy dispatch tool is constructed: a
-    /// profile like [`muta_contracts::CODE`] is paired with a distinct tool name
-    /// (e.g. `"envoy_code"`) and a description that tells the model this is the
-    /// delegation path for implementation work. The read-only `envoy` tool and
+    /// how a second, write-capable runner dispatch tool is constructed: a
+    /// profile like [`muta_contracts::RUNNER_CODE`] is paired with a distinct tool name
+    /// (e.g. `"runner_code"`) and a description that tells the model this is the
+    /// delegation path for implementation work. The read-only `runner` tool and
     /// a named variant coexist as separate capabilities in the parent toolset.
     pub fn named(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static EnvoyProfile,
+        profile: &'static RunnerPreset,
         tool_name: &'static str,
         tool_description: &'static str,
     ) -> Self {
@@ -263,11 +269,12 @@ impl EnvoyTool {
             tool_description,
             parent_variants: std::sync::Mutex::new(None),
             parent_workspace_security: std::sync::Mutex::new(None),
-            registry: Arc::new(EnvoyRegistry::default()),
+            parent_human_channel: std::sync::Mutex::new(None),
+            registry: Arc::new(RunnerRegistry::default()),
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
             workspace_root: std::sync::Mutex::new(None),
-            retry_config: std::sync::Mutex::new(EnvoyRetryConfig::default()),
+            retry_config: std::sync::Mutex::new(RunnerRetryConfig::default()),
         }
     }
 
@@ -277,10 +284,10 @@ impl EnvoyTool {
     pub fn named_with_registry(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static EnvoyProfile,
+        profile: &'static RunnerPreset,
         tool_name: &'static str,
         tool_description: &'static str,
-        registry: Arc<EnvoyRegistry>,
+        registry: Arc<RunnerRegistry>,
     ) -> Self {
         Self {
             provider,
@@ -290,15 +297,16 @@ impl EnvoyTool {
             tool_description,
             parent_variants: std::sync::Mutex::new(None),
             parent_workspace_security: std::sync::Mutex::new(None),
+            parent_human_channel: std::sync::Mutex::new(None),
             registry,
             accounting: std::sync::Mutex::new(None),
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
             workspace_root: std::sync::Mutex::new(None),
-            retry_config: std::sync::Mutex::new(EnvoyRetryConfig::default()),
+            retry_config: std::sync::Mutex::new(RunnerRetryConfig::default()),
         }
     }
 
-    /// Pin the session's workspace root so spawned envoys resolve relative
+    /// Pin the session's workspace root so spawned runners resolve relative
     /// `write_paths` (ADR-0028) against the session's project rather than the
     /// daemon process's cwd (ADR-0096). Called by the bootstrap right after
     /// construction; `None` (the default) keeps the process-cwd fallback.
@@ -310,7 +318,7 @@ impl EnvoyTool {
     }
 
     /// Bind the parent's session-scoped accounting handles. Each spawned
-    /// envoy gets its own actor id while sharing the session ledger, so nested
+    /// runner gets its own actor id while sharing the session ledger, so nested
     /// provider requests are visible without colliding with the principal's
     /// round/turn numbers.
     pub fn bind_accounting(
@@ -319,7 +327,7 @@ impl EnvoyTool {
         session_id: Arc<std::sync::Mutex<Option<String>>>,
         round_counter: Arc<std::sync::Mutex<u64>>,
     ) {
-        *self.accounting.lock().unwrap_or_else(|e| e.into_inner()) = Some(EnvoyAccountingContext {
+        *self.accounting.lock().unwrap_or_else(|e| e.into_inner()) = Some(RunnerAccountingContext {
             ledger,
             session_id,
             round_counter,
@@ -327,9 +335,9 @@ impl EnvoyTool {
     }
 
     /// Bind the parent agent's variant-selection handle (the **override** axis)
-    /// so spawned envoys inherit the model's tool overrides. Called once,
+    /// so spawned runners inherit the model's tool overrides. Called once,
     /// after the parent agent is constructed (the agent owns the handle). When
-    /// unbound, envoys use each capability's default variant.
+    /// unbound, runners use each capability's default variant.
     pub fn bind_variant_selection(
         &self,
         handle: Arc<std::sync::Mutex<muta_contracts::VariantSelection>>,
@@ -338,6 +346,26 @@ impl EnvoyTool {
             .parent_variants
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(handle);
+    }
+
+    /// ADR-0141: bind the session's channel accountant; spawned runners
+    /// inherit it (see [`Self::spawn`] wiring of
+    /// `Agent::set_human_channel_accountant`).
+    pub fn bind_human_channel(
+        &self,
+        handle: Arc<muta_contracts::human_request::HumanChannelAccountant>,
+    ) {
+        *self
+            .parent_human_channel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(handle);
+    }
+
+    fn parent_human_channel(&self) -> Option<Arc<muta_contracts::human_request::HumanChannelAccountant>> {
+        self.parent_human_channel
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn bind_workspace_security(
@@ -360,29 +388,29 @@ impl EnvoyTool {
             .unwrap_or_default()
     }
 
-    /// Bind the parent's provider retry settings so spawned envoys inherit
+    /// Bind the parent's provider retry settings so spawned runners inherit
     /// the session's retry budget and backoff parameters.
     pub fn bind_retry_policy(&self, max_attempts: usize, base_ms: u64, max_ms: u64) {
-        *self.retry_config.lock().unwrap_or_else(|e| e.into_inner()) = EnvoyRetryConfig {
+        *self.retry_config.lock().unwrap_or_else(|e| e.into_inner()) = RunnerRetryConfig {
             max_attempts: max_attempts.clamp(1, 60),
             base_ms,
             max_ms,
         };
     }
 
-    /// The shared handle registry for envoys spawned by this tool. The
+    /// The shared handle registry for runners spawned by this tool. The
     /// binary passes this `Arc` to the harness so a user reply in the TUI can
-    /// be routed back into the live child (ADR-0029). Each `EnvoyTool` instance
+    /// be routed back into the live child (ADR-0029). Each `RunnerTool` instance
     /// owns its own registry (children of different dispatch tools are
     /// disjoint), which is fine because the harness that needs to reply is the
     /// same one that constructed the tool.
-    pub fn registry(&self) -> Arc<EnvoyRegistry> {
+    pub fn registry(&self) -> Arc<RunnerRegistry> {
         self.registry.clone()
     }
 }
 
 #[async_trait]
-impl Tool for EnvoyTool {
+impl Tool for RunnerTool {
     fn name(&self) -> &str {
         self.tool_name
     }
@@ -394,19 +422,19 @@ impl Tool for EnvoyTool {
             "type": "object",
             "properties": {
                 "description": { "type": "string", "description": "Short label for the sub-task (<=60 chars)" },
-                "prompt": { "type": "string", "description": "The full, self-contained instructions for the envoy" }
+                "prompt": { "type": "string", "description": "The full, self-contained instructions for the runner" }
             },
             "required": ["description", "prompt"]
         })
     }
 
-    /// `task` spawns an envoy; envoy profiles exclude it to prevent
+    /// `task` spawns an runner; runner profiles exclude it to prevent
     /// unbounded recursion.
-    fn spawns_envoy(&self) -> bool {
+    fn spawns_runner(&self) -> bool {
         true
     }
 
-    /// The envoy's in-flight call owns a partial transcript worth preserving,
+    /// The runner's in-flight call owns a partial transcript worth preserving,
     /// so the harness routes turn cancellation through
     /// [`Tool::request_cancel`] instead of dropping the future: the child
     /// stops at its next safe boundary, returns its partial work, and the
@@ -417,7 +445,7 @@ impl Tool for EnvoyTool {
 
     /// Cancel the live child spawned by the `call_id` call. The child's round
     /// loop observes its token at the next safe boundary and returns its
-    /// partial transcript through `run_envoy_outcome`, so the parent executor
+    /// partial transcript through `run_runner_outcome`, so the parent executor
     /// can drain it instead of dropping it. Returns `false` for an unknown or
     /// already-finished call — the harness then falls back to the drop path.
     fn request_cancel(&self, call_id: &str) -> bool {
@@ -435,27 +463,27 @@ impl Tool for EnvoyTool {
     }
 
     async fn call(&self, arguments: &str) -> Result<String, String> {
-        self.run_envoy(None, arguments, Box::new(|_| {})).await
+        self.run_runner(None, arguments, Box::new(|_| {})).await
     }
 
     async fn call_with_events<'a>(
         &self,
         call_id: &str,
         arguments: &str,
-        on_event: Box<dyn FnMut(muta_contracts::EnvoyEvent) + Send + 'a>,
+        on_event: Box<dyn FnMut(muta_contracts::RunnerEvent) + Send + 'a>,
     ) -> Result<String, String> {
-        self.run_envoy(Some(call_id), arguments, on_event).await
+        self.run_runner(Some(call_id), arguments, on_event).await
     }
 
     async fn call_structured_with_events<'a>(
         &self,
         call_id: &str,
         arguments: &str,
-        on_event: Box<dyn FnMut(muta_contracts::EnvoyEvent) + Send + 'a>,
+        on_event: Box<dyn FnMut(muta_contracts::RunnerEvent) + Send + 'a>,
         _on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + 'a),
         _stdin: muta_contracts::StdinPolicy,
     ) -> Result<muta_contracts::ToolOutput, String> {
-        // Run the envoy, streaming its lifecycle as EnvoyEvents to the
+        // Run the runner, streaming its lifecycle as RunnerEvents to the
         // parent harness (so the live TUI builds the nested view in real
         // time), then return a structured payload carrying the full transcript
         // + real token usage so the parent can persist children and account
@@ -465,8 +493,8 @@ impl Tool for EnvoyTool {
         // handle in the registry (ADR-0029) so a user reply can flow back down
         // into this exact child while it runs.
         //
-        // Failure path: an envoy that hit the 32-turn limit, repeated-call
-        // guard, or a provider error returns an Envoy payload too — the
+        // Failure path: an runner that hit the 32-turn limit, repeated-call
+        // guard, or a provider error returns an Runner payload too — the
         // structured `failed` flag is set so the UI classifies it as Failed
         // without text-sniffing, and the partial transcript is preserved so
         // the user can resume into the half-finished work and the real token
@@ -475,18 +503,18 @@ impl Tool for EnvoyTool {
         // input-validation errors (bad JSON, missing fields) propagate as
         // `Err`, because they have no partial transcript worth keeping.
         let outcome = self
-            .run_envoy_outcome(Some(call_id), arguments, on_event)
+            .run_runner_outcome(Some(call_id), arguments, on_event)
             .await?;
         let summary = if outcome.final_content.trim().is_empty() {
             if outcome.failed {
-                "(envoy failed before producing an answer)".to_string()
+                "(runner failed before producing an answer)".to_string()
             } else {
-                "(envoy returned no answer)".to_string()
+                "(runner returned no answer)".to_string()
             }
         } else {
             outcome.final_content.trim().to_string()
         };
-        Ok(muta_contracts::ToolOutput::Envoy {
+        Ok(muta_contracts::ToolOutput::Runner {
             summary,
             messages: outcome.messages,
             usage: outcome.token_usage,
@@ -497,38 +525,38 @@ impl Tool for EnvoyTool {
     }
 }
 
-/// Internal result of running an envoy. Bundles everything the parent
+/// Internal result of running an runner. Bundles everything the parent
 /// harness needs to persist the nested transcript and account for real cost.
-struct EnvoyOutcome {
+struct RunnerOutcome {
     messages: Vec<muta_contracts::Message>,
     token_usage: muta_contracts::TokenUsage,
     /// Final assistant content, mirrored for convenience so the parent doesn't
     /// have to scan `messages` for the last Assistant turn.
     final_content: String,
-    /// Whether the envoy terminated abnormally (hit its turn cap,
+    /// Whether the runner terminated abnormally (hit its turn cap,
     /// repeated-call guard, or a provider error). Drives the structured
-    /// `failed` flag on the returned [`muta_contracts::ToolOutput::Envoy`]
+    /// `failed` flag on the returned [`muta_contracts::ToolOutput::Runner`]
     /// instead of the old `summary.starts_with("Error")` text sniff.
     failed: bool,
-    /// Whether the envoy was stopped by the parent before finishing (the turn
+    /// Whether the runner was stopped by the parent before finishing (the turn
     /// was cancelled). Distinct from `failed`: the partial transcript is
     /// preserved either way, but interruption is a user-initiated stop that
     /// the model should treat as resumable work, not a sub-task error.
     interrupted: bool,
-    /// The envoy's own generation time (summed across its completed provider
+    /// The runner's own generation time (summed across its completed provider
     /// requests). Folded into the parent round's `generation_ms` so the
-    /// throughput denominator matches its numerator scope (envoy output
+    /// throughput denominator matches its numerator scope (runner output
     /// tokens already reach the parent via `token_usage`).
     generation_ms: u64,
 }
 
-impl EnvoyTool {
-    async fn run_envoy_outcome<'a>(
+impl RunnerTool {
+    async fn run_runner_outcome<'a>(
         &self,
         call_id: Option<&str>,
         arguments: &str,
-        mut on_event: Box<dyn FnMut(muta_contracts::EnvoyEvent) + Send + 'a>,
-    ) -> Result<EnvoyOutcome, String> {
+        mut on_event: Box<dyn FnMut(muta_contracts::RunnerEvent) + Send + 'a>,
+    ) -> Result<RunnerOutcome, String> {
         let args: serde_json::Value =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let description = args["description"]
@@ -544,18 +572,18 @@ impl EnvoyTool {
         }
 
         // Announce the bound profile name first so the parent harness / TUI
-        // can label this envoy by its role (explore / plan / verify / …)
-        // rather than a generic "Envoy". Emitted before the child runs.
-        on_event(muta_contracts::EnvoyEvent::Started {
+        // can label this runner by its role (explore / plan / verify / …)
+        // rather than a generic "Runner". Emitted before the child runs.
+        on_event(muta_contracts::RunnerEvent::Started {
             profile: self.profile.name.to_string(),
         });
 
-        // Resolve the pool for this envoy: profile selection ⊓ model selection.
-        // The envoy is an agent on the *same* model as the parent, so it carries
+        // Resolve the pool for this runner: profile selection ⊓ model selection.
+        // The runner is an agent on the *same* model as the parent, so it carries
         // the parent's model (capability limits + variant overrides). The profile
         // contributes the role scope and any variant pins; the model contributes
         // its variant overrides (snapshotted from the parent) and its hard
-        // capability limits. `resolve_tools` composes both and applies the envoy
+        // capability limits. `resolve_tools` composes both and applies the runner
         // runtime hard rules (no recursion / control-flow / blocking-on-user).
         let model = muta_contracts::resolve_model(&self.provider.model());
         let model_sel =
@@ -564,11 +592,11 @@ impl EnvoyTool {
             .profile
             .resolve_tools(&self.toolset, &model, &model_sel);
 
-        // The envoy's identity *is* its profile's system prompt — that is the
-        // persona/mission framing for this role (e.g. EXPLORE's research
+        // The runner's identity *is* its profile's system prompt — that is the
+        // persona/mission framing for this role (e.g. RUNNER_EXPLORE's research
         // framing). `from_persona` injects it verbatim as the preamble.
         let identity = crate::AgentIdentity::from_persona(self.profile.system_prompt);
-        let mut envoy = Agent::new(self.provider.clone(), sub_tools, identity);
+        let mut runner = Agent::new(self.provider.clone(), sub_tools, identity);
         if let Some(handle) = self
             .parent_workspace_security
             .lock()
@@ -576,9 +604,9 @@ impl EnvoyTool {
             .as_ref()
             .cloned()
         {
-            envoy.bind_workspace_security_handle(handle);
+            runner.bind_workspace_security_handle(handle);
         }
-        let envoy = Arc::new(envoy);
+        let runner = Arc::new(runner);
         if let Some(accounting) = self
             .accounting
             .lock()
@@ -596,18 +624,18 @@ impl EnvoyTool {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let actor = call_id
-                .map(|id| format!("envoy:{id}"))
-                .unwrap_or_else(|| format!("envoy:{}", uuid::Uuid::new_v4()));
-            envoy.set_thread_id(session_id);
-            envoy.restore_round_count(round);
-            envoy.set_accounting_actor_id(actor);
-            envoy.install_token_ledger(accounting.ledger);
+                .map(|id| format!("runner:{id}"))
+                .unwrap_or_else(|| format!("runner:{}", uuid::Uuid::new_v4()));
+            runner.set_thread_id(session_id);
+            runner.restore_round_count(round);
+            runner.set_accounting_actor_id(actor);
+            runner.install_token_ledger(accounting.ledger);
         }
-        // A `task` envoy runs unobstructed: disable the deterministic
+        // A `task` runner runs unobstructed: disable the deterministic
         // read-loop guard's nudge (ADR-0034) so a short-lived, parent-supervised
-        // envoy is never steered by it. The parent and `abort` remain its
+        // runner is never steered by it. The parent and `abort` remain its
         // backstops.
-        envoy.set_doom_guard_config(muta_contracts::DoomGuardConfig::disabled());
+        runner.set_doom_guard_config(muta_contracts::DoomGuardConfig::disabled());
         // Full-duplex (ADR-0029): install the child's steering inbox and lodge
         // its handle in the registry keyed by the parent tool-call id. Now any
         // permission / `ask_user` request the child surfaces travels *up* via
@@ -616,23 +644,33 @@ impl EnvoyTool {
         // resolving the child's parked oneshot. A `None` call_id (the bare
         // `call` path, no harness involvement) skips registration — there is no
         // one to reply, so the child must stay self-contained.
-        let _handle = envoy.install_inbox();
+        let _handle = runner.install_inbox();
         if let Some(id) = call_id {
             self.registry.register(id, _handle.clone());
         }
         // Full-duplex (ADR-0029): the broker gate is now profile-driven. The
         // built-in profiles keep `autopilot: true` to preserve the legacy
         // autonomous contract, but a profile with `autopilot: false` lets a
-        // envoy's write/execute tool calls surface as
-        // `EnvoyEvent::PermissionRequest` up to the parent, with the user's
+        // runner's write/execute tool calls surface as
+        // `RunnerEvent::PermissionRequest` up to the parent, with the user's
         // reply routed back down via the registry → handle →
         // `reply_permission` (the parked oneshot resolves directly, no inbox
         // drain needed).
-        envoy.set_autopilot(self.profile.autopilot);
+        runner.set_autopilot(self.profile.autopilot);
+        // ADR-0141: the child inherits the parent's human-channel posture
+        // source. An interactive session's runners can ask the user through
+        // the parent's channel (permission requests flow up via
+        // RunnerEvent); an autonomous parent's children never park on a
+        // human that is not there — they fail closed / settle by labeled
+        // policy in the child, instead of deadlocking the parent's tool
+        // call on an unanswerable question.
+        if let Some(accountant) = self.parent_human_channel() {
+            runner.set_human_channel_accountant(accountant);
+        }
         // Resolve the bound profile's write grant (ADR-0028) against the
         // session's workspace root (falling back to the process cwd when no
         // root was captured) and set it on the child. All built-in profiles
-        // (EXPLORE/TITLE: empty `write_paths`) resolve to
+        // (RUNNER_EXPLORE/RUNNER_TITLE: empty `write_paths`) resolve to
         // `WriteScope::None`, consistent with their admission (no write tools
         // admitted anyway).
         let cwd = self
@@ -641,13 +679,13 @@ impl EnvoyTool {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        envoy.set_operation_scope(self.profile.resolve_operation_scope(&cwd));
-        // Envoys are short-lived and read-only by profile, and session
+        runner.set_operation_scope(self.profile.resolve_operation_scope(&cwd));
+        // Runners are short-lived and read-only by profile, and session
         // review is on-demand (`/review`) with no automatic firing — so a
-        // research envoy never pays for a diagnostic and review can never
+        // research runner never pays for a diagnostic and review can never
         // recurse. No setup needed here. ADR-0018.
 
-        // The envoy's durable transcript opens with just the task as the user
+        // The runner's durable transcript opens with just the task as the user
         // message. Request assembly composes a fresh head system message every
         // round from the profile persona (carried via `AgentIdentity`, set
         // above) and mission-neutral system-prompt policy — see ADR-0061.
@@ -659,10 +697,10 @@ impl EnvoyTool {
         // itself is the user message; `description` remains a required label
         // arg (validated above) for the parent / TUI.
         let mut messages = vec![crate::conversation_context::visible_user(
-            muta_contracts::InjectionKind::EnvoyTask,
+            muta_contracts::InjectionKind::RunnerTask,
             prompt,
         )];
-        // The envoy runs under its own cancellation token. When the parent
+        // The runner runs under its own cancellation token. When the parent
         // turn is interrupted, the harness's executor calls
         // [`Tool::request_cancel`] on this tool with the parent tool-call id,
         // which cancels the stored token below; the child's round loop
@@ -678,13 +716,13 @@ impl EnvoyTool {
                 .unwrap_or_else(|e| e.into_inner())
                 .insert(id.to_string(), child_cancel.clone());
         }
-        // Track the envoy's own ReAct position as `ModelRequestStarted`
+        // Track the runner's own ReAct position as `ModelRequestStarted`
         // events arrive so the streamed `StreamStart` / `ToolCall` events can
         // carry it (mirroring the main session's `(round, turn)` stamping).
         let mut position: (u64, usize) = (1, 0);
         // Transient-provider-retry loop. The top-level interactive round
         // retries `HarnessError::Retryable` in `orchestration::execute_round`
-        // (config: `provider_retry_max_attempts`), but an envoy runs through
+        // (config: `provider_retry_max_attempts`), but an runner runs through
         // `run_streaming_with_events` directly and had *no* retry at all —
         // one flaky long SSE generation (the GLM `xhigh`-effort stream that
         // gets cut mid-body) killed the whole sub-task after minutes of
@@ -699,8 +737,8 @@ impl EnvoyTool {
         // never its full chain, so streaming it upward would disclose text the
         // principal's live path also refuses to show (the TUI drops
         // `StreamReasoningDelta` for such models at message creation). The
-        // envoy shares the session's provider, so the parent's model is the
-        // envoy's model. Unknown ids default to disclosed — mirroring the
+        // runner shares the session's provider, so the parent's model is the
+        // runner's model. Unknown ids default to disclosed — mirroring the
         // `model_by_id` (not `resolve`) rule of both TUI gates — so local and
         // user-defined models that reason still stream their chains.
         let hidden_chain = !muta_contracts::model_by_id(&self.provider.model())
@@ -712,12 +750,12 @@ impl EnvoyTool {
                 &clean[..clean.len().min(6)]
             })
             .unwrap_or("subagent");
-        let origin_label = format!("envoy #{} · {}", short_id, self.profile.name);
-        let mut round = envoy.begin_streaming_round();
+        let origin_label = format!("runner #{} · {}", short_id, self.profile.name);
+        let mut round = runner.begin_streaming_round();
         let mut attempt: usize = 0;
         let result = loop {
             attempt += 1;
-            let run = envoy
+            let run = runner
                 .resume_streaming_with_events(&mut messages, &child_cancel, &mut round, |event| {
                     if let muta_contracts::AgentEvent::ModelRequestStarted { round, turn, .. } =
                         &event
@@ -753,14 +791,14 @@ impl EnvoyTool {
                         max_attempts = retry_limit,
                         delay_ms,
                         error = %message,
-                        "envoy hit a transient provider error; retrying"
+                        "runner hit a transient provider error; retrying"
                     );
-                    on_event(muta_contracts::EnvoyEvent::Notice(
+                    on_event(muta_contracts::RunnerEvent::Notice(
                         muta_contracts::AgentNotice::new(
                             muta_contracts::NoticeKind::ProviderRetry,
                             muta_contracts::NoticeSeverity::Warning,
                             format!(
-                                "Envoy retrying after transient provider error \
+                                "Runner retrying after transient provider error \
                                  ({attempt}/{retry_limit})"
                             ),
                             muta_contracts::NoticeSource::Harness,
@@ -771,7 +809,7 @@ impl EnvoyTool {
                             crate::orchestration::public_retry_reason(&message),
                         )),
                     ));
-                    on_event(muta_contracts::EnvoyEvent::Activity(format!(
+                    on_event(muta_contracts::RunnerEvent::Activity(format!(
                         "waiting to retry ({}s)",
                         delay_ms.div_ceil(1_000)
                     )));
@@ -801,7 +839,7 @@ impl EnvoyTool {
         match result {
             Ok(result) => {
                 let final_content = result.message.content.clone();
-                Ok(EnvoyOutcome {
+                Ok(RunnerOutcome {
                     messages,
                     token_usage: result.token_usage,
                     final_content,
@@ -816,7 +854,7 @@ impl EnvoyTool {
                 // error. The model must understand the sub-task was stopped by
                 // the user (resumable work), not that it failed. On a genuine
                 // failure we surface the partial transcript too — both so the
-                // parent's tool-result message carries the envoy's
+                // parent's tool-result message carries the runner's
                 // work-in-progress `children` and so the real token cost
                 // reaches the parent round's accounting; the `final_content`
                 // is prefixed `Error: …` so the failure classifier and the
@@ -832,20 +870,20 @@ impl EnvoyTool {
                     });
                     let final_content = match partial {
                         Some(text) => format!(
-                            "Interrupted: the envoy was stopped by the user before completing. \
+                            "Interrupted: the runner was stopped by the user before completing. \
                              It ran {tool_calls} tool call(s) and produced the following partial \
                              findings:\n{text}"
                         ),
                         None => format!(
-                            "Interrupted: the envoy was stopped by the user before producing any \
+                            "Interrupted: the runner was stopped by the user before producing any \
                              findings (it ran {tool_calls} tool call(s))."
                         ),
                     };
                     tracing::info!(
                         tool_calls,
-                        "envoy interrupted by parent; preserving partial transcript"
+                        "runner interrupted by parent; preserving partial transcript"
                     );
-                    return Ok(EnvoyOutcome {
+                    return Ok(RunnerOutcome {
                         messages,
                         token_usage: muta_contracts::TokenUsage::default(),
                         final_content,
@@ -855,8 +893,8 @@ impl EnvoyTool {
                     });
                 }
                 let error_string = error.to_string();
-                tracing::warn!(error = %error_string, "envoy failed; preserving partial transcript");
-                Ok(EnvoyOutcome {
+                tracing::warn!(error = %error_string, "runner failed; preserving partial transcript");
+                Ok(RunnerOutcome {
                     messages,
                     token_usage: muta_contracts::TokenUsage::default(),
                     final_content: format!("Error: {error_string}"),
@@ -868,16 +906,16 @@ impl EnvoyTool {
         }
     }
 
-    async fn run_envoy<'a>(
+    async fn run_runner<'a>(
         &self,
         call_id: Option<&str>,
         arguments: &str,
-        on_event: Box<dyn FnMut(muta_contracts::EnvoyEvent) + Send + 'a>,
+        on_event: Box<dyn FnMut(muta_contracts::RunnerEvent) + Send + 'a>,
     ) -> Result<String, String> {
-        let outcome = self.run_envoy_outcome(call_id, arguments, on_event).await?;
+        let outcome = self.run_runner_outcome(call_id, arguments, on_event).await?;
         let content = outcome.final_content.trim().to_string();
         if content.is_empty() {
-            Ok("(envoy returned no answer)".to_string())
+            Ok("(runner returned no answer)".to_string())
         } else {
             Ok(content)
         }
@@ -888,11 +926,11 @@ impl EnvoyTool {
         position: (u64, usize),
         hidden_chain: bool,
         origin: Option<&str>,
-        on_event: &mut dyn FnMut(muta_contracts::EnvoyEvent),
+        on_event: &mut dyn FnMut(muta_contracts::RunnerEvent),
     ) {
         match event {
             muta_contracts::AgentEvent::Notice(notice) => {
-                on_event(muta_contracts::EnvoyEvent::Notice(notice));
+                on_event(muta_contracts::RunnerEvent::Notice(notice));
             }
             muta_contracts::AgentEvent::ModelRequestStarted { turn, .. } => {
                 let status = if turn == 0 {
@@ -900,26 +938,26 @@ impl EnvoyTool {
                 } else {
                     format!("waiting for model (turn {})", turn + 1)
                 };
-                on_event(muta_contracts::EnvoyEvent::Activity(status));
+                on_event(muta_contracts::RunnerEvent::Activity(status));
             }
             muta_contracts::AgentEvent::AssistantDelta { delta, start } => {
                 if start {
-                    on_event(muta_contracts::EnvoyEvent::StreamStart {
+                    on_event(muta_contracts::RunnerEvent::StreamStart {
                         round: position.0,
                         turn: position.1,
                     });
                 }
-                on_event(muta_contracts::EnvoyEvent::StreamDelta(delta));
+                on_event(muta_contracts::RunnerEvent::StreamDelta(delta));
             }
             muta_contracts::AgentEvent::AssistantEnd(content) => {
-                on_event(muta_contracts::EnvoyEvent::StreamEnd(content));
+                on_event(muta_contracts::RunnerEvent::StreamEnd(content));
             }
-            // The envoy's reasoning chain, streamed live instead of surfacing
+            // The runner's reasoning chain, streamed live instead of surfacing
             // only after a session reload. Without these arms the child's
             // thinking fell into the catch-all `_ => {}` below — the durable
             // transcript kept it (`Message::reasoning_content`) and a resumed
             // session rendered it, but the run itself showed nothing: a live
-            // drill-in and a reloaded one disagreed about what the envoy did.
+            // drill-in and a reloaded one disagreed about what the runner did.
             // Gated at the source for hidden-chain models so the summary-only
             // chain is never disclosed (the caller computed `hidden_chain`
             // once; the principal's live path applies the same gate).
@@ -928,25 +966,25 @@ impl EnvoyTool {
                     return;
                 }
                 if start {
-                    on_event(muta_contracts::EnvoyEvent::StreamReasoningStart {
+                    on_event(muta_contracts::RunnerEvent::StreamReasoningStart {
                         round: position.0,
                         turn: position.1,
                     });
                 }
-                on_event(muta_contracts::EnvoyEvent::StreamReasoningDelta(delta));
+                on_event(muta_contracts::RunnerEvent::StreamReasoningDelta(delta));
             }
             muta_contracts::AgentEvent::ReasoningEnd(content) => {
                 if hidden_chain {
                     return;
                 }
-                on_event(muta_contracts::EnvoyEvent::StreamReasoningEnd(content));
+                on_event(muta_contracts::RunnerEvent::StreamReasoningEnd(content));
             }
             muta_contracts::AgentEvent::ToolCall {
                 id,
                 name,
                 arguments,
             } => {
-                on_event(muta_contracts::EnvoyEvent::ToolCall {
+                on_event(muta_contracts::RunnerEvent::ToolCall {
                     id,
                     name,
                     arguments,
@@ -961,7 +999,7 @@ impl EnvoyTool {
                 duration_ms,
                 ..
             } => {
-                on_event(muta_contracts::EnvoyEvent::ToolResult {
+                on_event(muta_contracts::RunnerEvent::ToolResult {
                     id,
                     name,
                     output,
@@ -974,20 +1012,20 @@ impl EnvoyTool {
                 if request.origin.is_none() {
                     request.origin = origin.map(str::to_string);
                 }
-                on_event(muta_contracts::EnvoyEvent::PermissionRequest(request));
+                on_event(muta_contracts::RunnerEvent::PermissionRequest(request));
             }
             // Same full-duplex contract as the permission arm above.
             muta_contracts::AgentEvent::UserQuestionRequest(mut request) => {
                 if request.origin.is_none() {
                     request.origin = origin.map(str::to_string);
                 }
-                on_event(muta_contracts::EnvoyEvent::UserQuestionRequest(request));
+                on_event(muta_contracts::RunnerEvent::UserQuestionRequest(request));
             }
-            // L3.5 β: an interactive `bash` inside the envoy needs operator
+            // L3.5 β: an interactive `bash` inside the runner needs operator
             // input; forward the request up so the parent harness can surface
             // it, with the reply routed back down via `reply_input`.
             muta_contracts::AgentEvent::InputRequest(request) => {
-                on_event(muta_contracts::EnvoyEvent::InputRequest(request));
+                on_event(muta_contracts::RunnerEvent::InputRequest(request));
             }
             _ => {}
         }
@@ -998,7 +1036,7 @@ impl EnvoyTool {
 mod tests {
     use super::*;
     use futures::stream::{self, BoxStream};
-    use muta_contracts::{EXPLORE, Message, Provider, ProviderStreamEvent, Role};
+    use muta_contracts::{RUNNER_EXPLORE, Message, Provider, ProviderStreamEvent, Role};
 
     struct CannedProvider;
 
@@ -1025,7 +1063,7 @@ mod tests {
     /// Fails the first `stream_chat_events` call with a retryable transport
     /// error, succeeds afterwards — the exact shape of a GLM long SSE stream
     /// cut off mid-body (`Kind::Decode` → `[MUTA_RETRYABLE]`), which before
-    /// the envoy retry loop killed the sub-task outright.
+    /// the runner retry loop killed the sub-task outright.
     struct FlakyThenOkProvider {
         calls: std::sync::atomic::AtomicUsize,
     }
@@ -1108,7 +1146,7 @@ mod tests {
         }
     }
 
-    /// A terse `read_text` variant and a write tool, to prove an envoy
+    /// A terse `read_text` variant and a write tool, to prove an runner
     /// resolves the *model's* variant (override axis) and then narrows to the
     /// *profile's* scope (scope axis) — the two are orthogonal.
     struct TerseReadTool;
@@ -1131,17 +1169,17 @@ mod tests {
         }
     }
     #[test]
-    fn envoy_inherits_model_variant_then_applies_profile_scope() {
-        // `StubWriteTool` (name "stub_write") is not in EXPLORE's read-only
+    fn runner_inherits_model_variant_then_applies_profile_scope() {
+        // `StubWriteTool` (name "stub_write") is not in RUNNER_EXPLORE's read-only
         // scope, so it is always excluded; `read_text` has two variants.
         let toolset = muta_contracts::ToolSet::from_tools([
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(TerseReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(StubWriteTool) as std::sync::Arc<dyn Tool>,
         ]);
-        let tool = EnvoyTool::new(std::sync::Arc::new(CannedProvider), toolset, &EXPLORE);
+        let tool = RunnerTool::new(std::sync::Arc::new(CannedProvider), toolset, &RUNNER_EXPLORE);
 
-        let resolve = |tool: &EnvoyTool| {
+        let resolve = |tool: &RunnerTool| {
             let model = muta_contracts::resolve_model(&CannedProvider.model());
             let model_sel = muta_contracts::ToolSelection::unrestricted()
                 .with_variants(tool.variant_snapshot());
@@ -1156,7 +1194,7 @@ mod tests {
         assert_eq!(read.map(|t| t.variant()), Some("default"));
         assert!(scoped.iter().all(|t| t.name() != "stub_write"));
 
-        // Bind a model selection pinning read_text=terse: the envoy inherits
+        // Bind a model selection pinning read_text=terse: the runner inherits
         // the override (terse), while scope is still profile-driven.
         let mut sel = muta_contracts::VariantSelection::new();
         sel.insert("read_text".to_string(), "terse".to_string());
@@ -1168,20 +1206,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn envoy_retries_after_transient_stream_failure() {
+    async fn runner_retries_after_transient_stream_failure() {
         let provider = std::sync::Arc::new(FlakyThenOkProvider::new());
-        let tool = EnvoyTool::new(
+        let tool = RunnerTool::new(
             std::sync::Arc::clone(&provider) as std::sync::Arc<dyn Provider>,
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &EXPLORE,
+            &RUNNER_EXPLORE,
         );
 
         let output = tool
             .call(r#"{"description":"find files","prompt":"where are the handlers?"}"#)
             .await
-            .expect("the envoy must recover from one transient stream failure");
+            .expect("the runner must recover from one transient stream failure");
 
         assert_eq!(
             output, "recovered",
@@ -1195,14 +1233,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn envoy_inherits_and_respects_custom_retry_policy() {
+    async fn runner_inherits_and_respects_custom_retry_policy() {
         let provider = std::sync::Arc::new(FlakyThenOkProvider::new());
-        let tool = EnvoyTool::new(
+        let tool = RunnerTool::new(
             std::sync::Arc::clone(&provider) as std::sync::Arc<dyn Provider>,
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &EXPLORE,
+            &RUNNER_EXPLORE,
         );
         tool.bind_retry_policy(1, 10, 10); // only 1 attempt
 
@@ -1219,13 +1257,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn task_tool_runs_read_only_envoy_and_returns_answer() {
-        let tool = EnvoyTool::new(
+    async fn task_tool_runs_read_only_runner_and_returns_answer() {
+        let tool = RunnerTool::new(
             std::sync::Arc::new(CannedProvider),
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &EXPLORE,
+            &RUNNER_EXPLORE,
         );
 
         let output = tool
@@ -1238,8 +1276,8 @@ mod tests {
 
     /// A provider that lets the test control when the *second* model request
     /// is in flight: the first request returns a `read_text` tool call (which
-    /// the envoy executes), the second flips `second_request_started` and
-    /// then never produces a stream event — so the envoy is parked mid-flight
+    /// the runner executes), the second flips `second_request_started` and
+    /// then never produces a stream event — so the runner is parked mid-flight
     /// until its cancellation token fires.
     struct GatedProvider {
         requests: std::sync::atomic::AtomicUsize,
@@ -1266,18 +1304,18 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
                 == 0
             {
-                // First request: ask the envoy to run its `read_text` tool.
+                // First request: ask the runner to run its `read_text` tool.
                 Ok(Box::pin(stream::iter(vec![Ok(
                     ProviderStreamEvent::ToolCallDelta {
                         index: 0,
-                        id: Some("envoy_inner_1".to_string()),
+                        id: Some("runner_inner_1".to_string()),
                         name: Some("read_text".to_string()),
                         arguments: "{}".to_string(),
                     },
                 )])))
             } else {
-                // Second request: tell the test the envoy is mid-flight, then
-                // stall forever. The envoy's streaming loop races its
+                // Second request: tell the test the runner is mid-flight, then
+                // stall forever. The runner's streaming loop races its
                 // cancellation token against `stream.next()`, so cancelling
                 // the child token resolves this immediately.
                 let _ = self.second_request_started.send(true);
@@ -1287,50 +1325,50 @@ mod tests {
     }
 
     /// Regression for cooperative interruption: when the parent cancels a
-    /// running envoy, the partial transcript is preserved as an *interrupted*
+    /// running runner, the partial transcript is preserved as an *interrupted*
     /// outcome (not dropped, not a failure). The child's completed tool call,
     /// the task message, and a model-facing "Interrupted:" summary all survive
     /// so the parent can record them and the user can resume.
     #[tokio::test]
-    async fn interrupting_envoy_preserves_partial_transcript() {
+    async fn interrupting_runner_preserves_partial_transcript() {
         let (started_tx, started_rx) = tokio::sync::watch::channel(false);
         let provider = std::sync::Arc::new(GatedProvider {
             requests: std::sync::atomic::AtomicUsize::new(0),
             second_request_started: started_tx,
         });
-        let tool = std::sync::Arc::new(EnvoyTool::new(
+        let tool = std::sync::Arc::new(RunnerTool::new(
             provider,
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &EXPLORE,
+            &RUNNER_EXPLORE,
         ));
 
         let tool_for_run = tool.clone();
         let run = tokio::spawn(async move {
             tool_for_run
-                .run_envoy_outcome(
+                .run_runner_outcome(
                     Some("call_interrupt"),
                     r#"{"description":"interrupt me","prompt":"find the handlers"}"#,
-                    Box::new(|_event: muta_contracts::EnvoyEvent| {}),
+                    Box::new(|_event: muta_contracts::RunnerEvent| {}),
                 )
                 .await
         });
 
-        // Wait until the envoy is genuinely mid-flight (its second model
+        // Wait until the runner is genuinely mid-flight (its second model
         // request is in the air), then interrupt it the way the harness's
         // executor does: via `Tool::request_cancel` keyed by the call id.
         let mut started_rx = started_rx;
         started_rx
             .changed()
             .await
-            .expect("envoy reached its second request");
+            .expect("runner reached its second request");
         assert!(
             tool.request_cancel("call_interrupt"),
-            "an in-flight envoy must accept the cancel request"
+            "an in-flight runner must accept the cancel request"
         );
 
-        let outcome = run.await.expect("envoy run task").expect("outcome");
+        let outcome = run.await.expect("runner run task").expect("outcome");
         assert!(outcome.interrupted, "interruption must be flagged");
         assert!(!outcome.failed, "interruption is not a failure");
         assert!(
@@ -1356,23 +1394,23 @@ mod tests {
         );
     }
 
-    /// The envoy persona belongs to the immutable provider request, not its
+    /// The runner persona belongs to the immutable provider request, not its
     /// durable child transcript. The delegated task remains a user message.
     #[tokio::test]
-    async fn envoy_head_system_message_has_no_dead_task_line() {
+    async fn runner_head_system_message_has_no_dead_task_line() {
         let provider = std::sync::Arc::new(RecordingProvider::default());
-        let tool = EnvoyTool::new(
+        let tool = RunnerTool::new(
             provider.clone(),
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &EXPLORE,
+            &RUNNER_EXPLORE,
         );
         let outcome = tool
-            .run_envoy_outcome(
+            .run_runner_outcome(
                 None,
                 r#"{"description":"find files","prompt":"where are the handlers?"}"#,
-                Box::new(|_event: muta_contracts::EnvoyEvent| {}),
+                Box::new(|_event: muta_contracts::RunnerEvent| {}),
             )
             .await
             .unwrap();
@@ -1382,14 +1420,14 @@ mod tests {
             .lock()
             .unwrap()
             .clone()
-            .expect("envoy request captured");
+            .expect("runner request captured");
         let system = &request.messages[0];
         assert_eq!(system.role, muta_contracts::Role::System);
         assert!(
             system
                 .content
-                .starts_with("You are a focused research envoy"),
-            "system message should open with the EXPLORE persona"
+                .starts_with("You are a focused research runner"),
+            "system message should open with the RUNNER_EXPLORE persona"
         );
         assert!(
             !system.content.contains("Task: find files"),
@@ -1412,16 +1450,16 @@ mod tests {
                 .origin
                 .as_ref()
                 .map(|origin| origin.kind),
-            Some(muta_contracts::InjectionKind::EnvoyTask)
+            Some(muta_contracts::InjectionKind::RunnerTask)
         );
     }
 
     #[tokio::test]
     async fn task_tool_rejects_missing_fields() {
-        let tool = EnvoyTool::new(
+        let tool = RunnerTool::new(
             std::sync::Arc::new(CannedProvider),
             muta_contracts::ToolSet::default(),
-            &EXPLORE,
+            &RUNNER_EXPLORE,
         );
         assert!(tool.call(r#"{"description":"x"}"#).await.is_err());
         assert!(tool.call(r#"{"prompt":"x"}"#).await.is_err());
@@ -1456,38 +1494,38 @@ mod tests {
     #[test]
     fn explore_profile_excludes_user_write_and_recursion_using_real_tools() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let envoy_tool = EnvoyTool::new(
+        let runner_tool = RunnerTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &EXPLORE,
+            &RUNNER_EXPLORE,
         );
 
         let toolset = muta_contracts::ToolSet::from_tools(vec![
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
             std::sync::Arc::new(crate::tools::AskUserTool),
             std::sync::Arc::new(StubWriteTool),
-            std::sync::Arc::new(envoy_tool),
+            std::sync::Arc::new(runner_tool),
         ]);
 
         let model = muta_contracts::resolve_model(&CannedProvider.model());
         let model_sel = muta_contracts::ToolSelection::unrestricted();
-        let admitted = EXPLORE.resolve_tools(&toolset, &model, &model_sel);
+        let admitted = RUNNER_EXPLORE.resolve_tools(&toolset, &model, &model_sel);
         let admitted_names: Vec<&str> = admitted.iter().map(|t| t.name()).collect();
 
         assert_eq!(admitted_names, vec!["read_text"]);
     }
 
-    /// Cross-cut regression: `EXPLORE` admits only its whitelisted read tools —
+    /// Cross-cut regression: `RUNNER_EXPLORE` admits only its whitelisted read tools —
     /// `ask_user`, the non-whitelisted write stub, and recursion are all
     /// excluded. The read stub is admitted because it is named `read_text`,
     /// which is in [`READ_ONLY_TOOLS`].
     #[test]
     fn explore_profile_excludes_bash_writes_user_and_recursion() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let envoy_tool = EnvoyTool::new(
+        let runner_tool = RunnerTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &EXPLORE,
+            &RUNNER_EXPLORE,
         );
 
         let toolset = muta_contracts::ToolSet::from_tools(vec![
@@ -1495,19 +1533,19 @@ mod tests {
             std::sync::Arc::new(crate::tools::BashTool::new(None)),
             std::sync::Arc::new(crate::tools::AskUserTool),
             std::sync::Arc::new(StubWriteTool),
-            std::sync::Arc::new(envoy_tool),
+            std::sync::Arc::new(runner_tool),
         ]);
 
-        // EXPLORE: only the whitelisted read tool survives (bash, ask_user,
+        // RUNNER_EXPLORE: only the whitelisted read tool survives (bash, ask_user,
         // the write stub, and recursion are all excluded).
         let model = muta_contracts::resolve_model(&CannedProvider.model());
         let model_sel = muta_contracts::ToolSelection::unrestricted();
-        let explore_selected = EXPLORE.resolve_tools(&toolset, &model, &model_sel);
+        let explore_selected = RUNNER_EXPLORE.resolve_tools(&toolset, &model, &model_sel);
         let explore_names: Vec<&str> = explore_selected.iter().map(|t| t.name()).collect();
         assert_eq!(explore_names, vec!["read_text"]);
     }
 
-    /// A write-capable `envoy_code` tool (bound to [`muta_contracts::CODE`])
+    /// A write-capable `runner_code` tool (bound to [`muta_contracts::RUNNER_CODE`])
     /// admits the edit surface a coder needs. Built with the real tools the
     /// harness registers so a future capability regression is caught here —
     /// mirrors `explore_profile_excludes_bash_writes_user_and_recursion` for
@@ -1515,12 +1553,12 @@ mod tests {
     #[test]
     fn code_profile_admits_edit_surface_using_real_tools() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let envoy_code_arc = std::sync::Arc::new(EnvoyTool::named(
+        let runner_code_arc = std::sync::Arc::new(RunnerTool::named(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &muta_contracts::CODE,
-            "envoy_code",
-            "coding envoy",
+            &muta_contracts::RUNNER_CODE,
+            "runner_code",
+            "coding runner",
         ));
 
         let toolset = muta_contracts::ToolSet::from_tools(vec![
@@ -1529,24 +1567,24 @@ mod tests {
             std::sync::Arc::new(crate::tools::WriteFileTool::new(None)),
             std::sync::Arc::new(crate::tools::EditFileTool::new(None)),
             std::sync::Arc::new(crate::tools::AskUserTool),
-            envoy_code_arc.clone() as std::sync::Arc<dyn Tool>,
+            runner_code_arc.clone() as std::sync::Arc<dyn Tool>,
         ]);
 
-        // CODE admits bash, write_file, edit_file, and the read tools; it
-        // excludes the envoy dispatch tool itself (recursion).
+        // RUNNER_CODE admits bash, write_file, edit_file, and the read tools; it
+        // excludes the runner dispatch tool itself (recursion).
         let model = muta_contracts::resolve_model(&CannedProvider.model());
         let model_sel = muta_contracts::ToolSelection::unrestricted();
-        let selected = muta_contracts::CODE.resolve_tools(&toolset, &model, &model_sel);
+        let selected = muta_contracts::RUNNER_CODE.resolve_tools(&toolset, &model, &model_sel);
         let names: std::collections::HashSet<&str> = selected.iter().map(|t| t.name()).collect();
         assert!(names.contains("read_text"));
         assert!(names.contains("bash"));
         assert!(names.contains("write_file"));
         assert!(names.contains("edit_file"));
-        assert!(!names.contains("envoy_code"), "recursion must be excluded");
-        assert!(!names.contains("envoy"));
+        assert!(!names.contains("runner_code"), "recursion must be excluded");
+        assert!(!names.contains("runner"));
 
         // The tool surfaces under its own name.
-        assert_eq!(envoy_code_arc.name(), "envoy_code");
+        assert_eq!(runner_code_arc.name(), "runner_code");
     }
 
     /// Two dispatch tools sharing one registry is the load-bearing property
@@ -1557,21 +1595,21 @@ mod tests {
     #[test]
     fn named_with_registry_shares_the_registry_across_tools() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let explore = EnvoyTool::new(
+        let explore = RunnerTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &EXPLORE,
+            &RUNNER_EXPLORE,
         );
         let shared = explore.registry();
-        let code = EnvoyTool::named_with_registry(
+        let code = RunnerTool::named_with_registry(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &muta_contracts::CODE,
-            "envoy_code",
-            "coding envoy",
+            &muta_contracts::RUNNER_CODE,
+            "runner_code",
+            "coding runner",
             shared.clone(),
         );
-        // Same Arc<EnvoyRegistry> — the driver hands one to the harness, and
+        // Same Arc<RunnerRegistry> — the driver hands one to the harness, and
         // children of either tool land in the same table.
         assert!(
             std::sync::Arc::ptr_eq(&explore.registry(), &code.registry()),
@@ -1581,7 +1619,7 @@ mod tests {
         // coexist in a parent toolset without one shadowing the other.
         assert_ne!(explore.name(), code.name());
 
-        let mcp = EnvoyTool::mcp_specialist(provider, muta_contracts::ToolSet::default(), shared);
-        assert_eq!(mcp.name(), "envoy_mcp");
+        let mcp = RunnerTool::mcp_specialist(provider, muta_contracts::ToolSet::default(), shared);
+        assert_eq!(mcp.name(), "runner_mcp");
     }
 }

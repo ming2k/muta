@@ -7,11 +7,9 @@
 //! single `PermissionStore` and delegates its permission-related public
 //! methods here.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Mutex;
 
-use muta_contracts::PermissionDecision;
-use tokio::sync::oneshot;
 
 /// Internal lock-guard helper: poison-immune (recovers via `into_inner`).
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -58,7 +56,6 @@ struct PermissionState {
     /// persisted (see `PersistedPermissions`) and is the complement of `always`:
     /// `add_always` removes from it, `revoke_allowed` adds to it. See #3.
     revoked: HashSet<PermissionRule>,
-    pending: HashMap<String, oneshot::Sender<PermissionDecision>>,
 }
 
 /// In-memory permission state: the "always allow" allowlist, the pending
@@ -107,45 +104,10 @@ impl PermissionStore {
         *lock(&self.autopilot) = value;
     }
 
-    // ── pending requests ────────────────────────────────────────────────
-
-    /// Register a pending permission request and return the receiver the
-    /// caller should `await` for the user's decision, alongside the instant the
-    /// request was parked. The caller measures the elapsed time across the
-    /// `await` so it can be subtracted from the round's wall-clock to derive an
-    /// honest active-generation time (tokens/sec that excludes the human pause).
-    pub fn park_request(
-        &self,
-        request_id: String,
-    ) -> (oneshot::Receiver<PermissionDecision>, std::time::Instant) {
-        let (sender, receiver) = oneshot::channel();
-        lock(&self.state).pending.insert(request_id, sender);
-        (receiver, std::time::Instant::now())
-    }
-
-    /// Resolve a pending permission request. Rejecting one settles the whole
-    /// concurrent permission batch, so every other pending request is also
-    /// resolved with `Reject` to avoid deadlocking the `join_all`. Returns
-    /// whether a sender was found.
-    pub fn reply(&self, request_id: &str, decision: PermissionDecision) -> bool {
-        let mut perms = lock(&self.state);
-        let sender = perms.pending.remove(request_id);
-        let sent = sender.is_some_and(|sender| sender.send(decision).is_ok());
-        if sent && decision == PermissionDecision::Reject {
-            for (_, pending_sender) in perms.pending.drain() {
-                let _ = pending_sender.send(PermissionDecision::Reject);
-            }
-        }
-        sent
-    }
-
-    /// Reject every pending permission request (e.g. on turn abort).
-    pub fn reject_pending(&self) {
-        let pending = std::mem::take(&mut lock(&self.state).pending);
-        for (_, sender) in pending {
-            let _ = sender.send(PermissionDecision::Reject);
-        }
-    }
+    // Pending-request parking moved to the human-request broker
+    // (ADR-0141, `muta_agent::human_broker`): one owner for permission /
+    // ask_user / interactive-input oneshots, uniform exactly-once
+    // settlement, per-kind metrics. The store keeps only rules + autopilot.
 
     // ── allowlist ───────────────────────────────────────────────────────
 
@@ -297,7 +259,7 @@ impl PermissionStore {
 
     /// Designate the project whose bucket backs the persistent "always"
     /// allowlist, and load any rules already on disk into the in-memory set.
-    /// Pass `None` to disable persistence (envoys and most tests do this).
+    /// Pass `None` to disable persistence (runners and most tests do this).
     pub fn set_project_root(&self, root: Option<std::path::PathBuf>) {
         self.set_project_root_with_dirs(root, &muta_persistence::paths::get());
     }
@@ -407,6 +369,7 @@ impl Default for PermissionStore {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use muta_persistence::config::PermissionRuleConfig;
 
@@ -487,23 +450,11 @@ mod tests {
         assert_eq!(store.allowed_tools().len(), 1);
     }
 
-    #[test]
-    fn park_request_returns_a_receiver_and_timestamp() {
-        // The receiver is awaited by the round task; the timestamp lets the
-        // caller measure how long the human took to decide, so that pause can
-        // be subtracted from the round's wall-clock for an honest tokens/sec.
-        let store = PermissionStore::new();
-        let (mut receiver, parked_at) = store.park_request("req-1".to_string());
-        let elapsed_before_reply = parked_at.elapsed();
-        // Replying resolves the receiver; the elapsed measured at the call site
-        // is non-negative by construction.
-        assert!(store.reply("req-1", PermissionDecision::Once));
-        let decision = receiver
-            .try_recv()
-            .expect("reply resolves the parked receiver");
-        assert_eq!(decision, PermissionDecision::Once);
-        assert!(elapsed_before_reply.as_nanos() < u128::MAX);
-    }
+    // Parking moved to the human-request broker (ADR-0141); the
+    // receiver-and-timestamp behavior now lives there — see
+    // `human_broker::tests::park_reply_settles_exactly_once` and
+    // `human_broker::tests::cancel_all_settles_every_kind_with_none_or_reject`.
+    // The store keeps only rules + autopilot.
 
     // ── #3: revoked config rules must not resurrect on re-seed ──────────
 

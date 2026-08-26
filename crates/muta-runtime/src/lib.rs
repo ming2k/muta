@@ -56,9 +56,9 @@
 //! # Identity posture
 //!
 //! This crate is application-neutral: it holds no product name, mission, or
-//! principal profile. The embedding binary supplies an
+//! master profile. The embedding binary supplies an
 //! [`muta_contracts::AgentIdentity`] to `Agent::new` / `from_toolset` and binds
-//! a [`muta_contracts::PrincipalProfile`] via `apply_principal_profile`.
+//! a [`muta_contracts::MasterPreset`] via `apply_master_profile`.
 //! `mutx` keeps the coding identity. The `/btw` side-session reuses
 //! the primary agent's identity (`Agent::identity()`) rather than naming a product here.
 
@@ -101,7 +101,7 @@ pub use session_driver::SessionDriver;
 pub use ui_bridge::{CopyOutcome, UiBridge};
 
 // NOTE: identity (`MUTA_NAME`/`MUTA_MISSION`/`muta_identity`/
-// `principal_code`) used to live here. It has moved to the application layer
+// `master_code`) used to live here. It has moved to the application layer
 // (each binary's own `identity` module) so this crate stays application-neutral.
 // The `/btw` side session reuses the primary agent's identity via
 // `Agent::identity()` rather than naming a product here.

@@ -14,7 +14,7 @@
 use crate::commands::CustomCommand;
 use muta_agent::catalog;
 use muta_agent::orchestration::{round_response, send_harness_state};
-use muta_agent::{Agent, EnvoyRegistry, RoundLifecycle};
+use muta_agent::{Agent, RunnerRegistry, RoundLifecycle};
 use muta_contracts::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use muta_mcp::McpRuntime;
 use muta_persistence::{
@@ -60,10 +60,10 @@ pub struct SessionDriver {
     pub provider_holder: Arc<RwLock<Arc<dyn Provider>>>,
     /// Shared skills registry.
     pub skills_registry: Arc<SkillRegistry>,
-    /// Full-duplex envoy registry (ADR-0029): maps the parent tool-call
+    /// Full-duplex runner registry (ADR-0029): maps the parent tool-call
     /// id to the live child handle so a permission / ask_user reply can be
-    /// routed back down into the specific envoy that surfaced it.
-    pub envoy_registry: Arc<EnvoyRegistry>,
+    /// routed back down into the specific runner that surfaced it.
+    pub runner_registry: Arc<RunnerRegistry>,
     /// Live MCP runtime: the connected server set, their tools, and status.
     /// Mutated by the `/mcp` modal (toggle / reconnect) and the periodic
     /// catalog refresh; read for the session-context snapshot's MCP pane.
@@ -135,7 +135,7 @@ impl SessionDriver {
             mut provider_usage,
             provider_holder: provider_for_task,
             skills_registry,
-            envoy_registry,
+            runner_registry,
             mcp_runtime,
             workspace_security,
             commands: commands_for_task,
@@ -331,7 +331,8 @@ impl SessionDriver {
                 } => {
                     crate::handlers_permission::reply(
                         &agent,
-                        &envoy_registry,
+                        &runner_registry,
+                        &side,
                         &resp_tx,
                         request_id,
                         decision,
@@ -347,7 +348,7 @@ impl SessionDriver {
                     let sess_id = session.id().await;
                     crate::handlers_permission::reply_question(
                         &agent,
-                        &envoy_registry,
+                        &runner_registry,
                         &side,
                         &workspace_security,
                         &project_root_for_side,
@@ -366,7 +367,7 @@ impl SessionDriver {
                 } => {
                     crate::handlers_permission::reply_input(
                         &agent,
-                        &envoy_registry,
+                        &runner_registry,
                         &side,
                         &resp_tx,
                         request_id,
@@ -925,9 +926,9 @@ struct CrashResidue {
 /// - Only the *highest* in-flight round is considered. The handler and
 ///   `start_resolved_turn` reject a point whose `round` no longer equals the
 ///   session's counter, so a lower one could never fire anyway.
-/// - The point names only the *principal* actor's round. Envoy (`task`)
-///   agents bill their own requests under `envoy:<call-id>` against the same
-///   session; a child's key must not decide the principal's resume point.
+/// - The point names only the *master* actor's round. Runner (`task`)
+///   agents bill their own requests under `runner:<call-id>` against the same
+///   session; a child's key must not decide the master's resume point.
 /// - `turns_committed` is recovered from the transcript itself: the round's
 ///   committed turns are the assistant messages after its opening prompt
 ///   (the last visible, non-echo user message — the transcript carries no
@@ -1224,20 +1225,20 @@ mod tests {
             .set_request_usage_records(vec![
                 usage_record(
                     &session_id,
-                    "principal",
+                    "master",
                     1,
                     1,
                     RequestUsageStatus::Completed,
                 ),
                 usage_record(
                     &session_id,
-                    "principal",
+                    "master",
                     2,
                     1,
                     RequestUsageStatus::Completed,
                 ),
-                usage_record(&session_id, "principal", 2, 2, RequestUsageStatus::InFlight),
-                usage_record(&session_id, "envoy:c1", 2, 5, RequestUsageStatus::InFlight),
+                usage_record(&session_id, "master", 2, 2, RequestUsageStatus::InFlight),
+                usage_record(&session_id, "runner:c1", 2, 5, RequestUsageStatus::InFlight),
             ])
             .await
             .unwrap();
@@ -1267,8 +1268,8 @@ mod tests {
             residue.interrupts[0].reason,
             muta_contracts::RoundInterruptReason::Terminated
         );
-        // The point names the highest in-flight round (not the envoy's key),
-        // counts only committed principal turns, and watermarks the durable
+        // The point names the highest in-flight round (not the runner's key),
+        // counts only committed master turns, and watermarks the durable
         // window.
         let point = residue
             .retry_point
@@ -1295,17 +1296,17 @@ mod tests {
             .set_request_usage_records(vec![
                 usage_record(
                     &session_id,
-                    "principal",
+                    "master",
                     1,
                     1,
                     RequestUsageStatus::Completed,
                 ),
                 // Round 2 still in flight — but round 3 has since completed,
                 // so 2 is history: the counter guard must retire it.
-                usage_record(&session_id, "principal", 2, 1, RequestUsageStatus::InFlight),
+                usage_record(&session_id, "master", 2, 1, RequestUsageStatus::InFlight),
                 usage_record(
                     &session_id,
-                    "principal",
+                    "master",
                     3,
                     1,
                     RequestUsageStatus::Completed,
@@ -1340,7 +1341,7 @@ mod tests {
         store
             .set_request_usage_records(vec![usage_record(
                 &session_id,
-                "principal",
+                "master",
                 1,
                 1,
                 RequestUsageStatus::InFlight,
@@ -1380,7 +1381,7 @@ mod tests {
         store
             .set_request_usage_records(vec![usage_record(
                 &session_id,
-                "principal",
+                "master",
                 2,
                 1,
                 RequestUsageStatus::InFlight,

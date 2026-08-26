@@ -73,7 +73,7 @@ impl Tool for AskUserTool {
         })
     }
 
-    /// `ask_user` blocks on a live human answer; envoys (which have no
+    /// `ask_user` blocks on a live human answer; runners (which have no
     /// user reachable) must be excluded from it by their profile.
     fn requires_user(&self) -> bool {
         true

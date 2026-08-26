@@ -322,7 +322,7 @@ mod tests {
         RequestUsageRecord {
             key: RequestUsageKey {
                 session_id: session.to_string(),
-                actor_id: "principal".to_string(),
+                actor_id: "master".to_string(),
                 round: 1,
                 turn: 1,
                 attempt,
@@ -480,7 +480,7 @@ mod tests {
 
         // One completed reported attempt.
         let first =
-            ledger.begin_request_for_actor("s1", "principal", "anthropic", "claude", 1, 1, 1_000);
+            ledger.begin_request_for_actor("s1", "master", "anthropic", "claude", 1, 1, 1_000);
         ledger.settle_request(
             &first,
             RequestUsageStatus::Completed,
@@ -496,7 +496,7 @@ mod tests {
         );
         // One failed attempt (still consumes a request slot upstream).
         let retry =
-            ledger.begin_request_for_actor("s1", "principal", "anthropic", "claude", 1, 2, 900);
+            ledger.begin_request_for_actor("s1", "master", "anthropic", "claude", 1, 2, 900);
         ledger.settle_request(&retry, RequestUsageStatus::Failed, None, 20, 0);
 
         let report = store.report(10);

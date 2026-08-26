@@ -40,8 +40,9 @@ impl UiBridge for HeadlessProbe {
 fn params(project_root: std::path::PathBuf, startup: SessionStart) -> BootstrapParams {
     let identity = muta_contracts::AgentIdentity::new("probe", "autopilot probe");
     BootstrapParams {
+        human_channel: None,
         identity: identity.clone(),
-        principal: muta_contracts::PrincipalProfile::with_identity("probe", identity),
+        master: muta_contracts::MasterPreset::with_identity("probe", identity),
         ui: Arc::new(HeadlessProbe),
         startup,
         project_root: Some(project_root),
