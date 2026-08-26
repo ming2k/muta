@@ -3200,7 +3200,7 @@ async fn test_app_does_not_touch_disk_history() {
         !app.input_history_persist,
         "test-constructed App must default to no disk persistence"
     );
-    let path = muta_persistence::config::Config::history_file_path();
+    let path = crate::paths::get().history_file();
     let before = std::fs::read(&path).ok();
 
     app.current_session_id = "session-a".to_string();

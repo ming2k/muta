@@ -752,33 +752,10 @@ impl SessionDriver {
                     crate::side::publish_btw_list(&side, &resp_tx).await;
                 }
                 AgentRequest::UpdateTuiLayout(layout) => {
-                    // Persist the updated transcript layout preference. This
-                    // is not a selection change, so preserve the on-disk
-                    // provider/model selection rather than leaking the
-                    // in-memory (possibly session-pinned) one into config.toml.
-                    config.tui.transcript_layout = layout.clone();
-                    if let Err(error) = config.save_preserving_connection_selection() {
-                        let _ = resp_tx.send(AgentResponse::Error(format!(
-                            "Could not save transcript layout: {error}"
-                        )));
-                    } else {
-                        let _ = resp_tx.send(AgentResponse::TuiLayoutUpdated(layout));
-                    }
+                    let _ = resp_tx.send(AgentResponse::TuiLayoutUpdated(layout));
                 }
                 AgentRequest::UpdateTuiColorScheme { name, custom } => {
-                    // Persist both pieces atomically. The custom palette remains
-                    // available when the active selection is a built-in preset.
-                    // Preserve the on-disk provider/model selection (see the
-                    // layout handler above).
-                    config.tui.color_scheme = name.clone();
-                    config.tui.custom_color_scheme = custom.clone();
-                    if let Err(error) = config.save_preserving_connection_selection() {
-                        let _ = resp_tx.send(AgentResponse::Error(format!(
-                            "Could not save color scheme: {error}"
-                        )));
-                    } else {
-                        let _ = resp_tx.send(AgentResponse::TuiColorSchemeUpdated { name, custom });
-                    }
+                    let _ = resp_tx.send(AgentResponse::TuiColorSchemeUpdated { name, custom });
                 }
                 AgentRequest::QueryWebSearchConfig => {
                     crate::handlers_websearch::query(&config, &resp_tx);

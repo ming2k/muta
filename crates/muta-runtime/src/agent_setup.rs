@@ -18,7 +18,7 @@ pub fn active_context_window(agent: &Agent) -> usize {
 /// tracks the live model instead of a frozen, model-agnostic budget. A no-op
 /// when pruning is disabled (no gate is installed in that case).
 pub fn reseed_prune_threshold(agent: &Agent, config: &Config) {
-    if !config.compaction_prune {
+    if !config.compaction.prune {
         return;
     }
     let window = active_context_window(agent);

@@ -38,10 +38,8 @@ User-edited configuration. Lossy; back it up.
 
 | Path | Purpose | Lossy? |
 |------|---------|--------|
-| `config.toml` | User-edited configuration — **behavior only** (`default_provider` / `default_model`, `[principal]`, `[permissions]`, `[bash_policy]`, `[tui]`, `[input_history]`, `[tool_variants]`, `[[hooks]]`, `[skills]`, `[websearch]`, `[mcp.<server>]`, ...). Provider *instances* live in the state store (`providers.toml`), secrets in `credentials.toml` | Yes |
-| `credentials.toml` | Token-auth secrets, split out of `config.toml` (written `rw-------`), keyed by **provider instance**: `[providers.<id>] api_key`. OAuth logins do not live here — see the note below. A credential belongs to the instance; every route it serves resolves it. | Yes |
-| `logo.txt` | Optional user-supplied ASCII logo; when present its lines replace the built-in wordmark on the welcome screen | Rebuildable |
-| `themes/<id>.toml` | Standalone theme files; one file per custom theme, loaded by the Settings overlay | User-authored |
+| `config.toml` | User-edited configuration — **daemon & core behavior only** (`default_connection` / `default_model`, `[compaction]`, `[permissions]`, `[bash_policy]`, `[tool_variants]`, `[[hooks]]`, `[skills]`, `[websearch]`, `[mcp.<server>]`, `[daemon]`, `[master]`, ...). Connection *instances* live in `connections.toml`, secrets in `credentials.toml` | Yes |
+| `credentials.toml` | Token-auth secrets, split out of `config.toml` (written `rw-------`), keyed by **connection instance**: `[connections.<id>] api_key`. OAuth logins do not live here — see the note below. | Yes |
 
 Default location: `~/.config/muta/`.
 
@@ -106,6 +104,20 @@ re-prompts; no conversation is lost.
 | `log/` | Structured rolling-log appender output, daily rotation with bounded retention (`MUTA_LOG_RETENTION`, default 14 files) | Rebuildable |
 
 Default location: `~/.local/state/muta/`.
+
+## Mutx Terminal App Paths — `$XDG_CONFIG_HOME/mutx/`, `$XDG_STATE_HOME/mutx/`
+
+Following ADR-0136, the `mutx` terminal frontend's user preferences, themes, and prompt history are fully decoupled from the core daemon.
+
+| Path | Location | Purpose | Lossy? |
+|------|----------|---------|--------|
+| `config.toml` | `$XDG_CONFIG_HOME/mutx/config.toml` | Terminal presentation preferences (`color_scheme`, `transcript_layout`, `[custom_color_scheme]`, `[default_expanded]`, `[input_history]`, …) | Yes |
+| `themes/*.toml` | `$XDG_CONFIG_HOME/mutx/themes/` | Standalone custom theme files; discovered dynamically by `/config` › Appearance | User-authored |
+| `logo.txt` | `$XDG_CONFIG_HOME/mutx/logo.txt` | Optional user-supplied ASCII logo for the welcome screen | Rebuildable |
+| `history.json` | `$XDG_STATE_HOME/mutx/history.json` | Persisted prompt input history and `Ctrl+R` recall index | Rebuildable |
+
+Default locations: `~/.config/mutx/` and `~/.local/state/mutx/`.
+
 
 ## Cache — `$XDG_CACHE_HOME/muta/`
 

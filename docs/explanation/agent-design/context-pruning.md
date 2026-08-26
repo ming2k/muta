@@ -134,9 +134,9 @@ it records how the durable session is projected into the model window
 
 | Key | Default | Effect |
 |-----|---------|--------|
-| `compaction_prune` | `true` | Master switch for both entry points. |
-| `compaction_prune_protect_tokens` | `6_000` | Recent tool output protected from pruning, in tokens (ADR-0120: passed to the pruner as-is; the old ×4 char conversion is gone). Larger = keep more recent detail, prune less. |
-| `[compaction].prune_utilization` | `0.65` | Window fraction at which pruning engages. |
+| `compaction.prune` | `true` | Master switch for both entry points. |
+| `compaction.prune_protect_tokens` | `6_000` | Recent tool output protected from pruning, in tokens (ADR-0120: passed to the pruner as-is; the old ×4 char conversion is gone). Larger = keep more recent detail, prune less. |
+| `compaction.prune_utilization` | `0.65` | Window fraction at which pruning engages. |
 
 `ContextProjectionSettings::PRUNE_MIN_RECLAIM_CHARS` (8_000) is the fixed
 reclaim floor and is not configurable.

@@ -92,10 +92,7 @@ pub async fn run_shell_command(
     // (ADR-0096): the `!` path must land in the same project the model-driven
     // bash tool does.
     let shell_env: Arc<dyn muta_contracts::ExecutionEnvironment> = Arc::new(
-        muta_agent::execution::WorkspaceExecutionEnvironment::with_security_handle(
-            project_root,
-            agent.workspace_security_handle(),
-        ),
+        muta_agent::execution::WorkspaceExecutionEnvironment::new(project_root),
     );
     let bash = BashTool::with_env(shell_env);
     let tx_for_stream = tx.clone();

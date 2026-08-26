@@ -443,10 +443,10 @@ impl ContextProjectionSettings {
     pub fn from_config(config: &Config, window_tokens: usize) -> Self {
         Self {
             budget: config.compaction.resolve(window_tokens),
-            preserve_rounds: config.compaction_preserve_rounds,
-            summarize: config.compaction_summarize,
-            prune: config.compaction_prune,
-            prune_protect_tokens: config.compaction_prune_protect_tokens,
+            preserve_rounds: config.compaction.preserve_rounds,
+            summarize: config.compaction.summarize,
+            prune: config.compaction.prune,
+            prune_protect_tokens: config.compaction.prune_protect_tokens,
         }
     }
 

@@ -1,17 +1,117 @@
-//! TUI presentation policy on top of the data-layer `[tui]` table.
+//! TUI presentation configuration and state for `mutx`.
 //!
-//! The serialisable data struct ([`TuiConfig`]) lives in `muta-persistence::config`
-//! so every frontend (TUI, future GUI) can read the same `config.toml`
-//! without cross-frontend dependencies. This module re-exports that struct
-//! for TUI-internal convenience and layers the **presenter-aware** policy on
-//! top: how a raw `[tui.default_expanded]` entry combines with each tool's
-//! built-in presenter default. That lookup touches `crate::view::tools`,
-//! so it cannot live below the TUI.
+//! Stored in `$XDG_CONFIG_HOME/mutx/config.toml` (and `$XDG_STATE_HOME/mutx/history.json`),
+//! cleanly decoupled from the core Muta daemon's configuration (ADR-0136).
 
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use serde::{Deserialize, Serialize};
+
+use muta_contracts::ColorSchemeConfig;
 use crate::view::tools::presenter_for;
 
-pub use muta_persistence::config::InputHistoryConfig;
-pub use muta_persistence::config::TuiConfig;
+pub const THINKING_KEY: &str = "thinking";
+
+fn default_true() -> bool {
+    true
+}
+
+/// Input-history behaviour: prompt dedup and slash-command persistence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InputHistoryConfig {
+    pub dedup: bool,
+    pub record_commands: bool,
+}
+
+impl Default for InputHistoryConfig {
+    fn default() -> Self {
+        Self {
+            dedup: true,
+            record_commands: false,
+        }
+    }
+}
+
+/// Complete configuration for the `mutx` TUI frontend application.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TuiConfig {
+    pub transcript_layout: String,
+    pub color_scheme: String,
+    #[serde(default = "default_true")]
+    pub click_outside_dismiss: bool,
+    pub expand_auto_scroll: bool,
+    #[serde(default)]
+    pub default_expanded: HashMap<String, bool>,
+    #[serde(default)]
+    pub custom_color_scheme: ColorSchemeConfig,
+    #[serde(default)]
+    pub input_history: InputHistoryConfig,
+}
+
+pub type MutxConfig = TuiConfig;
+
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self {
+            transcript_layout: String::new(),
+            color_scheme: String::new(),
+            click_outside_dismiss: true,
+            expand_auto_scroll: false,
+            default_expanded: HashMap::new(),
+            custom_color_scheme: ColorSchemeConfig::default(),
+            input_history: InputHistoryConfig::default(),
+        }
+    }
+}
+
+impl TuiConfig {
+    /// Load configuration from `$XDG_CONFIG_HOME/mutx/config.toml`.
+    /// If not present, automatically migrates any legacy `[tui]` table from `$XDG_CONFIG_HOME/muta/config.toml`.
+    pub fn load() -> Self {
+        let path = crate::paths::get().config_file();
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(cfg) = toml::from_str::<TuiConfig>(&content) {
+                return cfg;
+            }
+        }
+
+        // Migration check: check if muta/config.toml has [tui] or [input_history]
+        let muta_config_path = muta_persistence::paths::get().config_file();
+        if let Ok(content) = fs::read_to_string(&muta_config_path) {
+            #[derive(Deserialize)]
+            struct LegacyContainer {
+                tui: Option<TuiConfig>,
+                input_history: Option<InputHistoryConfig>,
+            }
+            if let Ok(legacy) = toml::from_str::<LegacyContainer>(&content) {
+                if legacy.tui.is_some() || legacy.input_history.is_some() {
+                    let mut cfg = legacy.tui.unwrap_or_default();
+                    if let Some(ih) = legacy.input_history {
+                        cfg.input_history = ih;
+                    }
+                    let _ = cfg.save();
+                    return cfg;
+                }
+            }
+        }
+
+        Self::default()
+    }
+
+    /// Save the configuration to `$XDG_CONFIG_HOME/mutx/config.toml`.
+    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let path = crate::paths::get().config_file();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let serialized = toml::to_string_pretty(self)?;
+        muta_persistence::fsutil::atomic_write_bytes(&path, serialized.as_bytes())?;
+        Ok(())
+    }
+}
 
 /// Effective default-expand state for a tool step. An explicit config entry
 /// wins; otherwise the presenter's built-in default applies.
@@ -28,15 +128,95 @@ pub fn tool_default_expanded(config: &TuiConfig, name: &str) -> bool {
 pub fn thinking_default_expanded(config: &TuiConfig) -> bool {
     config
         .default_expanded
-        .get(muta_persistence::config::THINKING_KEY)
+        .get(THINKING_KEY)
         .copied()
         .unwrap_or(false)
+}
+
+/// Load prompt input history from `$XDG_STATE_HOME/mutx/history.json`.
+pub fn load_history() -> Vec<muta_contracts::HistoryEntry> {
+    let path = crate::paths::get().history_file();
+    if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(entries) = serde_json::from_str(&content) {
+            return entries;
+        }
+    }
+    // Migration fallback: check muta's legacy history.json
+    let legacy_path = muta_persistence::paths::get().history_file();
+    if let Ok(content) = fs::read_to_string(&legacy_path) {
+        if let Ok(entries) = serde_json::from_str::<Vec<muta_contracts::HistoryEntry>>(&content) {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::copy(&legacy_path, &path);
+            return entries;
+        }
+    }
+    Vec::new()
+}
+
+/// Save prompt input history to `$XDG_STATE_HOME/mutx/history.json`.
+pub fn save_history(
+    history: &[muta_contracts::HistoryEntry],
+    dedup: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = crate::paths::get().history_file();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let _lock = muta_persistence::fsutil::FileLock::acquire(&path)
+        .map_err(|e| format!("could not lock history file: {e}"))?;
+    let existing: Vec<muta_contracts::HistoryEntry> = fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default();
+    let merged = muta_contracts::merge_history(&existing, history, dedup);
+    muta_persistence::fsutil::atomic_write_json(&path, &merged)
+        .map_err(Box::<dyn std::error::Error>::from)?;
+    Ok(())
+}
+
+/// Clear prompt input history in `$XDG_STATE_HOME/mutx/history.json`.
+pub fn clear_history() -> Result<(), Box<dyn std::error::Error>> {
+    let path = crate::paths::get().history_file();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let _lock = muta_persistence::fsutil::FileLock::acquire(&path)
+        .map_err(|e| format!("could not lock history file: {e}"))?;
+    muta_persistence::fsutil::atomic_write_json(&path, &Vec::<muta_contracts::HistoryEntry>::new())
+        .map_err(Box::<dyn std::error::Error>::from)?;
+    Ok(())
+}
+
+/// Load custom theme files from `$XDG_CONFIG_HOME/mutx/themes`.
+pub fn load_theme_files(themes_dir: &Path) -> Vec<muta_contracts::ThemeFile> {
+    let mut themes = Vec::new();
+    let Ok(entries) = fs::read_dir(themes_dir) else {
+        return themes;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("toml")
+            && let Ok(content) = fs::read_to_string(&path)
+            && let Ok(mut theme) = toml::from_str::<muta_contracts::ThemeFile>(&content)
+        {
+            if theme.id.is_empty()
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                theme.id = stem.to_string();
+            }
+            themes.push(theme);
+        }
+    }
+    themes.sort_by(|a, b| a.name.cmp(&b.name));
+    themes
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     fn config(defaults: &[(&str, bool)]) -> TuiConfig {
         let mut map = HashMap::new();
@@ -73,14 +253,12 @@ mod tests {
     #[test]
     fn thinking_defaults_collapsed_and_is_overridable() {
         assert!(!thinking_default_expanded(&TuiConfig::default()));
-        let cfg = config(&[(muta_persistence::config::THINKING_KEY, true)]);
+        let cfg = config(&[(THINKING_KEY, true)]);
         assert!(thinking_default_expanded(&cfg));
     }
 
     #[test]
     fn parses_tui_table_from_toml() {
-        // When deserialized directly into TuiConfig, the map is the top-level
-        // table. In the full config.toml it is nested under [tui.default_expanded].
         let toml = r#"
 [default_expanded]
 edit_file = true
@@ -119,6 +297,67 @@ accent = "#7aa2f7"
         assert_eq!(
             cfg.custom_color_scheme.text,
             muta_contracts::ColorSchemeConfig::default().text
+        );
+    }
+
+    #[test]
+    fn load_theme_files_reads_and_sorts_valid_toml() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let themes_dir = temp.path().join("themes");
+        std::fs::create_dir_all(&themes_dir).unwrap();
+
+        let theme_a = r##"
+name = "Dracula"
+description = "Vampire dark palette"
+[colors]
+background = "#282a36"
+surface = "#44475a"
+text = "#f8f8f2"
+muted = "#6272a4"
+accent = "#bd93f9"
+success = "#50fa7b"
+warning = "#ffb86c"
+error = "#ff5555"
+"##;
+
+        let theme_b = r##"
+name = "Cyberpunk"
+description = "Neon high-contrast"
+[colors]
+background = "#050505"
+surface = "#151515"
+text = "#ffffff"
+muted = "#808080"
+accent = "#00ffff"
+success = "#00ff00"
+warning = "#ffff00"
+error = "#ff0055"
+
+[components.input]
+bg_active = "#222222"
+caret = "#00ffff"
+"##;
+
+        std::fs::write(themes_dir.join("dracula.toml"), theme_a).unwrap();
+        std::fs::write(themes_dir.join("cyberpunk.toml"), theme_b).unwrap();
+        std::fs::write(themes_dir.join("corrupt.toml"), "invalid [== toml").unwrap();
+        std::fs::write(themes_dir.join("readme.txt"), "not a theme").unwrap();
+
+        let loaded = load_theme_files(&themes_dir);
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].name, "Cyberpunk");
+        assert_eq!(loaded[0].id, "cyberpunk");
+        assert_eq!(loaded[1].name, "Dracula");
+        assert_eq!(loaded[1].id, "dracula");
+        let cyberpunk_components = loaded[0].components.as_ref().unwrap();
+        assert_eq!(
+            cyberpunk_components
+                .input
+                .as_ref()
+                .unwrap()
+                .caret
+                .as_deref(),
+            Some("#00ffff")
         );
     }
 }

@@ -57,9 +57,9 @@ never mid-round — so the model-visible history always begins coherently.
 
 1. **Select.** `CompactionSelection` splits the history into an archived *head*
    (older complete rounds), a verbatim *tail* (the most recent
-   `compaction_preserve_rounds` rounds, default 6, kept provider-native), and the
+   `compaction.preserve_rounds` rounds, default 6, kept provider-native), and the
    *previous summary* extracted from any prior checkpoint.
-2. **Summarize.** By default (`compaction_summarize = true`) the active model
+2. **Summarize.** By default (`compaction.summarize = true`) the active model
    writes an anchored, structured summary of the head. The previous summary is
    carried forward, so each compaction **updates** the running summary rather
    than restarting it. If the model call fails, a deterministic newest-first

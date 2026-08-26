@@ -61,6 +61,21 @@ pub struct CompactionPolicy {
     /// (the registry resolves to `0`). Conservative, so unknown / local models
     /// still relieve pressure instead of overflowing.
     pub fallback_window_tokens: usize,
+    /// Number of recent complete user rounds preserved verbatim by full compaction.
+    #[serde(alias = "compaction_preserve_rounds")]
+    pub preserve_rounds: usize,
+    /// Use the active model to produce an anchored, structured summary when
+    /// compacting. When `false` (or when summarization fails) compaction falls
+    /// back to deterministic message excerpts.
+    #[serde(alias = "compaction_summarize")]
+    pub summarize: bool,
+    /// Enable cheap tool-result pruning (pre-turn and mid-turn) that clears old
+    /// tool outputs in place to relieve context pressure before a full compaction.
+    #[serde(alias = "compaction_prune")]
+    pub prune: bool,
+    /// Token budget of the most recent tool results protected from pruning.
+    #[serde(alias = "compaction_prune_protect_tokens")]
+    pub prune_protect_tokens: usize,
 }
 
 impl Default for CompactionPolicy {
@@ -70,6 +85,10 @@ impl Default for CompactionPolicy {
             target_utilization: 0.25,
             prune_utilization: 0.65,
             fallback_window_tokens: 32_000,
+            preserve_rounds: 6,
+            summarize: true,
+            prune: true,
+            prune_protect_tokens: 6_000,
         }
     }
 }

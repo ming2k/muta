@@ -367,18 +367,14 @@ impl ProcessRunner for WorkspaceProcessRunner {
     }
 }
 
-/// Product runtime environment: filesystem tools are physically confined and
-/// shell tools dynamically adapt to the workspace's trust authority profile.
+/// Product runtime environment: filesystem tools are physically confined to
+/// the workspace (and additional roots) and shell tools execute in host native mode,
+/// governed by the Tool Hazard model.
 #[derive(Debug, Clone)]
 pub struct WorkspaceExecutionEnvironment {
     fs: WorkspaceFsProvider,
     process: WorkspaceProcessRunner,
     workspace_root: PathBuf,
-    security_handle: std::sync::Arc<
-        std::sync::RwLock<
-            Option<std::sync::Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>>,
-        >,
-    >,
 }
 
 impl WorkspaceExecutionEnvironment {
@@ -388,7 +384,6 @@ impl WorkspaceExecutionEnvironment {
             fs: WorkspaceFsProvider::new(workspace_root.clone()),
             process: WorkspaceProcessRunner,
             workspace_root,
-            security_handle: std::sync::Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -405,37 +400,12 @@ impl WorkspaceExecutionEnvironment {
                 .with_additional_roots(additional_roots),
             process: WorkspaceProcessRunner,
             workspace_root,
-            security_handle: std::sync::Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
     /// Canonicalized additional roots admitted alongside the primary (ADR-0142).
     pub fn additional_roots(&self) -> &[PathBuf] {
         self.fs.additional_roots()
-    }
-
-    pub fn with_security_handle(
-        workspace_root: impl Into<PathBuf>,
-        security_handle: std::sync::Arc<
-            std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>,
-        >,
-    ) -> Self {
-        let workspace_root = workspace_root.into();
-        Self {
-            fs: WorkspaceFsProvider::new(workspace_root.clone()),
-            process: WorkspaceProcessRunner,
-            workspace_root,
-            security_handle: std::sync::Arc::new(std::sync::RwLock::new(Some(security_handle))),
-        }
-    }
-
-    pub fn bind_security_handle(
-        &self,
-        handle: std::sync::Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
-    ) {
-        if let Ok(mut lock) = self.security_handle.write() {
-            *lock = Some(handle);
-        }
     }
 }
 
@@ -645,15 +615,7 @@ mod workspace_tests {
     #[tokio::test]
     async fn workspace_shell_isolation_is_host_native() {
         let root = scratch();
-        let security_snapshot = std::sync::Arc::new(std::sync::Mutex::new(
-            muta_contracts::WorkspaceSecuritySnapshot::new(
-                root.display().to_string(),
-                muta_contracts::WorkspaceTrustState::Absent,
-            ),
-        ));
-
-        let env =
-            WorkspaceExecutionEnvironment::with_security_handle(&root, security_snapshot.clone());
+        let env = WorkspaceExecutionEnvironment::new(&root);
 
         assert_eq!(env.shell_isolation(), ShellIsolation::Host);
     }

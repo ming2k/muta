@@ -132,7 +132,7 @@ pub trait PermissionContext: Send + Sync {
     /// This verdict is independent of attended/autopilot posture.
     async fn check_bash_policy(&self, command: &str, arguments: &str) -> BashVerdict;
 
-    /// The permission store, for synchronous `is_always_allowed` checks.
+    /// The permission store, for synchronous permission checks (`is_allowed`).
     fn permissions(&self) -> &PermissionStore;
 }
 
@@ -317,7 +317,7 @@ impl PermissionPolicy for ScopeGatePolicy {
             return PolicyDecision::Pass;
         }
         let rule = scope_target_to_rule(ctx.call_name, &ctx.scope_target);
-        if ctx.ctx.permissions().is_always_allowed(&rule) {
+        if ctx.ctx.permissions().is_allowed(&rule) {
             return PolicyDecision::Pass;
         }
         PolicyDecision::MissingAuthority {
@@ -747,6 +747,79 @@ mod tests {
         assert!(matches!(
             ScopeGatePolicy.evaluate(&c).await,
             PolicyDecision::Pass
+        ));
+    }
+
+    #[tokio::test]
+    async fn scope_gate_out_of_scope_passes_when_session_allowed() {
+        let (granted, _inside, outside) = scoped_test_paths();
+        let tool: Arc<dyn Tool> = Arc::new(StubTool {
+            name: "write_file".into(),
+            target: ScopeTarget::Path(outside.clone()),
+        });
+        let op = muta_contracts::OperationScope {
+            paths: Some(vec![granted]),
+            commands: None,
+        };
+        let perms = PermissionStore::new();
+        perms.add_session(PermissionRule {
+            tool: "write_file".into(),
+            scope: outside.display().to_string(),
+        });
+        let disabled = HashSet::new();
+        let scoped = ScopedToolDisable::default();
+        let ctxr = StubCtx { perms };
+        let c = pctx(
+            &tool,
+            "write_file",
+            "{}",
+            ScopeTarget::Path(outside),
+            false,
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
+        );
+        assert!(matches!(
+            ScopeGatePolicy.evaluate(&c).await,
+            PolicyDecision::Pass
+        ));
+    }
+
+    #[tokio::test]
+    async fn chain_out_of_scope_approves_when_session_allowed() {
+        let (granted, _inside, outside) = scoped_test_paths();
+        let tool: Arc<dyn Tool> = Arc::new(StubTool {
+            name: "write_file".into(),
+            target: ScopeTarget::Path(outside.clone()),
+        });
+        let op = muta_contracts::OperationScope {
+            paths: Some(vec![granted]),
+            commands: None,
+        };
+        let perms = PermissionStore::new();
+        perms.add_session(PermissionRule {
+            tool: "write_file".into(),
+            scope: outside.display().to_string(),
+        });
+        let disabled = HashSet::new();
+        let scoped = ScopedToolDisable::default();
+        let ctxr = StubCtx { perms };
+        let c = pctx(
+            &tool,
+            "write_file",
+            "{}",
+            ScopeTarget::Path(outside),
+            false,
+            op.clone(),
+            disabled.clone(),
+            scoped.clone(),
+            &ctxr,
+        );
+        let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
+        assert!(matches!(
+            chain.evaluate(&c).await,
+            PolicyDecision::Approve
         ));
     }
 

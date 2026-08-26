@@ -30,7 +30,7 @@ use muta_contracts::{
 
 use muta_mcp::{McpCatalog, McpRuntime};
 use muta_persistence::{
-    config::{Config, InputHistoryConfig, TuiConfig},
+    config::Config,
     connection_usage, embedding, paths,
     session::SessionStore,
     workspace_security::WorkspaceSecurityStore,
@@ -105,21 +105,10 @@ pub struct Bootstrap {
     pub initial_provider_name: String,
     /// The model name the UI should display at startup.
     pub initial_model_name: String,
-    /// Persisted input history for the frontend's composer. Each entry is
-    /// tagged with the session/workspace it came from so Ctrl+R can search
-    /// the whole history while inline ↑/↓ walks only the current session's.
-    pub input_history: Vec<muta_contracts::HistoryEntry>,
     /// The session's restored transcript (empty for a fresh session).
     pub restored_messages: Vec<Message>,
     /// Complete daemon-owned command/completion vocabulary for this session.
     pub command_catalog: muta_contracts::CommandCatalog,
-    /// The `[tui]` presentation config, pulled out of the live config before
-    /// the driver takes ownership of it.
-    pub tui_config: TuiConfig,
-    /// The `[input_history]` config, pulled out of the live config alongside
-    /// `tui_config` so the frontend can dedup / filter history as it records.
-    pub input_history_config: InputHistoryConfig,
-    /// caller must hold it for the process lifetime (e.g. bind it to
     /// Echo of [`BootstrapParams::extra_session_tools`], for the registry to
     /// publish once the session id is known. Not consumed by the assemble.
     pub extra_session_tools: Option<Vec<Arc<dyn muta_contracts::Tool>>>,
@@ -502,7 +491,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     if let Some(accountant) = human_channel.as_ref() {
         runner_tool_handle.bind_human_channel(Arc::clone(accountant));
     }
-    execution_env.bind_security_handle(agent.workspace_security_handle());
     // Wire the per-project "always allow" allowlist so prior `Always`
     // approvals survive across sessions in this project. Best-effort: a
     // missing or unreadable permissions.json just means we re-prompt.
@@ -710,7 +698,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // from `paths::get()` globals and return owned, `Send` data, so a plain
     // `spawn_blocking` closure is self-contained. They are awaited later where
     // their results feed the harness / frontend.
-    let input_history_handle = tokio::task::spawn_blocking(Config::load_history);
     let provider_usage_handle =
         tokio::task::spawn_blocking(connection_usage::ConnectionUsage::load);
 
@@ -733,12 +720,12 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // window and re-seeded whenever the provider switches (see
     // `reseed_prune_threshold`), so it tracks the live model rather than a
     // fixed token budget.
-    if config.compaction_prune {
+    if config.compaction.prune {
         agent.set_context_projection_gate(Some(Arc::new(MidTurnPruneProjectionGate {
             session: session.clone(),
             // ADR-0120: token-native — the config key was always tokens; the
             // old ×4 char conversion existed only for the byte-space pruner.
-            prune_protect_tokens: config.compaction_prune_protect_tokens,
+            prune_protect_tokens: config.compaction.prune_protect_tokens,
         })));
         crate::agent_setup::reseed_prune_threshold(&agent, &config);
     }
@@ -846,13 +833,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         }
     }
 
-    // Load history — awaited here after running concurrently with the agent
-    // setup above. `unwrap` is safe: `spawn_blocking` only panics if the
-    // closure panics, and neither read does.
-    let input_history = input_history_handle
-        .await
-        .unwrap_or_else(|_| Config::load_history());
-
     // Load per-model usage telemetry (recency signal for the picker,
     // ADR-0002 phase 2). Moved into the agent task so both the startup
     // activation and runtime switches record through one instance.
@@ -881,10 +861,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         catalog::resolved_model_name_with_usage(&config, &initial_provider_name, &provider_usage)
             .unwrap_or_default();
 
-    // The driver task takes ownership of `config`; pull the frontend
-    // presentation config out first so it can be handed back to the caller.
-    let tui_config = config.tui.clone();
-    let input_history_config = config.input_history.clone();
     // Keep an Arc handle for the caller so SessionEnd hooks (ADR-0025) can
     // fire after its UI returns — the driver below moves `agent`.
     let agent_for_session_end = Arc::clone(&agent);
@@ -942,11 +918,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         token_ledger,
         initial_provider_name,
         initial_model_name,
-        input_history,
         restored_messages,
         command_catalog,
-        tui_config,
-        input_history_config,
         extra_session_tools,
         agent: agent_for_session_end.clone(),
         security: workspace_security.clone(),

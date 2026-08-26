@@ -673,6 +673,7 @@ pub(super) async fn dispatch_action(
                                                     custom: app.custom_color_scheme.clone(),
                                                 });
                                             app.config_custom_editing = false;
+                                            app.save_tui_config();
                                             app.input.clear();
                                             app.set_cursor(0);
                                         }
@@ -690,16 +691,19 @@ pub(super) async fn dispatch_action(
                                             name: app.color_scheme.clone(),
                                             custom: app.custom_color_scheme.clone(),
                                         });
+                                        app.save_tui_config();
                                     }
                                 }
                             }
                             1 if app.config_detail_index == 1 => {
                                 // Transcript category:
                                 app.expand_auto_scroll = !app.expand_auto_scroll;
+                                app.save_tui_config();
                             }
                             2 if app.config_detail_index == 0 => {
                                 // Behavior category:
                                 app.click_outside_dismiss = !app.click_outside_dismiss;
+                                app.save_tui_config();
                             }
                             3 => {
                                 // Web Tools category. Row indices mirror

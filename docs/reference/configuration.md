@@ -35,10 +35,10 @@ files. Performance limits are not part of context-capacity safety policy.
 | `compaction.target_utilization` | `0.25` | After a full compaction, compress the model window down to this fraction |
 | `compaction.prune_utilization` | `0.65` | Trigger cheap tool-result pruning at this fraction (below `utilization`) |
 | `compaction.fallback_window_tokens` | `32000` | Assumed window (tokens) when the model's context window is unknown |
-| `compaction_preserve_rounds` | `6` | Number of recent complete user rounds kept verbatim after a full compaction. The former key `compaction_preserve_turns` is **not** aliased (ADR-0120): it parses as an unknown key, is ignored, and is dropped on the next save — run `muta config check` to find stale spellings |
-| `compaction_summarize` | `true` | Use the active model for an anchored structured summary; `false` uses the deterministic excerpt fallback |
-| `compaction_prune` | `true` | Enable cheap tool-result pruning (pre-round and mid-round) |
-| `compaction_prune_protect_tokens` | `6000` | Most recent tool results (tokens) protected from pruning |
+| `compaction.preserve_rounds` | `6` | Number of recent complete user rounds kept verbatim after a full compaction. The former key `compaction_preserve_turns` is **not** aliased (ADR-0120): it parses as an unknown key, is ignored, and is dropped on the next save — run `muta config check` to find stale spellings |
+| `compaction.summarize` | `true` | Use the active model for an anchored structured summary; `false` uses the deterministic excerpt fallback |
+| `compaction.prune` | `true` | Enable cheap tool-result pruning (pre-round and mid-round) |
+| `compaction.prune_protect_tokens` | `6000` | Most recent tool results (tokens) protected from pruning |
 
 Resolved thresholds per model (defaults):
 
@@ -56,11 +56,10 @@ utilization = 0.85
 target_utilization = 0.25
 prune_utilization = 0.65
 fallback_window_tokens = 32000
-
-compaction_preserve_rounds = 6
-compaction_summarize = true
-compaction_prune = true
-compaction_prune_protect_tokens = 6000
+preserve_rounds = 6
+summarize = true
+prune = true
+prune_protect_tokens = 6000
 ```
 
 ## Master agent behavior
@@ -87,66 +86,59 @@ window = 16
 ```
 
 
-## Provider selection and retry
+## Connection selection and retry
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `default_provider` | `""` (empty) | Provider id for the **fresh-session default**: used at startup and updated by a `/models` switch so the next launch follows it; empty leaves the choice to the `/models` picker. A switch also pins the selection to the session so resume restores it |
-| `default_model` | `""` (empty) | Active model id within the selected provider, written by a `/models` switch or add-connection flow alongside `default_provider`. The startup migration seeds a provider instance's default channel from it but no longer strips it |
-| `provider_retry_max_attempts` | `30` | Max retry attempts for a transient provider error within a turn (clamped to 1..60) |
-| `provider_retry_base_ms` | `1000` | Base delay for exponential backoff, in milliseconds |
-| `provider_retry_max_ms` | `10000` | Cap on the backoff delay, in milliseconds |
+| `default_connection` | `""` (empty) | Connection id for the **fresh-session default**: used at startup and updated by a `/models` switch so the next launch follows it; empty leaves the choice to the `/models` picker. A switch also pins the selection to the session so resume restores it |
+| `default_model` | `""` (empty) | Active model id within the selected connection, written by a `/models` switch or add-connection flow alongside `default_connection`. |
+| `connection_retry_max_attempts` | `30` | Max retry attempts for a transient connection error within a turn (clamped to 1..60) |
+| `connection_retry_base_ms` | `1000` | Base delay for exponential backoff, in milliseconds |
+| `connection_retry_max_ms` | `10000` | Cap on the backoff delay, in milliseconds |
 
-## Provider instances and credentials
+## Connection instances and credentials
 
-Provider *instances* (the "who I connect to" records) live in the state store
-`$XDG_STATE_HOME/muta/providers.toml`; secrets in
+Connection *instances* (the "who I connect to" records) live in the state store
+`$XDG_STATE_HOME/muta/connections.toml`; secrets in
 `$XDG_CONFIG_HOME/muta/credentials.toml`; `config.toml` holds only the
-*selection* (`default_provider` / `default_model`, which reference instance
+*selection* (`default_connection` / `default_model`, which reference instance
 ids). The routes a model actually travels (per-model transport/endpoint/
-reasoning) are **derived at runtime** from each instance's template and the
-discovery cache — never persisted, so two instances of the same template can
+reasoning) are **derived at runtime** from each instance's preset and the
+discovery cache — never persisted, so two instances of the same preset can
 never duplicate or drift a route set. See [Providers](providers.md) for the
 matrix, [Paths](paths.md) for the files, and [Add a provider](../how-to/add-a-provider.md)
 for the full workflow.
 
-An instance is declared as one `[[providers]]` table in `providers.toml`:
+An instance is declared as one `[[connections]]` table in `connections.toml`:
 
 ```toml
-[[providers]]
+[[connections]]
 id = "acme"
 name = "Acme Relay"          # display name; defaults to the id
-template_id = "custom-openai" # optional: derive routes from a template
+preset_id = "custom-openai"   # optional: derive routes from a preset
 auth = "ApiKey"              # ApiKey | XaiOAuth | ChatGptOAuth | CopilotOAuth | AntigravityOAuth
 # api_key_env = "ACME_API_KEY"  # optional env var holding the credential
 
-# Pure-custom instance only (no template_id):
+# Pure-custom instance only (no preset_id):
 transport = "OpenAi"         # OpenAi | OpenAiResponses | Anthropic | Google
 base_url = "https://relay.example.com/v1/chat/completions"
 models = ["acme-7b", "acme-13b"]
 ```
 
-The credential for an instance is stored once, keyed by instance id:
+The credential for an instance is stored once in `credentials.toml`, keyed by connection id:
 
 ```toml
-[providers]
+[connections]
 acme = "sk-..."
 ```
 
 Resolution precedence is **`api_key_env` env var > `credentials.toml`** — an
 instance declares an optional env var *name*; when set and populated it wins.
 
-Multiple instances of the same provider are ordinary: each is its own
-`[[providers]]` row referencing the same `template_id`, differing only in
-identity, credential, and overrides. The template defines the routes once;
+Multiple instances of the same preset are ordinary: each is its own
+`[[connections]]` row referencing the same `preset_id`, differing only in
+identity, credential, and overrides. The preset defines the routes once;
 instances never repeat them.
-
-> **Legacy layout.** Older releases stored provider instances (with embedded
-> per-model channels) in `config.toml` `[[providers]]` tables, keys in
-> `[builtins.<id>]` / `[user.<id>]` in `credentials.toml`, and per-model
-> reasoning in `[model_reasoning]`. A one-shot migration converts that layout
-> to the stores above on the first launch with a current build; the old tables
-> are then ignored by the app (and dropped by the next `config.toml` save).
 
 | `favorites` | Default | Meaning |
 |-----|---------|---------|
@@ -254,39 +246,42 @@ the instances that serve the model.
 The optional `[tui]` table. Appearance and layout values can also be changed
 interactively with `/settings` (alias `/config`).
 
+## Mutx Terminal Configuration (`mutx/config.toml`)
+
+Following ADR-0136, terminal UI presentation and input history preferences are cleanly decoupled from the core daemon into `$XDG_CONFIG_HOME/mutx/config.toml` (and prompt history in `$XDG_STATE_HOME/mutx/history.json`).
+
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `tui.transcript_layout` | `"turn_band"` | Transcript grouping: `"turn_band"` (grouped ReAct turn bands) |
-| `tui.color_scheme` | `"zen"` | Active palette: `zen`, `midnight`, `nord`, `catppuccin`, `paper`, or `custom` |
-| `tui.click_outside_dismiss` | `true` | Click outside a modal to close it (mirrors Esc). On by default; the dismissable set excludes modals holding in-progress input, and the startup picker's click-outside still quits. Set `false` to require Esc / Ctrl+C for every close. |
-| `tui.expand_auto_scroll` | `false` | Whether expanding/collapsing a disclosure (tool step, command result, thinking, provider retry, notice) auto-scrolls to keep the toggled card well-placed — on expand the header shifts toward the viewport top; on collapse a scrolled-past summary is kept visible. Off by default: a toggle is a read interaction and leaves your scroll position untouched. |
-| `tui.default_expanded.<step>` | presenter default | Default expand state for a tool name or `thinking` |
-| `tui.custom_color_scheme.background` | `"#070808"` | Terminal canvas |
-| `tui.custom_color_scheme.surface` | `"#0e0f0f"` | Panels and menus |
-| `tui.custom_color_scheme.text` | `"#d5d5cd"` | Primary foreground |
-| `tui.custom_color_scheme.muted` | `"#777d75"` | Secondary foreground |
-| `tui.custom_color_scheme.accent` | `"#8ea191"` | Focus and brand color |
-| `tui.custom_color_scheme.success` | `"#759475"` | Positive states |
-| `tui.custom_color_scheme.warning` | `"#b5955d"` | Caution states |
-| `tui.custom_color_scheme.error` | `"#be6f68"` | Failure states |
+| `transcript_layout` | `"turn_band"` | Transcript grouping: `"turn_band"` (grouped ReAct turn bands) |
+| `color_scheme` | `"zen"` | Active palette: `zen`, `midnight`, `nord`, `catppuccin`, `paper`, or `custom` |
+| `click_outside_dismiss` | `true` | Click outside a modal to close it (mirrors Esc). On by default; the dismissable set excludes modals holding in-progress input, and the startup picker's click-outside still quits. Set `false` to require Esc / Ctrl+C for every close. |
+| `expand_auto_scroll` | `false` | Whether expanding/collapsing a disclosure (tool step, command result, thinking, provider retry, notice) auto-scrolls to keep the toggled card well-placed — on expand the header shifts toward the viewport top; on collapse a scrolled-past summary is kept visible. Off by default: a toggle is a read interaction and leaves your scroll position untouched. |
+| `default_expanded.<step>` | presenter default | Default expand state for a tool name or `thinking` |
+| `custom_color_scheme.background` | `"#070808"` | Terminal canvas |
+| `custom_color_scheme.surface` | `"#0e0f0f"` | Panels and menus |
+| `custom_color_scheme.text` | `"#d5d5cd"` | Primary foreground |
+| `custom_color_scheme.muted` | `"#777d75"` | Secondary foreground |
+| `custom_color_scheme.accent` | `"#8ea191"` | Focus and brand color |
+| `custom_color_scheme.success` | `"#759475"` | Positive states |
+| `custom_color_scheme.warning` | `"#b5955d"` | Caution states |
+| `custom_color_scheme.error` | `"#be6f68"` | Failure states |
+| `input_history.dedup` | `true` | Collapse identical prompt text into a single entry, keyed on the text **alone** (across sessions and workspaces). Re-sending the same prompt bumps it to the top of the newest-first picker. Set `false` to keep `(text, session)` entries distinct — the same words typed in two sessions then stay as two rows, each with its own origin |
+| `input_history.record_commands` | `false` | Record `/slash` command invocations (`/model`, `/new`, …) into the input history. With the default `false`, new commands are not recorded and any legacy ones stop showing in the picker. Commands are UI gestures, not prompts — they are already visible in the transcript. Set `true` to make them recallable from `Ctrl+R` again |
 
-The custom palette contains eight `#RRGGBB` semantic colors. The renderer
-derives its remaining surfaces, hover states, code colors, and diff colors
-from these values.
+The custom palette contains eight `#RRGGBB` semantic colors. The renderer derives its remaining surfaces, hover states, code colors, and diff colors from these values. Custom themes can also be placed as `*.toml` files in `$XDG_CONFIG_HOME/mutx/themes/`.
 
 ```toml
-[tui]
 transcript_layout = "turn_band"
 color_scheme = "custom"
 click_outside_dismiss = true
 expand_auto_scroll = false
 
-[tui.default_expanded]
+[default_expanded]
 edit_file = true
 bash = true
 thinking = false
 
-[tui.custom_color_scheme]
+[custom_color_scheme]
 background = "#070808"
 surface = "#0e0f0f"
 text = "#d5d5cd"
@@ -295,20 +290,7 @@ accent = "#8ea191"
 success = "#759475"
 warning = "#b5955d"
 error = "#be6f68"
-```
 
-## Input history
-
-The optional `[input_history]` table controls how the prompt history (the
-`Ctrl+R` picker and the persisted `history.json`) treats repeated prompts and
-slash-command invocations.
-
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `input_history.dedup` | `true` | Collapse identical prompt text into a single entry, keyed on the text **alone** (across sessions and workspaces). Re-sending the same prompt bumps it to the top of the newest-first picker. Set `false` to keep `(text, session)` entries distinct — the same words typed in two sessions then stay as two rows, each with its own origin |
-| `input_history.record_commands` | `false` | Record `/slash` command invocations (`/model`, `/new`, …) into the input history. With the default `false`, new commands are not recorded and any legacy ones stop showing in the picker. Commands are UI gestures, not prompts — they are already visible in the transcript. Set `true` to make them recallable from `Ctrl+R` again |
-
-```toml
 [input_history]
 dedup = true
 record_commands = false

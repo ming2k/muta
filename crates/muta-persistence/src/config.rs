@@ -108,149 +108,6 @@ pub struct MasterConfig {
 // TOML table and the wire type for `AgentRequest::UpdateDoomGuardConfig`. See
 // `muta_contracts::DoomGuardConfig` for the per-field semantics and defaults.
 
-/// User-tunable frontend presentation, deserialized from the optional `[tui]`
-/// table of `config.toml`. This is the **pure-data** form shared by every
-/// frontend (TUI, future GUI); frontend-specific presenter logic (e.g. the
-/// TUI's per-tool default-expand lookup against its render presenters) lives
-/// in the frontend crate and reads this struct as input.
-///
-/// All fields default sensibly, so a `config.toml` with no `[tui]` table (or
-/// a partially specified one) is valid.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TuiConfig {
-    /// Per-step-kind default expand state. Keys are tool names (`edit_file`,
-    /// `bash`, …) or [`THINKING_KEY`] for reasoning traces.
-    ///
-    /// ```toml
-    /// [tui.default_expanded]
-    /// edit_file = true
-    /// bash = true
-    /// thinking = false
-    /// ```
-    pub default_expanded: HashMap<String, bool>,
-    /// How the transcript message stream is arranged. Recognized values
-    /// (case-insensitive): `"turn_band"` (default — each tool-bearing ReAct turn is grouped
-    /// into a labelled band with a header row). Unknown / empty values fall back to default.
-    ///
-    /// ```toml
-    /// [tui]
-    /// transcript_layout = "turn_band"
-    /// ```
-    pub transcript_layout: String,
-    /// Active color scheme id. Built-in values are `zen`, `midnight`, `nord`,
-    /// `catppuccin`, and `paper`; `custom` uses `custom_color_scheme` below.
-    /// Unknown / empty values fall back to `zen`.
-    pub color_scheme: String,
-    /// User-editable semantic palette retained even when a built-in scheme is
-    /// active, so it can be revisited from `/config` without losing changes.
-    pub custom_color_scheme: muta_contracts::ColorSchemeConfig,
-    /// Whether clicking outside a dismissable modal closes it (mirroring Esc).
-    ///
-    /// Defaults to `true`: clicking the backdrop of a dismissable overlay (Help,
-    /// Tools, Sessions, Config, …) closes it, exactly like Esc — the composer
-    /// draft is safely parked so nothing is lost. Modals that hold precious
-    /// in-progress input (API-key editor, permission/question sheets, …) are
-    /// never click-dismissable regardless of this flag (see
-    /// `Modal::dismissable_by_outside_click`), and the `mutx attach` startup
-    /// picker is a special case whose click-outside still quits. Set `false` to
-    /// disable click-outside-to-dismiss entirely (Esc / Ctrl+C always work).
-    ///
-    /// ```toml
-    /// [tui]
-    /// click_outside_dismiss = true
-    /// ```
-    #[serde(default = "default_click_outside_dismiss")]
-    pub click_outside_dismiss: bool,
-    /// Whether expanding or collapsing a disclosure (tool step, command
-    /// result, thinking, provider-retry, or notice card) auto-scrolls the
-    /// transcript so the toggled card's summary stays well-placed in the
-    /// viewport (expanded: the header moves toward the top to reveal the body;
-    /// collapsed: the summary is kept from scrolling off the top).
-    ///
-    /// Defaults to `false` — the toggle leaves the scroll offset untouched, so
-    /// the view never moves as a side effect of a click. Users who want the
-    /// content-maximizing behavior back can enable it. When enabled, the
-    /// scroll is settled through a staged measure-then-paint frame so no
-    /// intermediate viewport is ever shown (no flicker).
-    ///
-    /// ```toml
-    /// [tui]
-    /// expand_auto_scroll = false
-    /// ```
-    #[serde(default = "default_expand_auto_scroll")]
-    pub expand_auto_scroll: bool,
-}
-
-/// Default for [`TuiConfig::click_outside_dismiss`]: **on**. Kept as a named
-/// function so it can be referenced from the manual `Default` impl and the
-/// `#[serde(default = …)]` attribute in lockstep.
-fn default_click_outside_dismiss() -> bool {
-    true
-}
-
-/// Default for [`TuiConfig::expand_auto_scroll`]: **off**. A disclosure
-/// toggle is a read interaction, not a navigation command — by default the
-/// scroll position is the user's and stays put. Kept as a named function so
-/// the manual `Default` impl and the `#[serde(default = …)]` attribute stay
-/// in lockstep.
-fn default_expand_auto_scroll() -> bool {
-    false
-}
-
-impl Default for TuiConfig {
-    fn default() -> Self {
-        Self {
-            default_expanded: HashMap::new(),
-            transcript_layout: String::new(),
-            color_scheme: String::new(),
-            custom_color_scheme: muta_contracts::ColorSchemeConfig::default(),
-            click_outside_dismiss: default_click_outside_dismiss(),
-            expand_auto_scroll: default_expand_auto_scroll(),
-        }
-    }
-}
-
-/// Input-history behaviour (`[input_history]` table): how the persisted
-/// prompt history (`history.json`) and the Ctrl+R picker treat repeated
-/// prompts and slash-command invocations.
-///
-/// ```toml
-/// [input_history]
-/// dedup = true              # one row per prompt text, across sessions
-/// record_commands = false   # don't persist `/model`, `/new`, …
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct InputHistoryConfig {
-    /// Collapse repeated identical prompts into a single history entry, keyed
-    /// on the prompt **text alone** (across sessions and workspaces).
-    ///
-    /// With the default `true`, sending the same prompt twice — even in
-    /// different sessions — shows one row; re-sending refreshes the entry's
-    /// timestamp so it bubbles to the top of the newest-first picker. With
-    /// `false`, identity is `(text, session_id)`: the same words typed in two
-    /// sessions stay as two entries, each with its own origin.
-    pub dedup: bool,
-    /// Record `/slash` command invocations (`/model`, `/new`, `/repeat`, …)
-    /// into the input history.
-    ///
-    /// Default `false`: commands are UI gestures, not prompts — they are
-    /// already visible in the transcript, and most users don't want `/model`
-    /// noise cluttering the prompt picker. Set `true` to make them recallable
-    /// from Ctrl+R again.
-    pub record_commands: bool,
-}
-
-impl Default for InputHistoryConfig {
-    fn default() -> Self {
-        Self {
-            dedup: true,
-            record_commands: false,
-        }
-    }
-}
-
 /// Declarative permission configuration — the `[permissions]` table. Lets users
 /// pre-declare "always allow" rules in `config.toml` so default policies are
 /// data-driven, not purely interactive:
@@ -679,29 +536,14 @@ impl DiscoveryCache {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(default)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Config {
     #[serde(alias = "default_provider")]
     pub default_connection: String,
     pub mcp: HashMap<String, McpServerConfig>,
-    /// Context-compaction thresholds expressed as fractions of the active
-    /// model's context window, plus a fallback window for unknown models. See
+    /// Context-compaction thresholds and relief policies. See
     /// [`CompactionPolicy`] for the per-field semantics.
     pub compaction: CompactionPolicy,
-    /// Number of recent complete user rounds preserved verbatim by full
-    /// compaction.
-    pub compaction_preserve_rounds: usize,
-    /// Use the active model to produce an anchored, structured summary when
-    /// compacting. When `false` (or when the summarization call fails) compaction
-    /// falls back to the deterministic message-excerpt summary.
-    pub compaction_summarize: bool,
-    /// Enable cheap tool-result pruning (pre-turn and mid-turn) that clears old
-    /// tool outputs in place to relieve context pressure before a full
-    /// compaction is needed.
-    pub compaction_prune: bool,
-    /// Token budget of the most recent tool results protected from pruning.
-    pub compaction_prune_protect_tokens: usize,
     /// Maximum number of attempts for a single model request when the connection returns a
     /// transient error (HTTP 408/429/5xx, connection, timeout). The initial try
     /// counts as the first attempt, so this is the *total* attempts, not extra
@@ -751,13 +593,6 @@ pub struct Config {
     /// Web tool configuration (`[websearch]` table): search backend, proxy, timeout.
     #[serde(default)]
     pub websearch: WebSearchConfig,
-    /// TUI presentation (`[tui]` table): per-step-kind default expand state.
-    #[serde(default)]
-    pub tui: TuiConfig,
-    /// Input-history behaviour (`[input_history]` table): prompt dedup and
-    /// slash-command recording. See [`InputHistoryConfig`].
-    #[serde(default)]
-    pub input_history: InputHistoryConfig,
     /// Master behaviour (`[master]` table): opt-in hard-stop budget and the
     /// doom-loop guard toggle. See [`MasterConfig`] for the per-field
     /// semantics and TOML examples.
@@ -901,16 +736,145 @@ pub struct HookSpec {
     pub sandbox_root: Option<std::path::PathBuf>,
 }
 
+#[derive(Deserialize)]
+struct RawConfig {
+    #[serde(default, alias = "default_provider")]
+    default_connection: Option<String>,
+    #[serde(default)]
+    default_model: Option<String>,
+    #[serde(default)]
+    mcp: Option<HashMap<String, McpServerConfig>>,
+    #[serde(default)]
+    compaction: Option<CompactionPolicy>,
+    #[serde(default)]
+    compaction_preserve_rounds: Option<usize>,
+    #[serde(default)]
+    compaction_summarize: Option<bool>,
+    #[serde(default)]
+    compaction_prune: Option<bool>,
+    #[serde(default)]
+    compaction_prune_protect_tokens: Option<usize>,
+    #[serde(default, alias = "provider_retry_max_attempts")]
+    connection_retry_max_attempts: Option<usize>,
+    #[serde(default, alias = "provider_retry_base_ms")]
+    connection_retry_base_ms: Option<u64>,
+    #[serde(default, alias = "provider_retry_max_ms")]
+    connection_retry_max_ms: Option<u64>,
+    #[serde(default)]
+    favorites: Option<Vec<String>>,
+    #[serde(default)]
+    hidden_models: Option<Vec<String>>,
+    #[serde(default)]
+    skills: Option<SkillsConfig>,
+    #[serde(default)]
+    permissions: Option<PermissionConfig>,
+    #[serde(default)]
+    bash_policy: Option<BashPolicyConfig>,
+    #[serde(default)]
+    websearch: Option<WebSearchConfig>,
+    #[serde(default)]
+    master: Option<MasterConfig>,
+    #[serde(default)]
+    hooks: Option<Vec<HookSpec>>,
+    #[serde(default)]
+    tool_variants: Option<ToolVariantsConfig>,
+    #[serde(default)]
+    daemon: Option<DaemonConfig>,
+}
+
+impl<'de> Deserialize<'de> for Config {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawConfig::deserialize(deserializer)?;
+        let mut cfg = Config::default();
+        if let Some(c) = raw.default_connection {
+            cfg.default_connection = c;
+        }
+        if let Some(m) = raw.default_model {
+            cfg.default_model = Some(m);
+        }
+        if let Some(mcp) = raw.mcp {
+            cfg.mcp = mcp;
+        }
+        if let Some(mut comp) = raw.compaction {
+            if let Some(r) = raw.compaction_preserve_rounds {
+                comp.preserve_rounds = r;
+            }
+            if let Some(s) = raw.compaction_summarize {
+                comp.summarize = s;
+            }
+            if let Some(p) = raw.compaction_prune {
+                comp.prune = p;
+            }
+            if let Some(pt) = raw.compaction_prune_protect_tokens {
+                comp.prune_protect_tokens = pt;
+            }
+            cfg.compaction = comp;
+        } else {
+            if let Some(r) = raw.compaction_preserve_rounds {
+                cfg.compaction.preserve_rounds = r;
+            }
+            if let Some(s) = raw.compaction_summarize {
+                cfg.compaction.summarize = s;
+            }
+            if let Some(p) = raw.compaction_prune {
+                cfg.compaction.prune = p;
+            }
+            if let Some(pt) = raw.compaction_prune_protect_tokens {
+                cfg.compaction.prune_protect_tokens = pt;
+            }
+        }
+        if let Some(a) = raw.connection_retry_max_attempts {
+            cfg.connection_retry_max_attempts = a;
+        }
+        if let Some(b) = raw.connection_retry_base_ms {
+            cfg.connection_retry_base_ms = b;
+        }
+        if let Some(m) = raw.connection_retry_max_ms {
+            cfg.connection_retry_max_ms = m;
+        }
+        if let Some(f) = raw.favorites {
+            cfg.favorites = f;
+        }
+        if let Some(h) = raw.hidden_models {
+            cfg.hidden_models = h;
+        }
+        if let Some(s) = raw.skills {
+            cfg.skills = s;
+        }
+        if let Some(p) = raw.permissions {
+            cfg.permissions = p;
+        }
+        if let Some(b) = raw.bash_policy {
+            cfg.bash_policy = b;
+        }
+        if let Some(w) = raw.websearch {
+            cfg.websearch = w;
+        }
+        if let Some(m) = raw.master {
+            cfg.master = m;
+        }
+        if let Some(h) = raw.hooks {
+            cfg.hooks = h;
+        }
+        if let Some(tv) = raw.tool_variants {
+            cfg.tool_variants = tv;
+        }
+        if let Some(d) = raw.daemon {
+            cfg.daemon = d;
+        }
+        Ok(cfg)
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             default_connection: String::new(),
             mcp: HashMap::new(),
             compaction: CompactionPolicy::default(),
-            compaction_preserve_rounds: 6,
-            compaction_summarize: true,
-            compaction_prune: true,
-            compaction_prune_protect_tokens: 6_000,
             connection_retry_max_attempts: 30,
             connection_retry_base_ms: 1_000,
             connection_retry_max_ms: 10_000,
@@ -921,8 +885,6 @@ impl Default for Config {
             permissions: PermissionConfig::default(),
             bash_policy: BashPolicyConfig::default(),
             websearch: WebSearchConfig::default(),
-            tui: TuiConfig::default(),
-            input_history: InputHistoryConfig::default(),
             master: MasterConfig::default(),
             hooks: Vec::new(),
             tool_variants: ToolVariantsConfig::default(),
@@ -1259,92 +1221,6 @@ impl Config {
     pub fn config_file_path() -> PathBuf {
         paths::get().config_file()
     }
-
-    pub fn history_file_path() -> PathBuf {
-        paths::get().history_file()
-    }
-
-    pub fn load_history() -> Vec<muta_contracts::HistoryEntry> {
-        let path = Self::history_file_path();
-        if let Ok(content) = fs::read_to_string(path) {
-            serde_json::from_str(&content).unwrap_or_default()
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Persist `history` into the global history file, locking and merging
-    /// against what is already on disk so a concurrent process's recent
-    /// prompts survive this write (ADR-0018).
-    ///
-    /// `dedup` selects the merge identity (see
-    /// [`muta_contracts::merge_history`]): `true` collapses identical prompt
-    /// text into one entry across sessions, `false` keeps `(text, session_id)`
-    /// entries distinct. Callers pass the live `[input_history] dedup` value
-    /// rather than having this method re-read `config.toml` on every send.
-    pub fn save_history(
-        history: &[muta_contracts::HistoryEntry],
-        dedup: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let path = Self::history_file_path();
-        // Serialise against other `muta` instances and merge so a concurrent
-        // process's recent commands survive this write (ADR-0018). Without the
-        // lock + reload the last writer would erase the other's history; the
-        // merge keeps the newest recorded timestamp for each survivor and
-        // re-orders newest-first.
-        let _lock = fsutil::FileLock::acquire(&path)
-            .map_err(|e| format!("could not lock history file: {e}"))?;
-        let existing: Vec<muta_contracts::HistoryEntry> = fs::read_to_string(&path)
-            .ok()
-            .and_then(|content| serde_json::from_str(&content).ok())
-            .unwrap_or_default();
-        let merged = muta_contracts::merge_history(&existing, history, dedup);
-        fsutil::atomic_write_json(&path, &merged).map_err(Box::<dyn std::error::Error>::from)?;
-        Ok(())
-    }
-
-    /// Truncate the global history file (the Ctrl+R picker's "clear history"
-    /// action). Locked like [`Self::save_history`] so a concurrent write does
-    /// not race the truncation; a concurrent *record* can still append a new
-    /// entry immediately after — clearing is inherently last-writer-wins for
-    /// the on-disk union, exactly like the rest of the history writes.
-    pub fn clear_history() -> Result<(), Box<dyn std::error::Error>> {
-        let path = Self::history_file_path();
-        let _lock = fsutil::FileLock::acquire(&path)
-            .map_err(|e| format!("could not lock history file: {e}"))?;
-        fsutil::atomic_write_json(&path, &Vec::<muta_contracts::HistoryEntry>::new())
-            .map_err(Box::<dyn std::error::Error>::from)?;
-        Ok(())
-    }
-}
-
-/// Load all valid custom theme files (`*.toml`) from the given themes directory.
-///
-/// Each file defines a named theme with metadata (`name`, `description`, etc.)
-/// and full or partial color definitions. Errors reading individual files are
-/// ignored so a single malformed file does not break theme discovery.
-pub fn load_theme_files(themes_dir: &std::path::Path) -> Vec<muta_contracts::ThemeFile> {
-    let mut themes = Vec::new();
-    let Ok(entries) = std::fs::read_dir(themes_dir) else {
-        return themes;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("toml")
-            && let Ok(content) = std::fs::read_to_string(&path)
-            && let Ok(mut theme) = toml::from_str::<muta_contracts::ThemeFile>(&content)
-        {
-            if theme.id.is_empty()
-                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-            {
-                theme.id = stem.to_string();
-            }
-            themes.push(theme);
-        }
-    }
-    themes.sort_by(|a, b| a.name.cmp(&b.name));
-    themes
 }
 
 #[cfg(test)]
@@ -1394,12 +1270,12 @@ mod tests {
         // default — the stale value must not carry through.
         let legacy: Config = toml::from_str("compaction_preserve_turns = 9").unwrap();
         assert_eq!(
-            legacy.compaction_preserve_rounds,
-            Config::default().compaction_preserve_rounds
+            legacy.compaction.preserve_rounds,
+            Config::default().compaction.preserve_rounds
         );
 
         let serialized = toml::to_string(&legacy).unwrap();
-        assert!(serialized.contains("compaction_preserve_rounds ="));
+        assert!(serialized.contains("preserve_rounds ="));
         assert!(!serialized.contains("compaction_preserve_turns ="));
     }
 
@@ -1684,77 +1560,6 @@ name = "DeepSeek"
             thinking: Some(false),
         };
         assert!(!with_thinking.is_empty());
-    }
-
-    #[test]
-    fn tui_click_outside_dismiss_defaults_on_and_overrides() {
-        // The click-outside-to-dismiss pref is ON by default: clicking the
-        // backdrop of a dismissable overlay closes it like Esc (the draft is
-        // parked, so nothing is lost). The startup-picker quit path and the
-        // never-dismissable "precious input" modals are gated elsewhere
-        // (`Modal::dismissable_by_outside_click`), not by this flag.
-        let cfg: Config = toml::from_str("").unwrap();
-        assert!(
-            cfg.tui.click_outside_dismiss,
-            "click_outside_dismiss defaults to true"
-        );
-
-        // Explicit opt-out round-trips.
-        let toml = r#"
-            [tui]
-            click_outside_dismiss = false
-        "#;
-        let cfg: Config = toml::from_str(toml).unwrap();
-        assert!(!cfg.tui.click_outside_dismiss);
-    }
-
-    #[test]
-    fn tui_expand_auto_scroll_defaults_off_and_overrides() {
-        // The disclosure auto-scroll pref is OFF by default: toggling a
-        // card's expansion is a read interaction, so the scroll offset stays
-        // where the user put it. Users who want the content-maximizing
-        // behavior (expanded header moves toward the viewport top) opt in.
-        let cfg: Config = toml::from_str("").unwrap();
-        assert!(
-            !cfg.tui.expand_auto_scroll,
-            "expand_auto_scroll defaults to false"
-        );
-
-        // Explicit opt-in round-trips.
-        let toml = r#"
-            [tui]
-            expand_auto_scroll = true
-        "#;
-        let cfg: Config = toml::from_str(toml).unwrap();
-        assert!(cfg.tui.expand_auto_scroll);
-    }
-
-    #[test]
-    fn input_history_defaults_dedup_on_and_commands_off() {
-        // A config with no `[input_history]` table gets the sensible defaults:
-        // dedup on (one row per prompt text) and slash-command recording off.
-        let cfg: Config = toml::from_str("").unwrap();
-        assert!(cfg.input_history.dedup, "dedup defaults to true");
-        assert!(
-            !cfg.input_history.record_commands,
-            "record_commands defaults to false"
-        );
-
-        // Both keys parse and round-trip.
-        let toml = r#"
-            [input_history]
-            dedup = false
-            record_commands = true
-        "#;
-        let cfg: Config = toml::from_str(toml).unwrap();
-        assert!(!cfg.input_history.dedup);
-        assert!(cfg.input_history.record_commands);
-
-        // Serialising back keeps the explicit table.
-        let out = toml::to_string(&cfg).unwrap();
-        assert!(out.contains("[input_history]"));
-        assert!(out.contains("dedup = false"));
-        assert!(out.contains("record_commands = true"));
     }
 
     // --- project-scope MCP merge (ADR-0085 §2/§3) --------------------------
@@ -2057,79 +1862,5 @@ name = "DeepSeek"
         // Global hook ordering preserved; project hooks come after.
         assert_eq!(global.hooks[0].command, "global-notify.sh");
         assert_eq!(global.hooks[1].command, ".muta/hooks/lint.sh");
-    }
-
-    #[test]
-    fn load_theme_files_reads_and_sorts_valid_toml() {
-        let root = scratch_project_root();
-        let themes_dir = root.join("themes");
-        std::fs::create_dir_all(&themes_dir).unwrap();
-
-        let theme_a = r##"
-name = "Dracula"
-description = "Vampire dark palette"
-[colors]
-background = "#282a36"
-surface = "#44475a"
-text = "#f8f8f2"
-muted = "#6272a4"
-accent = "#bd93f9"
-success = "#50fa7b"
-warning = "#ffb86c"
-error = "#ff5555"
-"##;
-
-        let theme_b = r##"
-name = "Cyberpunk"
-description = "Neon high-contrast"
-[colors]
-background = "#050505"
-surface = "#151515"
-text = "#ffffff"
-muted = "#808080"
-accent = "#00ffff"
-success = "#00ff00"
-warning = "#ffff00"
-error = "#ff0055"
-
-[components.input]
-bg_active = "#222222"
-caret = "#00ffff"
-
-[components.crate]
-fg = "#ff00ff"
-"##;
-
-        std::fs::write(themes_dir.join("dracula.toml"), theme_a).unwrap();
-        std::fs::write(themes_dir.join("cyberpunk.toml"), theme_b).unwrap();
-        std::fs::write(themes_dir.join("corrupt.toml"), "invalid [== toml").unwrap();
-        std::fs::write(themes_dir.join("readme.txt"), "not a theme").unwrap();
-
-        let loaded = load_theme_files(&themes_dir);
-        assert_eq!(loaded.len(), 2);
-        assert_eq!(loaded[0].name, "Cyberpunk");
-        assert_eq!(loaded[0].id, "cyberpunk");
-        assert_eq!(loaded[1].name, "Dracula");
-        assert_eq!(loaded[1].id, "dracula");
-        let cyberpunk_components = loaded[0].components.as_ref().unwrap();
-        assert_eq!(
-            cyberpunk_components
-                .input
-                .as_ref()
-                .unwrap()
-                .caret
-                .as_deref(),
-            Some("#00ffff")
-        );
-        assert_eq!(
-            cyberpunk_components
-                .crate_component
-                .as_ref()
-                .unwrap()
-                .fg
-                .as_deref(),
-            Some("#ff00ff")
-        );
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

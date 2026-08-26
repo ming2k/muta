@@ -259,16 +259,21 @@ impl Default for Theme {
 /// names, so the palette can be retuned in one place. The fields stay `pub`
 /// for `Theme::default()` construction; new rendering code should prefer these.
 impl Theme {
-    /// Return all available color schemes: built-ins + custom theme files in `$XDG_CONFIG_HOME/muta/themes` + custom slot.
+    /// Return all available color schemes: built-ins + custom theme files in `$XDG_CONFIG_HOME/mutx/themes` + custom slot.
     pub fn available_color_schemes() -> Vec<ColorSchemePreset> {
         let mut list = Vec::new();
         // 1. Built-in presets (Zen, Midnight, Nord, Catppuccin, Paper)
         for preset in COLOR_SCHEMES.iter().take(5) {
             list.push(preset.clone());
         }
-        // 2. Custom files from themes_dir
-        let themes_dir = muta_persistence::paths::get().themes_dir();
-        for file in muta_persistence::config::load_theme_files(&themes_dir) {
+        // 2. Custom files from mutx themes_dir (and legacy muta themes_dir)
+        let themes_dir = crate::paths::get().themes_dir();
+        let mut files = crate::config::load_theme_files(&themes_dir);
+        let legacy_themes_dir = muta_persistence::paths::get().themes_dir();
+        if legacy_themes_dir.exists() && legacy_themes_dir != themes_dir {
+            files.extend(crate::config::load_theme_files(&legacy_themes_dir));
+        }
+        for file in files {
             if !list
                 .iter()
                 .any(|item| item.id.eq_ignore_ascii_case(&file.id))
@@ -364,8 +369,12 @@ impl Theme {
             "custom" => Self::from_custom(custom),
             "zen" => Self::default(),
             other => {
-                let themes_dir = muta_persistence::paths::get().themes_dir();
-                let files = muta_persistence::config::load_theme_files(&themes_dir);
+                let themes_dir = crate::paths::get().themes_dir();
+                let mut files = crate::config::load_theme_files(&themes_dir);
+                let legacy_themes_dir = muta_persistence::paths::get().themes_dir();
+                if legacy_themes_dir.exists() && legacy_themes_dir != themes_dir {
+                    files.extend(crate::config::load_theme_files(&legacy_themes_dir));
+                }
                 if let Some(found) = files.into_iter().find(|t| t.id.eq_ignore_ascii_case(other)) {
                     Self::from_theme_file(&found)
                 } else {
@@ -819,7 +828,8 @@ mod tests {
 
     #[test]
     fn every_preset_has_a_distinct_canonical_index() {
-        for (index, scheme) in COLOR_SCHEMES.iter().enumerate() {
+        let schemes = Theme::available_color_schemes();
+        for (index, scheme) in schemes.iter().enumerate() {
             assert_eq!(Theme::color_scheme_index(&scheme.id), index);
         }
     }

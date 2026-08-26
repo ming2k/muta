@@ -82,10 +82,10 @@ Specialized UI components have dedicated tokens and fallback constants:
 
 ## 4. Custom Themes Directory & TOML Schema
 
-Muta automatically loads all custom theme files located in the themes directory:
+`mutx` automatically loads all custom theme files located in its themes directory:
 
 ```text
-~/.config/muta/themes/*.toml
+~/.config/mutx/themes/*.toml
 ```
 
 Each theme file must adhere to the formal `ThemeFile` contract:
@@ -133,12 +133,11 @@ hover_bg = "#252940"
 
 ### Loading & Discovery
 
-1. Custom theme files placed in `~/.config/muta/themes/` are dynamically parsed on launch.
-2. The stem of the filename (e.g. `dracula.toml` → `dracula`) becomes the unique theme ID.
+1. Custom theme files placed in `~/.config/mutx/themes/` are dynamically parsed on launch.
+2. The stem of the filename (e.g. `cyberpunk.toml` → `cyberpunk`) becomes the unique theme ID.
 3. Themes appear automatically in the full-screen Settings View (`/config` › Appearance) with live transcript and component swatches.
-4. Themes can be selected directly or specified in `~/.config/muta/config.toml`:
+4. Themes can be selected directly in the UI or specified in `~/.config/mutx/config.toml`:
 
 ```toml
-[tui]
 color_scheme = "cyberpunk"
 ```

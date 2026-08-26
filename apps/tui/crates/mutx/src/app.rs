@@ -2243,6 +2243,17 @@ impl App {
         self.modal_keymap_open = false;
     }
 
+    /// Persist current TUI presentation preferences into `$XDG_CONFIG_HOME/mutx/config.toml`.
+    pub fn save_tui_config(&self) {
+        let mut cfg = crate::config::TuiConfig::load();
+        cfg.color_scheme = self.color_scheme.clone();
+        cfg.custom_color_scheme = self.custom_color_scheme.clone();
+        cfg.click_outside_dismiss = self.click_outside_dismiss;
+        cfg.expand_auto_scroll = self.expand_auto_scroll;
+        cfg.transcript_layout = self.transcript_layout.as_str().to_string();
+        let _ = cfg.save();
+    }
+
     /// Snapshot the *current* field values of a browse view into the
     /// registry — the "save on losing focus" half of the contract. The
     /// inverse of the restore in [`Self::open_panel`].
@@ -3422,7 +3433,7 @@ impl App {
                 self.prune_backfill_after_record(&refreshed.text);
                 if self.input_history_persist {
                     tokio::task::spawn_blocking(move || {
-                        let _ = muta_persistence::config::Config::save_history(
+                        let _ = crate::config::save_history(
                             std::slice::from_ref(&refreshed),
                             true,
                         );
@@ -3434,7 +3445,7 @@ impl App {
             self.push_history(recorded.clone());
             if self.input_history_persist {
                 tokio::task::spawn_blocking(move || {
-                    let _ = muta_persistence::config::Config::save_history(
+                    let _ = crate::config::save_history(
                         std::slice::from_ref(&recorded),
                         true,
                     );
@@ -3466,7 +3477,7 @@ impl App {
         // persistence is disabled (tests).
         if self.input_history_persist {
             tokio::task::spawn_blocking(move || {
-                let _ = muta_persistence::config::Config::save_history(
+                let _ = crate::config::save_history(
                     std::slice::from_ref(&recorded),
                     false,
                 );
@@ -3493,7 +3504,7 @@ impl App {
         // test invoking the clear action must never wipe the user's history.
         if self.input_history_persist {
             tokio::task::spawn_blocking(|| {
-                let _ = muta_persistence::config::Config::clear_history();
+                let _ = crate::config::clear_history();
             });
         }
     }

@@ -38,6 +38,7 @@ mod event_loop;
 pub mod input;
 pub mod interaction;
 pub mod keymap;
+pub mod paths;
 pub mod question_model;
 pub mod step_interaction;
 mod terminal;

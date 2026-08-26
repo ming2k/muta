@@ -80,23 +80,15 @@ pub fn schema_key_tree() -> BTreeMap<String, BTreeMap<String, String>> {
     root.insert("default_model".to_string(), BTreeMap::new());
     root.insert("mcp".to_string(), BTreeMap::new());
     root.insert("compaction".to_string(), BTreeMap::new());
-    root.insert("compaction_preserve_rounds".to_string(), BTreeMap::new());
-    root.insert("compaction_summarize".to_string(), BTreeMap::new());
-    root.insert("compaction_prune".to_string(), BTreeMap::new());
-    root.insert(
-        "compaction_prune_protect_tokens".to_string(),
-        BTreeMap::new(),
-    );
     root.insert("connection_retry_max_attempts".to_string(), BTreeMap::new());
     root.insert("connection_retry_base_ms".to_string(), BTreeMap::new());
     root.insert("connection_retry_max_ms".to_string(), BTreeMap::new());
     root.insert("favorites".to_string(), BTreeMap::new());
+    root.insert("hidden_models".to_string(), BTreeMap::new());
     root.insert("skills".to_string(), BTreeMap::new());
     root.insert("permissions".to_string(), BTreeMap::new());
     root.insert("bash_policy".to_string(), BTreeMap::new());
     root.insert("websearch".to_string(), BTreeMap::new());
-    root.insert("tui".to_string(), BTreeMap::new());
-    root.insert("input_history".to_string(), BTreeMap::new());
     root.insert("master".to_string(), BTreeMap::new());
     root.insert("hooks".to_string(), BTreeMap::new());
     root.insert("tool_variants".to_string(), BTreeMap::new());
@@ -111,20 +103,15 @@ pub const CONFIG_KEYS: &[&str] = &[
     "default_model",
     "mcp",
     "compaction",
-    "compaction_preserve_rounds",
-    "compaction_summarize",
-    "compaction_prune",
-    "compaction_prune_protect_tokens",
     "connection_retry_max_attempts",
     "connection_retry_base_ms",
     "connection_retry_max_ms",
     "favorites",
+    "hidden_models",
     "skills",
     "permissions",
     "bash_policy",
     "websearch",
-    "tui",
-    "input_history",
     "master",
     "hooks",
     "tool_variants",
@@ -150,8 +137,24 @@ const LEGACY_KEYS: &[(&str, &str)] = &[
     ),
     (
         "compaction_preserve_turns",
-        "renamed to `compaction_preserve_rounds` (ADR-0047); the old key is \
+        "renamed to `compaction.preserve_rounds` (ADR-0047); the old key is \
          ignored and dropped on next save (ADR-0120)",
+    ),
+    (
+        "compaction_preserve_rounds",
+        "moved into `[compaction]` table as `preserve_rounds`",
+    ),
+    (
+        "compaction_summarize",
+        "moved into `[compaction]` table as `summarize`",
+    ),
+    (
+        "compaction_prune",
+        "moved into `[compaction]` table as `prune`",
+    ),
+    (
+        "compaction_prune_protect_tokens",
+        "moved into `[compaction]` table as `prune_protect_tokens`",
     ),
     (
         "compaction.max_active_tokens",
@@ -160,6 +163,14 @@ const LEGACY_KEYS: &[(&str, &str)] = &[
     (
         "compaction.prompt_reserve_tokens",
         "removed; superseded by the pressure ladder",
+    ),
+    (
+        "tui",
+        "decoupled into the dedicated TUI client configuration `$XDG_CONFIG_HOME/mutx/config.toml` (ADR-0136)",
+    ),
+    (
+        "input_history",
+        "decoupled into the dedicated TUI client configuration `$XDG_CONFIG_HOME/mutx/config.toml` (ADR-0136)",
     ),
     ("providers", "moved to `connections.toml`"),
     (
@@ -293,13 +304,13 @@ mod tests {
     #[test]
     fn typo_and_legacy_keys_are_reported_separately() {
         let (path, _dir) = write_config(
-            "compaction_preserve_rounds = 6\ncompaction_preserve_turns = 9\ncopaction = {}\n",
+            "compaction_preserve_turns = 9\n\n[compaction]\npreserve_rounds = 6\n\n[copaction]\n",
         );
         let findings = check_config_file(Some(path));
         assert_eq!(findings.len(), 2, "got: {findings:?}");
         let legacy = findings.iter().find(|f| f.is_legacy).unwrap();
         assert_eq!(legacy.key, "compaction_preserve_turns");
-        assert!(legacy.message.contains("compaction_preserve_rounds"));
+        assert!(legacy.message.contains("preserve_rounds"));
         let typo = findings.iter().find(|f| !f.is_legacy).unwrap();
         assert_eq!(typo.key, "copaction");
         assert!(typo.message.contains("unknown section"));
@@ -315,10 +326,10 @@ mod tests {
 
     #[test]
     fn type_mismatch_is_a_finding() {
-        // `compaction_preserve_rounds` is a usize; a string is a type error
+        // `preserve_rounds` is a usize; a string is a type error
         // that makes a load fall back to *defaults* — the exact silent
         // failure mode `check` exists to surface.
-        let (path, _dir) = write_config("compaction_preserve_rounds = \"six\"\n");
+        let (path, _dir) = write_config("[compaction]\npreserve_rounds = \"six\"\n");
         let findings = check_config_file(Some(path));
         assert!(
             findings.iter().any(|f| f.message.contains("schema")),

@@ -1,6 +1,5 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
-use muta_persistence::config::Config;
 use muta_runtime::client;
 use mutx::start_tui;
 mod cli;
@@ -296,7 +295,7 @@ const EXIT_HISTORY_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from
 /// interrupted process can at worst lose the merge, never corrupt the file.
 async fn save_history_bounded(history: Vec<muta_contracts::HistoryEntry>, dedup: bool) {
     let save = tokio::task::spawn_blocking(move || {
-        Config::save_history(&history, dedup).map_err(|error| error.to_string())
+        mutx::config::save_history(&history, dedup).map_err(|error| error.to_string())
     });
     match tokio::time::timeout(EXIT_HISTORY_SAVE_TIMEOUT, save).await {
         Ok(Ok(Ok(()))) => {}
@@ -511,10 +510,10 @@ async fn run_attached(
                 sent_at_ms: None,
             });
         }
-        let input_history = Config::load_history();
-        let config = Config::load();
-        let tui_config = config.tui.clone();
-        let input_history_config = config.input_history.clone();
+        let mutx_config = mutx::config::TuiConfig::load();
+        let input_history = mutx::config::load_history();
+        let tui_config = mutx_config.clone();
+        let input_history_config = mutx_config.input_history.clone();
         let startup_overlay = if dashboard_pending {
             dashboard_pending = false;
             mutx::StartupOverlay::Dashboard
@@ -546,7 +545,7 @@ async fn run_attached(
             startup_overlay,
         )
         .await?;
-        save_history_bounded(outcome.history, config.input_history.dedup).await;
+        save_history_bounded(outcome.history, mutx_config.input_history.dedup).await;
         match outcome.switch_to {
             Some(id) => {
                 target = Some(id);
