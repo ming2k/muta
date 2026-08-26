@@ -34,7 +34,7 @@
 curl -fsSL https://raw.githubusercontent.com/ming2k/muta/main/install.sh | bash
 ```
 
-> Pin this release with `MUTA_VERSION=0.35.0`, or install into a custom dir with `INSTALL_DIR=/usr/local/bin`.
+> Pin this release with `MUTA_VERSION=0.35.1`, or install into a custom dir with `INSTALL_DIR=/usr/local/bin`.
 
 On Windows (PowerShell), install the verified release build for the current user:
 
