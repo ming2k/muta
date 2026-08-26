@@ -176,7 +176,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -185,6 +185,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - name: Run workspace tests in an isolated home
         # ADR-0121: belt-and-braces. Every suite sandboxes itself, but a
         # process-wide MUTA_HOME means a test that forgets its own sandbox
@@ -192,7 +195,9 @@ jobs:
         # HOME. The runner context is valid at step scope, not job env scope.
         env:
           MUTA_HOME: ${{ runner.temp }}/muta-test-home
-        run: cargo test --workspace --locked --no-fail-fast
+        run: |
+          cargo nextest run --profile ci --workspace --locked
+          cargo test --doc --workspace --locked
 
   msrv:
     name: MSRV (1.95)
