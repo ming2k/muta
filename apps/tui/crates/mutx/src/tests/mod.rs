@@ -76,7 +76,6 @@ pub(crate) fn new_app_for_relay_tests() -> App {
 
 fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let tmp = tempfile::tempdir().expect("tempdir");
     for d in dirs {
         std::fs::create_dir_all(tmp.path().join(d)).expect("mkdir");
     }
