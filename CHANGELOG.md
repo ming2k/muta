@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.5] - 2026-08-26
+
 ### Changed
 
+- Retired the `INTERACTIVE` and `QUANT` envoy profiles: the
+  reserved `INTERACTIVE` role never gained a dispatch tool, and `QUANT`'s
+  domain-specific tools are not wired into any dispatch surface. The
+  remaining built-ins (`EXPLORE`, `CODE`, `TITLE`, `MCP_SPECIALIST`) are
+  unchanged; `CODE` retains `allow_user_interaction` so its ask_user
+  request/reply path still works.
 - Consolidated filesystem search into three single-purpose tools (ADR 0143):
   `find_files` takes an explicit `patterns` array (OR, ripgrep-style gitignore
   globs) for recursive discovery, `search_text` runs content search in-process
