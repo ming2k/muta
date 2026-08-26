@@ -429,7 +429,13 @@ pub fn start_server(
                 tokio::select! {_=cc.cancelled()=>{tracing::info!("muta daemon: cancelled");break;}
                 ac=listener.accept()=>{let(stream,peer)=match ac{Ok(c)=>c,Err(e)=>{tracing::warn!(error=%e,backoff_ms=backoff.as_millis() as u64,"muta daemon: accept failed");tokio::time::sleep(backoff).await;backoff=(backoff*2).min(ACCEPT_BACKOFF_CAP);continue;}};
                 backoff=std::time::Duration::from_millis(5);
-                spawn_tcp_connection(stream, registry.clone(), tf.clone(), expose, conns.clone(), gate.clone(), cc.clone(), peer.to_string());}}
+                spawn_tcp_connection(
+                    stream,
+                    ServeCtx { registry: registry.clone(), conns: conns.clone(), gate: gate.clone(), listeners: cc.clone() },
+                    tf.clone(),
+                    expose,
+                    peer.to_string(),
+                );}}
             }
         });
         tasks.track("tcp-accept", handle);
@@ -463,7 +469,13 @@ pub fn start_server(
                     tokio::select! {_=cc.cancelled()=>{tracing::info!("muta daemon: local IPC cancelled");break;}
                     ac=listener.accept()=>{let stream=match ac{Ok(c)=>c,Err(e)=>{tracing::warn!(error=%e,backoff_ms=backoff.as_millis() as u64,"muta daemon: local IPC accept failed");tokio::time::sleep(backoff).await;backoff=(backoff*2).min(ACCEPT_BACKOFF_CAP);continue;}};
                     backoff=std::time::Duration::from_millis(5);
-                    spawn_connection(stream, registry.clone(), None, ServeExpose::Local, conns.clone(), gate.clone(), cc.clone(), format!("local:{endpoint:?}"));}}
+                    spawn_connection(
+                        stream,
+                        ServeCtx { registry: registry.clone(), conns: conns.clone(), gate: gate.clone(), listeners: cc.clone() },
+                        None,
+                        ServeExpose::Local,
+                        format!("local:{endpoint:?}"),
+                    );}}
                 }
             });
             tasks.track("local-ipc-accept", handle);
@@ -514,17 +526,19 @@ async fn bind_tcp(addr: SocketAddr, port_fallback: bool) -> std::io::Result<(Tcp
 /// runs inside the per-connection
 /// task, never inline in the accept loop, so a slowloris peer cannot stall
 /// accepts.
-#[allow(clippy::too_many_arguments)]
 fn spawn_tcp_connection(
     stream: tokio::net::TcpStream,
-    registry: Arc<crate::registry::SessionRegistry>,
+    ctx: ServeCtx,
     token: Option<String>,
     expose: ServeExpose,
-    conns: Arc<ConnTable>,
-    gate: Arc<ShutdownGate>,
-    listeners: CancellationToken,
     peer: String,
 ) {
+    let ServeCtx {
+        registry,
+        conns,
+        gate,
+        listeners,
+    } = ctx;
     tokio::spawn(async move {
         let expected_token = token.as_deref();
         match classify(&stream).await {
@@ -540,7 +554,16 @@ fn spawn_tcp_connection(
             }
             Ok(TcpTransport::WebSocket) => {
                 spawn_connection(
-                    stream, registry, token, expose, conns, gate, listeners, peer,
+                    stream,
+                    ServeCtx {
+                        registry,
+                        conns,
+                        gate,
+                        listeners,
+                    },
+                    token,
+                    expose,
+                    peer,
                 );
             }
             Err(e) => {
@@ -553,19 +576,33 @@ fn spawn_tcp_connection(
 /// Spawn one connection task, registered in the connection table for the
 /// drain phase. Every accepted socket funnels through here so the table can
 /// never miss one; the guard unregisters on every exit path.
-#[allow(clippy::too_many_arguments)]
-fn spawn_connection<S>(
-    stream: S,
+/// Shared daemon accept context: the session registry, connection table,
+/// shutdown gate, and cancellation token every accepted socket needs. One
+/// instance is cloned per accept loop; `spawn_connection` takes it plus the
+/// per-socket specifics (stream, token, exposure, peer).
+#[derive(Clone)]
+struct ServeCtx {
     registry: Arc<crate::registry::SessionRegistry>,
-    token: Option<String>,
-    expose: ServeExpose,
     conns: Arc<ConnTable>,
     gate: Arc<ShutdownGate>,
     listeners: CancellationToken,
+}
+
+fn spawn_connection<S>(
+    stream: S,
+    ctx: ServeCtx,
+    token: Option<String>,
+    expose: ServeExpose,
     peer: String,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    let ServeCtx {
+        registry,
+        conns,
+        gate,
+        listeners,
+    } = ctx;
     let (id, conn_cancel) = conns.register();
     let conns_for_guard = conns.clone();
     tokio::spawn(async move {

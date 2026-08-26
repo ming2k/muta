@@ -374,16 +374,28 @@ pub async fn publish_btw_list(
 /// to the primary so the prompt is never silently dropped.
 /// Compaction/retry knobs are resolved once from the primary agent + config,
 /// which is correct because the aside shares the same provider/model.
-#[allow(clippy::too_many_arguments)]
-pub async fn start_active_turn(
-    side: &Arc<AsyncRwLock<SideRegistry>>,
-    master: &Arc<Agent>,
-    primary_session: &Arc<SessionStore>,
-    primary_lifecycle: &Arc<RoundLifecycle>,
-    tx: &mpsc::UnboundedSender<AgentResponse>,
-    config: &Config,
-    input: RoundInput,
-) {
+/// Bundled round-start environment: the side registry, the primary
+/// session's agent/store/lifecycle triple, the response channel, and the
+/// config. Every turn entry point threads the same six handles; bundling
+/// keeps the signatures to (env, input).
+pub(crate) struct SideEnv<'a> {
+    pub side: &'a Arc<AsyncRwLock<SideRegistry>>,
+    pub master: &'a Arc<Agent>,
+    pub primary_session: &'a Arc<SessionStore>,
+    pub primary_lifecycle: &'a Arc<RoundLifecycle>,
+    pub tx: &'a mpsc::UnboundedSender<AgentResponse>,
+    pub config: &'a Config,
+}
+
+pub async fn start_active_turn(env: SideEnv<'_>, input: RoundInput) {
+    let SideEnv {
+        side,
+        master,
+        primary_session,
+        primary_lifecycle,
+        tx,
+        config,
+    } = env;
     // Resolve which live session this round belongs to, cloning the per-session
     // Arcs out of the registry under a short-lived read lock. The guard drops
     // at the end of this statement, before the round starts.
@@ -451,17 +463,19 @@ pub async fn target_agent(
 
 /// Start a fresh round in one exact live session. Returns `false` when the
 /// target aside was closed after the message entered the frontend outbox.
-#[allow(clippy::too_many_arguments)]
 pub async fn start_session_turn(
     target_session_id: &str,
-    side: &Arc<AsyncRwLock<SideRegistry>>,
-    master: &Arc<Agent>,
-    primary_session: &Arc<SessionStore>,
-    primary_lifecycle: &Arc<RoundLifecycle>,
-    tx: &mpsc::UnboundedSender<AgentResponse>,
-    config: &Config,
+    env: SideEnv<'_>,
     input: RoundInput,
 ) -> bool {
+    let SideEnv {
+        side,
+        master,
+        primary_session,
+        primary_lifecycle,
+        tx,
+        config,
+    } = env;
     let primary_id = primary_session.id().await;
     let is_primary = primary_id == target_session_id;
     let resolved = if is_primary {
@@ -509,7 +523,6 @@ pub async fn start_session_turn(
     true
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn start_resolved_turn(
     master: &Arc<Agent>,
     tx: &mpsc::UnboundedSender<AgentResponse>,

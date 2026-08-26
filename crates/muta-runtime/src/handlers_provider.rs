@@ -36,14 +36,28 @@ use crate::session_view::provider_key_status;
 /// selection to this session's store so resuming *this* session restores its
 /// own choice. Other live sessions keep their in-memory selection and live
 /// provider; only fresh sessions follow the new global default.
-#[allow(clippy::too_many_arguments)]
+/// Bundled handler environment: the plumbing arguments every provider
+/// request handler threads through (config, agent, shared provider slot,
+/// session store, response channel, connection usage). Handlers keep only
+/// their request-specific parameters.
+pub(crate) struct ProviderEnv<'a> {
+    pub config: &'a mut Config,
+    pub agent: &'a Agent,
+    pub provider_for_task: &'a Arc<RwLock<Arc<dyn Provider>>>,
+    pub session: &'a SessionStore,
+    pub resp_tx: &'a mpsc::UnboundedSender<AgentResponse>,
+    pub provider_usage: &'a mut ConnectionUsage,
+}
+
 pub async fn switch(
-    config: &mut Config,
-    agent: &Agent,
-    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    session: &SessionStore,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ConnectionUsage,
+    ProviderEnv {
+        config,
+        agent,
+        provider_for_task,
+        session,
+        resp_tx,
+        provider_usage,
+    }: ProviderEnv<'_>,
     provider_type: String,
     model: String,
     api_key: Option<SecretString>,
@@ -111,14 +125,15 @@ pub async fn switch(
 /// or as a pure-custom declaration), persist it to the state store, set its
 /// credential, then activate it. For OAuth presets the TUI runs
 /// [`authorize`] first, then calls this with `auth` set.
-#[allow(clippy::too_many_arguments)]
 pub async fn add(
-    config: &mut Config,
-    agent: &Agent,
-    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    session: &SessionStore,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ConnectionUsage,
+    ProviderEnv {
+        config,
+        agent,
+        provider_for_task,
+        session,
+        resp_tx,
+        provider_usage,
+    }: ProviderEnv<'_>,
     name: String,
     protocol: String,
     base_url: String,
@@ -254,13 +269,15 @@ pub async fn add(
 
 /// `AgentRequest::EditProvider` — update a connection's display name, endpoint
 /// override, credential, and client identity in place.
-#[allow(clippy::too_many_arguments)]
 pub async fn edit(
-    config: &mut Config,
-    agent: &Agent,
-    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ConnectionUsage,
+    ProviderEnv {
+        config,
+        agent,
+        provider_for_task,
+        resp_tx,
+        provider_usage,
+        ..
+    }: ProviderEnv<'_>,
     id: String,
     name: String,
     protocol: String,
@@ -364,13 +381,15 @@ pub async fn remove_model(
 /// `AgentRequest::EditProviderModel` — update the per-(connection, model)
 /// reasoning overrides in the discovery cache. Connection metadata (name /
 /// endpoint / credential) is untouched.
-#[allow(clippy::too_many_arguments)]
 pub async fn edit_model(
-    config: &mut Config,
-    agent: &Agent,
-    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ConnectionUsage,
+    ProviderEnv {
+        config,
+        agent,
+        provider_for_task,
+        resp_tx,
+        provider_usage,
+        ..
+    }: ProviderEnv<'_>,
     provider_id: String,
     model: String,
     effort: Option<String>,
@@ -454,13 +473,15 @@ pub async fn edit_model(
 /// actually serves it (a model id can be served by more than one connection).
 /// If the edited model is the active one, the live provider is re-activated
 /// so the new settings take effect at once.
-#[allow(clippy::too_many_arguments)]
 pub async fn edit_model_reasoning(
-    config: &mut Config,
-    agent: &Agent,
-    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ConnectionUsage,
+    ProviderEnv {
+        config,
+        agent,
+        provider_for_task,
+        resp_tx,
+        provider_usage,
+        ..
+    }: ProviderEnv<'_>,
     model: String,
     effort: Option<String>,
     thinking: Option<bool>,
@@ -517,13 +538,15 @@ pub async fn edit_model_reasoning(
 /// and its OAuth tokens, and prune its model ids from favorites. When the
 /// deleted connection was the active one, fall back to the effective default and
 /// re-activate so the live provider never points at a removed entry.
-#[allow(clippy::too_many_arguments)]
 pub async fn delete(
-    config: &mut Config,
-    agent: &Agent,
-    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ConnectionUsage,
+    ProviderEnv {
+        config,
+        agent,
+        provider_for_task,
+        resp_tx,
+        provider_usage,
+        ..
+    }: ProviderEnv<'_>,
     id: String,
 ) {
     let mut connections = Connections::load();
@@ -1008,7 +1031,6 @@ async fn record_provider_ack(session: &SessionStore, provider: &str, model: &str
 /// Shared tail of [`switch`] and [`add`]: rebuild the active provider through the
 /// catalog, swap it into the shared holder, re-seed mid-turn relief, and push
 /// the key + picker snapshots.
-#[allow(clippy::too_many_arguments)]
 async fn activate(
     config: &Config,
     agent: &Agent,

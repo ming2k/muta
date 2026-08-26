@@ -9,29 +9,32 @@
 use muta_agent::orchestration::{RoundInput, round_response};
 use muta_agent::{Agent, RoundLifecycle};
 use muta_contracts::{AgentResponse, QueuedMessage, RoundEvent};
-use muta_persistence::{config::Config, session::SessionStore};
+use muta_persistence::session::SessionStore;
 use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::shell::run_shell_command;
+use crate::side::SideEnv;
 use crate::side::{
     SideRegistry, refuse_if_no_provider, start_active_turn, start_session_turn, target_agent,
 };
 
 /// `AgentRequest::Chat` — start an interactive round against whichever session
 /// the user is currently composing into (primary or `/btw` side).
-#[allow(clippy::too_many_arguments)]
 pub async fn chat(
-    side: &Arc<AsyncRwLock<SideRegistry>>,
-    agent: &Arc<Agent>,
-    session: &Arc<SessionStore>,
-    lifecycle: &Arc<RoundLifecycle>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    config: &Config,
+    env: SideEnv<'_>,
     text: String,
     images: Vec<muta_contracts::ImagePart>,
     sent_at_ms: Option<u64>,
 ) {
+    let SideEnv {
+        side,
+        master: agent,
+        primary_session: session,
+        primary_lifecycle: lifecycle,
+        tx: resp_tx,
+        config,
+    } = env;
     // Refuse up-front when no real provider is configured: the shared holder
     // is parked on the `NoProvider` sentinel (catalog could not resolve a
     // channel at startup or the last `/models` switch). Failing here keeps
@@ -45,12 +48,14 @@ pub async fn chat(
         return;
     }
     start_active_turn(
-        side,
-        agent,
-        session,
-        lifecycle,
-        resp_tx,
-        config,
+        SideEnv {
+            side,
+            master: agent,
+            primary_session: session,
+            primary_lifecycle: lifecycle,
+            tx: resp_tx,
+            config,
+        },
         RoundInput {
             prompt: text,
             hidden: false,
@@ -111,25 +116,25 @@ pub async fn cancel_steer(
 /// Dispatch a paused outbox item into a fresh round without consulting the
 /// frontend's current view. If its side session vanished, hand ownership back
 /// to the outbox through `SteerUnavailable`.
-#[allow(clippy::too_many_arguments)]
-pub async fn follow_up(
-    side: &Arc<AsyncRwLock<SideRegistry>>,
-    agent: &Arc<Agent>,
-    session: &Arc<SessionStore>,
-    lifecycle: &Arc<RoundLifecycle>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    config: &Config,
-    session_id: String,
-    input: QueuedMessage,
-) {
+pub async fn follow_up(env: SideEnv<'_>, session_id: String, input: QueuedMessage) {
+    let SideEnv {
+        side,
+        master: agent,
+        primary_session: session,
+        primary_lifecycle: lifecycle,
+        tx: resp_tx,
+        config,
+    } = env;
     let started = start_session_turn(
         &session_id,
-        side,
-        agent,
-        session,
-        lifecycle,
-        resp_tx,
-        config,
+        SideEnv {
+            side,
+            master: agent,
+            primary_session: session,
+            primary_lifecycle: lifecycle,
+            tx: resp_tx,
+            config,
+        },
         RoundInput {
             prompt: input.text.clone(),
             hidden: false,

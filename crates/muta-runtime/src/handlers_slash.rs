@@ -110,6 +110,7 @@ async fn reload_trusted_assets(
 
 use crate::agent_setup::active_context_window;
 use crate::session_view::{build_sessions_overview, short_session_id};
+use crate::side::SideEnv;
 use crate::side::{
     SideRegistry, SideSession, publish_btw_list, refuse_if_no_provider,
     spawn_parent_status_watcher, start_active_turn,
@@ -183,19 +184,19 @@ pub(crate) async fn teardown_sides_for_session_switch(
 /// provider pin, C6). The frontend is told through `ConversationCleared`
 /// (blank transcript, zeroed round count) plus a `TodosUpdated` reset, and
 /// the confirmation lands in the new session's command ledger.
-#[allow(clippy::too_many_arguments)]
-async fn start_fresh_session(
-    side: &Arc<AsyncRwLock<SideRegistry>>,
-    session: &Arc<SessionStore>,
-    config: &Config,
-    agent: &Arc<Agent>,
-    lifecycle: &Arc<RoundLifecycle>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    provider_usage: &mut ConnectionUsage,
-    name: &str,
-    args: &str,
-) {
+async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args: &str) {
+    // Split-borrow: the fresh-session path mutates usage while reading the
+    // rest of the environment.
+    let (side, session, config, agent, lifecycle, resp_tx, provider_for_task) = (
+        env.side,
+        env.session,
+        env.config,
+        env.agent,
+        env.lifecycle,
+        env.resp_tx,
+        env.provider_for_task,
+    );
+    let provider_usage = &mut *env.provider_usage;
     supersede_for_session_switch(lifecycle, agent, resp_tx).await;
     teardown_sides_for_session_switch(side, resp_tx).await;
     agent.clear_todos();
@@ -580,33 +581,60 @@ fn trust_route(name: &str, parts: &[&str]) -> Result<TrustRoute, String> {
     }
 }
 
+/// Bundled slash-dispatch environment: the daemon plumbing a slash command
+/// needs beyond the command text itself. Extracted so `dispatch` reads as
+/// `dispatch(cmd, env)` instead of a 22-parameter list threaded from the
+/// single call site in `session_driver`.
+pub(crate) struct SlashEnv<'a> {
+    pub config: &'a Config,
+    pub agent: &'a Arc<Agent>,
+    pub mcp_runtime: &'a Arc<McpRuntime>,
+    pub workspace_security: &'a Arc<WorkspaceSecurityStore>,
+    pub resp_tx: &'a mpsc::UnboundedSender<AgentResponse>,
+    pub session: &'a Arc<SessionStore>,
+    pub lifecycle: &'a Arc<RoundLifecycle>,
+    pub side: &'a Arc<AsyncRwLock<SideRegistry>>,
+    pub base_tools_for_side: &'a Arc<Vec<Arc<dyn Tool>>>,
+    pub provider_for_task: &'a Arc<RwLock<Arc<dyn Provider>>>,
+    pub provider_usage: &'a mut ConnectionUsage,
+    pub skills_registry: Arc<SkillRegistry>,
+    pub skills_registry_for_commands: &'a Arc<SkillRegistry>,
+    pub _commands_for_task: &'a HashMap<String, CustomCommand>,
+    pub embedding_store_for_commands: &'a Arc<AsyncRwLock<embedding::EmbeddingStore>>,
+    pub req_tx_for_commands: &'a mpsc::UnboundedSender<AgentRequest>,
+    pub project_root_for_side: &'a std::path::Path,
+    pub startup: &'a SessionStart,
+    pub ui: &'a dyn crate::UiBridge,
+    pub extra_commands: &'a SlashCommandRegistry,
+    pub websearch_shared: &'a Arc<muta_contracts::SharedWebSearchConfig>,
+}
+
 /// `AgentRequest::SlashCommand` — parse the command, dispatch to the matching
 /// built-in handler, or fall through to the user-defined project-command path.
-#[allow(clippy::too_many_arguments)]
-pub async fn dispatch(
-    cmd: String,
-    config: &Config,
-    agent: &Arc<Agent>,
-    mcp_runtime: &Arc<McpRuntime>,
-    workspace_security: &Arc<WorkspaceSecurityStore>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    session: &Arc<SessionStore>,
-    lifecycle: &Arc<RoundLifecycle>,
-    side: &Arc<AsyncRwLock<SideRegistry>>,
-    base_tools_for_side: &Arc<Vec<Arc<dyn Tool>>>,
-    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    provider_usage: &mut ConnectionUsage,
-    skills_registry: Arc<SkillRegistry>,
-    skills_registry_for_commands: &Arc<SkillRegistry>,
-    _commands_for_task: &HashMap<String, CustomCommand>,
-    embedding_store_for_commands: &Arc<AsyncRwLock<embedding::EmbeddingStore>>,
-    req_tx_for_commands: &mpsc::UnboundedSender<AgentRequest>,
-    project_root_for_side: &std::path::Path,
-    startup: &SessionStart,
-    ui: &dyn crate::UiBridge,
-    extra_commands: &SlashCommandRegistry,
-    websearch_shared: &Arc<muta_contracts::SharedWebSearchConfig>,
-) {
+pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
+    let SlashEnv {
+        ref config,
+        ref agent,
+        ref mcp_runtime,
+        ref workspace_security,
+        ref resp_tx,
+        ref session,
+        ref lifecycle,
+        ref side,
+        ref base_tools_for_side,
+        ref provider_for_task,
+        ref mut provider_usage,
+        ref skills_registry,
+        ref skills_registry_for_commands,
+        ref _commands_for_task,
+        ref embedding_store_for_commands,
+        ref req_tx_for_commands,
+        ref project_root_for_side,
+        ref startup,
+        ref ui,
+        ref extra_commands,
+        ref websearch_shared,
+    } = env;
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if parts.is_empty() {
         return;
@@ -957,19 +985,7 @@ pub async fn dispatch(
             };
             match route {
                 SessionRoute::New => {
-                    start_fresh_session(
-                        side,
-                        session,
-                        config,
-                        agent,
-                        lifecycle,
-                        resp_tx,
-                        provider_for_task,
-                        provider_usage,
-                        name,
-                        args,
-                    )
-                    .await;
+                    start_fresh_session(&mut env, name, args).await;
                 }
                 SessionRoute::Fork => {
                     fork_current_session(lifecycle, agent, session, side, resp_tx, name, args)
@@ -1166,7 +1182,7 @@ pub async fn dispatch(
                 session,
                 base_tools_for_side,
                 provider_for_task,
-                (*skills_registry).clone(),
+                (**skills_registry).clone(),
                 project_root_for_side,
                 agent.identity().clone(),
                 agent.workspace_security_handle(),
@@ -1209,15 +1225,17 @@ pub async fn dispatch(
             // one while the first is still alive is harmless (both emit only
             // on change and dedupe through the shared last-value cell on the
             // TUI side).
-            spawn_parent_status_watcher(side.clone(), lifecycle.clone(), resp_tx.clone());
+            spawn_parent_status_watcher((*side).clone(), (*lifecycle).clone(), (*resp_tx).clone());
             if !prompt.is_empty() {
                 start_active_turn(
-                    side,
-                    agent,
-                    session,
-                    lifecycle,
-                    resp_tx,
-                    config,
+                    SideEnv {
+                        side,
+                        master: agent,
+                        primary_session: session,
+                        primary_lifecycle: lifecycle,
+                        tx: resp_tx,
+                        config,
+                    },
                     RoundInput {
                         prompt: prompt.to_string(),
                         hidden: false,
@@ -1679,7 +1697,7 @@ pub async fn dispatch(
             match sub {
                 "list" => {
                     let tool = ListSkillsTool {
-                        registry: skills_registry_for_commands.clone(),
+                        registry: (*skills_registry_for_commands).clone(),
                     };
                     match tool.call("{}").await {
                         Ok(output) => {
@@ -1734,7 +1752,7 @@ pub async fn dispatch(
             } else {
                 let args_json = serde_json::json!({ "name": skill_name }).to_string();
                 let tool = UseSkillTool {
-                    registry: skills_registry_for_commands.clone(),
+                    registry: (*skills_registry_for_commands).clone(),
                 };
                 match tool.call(&args_json).await {
                     Ok(output) => {
@@ -1752,19 +1770,7 @@ pub async fn dispatch(
             // and leaves the current one on disk (resumable via `/sessions`
             // or `/session open`). The retired `/clear` resolves here through
             // the alias table, so old muscle memory gets the safe semantics.
-            start_fresh_session(
-                side,
-                session,
-                config,
-                agent,
-                lifecycle,
-                resp_tx,
-                provider_for_task,
-                provider_usage,
-                name,
-                args,
-            )
-            .await;
+            start_fresh_session(&mut env, name, args).await;
         }
         Some(BuiltinCmd::Export) => {
             let messages = session.model_window().await;
@@ -2079,12 +2085,14 @@ pub async fn dispatch(
             }
             record_invocation(session, name, args).await;
             start_active_turn(
-                side,
-                agent,
-                session,
-                lifecycle,
-                resp_tx,
-                config,
+                SideEnv {
+                    side,
+                    master: agent,
+                    primary_session: session,
+                    primary_lifecycle: lifecycle,
+                    tx: resp_tx,
+                    config,
+                },
                 RoundInput::resume(point),
             )
             .await;
@@ -2171,7 +2179,7 @@ pub async fn dispatch(
                     req_tx: req_tx_for_commands,
                     project_root: project_root_for_side,
                     startup,
-                    ui,
+                    ui: *ui,
                 };
                 if handler.handle(ctx).await {
                     return;
@@ -2192,12 +2200,14 @@ pub async fn dispatch(
             };
             record_invocation(session, name, args).await;
             start_active_turn(
-                side,
-                agent,
-                session,
-                lifecycle,
-                resp_tx,
-                config,
+                SideEnv {
+                    side,
+                    master: agent,
+                    primary_session: session,
+                    primary_lifecycle: lifecycle,
+                    tx: resp_tx,
+                    config,
+                },
                 RoundInput {
                     prompt: expand_command(&command, arguments),
                     hidden: false,

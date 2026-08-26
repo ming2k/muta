@@ -12,6 +12,8 @@
 //! making its ownership boundary explicit.
 
 use crate::commands::CustomCommand;
+use crate::handlers_slash::SlashEnv;
+use crate::side::SideEnv;
 use muta_agent::catalog;
 use muta_agent::orchestration::{round_response, send_harness_state};
 use muta_agent::{Agent, RoundLifecycle, RunnerRegistry};
@@ -346,10 +348,12 @@ impl SessionDriver {
                     parent_call_id,
                 } => {
                     crate::handlers_permission::reply_question(
-                        &agent,
-                        &runner_registry,
-                        &side,
-                        &resp_tx,
+                        crate::handlers_permission::ReplyEnv {
+                            agent: &agent,
+                            runner_registry: &runner_registry,
+                            side: &side,
+                            resp_tx: &resp_tx,
+                        },
                         request_id,
                         answers,
                         parent_call_id,
@@ -362,10 +366,12 @@ impl SessionDriver {
                     parent_call_id,
                 } => {
                     crate::handlers_permission::reply_input(
-                        &agent,
-                        &runner_registry,
-                        &side,
-                        &resp_tx,
+                        crate::handlers_permission::ReplyEnv {
+                            agent: &agent,
+                            runner_registry: &runner_registry,
+                            side: &side,
+                            resp_tx: &resp_tx,
+                        },
                         request_id,
                         text,
                         parent_call_id,
@@ -379,12 +385,14 @@ impl SessionDriver {
                     base_url,
                 } => {
                     crate::handlers_provider::switch(
-                        &mut config,
-                        &agent,
-                        &provider_for_task,
-                        &session,
-                        &resp_tx,
-                        &mut provider_usage,
+                        crate::handlers_provider::ProviderEnv {
+                            config: &mut config,
+                            agent: &agent,
+                            provider_for_task: &provider_for_task,
+                            session: &session,
+                            resp_tx: &resp_tx,
+                            provider_usage: &mut provider_usage,
+                        },
                         provider_type,
                         model,
                         api_key,
@@ -404,12 +412,14 @@ impl SessionDriver {
                     client_identity,
                 } => {
                     crate::handlers_provider::add(
-                        &mut config,
-                        &agent,
-                        &provider_for_task,
-                        &session,
-                        &resp_tx,
-                        &mut provider_usage,
+                        crate::handlers_provider::ProviderEnv {
+                            config: &mut config,
+                            agent: &agent,
+                            provider_for_task: &provider_for_task,
+                            session: &session,
+                            resp_tx: &resp_tx,
+                            provider_usage: &mut provider_usage,
+                        },
                         name,
                         protocol,
                         base_url,
@@ -446,11 +456,14 @@ impl SessionDriver {
                     client_identity,
                 } => {
                     crate::handlers_provider::edit(
-                        &mut config,
-                        &agent,
-                        &provider_for_task,
-                        &resp_tx,
-                        &mut provider_usage,
+                        crate::handlers_provider::ProviderEnv {
+                            config: &mut config,
+                            agent: &agent,
+                            provider_for_task: &provider_for_task,
+                            session: &session,
+                            resp_tx: &resp_tx,
+                            provider_usage: &mut provider_usage,
+                        },
                         id,
                         name,
                         protocol,
@@ -478,11 +491,14 @@ impl SessionDriver {
                     overrides,
                 } => {
                     crate::handlers_provider::edit_model(
-                        &mut config,
-                        &agent,
-                        &provider_for_task,
-                        &resp_tx,
-                        &mut provider_usage,
+                        crate::handlers_provider::ProviderEnv {
+                            config: &mut config,
+                            agent: &agent,
+                            provider_for_task: &provider_for_task,
+                            session: &session,
+                            resp_tx: &resp_tx,
+                            provider_usage: &mut provider_usage,
+                        },
                         provider_id,
                         model,
                         effort,
@@ -498,11 +514,14 @@ impl SessionDriver {
                     overrides,
                 } => {
                     crate::handlers_provider::edit_model_reasoning(
-                        &mut config,
-                        &agent,
-                        &provider_for_task,
-                        &resp_tx,
-                        &mut provider_usage,
+                        crate::handlers_provider::ProviderEnv {
+                            config: &mut config,
+                            agent: &agent,
+                            provider_for_task: &provider_for_task,
+                            session: &session,
+                            resp_tx: &resp_tx,
+                            provider_usage: &mut provider_usage,
+                        },
                         model,
                         effort,
                         thinking,
@@ -512,11 +531,14 @@ impl SessionDriver {
                 }
                 AgentRequest::DeleteProvider { id } => {
                     crate::handlers_provider::delete(
-                        &mut config,
-                        &agent,
-                        &provider_for_task,
-                        &resp_tx,
-                        &mut provider_usage,
+                        crate::handlers_provider::ProviderEnv {
+                            config: &mut config,
+                            agent: &agent,
+                            provider_for_task: &provider_for_task,
+                            session: &session,
+                            resp_tx: &resp_tx,
+                            provider_usage: &mut provider_usage,
+                        },
                         id,
                     )
                     .await;
@@ -661,27 +683,29 @@ impl SessionDriver {
                 AgentRequest::SlashCommand(cmd) => {
                     crate::handlers_slash::dispatch(
                         cmd,
-                        &config,
-                        &agent,
-                        &mcp_runtime,
-                        &workspace_security,
-                        &resp_tx,
-                        &session,
-                        &lifecycle,
-                        &side,
-                        &base_tools_for_side,
-                        &provider_for_task,
-                        &mut provider_usage,
-                        skills_registry.clone(),
-                        &skills_registry_for_commands,
-                        &commands_for_task,
-                        &embedding_store_for_commands,
-                        &req_tx_for_commands,
-                        &project_root_for_side,
-                        &startup,
-                        &*ui,
-                        &extra_commands,
-                        &websearch_shared,
+                        SlashEnv {
+                            config: &config,
+                            agent: &agent,
+                            mcp_runtime: &mcp_runtime,
+                            workspace_security: &workspace_security,
+                            resp_tx: &resp_tx,
+                            session: &session,
+                            lifecycle: &lifecycle,
+                            side: &side,
+                            base_tools_for_side: &base_tools_for_side,
+                            provider_for_task: &provider_for_task,
+                            provider_usage: &mut provider_usage,
+                            skills_registry: skills_registry.clone(),
+                            skills_registry_for_commands: &skills_registry_for_commands,
+                            _commands_for_task: &commands_for_task,
+                            embedding_store_for_commands: &embedding_store_for_commands,
+                            req_tx_for_commands: &req_tx_for_commands,
+                            project_root_for_side: &project_root_for_side,
+                            startup: &startup,
+                            ui: &*ui,
+                            extra_commands: &extra_commands,
+                            websearch_shared: &websearch_shared,
+                        },
                     )
                     .await;
                 }
@@ -699,7 +723,16 @@ impl SessionDriver {
                     sent_at_ms,
                 } => {
                     crate::handlers_chat::chat(
-                        &side, &agent, &session, &lifecycle, &resp_tx, &config, text, images,
+                        SideEnv {
+                            side: &side,
+                            master: &agent,
+                            primary_session: &session,
+                            primary_lifecycle: &lifecycle,
+                            tx: &resp_tx,
+                            config: &config,
+                        },
+                        text,
+                        images,
                         sent_at_ms,
                     )
                     .await;
@@ -721,7 +754,16 @@ impl SessionDriver {
                 }
                 AgentRequest::FollowUp { session_id, input } => {
                     crate::handlers_chat::follow_up(
-                        &side, &agent, &session, &lifecycle, &resp_tx, &config, session_id, input,
+                        SideEnv {
+                            side: &side,
+                            master: &agent,
+                            primary_session: &session,
+                            primary_lifecycle: &lifecycle,
+                            tx: &resp_tx,
+                            config: &config,
+                        },
+                        session_id,
+                        input,
                     )
                     .await;
                 }

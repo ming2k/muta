@@ -101,15 +101,26 @@ pub async fn reply(
     }
 }
 
+/// Bundled reply environment: the agent, runner registry, side registry,
+/// and response channel shared by the permission/question/input reply
+/// handlers. Request-specific fields stay positional.
+pub(crate) struct ReplyEnv<'a> {
+    pub agent: &'a Agent,
+    pub runner_registry: &'a Arc<RunnerRegistry>,
+    pub side: &'a Arc<AsyncRwLock<SideRegistry>>,
+    pub resp_tx: &'a mpsc::UnboundedSender<AgentResponse>,
+}
+
 /// `AgentRequest::UserQuestionReply` — mirror the permission arm: a
 /// `parent_call_id` targets the runner; otherwise try the primary, then a
 /// `/btw` side agent (ADR-0017).
-#[allow(clippy::too_many_arguments)]
 pub async fn reply_question(
-    agent: &Agent,
-    runner_registry: &Arc<RunnerRegistry>,
-    side: &Arc<AsyncRwLock<SideRegistry>>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    ReplyEnv {
+        agent,
+        runner_registry,
+        side,
+        resp_tx,
+    }: ReplyEnv<'_>,
     request_id: String,
     answers: Vec<Vec<String>>,
     parent_call_id: Option<String>,
@@ -141,10 +152,12 @@ pub async fn reply_question(
 /// `parent_call_id` targets the runner; otherwise try the primary, then a
 /// `/btw` side agent.
 pub async fn reply_input(
-    agent: &Agent,
-    runner_registry: &Arc<RunnerRegistry>,
-    side: &Arc<AsyncRwLock<SideRegistry>>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
+    ReplyEnv {
+        agent,
+        runner_registry,
+        side,
+        resp_tx,
+    }: ReplyEnv<'_>,
     request_id: String,
     text: String,
     parent_call_id: Option<String>,
