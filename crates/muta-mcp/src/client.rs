@@ -37,6 +37,12 @@ use tokio::time::{Duration, timeout};
 /// version it supports, and the client either downgrades or disconnects").
 /// Over stdio the 2024-11-05 baseline remains the guaranteed common tongue.
 const MCP_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+/// The 2026-07-28 stateless revision, which *removed* the
+/// `initialize`/`initialized` handshake (SEP-2575): every request carries the
+/// protocol version, client identity, and capabilities in `params._meta`
+/// instead. A server that only speaks it rejects `initialize`, so
+/// [`McpClient::connect`] falls back to this dialect.
+const MCP_STATELESS_VERSION: &str = "2026-07-28";
 const MCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 /// Per-call timeout for a single JSON-RPC request over an established
 /// connection. A server that accepts the request but never responds (or streams
@@ -62,6 +68,21 @@ impl McpError {
     /// once could plausibly succeed.
     fn is_transport(&self) -> bool {
         matches!(self, McpError::Transport(_))
+    }
+
+    /// True when a server's rejection of `initialize` says it only speaks the
+    /// 2026-07-28 stateless revision (no handshake exists — SEP-2575).
+    /// Matched on message text because JSON-RPC error codes are not
+    /// standardized across revisions; the phrasings below are what
+    /// spec-conformant servers answer with.
+    fn is_stateless_rejection(&self) -> bool {
+        let msg = self.to_string().to_lowercase();
+        msg.contains("params._meta")
+            || msg.contains("requires _meta")
+            || msg.contains("stateless")
+            || (msg.contains("unknown method") && msg.contains("initialize"))
+            || (msg.contains("method not found") && msg.contains("initialize"))
+            || (msg.contains("unsupported") && msg.contains("protocol"))
     }
 }
 
@@ -125,6 +146,21 @@ impl Drop for McpConnection {
 struct McpClient {
     transport: Mutex<McpConnection>,
     next_id: AtomicU64,
+    /// The negotiated wire dialect, swappable on connect. `Legacy` keeps the
+    /// initialize/initialized handshake shape; `Stateless` is the 2026-07-28
+    /// revision, which has no handshake — every request carries
+    /// version/identity/capabilities in `params._meta` instead.
+    dialect: tokio::sync::RwLock<McpDialect>,
+}
+
+/// The wire dialect one connection speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum McpDialect {
+    /// Initialize/initialized handshake, revisions ≤ 2025-06-18.
+    #[default]
+    Legacy,
+    /// 2026-07-28 stateless requests: no handshake, `_meta` on every request.
+    Stateless,
 }
 
 impl McpClient {
@@ -203,9 +239,10 @@ impl McpClient {
         let client = Arc::new(Self {
             transport: Mutex::new(connection),
             next_id: AtomicU64::new(1),
+            dialect: tokio::sync::RwLock::new(McpDialect::Legacy),
         });
 
-        let response = client
+        let response = match client
             .request(
                 "initialize",
                 json!({
@@ -217,18 +254,34 @@ impl McpClient {
                     }
                 }),
             )
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) if error.is_stateless_rejection() => {
+                // The server only speaks the 2026-07-28 stateless revision,
+                // which has no initialize at all (SEP-2575): it rejected the
+                // handshake request itself. Switch dialects and continue —
+                // the whole exchange collapses into stateless requests.
+                return Self::connect_stateless(client).await;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
         // Version negotiation: a compliant server echoes a version it
         // supports. If it answered with an older revision we still speak,
         // we stay on our newest common revision for the connection's
         // lifetime — a mismatch here is informational only for stdio, since
         // all revisions share the same JSON-RPC framing. A revision we
         // cannot speak at all fails the connection rather than continuing
-        // in an undefined dialect. (A missing field is the pre-2024-11-05
-        // legacy shape; the baseline revision covers it.)
+        // in an undefined dialect — except the 2026-07-28 stateless
+        // revision, which we speak by switching dialects (no handshake).
+        // (A missing field is the pre-2024-11-05 legacy shape; the baseline
+        // revision covers it.)
         if let Some(server_version) = response.get("protocolVersion").and_then(Value::as_str)
             && !MCP_PROTOCOL_VERSIONS.contains(&server_version)
         {
+            if server_version == MCP_STATELESS_VERSION {
+                return Self::connect_stateless(client).await;
+            }
             return Err(format!(
                 "MCP server speaks unsupported protocol revision {server_version} \
                      (client supports: {})",
@@ -241,8 +294,54 @@ impl McpClient {
         Ok(client)
     }
 
-    async fn request(&self, method: &str, params: Value) -> Result<Value, McpError> {
+    /// Adopt the 2026-07-28 stateless dialect on an already-open transport.
+    ///
+    /// There is no handshake to perform — capabilities are learned lazily via
+    /// `tools/list` — so "connecting" is just flipping the dialect marker:
+    /// every subsequent [`Self::request`] stamps `params._meta` with the
+    /// protocol version and client identity (SEP-2575). A cheap liveness
+    /// probe (`tools/list`) validates the server actually serves the dialect
+    /// before we report the connection as usable.
+    async fn connect_stateless(client: Arc<Self>) -> Result<Arc<Self>, String> {
+        {
+            let mut dialect = client.dialect.write().await;
+            *dialect = McpDialect::Stateless;
+        }
+        // Liveness + dialect probe: a server that also rejects a stateless
+        // tools/list is not speakable at all, and the error surfaces verbatim.
+        client
+            .request("tools/list", json!({}))
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(client)
+    }
+
+    async fn request(&self, method: &str, mut params: Value) -> Result<Value, McpError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        // The 2026-07-28 revision carries the protocol version, client
+        // identity, and capabilities on every request via `params._meta`
+        // under reserved `io.modelcontextprotocol/*` keys (SEP-2575); older
+        // revisions send them once, in `initialize`.
+        let params = if matches!(*self.dialect.read().await, McpDialect::Stateless) {
+            let mut object = params
+                .as_object_mut()
+                .cloned()
+                .unwrap_or_else(serde_json::Map::new);
+            object.insert(
+                "_meta".to_string(),
+                json!({
+                    "io.modelcontextprotocol/protocolVersion": MCP_STATELESS_VERSION,
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "muta",
+                        "version": env!("CARGO_PKG_VERSION")
+                    },
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }),
+            );
+            Value::Object(object)
+        } else {
+            params
+        };
         let payload = json!({
             "jsonrpc": "2.0",
             "id": id,

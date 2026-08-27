@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **User-level MCP management (`muta mcp add/rm/enable/disable/get/probe/import`):**
+  the `[mcp.<name>]` table in the user config could previously only be edited
+  by hand. `muta mcp add <name> -- <command> [args…]` (or `--url <endpoint>`
+  for Streamable HTTP) writes the entry, with `--env K=V`, `--read-only`,
+  `--disabled`, and `--allow-tools`/`--deny-tools` scoping flags; `rm`,
+  `enable`/`disable`, and `get` round out the CRUD surface; `probe <name>`
+  connects once and lists the advertised tools. `muta mcp import -` (or a file
+  path) merges a `[mcp.*]` TOML document — e.g. piped straight from
+  `aegis-mcp print-config` — into the user config, skipping names that already
+  exist. Project-scope MCP (`.muta/config.toml`, `.muta/mcp.json`) stays
+  file-authored and trust-gated (ADR-0085).
+- **MCP 2026-07-28 stateless dialect:** the client now negotiates the 2026-07-28
+  revision, which removed the `initialize`/`initialized` handshake (SEP-2575).
+  When a server rejects the handshake (or negotiates the revision in its
+  response), the connection switches to stateless requests carrying the
+  protocol version, client identity, and capabilities in `params._meta` under
+  the reserved `io.modelcontextprotocol/*` keys. Servers speaking only this
+  revision (e.g. `aegis-mcp`) previously failed with
+  `MCP 2026 requests require params._meta`.
+
 ## [0.36.6] - 2026-08-28
 
 ### Changed

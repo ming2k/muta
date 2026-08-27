@@ -19,6 +19,13 @@ muta [OPTIONS] <COMMAND>
 | `auth <list\|show\|set>` | Manage model provider authentication & API keys |
 | `config <path\|list\|get\|set\|check>` | Inspect or mutate `config.toml`; `check` validates it (syntax errors, typo'd keys, dead legacy spellings) |
 | `mcp ls` | List configured MCP servers (the bare `muta mcp` teaches the subcommand) |
+| `mcp add <name> -- <cmd> [args…]` | Register a stdio MCP server in the user config; flags: `--env K=V`, `--read-only`, `--disabled`, `--allow-tools`, `--deny-tools` |
+| `mcp add <name> --url <endpoint>` | Register a Streamable HTTP MCP server |
+| `mcp rm <name>` | Remove a server from the user config |
+| `mcp enable <name>` / `mcp disable <name>` | Toggle a server without removing it |
+| `mcp get <name>` | Print one server's config entry |
+| `mcp probe <name>` | Connect once, list the advertised tools, disconnect |
+| `mcp import (- \| <file>)` | Merge `[mcp.*]` TOML into the user config, e.g. `aegis-mcp print-config \| muta mcp import -` |
 | `skill ls` | List discovered skills (the bare `muta skill` teaches the subcommand) |
 | `session rm <id>` | Terminate a hosted session by id — listing is `daemon status`, the daemon's view of what it hosts |
 | `daemon start [--fg] [--port <n>] [--public] [--idle-exit <min>] [--grace <secs>]` | Start the session daemon (detached by default; `--fg` stays in the foreground for supervisors) |

@@ -1118,6 +1118,22 @@ impl Config {
         }
     }
 
+    /// Parse a bare `[mcp.<name>]` TOML document — the same table shape a
+    /// project `.muta/config.toml` carries and a server-side `print-config`
+    /// command emits — into named server entries. A *narrow* projection like
+    /// [`Self::load_project_mcp`]: unrelated well-formed keys are ignored, so
+    /// a full user config can be piped through. Used by `muta mcp import`.
+    pub fn parse_mcp_toml(content: &str) -> Result<HashMap<String, McpServerConfig>, String> {
+        #[derive(Deserialize)]
+        struct McpProjection {
+            #[serde(default)]
+            mcp: HashMap<String, McpServerConfig>,
+        }
+        toml::from_str::<McpProjection>(content)
+            .map(|parsed| parsed.mcp)
+            .map_err(|error| format!("input is not valid TOML with [mcp.<name>] tables: {error}"))
+    }
+
     /// Load only the `[[hooks]]` array from a project-local
     /// `.muta/config.toml`. Returns an empty vec when the file or table is
     /// absent. Like [`Self::load_project_mcp`], this is a *narrow* projection
@@ -2004,6 +2020,43 @@ name = "DeepSeek"
         // Global hook ordering preserved; project hooks come after.
         assert_eq!(global.hooks[0].command, "global-notify.sh");
         assert_eq!(global.hooks[1].command, ".muta/hooks/lint.sh");
+    }
+
+    #[test]
+    fn parse_mcp_toml_projects_only_the_mcp_table() {
+        // The `aegis-mcp print-config` shape: unrelated keys may appear.
+        let input = r#"
+            title = "unrelated scalar"
+
+            [mcp.aegis]
+            command = ["/usr/bin/aegis-mcp"]
+            enabled = true
+            read_only = false
+            environment = { AEGIS_MCP_INSTANCE_ID = "8d1b62d6" }
+
+            [mcp.docs]
+            url = "https://example.com/mcp"
+        "#;
+        let servers = Config::parse_mcp_toml(input).unwrap();
+        assert_eq!(servers.len(), 2);
+        let aegis_command = vec!["/usr/bin/aegis-mcp".to_string()];
+        assert_eq!(servers["aegis"].command, aegis_command);
+        let instance_id = servers["aegis"].environment.get("AEGIS_MCP_INSTANCE_ID");
+        assert_eq!(instance_id.map(String::as_str), Some("8d1b62d6"));
+        assert_eq!(
+            servers["docs"].url.as_deref(),
+            Some("https://example.com/mcp")
+        );
+        // Runtime-only marker never leaks in from serialized input.
+        assert!(servers["aegis"].sandbox_root.is_none());
+    }
+
+    #[test]
+    fn parse_mcp_toml_rejects_invalid_toml_and_ignores_empty_tables() {
+        assert!(Config::parse_mcp_toml("not = = toml").is_err());
+        // A document without [mcp.*] parses to an empty map, not an error.
+        let empty = Config::parse_mcp_toml("[other]\nx = 1\n").unwrap();
+        assert!(empty.is_empty());
     }
 
     #[test]
