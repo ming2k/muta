@@ -40,6 +40,7 @@ use super::HeightCache;
 use super::disclosure::StickyStep;
 use super::theme::Theme;
 use crate::design::{MESSAGE_GAP_ROWS, TURN_HEADER_BODY_GAP_ROWS};
+use crate::disclosure::renderers::RenderCtx;
 
 /// Which layout strategy to use for the transcript message stream.
 ///
@@ -405,6 +406,15 @@ impl<'a, 'f> Stream<'a, 'f> {
         let msg = &self.messages[mi];
         let viewport_bottom = self.band.y + self.band.height;
 
+        // Snapshot the interaction state before the cursor borrow: once the
+        // RenderCtx holds &mut frame/layout_map/counters, only ctx fields move.
+        let hovered = self.hovered_step == Some(mi);
+        let focused_retry = self.focused_target == Some(InteractiveTarget::provider_retry(mi));
+        let focused_tool = self.focused_target == Some(InteractiveTarget::tool_step(mi));
+        let focused_thinking = self.focused_target == Some(InteractiveTarget::thinking(mi));
+        let focused_command = self.focused_target == Some(InteractiveTarget::command_result(mi));
+        let _focused_notice = self.focused_target == Some(InteractiveTarget::notice(mi));
+
         let body_before = self.content_lines;
         // Round-interrupt markers are terminal and immutable (C11): they join
         // the height-cache fast path alongside notices.
@@ -436,19 +446,17 @@ impl<'a, 'f> Stream<'a, 'f> {
                 self.skip_rows -= h as usize;
             }
         } else if msg.is_provider_retry() {
-            super::disclosure::draw_provider_retry(
+            let mut ctx = RenderCtx::from_cursor(
                 self.frame,
                 self.band,
-                msg,
-                mi,
+                self.band.width as usize,
                 self.theme,
                 self.layout_map,
                 &mut self.skip_rows,
                 &mut self.current_y,
                 &mut self.content_lines,
-                self.hovered_step == Some(mi),
-                self.focused_target == Some(InteractiveTarget::provider_retry(mi)),
             );
+            super::disclosure::draw_provider_retry(&mut ctx, msg, mi, hovered, focused_retry);
         } else if msg.is_notice() {
             super::draw_notice(
                 self.frame,
@@ -464,69 +472,79 @@ impl<'a, 'f> Stream<'a, 'f> {
                 self.focused_target == Some(InteractiveTarget::notice(mi)),
             );
         } else if msg.is_runner_task() {
-            super::disclosure::draw_runner_inline_step(
+            let mut ctx = RenderCtx::from_cursor(
                 self.frame,
                 self.band,
-                msg,
-                mi,
+                self.band.width as usize,
                 self.theme,
                 self.layout_map,
                 &mut self.skip_rows,
                 &mut self.current_y,
                 &mut self.content_lines,
-                self.hovered_step == Some(mi),
-                self.focused_target == Some(InteractiveTarget::tool_step(mi)),
             );
+            super::disclosure::draw_runner_inline_step(&mut ctx, msg, mi, hovered, focused_tool);
         } else if msg.is_tool_step() {
-            super::disclosure::draw_tool_step(
+            let mut ctx = RenderCtx::from_cursor(
                 self.frame,
                 self.band,
+                self.band.width as usize,
+                self.theme,
+                self.layout_map,
+                &mut self.skip_rows,
+                &mut self.current_y,
+                &mut self.content_lines,
+            );
+            super::disclosure::draw_tool_step(
+                &mut ctx,
                 msg,
                 mi,
                 self.selection,
                 self.cell_selection,
-                self.theme,
                 &mut self.height_cache.diff_cache,
-                self.layout_map,
-                &mut self.skip_rows,
-                &mut self.current_y,
-                &mut self.content_lines,
                 &mut self.sticky_steps,
-                self.hovered_step == Some(mi),
-                self.focused_target == Some(InteractiveTarget::tool_step(mi)),
+                hovered,
+                focused_tool,
             );
         } else if msg.is_thinking() {
-            super::disclosure::draw_reasoning_trace(
+            let mut ctx = RenderCtx::from_cursor(
                 self.frame,
                 self.band,
-                msg,
-                mi,
-                self.selection,
-                self.cell_selection,
+                self.band.width as usize,
                 self.theme,
                 self.layout_map,
                 &mut self.skip_rows,
                 &mut self.current_y,
                 &mut self.content_lines,
+            );
+            super::disclosure::draw_reasoning_trace(
+                &mut ctx,
+                msg,
+                mi,
+                self.selection,
+                self.cell_selection,
                 &mut self.sticky_steps,
-                self.hovered_step == Some(mi),
-                self.focused_target == Some(InteractiveTarget::thinking(mi)),
+                hovered,
+                focused_thinking,
             );
         } else if msg.is_command_result() {
-            super::disclosure::draw_command_result(
+            let mut ctx = RenderCtx::from_cursor(
                 self.frame,
                 self.band,
-                msg,
-                mi,
-                self.selection,
-                self.cell_selection,
+                self.band.width as usize,
                 self.theme,
                 self.layout_map,
                 &mut self.skip_rows,
                 &mut self.current_y,
                 &mut self.content_lines,
-                self.hovered_step == Some(mi),
-                self.focused_target == Some(InteractiveTarget::command_result(mi)),
+            );
+            super::disclosure::draw_command_result(
+                &mut ctx,
+                msg,
+                mi,
+                self.selection,
+                self.cell_selection,
+                hovered,
+                focused_command,
             );
         } else if msg.is_round_interrupt() {
             super::draw_round_interrupt(

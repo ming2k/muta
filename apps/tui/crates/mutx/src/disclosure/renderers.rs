@@ -43,7 +43,7 @@ use crate::design::TURN_HEADER_BODY_GAP_ROWS;
 /// positional cursor args threaded through every helper. This is the
 /// extraction seam for the tool-rendering redesign (ADR-0001); higher-level
 /// orchestration still constructs a `RenderCtx` at the boundary.
-pub(super) struct RenderCtx<'a, 'f: 'a> {
+pub(crate) struct RenderCtx<'a, 'f: 'a> {
     pub frame: &'a mut Frame<'f>,
     pub area: Rect,
     pub full_width: usize,
@@ -76,6 +76,21 @@ impl<'a, 'f: 'a> RenderCtx<'a, 'f> {
             skip_rows,
             y,
             content_lines,
+        }
+    }
+
+    /// Advance the cursor over `rows` unpainted blank rows, honoring
+    /// scroll-skip and the viewport clip. The accounting twin of [`Self::paint`]
+    /// for rows that produce no output (gaps, padding): `content_lines` still
+    /// grows so the scroll height stays honest.
+    pub fn advance_blank_rows(&mut self, rows: usize) {
+        for _ in 0..rows {
+            *self.content_lines += 1;
+            if *self.skip_rows > 0 {
+                *self.skip_rows = self.skip_rows.saturating_sub(1);
+            } else if *self.y < self.area.y + self.area.height {
+                *self.y += 1;
+            }
         }
     }
 
@@ -164,20 +179,16 @@ fn retry_duration(duration: std::time::Duration) -> String {
 /// `retry_at` it is a countdown, afterwards it becomes the current retry
 /// attempt's elapsed time. A later `RetryScheduled` event mutates the same
 /// message, so the transcript never accumulates one notice per attempt.
-#[allow(clippy::too_many_arguments)]
 pub fn draw_provider_retry(
-    frame: &mut Frame,
-    transcript_area: Rect,
+    ctx: &mut RenderCtx<'_, '_>,
     msg: &TranscriptMessage,
     mi: usize,
-    theme: &Theme,
-    layout_map: &mut LayoutMap,
-    skip_rows: &mut usize,
-    current_y: &mut u16,
-    content_lines: &mut usize,
     hovered: bool,
     focused: bool,
 ) {
+    let theme = &*ctx.theme;
+    let _transcript_area = ctx.area;
+    let full_width = ctx.full_width;
     let MessageKind::ProviderRetry {
         attempt,
         max_attempts,
@@ -222,17 +233,6 @@ pub fn draw_provider_retry(
     } else {
         MARKER_COLLAPSED
     };
-    let full_width = transcript_area.width as usize;
-    let mut ctx = RenderCtx::from_cursor(
-        frame,
-        transcript_area,
-        full_width,
-        theme,
-        layout_map,
-        skip_rows,
-        current_y,
-        content_lines,
-    );
     let used = 2 + summary.width();
     let summary_line = Line::from(vec![
         Span::styled(format!("{marker} "), Style::default().bg(bg).fg(color)),
@@ -366,7 +366,6 @@ fn tool_summary_line(
 /// `block_idx` is the sentinel recorded in [`BlockRegion`] so the click handler
 /// can tell step/trace kinds apart: `usize::MAX` for tool steps and
 /// `usize::MAX - 1` for reasoning traces.
-#[allow(clippy::too_many_arguments)]
 fn draw_step_summary(
     ctx: &mut RenderCtx<'_, '_>,
     mi: usize,
@@ -653,7 +652,6 @@ fn emit_simple_rows(
 /// (ripgrep block separators, etc.) fall back to a dimmed plain row.
 /// Selection byte ranges are anchored in the original tool output so
 /// copy/cut works across the visible match content.
-#[allow(clippy::too_many_arguments)]
 fn draw_matches_content(
     ctx: &mut RenderCtx<'_, '_>,
     mi: usize,
@@ -1324,7 +1322,6 @@ fn draw_tool_result(
 /// Render an explicit tool failure as error text on the shared code surface.
 /// It deliberately has no line-number gutter: these rows describe the failed
 /// operation and are not source-file content.
-#[allow(clippy::too_many_arguments)]
 fn draw_tool_error(
     ctx: &mut RenderCtx<'_, '_>,
     mi: usize,
@@ -1531,20 +1528,16 @@ fn fmt_no(no: Option<usize>, width: usize) -> String {
 /// a single `└`-edged second row that shows the live "peek" (current
 /// activity + elapsed) while running and is replaced in place by the
 /// one-line conclusion when the runner terminates.
-#[allow(clippy::too_many_arguments)]
 pub fn draw_runner_inline_step(
-    frame: &mut Frame,
-    transcript_area: Rect,
+    ctx: &mut RenderCtx<'_, '_>,
     msg: &TranscriptMessage,
     mi: usize,
-    theme: &Theme,
-    layout_map: &mut LayoutMap,
-    skip_rows: &mut usize,
-    current_y: &mut u16,
-    content_lines: &mut usize,
     hovered: bool,
     focused: bool,
 ) {
+    let _theme = &*ctx.theme;
+    let _transcript_area = ctx.area;
+
     let Some(summary) = msg.tool_step_summary() else {
         return;
     };
@@ -1554,20 +1547,20 @@ pub fn draw_runner_inline_step(
         .map(ToolStatus::from_status)
         .unwrap_or(ToolStatus::Running);
 
-    // `transcript_area` arrives already inset by `draw_transcript`, so no
+    // `ctx.area` arrives already inset by `draw_transcript`, so no
     // re-clip is needed here.
-    let full_width = transcript_area.width as usize;
+    let full_width = ctx.area.width as usize;
     if full_width < STEP_MIN_WIDTH {
         return;
     }
 
-    let bg = theme.surface();
+    let bg = ctx.theme.surface();
 
     // Summary color flows through the shared state machine exactly like a
     // tool step (steady lifecycle accent while non-terminal, weight ladder
     // once completed); the badge borrows the brand hue so the role reads as
     // identity rather than as run state.
-    let status_color = status.color(theme);
+    let status_color = status.color(ctx.theme);
     let accent = match status {
         ToolStatus::Ok => None,
         _ => Some(status_color),
@@ -1576,17 +1569,7 @@ pub fn draw_runner_inline_step(
         accent,
         Disclosure::Collapsed,
         Interaction::from_hover_focused(hovered, focused),
-        theme,
-    );
-    let mut ctx = RenderCtx::from_cursor(
-        frame,
-        transcript_area,
-        full_width,
-        theme,
-        layout_map,
-        skip_rows,
-        current_y,
-        content_lines,
+        ctx.theme,
     );
 
     // Row 1: `[badge]  summary`. The badge is a plain bracketed token in the
@@ -1603,7 +1586,7 @@ pub fn draw_runner_inline_step(
         let mut used = 0usize;
         let badge_text = format!("  {}", badge);
         used += badge_text.width();
-        spans.push(Span::styled(badge_text, base.fg(theme.brand())));
+        spans.push(Span::styled(badge_text, base.fg((*ctx.theme).brand())));
         let sep = "  ";
         used += sep.len();
         spans.push(Span::styled(sep, base));
@@ -1637,11 +1620,11 @@ pub fn draw_runner_inline_step(
     // running/terminated distinction is carried by color and content, not by
     // the glyph.
     let (row_text, row_color) = if let Some(peek) = msg.runner_status_line() {
-        (peek, theme.info())
+        (peek, (*ctx.theme).info())
     } else if let Some(outcome) = msg.runner_outcome_line() {
-        (outcome, theme.muted())
+        (outcome, ctx.theme.muted())
     } else {
-        (String::new(), theme.muted())
+        (String::new(), ctx.theme.muted())
     };
     if !row_text.is_empty() {
         let bg_style = Style::default().bg(bg);
@@ -1678,24 +1661,20 @@ pub fn draw_runner_inline_step(
 /// Render a tool-step message as an expandable step with a summary line,
 /// a body, and per-line scroll handling so tall steps scroll like
 /// normal messages.
-#[allow(clippy::too_many_arguments)]
 pub fn draw_tool_step(
-    frame: &mut Frame,
-    transcript_area: Rect,
+    mut ctx: &mut RenderCtx<'_, '_>,
     msg: &TranscriptMessage,
     mi: usize,
     selection: &SelectionState,
     cell_selection: Option<&CellDragInfo>,
-    theme: &Theme,
     diff_cache: &mut DiffCache,
-    layout_map: &mut LayoutMap,
-    skip_rows: &mut usize,
-    current_y: &mut u16,
-    content_lines: &mut usize,
     sticky_steps: &mut Vec<StickyStep>,
     hovered: bool,
     focused: bool,
 ) {
+    let _theme = &*ctx.theme;
+    let _transcript_area = ctx.area;
+
     let Some(summary) = msg.tool_step_summary() else {
         return;
     };
@@ -1722,8 +1701,8 @@ pub fn draw_tool_step(
         .unwrap_or(ToolStatus::Running);
     // Tool steps render flat on the app background (no band) — like
     // reasoning traces, only the optional content block carries a `code_bg`.
-    let summary_bg = theme.surface();
-    let status_color = status.color(theme);
+    let summary_bg = ctx.theme.surface();
+    let status_color = status.color(ctx.theme);
     let accent = match status {
         ToolStatus::Ok => None,
         _ => Some(status_color),
@@ -1732,44 +1711,34 @@ pub fn draw_tool_step(
         accent,
         Disclosure::from_expanded(expanded),
         Interaction::from_hover_focused(hovered, focused),
-        theme,
+        ctx.theme,
     );
 
-    // `transcript_area` arrives already inset by `draw_transcript` (the
+    // `ctx.area` arrives already inset by `draw_transcript` (the
     // uniform horizontal gutters are applied once at the stream entry point),
-    // so all helpers below read `transcript_area.x` / `.width` directly.
-    let full_width = transcript_area.width as usize;
+    // so all helpers below read `ctx.area.x` / `.width` directly.
+    let full_width = ctx.area.width as usize;
     if full_width < STEP_MIN_WIDTH {
         // Too narrow to draw; fall back to plain block rendering.
         draw_message_body(
-            frame,
-            transcript_area,
+            &mut *ctx.frame,
+            ctx.area,
             msg,
             mi,
             selection,
             cell_selection,
-            theme,
-            layout_map,
-            skip_rows,
-            current_y,
-            content_lines,
+            ctx.theme,
+            &mut *ctx.layout_map,
+            &mut *ctx.skip_rows,
+            &mut *ctx.y,
+            &mut *ctx.content_lines,
             true,
         );
         return;
     }
 
-    let inner_width = transcript_area.width as usize;
+    let inner_width = ctx.area.width as usize;
     let summary_line_idx = {
-        let mut ctx = RenderCtx::from_cursor(
-            frame,
-            transcript_area,
-            full_width,
-            theme,
-            layout_map,
-            skip_rows,
-            current_y,
-            content_lines,
-        );
         draw_step_summary(
             &mut ctx,
             mi,
@@ -1788,22 +1757,12 @@ pub fn draw_tool_step(
     // align with prose. Only content blocks carry a `code_bg`; everything else
     // sits on the app background.
     if expanded {
-        let surface = theme.surface();
+        let surface = ctx.theme.surface();
         let pad = Style::default().bg(surface);
         let indent = TOOL_STEP_BODY_INDENT_COLS;
         let inner_w = inner_width.saturating_sub(indent);
 
         {
-            let mut ctx = RenderCtx::from_cursor(
-                frame,
-                transcript_area,
-                full_width,
-                theme,
-                layout_map,
-                skip_rows,
-                current_y,
-                content_lines,
-            );
             draw_blank_rows(&mut ctx, pad, TOOL_STEP_BODY_TOP_GAP_ROWS);
 
             if let crate::model::document::MessageKind::ToolStep {
@@ -1824,7 +1783,7 @@ pub fn draw_tool_step(
                 ) {
                     let kv = crate::model::document::parse_arguments_kv(arguments);
                     if !kv.is_empty() {
-                        let kv_style = Style::default().bg(surface).fg(theme.muted());
+                        let kv_style = Style::default().bg(surface).fg(ctx.theme.muted());
                         let wrap_w = inner_w.max(1);
                         for (k, v) in &kv {
                             let row = format!("{}: {}", k, v);
@@ -1869,54 +1828,35 @@ pub fn draw_tool_step(
         // ── Nested runner children ──.
         if let crate::model::document::MessageKind::ToolStep { children, .. } = &msg.kind {
             if !children.is_empty() {
-                let mut ctx = RenderCtx::from_cursor(
-                    frame,
-                    transcript_area,
-                    full_width,
-                    theme,
-                    layout_map,
-                    skip_rows,
-                    current_y,
-                    content_lines,
-                );
                 draw_blank_rows(&mut ctx, pad, TOOL_STEP_CHILDREN_GAP_ROWS);
             }
             for child in children {
                 if child.is_tool_step() {
-                    let mut ctx = RenderCtx::from_cursor(
-                        frame,
-                        transcript_area,
-                        full_width,
-                        theme,
-                        layout_map,
-                        skip_rows,
-                        current_y,
-                        content_lines,
-                    );
                     draw_child_tool_step(&mut ctx, child, status_color);
                 } else {
-                    let remaining_height = transcript_area
+                    let remaining_height = ctx
+                        .area
                         .y
-                        .saturating_add(transcript_area.height)
-                        .saturating_sub(*current_y);
+                        .saturating_add(ctx.area.height)
+                        .saturating_sub(*(&mut *ctx.y));
                     let child_area = Rect::new(
-                        transcript_area.x + 6,
-                        *current_y,
-                        transcript_area.width.saturating_sub(12),
+                        ctx.area.x + 6,
+                        *(&mut *ctx.y),
+                        ctx.area.width.saturating_sub(12),
                         remaining_height,
                     );
                     draw_message_body(
-                        frame,
+                        &mut *ctx.frame,
                         child_area,
                         child,
                         usize::MAX,
                         selection,
                         cell_selection,
-                        theme,
-                        layout_map,
-                        skip_rows,
-                        current_y,
-                        content_lines,
+                        ctx.theme,
+                        &mut *ctx.layout_map,
+                        &mut *ctx.skip_rows,
+                        &mut *ctx.y,
+                        &mut *ctx.content_lines,
                         false,
                     );
                 }
@@ -1933,15 +1873,14 @@ pub fn draw_tool_step(
             message_idx: mi,
             summary,
             color: status_color,
-            background: Some(theme.surface()),
+            background: Some(ctx.theme.surface()),
             summary_line: summary_line_idx,
-            body_end_line: *content_lines,
+            body_end_line: *(&mut *ctx.content_lines),
         });
     }
 }
 
 /// Render a nested child tool step as a compact summary line plus its output.
-#[allow(clippy::too_many_arguments)]
 fn draw_child_tool_step(
     ctx: &mut RenderCtx<'_, '_>,
     child: &TranscriptMessage,
@@ -2098,58 +2037,44 @@ fn draw_reasoning_summary(
 /// Render a reasoning trace as expandable prose. It keeps the thinking
 /// message model for stream semantics, but presents it as body-aligned text
 /// instead of a colored step.
-#[allow(clippy::too_many_arguments)]
 pub fn draw_reasoning_trace(
-    frame: &mut Frame,
-    transcript_area: Rect,
+    mut ctx: &mut RenderCtx<'_, '_>,
     msg: &TranscriptMessage,
     mi: usize,
     selection: &SelectionState,
     cell_selection: Option<&CellDragInfo>,
-    theme: &Theme,
-    layout_map: &mut LayoutMap,
-    skip_rows: &mut usize,
-    current_y: &mut u16,
-    content_lines: &mut usize,
     sticky_steps: &mut Vec<StickyStep>,
     hovered: bool,
     focused: bool,
 ) {
+    let _theme = &*ctx.theme;
+    let _transcript_area = ctx.area;
+
     let Some(summary) = msg.thinking_summary() else {
         return;
     };
     let expanded = msg.thinking_expanded() == Some(true);
-    let full_width = transcript_area.width as usize;
+    let full_width = ctx.area.width as usize;
 
     if full_width < (TRANSCRIPT_BODY_LEADING_INDENT as usize + 1) {
         draw_message_body(
-            frame,
-            transcript_area,
+            &mut *ctx.frame,
+            ctx.area,
             msg,
             mi,
             selection,
             cell_selection,
-            theme,
-            layout_map,
-            skip_rows,
-            current_y,
-            content_lines,
+            ctx.theme,
+            &mut *ctx.layout_map,
+            &mut *ctx.skip_rows,
+            &mut *ctx.y,
+            &mut *ctx.content_lines,
             true,
         );
         return;
     }
 
     let summary_line_idx = {
-        let mut ctx = RenderCtx::from_cursor(
-            frame,
-            transcript_area,
-            full_width,
-            theme,
-            layout_map,
-            skip_rows,
-            current_y,
-            content_lines,
-        );
         draw_reasoning_summary(
             &mut ctx,
             mi,
@@ -2174,16 +2099,17 @@ pub fn draw_reasoning_trace(
         // The leading indent is all that remains now that the horizontal
         // gutter is applied once at the stream entry point.
         let body_prefix = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
-        let body_wrap_width = transcript_area
+        let body_wrap_width = ctx
+            .area
             .width
             .saturating_sub(TRANSCRIPT_BODY_LEADING_INDENT) as usize;
 
         advance_plain_blank_rows(
-            transcript_area,
+            ctx.area,
             REASONING_TRACE_BODY_TOP_GAP_ROWS,
-            skip_rows,
-            current_y,
-            content_lines,
+            &mut *ctx.skip_rows,
+            &mut *ctx.y,
+            &mut *ctx.content_lines,
         );
         let mut emitted_any_block = false;
         for (bi, block) in msg.blocks.iter().enumerate() {
@@ -2197,25 +2123,15 @@ pub fn draw_reasoning_trace(
                 } = inline;
                 if emitted_any_block {
                     advance_plain_blank_rows(
-                        transcript_area,
+                        ctx.area,
                         REASONING_TRACE_BLOCK_GAP_ROWS,
-                        skip_rows,
-                        current_y,
-                        content_lines,
+                        &mut *ctx.skip_rows,
+                        &mut *ctx.y,
+                        &mut *ctx.content_lines,
                     );
                 }
                 emitted_any_block = true;
                 let lines = wrap_text(content, body_wrap_width);
-                let mut ctx = RenderCtx::from_cursor(
-                    frame,
-                    transcript_area,
-                    full_width,
-                    theme,
-                    layout_map,
-                    skip_rows,
-                    current_y,
-                    content_lines,
-                );
                 let sel_range = block_selection_range(selection, mi, bi);
                 for wl in &lines {
                     let block_wl = WrappedLine {
@@ -2265,10 +2181,10 @@ pub fn draw_reasoning_trace(
         sticky_steps.push(StickyStep {
             message_idx: mi,
             summary,
-            color: theme.muted(),
+            color: ctx.theme.muted(),
             background: None,
             summary_line: summary_line_idx,
-            body_end_line: *content_lines,
+            body_end_line: *(&mut *ctx.content_lines),
         });
     }
 }
@@ -2322,43 +2238,39 @@ fn command_header_line(
 /// - **Header**: `⌘ command` plus a right-aligned `HH:MM` timestamp
 /// - **Gap**: 1 blank row separating header and content body (`TURN_HEADER_BODY_GAP_ROWS`)
 /// - **Body**: The concrete invocation (e.g. `/autopilot on`) followed by result output blocks.
-#[allow(clippy::too_many_arguments)]
 pub fn draw_command_result(
-    frame: &mut Frame,
-    transcript_area: Rect,
+    ctx: &mut RenderCtx<'_, '_>,
     msg: &TranscriptMessage,
     mi: usize,
     selection: &SelectionState,
     cell_selection: Option<&CellDragInfo>,
-    theme: &Theme,
-    layout_map: &mut LayoutMap,
-    skip_rows: &mut usize,
-    current_y: &mut u16,
-    content_lines: &mut usize,
     _hovered: bool,
     _focused: bool,
 ) {
+    let _theme = &*ctx.theme;
+    let _transcript_area = ctx.area;
+
     let Some(invocation) = msg.command_result_summary() else {
         return;
     };
     let phase = msg
         .command_result_phase()
         .unwrap_or(CommandPhase::Completed);
-    let full_width = transcript_area.width as usize;
+    let full_width = ctx.area.width as usize;
 
     if full_width < (TRANSCRIPT_BODY_LEADING_INDENT as usize + 1) {
         draw_message_body(
-            frame,
-            transcript_area,
+            &mut *ctx.frame,
+            ctx.area,
             msg,
             mi,
             selection,
             cell_selection,
-            theme,
-            layout_map,
-            skip_rows,
-            current_y,
-            content_lines,
+            ctx.theme,
+            &mut *ctx.layout_map,
+            &mut *ctx.skip_rows,
+            &mut *ctx.y,
+            &mut *ctx.content_lines,
             true,
         );
         return;
@@ -2366,27 +2278,21 @@ pub fn draw_command_result(
 
     let is_shell = invocation.starts_with('!') || msg.raw.starts_with('!');
     let lead_symbol = if is_shell { "❯ " } else { "⌘ " };
-    let family_tone = if is_shell { theme.ok() } else { theme.info() };
+    let family_tone = if is_shell {
+        (*ctx.theme).ok()
+    } else {
+        (*ctx.theme).info()
+    };
     let time_label = msg.sent_at_ms.map(crate::time::sent_time_label);
 
     let header_line = command_header_line(
         lead_symbol,
         family_tone,
         time_label.as_deref(),
-        theme.muted(),
+        ctx.theme.muted(),
         full_width,
     );
     {
-        let mut ctx = RenderCtx::from_cursor(
-            frame,
-            transcript_area,
-            full_width,
-            theme,
-            layout_map,
-            skip_rows,
-            current_y,
-            content_lines,
-        );
         if let Some(rect) = ctx.paint(header_line) {
             ctx.layout_map.push(BlockRegion {
                 message_idx: mi,
@@ -2403,11 +2309,11 @@ pub fn draw_command_result(
 
     // 1-row blank gap between entry header and body
     advance_plain_blank_rows(
-        transcript_area,
+        ctx.area,
         TURN_HEADER_BODY_GAP_ROWS,
-        skip_rows,
-        current_y,
-        content_lines,
+        &mut *ctx.skip_rows,
+        &mut *ctx.y,
+        &mut *ctx.content_lines,
     );
 
     // Concrete command invocation inside the entry body. It is indented by
@@ -2417,10 +2323,12 @@ pub fn draw_command_result(
     let body_indent = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
     let invocation_style = if phase == CommandPhase::Pending {
         Style::default()
-            .fg(theme.muted())
+            .fg(ctx.theme.muted())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg((*ctx.theme).fg())
+            .add_modifier(Modifier::BOLD)
     };
 
     let invocation_line = Line::from(vec![
@@ -2428,53 +2336,31 @@ pub fn draw_command_result(
         Span::styled(invocation, invocation_style),
     ]);
     {
-        let mut ctx = RenderCtx::from_cursor(
-            frame,
-            transcript_area,
-            full_width,
-            theme,
-            layout_map,
-            skip_rows,
-            current_y,
-            content_lines,
-        );
         ctx.paint(invocation_line);
     }
 
     // Result body blocks
     if phase == CommandPhase::Completed && msg.command_result_text().is_some() {
-        advance_plain_blank_rows(transcript_area, 1, skip_rows, current_y, content_lines);
+        ctx.advance_blank_rows(1);
         // An ack with detail renders in its own two-tone scheme (ADR-0106):
         // the headline in the entry's foreground tone — the part the eye
         // should land on first — and each explanation line muted below it.
         // The generic body path stays for every other result shape.
         if let Some((title, detail)) = msg.command_ack_split() {
-            draw_ack_body(
-                frame,
-                transcript_area,
-                mi,
-                title,
-                detail,
-                family_tone,
-                theme,
-                layout_map,
-                skip_rows,
-                current_y,
-                content_lines,
-            );
+            draw_ack_body(ctx, mi, title, detail, family_tone);
         } else {
             draw_message_body(
-                frame,
-                transcript_area,
+                &mut *ctx.frame,
+                ctx.area,
                 msg,
                 mi,
                 selection,
                 cell_selection,
-                theme,
-                layout_map,
-                skip_rows,
-                current_y,
-                content_lines,
+                ctx.theme,
+                &mut *ctx.layout_map,
+                &mut *ctx.skip_rows,
+                &mut *ctx.y,
+                &mut *ctx.content_lines,
                 true,
             );
         }
@@ -2483,22 +2369,18 @@ pub fn draw_command_result(
 
 /// Draw an ack reply body: headline first in the foreground tone, then each
 /// detail line muted — never one `•`-joined row (the layout bug this fixes).
-#[allow(clippy::too_many_arguments)]
-fn draw_ack_body(
-    frame: &mut Frame,
-    transcript_area: Rect,
+pub fn draw_ack_body(
+    ctx: &mut RenderCtx<'_, '_>,
     mi: usize,
     title: &str,
     detail: &[String],
     family_tone: Color,
-    theme: &Theme,
-    layout_map: &mut LayoutMap,
-    skip_rows: &mut usize,
-    current_y: &mut u16,
-    content_lines: &mut usize,
 ) {
+    let _theme = &*ctx.theme;
+    let _transcript_area = ctx.area;
+
     let body_indent = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
-    let wrap_width = (transcript_area.width as usize)
+    let wrap_width = (ctx.area.width as usize)
         .saturating_sub(TRANSCRIPT_BODY_LEADING_INDENT as usize)
         .max(1);
 
@@ -2509,28 +2391,28 @@ fn draw_ack_body(
         .add_modifier(Modifier::BOLD);
     let mut regions: Vec<(String, Style)> = vec![(title.to_string(), title_style)];
     // Detail: muted prose, one line each, wrapping preserved.
-    let muted_style = Style::default().fg(theme.muted());
+    let muted_style = Style::default().fg(ctx.theme.muted());
     for line in detail {
         regions.push((line.clone(), muted_style));
     }
 
     for (text, style) in regions {
         for wl in wrap_text(&text, wrap_width) {
-            *content_lines += 1;
-            if *skip_rows > 0 {
-                *skip_rows -= 1;
+            *ctx.content_lines += 1;
+            if *ctx.skip_rows > 0 {
+                *ctx.skip_rows -= 1;
                 continue;
             }
-            if *current_y >= transcript_area.y + transcript_area.height {
+            if *ctx.y >= ctx.area.y + ctx.area.height {
                 return;
             }
             let line = Line::from(vec![
                 Span::styled(body_indent.clone(), style),
                 Span::styled(wl.text.clone(), style),
             ]);
-            let rect = Rect::new(transcript_area.x, *current_y, transcript_area.width, 1);
-            frame.render_widget(Paragraph::new(line), rect);
-            layout_map.push(BlockRegion {
+            let rect = Rect::new(ctx.area.x, *(&mut *ctx.y), ctx.area.width, 1);
+            (*ctx.frame).render_widget(Paragraph::new(line), rect);
+            (*ctx.layout_map).push(BlockRegion {
                 message_idx: mi,
                 block_idx: COMMAND_RESULT_BLOCK_IDX,
                 start_byte: 0,
@@ -2540,7 +2422,7 @@ fn draw_ack_body(
                 rect,
                 hidden_ranges: Vec::new(),
             });
-            *current_y += 1;
+            *ctx.y += 1;
         }
     }
 }

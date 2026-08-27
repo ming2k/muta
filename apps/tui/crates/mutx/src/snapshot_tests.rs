@@ -95,19 +95,23 @@ fn render_grid(msg: &TranscriptMessage, width: u16, height: u16) -> String {
         let mut current_y = area.y;
         let mut content_lines = 0usize;
         let mut sticky = Vec::new();
-        draw_tool_step(
+        let mut ctx = crate::disclosure::renderers::RenderCtx::from_cursor(
             f,
             area,
-            msg,
-            0,
-            &selection,
-            None,
+            area.width as usize,
             &theme,
-            &mut diff_cache,
             &mut layout_map,
             &mut skip_rows,
             &mut current_y,
             &mut content_lines,
+        );
+        draw_tool_step(
+            &mut ctx,
+            msg,
+            0,
+            &selection,
+            None,
+            &mut diff_cache,
             &mut sticky,
             false,
             false,
