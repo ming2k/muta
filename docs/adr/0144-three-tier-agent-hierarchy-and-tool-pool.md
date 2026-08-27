@@ -93,7 +93,11 @@ availability* fact the platform reports (you cannot enforce containment on a
 host without the runtime), but it no longer decides role capability — a
 preset demanding `sandbox_bash` on a host where enforcement is `Unavailable`
 fails closed at **resolve** time with an explicit error, instead of silently
-degrading the whole workspace into the sandbox posture.
+degrading the whole workspace into the sandbox posture. (Landed shape note:
+containment is expressed through the preset's delegation — `write_paths` /
+`command_allowlist` in `MasterPresetDelegation` — rather than a literal
+`sandbox_bash` tool variant; the capability split is the decision, the
+spelling above was the working sketch.)
 
 ### 3. Master presets: developer and code-analyst
 
@@ -165,8 +169,9 @@ to it rather than owning it.
 - **Naming:** in-tree source identifiers move to the new vocabulary
   (`envoy_tool.rs` → `runner_tool.rs`, `EnvoyTool` → `RunnerTool`,
   `EnvoyRegistry` → `RunnerRegistry`, `EnvoyHandle` → `RunnerHandle`);
-  low-level task panic supervisors are renamed to `task_fault_tolerance.rs`
-  so they cannot collide with the top-level `Supervisor`.
+  low-level task panic supervision moved under the orchestration/runner-tool
+  modules rather than a dedicated `task_fault_tolerance.rs` file, so it
+  cannot collide with the top-level `Supervisor`.
   Frontend rendering vocabulary ("envoy" strings in the TUI) is updated in the
   same change; snapshot tests are regenerated.
 - **ADR-0042 / ADR-0011 / ADR-0053 / ADR-0138:** superseded where they speak

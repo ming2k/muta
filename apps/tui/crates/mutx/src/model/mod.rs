@@ -4,4 +4,5 @@
 
 pub mod document;
 pub mod layout;
+mod markdown;
 pub mod selection;
