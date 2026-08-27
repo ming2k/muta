@@ -1,12 +1,10 @@
 //! Unit tests for the catalog modules: runtime derivation of routes from
-//! instances + templates + discovery cache, credential resolution, per-route
-//! reasoning, the fitted-model overlay, live discovery, and the one-shot
-//! legacy migration.
+//! connections + presets + discovery cache, credential resolution, per-route
+//! reasoning, the fitted-model overlay, and live discovery.
 
 use super::derive::{
     derive_channel, derive_entries, resolve_credential, route_models, transport_for_protocol,
 };
-use super::legacy::migrate_legacy_state;
 use super::picker::channel_model_info;
 use super::{
     build_catalog, build_picker_state, discover_provider_models, sync_fitted_model_registry,
@@ -79,11 +77,11 @@ fn instance(id: &str, preset_id: Option<&str>) -> Connection {
 // ── derivation ─────────────────────────────────────────────────────────────
 
 #[test]
-fn template_instance_derives_models_from_the_template() {
+fn preset_connection_derives_models_from_the_preset() {
     let deepseek = instance("deepseek", Some("deepseek"));
     let models = route_models(&deepseek, &DiscoveryCache::default());
     assert_eq!(models, DEEPSEEK_BUILTIN_MODELS);
-    // Discovery-enabled templates without a cache fall back to the snapshot.
+    // Discovery-enabled presets without a cache fall back to the snapshot.
     let openai = instance("openai", Some("openai"));
     assert!(!route_models(&openai, &DiscoveryCache::default()).is_empty());
 }
@@ -470,86 +468,6 @@ fn sync_fitted_model_registry_overlays_fitted_ids() {
     let resolved = muta_contracts::model::resolve("kimi-for-coding");
     assert_eq!(resolved.context_window, 262_144);
     assert!(resolved.reasoning());
-}
-
-// ── legacy migration ───────────────────────────────────────────────────────
-
-#[test]
-fn legacy_state_migrates_to_instances_credentials_and_route_facts() {
-    let _sandbox = sandboxed_paths();
-    let dirs = muta_persistence::paths::get();
-    std::fs::create_dir_all(&dirs.config_dir).unwrap();
-    std::fs::write(
-        dirs.config_file(),
-        r#"default_provider = "deepseek"
-default_model = "deepseek-v4-flash"
-[model_reasoning."deepseek-v4-flash"]
-effort = "max"
-[[providers]]
-id = "deepseek"
-name = "DeepSeek"
-template_id = "deepseek"
-[[providers.channels]]
-label = "deepseek-v4-flash"
-transport = "OpenAiResponses"
-model = "deepseek-v4-flash"
-base_url = "https://api.deepseek.com/v1/responses"
-auth = "ApiKey"
-[[providers.channels]]
-label = "deepseek-v4-pro"
-transport = "OpenAiResponses"
-model = "deepseek-v4-pro"
-base_url = "https://api.deepseek.com/v1/responses"
-auth = "ApiKey"
-effort = "high"
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        dirs.credentials_file(),
-        r#"[user.deepseek]
-api_key = "sk-legacy"
-"#,
-    )
-    .unwrap();
-
-    assert!(migrate_legacy_state(), "migration must run on legacy data");
-    // Idempotent: the store now exists, a second call is a no-op.
-    assert!(!migrate_legacy_state());
-
-    let instances = Connections::load();
-    assert_eq!(instances.connections.len(), 1);
-    let deepseek = &instances.connections[0];
-    assert_eq!(deepseek.id, "deepseek");
-    assert_eq!(deepseek.preset_id.as_deref(), Some("deepseek"));
-    // Preset connections do not duplicate their derived model set.
-    assert!(
-        deepseek.models.is_empty(),
-        "routes are derived, not persisted"
-    );
-
-    let creds = Credentials::load();
-    assert_eq!(
-        creds.api_key("deepseek").map(|k| k.expose_secret()),
-        Some("sk-legacy")
-    );
-
-    // Per-channel reasoning rode into the route store (state, not cache).
-    let routes = RouteSettingsStore::load();
-    assert_eq!(
-        routes
-            .settings_for("deepseek", "deepseek-v4-pro")
-            .and_then(|r| r.effort.as_deref()),
-        Some("high")
-    );
-    // Legacy `[model_reasoning]` applied to every serving instance (it wins
-    // over the per-channel value, since it is applied last).
-    assert_eq!(
-        routes
-            .settings_for("deepseek", "deepseek-v4-flash")
-            .and_then(|r| r.effort.as_deref()),
-        Some("max")
-    );
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

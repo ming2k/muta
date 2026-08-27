@@ -1,11 +1,11 @@
-//! The `antigravity-oauth` provider template: Google-native models served
+//! The `antigravity-oauth` provider preset: Google-native models served
 //! via Google Antigravity OAuth subscription.
 
 use muta_contracts::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::ProviderTemplateSpec;
+use super::ProviderPresetSpec;
 
 /// Models served by Google Antigravity OAuth (Google One AI Premium / Pro).
 pub const ANTIGRAVITY_OAUTH_MODELS: &[&str] = &[
@@ -222,7 +222,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "antigravity-oauth",
     baselines: MODELS,
     base_url: "https://daily-cloudcode-pa.googleapis.com",

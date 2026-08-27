@@ -877,7 +877,7 @@ fn modal_owns_caret_lists_only_unconditional_input_surfaces() {
         Modal::Question,
         Modal::Permission,
         Modal::Config,
-        Modal::ProviderTemplate,
+        Modal::ProviderPreset,
         Modal::HistorySearch,
         Modal::Models,
         Modal::Connections,

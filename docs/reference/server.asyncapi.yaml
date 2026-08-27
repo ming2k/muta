@@ -857,7 +857,7 @@ components:
       properties:
         AddProvider:
           type: object
-          required: [name, protocol, base_url, api_key, user_agent, models, auth, template_id]
+          required: [name, protocol, base_url, api_key, user_agent, models, auth, preset_id]
           properties:
             name: { type: string }
             protocol: { type: string, enum: [openai, anthropic, gemini] }
@@ -866,7 +866,7 @@ components:
             user_agent: { type: [string, 'null'] }
             models: { type: array, minItems: 1, items: { type: string } }
             auth: { $ref: '#/components/schemas/ChannelAuth' }
-            template_id: { type: [string, 'null'] }
+            preset_id: { type: [string, 'null'] }
           additionalProperties: false
       additionalProperties: false
     RequestConnectProvider:

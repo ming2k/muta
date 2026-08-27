@@ -164,26 +164,26 @@ pub(super) async fn dispatch_action(
                 app.move_custom_suggestion(forward);
             }
         }
-        input::InputAction::MoveProviderTemplate { forward } => {
-            if app.active_modal() == Modal::ProviderTemplate {
-                app.move_template_choice(forward);
+        input::InputAction::MovePresetChoice { forward } => {
+            if app.active_modal() == Modal::ProviderPreset {
+                app.move_preset_choice(forward);
             }
         }
-        input::InputAction::SelectProviderTemplate => {
-            if app.active_modal() == Modal::ProviderTemplate
-                && let Some(template) = crate::PROVIDER_TEMPLATES.get(app.template_choice)
+        input::InputAction::SelectPreset => {
+            if app.active_modal() == Modal::ProviderPreset
+                && let Some(preset) = crate::PROVIDER_PRESETS.get(app.preset_choice)
             {
-                if template.oauth_first() {
-                    app.begin_oauth_add(template);
+                if preset.oauth_first() {
+                    app.begin_oauth_add(preset);
                     let _ = app.tx.send(AgentRequest::AuthorizeOAuth {
-                        method: template
+                        method: preset
                             .auth
                             .default_login_method()
                             .unwrap_or(muta_contracts::LoginMethod::Device),
-                        auth: template.auth,
+                        auth: preset.auth,
                     });
                 } else {
-                    app.open_custom_provider_editor(template);
+                    app.open_custom_provider_editor(preset);
                 }
             }
         }
@@ -194,7 +194,7 @@ pub(super) async fn dispatch_action(
                 app.oauth_pending_user_code.clear();
                 app.oauth_pending_message.clear();
                 app.oauth_pending_error = None;
-                app.open_provider_template_chooser();
+                app.open_preset_chooser();
             }
         }
         input::InputAction::CycleOauthSelection => {
@@ -229,10 +229,10 @@ pub(super) async fn dispatch_action(
                     Some(std::time::Instant::now() + std::time::Duration::from_millis(1500));
             }
         }
-        input::InputAction::CancelProviderTemplate => {
+        input::InputAction::CancelPresetChooser => {
             // Return to the Connections list the chooser was opened
             // from; the chat draft stays parked in stashed_input.
-            if app.active_modal() == Modal::ProviderTemplate {
+            if app.active_modal() == Modal::ProviderPreset {
                 app.input.clear();
                 app.set_cursor(0);
                 app.pop_transient_surface();
@@ -465,12 +465,12 @@ pub(super) async fn dispatch_action(
                 viewed_session_id,
             );
         }
-        input::InputAction::OpenProviderTemplate => {
+        input::InputAction::OpenPresetChooser => {
             // `a` in the Connections modal: open the add-provider
-            // template chooser (the first step of adding a connection).
+            // preset chooser (the first step of adding a connection).
             // Only meaningful from Connections; ignored otherwise.
             if app.active_modal() == Modal::Connections {
-                app.open_provider_template_chooser();
+                app.open_preset_chooser();
             }
         }
         input::InputAction::RefreshProviderModels => {

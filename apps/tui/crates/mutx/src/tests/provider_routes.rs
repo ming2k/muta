@@ -1,4 +1,4 @@
-//! Provider/route settings tests: template editors, capability overrides, custom provider submission, model selection.
+//! Provider/route settings tests: preset editors, capability overrides, custom connection submission, model selection.
 
 use super::*;
 
@@ -273,24 +273,24 @@ fn completions_expose_only_canonical_trust_subcommands() {
 }
 
 #[test]
-fn add_provider_row_opens_the_template_chooser() {
+fn add_connection_row_opens_the_preset_chooser() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_provider_template_chooser();
-    assert!(app.active_modal() == Modal::ProviderTemplate);
-    assert_eq!(app.template_choice, 0);
-    // `↑/↓` wrap across the template list.
-    let n = crate::PROVIDER_TEMPLATES.len();
-    app.move_template_choice(false);
-    assert_eq!(app.template_choice, n - 1, "wraps to the last template");
-    app.move_template_choice(true);
-    assert_eq!(app.template_choice, 0, "wraps back to the first");
+    app.open_preset_chooser();
+    assert!(app.active_modal() == Modal::ProviderPreset);
+    assert_eq!(app.preset_choice, 0);
+    // `↑/↓` wrap across the preset list.
+    let n = crate::PROVIDER_PRESETS.len();
+    app.move_preset_choice(false);
+    assert_eq!(app.preset_choice, n - 1, "wraps to the last template");
+    app.move_preset_choice(true);
+    assert_eq!(app.preset_choice, 0, "wraps back to the first");
 }
 
 #[test]
 fn custom_provider_editor_opens_empty_on_name_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.custom_name = "stale".to_string();
-    app.open_custom_provider_editor(openai_template());
+    app.open_custom_provider_editor(openai_preset());
     assert!(app.active_modal() == Modal::CustomProvider);
     assert_eq!(app.custom_field, 0, "opens on the Name field");
     assert!(app.custom_name.is_empty(), "buffers reset on open");
@@ -298,28 +298,28 @@ fn custom_provider_editor_opens_empty_on_name_field() {
         app.input.is_empty(),
         "Name field borrows an empty input line"
     );
-    // The template seeds the protocol and OpenAI model list.
+    // The preset seeds the protocol and OpenAI model list.
     assert_eq!(app.custom_protocol_wire, "openai");
     assert!(app.custom_models.iter().any(|m| m == "gpt-5.5"));
     assert!(!app.custom_fields.contains(&crate::CustomField::Model));
 }
 
 #[test]
-fn anthropic_template_seeds_the_claude_family_without_a_model_field() {
+fn anthropic_preset_seeds_the_claude_family_without_a_model_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_custom_provider_editor(anthropic_template());
+    app.open_custom_provider_editor(anthropic_preset());
     assert_eq!(app.custom_protocol_wire, "anthropic");
     // The Claude family is seeded as the provider's model list…
     assert!(app.custom_models.len() > 1, "seeds multiple Claude models");
     assert!(app.custom_models.iter().any(|m| m.starts_with("claude-")));
-    // …and there is no Model field (models are fixed by the template).
+    // …and there is no Model field (models are fixed by the preset).
     assert!(!app.custom_fields.contains(&crate::CustomField::Model));
 }
 
 #[test]
-fn antigravity_template_prefills_url_and_seeds_relay_models() {
+fn antigravity_preset_prefills_url_and_seeds_relay_models() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_custom_provider_editor(antigravity_template());
+    app.open_custom_provider_editor(antigravity_preset());
     assert_eq!(app.custom_protocol_wire, "google");
     assert_eq!(
         app.custom_base_url,
@@ -336,11 +336,11 @@ fn antigravity_template_prefills_url_and_seeds_relay_models() {
 #[test]
 fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    let custom_template = crate::PROVIDER_TEMPLATES
+    let custom_preset = crate::PROVIDER_PRESETS
         .iter()
         .find(|t| t.id == "custom-openai")
-        .expect("custom-openai template");
-    app.open_custom_provider_editor(custom_template);
+        .expect("custom-openai preset");
+    app.open_custom_provider_editor(custom_preset);
     // Fields: Name(0) / Base URL(1) / Token(2) / Model(3).
     let n = app.custom_fields.len() as u8;
     // Type a name, then advance: the name is stashed and the Base URL field
@@ -361,14 +361,14 @@ fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
 #[test]
 fn custom_provider_model_filter_commits_and_offers_custom_id() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    // The real generic template: it exposes the Model field and seeds no
+    // The real generic preset: it exposes the Model field and seeds no
     // models, so the flow under test is exactly what ships.
-    let free_model_template = crate::providers::PROVIDER_TEMPLATES
+    let free_model_preset = crate::providers::PROVIDER_PRESETS
         .iter()
         .find(|t| t.id == "custom-openai")
-        .expect("custom-openai template");
-    app.open_custom_provider_editor(free_model_template);
-    // The default model is the first candidate of the template's (OpenAI) protocol.
+        .expect("custom-openai preset");
+    app.open_custom_provider_editor(free_model_preset);
+    // The default model is the first candidate of the preset's (OpenAI) protocol.
     assert!(
         app.custom_model_candidates()
             .contains(&app.custom_model.as_str())
@@ -391,18 +391,18 @@ fn custom_provider_model_filter_commits_and_offers_custom_id() {
 }
 
 #[test]
-fn custom_openai_template_submits_with_the_typed_model_and_url() {
-    // End-to-end create flow for the generic template: fields Name/Base
+fn custom_openai_preset_submits_with_the_typed_model_and_url() {
+    // End-to-end create flow for the generic preset: fields Name/Base
     // URL/Token/Model, and the submitted `AddProvider` carries the typed
     // model id (not a seeded list) plus the relay endpoint.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    let template = crate::providers::PROVIDER_TEMPLATES
+    let preset = crate::providers::PROVIDER_PRESETS
         .iter()
         .find(|t| t.id == "custom-openai")
-        .expect("custom-openai template");
+        .expect("custom-openai preset");
     // The editor's visible fields include the Model filter field.
     assert_eq!(
-        template.fields(),
+        preset.fields(),
         vec![
             crate::CustomField::Name,
             crate::CustomField::BaseUrl,
@@ -410,7 +410,7 @@ fn custom_openai_template_submits_with_the_typed_model_and_url() {
             crate::CustomField::Model,
         ]
     );
-    app.open_custom_provider_editor(template);
+    app.open_custom_provider_editor(preset);
     app.custom_name = "WeChat".to_string();
     app.custom_base_url = "https://chatapi.weixin.qq.com/openai/v1/chat/completions".to_string();
     app.custom_token = "tok".to_string();
@@ -423,7 +423,7 @@ fn custom_openai_template_submits_with_the_typed_model_and_url() {
     assert_eq!(app.custom_model, "GLM-5.2");
 
     // Submit: the request must carry the single typed model as the seeded
-    // list, the template id, and the endpoint — a case-sensitive id travels
+    // list, the preset id, and the endpoint — a case-sensitive id travels
     // verbatim (the WeChat endpoint 400s on the lowercase spelling).
     app.stash_custom_field();
     let payload = serde_json::json!({
@@ -431,10 +431,10 @@ fn custom_openai_template_submits_with_the_typed_model_and_url() {
         "protocol": app.custom_protocol_wire,
         "base_url": app.custom_base_url,
         "models": [app.custom_model],
-        "template_id": template.id,
+        "preset_id": preset.id,
     });
     assert_eq!(payload["models"][0], "GLM-5.2");
-    assert_eq!(payload["template_id"], "custom-openai");
+    assert_eq!(payload["preset_id"], "custom-openai");
     assert_eq!(payload["protocol"], "openai");
     assert_eq!(
         payload["base_url"],

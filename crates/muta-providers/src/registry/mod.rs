@@ -2,7 +2,7 @@
 //! factory consumed by the orchestration layer.
 //!
 //! The registry is split one file per provider: each module holds the
-//! provider's model constants, its [`ProviderTemplateSpec`] entry, and (for
+//! provider's model constants, its [`ProviderPresetSpec`] entry, and (for
 //! the two legacy OpenAI-compatible presets) its [`OpenAiProviderSpec`] entry.
 //! This file keeps the shared types, the aggregate tables, and the factory.
 
@@ -90,64 +90,64 @@ pub fn openai_provider_spec(id: &str) -> Option<&'static OpenAiProviderSpec> {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Provider templates — the seed spec for a user-added provider instance
+// Provider presets — the seed spec for a user-added connection
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// The reconciliation-relevant subset of an add-provider template.
+/// The reconciliation-relevant subset of an add-connection preset.
 ///
-/// A provider instance created from a template records the template's stable
-/// [`id`](ProviderTemplateSpec::id) on its `UserProviderConfig`. At startup the
-/// catalog uses the template protocol and seed `models` to reconcile the
-/// instance. Fixed instances mirror the seed list; API-discovered instances
-/// retain only provider-advertised ids known to the client for that protocol.
-/// This struct is the source of truth for that mapping; it intentionally
-/// lives in `muta-providers` (where the model constants live) so the
-/// reconciliation layer in `muta-agent` and the UI templates in
+/// A connection created from a preset records the preset's stable
+/// [`id`](ProviderPresetSpec::id) on its `UserProviderConfig`. At startup the
+/// catalog uses the preset protocol and seed `models` to reconcile the
+/// connection. Fixed connections mirror the seed list; API-discovered
+/// connections retain only provider-advertised ids known to the client for
+/// that protocol. This struct is the source of truth for that mapping; it
+/// intentionally lives in `muta-providers` (where the model constants live)
+/// so the reconciliation layer in `muta-agent` and the UI presets in
 /// `mutx::tui` both read one table. The UI-only fields (label /
 /// description / placeholders) are **not** duplicated here.
-pub struct ProviderTemplateSpec {
-    /// Stable identifier persisted on the instance (`template_id`). Never
+pub struct ProviderPresetSpec {
+    /// Stable identifier persisted on the connection (`preset_id`). Never
     /// reused and never renamed once shipped — it is the durable join key
-    /// between an instance and its template.
+    /// between a connection and its preset.
     pub id: &'static str,
-    /// The instance-level default endpoint this template's routes reach.
-    /// `""` for templates that need a user-supplied endpoint
+    /// The connection-level default endpoint this preset's routes reach.
+    /// `""` for presets that need a user-supplied endpoint
     /// (`custom-openai`) — [`route_for_model`] returns `None` for those.
     pub base_url: &'static str,
-    /// The `User-Agent` header this template's routes must send, when the
+    /// The `User-Agent` header this preset's routes must send, when the
     /// provider requires a specific one (the coding-plan endpoints validate
     /// this header). `None` → the shared [`crate::MUTA_USER_AGENT`].
     pub user_agent: Option<&'static str>,
     /// Baseline capability metadata for the models this provider serves.
-    /// Lives beside the template (one table per provider) and is submitted to
+    /// Lives beside the preset (one table per provider) and is submitted to
     /// `muta_contracts`'s baseline registry at link time; the reconciliation
     /// layer intersects live-discovered ids against this local table.
     pub baselines: &'static [muta_contracts::Model],
-    /// Wire protocol the template's channels speak: `"openai"` |
+    /// Wire protocol the preset's channels speak: `"openai"` |
     /// `"openai-responses"` | `"anthropic"` | `"google"` (the legacy `"gemini"`
     /// label is still accepted). `"openai-responses"` is the OpenAI Responses
     /// API (`/responses` endpoint) over an ordinary API key — distinct from
     /// `"openai"` (chat completions) in transport only; model metadata and
     /// live discovery stay on the OpenAI shape.
     pub protocol: &'static str,
-    /// The model ids the template initially seeds, in display/activation order.
-    /// Fixed instances continue to mirror this list.
+    /// The model ids the preset initially seeds, in display/activation order.
+    /// Fixed connections continue to mirror this list.
     pub models: &'static [&'static str],
-    /// Whether this template supports **live model-list discovery** — fetching
+    /// Whether this preset supports **live model-list discovery** — fetching
     /// the provider's actual `GET /models` list at startup instead of mirroring
     /// the compiled-in [`models`](Self::models) snapshot.
     ///
-    /// When `true`, an instance created from this template defaults to
+    /// When `true`, a connection created from this preset defaults to
     /// `ModelSource::Api` (live availability intersected with the client model
     /// registry, retaining the last valid subset on error). When `false`, the
-    /// instance always uses the snapshot. A template is marked `false` when its
-    /// model list is derived at runtime (opencode-go), since that would
+    /// connection always uses the snapshot. A preset is marked `false` when
+    /// its model list is derived at runtime (opencode-go), since that would
     /// regress under a live overwrite.
     pub discovery: bool,
     /// Whether live discovery may **fit capability metadata** for model ids the
     /// client registry does not know — materializing them as channels with
     /// their advertised context window, reasoning, vision, and effort tiers
-    /// (persisted per instance, then overlaid onto model resolution; see
+    /// (persisted per connection, then overlaid onto model resolution; see
     /// `muta_contracts::model::register_fitted_models`).
     ///
     /// This is a trust decision, not a technical one: it is enabled only for
@@ -159,56 +159,50 @@ pub struct ProviderTemplateSpec {
     pub fitting: bool,
 }
 
-/// The single registry of provider templates offered when adding a provider.
+/// The single registry of provider presets offered when adding a connection.
 ///
 /// Each entry's `id` MUST be unique. The set is the source of truth shared by
-/// the add-provider UI and the catalog's model reconciliation — a template id
-/// recorded on a user instance resolves back to its entry here. Each entry
+/// the add-connection UI and the catalog's model reconciliation — a preset id
+/// recorded on a user connection resolves back to its entry here. Each entry
 /// lives beside its provider's model constants in the per-provider modules.
-pub const PROVIDER_TEMPLATE_SPECS: &[ProviderTemplateSpec] = &[
-    openai::TEMPLATE_SPEC,
-    anthropic::TEMPLATE_SPEC,
-    google::TEMPLATE_SPEC,
-    deepseek::TEMPLATE_SPEC,
-    xai::TEMPLATE_SPEC,
-    chatgpt::TEMPLATE_SPEC,
-    copilot::TEMPLATE_SPEC,
-    kimi::TEMPLATE_SPEC,
-    zai::TEMPLATE_SPEC,
-    opencode_go::TEMPLATE_SPEC,
-    antigravity_oauth::TEMPLATE_SPEC,
+pub const PROVIDER_PRESET_SPECS: &[ProviderPresetSpec] = &[
+    openai::PRESET_SPEC,
+    anthropic::PRESET_SPEC,
+    google::PRESET_SPEC,
+    deepseek::PRESET_SPEC,
+    xai::PRESET_SPEC,
+    chatgpt::PRESET_SPEC,
+    copilot::PRESET_SPEC,
+    kimi::PRESET_SPEC,
+    zai::PRESET_SPEC,
+    opencode_go::PRESET_SPEC,
+    antigravity_oauth::PRESET_SPEC,
     // The generic escape hatch: no seeded models — the Model field supplies
     // the one id, so an arbitrary OpenAI-compatible endpoint (third-party
-    // relay, self-hosted gateway) works without a curated template.
-    custom_openai::TEMPLATE_SPEC,
+    // relay, self-hosted gateway) works without a curated preset.
+    custom_openai::PRESET_SPEC,
 ];
 
-/// Look up a template spec by its stable id. Exact match only.
-pub fn provider_template_spec(id: &str) -> Option<&'static ProviderTemplateSpec> {
-    PROVIDER_TEMPLATE_SPECS.iter().find(|spec| spec.id == id)
-}
-
-pub type ProviderPresetSpec = ProviderTemplateSpec;
-pub const PROVIDER_PRESET_SPECS: &[ProviderPresetSpec] = PROVIDER_TEMPLATE_SPECS;
+/// Look up a preset spec by its stable id. Exact match only.
 pub fn provider_preset_spec(id: &str) -> Option<&'static ProviderPresetSpec> {
-    provider_template_spec(id)
+    PROVIDER_PRESET_SPECS.iter().find(|spec| spec.id == id)
 }
 
-/// Resolve the transport endpoint for **one model** of a template — the route
+/// Resolve the transport endpoint for **one model** of a preset — the route
 /// the catalog materializes at runtime (routes are derived, never persisted).
 ///
 /// Returns `(protocol, base_url, user_agent)` where `protocol` is one of the
 /// wire-protocol labels `"openai"` / `"openai-responses"` / `"anthropic"` /
-/// `"google"`. Most templates serve every model over one endpoint; the
+/// `"google"`. Most presets serve every model over one endpoint; the
 /// `opencode-go` relay routes models by their registered wire format (OpenAI
 /// chat / Anthropic `/messages` / Google `/v1beta`), so its base URL and
-/// protocol vary per model. `None` for templates with no built-in endpoint
-/// (`custom-openai`), where the instance declaration must supply one.
+/// protocol vary per model. `None` for presets with no built-in endpoint
+/// (`custom-openai`), where the connection declaration must supply one.
 pub fn route_for_model(
-    template_id: &str,
+    preset_id: &str,
     model_id: &str,
 ) -> Option<(&'static str, &'static str, Option<&'static str>)> {
-    let spec = provider_template_spec(template_id)?;
+    let spec = provider_preset_spec(preset_id)?;
     if spec.id == "opencode-go" {
         let format = muta_contracts::model::resolve(model_id).format;
         let (protocol, base_url) = match format {
@@ -403,43 +397,43 @@ mod spec_tests {
     use super::*;
 
     #[test]
-    fn provider_template_specs_have_unique_nonempty_ids() {
-        // Template ids are the durable join key between an instance and its
-        // template, so they must be unique and non-empty.
-        let mut ids: Vec<&str> = PROVIDER_TEMPLATE_SPECS.iter().map(|spec| spec.id).collect();
+    fn provider_preset_specs_have_unique_nonempty_ids() {
+        // Preset ids are the durable join key between a connection and its
+        // preset, so they must be unique and non-empty.
+        let mut ids: Vec<&str> = PROVIDER_PRESET_SPECS.iter().map(|spec| spec.id).collect();
         ids.sort_unstable();
         assert!(
             ids.iter().all(|id| !id.is_empty()),
-            "template ids must be non-empty"
+            "preset ids must be non-empty"
         );
         let dups: Vec<&[&str]> = ids.windows(2).filter(|pair| pair[0] == pair[1]).collect();
-        assert!(dups.is_empty(), "duplicate template ids: {dups:?}");
+        assert!(dups.is_empty(), "duplicate preset ids: {dups:?}");
     }
 
     #[test]
-    fn provider_template_spec_resolves_each_known_id() {
-        // The reconciliation layer resolves an instance's template_id back to a
+    fn provider_preset_spec_resolves_each_known_id() {
+        // The reconciliation layer resolves a connection's preset_id back to a
         // spec here; every id in the table must round-trip.
-        // `custom-openai` is the one template allowed to seed no models: the
+        // `custom-openai` is the one preset allowed to seed no models: the
         // free-text Model field supplies the one id at create time, so there
         // is no snapshot to mirror.
-        const NO_SEED_TEMPLATES: &[&str] = &["custom-openai"];
-        for spec in PROVIDER_TEMPLATE_SPECS {
-            let resolved = provider_template_spec(spec.id).expect("id resolves");
+        const NO_SEED_PRESETS: &[&str] = &["custom-openai"];
+        for spec in PROVIDER_PRESET_SPECS {
+            let resolved = provider_preset_spec(spec.id).expect("id resolves");
             assert_eq!(resolved.id, spec.id);
-            if NO_SEED_TEMPLATES.contains(&spec.id) {
+            if NO_SEED_PRESETS.contains(&spec.id) {
                 assert!(
                     resolved.models.is_empty(),
-                    "{} is a no-seed template and must stay empty",
+                    "{} is a no-seed preset and must stay empty",
                     spec.id
                 );
             } else {
                 assert!(!resolved.models.is_empty(), "{} has no models", spec.id);
             }
         }
-        // Unknown ids resolve to None (graceful: an unknown template_id leaves
-        // the instance untouched).
-        assert!(provider_template_spec("does-not-exist").is_none());
+        // Unknown ids resolve to None (graceful: an unknown preset_id leaves
+        // the connection untouched).
+        assert!(provider_preset_spec("does-not-exist").is_none());
     }
 
     #[test]
@@ -466,7 +460,7 @@ mod spec_tests {
         }
 
         let mut seen: HashMap<&str, (&str, String)> = HashMap::new();
-        for spec in PROVIDER_TEMPLATE_SPECS {
+        for spec in PROVIDER_PRESET_SPECS {
             for m in spec.baselines {
                 let sig = signature(m);
                 match seen.insert(m.id, (spec.id, sig)) {
@@ -487,17 +481,17 @@ mod spec_tests {
     }
 
     #[test]
-    fn template_models_are_covered_by_the_local_baseline_table() {
-        // Every id a template seeds must have baseline metadata in the same
+    fn preset_models_are_covered_by_the_local_baseline_table() {
+        // Every id a preset seeds must have baseline metadata in the same
         // provider file's local table — that table is what the reconciliation
         // layer intersects live discovery against.
-        for spec in PROVIDER_TEMPLATE_SPECS {
+        for spec in PROVIDER_PRESET_SPECS {
             let baseline_ids: std::collections::HashSet<&str> =
                 spec.baselines.iter().map(|m| m.id).collect();
             for id in spec.models {
                 assert!(
                     baseline_ids.contains(id),
-                    "{} template model {id} has no entry in the local baseline table",
+                    "{} preset model {id} has no entry in the local baseline table",
                     spec.id
                 );
             }
@@ -506,9 +500,9 @@ mod spec_tests {
 
     #[test]
     fn opencode_go_served_ids_all_have_local_baselines() {
-        // The go seed derives channels from the template's local table; every
+        // The go seed derives channels from the preset's local table; every
         // advertised SERVED id must be present there.
-        let spec = provider_template_spec("opencode-go").expect("opencode-go template");
+        let spec = provider_preset_spec("opencode-go").expect("opencode-go preset");
         let baseline_ids: std::collections::HashSet<&str> =
             spec.baselines.iter().map(|m| m.id).collect();
         for id in OPENCODE_GO_SERVED_MODELS {

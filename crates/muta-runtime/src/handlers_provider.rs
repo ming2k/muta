@@ -141,7 +141,7 @@ pub async fn add(
     user_agent: Option<String>,
     models: Vec<String>,
     auth: muta_contracts::ChannelAuth,
-    template_id: Option<String>,
+    preset_id: Option<String>,
     client_identity: Option<ClientIdentity>,
 ) {
     let mut connections = Connections::load();
@@ -161,7 +161,7 @@ pub async fn add(
     // the preset. Only a known id is recorded; an unknown / blank value
     // keeps the connection pure-custom (its declared models are honored).
     let resolved_preset_id =
-        template_id.filter(|pid| muta_providers::provider_preset_spec(pid).is_some());
+        preset_id.filter(|pid| muta_providers::provider_preset_spec(pid).is_some());
     // Sanitized declared model ids. Preset connections derive their model set
     // and leave `models` empty; a preset that must still seed its list
     // (custom-openai) declares it here.

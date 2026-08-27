@@ -143,7 +143,7 @@ fn page_keys_scroll_every_scrollable_modal_body() {
         crate::Modal::Config,
         crate::Modal::TokenReport,
         crate::Modal::OauthPending,
-        crate::Modal::ProviderTemplate,
+        crate::Modal::ProviderPreset,
         crate::Modal::CustomProvider,
         crate::Modal::Tools,
         crate::Modal::Mcp,

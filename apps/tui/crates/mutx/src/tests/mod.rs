@@ -283,7 +283,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         custom_url_hint: String::new(),
         custom_user_agent: None,
         custom_auth: Default::default(),
-        custom_template_id: None,
+        custom_preset_id: None,
         awaiting_oauth_add: false,
         oauth_pending_message: String::new(),
         oauth_pending_url: String::new(),
@@ -298,8 +298,8 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         custom_base_url: String::new(),
         custom_token: String::new(),
         custom_model: String::new(),
-        template_choice: 0,
-        template_scroll: 0,
+        preset_choice: 0,
+        preset_scroll: 0,
         model_search: false,
         model_scroll: 0,
         model_modal_follow: true,
@@ -319,25 +319,25 @@ fn new_test_channel() -> mpsc::UnboundedSender<AgentRequest> {
     tx
 }
 
-fn openai_template() -> &'static crate::providers::ProviderTemplate {
-    crate::PROVIDER_TEMPLATES
+fn openai_preset() -> &'static crate::providers::ProviderPreset {
+    crate::PROVIDER_PRESETS
         .iter()
         .find(|t| t.id == "openai")
-        .expect("openai template")
+        .expect("openai preset")
 }
 
-fn anthropic_template() -> &'static crate::providers::ProviderTemplate {
-    crate::PROVIDER_TEMPLATES
+fn anthropic_preset() -> &'static crate::providers::ProviderPreset {
+    crate::PROVIDER_PRESETS
         .iter()
         .find(|t| t.id == "anthropic")
-        .expect("anthropic template")
+        .expect("anthropic preset")
 }
 
-fn antigravity_template() -> &'static crate::providers::ProviderTemplate {
-    crate::PROVIDER_TEMPLATES
+fn antigravity_preset() -> &'static crate::providers::ProviderPreset {
+    crate::PROVIDER_PRESETS
         .iter()
         .find(|t| t.id == "antigravity-oauth")
-        .expect("antigravity template")
+        .expect("antigravity preset")
 }
 
 fn queued_dispatch(id: &str, session_id: &str, text: &str) -> QueuedDispatch {

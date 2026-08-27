@@ -26,7 +26,7 @@ use muta_contracts::{
 use crate::fuzzy;
 
 /// One editable field of the provider editor. The visible set is chosen by the
-/// active [`ProviderTemplate`] (create) or the edited provider's protocol (edit),
+/// active [`ProviderPreset`] (create) or the edited provider's protocol (edit),
 /// rather than a fixed five-field form. Provider-owned model collections are
 /// imported from `muta_providers`; this view layer only selects and renders
 /// those curated values.
@@ -46,39 +46,42 @@ pub enum CustomField {
 /// A curated starting point for adding a user-defined provider. The protocol is
 /// pre-locked (no protocol picker), the relay's model list is seeded, and the
 /// URL placeholder shows the expected endpoint shape. Modelled as *data* — one
-/// table entry per template — mirroring `muta_providers::OPENAI_PROVIDER_SPECS`.
-pub struct ProviderTemplate {
+/// table entry per preset — mirroring `muta_providers::OPENAI_PROVIDER_SPECS`.
+pub struct ProviderPreset {
     /// Stable identifier shared with the matching entry in
-    /// `muta_providers::PROVIDER_TEMPLATE_SPECS`. Persisted on the created
-    /// instance as `template_id` so the catalog can re-seed the instance from
-    /// this template's *current* model list on later startups. MUST match the
-    /// spec's `id` 1:1 and never change once shipped.
+    /// `muta_providers::PROVIDER_PRESET_SPECS`. Persisted on the created
+    /// connection as `preset_id` so the catalog can re-seed the connection
+    /// from this preset's *current* model list on later startups. MUST match
+    /// the spec's `id` 1:1 and never change once shipped.
     pub id: &'static str,
     /// List label, e.g. `"Custom Anthropic (Claude relay)"`.
     pub label: &'static str,
-    /// One-line description shown under the label in the chooser.
+    /// One-sentence description shown wrapped under the label in the chooser's
+    /// focused row. It must read as prose and cover what the user acts on:
+    /// what the service is, what it serves, and how it authenticates ("sign
+    /// in with an API key" vs "authorizes in the browser").
     pub description: &'static str,
     /// Wire protocol sent in `AgentRequest::AddProvider`: `"openai"` |
     /// `"anthropic"` | `"google"` (the legacy `"gemini"` label is still
     /// accepted).
     pub protocol: &'static str,
     /// Models seeded as channels. Empty means the user enters one via the Model
-    /// field (templates can opt in when they need one).
+    /// field (presets can opt in when they need one).
     pub models: &'static [&'static str],
     /// Whether the editor shows a Base URL field (false for native Google).
     pub needs_url: bool,
     /// Placeholder shown in the Base URL field — the full endpoint shape.
     pub url_hint: &'static str,
-    /// Whether the editor exposes a free-text Model field. Most templates seed
+    /// Whether the editor exposes a free-text Model field. Most presets seed
     /// `models`; open protocols can still add arbitrary model ids later.
     pub needs_model: bool,
     /// A concrete relay endpoint pre-filled into the Base URL field on open
-    /// (create mode), so a relay-specific template works without the user
-    /// typing the host. `None` for the generic templates — their `url_hint` is
+    /// (create mode), so a relay-specific preset works without the user
+    /// typing the host. `None` for the generic presets — their `url_hint` is
     /// a placeholder only and the field starts empty, since the user supplies
     /// their own relay host. When set, the user can still edit the value.
     pub default_url: Option<&'static str>,
-    /// Template-specific user agent. Most providers use the default agent, but
+    /// Preset-specific user agent. Most providers use the default agent, but
     /// the coding-plan endpoints validate this header.
     pub user_agent: Option<&'static str>,
     /// How seeded channels authenticate. `XaiOAuth` starts browser OAuth
@@ -86,8 +89,8 @@ pub struct ProviderTemplate {
     pub auth: muta_contracts::ChannelAuth,
 }
 
-impl ProviderTemplate {
-    /// The title the template chooser sorts and keys rows by. Every template
+impl ProviderPreset {
+    /// The title the preset chooser sorts and keys rows by. Every preset
     /// renders its [`Self::label`] alone as the row title — the `OAuth` /
     /// `(sub2api)` suffixes are part of the label, so this accessor exists to
     /// name that rule and give the sort a single home rather than to project
@@ -96,20 +99,8 @@ impl ProviderTemplate {
         self.label
     }
 
-    /// The auth-scheme badge for the chooser row: `oauth` when the template
-    /// authenticates through a browser flow, `token` when it asks for an API
-    /// key. This is the only per-row auth surface — the wire protocol and the
-    /// seeded model count are implementation details the user does not act on.
-    pub fn auth_badge(&self) -> &'static str {
-        if self.auth.is_oauth() {
-            "oauth"
-        } else {
-            "token"
-        }
-    }
-
-    /// The ordered, visible editor fields for this template (create mode).
-    /// OAuth templates only ask for the instance name (auth already completed).
+    /// The ordered, visible editor fields for this preset (create mode).
+    /// OAuth presets only ask for the connection name (auth already completed).
     pub fn fields(&self) -> Vec<CustomField> {
         if self.auth.is_oauth() {
             return vec![CustomField::Name];
@@ -126,21 +117,21 @@ impl ProviderTemplate {
         fields
     }
 
-    /// Whether selecting this template starts OAuth before the name editor.
+    /// Whether selecting this preset starts OAuth before the name editor.
     pub fn oauth_first(&self) -> bool {
         self.auth.is_oauth()
     }
 }
 
-/// The provider templates offered when adding a provider, **sorted
+/// The provider presets offered when adding a connection, **sorted
 /// alphabetically by title**. The chooser renders rows in this order and keys
 /// `↑/↓` movement to it, so the declared order here IS the display order —
 /// insert new entries at their sorted position, not at the end.
-pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
-    ProviderTemplate {
+pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
+    ProviderPreset {
         id: "anthropic",
         label: "Anthropic",
-        description: "Anthropic API — Flagship Claude models with advanced reasoning (API Key)",
+        description: "Anthropic's official API for flagship Claude models with advanced reasoning; sign in with an Anthropic API key.",
         protocol: "anthropic",
         models: muta_providers::ANTHROPIC_BUILTIN_MODELS,
         needs_url: false,
@@ -150,10 +141,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: None,
         auth: muta_contracts::ChannelAuth::ApiKey,
     },
-    ProviderTemplate {
+    ProviderPreset {
         id: "chatgpt-oauth",
         label: "ChatGPT",
-        description: "ChatGPT Plus/Pro subscription — Flagship GPT & deep reasoning models (browser OAuth)",
+        description: "Uses your ChatGPT Plus or Pro subscription for flagship GPT and deep-reasoning models; authorizes in the browser, no API key.",
         protocol: "openai",
         models: muta_providers::CHATGPT_BUILTIN_MODELS,
         needs_url: false,
@@ -163,10 +154,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: None,
         auth: muta_contracts::ChannelAuth::ChatGptOAuth,
     },
-    ProviderTemplate {
+    ProviderPreset {
         id: "custom-openai",
         label: "Custom Provider",
-        description: "Custom OpenAI-compatible gateway, local runtime, or relay (Base URL & Key)",
+        description: "Any OpenAI-compatible endpoint you bring — a custom gateway, local runtime, or relay; you set the base URL and key.",
         protocol: "openai",
         models: &[],
         needs_url: true,
@@ -176,10 +167,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: None,
         auth: muta_contracts::ChannelAuth::ApiKey,
     },
-    ProviderTemplate {
+    ProviderPreset {
         id: "deepseek",
         label: "DeepSeek",
-        description: "DeepSeek Platform API — High-performance reasoning & coding models (API Key)",
+        description: "DeepSeek's platform API with high-performance reasoning and coding models; sign in with a DeepSeek API key.",
         protocol: "openai-responses",
         models: muta_providers::DEEPSEEK_BUILTIN_MODELS,
         needs_url: false,
@@ -189,10 +180,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: None,
         auth: muta_contracts::ChannelAuth::ApiKey,
     },
-    ProviderTemplate {
+    ProviderPreset {
         id: "copilot-oauth",
         label: "GitHub Copilot",
-        description: "GitHub Copilot subscription — Multi-vendor coding & reasoning models (device OAuth)",
+        description: "Your GitHub Copilot subscription, serving multi-vendor coding and reasoning models; authorizes on the device via GitHub.",
         protocol: "openai",
         models: muta_providers::COPILOT_SEED_MODELS,
         needs_url: false,
@@ -202,10 +193,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: None,
         auth: muta_contracts::ChannelAuth::CopilotOAuth,
     },
-    ProviderTemplate {
+    ProviderPreset {
         id: "google",
         label: "Google AI Studio",
-        description: "Google AI Studio / Developer API — Full-range Gemini models (API Key)",
+        description: "Google AI Studio / developer API covering the full Gemini range; sign in with a Google API key.",
         protocol: "google",
         models: muta_providers::GOOGLE_BUILTIN_MODELS,
         needs_url: false,
@@ -215,10 +206,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: None,
         auth: muta_contracts::ChannelAuth::ApiKey,
     },
-    ProviderTemplate {
+    ProviderPreset {
         id: "antigravity-oauth",
         label: "Google Antigravity",
-        description: "Google One AI Premium subscription — Flagship Gemini & companion Claude models (browser OAuth)",
+        description: "Your Google One AI Premium subscription for flagship Gemini plus companion Claude models; authorizes in the browser.",
         protocol: "google",
         models: muta_providers::ANTIGRAVITY_OAUTH_MODELS,
         needs_url: false,
@@ -228,10 +219,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: Some(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT),
         auth: muta_contracts::ChannelAuth::AntigravityOAuth,
     },
-    ProviderTemplate {
+    ProviderPreset {
         id: "kimi-code",
         label: "Kimi Code",
-        description: "Moonshot Kimi Coding Plan — Long-context coding & reasoning models (API Key)",
+        description: "Moonshot's Kimi Coding Plan with long-context coding and reasoning models; sign in with a plan API key.",
         protocol: "openai",
         models: muta_providers::KIMI_CODE_MODELS,
         needs_url: false,
@@ -241,10 +232,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: Some(muta_providers::OPENCODE_USER_AGENT),
         auth: muta_contracts::ChannelAuth::ApiKey,
     },
-    ProviderTemplate {
+    ProviderPreset {
         id: "openai",
-        label: "OpenAI",
-        description: "OpenAI Platform API — Official flagship GPT & frontier reasoning models (API Key)",
+        label: "OpenAI Platform",
+        description: "OpenAI's platform API for official flagship GPT and frontier reasoning models; sign in with an OpenAI API key.",
         protocol: "openai",
         models: muta_providers::OPENAI_BUILTIN_MODELS,
         needs_url: false,
@@ -254,10 +245,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: None,
         auth: muta_contracts::ChannelAuth::ApiKey,
     },
-    ProviderTemplate {
+    ProviderPreset {
         id: "opencode-go",
         label: "OpenCode Go",
-        description: "OpenCode.ai subscription relay — Cloud-accelerated coding & agent models (API Key)",
+        description: "OpenCode.ai subscription relay with cloud-accelerated coding and agent models; sign in with an OpenCode API key.",
         protocol: "openai",
         models: muta_providers::OPENCODE_GO_MODELS,
         needs_url: false,
@@ -267,10 +258,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: None,
         auth: muta_contracts::ChannelAuth::ApiKey,
     },
-    ProviderTemplate {
+    ProviderPreset {
         id: "zai-code",
         label: "ZAI Code (CN)",
-        description: "Zhipu Z.AI Coding Plan — Flagship GLM & code-enhanced models (API Key)",
+        description: "Zhipu's Z.AI Coding Plan with flagship GLM and code-enhanced models; sign in with a plan API key.",
         protocol: "openai",
         models: muta_providers::ZAI_CODE_MODELS,
         needs_url: false,
@@ -280,10 +271,10 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
         user_agent: Some(muta_providers::ZCODE_USER_AGENT),
         auth: muta_contracts::ChannelAuth::ApiKey,
     },
-    ProviderTemplate {
+    ProviderPreset {
         id: "xai-oauth",
         label: "xAI",
-        description: "SuperGrok / X Premium subscription — Flagship Grok reasoning models (browser OAuth)",
+        description: "Your SuperGrok or X Premium subscription for flagship Grok reasoning models; authorizes in the browser.",
         protocol: "openai",
         models: muta_providers::XAI_BUILTIN_MODELS,
         needs_url: false,
@@ -295,29 +286,31 @@ pub const PROVIDER_TEMPLATES: &[ProviderTemplate] = &[
     },
 ];
 
-/// The editor header title for a create-mode provider with the given protocol
-/// wire — the matching template's label (protocols are unique across templates),
-/// falling back to a generic header.
-pub fn provider_template_label_for(protocol: &str) -> String {
-    PROVIDER_TEMPLATES
+/// The editor header title for a create-mode connection — the label of the
+/// preset the flow was seeded from, falling back to a generic header. The
+/// lookup is by **preset id**, not wire protocol: several presets share the
+/// `openai` protocol, and a first-match-by-protocol lookup would mislabel
+/// the editor (e.g. "ChatGPT" for the OpenAI Platform preset).
+pub fn preset_label_for(preset_id: Option<&str>) -> String {
+    PROVIDER_PRESETS
         .iter()
-        .find(|t| t.protocol == protocol)
+        .find(|t| Some(t.id) == preset_id)
         .map(|t| t.label.to_string())
         .unwrap_or_else(|| "＋ Add connection".to_string())
 }
 
-/// Resolve the provider **type** label for a Connections row from its template
-/// id — e.g. `template_id = "openai-sub2api"` → `"OpenAI (sub2api)"`. This is
-/// the provider *kind* shown beside the user-given instance name (distinct from
-/// the instance name itself). Returns `None` for legacy instances with no
-/// recorded template, in which case the row renders the instance name alone.
-pub fn provider_type_label(template_id: &str) -> Option<&'static str> {
-    if template_id.is_empty() {
+/// Resolve the provider **type** label for a Connections row from its preset
+/// id — e.g. `preset_id = "openai"` → `"OpenAI Platform"`. This is the
+/// provider *kind* shown beside the user-given connection name (distinct from
+/// the connection name itself). Returns `None` for legacy connections with no
+/// recorded preset, in which case the row renders the connection name alone.
+pub fn provider_type_label(preset_id: &str) -> Option<&'static str> {
+    if preset_id.is_empty() {
         return None;
     }
-    PROVIDER_TEMPLATES
+    PROVIDER_PRESETS
         .iter()
-        .find(|t| t.id == template_id)
+        .find(|t| t.id == preset_id)
         .map(|t| t.label)
 }
 
@@ -1093,11 +1086,11 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_template_is_offered_with_prefilled_url_and_seeded_models() {
-        let tmpl = PROVIDER_TEMPLATES
+    fn antigravity_preset_is_offered_with_prefilled_url_and_seeded_models() {
+        let tmpl = PROVIDER_PRESETS
             .iter()
             .find(|t| t.id == "antigravity-oauth")
-            .expect("antigravity template offered in the chooser");
+            .expect("antigravity preset offered in the chooser");
         assert_eq!(tmpl.label, "Google Antigravity");
         assert_eq!(tmpl.protocol, "google");
         assert_eq!(tmpl.models, muta_providers::ANTIGRAVITY_OAUTH_MODELS);
@@ -1105,7 +1098,7 @@ mod tests {
             tmpl.default_url,
             Some("https://daily-cloudcode-pa.googleapis.com")
         );
-        assert!(!tmpl.needs_url, "OAuth template hides Base URL field");
+        assert!(!tmpl.needs_url, "OAuth preset hides Base URL field");
         assert!(
             !tmpl.needs_model,
             "no free-text Model field — models are seeded"
@@ -1114,11 +1107,11 @@ mod tests {
     }
 
     #[test]
-    fn openai_template_seeds_openai_text_models() {
-        let tmpl = PROVIDER_TEMPLATES
+    fn openai_preset_seeds_openai_text_models() {
+        let tmpl = PROVIDER_PRESETS
             .iter()
             .find(|t| t.id == "openai")
-            .expect("openai template offered in the chooser");
+            .expect("openai preset offered in the chooser");
         assert_eq!(tmpl.protocol, "openai");
         assert_eq!(tmpl.models, muta_providers::OPENAI_BUILTIN_MODELS);
         assert!(
@@ -1139,9 +1132,9 @@ mod tests {
     }
 
     #[test]
-    fn builtin_templates_prefill_official_urls_generic_relays_do_not() {
+    fn builtin_presets_prefill_official_urls_generic_relays_do_not() {
         let builtin_labels = [
-            "OpenAI",
+            "OpenAI Platform",
             "Anthropic",
             "Google AI Studio",
             "DeepSeek",
@@ -1153,7 +1146,7 @@ mod tests {
             "ZAI Code (CN)",
             "OpenCode Go",
         ];
-        for t in PROVIDER_TEMPLATES {
+        for t in PROVIDER_PRESETS {
             if builtin_labels.contains(&t.label) {
                 assert!(t.default_url.is_some(), "{:?} should pre-fill", t.label);
             } else {
@@ -1322,35 +1315,69 @@ mod tests {
     }
 
     #[test]
-    fn each_template_id_resolves_to_a_matching_spec() {
-        // The template `id` is the durable join key persisted on instances as
-        // `template_id`. Every UI template MUST resolve to a spec in
-        // PROVIDER_TEMPLATE_SPECS with the same id, protocol, and model list —
-        // otherwise the catalog's reconciliation could not re-seed an instance
-        // from its template. This test catches a divergence introduced by
+    fn each_preset_id_resolves_to_a_matching_spec() {
+        // The preset `id` is the durable join key persisted on connections as
+        // `preset_id`. Every UI preset MUST resolve to a spec in
+        // PROVIDER_PRESET_SPECS with the same id, protocol, and model list —
+        // otherwise the catalog's reconciliation could not re-seed a connection
+        // from its preset. This test catches a divergence introduced by
         // editing one table but not the other.
-        for t in PROVIDER_TEMPLATES {
-            let spec = muta_providers::provider_template_spec(t.id)
-                .unwrap_or_else(|| panic!("template id {} has no matching spec", t.id));
+        for t in PROVIDER_PRESETS {
+            let spec = muta_providers::provider_preset_spec(t.id)
+                .unwrap_or_else(|| panic!("preset id {} has no matching spec", t.id));
             assert_eq!(
                 spec.protocol, t.protocol,
-                "template {} protocol mismatch",
+                "preset {} protocol mismatch",
                 t.id
             );
             assert_eq!(
                 spec.models, t.models,
-                "template {} model list diverged from its spec",
+                "preset {} model list diverged from its spec",
                 t.id
             );
         }
     }
 
     #[test]
-    fn template_ids_are_unique() {
-        let mut ids: Vec<&str> = PROVIDER_TEMPLATES.iter().map(|t| t.id).collect();
+    fn preset_ids_are_unique() {
+        let mut ids: Vec<&str> = PROVIDER_PRESETS.iter().map(|t| t.id).collect();
         ids.sort_unstable();
         let dups: Vec<&[&str]> = ids.windows(2).filter(|pair| pair[0] == pair[1]).collect();
-        assert!(dups.is_empty(), "duplicate template ids: {dups:?}");
+        assert!(dups.is_empty(), "duplicate preset ids: {dups:?}");
+    }
+
+    #[test]
+    fn openai_platform_preset_is_labeled_to_distinguish_chatgpt() {
+        // The `openai` preset is the platform/API-key billing plan, distinct
+        // from the ChatGPT subscription preset that shares its wire protocol.
+        // The label must say so — a bare "OpenAI" reads as the company and
+        // matches the subscription plan users actually have.
+        let openai = PROVIDER_PRESETS.iter().find(|t| t.id == "openai").unwrap();
+        assert_eq!(openai.label, "OpenAI Platform");
+        let chatgpt = PROVIDER_PRESETS
+            .iter()
+            .find(|t| t.id == "chatgpt-oauth")
+            .unwrap();
+        assert_eq!(chatgpt.label, "ChatGPT");
+        assert_eq!(openai.protocol, chatgpt.protocol);
+    }
+
+    #[test]
+    fn editor_title_resolves_by_preset_id_not_protocol() {
+        // Several presets share the `openai` wire protocol (chatgpt-oauth is
+        // declared first). A create-mode editor title must resolve from the
+        // seeded preset id, otherwise every openai-protocol flow would be
+        // headed "ChatGPT".
+        assert_eq!(preset_label_for(Some("openai")), "OpenAI Platform");
+        assert_eq!(preset_label_for(Some("chatgpt-oauth")), "ChatGPT");
+        assert_eq!(preset_label_for(Some("custom-openai")), "Custom Provider");
+        assert_eq!(preset_label_for(Some("deepseek")), "DeepSeek");
+        // Unknown / unseeded ids fall back to the generic header.
+        assert_eq!(preset_label_for(None), "＋ Add connection");
+        assert_eq!(
+            preset_label_for(Some("no-such-preset")),
+            "＋ Add connection"
+        );
     }
 
     #[test]

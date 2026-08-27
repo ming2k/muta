@@ -229,7 +229,7 @@ is the reliable trigger.
 
 Provider-instance management surface. Rows are the configured provider
 instances, ranked last-used → name; each row shows the instance name and its
-provider *type* (`· OpenAI`). This surface only *manages* instances — it has
+provider *type* (`· OpenAI Platform`). This surface only *manages* instances — it has
 no activate concept, so switching the active provider is done from the Models
 picker. When no instance exists, an empty-state hint prompts the user to press
 `a`.
@@ -239,35 +239,37 @@ picker. When no instance exists, an empty-state hint prompts the user to press
 | printable | Append to the filter (composer is the input source) |
 | `↑` / `↓` | Move selection |
 | `/` | Enter the search sub-layer (`Esc` clears it) |
-| `a` | Add a connection — open the provider-template chooser |
+| `a` | Add a connection — open the preset chooser |
 | `e` | Edit — API key for built-ins, full meta editor for custom providers |
 | `D` | Delete a custom provider (confirm overlay) |
 | `Esc` | Close |
 
-### Add connection (template chooser)
+### Add connection (preset chooser)
 
 The secondary page `a` opens, rendered inside the same panel with a
-`Connections › Add connection` breadcrumb. One row per provider template,
+`Connections › Add connection` breadcrumb. One row per connection preset,
 **sorted alphabetically by title**. An unfocused row shows its title alone; the
-focused row additionally reveals the template's one-line description and is
-marked by a full-width brand background highlight (no `›` cursor marker). Each
-row carries a trailing auth-scheme badge — `⚿ oauth` for browser/device-flow
-subscriptions, `⚿ token` for API-key templates — separated from the title by
-whitespace, never a `·`. The wire protocol and the seeded model count are
-deliberately omitted: the models an endpoint actually serves are only knowable
-with a working credential, and the protocol is locked by the template.
+focused row additionally reveals the preset's one-sentence description,
+wrapped under the title in the panel background, and is marked by a full-width
+brand background highlight (no `›` cursor marker). The description sentence
+carries everything the user acts on — what the service is, what it serves, and
+how it authenticates ("sign in with an API key" vs "authorizes in the browser")
+— so there is no separate badge or meta column. The wire protocol and the
+seeded model count are deliberately omitted: the models an endpoint actually
+serves are only knowable with a working credential, and the protocol is locked
+by the preset.
 
 ```text
 ╭──────────────────────────────────────────────────────────────────╮
 │ Connections › Add connection                                      │
 │                                                                   │
-│  Anthropic                                                  ⚿ token │
-│    Claude models over the Anthropic /messages API                │
-│  Anthropic (sub2api)                                        ⚿ token │
-│  Antigravity (sub2api)                                      ⚿ token │
-│  Antigravity OAuth                                          ⚿ oauth │
-│  ChatGPT OAuth                                              ⚿ oauth │
-│  …                                                               │
+│  Anthropic                                                        │
+│    Anthropic's official API for flagship Claude models with       │
+│    advanced reasoning; sign in with an Anthropic API key.         │
+│  ChatGPT                                                          │
+│  Custom Provider                                                  │
+│  Antigravity OAuth                                                │
+│  …                                                                │
 │                                                                   │
 │ ↑↓ navigate  Enter select  Esc back                              │
 ╰──────────────────────────────────────────────────────────────────╯
@@ -276,7 +278,7 @@ with a working credential, and the protocol is locked by the template.
 | Key | Effect |
 |-----|--------|
 | `↑` / `↓` | Move selection (wraps) |
-| `Enter` | Select — OAuth templates start the browser flow, token templates open the editor |
+| `Enter` | Select — OAuth presets start the browser flow, token presets open the editor |
 | `Esc` | Back to the Connections list |
 
 ## Model editor

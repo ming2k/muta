@@ -1,10 +1,10 @@
-//! The `chatgpt-oauth` provider template: GPT-5.x over the ChatGPT
+//! The `chatgpt-oauth` provider preset: GPT-5.x over the ChatGPT
 //! subscription backend (the Codex Responses API).
 
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::ProviderTemplateSpec;
+use super::ProviderPresetSpec;
 
 /// GPT-5.x models served over the ChatGPT subscription backend (the Codex
 /// Responses API). These are the models a ChatGPT Pro/PLUS plan unlocks; the
@@ -98,7 +98,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "chatgpt-oauth",
     baselines: MODELS,
     base_url: "https://chatgpt.com/backend-api/codex/responses",

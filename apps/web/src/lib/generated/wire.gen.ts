@@ -46,7 +46,7 @@ auth: ChannelAuth,
 /**
  * The stable preset id this connection is created from.
  */
-template_id: string | null, 
+preset_id: string | null, 
 /**
  * Client identity (impersonation/headers). Defaults to Native when unset.
  */
@@ -804,7 +804,7 @@ protocol: string,
  */
 base_url: string, key_ready: boolean, 
 /**
- * The add-connection preset that birthed this instance (`"openai"`,
+ * The add-connection preset that birthed this connection (`"openai"`,
  * `"anthropic"`, `"deepseek"`, …), when known.
  */
 preset_id: string, 

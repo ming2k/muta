@@ -1,51 +1,51 @@
-//! Provider modals state: template chooser, custom editor fields, the OAuth flow, model suggestions, delete staging.
+//! Provider modals state: preset chooser, custom editor fields, the OAuth flow, model suggestions, delete staging.
 
 use super::*;
 
 impl App {
-    /// Open the provider-template chooser — the "＋ Add connection" entry point.
+    /// Open the preset chooser — the "＋ Add connection" entry point.
     /// The chat draft is already parked in `stashed_input` (the Connections list
     /// stashed it on open); the chooser is a pure list, so the composer line
     /// stays clear.
-    pub fn open_provider_template_chooser(&mut self) {
+    pub fn open_preset_chooser(&mut self) {
         if self.active_panel() == Some(crate::surfaces::PanelId::Connections) {
-            self.push_transient_surface(Modal::ProviderTemplate);
+            self.push_transient_surface(Modal::ProviderPreset);
         } else {
-            self.replace_transient_surface(Modal::ProviderTemplate);
+            self.replace_transient_surface(Modal::ProviderPreset);
         }
-        self.template_choice = 0;
-        self.template_scroll = 0;
+        self.preset_choice = 0;
+        self.preset_scroll = 0;
         self.input.clear();
         self.set_cursor(0);
     }
 
-    /// Move the template-chooser selection, wrapping at the ends.
-    pub fn move_template_choice(&mut self, forward: bool) {
-        let n = crate::PROVIDER_TEMPLATES.len();
+    /// Move the preset-chooser selection, wrapping at the ends.
+    pub fn move_preset_choice(&mut self, forward: bool) {
+        let n = crate::PROVIDER_PRESETS.len();
         if n == 0 {
             return;
         }
-        self.template_choice = if forward {
-            (self.template_choice + 1) % n
+        self.preset_choice = if forward {
+            (self.preset_choice + 1) % n
         } else {
-            (self.template_choice + n - 1) % n
+            (self.preset_choice + n - 1) % n
         };
     }
 
-    /// Seed create-mode buffers from `template` without opening the editor.
-    pub fn seed_custom_provider_from_template(&mut self, template: &ProviderTemplate) {
+    /// Seed create-mode buffers from `preset` without opening the editor.
+    pub fn seed_custom_provider_from_preset(&mut self, preset: &ProviderPreset) {
         self.custom_edit_id = None;
-        self.custom_fields = template.fields();
+        self.custom_fields = preset.fields();
         self.custom_field = 0;
-        self.custom_protocol_wire = template.protocol.to_string();
-        self.custom_models = template.models.iter().map(|m| m.to_string()).collect();
-        self.custom_url_hint = template.url_hint.to_string();
-        self.custom_user_agent = template.user_agent.map(str::to_string);
-        self.custom_auth = template.auth;
-        self.custom_template_id = Some(template.id.to_string());
+        self.custom_protocol_wire = preset.protocol.to_string();
+        self.custom_models = preset.models.iter().map(|m| m.to_string()).collect();
+        self.custom_url_hint = preset.url_hint.to_string();
+        self.custom_user_agent = preset.user_agent.map(str::to_string);
+        self.custom_auth = preset.auth;
+        self.custom_preset_id = Some(preset.id.to_string());
         self.custom_suggest_index = 0;
         self.custom_name.clear();
-        self.custom_base_url = template.default_url.map(str::to_string).unwrap_or_default();
+        self.custom_base_url = preset.default_url.map(str::to_string).unwrap_or_default();
         self.custom_token.clear();
         self.custom_model = self
             .custom_model_candidates()
@@ -54,25 +54,25 @@ impl App {
             .unwrap_or_default();
     }
 
-    /// Open the provider editor seeded from `template` (create mode) on the Name
+    /// Open the provider editor seeded from `preset` (create mode) on the Name
     /// field. The composer line is borrowed for the focused Name field.
-    pub fn open_custom_provider_editor(&mut self, template: &ProviderTemplate) {
-        self.seed_custom_provider_from_template(template);
+    pub fn open_custom_provider_editor(&mut self, preset: &ProviderPreset) {
+        self.seed_custom_provider_from_preset(preset);
         self.replace_transient_surface(Modal::CustomProvider);
         self.input.clear();
         self.set_cursor(0);
     }
 
-    /// Open the OAuth waiting sheet and seed create buffers from `template`.
-    pub fn begin_oauth_add(&mut self, template: &ProviderTemplate) {
-        self.seed_custom_provider_from_template(template);
+    /// Open the OAuth waiting sheet and seed create buffers from `preset`.
+    pub fn begin_oauth_add(&mut self, preset: &ProviderPreset) {
+        self.seed_custom_provider_from_preset(preset);
         self.awaiting_oauth_add = true;
         // The default message mirrors the provider's default login method: the
         // device flow (Copilot/xAI/ChatGPT default) prints a URL + user code,
         // while the browser flow opens a loopback callback. The auth runner
         // overwrites this with the live URL/code as soon as the device-code
         // request returns.
-        self.oauth_pending_message = match template.auth.default_login_method() {
+        self.oauth_pending_message = match preset.auth.default_login_method() {
             Some(muta_contracts::LoginMethod::Device) => "Requesting device code…".to_string(),
             _ => "Complete authorization in your browser (or open the link below).".to_string(),
         };
@@ -165,10 +165,10 @@ impl App {
         self.custom_url_hint.clear();
         self.custom_user_agent = None;
         self.custom_auth = auth;
-        // Edit mode never carries a template id: edits to an existing provider
-        // are sent as `EditProvider`, which ignores template_id anyway, and a
-        // stray id here must not leak into a later create flow.
-        self.custom_template_id = None;
+        // Edit mode never carries a preset id: edits to an existing connection
+        // are sent as `EditProvider`, which ignores the preset id anyway, and
+        // a stray id here must not leak into a later create flow.
+        self.custom_preset_id = None;
         self.custom_suggest_index = 0;
         self.custom_name = name.clone();
         self.custom_base_url = base_url;
@@ -188,7 +188,7 @@ impl App {
         self.custom_fields.get(self.custom_field as usize).copied()
     }
 
-    /// Number of visible fields the editor exposes for the active template.
+    /// Number of visible fields the editor exposes for the active preset.
     fn custom_field_count(&self) -> u8 {
         self.custom_fields.len().max(1) as u8
     }
@@ -313,7 +313,7 @@ impl App {
     }
 
     /// Move the provider editor focus (`Tab` / `BackTab`), wrapping across the
-    /// active template's visible fields.
+    /// active preset's visible fields.
     pub fn cycle_custom_field(&mut self, forward: bool) {
         self.stash_custom_field();
         let n = self.custom_field_count();

@@ -187,10 +187,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let (resp_tx, resp_rx) = mpsc::unbounded_channel::<AgentResponse>();
 
     let mut config = Config::load();
-    // One-shot migration from the legacy layout (provider instances in
-    // `config.toml`, keys in `[builtins]/[user]`) to the state stores. Runs
-    // before anything touches the instance store.
-    catalog::migrate_legacy_state();
     // Overlay persisted fitted-model metadata onto model resolution, so ids a
     // trusted provider advertised (but the static registry does not know)
     // resolve with their real capabilities from the very first request.

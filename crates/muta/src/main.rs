@@ -203,17 +203,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Mode::Doctor => session::run_doctor(project_override.as_deref())
             .await
             .map_err(Into::into),
-        Mode::Config(action) => {
-            // Standalone config/auth commands read the instance store; run the
-            // one-shot legacy migration first so a pre-refactor install is
-            // converted before anything lists or edits instances.
-            muta_agent::catalog::migrate_legacy_state();
-            commands::config::run(action)
-        }
-        Mode::Auth(action) => {
-            muta_agent::catalog::migrate_legacy_state();
-            commands::auth::run(action)
-        }
+        Mode::Config(action) => commands::config::run(action),
+        Mode::Auth(action) => commands::auth::run(action),
         Mode::Mcp(McpAction::List) => commands::mcp::run(),
         Mode::Skill(SkillAction::List) => commands::skill::run().await,
         Mode::Session(action) => commands::session::run(action, project_override).await,

@@ -95,7 +95,7 @@ pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice, ProviderRetryState, 
 pub(crate) use completion::CompletionKind;
 pub(crate) use modal::{ActivityTab, Modal, Recess};
 pub(crate) use providers::{
-    CustomField, PROVIDER_TEMPLATES, protocol_model_candidates, provider_template_label_for,
+    CustomField, PROVIDER_PRESETS, preset_label_for, protocol_model_candidates,
 };
 
 use crossterm::{
@@ -2183,7 +2183,7 @@ pub async fn run_tui(
         custom_url_hint: String::new(),
         custom_user_agent: None,
         custom_auth: muta_contracts::ChannelAuth::ApiKey,
-        custom_template_id: None,
+        custom_preset_id: None,
         awaiting_oauth_add: false,
         oauth_pending_message: String::new(),
         oauth_pending_url: String::new(),
@@ -2198,8 +2198,8 @@ pub async fn run_tui(
         custom_base_url: String::new(),
         custom_token: String::new(),
         custom_model: String::new(),
-        template_choice: 0,
-        template_scroll: 0,
+        preset_choice: 0,
+        preset_scroll: 0,
         model_search: false,
         model_scroll: 0,
         model_modal_follow: true,

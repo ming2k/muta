@@ -172,7 +172,7 @@ impl App {
             Modal::TokenReport => Some((&mut self.token_report_scroll, None)),
             Modal::UsageStats => Some((&mut self.usage_stats_scroll, None)),
             Modal::OauthPending => Some((&mut self.oauth_scroll, None)),
-            Modal::ProviderTemplate => Some((&mut self.template_scroll, None)),
+            Modal::ProviderPreset => Some((&mut self.preset_scroll, None)),
             Modal::CustomProvider => Some((&mut self.custom_scroll, None)),
             // List-style modals: clear the follow flag so manual scroll wins.
             Modal::Tools | Modal::Mcp | Modal::Skills | Modal::Sessions => Some((

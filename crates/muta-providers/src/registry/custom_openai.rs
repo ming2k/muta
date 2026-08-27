@@ -1,14 +1,14 @@
-//! The `custom-openai` provider template: any OpenAI-compatible endpoint the
+//! The `custom-openai` provider preset: any OpenAI-compatible endpoint the
 //! user supplies — third-party relays, self-hosted gateways, subscription
 //! bundles that expose a `/v1/chat/completions` surface.
 //!
-//! This template is the generic escape hatch: unlike the curated templates it
+//! This preset is the generic escape hatch: unlike the curated presets it
 //! seeds **no** model list. The editor shows a free-text Model field (with the
 //! registry-known OpenAI ids as fuzzy suggestions plus the raw typed id as a
 //! custom value), so a single model id of the user's choosing becomes the one
 //! seeded channel. More models are added afterwards from the Models picker.
 //!
-//! Baselines for the third-party ids this template is known to serve are
+//! Baselines for the third-party ids this preset is known to serve are
 //! registered alongside (see [`MODELS`]); ids the registry does not know
 //! resolve through the conservative fallback, which is fine for a relay whose
 //! serving contract is user-asserted.
@@ -16,10 +16,10 @@
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::ProviderTemplateSpec;
+use super::ProviderPresetSpec;
 
 /// Baseline capability metadata for third-party model ids surfaced by
-/// OpenAI-compatible relays but not registered by a curated template.
+/// OpenAI-compatible relays but not registered by a curated preset.
 ///
 /// These are ids whose serving contract differs from the same-named registry
 /// entry (e.g. a relay that expects the cased spelling `GLM-5.2` where the
@@ -57,7 +57,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "custom-openai",
     baselines: MODELS,
     base_url: "",
@@ -65,7 +65,7 @@ pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
     protocol: "openai",
     // No live discovery: arbitrary relays' `GET /models` is an availability
     // signal at best, and a user-supplied single-model endpoint must keep the
-    // id the user typed rather than being re-seeded from a template snapshot.
+    // id the user typed rather than being re-seeded from a preset snapshot.
     discovery: false,
     fitting: false,
     models: &[],
@@ -89,10 +89,10 @@ mod tests {
     }
 
     #[test]
-    fn template_seeds_no_models() {
-        // The generic template's contract: no seeded models — the Model field
+    fn preset_seeds_no_models() {
+        // The generic preset's contract: no seeded models — the Model field
         // supplies the one id, and the catalog must never re-seed the
         // instance from an empty snapshot (reseed's empty guard).
-        assert!(TEMPLATE_SPEC.models.is_empty());
+        assert!(PRESET_SPEC.models.is_empty());
     }
 }

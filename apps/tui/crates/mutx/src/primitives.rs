@@ -141,7 +141,7 @@ impl FixedModalSpec {
         }
     }
 
-    // The template chooser shares the provider list's footprint.
+    // The preset chooser shares the provider list's footprint.
     pub const PROVIDER: Self = Self::new(76, 80);
     pub const QUESTION: Self = Self::new(78, 70);
     #[allow(dead_code)]
@@ -750,7 +750,7 @@ pub(crate) fn modal_frame(
 /// `edge_margin`-row band (when the viewport is tall enough), so `↑/↓`
 /// navigation never pins the highlight to the last visible line — there is
 /// always a buffer of context on the side being moved toward. Pass
-/// [`SCROLL_EDGE_MARGIN`] for a pure list (provider/model/template/skills/…
+/// [`SCROLL_EDGE_MARGIN`] for a pure list (provider/model/preset/skills/…
 /// pickers) where every followed row is a peer and context on both sides is
 /// meaningful; pass `0` for decision sheets and content viewers whose
 /// `follow` is an absolute body line in mixed header+row content (the

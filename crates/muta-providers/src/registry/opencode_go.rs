@@ -1,13 +1,13 @@
-//! The `opencode-go` provider template: the opencode.ai/zen/go relay's
+//! The `opencode-go` provider preset: the opencode.ai/zen/go relay's
 //! curated OpenAI-compatible catalogue.
 
 use muta_contracts::effort::{EFFORT_GLM_5, EFFORT_LOW_HIGH_MAX};
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::ProviderTemplateSpec;
+use super::ProviderPresetSpec;
 
-/// Curated OpenAI-compatible models offered by the OpenCode Go template.
+/// Curated OpenAI-compatible models offered by the OpenCode Go preset.
 pub const OPENCODE_GO_MODELS: &[&str] = &["glm-5.2", "kimi-k2.7-code", "deepseek-v4-flash"];
 
 /// The full catalogue the opencode-go relay (opencode.ai/zen/go) actually
@@ -280,7 +280,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "opencode-go",
     baselines: MODELS,
     // Endpoints are per-model by wire format (see `route_for_model`); the

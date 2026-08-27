@@ -22,7 +22,7 @@ use crate::primitives::{
     render_modal_footer, render_modal_footer_with_more,
 };
 use crate::providers::{
-    CustomField, ModelBodyLine, PROVIDER_TEMPLATES, ProviderTemplate, RankedModel, RankedProvider,
+    CustomField, ModelBodyLine, PROVIDER_PRESETS, ProviderPreset, RankedModel, RankedProvider,
     models_body_lines,
 };
 use crate::view::Theme;
@@ -34,7 +34,7 @@ use crate::view::Theme;
 /// state dot and no favorite concept here (favorite is model-level now,
 /// ADR-0046), and no activation concept either — switching the active provider
 /// is the Models picker's job, so this surface only *manages* instances: `a`
-/// adds a new connection (opens the template chooser from the footer), `e`
+/// adds a new connection (opens the preset chooser from the footer), `e`
 /// edits, `Shift+D` deletes a custom provider. When no instance exists, an
 /// empty-state hint prompts the user to press `a`. Mirrors the input-history
 /// modal's two-mode (browse/search) design: `/` enters search, the header stays
@@ -66,7 +66,7 @@ pub fn draw_connections_modal(
 
     let header_rect = f.header;
 
-    // `a add` opens the template chooser and is the primary action in this view
+    // `a add` opens the preset chooser and is the primary action in this view
     // (rank 80), surviving width collapse longer than `D delete` (rank 70).
     // There is no `Enter activate` here — switching the active provider is the Models
     // picker's job; this surface only manages instances.
@@ -480,7 +480,7 @@ fn provider_list_body(
 
         // Column 2 (midpoint): the provider TYPE label, anchored at the
         // horizontal center so the two columns spread across the width. Omitted
-        // for legacy instances with no recorded template.
+        // for legacy connections with no recorded preset.
         if let Some(label) = crate::providers::provider_type_label(&rp.preset_id) {
             row = row.group(RowGroup::midpoint().text(label, style.dim, 0));
         }
@@ -1360,44 +1360,33 @@ pub fn draw_oauth_pending(
     area
 }
 
-/// The render policy of one template-chooser row, factored out of the loop so
+/// The render policy of one preset-chooser row, factored out of the loop so
 /// the rules are unit-testable without a terminal. An unfocused row shows its
-/// title alone; the focused row also reveals the one-line description and an
-/// auth-scheme badge (`oauth` / `token`), separated from the title by the
-/// standard [`RowGroup`] whitespace gap — never a `·` glyph. The wire protocol
-/// and the seeded model count are deliberately omitted: neither changes what
-/// the user does next (the models an endpoint will actually serve are only
-/// knowable with a working token, and the protocol is locked by the template).
-struct TemplateRow {
+/// title alone; the focused row also reveals the one-sentence description,
+/// wrapped under the title and painted in the panel background. There is
+/// deliberately no meta badge: the description sentence already carries the
+/// auth scheme ("sign in with an API key" vs "authorizes in the browser"),
+/// the wire protocol and the seeded model count are implementation details
+/// the user does not act on, and a trailing badge would re-introduce the
+/// stiff two-column layout.
+struct PresetRow {
     /// Visible width the row must fill edge-to-edge.
     body_width: usize,
 }
 
-impl TemplateRow {
-    /// Columns available for the title before the trailing badge claims its
-    /// share. The badge is painted even when unfocused (it is `dim`, cheap),
-    /// so the title must always leave room for it — otherwise the columns
-    /// would jump as the selection moves.
+impl PresetRow {
+    /// Columns available for the title. With the trailing badge gone the
+    /// title owns the whole body minus the leading gutter, so unfocused
+    /// rows no longer reserve a dead right column.
     fn title_budget(&self) -> usize {
-        let badge_w = 1 + AUTH_BADGE_WIDTH; // glyph + intra-group gap
-        (self.body_width / 2)
-            .saturating_sub(GUTTER + GROUP_GAP + badge_w)
-            .max(1)
+        self.body_width.saturating_sub(GUTTER + GROUP_GAP).max(1)
     }
 }
 
-/// Widest badge label both variants render ("oauth" and "token" are 5).
-const AUTH_BADGE_WIDTH: usize = 5;
-
-impl TemplateRow {
-    fn build(
-        &self,
-        template: &ProviderTemplate,
-        focused: bool,
-        theme: &Theme,
-    ) -> Vec<Line<'static>> {
+impl PresetRow {
+    fn build(&self, preset: &ProviderPreset, focused: bool, theme: &Theme) -> Vec<Line<'static>> {
         let style = choice_style(ChoiceTone::Filled, focused, theme);
-        let title = truncate_ellipsis(template.display_title(), self.title_budget());
+        let title = truncate_ellipsis(preset.display_title(), self.title_budget());
 
         // Identity: the title, bold. One styled atom per char keeps the door
         // open for fuzzy highlighting if the chooser ever grows a filter.
@@ -1415,22 +1404,7 @@ impl TemplateRow {
             );
         }
 
-        let mut row = ListRow::new(style, self.body_width).group(identity);
-
-        // Trailing badge: `⚡ oauth` / `⚿ token`, right-pinned so the two
-        // columns spread across the row. On a brand-filled focused row it
-        // lifts to the contrast foreground.
-        let badge_fg = if focused { row.fill_fg() } else { style.dim };
-        let glyph = if template.auth.is_oauth() {
-            "⚡"
-        } else {
-            "⚿"
-        };
-        row = row.group(RowGroup::trailing().glyph(glyph, badge_fg, 0).text(
-            template.auth_badge(),
-            badge_fg,
-            1,
-        ));
+        let row = ListRow::new(style, self.body_width).group(identity);
 
         if !focused {
             return vec![row.finish()];
@@ -1446,7 +1420,7 @@ impl TemplateRow {
             &mut lines,
             &indent,
             &indent,
-            template.description,
+            preset.description,
             Style::default().bg(theme.panel()).fg(theme.dim()),
             self.body_width,
         );
@@ -1454,25 +1428,27 @@ impl TemplateRow {
     }
 }
 
-/// Draw the provider-template chooser as the Connections list's Add connection
+/// Draw the preset chooser as the Connections list's Add connection
 /// child page. It retains the parent panel geometry and uses a breadcrumb
 /// header so navigation does not look like a separate modal.
 ///
-/// Row rules (see [`TemplateRow`]):
+/// Row rules (see [`PresetRow`]):
 /// - unfocused rows show **only the title** — no description, no meta;
 /// - the focused row is a full-width **background highlight** (brand fill, the
 ///   Connections/Models standard) with no `›` marker, so the title column is
 ///   never indented by the cursor;
-/// - a trailing `⚿ oauth`/`⚿ token` badge marks the auth scheme — the only
-///   per-row meta. The protocol and seeded model count are omitted: the
-///   user cannot query an endpoint's real catalog without credentials, and
-///   the wire protocol is an implementation detail of the locked template.
-/// - rows are sorted by title (see [`PROVIDER_TEMPLATES`]).
+/// - the focused row reveals its one-sentence description below the title,
+///   which carries everything the user acts on: what the service is, what it
+///   serves, and how it authenticates. The protocol and seeded model count
+///   are omitted: the user cannot query an endpoint's real catalog without
+///   credentials, and the wire protocol is an implementation detail of the
+///   locked preset.
+/// - rows are sorted by title (see [`PROVIDER_PRESETS`]).
 ///
 /// `scroll` is read AND written back so the offset stays consistent with the
-/// clamped body height; the focused template is followed on-screen so `↑/↓`
+/// clamped body height; the focused preset is followed on-screen so `↑/↓`
 /// navigation keeps it visible even when the list overflows the body.
-pub fn draw_provider_template_chooser(
+pub fn draw_preset_chooser(
     selected: usize,
     frame: &mut Frame,
     theme: &Theme,
@@ -1487,18 +1463,18 @@ pub fn draw_provider_template_chooser(
     );
     modal_header_parts(frame, f.header, &header, theme);
 
-    let policy = TemplateRow {
+    let policy = PresetRow {
         body_width: f.body.width as usize,
     };
 
     let mut body: Vec<Line> = Vec::new();
     let mut follow: Option<usize> = None;
-    for (i, template) in PROVIDER_TEMPLATES.iter().enumerate() {
+    for (i, preset) in PROVIDER_PRESETS.iter().enumerate() {
         let focused = i == selected;
         if focused {
             follow = Some(body.len());
         }
-        body.extend(policy.build(template, focused, theme));
+        body.extend(policy.build(preset, focused, theme));
     }
 
     render_body(
@@ -1530,21 +1506,21 @@ pub fn draw_provider_template_chooser(
 /// Everything [`draw_custom_provider_editor`] renders, bundled so the call site
 /// stays readable.
 pub struct CustomEditorView<'a> {
-    /// Ordered visible fields, chosen by the active template (create) or the
+    /// Ordered visible fields, chosen by the active preset (create) or the
     /// edited provider's protocol (edit).
     pub fields: &'a [CustomField],
     /// Focused field index into [`Self::fields`].
     pub field: u8,
     /// Edit mode hides the Model field and changes the Token hint / header.
     pub editing: bool,
-    /// Header title — the template label (create) or `Edit · <name>` (edit).
+    /// Header title — the preset label (create) or `Edit · <name>` (edit).
     pub title: &'a str,
     pub name_buf: &'a str,
     pub base_url_buf: &'a str,
     pub token_buf: &'a str,
     /// Display name of the committed model (shown when Model is unfocused).
     pub model_display: &'a str,
-    /// Base URL placeholder — the template's expected endpoint shape.
+    /// Base URL placeholder — the preset's expected endpoint shape.
     pub url_hint: &'a str,
     /// Model suggestions for the Model filter field (empty off that field).
     pub suggestions: &'a [String],
@@ -1554,8 +1530,8 @@ pub struct CustomEditorView<'a> {
     pub cursor_position: usize,
 }
 
-/// Draw the provider editor: a per-template form drawn from [`CustomEditorView::fields`]
-/// (Name / Base URL / Token, plus a type-to-filter Model field when a template
+/// Draw the provider editor: a per-preset form drawn from [`CustomEditorView::fields`]
+/// (Name / Base URL / Token, plus a type-to-filter Model field when a preset
 /// opts in). Focusing the Model field renders a suggestion
 /// dropdown below the form; `↑/↓` move the highlight (committed live). The Token
 /// is masked unless focused. In edit mode the header reads `Edit · <name>`.
@@ -2121,54 +2097,57 @@ mod tests {
         assert_eq!(reasoning_tag(None, None), "");
     }
 
-    /// Render the provider-template chooser at `selected` into a terminal and
+    /// Render the preset chooser at `selected` into a terminal and
     /// read back the full buffer text, the standard readback for the chooser's
     /// layout-level assertions.
-    fn render_template_chooser(selected: usize, width: u16, height: u16) -> String {
+    fn render_preset_chooser(selected: usize, width: u16, height: u16) -> String {
         let theme = Theme::default();
         let mut terminal = mutx_engine::TestTerminal::new(width, height);
         let mut scroll = 0;
         terminal.draw(|f| {
-            draw_provider_template_chooser(selected, f, &theme, &mut scroll);
+            draw_preset_chooser(selected, f, &theme, &mut scroll);
         });
         buffer_text(&terminal)
     }
 
     #[test]
-    fn template_rows_are_sorted_by_title() {
+    fn preset_rows_are_sorted_by_title() {
         // The chooser's display order IS the table order (the const is kept
         // sorted), so an out-of-order insertion breaks the alphabetical rule
         // at the declaration site. This test pins it.
-        let titles: Vec<&str> = PROVIDER_TEMPLATES.iter().map(|t| t.label).collect();
+        let titles: Vec<&str> = PROVIDER_PRESETS.iter().map(|t| t.label).collect();
         let mut sorted = titles.clone();
         sorted.sort();
         assert_eq!(
             titles, sorted,
-            "PROVIDER_TEMPLATES must stay sorted by label (title)"
+            "PROVIDER_PRESETS must stay sorted by label (title)"
         );
         // And the chooser renders them in table order, so display order is
         // alphabetical by construction.
     }
 
     #[test]
-    fn template_chooser_shows_only_titles_when_unfocused() {
+    fn preset_chooser_shows_only_titles_when_unfocused() {
         // Selection 0 = "Anthropic" (the table is title-sorted). Every other
         // row is unfocused, so its description must NOT be in the buffer;
         // only the focused row's description is revealed.
-        let text = render_template_chooser(0, 100, 32);
+        let text = render_preset_chooser(0, 100, 32);
         assert!(
             text.contains("Anthropic"),
             "focused title present: {text:?}"
         );
-        // Focused row's description is revealed.
+        // Focused row's description is revealed. Whitespace-insensitive: the
+        // grapheme-level wrapper may break the sentence mid-word, inserting a
+        // newline + indent between its characters.
+        let squeezed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            text.contains("Flagship Claude models with advanced reasoning"),
+            squeezed.contains("flagshipClaudemodelswithadvancedreasoning"),
             "focused description revealed: {text:?}"
         );
         // An unfocused row's description is hidden (Antigravity OAuth is
         // further down the sorted list).
         assert!(
-            !text.contains("Google One AI Premium"),
+            !text.contains("Google One AI Premium subscription"),
             "unfocused rows show title only: {text:?}"
         );
         // The old meta run is gone. Checked per line, and only for a DIGIT-
@@ -2204,55 +2183,59 @@ mod tests {
     }
 
     #[test]
-    fn template_chooser_marks_the_auth_scheme_without_a_dot_join() {
-        // The focused row carries an auth badge: `oauth` for browser flows,
-        // `token` for API keys — separated from the title by whitespace only.
-        let xai_idx = PROVIDER_TEMPLATES
+    fn preset_chooser_carries_the_auth_scheme_in_the_description_sentence() {
+        // The auth scheme is no longer a badge; it is stated in the focused
+        // row's description sentence — "authorizes in the browser" for OAuth
+        // flows, "sign in with ... API key" for tokens — and no emoji glyph
+        // is used anywhere in the chooser.
+        let xai_idx = PROVIDER_PRESETS
             .iter()
             .position(|t| t.id == "xai-oauth")
-            .expect("xai-oauth template");
-        let text = render_template_chooser(xai_idx, 100, 32);
-        let row = text
-            .lines()
-            .find(|l| l.contains("xAI"))
-            .expect("focused xAI row");
-        assert!(row.contains("oauth"), "oauth badge: {row:?}");
+            .expect("xai-oauth preset");
+        let text = render_preset_chooser(xai_idx, 100, 32);
         assert!(
-            !row.contains("oauth ·") && !row.contains("· oauth"),
-            "badge is whitespace-separated, not `·`-joined: {row:?}"
+            text.contains("authorizes in the browser"),
+            "oauth phrasing in xAI description: {text:?}"
         );
 
-        let openai_idx = PROVIDER_TEMPLATES
+        let openai_idx = PROVIDER_PRESETS
             .iter()
             .position(|t| t.id == "openai")
-            .expect("openai template");
-        let text = render_template_chooser(openai_idx, 100, 32);
-        let row = text
-            .lines()
-            .find(|l| l.contains("OpenAI"))
-            .expect("focused OpenAI row");
-        assert!(row.contains("token"), "token badge: {row:?}");
+            .expect("openai preset");
+        let text = render_preset_chooser(openai_idx, 100, 32);
         assert!(
-            !row.contains("token ·") && !row.contains("· token"),
-            "badge is whitespace-separated, not `·`-joined: {row:?}"
+            text.contains("API key"),
+            "token phrasing in OpenAI description: {text:?}"
         );
+
+        // No badge glyph and no legacy two-column artifacts on any row.
+        for line in text.lines() {
+            assert!(
+                !line.contains("⚿") && !line.contains("⚡"),
+                "no auth glyphs: {line:?}"
+            );
+            assert!(
+                !line.contains("oauth ·") && !line.contains("token ·"),
+                "no badge meta: {line:?}"
+            );
+        }
     }
 
     #[test]
-    fn template_chooser_highlights_the_focused_row_with_a_background_fill() {
+    fn preset_chooser_highlights_the_focused_row_with_a_background_fill() {
         // The focused row paints a brand background across its full width —
         // the Connections/Models standard — instead of a `›` marker. Locate
         // the focused title's row in the cell buffer and assert every column
         // of that row carries the brand background (an unbroken band).
-        let openai_idx = PROVIDER_TEMPLATES
+        let openai_idx = PROVIDER_PRESETS
             .iter()
             .position(|t| t.id == "openai")
-            .expect("openai template");
+            .expect("openai preset");
         let theme = Theme::default();
         let mut terminal = mutx_engine::TestTerminal::new(100, 32);
         let mut scroll = 0;
         terminal.draw(|f| {
-            draw_provider_template_chooser(openai_idx, f, &theme, &mut scroll);
+            draw_preset_chooser(openai_idx, f, &theme, &mut scroll);
         });
 
         // Rebuild the row texts from the buffer to find the focused row's y.
@@ -2266,10 +2249,10 @@ mod tests {
         let focused_y = (0..area.height)
             .map(|y| (y, row_text(y)))
             // Exact-title match: a subtitle row ("Custom OpenAI") must not
-            // capture a search for the "OpenAI" template's row.
-            .find(|(_, text)| text.trim().starts_with("OpenAI"))
+            // capture a search for the "OpenAI Platform" preset's row.
+            .find(|(_, text)| text.trim().starts_with("OpenAI Platform"))
             .map(|(y, _)| y)
-            .expect("focused OpenAI row rendered");
+            .expect("focused OpenAI Platform row rendered");
 
         // Every column of the focused row inside the modal BODY carries the
         // brand background. The panel spans the middle 72% of the viewport

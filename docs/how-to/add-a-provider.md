@@ -8,7 +8,7 @@ capability model that decides which path to take, see
 muta resolves every provider through one catalog
 (`build_catalog` in `crates/muta-agent/src/catalog/`): it derives the
 concrete routes (per-model transport/endpoint/credential/reasoning) from each
-provider instance's template plus the discovery cache, then constructs the
+connection's preset plus the discovery cache, then constructs the
 concrete `Provider` via `build_provider_for_channel` in
 `crates/muta-providers/src/registry/mod.rs`.
 Startup and a `/models` pick share this single path — there is no separate
@@ -18,14 +18,14 @@ dispatch `match` to edit for presets or user entries.
 
 | Provider speaks... | Path | Effort |
 |--------------------|------|--------|
-| OpenAI Chat Completions, or any endpoint reachable with a URL + key | **Custom OpenAI template** in the TUI (`/connections` → `＋ Add connection`), or a user-defined entry in `config.toml` | None (no code) |
+| OpenAI Chat Completions, or any endpoint reachable with a URL + key | **Custom OpenAI preset** in the TUI (`/connections` → `＋ Add connection`), or a user-defined entry in `providers.toml` | None (no code) |
 | OpenAI Chat Completions, and you want it shipped as a built-in | Per-provider file in `registry/` | Small |
 | A genuinely incompatible contract (different roles, no `tools` field) | Standalone adapter | Medium |
 
 Prefer the config path for private or self-hosted endpoints, and the registry
 path for a vendor preset every muta user would want.
 
-## Path 0: The Custom OpenAI template (no code, no config editing)
+## Path 0: The Custom OpenAI preset (no code, no config editing)
 
 For any OpenAI-compatible endpoint — a third-party relay, a self-hosted
 gateway, a subscription bundle exposing `/v1/chat/completions` — pick
@@ -40,7 +40,7 @@ Two properties worth knowing:
 - **Model ids are case-sensitive and travel verbatim.** Some relays serve
   cased ids (`GLM-5.2`, not `glm-5.2`); nothing in the editor, the config
   layer, or the request builder normalizes the id.
-- **The instance is never re-seeded.** Unlike curated templates there is no
+- **The connection is never re-seeded.** Unlike curated presets there is no
   model snapshot to mirror, so a later startup never replaces the typed id.
 
 The equivalent hand-written state looks like this (see [Path 1](#path-1-user-defined-entry-no-code)
@@ -55,7 +55,7 @@ default_model = "GLM-5.2"
 ```
 
 ```toml
-# $XDG_STATE_HOME/muta/providers.toml — instances
+# $XDG_STATE_HOME/muta/providers.toml — connections
 [[providers]]
 id = "wechat"
 name = "WeChat OpenAI"
@@ -74,7 +74,7 @@ wechat = "sk-..."
 
 Any OpenAI-compatible, Google-native, or Anthropic-format endpoint can be
 added to `providers.toml` without touching code. Declare a pure-custom
-instance (no `template_id`) with its transport, endpoint, and model ids:
+connection (no `preset_id`) with its transport, endpoint, and model ids:
 
 ```toml
 [[providers]]
@@ -104,16 +104,16 @@ base_url = "https://relay.example.com/v1beta"
 models = ["gemini-2.5-flash"]
 ```
 
-To redirect the **built-in** `google` template instead (so picking `google` in
+To redirect the **built-in** `google` preset instead (so picking `google` in
 `/models` and `default_provider = "google"` route through the relay), create
-an instance referencing the template with a `base_url` override — the override
-wins over the template's default endpoint:
+a connection referencing the preset with a `base_url` override — the override
+wins over the preset's default endpoint:
 
 ```toml
 [[providers]]
 id = "google"
 name = "Google"
-template_id = "google"
+preset_id = "google"
 base_url = "https://relay.example.com/v1beta"
 ```
 
@@ -121,36 +121,36 @@ Instance fields:
 
 | Field | Meaning |
 |-------|---------|
-| `id` | Unique instance id; referenced by `default_provider` and by `credentials.toml` |
+| `id` | Unique connection id; referenced by `default_provider` and by `credentials.toml` |
 | `name` | Display name; defaults to the id |
-| `template_id` | Optional: derive routes from a template (`deepseek`, `kimi-code`, `google`, ...). Pure-custom instances omit it and declare `transport` / `base_url` / `models` below |
-| `auth` | `ApiKey` (default), or an OAuth variant for subscription instances |
+| `preset_id` | Optional: derive routes from a preset (`deepseek`, `kimi-code`, `google`, ...). Pure-custom connections omit it and declare `transport` / `base_url` / `models` below |
+| `auth` | `ApiKey` (default), or an OAuth variant for subscription connections |
 | `api_key_env` | Optional env var *name* holding the credential; wins over `credentials.toml` |
 | `transport` | `OpenAi`, `OpenAiResponses`, `Anthropic`, or `Google` (pure-custom only) |
 | `base_url` | Full chat-completions URL (OpenAI), `/responses` URL (Responses), `/messages` URL (Anthropic), or **versioned Google base** (native Google, e.g. `https://relay.example.com/v1beta` — the `/models/{id}:generateContent` path is appended for you) |
 | `user_agent` | OpenAI-compatible and native Google (pure-custom only) |
-| `models` | The declared model ids a pure-custom instance serves |
+| `models` | The declared model ids a pure-custom connection serves |
 
 Per-model reasoning (`effort` / `thinking`) is **not** a persisted field — it
-lives per `(instance, model)` in the discovery cache, edited from the model `e`
+lives per `(connection, model)` in the discovery cache, edited from the model `e`
 picker. See [Reasoning effort](../reference/effort.md).
 
-Multiple instances of the same template (e.g. two `deepseek` instances with
+Multiple connections of the same preset (e.g. two `deepseek` connections with
 different keys or endpoints) are ordinary: each is its own `[[providers]]` row
-with the same `template_id`, and each owns its own credential keyed by its own
-`id`. The template defines the routes once; instances never repeat them.
+with the same `preset_id`, and each owns its own credential keyed by its own
+`id`. The preset defines the routes once; connections never repeat them.
 
 ## Path 2: Built-in provider (per-provider file)
 
 Create a new file `crates/muta-providers/src/registry/<name>.rs`. Each
 provider file owns three things: a model-id list, a baseline metadata table,
-and a template spec. Use `deepseek.rs` as a minimal reference.
+and a preset spec. Use `deepseek.rs` as a minimal reference.
 
 ```rust
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::ProviderTemplateSpec;
+use super::ProviderPresetSpec;
 
 /// The model ids this provider serves (display order).
 pub const ACME_BUILTIN_MODELS: &[&str] = &["acme-1"];
@@ -174,7 +174,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "acme",
     baselines: MODELS,
     protocol: "openai",
@@ -189,11 +189,11 @@ Then wire the file into the aggregate tables in
 
 1. Add `pub mod acme;` (alphabetical order).
 2. Add `pub use acme::ACME_BUILTIN_MODELS;` to the re-export block.
-3. Add `acme::TEMPLATE_SPEC` to the `PROVIDER_TEMPLATE_SPECS` array.
+3. Add `acme::PRESET_SPEC` to the `PROVIDER_PRESET_SPECS` array.
 
-The catalog loops over `PROVIDER_TEMPLATE_SPECS` automatically, so no `match`
+The catalog loops over `PROVIDER_PRESET_SPECS` automatically, so no `match`
 arm is needed. `build_provider_for_channel` constructs the concrete
-`OpenAiChatCompletionsProvider`, stamping the template `id` so assistant
+`OpenAiChatCompletionsProvider`, stamping the preset `id` so assistant
 messages are attributed correctly. The `MODELS` table feeds the model
 registry via `inventory` at link time — `resolve("acme-1")` returns the
 context window and capabilities you declared, with no manual registration
@@ -201,9 +201,9 @@ call.
 
 ### Optional: persist the API key
 
-An instance's credential is stored in `credentials.toml` keyed by instance id
+A connection's credential is stored in `credentials.toml` keyed by connection id
 (`[providers.<id>] api_key`), or read live from an `api_key_env` env var when
-the instance declares one. No code change is needed — every instance already
+the connection declares one. No code change is needed — every connection already
 resolves its credential this way. The catalog resolves env-first
 (`api_key_env`), then `credentials.toml`, then empty (a keyless relay sends no
 bearer).
@@ -240,7 +240,7 @@ Then wire the adapter into the two construction sites:
    in `build_provider_for_channel`
    (`crates/muta-providers/src/registry/mod.rs`) that constructs the adapter
    from the channel.
-2. Register the template in `PROVIDER_TEMPLATE_SPECS` (add a `route_for_model`
+2. Register the preset in `PROVIDER_PRESET_SPECS` (add a `route_for_model`
    arm if the adapter routes by model wire format) so the catalog's derivation
    (`crates/muta-agent/src/catalog/derive.rs`) exposes it by `id`.
 

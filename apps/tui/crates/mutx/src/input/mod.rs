@@ -197,7 +197,7 @@ fn scrolls_own_body(modal: super::Modal) -> bool {
             | super::Modal::TokenReport
             | super::Modal::UsageStats
             | super::Modal::OauthPending
-            | super::Modal::ProviderTemplate
+            | super::Modal::ProviderPreset
             | super::Modal::CustomProvider
             | super::Modal::Tools
             | super::Modal::Mcp
@@ -287,14 +287,14 @@ pub enum InputAction {
     MoveCustomSuggestion {
         forward: bool,
     },
-    /// Move the provider-template chooser selection with `↑` / `↓`. `forward` = down.
-    MoveProviderTemplate {
+    /// Move the preset-chooser selection with `↑` / `↓`. `forward` = down.
+    MovePresetChoice {
         forward: bool,
     },
-    /// Open the provider editor seeded from the highlighted template (`Enter`).
-    SelectProviderTemplate,
-    /// Cancel the provider-template chooser and return to the Connections list.
-    CancelProviderTemplate,
+    /// Open the provider editor seeded from the highlighted preset (`Enter`).
+    SelectPreset,
+    /// Cancel the preset chooser and return to the Connections list.
+    CancelPresetChooser,
     /// Cancel the "+ Add provider → OAuth" browser flow (`Esc` while
     /// `Modal::OauthPending` is active).
     CancelOauthPending,
@@ -328,9 +328,9 @@ pub enum InputAction {
     OpenConnections,
     /// Refresh / rediscover available models for discovery-enabled providers from upstream.
     RefreshProviderModels,
-    /// Open the add-provider template chooser (`a` in the Connections modal) —
+    /// Open the add-connection preset chooser (`a` in the Connections modal) —
     /// the first step of adding a new provider connection.
-    OpenProviderTemplate,
+    OpenPresetChooser,
     /// Open the input-history modal (Ctrl+R). Opens in browse mode — a plain
     /// newest-first list; `/` then enters the search sub-layer.
     OpenHistory,
@@ -1331,10 +1331,10 @@ pub fn process_event(
                         }
                     } else if context.active_modal == super::Modal::Question {
                         InputAction::QuestionCancel
-                    } else if context.active_modal == super::Modal::ProviderTemplate {
-                        // Esc cancels the template chooser back to the provider
+                    } else if context.active_modal == super::Modal::ProviderPreset {
+                        // Esc cancels the preset chooser back to the provider
                         // picker it was opened from.
-                        InputAction::CancelProviderTemplate
+                        InputAction::CancelPresetChooser
                     } else if context.active_modal == super::Modal::OauthPending {
                         InputAction::CancelOauthPending
                     } else if context.active_modal == super::Modal::CustomProvider {
@@ -1493,7 +1493,7 @@ pub fn process_event(
                         // chars below.
                         super::Modal::Connections => InputAction::None,
                         super::Modal::ModelEditor => InputAction::SubmitModelEditor,
-                        super::Modal::ProviderTemplate => InputAction::SelectProviderTemplate,
+                        super::Modal::ProviderPreset => InputAction::SelectPreset,
                         super::Modal::OauthPending => InputAction::CopyOauthContent {
                             target: OauthCopyTarget::Selected,
                         },
@@ -1980,10 +1980,10 @@ pub fn process_event(
                         && c == 'a'
                     {
                         // Connections / Models browse mode: `a` opens the add-provider
-                        // template chooser (the first step of adding a
+                        // preset chooser (the first step of adding a
                         // connection). In the search sub-layer `a` is a query
                         // char.
-                        InputAction::OpenProviderTemplate
+                        InputAction::OpenPresetChooser
                     } else if matches!(
                         context.active_modal,
                         super::Modal::Models | super::Modal::Connections
@@ -2387,8 +2387,8 @@ pub fn process_event(
                         super::Modal::Permissions => InputAction::ModalUp,
                         super::Modal::Config => InputAction::ModalUp,
                         super::Modal::Tree => InputAction::ModalUp,
-                        super::Modal::ProviderTemplate => {
-                            InputAction::MoveProviderTemplate { forward: false }
+                        super::Modal::ProviderPreset => {
+                            InputAction::MovePresetChoice { forward: false }
                         }
                         super::Modal::OauthPending => InputAction::ScrollUp,
                         super::Modal::CustomProvider => {
@@ -2470,8 +2470,8 @@ pub fn process_event(
                         super::Modal::Permissions => InputAction::ModalDown,
                         super::Modal::Config => InputAction::ModalDown,
                         super::Modal::Tree => InputAction::ModalDown,
-                        super::Modal::ProviderTemplate => {
-                            InputAction::MoveProviderTemplate { forward: true }
+                        super::Modal::ProviderPreset => {
+                            InputAction::MovePresetChoice { forward: true }
                         }
                         super::Modal::OauthPending => InputAction::ScrollDown,
                         super::Modal::CustomProvider => {

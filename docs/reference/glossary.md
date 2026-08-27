@@ -147,7 +147,7 @@ before the round runs.
 | **`RetryableError`** | The marker type wrapping transient provider errors; prefixed `[MUTA_RETRYABLE]`. [Providers](providers.md) |
 | **provider retry** | Round-level retry loop: transient HTTP 408/429/5xx failures retried with bounded exponential backoff; retryable errors become terminal once any tool has run. [Harness architecture](../explanation/agent-design/harness.md) |
 | **fitted model** | A model id the static registry does not know, materialized from a trusted provider's live `/models` capability fields (context window, reasoning, vision, effort tiers); persisted per instance and overlaid onto `model::resolve` behind the static registry. [ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md) |
-| **model discovery** | Live `GET /models` fetch for template-sourced provider instances (`ModelSource::Api`); the result is intersected with the client registry, or fitted wholesale for trusted templates. [ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md) |
+| **model discovery** | Live `GET /models` fetch for preset-sourced connections (`ModelSource::Api`); the result is intersected with the client registry, or fitted wholesale for trusted presets. [ADR-0065](../adr/0065-runtime-fitted-model-capability-overlay.md) |
 | **remote model metadata** | A trusted provider's persisted capability and endpoint snapshot for one channel. Explicit remote fields override the static baseline only for that provider route. [Model Metadata](model-metadata.md) |
 
 ## Persistence

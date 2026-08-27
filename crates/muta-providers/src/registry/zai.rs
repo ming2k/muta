@@ -5,7 +5,7 @@ use muta_contracts::effort::EFFORT_GLM_5;
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::{OpenAiProviderSpec, ProviderTemplateSpec};
+use super::{OpenAiProviderSpec, ProviderPresetSpec};
 
 /// Models served by Z.AI's coding-plan endpoint, in display/activation
 /// order — the first entry is the initial active channel. `glm-5.3-flash`
@@ -132,7 +132,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "zai-code",
     baselines: MODELS,
     base_url: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",

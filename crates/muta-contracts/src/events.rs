@@ -120,8 +120,8 @@ pub enum AgentRequest {
         /// access token is resolved from `auth.toml`.
         auth: crate::ChannelAuth,
         /// The stable preset id this connection is created from.
-        #[serde(default, alias = "preset_id")]
-        template_id: Option<String>,
+        #[serde(default)]
+        preset_id: Option<String>,
         /// Client identity (impersonation/headers). Defaults to Native when unset.
         #[serde(default)]
         client_identity: Option<crate::ClientIdentity>,
@@ -1425,9 +1425,9 @@ pub struct ProviderPickerRow {
     /// Base URL of the default channel, used to pre-fill the edit form.
     pub base_url: String,
     pub key_ready: bool,
-    /// The add-connection preset that birthed this instance (`"openai"`,
+    /// The add-connection preset that birthed this connection (`"openai"`,
     /// `"anthropic"`, `"deepseek"`, …), when known.
-    #[serde(default, alias = "template_id")]
+    #[serde(default)]
     pub preset_id: String,
     /// Client identity configured for this connection.
     #[serde(default)]

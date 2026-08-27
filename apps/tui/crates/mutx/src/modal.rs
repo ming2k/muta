@@ -28,7 +28,7 @@ pub enum Modal {
     Models,
     /// Provider-instance management (`/connections`): the ranked provider list
     /// (`App::providers_filtered`, favorites → last-used → name) with a trailing
-    /// "＋ Add connection" row that opens [`Self::ProviderTemplate`]. Enter
+    /// "＋ Add connection" row that opens [`Self::ProviderPreset`]. Enter
     /// activates the provider's current model; `*` favorites; `e` edits (built-in
     /// → API-key editor [`Self::ModelEditor`], custom → meta editor
     /// [`Self::CustomProvider`]); `Shift+D` deletes a custom provider behind a
@@ -54,21 +54,21 @@ pub enum Modal {
     /// Models pickers or `Enter` on a no-key model. Replaces the sequential
     /// ApiKey / Endpoint / ModelName modal chain.
     ModelEditor,
-    /// Provider-template chooser: the "Connections / Add connection" child page
+    /// Preset chooser: the "Connections / Add connection" child page
     /// of the Connections list. It retains the provider panel footprint and is
     /// reached from the "＋ Add connection" row at the bottom of the
     /// Connections list. `↑/↓` move; `Enter` opens the [`Self::CustomProvider`]
-    /// editor seeded from the chosen template; `Esc` returns to the Connections
-    /// list. See `App::template_choice` and
-    /// [`crate::providers::PROVIDER_TEMPLATES`].
-    ProviderTemplate,
+    /// editor seeded from the chosen preset; `Esc` returns to the Connections
+    /// list. See `App::preset_choice` and
+    /// [`crate::providers::PROVIDER_PRESETS`].
+    ProviderPreset,
     /// OAuth-in-progress sheet for SuperGrok. Stays open while browser authorize
     /// + loopback callback run; on success transitions to [`Self::CustomProvider`].
     OauthPending,
-    /// Provider editor: a per-template form (Name, Base URL, Token, and — when
-    /// a template opts in — Model) for defining a user provider without
+    /// Provider editor: a per-preset form (Name, Base URL, Token, and — when
+    /// a preset opts in — Model) for defining a user connection without
     /// editing config.toml by hand. The protocol and seeded models come from the
-    /// template chosen in [`Self::ProviderTemplate`]; `Tab`/`BackTab` cycle the
+    /// template chosen in [`Self::ProviderPreset`]; `Tab`/`BackTab` cycle the
     /// visible fields, and the focused field borrows the composer line (like
     /// [`Self::ModelEditor`]). `Enter` saves (→ `AgentRequest::AddProvider`) and
     /// activates; `Esc` returns to the Connections list. See `App::custom_field`

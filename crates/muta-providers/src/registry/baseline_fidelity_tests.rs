@@ -278,7 +278,7 @@ const PRE_MIGRATION: &[Model] = &[
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
     // OpenAI relays and gateways can expose additional text aliases not used by the
-    // official built-in template. Keep their metadata conservative when the
+    // official built-in preset. Keep their metadata conservative when the
     // exact serving contract is relay-defined.
     Model {
         id: "gpt-5.3-codex-spark",

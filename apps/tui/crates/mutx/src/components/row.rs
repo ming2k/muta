@@ -211,6 +211,7 @@ impl RowGroup {
 
     /// Append a status-glyph atom (e.g. `●`, `★`), bolded so it reads as an
     /// icon. `gap` is the intra-group spacing before it, same as [`Self::text`].
+    #[allow(dead_code)] // used by tests; the preset-chooser badge was removed
     pub(crate) fn glyph(mut self, glyph: &str, fg: Color, gap: usize) -> Self {
         self.atoms.push((
             GroupAtom::Plain {

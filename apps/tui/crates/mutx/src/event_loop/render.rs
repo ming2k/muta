@@ -765,11 +765,11 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 &app.theme,
             ))
         }
-        Modal::ProviderTemplate => Some(view::draw_provider_template_chooser(
-            app.template_choice,
+        Modal::ProviderPreset => Some(view::draw_preset_chooser(
+            app.preset_choice,
             f,
             &app.theme,
-            &mut app.template_scroll,
+            &mut app.preset_scroll,
         )),
         Modal::OauthPending => {
             let title: &'static str = match app.custom_auth {
@@ -799,7 +799,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let title = if editing {
                 format!("Edit — {}", app.custom_name)
             } else {
-                crate::provider_template_label_for(&app.custom_protocol_wire)
+                crate::preset_label_for(app.custom_preset_id.as_deref())
             };
             let model_display = if app.custom_model.is_empty() {
                 "—".to_string()

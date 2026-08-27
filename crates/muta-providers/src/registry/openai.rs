@@ -1,10 +1,10 @@
-//! The built-in `openai` provider template: OpenAI's chat-completions API,
+//! The built-in `openai` provider preset: OpenAI's chat-completions API,
 //! one key (`OPENAI_API_KEY`).
 
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::ProviderTemplateSpec;
+use super::ProviderPresetSpec;
 
 /// The model ids the built-in `openai` provider serves over the OpenAI
 /// chat-completions API, one key (`OPENAI_API_KEY`). Mirrors OpenAI's current
@@ -190,7 +190,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "openai",
     baselines: MODELS,
     base_url: "https://api.openai.com/v1/chat/completions",

@@ -14,7 +14,7 @@ own home. No single edit makes a model appear everywhere:
    the `MODELS: &[Model]` const. This is the single source of *capability*
    truth (context window, vision, thinking style, effort ladder, wire format).
 2. **Offering list** — the same file's `<PROVIDER>_MODELS: &[&str]` (e.g.
-   `ZAI_CODE_MODELS`): the curated, ordered ids the template seeds as channels
+   `ZAI_CODE_MODELS`): the curated, ordered ids the preset seeds as channels
    and shows in the model picker.
 3. **Fidelity snapshot** — `registry/baseline_fidelity_tests.rs::PRE_MIGRATION`,
    the frozen pre-migration registry. New models are *not* added here (it is a
@@ -40,13 +40,13 @@ own home. No single edit makes a model appear everywhere:
       `shared_baseline_ids_are_identical_across_provider_tables` enforces it.
       Copy the existing entry rather than re-deriving it.
 - [ ] Run `cargo nextest run -p muta-providers` — the coverage test
-      (`template_models_are_covered_by_the_local_baseline_table`) fails loudly
+      (`template_models_are_covered_by_the_local_baseline_table` — historical test name) fails loudly
       if the offering list and the baseline table drift apart.
 - [ ] Update `docs/reference/providers.md`: the preset table row (model list
       column) and the provider bullet (behavior, discovery, defaults).
 - [ ] Add a `CHANGELOG.md` `Unreleased` entry describing what a user gains.
 - [ ] If the platform's `/models` endpoint now returns capability metadata it
-      did not before, revisit `fitting:` on the template spec (see
+      did not before, revisit `fitting:` on the preset spec (see
       [ADR-0070](../../adr/0070-provider-scoped-remote-model-metadata.md)):
       ids-only endpoints stay `fitting: false` (baselines own capabilities);
       trusted rich-metadata endpoints may flip to `fitting: true`.
@@ -57,7 +57,7 @@ Effective capability resolution for a model id is:
 
 ```
 user config (RouteSettings, per provider-instance + model id)
-  > remote advertised metadata (fitting: true templates only)
+  > remote advertised metadata (fitting: true presets only)
   > provider baseline table (this checklist's layer 1)
   > (visibility only) live /models discovery intersection
 ```

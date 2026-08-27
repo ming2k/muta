@@ -58,7 +58,7 @@ pub use permission::{draw_input_injection, draw_permission_sheet, draw_question_
 pub use permissions_manager::draw_permissions_manager;
 pub use provider::{
     CustomEditorView, draw_connections_modal, draw_custom_provider_editor, draw_model_editor,
-    draw_models_modal, draw_oauth_pending, draw_provider_template_chooser,
+    draw_models_modal, draw_oauth_pending, draw_preset_chooser,
 };
 pub use provider_delete_confirm::draw_provider_delete_confirm;
 pub use queue::{QueueModalView, draw_queue_modal};

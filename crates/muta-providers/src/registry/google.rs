@@ -1,10 +1,10 @@
-//! The built-in `google` provider template: the native Google API, one key.
+//! The built-in `google` provider preset: the native Google API, one key.
 
 use muta_contracts::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::ProviderTemplateSpec;
+use super::ProviderPresetSpec;
 
 /// The Gemini model ids the built-in `google` provider serves (native Google
 /// API, one key). Each id exists in the model registry. The set is the
@@ -152,7 +152,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "google",
     baselines: MODELS,
     base_url: "https://generativelanguage.googleapis.com/v1beta",

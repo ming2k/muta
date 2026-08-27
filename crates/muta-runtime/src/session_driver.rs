@@ -408,7 +408,7 @@ impl SessionDriver {
                     user_agent,
                     models,
                     auth,
-                    template_id,
+                    preset_id,
                     client_identity,
                 } => {
                     crate::handlers_provider::add(
@@ -427,7 +427,7 @@ impl SessionDriver {
                         user_agent,
                         models,
                         auth,
-                        template_id,
+                        preset_id,
                         client_identity,
                     )
                     .await;

@@ -311,8 +311,8 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
 }
 
 #[test]
-fn a_in_connections_modal_opens_template_chooser() {
-    // `a` in the Connections modal opens the add-provider template chooser.
+fn a_in_connections_modal_opens_preset_chooser() {
+    // `a` in the Connections modal opens the add-connection preset chooser.
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -350,7 +350,7 @@ fn a_in_connections_modal_opens_template_chooser() {
         },
         &mut drag,
     );
-    assert_eq!(action, InputAction::OpenProviderTemplate);
+    assert_eq!(action, InputAction::OpenPresetChooser);
 }
 
 #[test]

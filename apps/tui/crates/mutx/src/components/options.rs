@@ -2,7 +2,7 @@
 //!
 //! This is the **single source of truth** for how a selectable row looks
 //! across the TUI — modal lists, the question modal, inline suggestion
-//! dropdowns, and template choosers all flow through here. There are two
+//! dropdowns, and preset choosers all flow through here. There are two
 //! visual tones, but one set of rules:
 //!
 //! - [`ChoiceTone::Filled`]: the cursor fills the whole row with the brand
@@ -11,7 +11,7 @@
 //!   delegates to.
 //! - [`ChoiceTone::Flat`]: no background; the cursor is a leading `›` marker
 //!   plus brand-colored bold text. Used where a quiet, inline look is wanted
-//!   (provider/model picker, suggestion dropdowns, template chooser, the
+//!   (provider/model picker, suggestion dropdowns, preset chooser, the
 //!   question modal). Flat is the *default* because it composes with
 //!   multi-row wrapped descriptions without painting behind them.
 //!

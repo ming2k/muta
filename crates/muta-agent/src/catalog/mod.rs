@@ -4,12 +4,10 @@
 
 mod derive;
 mod discovery;
-mod legacy;
 mod picker;
 
 pub use derive::{derive_channel, derive_entries, route_models, transport_for_protocol};
 pub use discovery::{discover_provider_models, sync_fitted_model_registry};
-pub use legacy::migrate_legacy_state;
 use picker::active_model_id_for_entry;
 pub use picker::{build_picker_state, prune_stale_models, prune_stale_models_on_disk};
 

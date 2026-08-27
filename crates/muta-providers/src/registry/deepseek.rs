@@ -1,4 +1,4 @@
-//! The built-in `deepseek` provider template: DeepSeek V4 Flash + Pro over
+//! The built-in `deepseek` provider preset: DeepSeek V4 Flash + Pro over
 //! the official Responses API, one key (`DEEPSEEK_API_KEY`).
 //!
 //! DeepSeek V4 (Flash + Pro) is served as one multi-model `deepseek` provider
@@ -8,15 +8,15 @@
 //!
 //! Both V4 models natively speak the OpenAI **Responses API**
 //! (`https://api.deepseek.com/v1/responses`): Flash gained it with the 0731 GA
-//! (adapted for Codex), Pro with the 0813 release — so this template's
+//! (adapted for Codex), Pro with the 0813 release — so this preset's
 //! channels use the Responses transport. Chat-completions remains available
-//! upstream, but is no longer what the template seeds.
+//! upstream, but is no longer what the preset seeds.
 
 use muta_contracts::effort::EFFORT_LOW_HIGH_MAX;
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::ProviderTemplateSpec;
+use super::ProviderPresetSpec;
 
 /// The model ids the built-in `deepseek` provider serves (V4 Flash + Pro over
 /// the Responses API, one key). Each id exists in the model registry. The
@@ -82,7 +82,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "deepseek",
     baselines: MODELS,
     base_url: "https://api.deepseek.com/v1/responses",

@@ -1,7 +1,7 @@
 //! Live model-list discovery from each provider's API.
 //!
-//! A provider instance created from a template can either mirror the
-//! template's *compiled-in* model list ([`crate::registry::ProviderTemplateSpec`])
+//! A connection created from a preset can either mirror the
+//! preset's *compiled-in* model list ([`crate::registry::ProviderPresetSpec`])
 //! or fetch the list *live* from the provider's own `GET /models` endpoint.
 //! This module owns the live path: it speaks the three wire protocols
 //! (`openai` / `anthropic` / `google`), authenticates the same way a chat
@@ -62,11 +62,11 @@ pub enum DiscoveryProtocol {
 }
 
 impl DiscoveryProtocol {
-    /// Parse a template registry protocol string into a discovery protocol.
+    /// Parse a preset registry protocol string into a discovery protocol.
     /// Unknown values fall back to [`DiscoveryProtocol::OpenAi`] (the most
     /// common relay shape) rather than erroring, so a future protocol label
     /// degrades to "best effort" discovery.
-    pub fn from_template_protocol(protocol: &str) -> Self {
+    pub fn from_preset_protocol(protocol: &str) -> Self {
         match protocol {
             "anthropic" => Self::Anthropic,
             "google" => Self::Google,
@@ -159,7 +159,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 /// entry, and GitHub Copilot (`api.githubcopilot.com`), advertising the same
 /// information nested under `capabilities.{limits,supports}` (see
 /// `discovered_model_from_entry`). Consumers decide per template whether
-/// these hints may be trusted (see `ProviderTemplateSpec::fitting`).
+/// these hints may be trusted (see `ProviderPresetSpec::fitting`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiscoveredModel {
     pub id: String,
@@ -1150,31 +1150,31 @@ mod tests {
     #[test]
     fn discovery_protocol_maps_template_strings() {
         assert_eq!(
-            DiscoveryProtocol::from_template_protocol("anthropic"),
+            DiscoveryProtocol::from_preset_protocol("anthropic"),
             DiscoveryProtocol::Anthropic
         );
         assert_eq!(
-            DiscoveryProtocol::from_template_protocol("google"),
+            DiscoveryProtocol::from_preset_protocol("google"),
             DiscoveryProtocol::Google
         );
         // Legacy "gemini" protocol string still maps to Google (backward
         // compat for old registries/configs).
         assert_eq!(
-            DiscoveryProtocol::from_template_protocol("gemini"),
+            DiscoveryProtocol::from_preset_protocol("gemini"),
             DiscoveryProtocol::Google
         );
         assert_eq!(
-            DiscoveryProtocol::from_template_protocol("openai"),
+            DiscoveryProtocol::from_preset_protocol("openai"),
             DiscoveryProtocol::OpenAi
         );
         // Responses-API templates discover over the same OpenAI GET /models.
         assert_eq!(
-            DiscoveryProtocol::from_template_protocol("openai-responses"),
+            DiscoveryProtocol::from_preset_protocol("openai-responses"),
             DiscoveryProtocol::OpenAi
         );
         // Unknown → OpenAI (most common relay shape), never an error.
         assert_eq!(
-            DiscoveryProtocol::from_template_protocol("future"),
+            DiscoveryProtocol::from_preset_protocol("future"),
             DiscoveryProtocol::OpenAi
         );
     }

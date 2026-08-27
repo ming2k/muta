@@ -48,9 +48,9 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
                 app.custom_edit_id = None;
             }
         } else {
-            // Create mode: the model list comes from the template's
+            // Create mode: the model list comes from the preset's
             // seeded models, or the single typed Model field when
-            // the template exposes one.
+            // the preset exposes one.
             // ADR-0046: new channels start with thinking off;
             // reasoning is opted in per model from the Models
             // picker.
@@ -74,7 +74,7 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
                     user_agent: app.custom_user_agent.clone(),
                     models,
                     auth: app.custom_auth,
-                    template_id: app.custom_template_id.take(),
+                    preset_id: app.custom_preset_id.take(),
                     client_identity: None,
                 });
                 app.restore_chat_after_editor_chain();
@@ -550,7 +550,7 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
         Modal::Help
         | Modal::Question
         | Modal::ModelEditor
-        | Modal::ProviderTemplate
+        | Modal::ProviderPreset
         | Modal::OauthPending
         | Modal::CustomProvider
         | Modal::InputInjection
@@ -685,7 +685,7 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
         Modal::Help
         | Modal::Question
         | Modal::ModelEditor
-        | Modal::ProviderTemplate
+        | Modal::ProviderPreset
         | Modal::OauthPending
         | Modal::CustomProvider
         | Modal::InputInjection

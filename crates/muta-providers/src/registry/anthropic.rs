@@ -1,4 +1,4 @@
-//! The `anthropic` and `anthropic-sub2api` provider templates: a configurable
+//! The `anthropic` and `anthropic-sub2api` provider presets: a configurable
 //! Anthropic `/messages` relay (the official API or any compatible relay),
 //! plus the per-model `max_tokens` table every Anthropic-format build
 //! consults.
@@ -6,7 +6,7 @@
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::ProviderTemplateSpec;
+use super::ProviderPresetSpec;
 
 /// Per-model `max_tokens` for the Anthropic `/messages` surface. The Messages
 /// API requires `max_tokens`; capping the response at the model's registered
@@ -141,7 +141,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "anthropic",
     baselines: MODELS,
     base_url: "https://api.anthropic.com/v1/messages",

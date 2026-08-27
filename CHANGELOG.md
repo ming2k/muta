@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Provider preset vocabulary, repo-wide clean break:** the "provider
+  template" concept is renamed to **preset** everywhere — code, wire
+  contracts, persistence, and docs — with no compatibility shims:
+  - Wire: `AgentRequest::AddProvider.template_id` is now `preset_id` and the
+    `template_id` serde aliases on `AddProvider`/`ProviderPickerRow` are gone;
+    the AsyncAPI schema is updated to match.
+  - Registry: `ProviderTemplateSpec`/`PROVIDER_TEMPLATE_SPECS`/
+    `provider_template_spec` are now `ProviderPresetSpec`/
+    `PROVIDER_PRESET_SPECS`/`provider_preset_spec` (the transitional type
+    aliases are deleted); per-preset constants renamed `TEMPLATE_SPEC` →
+    `PRESET_SPEC`.
+  - TUI: `ProviderPreset` (was `ProviderTemplate`), `PROVIDER_PRESETS`,
+    `preset_label_for`, `Modal::ProviderPreset`, `custom_preset_id`,
+    `preset_choice`/`preset_scroll`.
+  - Reference docs (`add-a-provider`, `providers`, `paths`, `glossary`,
+    `new-model-onboarding`) now use preset/connection vocabulary throughout.
+- **Legacy state migration removed:** the one-shot migrator from the
+  pre-ADR-0123 layout (`[[providers]]` in `config.toml` +
+  `[builtins]/[user]` keys) is deleted (`catalog/legacy.rs` and its call
+  sites in daemon bootstrap and the `config`/`auth` CLI paths). Installs
+  still on the old layout must re-add their connections.
+- **OpenAI preset relabeled:** the `openai` connection preset is now labeled
+  **OpenAI Platform** (chooser row, editor header, Connections provider-type
+  column) to disambiguate it from the ChatGPT subscription preset. The preset
+  id and stored `preset_id` values are unchanged, so existing connections and
+  configs are unaffected.
+- **Connections › Add Provider chooser restyle:** the trailing `⚿ oauth`/`⚿
+  token` badge is gone along with the dead right column it forced on every
+  row; titles now own the full row width. Auth scheme lives in the prose:
+  each preset's description was rewritten from the stiff
+  `Service — blurb (Auth)` formula into one sentence covering what the
+  service is, what it serves, and how to sign in.
+
+### Fixed
+
+- **Create-mode editor title:** the provider editor header resolved its title
+  by wire protocol, where several presets (`chatgpt-oauth`, `openai`,
+  `custom-openai`, `deepseek`, …) share `openai`. Creating a connection from
+  any of them showed "ChatGPT" as the title. The title now resolves from the
+  seeded preset id (`preset_label_for`).
+
 ## [0.35.6] - 2026-08-27
 
 ### Added

@@ -4,7 +4,7 @@
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::{OpenAiProviderSpec, ProviderTemplateSpec};
+use super::{OpenAiProviderSpec, ProviderPresetSpec};
 
 /// Models served by Moonshot's Kimi Code endpoint, in display/activation
 /// order — the first entry is the initial active channel. `k3` is the
@@ -94,14 +94,14 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "kimi-code",
     baselines: MODELS,
     base_url: "https://api.kimi.com/coding/v1/chat/completions",
     user_agent: Some(crate::OPENCODE_USER_AGENT),
     protocol: "openai",
     // The Kimi Code platform exposes a live /models endpoint, so instances
-    // created from this template track the platform's actual model list.
+    // created from this preset track the platform's actual model list.
     discovery: true,
     // It is also a trusted first-party endpoint whose /models advertises
     // real capability fields: platform-native ids the static registry does

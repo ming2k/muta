@@ -37,7 +37,7 @@ struct ProviderState {
 
 pub fn provider() -> io::Result<()> {
     let theme = Theme::default();
-    let mk = |id: &str, name: &str, template_id: &str, models: &[&str], fav: bool, key: bool| {
+    let mk = |id: &str, name: &str, preset_id: &str, models: &[&str], fav: bool, key: bool| {
         ProviderPickerRow {
             id: id.to_string(),
             name: name.to_string(),
@@ -48,7 +48,7 @@ pub fn provider() -> io::Result<()> {
             protocol: String::new(),
             base_url: String::new(),
             key_ready: key,
-            preset_id: template_id.to_string(),
+            preset_id: preset_id.to_string(),
             client_identity: Default::default(),
             last_used_ms: fav.then_some(1_700_000_000_000),
             auth: Default::default(),
@@ -186,7 +186,7 @@ pub fn models() -> io::Result<()> {
     let theme = Theme::default();
     // Seed a snapshot with a couple of providers and a favorited model so the
     // star glyph, the current dot, and the two-tier ASCII sort all render.
-    let mk = |id: &str, name: &str, template_id: &str, models: &[&str]| ProviderPickerRow {
+    let mk = |id: &str, name: &str, preset_id: &str, models: &[&str]| ProviderPickerRow {
         id: id.to_string(),
         name: name.to_string(),
         model: models.first().copied().unwrap_or("").to_string(),
@@ -212,7 +212,7 @@ pub fn models() -> io::Result<()> {
         protocol: String::new(),
         base_url: String::new(),
         key_ready: true,
-        preset_id: template_id.to_string(),
+        preset_id: preset_id.to_string(),
         client_identity: Default::default(),
         last_used_ms: None,
         auth: Default::default(),

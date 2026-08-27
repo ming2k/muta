@@ -95,7 +95,7 @@ re-prompts; no conversation is lost.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `history.json` | Slash-command input history | Rebuildable |
-| `providers.toml` | **Provider instances** — the program-managed "who I connect to" records: id/name, `template_id`, `auth`, optional `api_key_env`, and a pure-custom instance's declared transport/endpoint/models. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each instance's template + the discovery cache, never persisted | No (user-managed connections) |
+| `providers.toml` | **Connections** — the program-managed "who I connect to" records: id/name, `preset_id`, `auth`, optional `api_key_env`, and a pure-custom connection's declared transport/endpoint/models. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each connection's preset + the discovery cache, never persisted | No (user-managed connections) |
 | `route_settings.json` | The user's per-(instance, model) reasoning overrides — set from the model `e` editor. State, not cache: deleting it loses user configuration no endpoint can re-derive (migrated out of `models_discovery.json`) | No |
 | `workspace_security.json` | Versioned, canonical-workspace-keyed SHA-256 grants for the concrete `mcp`, `skills`, `hooks`, and `rules` project asset domains | Rebuildable (project asset trust must be granted again) |
 | `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |

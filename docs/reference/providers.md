@@ -42,20 +42,20 @@ Responses API used by the ChatGPT subscription backend.
 ## Provider catalog
 
 `default_provider` in `config.toml` is the **fresh-session default**: the
-provider instance a new launch lands on. The `/models` picker accepts the same
+connection a new launch lands on. The `/models` picker accepts the same
 ids and, on a switch, persists the choice back to `default_provider` so the
 next launch follows it; see [Dual-write provider/model
 selection](../adr/0066-dual-write-provider-selection.md).
 
-Provider *instances* are declared in the state store
+Connections are declared in the state store
 (`$XDG_STATE_HOME/muta/providers.toml`, one `[[providers]]` row per
-instance); each instance references a template by `template_id` (or is a
+connection); each connection references a preset by `preset_id` (or is a
 pure-custom declaration) and owns exactly one credential, stored in
-`credentials.toml` keyed by instance id (`[providers.<id>]`, see
+`credentials.toml` keyed by connection id (`[providers.<id>]`, see
 [Paths](paths.md)). The concrete routes (per-model transport/endpoint/
-reasoning) are **derived at runtime** from the instance's template and the
-discovery cache — they are never persisted, so two instances of the same
-template cannot drift apart. Credential resolution precedence is
+reasoning) are **derived at runtime** from the connection's preset and the
+discovery cache — they are never persisted, so two connections of the same
+preset cannot drift apart. Credential resolution precedence is
 `api_key_env` env var > `credentials.toml`. The legacy `<PROVIDER>_API_KEY`
 environment variables and `config.toml` `*_api_key` fields of earlier releases
 are no longer read at runtime.
@@ -82,11 +82,11 @@ env vars are data in that table, not hard-coded per struct.
 
 Notes:
 
-- `deepseek` is a multi-model template instance: `deepseek-v4-flash` and
+- `deepseek` is a multi-model preset connection: `deepseek-v4-flash` and
   `deepseek-v4-pro` share one credential and one endpoint. It is derived by
-  the catalog from the `deepseek` template, not by `OPENAI_PROVIDER_SPECS`.
+  the catalog from the `deepseek` preset, not by `OPENAI_PROVIDER_SPECS`.
   Both V4 models natively speak the OpenAI **Responses API** (Flash since the
-  0731 GA, Pro since 0813), so the template's routes use the Responses
+  0731 GA, Pro since 0813), so the preset's routes use the Responses
   transport. The dated ids (`-0731` / `-0813`) pin a snapshot; the bare ids
   float with the upstream latest.
 - `zai-code` targets the Zhipu BigModel / Z.AI coding-plan platform (CN) and serves the
@@ -98,7 +98,7 @@ Notes:
   curated offering list.
 - `kimi-code` tracks the Kimi Code platform's live `GET /models` list at
   startup (`k3` by default); model overrides are ignored. It is the first
-  **fitting** template: platform-native ids the client registry does not know
+  **fitting** preset: platform-native ids the client registry does not know
   (e.g. `kimi-for-coding`) are materialized with the capability metadata the
   platform advertises — context window, reasoning, vision, effort tiers — so
   new platform models become usable with zero client changes
@@ -118,7 +118,7 @@ Notes:
 
 ### OAuth and subscription providers
 
-Provider templates that authenticate with a browser OAuth flow instead of an
+Provider presets that authenticate with a browser OAuth flow instead of an
 API key (the `oauth` module in `muta-providers`; tokens persist in
 `auth.toml` — see [Paths](paths.md)). Added from the TUI's add-provider flow;
 the `/models` picker accepts them like any other provider.
@@ -129,7 +129,7 @@ the `/models` picker accepts them like any other provider.
 | `chatgpt-oauth` | ChatGPT Pro/Plus subscription | ChatGPT JSON device-code grant against the Responses backend at `chatgpt.com/backend-api/codex/responses`; fixed model set (no `/models` discovery) |
 | `copilot-oauth` | GitHub Copilot subscription | Public Copilot OAuth App client id (shared with opencode); tracks the plan-unlocked model list with live discovery + fitting. See [Copilot Provider Pitfalls](../how-to/copilot-provider-pitfalls.md) |
 
-### sub2api relay templates
+### sub2api relay presets
 
 Templates for sub2api-style relays that forward another vendor's protocol —
 configured with the relay's `base_url` and an API key, exactly like the
@@ -143,10 +143,10 @@ built-ins:
 
 See [How to use sub2api relays](../how-to/use-sub2api.md).
 
-### custom template
+### custom preset
 
 The generic escape hatch for any OpenAI-compatible endpoint the curated
-templates do not cover — third-party relays, self-hosted gateways, or
+presets do not cover — third-party relays, self-hosted gateways, or
 subscription bundles that expose a `/v1/chat/completions` surface:
 
 | Template id | Protocol | Notes |

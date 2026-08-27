@@ -27,7 +27,7 @@ use crate::model::document::{NoticeSeverity, TranscriptMessage};
 use crate::model::layout::{InteractiveTarget, LayoutMap, ModalHitMap};
 use crate::model::selection::{SelectionDrag, SelectionState};
 use crate::providers::{
-    CustomField, ProviderTemplate, RankedModel, RankedProvider, edit_fields,
+    CustomField, ProviderPreset, RankedModel, RankedProvider, edit_fields,
     models_flat_filtered_from, providers_filtered_from,
 };
 use crate::view::Theme;
@@ -987,34 +987,35 @@ pub struct App {
     /// semantics as [`Self::editor_vision_override`].
     pub editor_tool_override: Option<bool>,
     /// Focused field of the provider editor (`Modal::CustomProvider`) as an
-    /// index into [`Self::custom_fields`] — the per-template visible field set
+    /// index into [`Self::custom_fields`] — the per-preset visible field set
     /// (Name / Base URL / Token / Model). The focused field always borrows the
     /// composer line; the Model field borrows it as a live filter query.
     pub custom_field: u8,
     /// The ordered visible fields of the provider editor, chosen by the active
-    /// template (create) or the edited provider's protocol (edit). Empty when no
+    /// preset (create) or the edited connection's protocol (edit). Empty when no
     /// editor is open.
     pub custom_fields: Vec<CustomField>,
     /// Wire protocol of the provider being created/edited (`"openai"` |
-    /// `"anthropic"` | `"google"`), carried from the template or the edited
+    /// `"anthropic"` | `"google"`), carried from the preset or the edited
     /// provider rather than chosen with a protocol picker.
     pub custom_protocol_wire: String,
-    /// Models seeded by the active template (create mode). Submitted as the
+    /// Models seeded by the active preset (create mode). Submitted as the
     /// provider's model list unless the editor exposes a free-text Model field
     /// (then the single typed model is submitted instead). Empty in edit mode.
     pub custom_models: Vec<String>,
-    /// Base URL placeholder for the active template (the expected endpoint shape).
+    /// Base URL placeholder for the active preset (the expected endpoint shape).
     pub custom_url_hint: String,
     /// Template-specific user agent carried into newly-created channels.
     pub custom_user_agent: Option<String>,
-    /// How newly-created channels authenticate (from the selected template).
+    /// How newly-created connections authenticate (from the selected preset).
     pub custom_auth: muta_contracts::ChannelAuth,
-    /// Stable template id the active create flow was seeded from, or `None` in
-    /// edit mode / when no template is active. Sent as `AddProvider::template_id`
-    /// so the catalog can re-seed the instance from the template's current
+    /// Stable preset id the active create flow was seeded from, or `None` in
+    /// edit mode / when no preset is active. Sent as `AddProvider::preset_id`
+    /// (the wire field) so the catalog can re-seed the connection from the
+    /// preset's current
     /// models on later startups. `None` yields a pure-custom instance that is
     /// never re-seeded.
-    pub custom_template_id: Option<String>,
+    pub custom_preset_id: Option<String>,
     /// True while "+ Add provider → xAI OAuth" browser flow is in flight.
     pub awaiting_oauth_add: bool,
     pub oauth_pending_message: String,
@@ -1043,13 +1044,13 @@ pub struct App {
     pub custom_base_url: String,
     pub custom_token: String,
     pub custom_model: String,
-    /// Selected row of the provider-template chooser (`Modal::ProviderTemplate`),
-    /// indexing `crate::PROVIDER_TEMPLATES`. Cycled with `↑/↓`.
-    pub template_choice: usize,
-    /// Scroll offset for the provider-template chooser body. The rendered body
+    /// Selected row of the provider-template chooser (`Modal::ProviderPreset`),
+    /// indexing `crate::PROVIDER_PRESETS`. Cycled with `↑/↓`.
+    pub preset_choice: usize,
+    /// Scroll offset for the preset-chooser body. The rendered body
     /// sets the upper bound automatically (via `render_body`), and `↑/↓` move
-    /// the selection so the chosen template stays on-screen.
-    pub template_scroll: usize,
+    /// the selection so the chosen preset stays on-screen.
+    pub preset_scroll: usize,
     /// Whether the model picker's **search sub-layer** is active. Both pickers
     /// (`Modal::Models` and `Modal::Connections`) open in browse mode
     /// (`false`): a plain ranked list with no query field. Pressing `/` enters

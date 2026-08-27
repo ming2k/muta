@@ -85,7 +85,7 @@ impl View {
 ///
 /// Not panel ids: the request-driven sheets (Permission, Question,
 /// InputInjection — queue-driven lifecycles) and the child editors of the
-/// picker chain (ModelEditor, ProviderTemplate, OauthPending,
+/// picker chain (ModelEditor, ProviderPreset, OauthPending,
 /// CustomProvider — they are *transitions* within the Models/Connections
 /// flow, not places to stand: they never appear in the switcher and their
 /// Esc pops the router's transient return stack rather than hiding a

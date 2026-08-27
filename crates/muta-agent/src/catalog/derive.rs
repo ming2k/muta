@@ -18,7 +18,7 @@ use muta_contracts::{ChannelAuth, Effort, RemoteModelEndpoint, SecretString, Thi
 use muta_persistence::config::{Credentials, DiscoveryCache, UserTransport};
 use muta_persistence::connections::{Connection, Connections};
 use muta_persistence::route_settings::RouteSettingsStore;
-use muta_providers::{MUTA_USER_AGENT, provider_preset_spec, route_for_model as template_route};
+use muta_providers::{MUTA_USER_AGENT, provider_preset_spec, route_for_model as preset_route};
 
 pub(super) const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 
@@ -185,8 +185,8 @@ pub fn derive_channel(
 /// from the hardcoded preset spec) or the pure-custom declaration.
 fn base_route(connection: &Connection, model: &str) -> (UserTransport, String, String) {
     if let Some(pid) = connection.preset_id.as_deref() {
-        let (protocol, base_url, tpl_ua) =
-            template_route(pid, model).unwrap_or(("openai", "", None));
+        let (protocol, base_url, preset_ua) =
+            preset_route(pid, model).unwrap_or(("openai", "", None));
         let user_agent = connection
             .user_agent
             .clone()
@@ -194,7 +194,7 @@ fn base_route(connection: &Connection, model: &str) -> (UserTransport, String, S
                 if connection.client_identity != muta_contracts::ClientIdentity::Native {
                     Some(connection.client_identity.user_agent().to_string())
                 } else {
-                    tpl_ua.map(str::to_string)
+                    preset_ua.map(str::to_string)
                 }
             })
             .unwrap_or_else(|| connection.client_identity.user_agent().to_string());

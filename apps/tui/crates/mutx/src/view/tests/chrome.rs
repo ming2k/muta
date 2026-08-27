@@ -164,9 +164,9 @@ ComposerText {
             &mut layout_map,
         );
         draw_model_editor(f, "OpenAI", "", 0, true, 0, None, &[], None, None, &theme);
-        // Provider-template chooser.
-        let mut template_scroll = 0;
-        draw_provider_template_chooser(0, f, &theme, &mut template_scroll);
+        // Preset chooser.
+        let mut preset_scroll = 0;
+        draw_preset_chooser(0, f, &theme, &mut preset_scroll);
         // Provider editor on the Model filter field.
         use crate::providers::CustomField;
         let mut scroll = 0;

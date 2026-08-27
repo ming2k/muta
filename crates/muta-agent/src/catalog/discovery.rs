@@ -56,24 +56,24 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
             .into_iter()
             .next()
             .unwrap_or_default();
-        let Some((protocol, template_base, tpl_ua)) = route_for_model(pid, &first_model) else {
+        let Some((protocol, preset_base, preset_ua)) = route_for_model(pid, &first_model) else {
             continue;
         };
         let base_url = connection
             .base_url
             .clone()
             .filter(|u| !u.trim().is_empty())
-            .unwrap_or_else(|| template_base.to_string());
+            .unwrap_or_else(|| preset_base.to_string());
         let user_agent = connection.user_agent.clone().or_else(|| {
             if connection.client_identity != muta_contracts::ClientIdentity::Native {
                 Some(connection.client_identity.user_agent().to_string())
             } else {
-                tpl_ua.map(str::to_string)
+                preset_ua.map(str::to_string)
             }
         });
 
         let discovery_req = ModelDiscoveryRequest {
-            protocol: DiscoveryProtocol::from_template_protocol(protocol),
+            protocol: DiscoveryProtocol::from_preset_protocol(protocol),
             base_url: &base_url,
             api_key: &resolve_credential(connection, &stores.creds),
             user_agent: user_agent.as_deref(),
@@ -102,7 +102,7 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
                         .collect()
                 } else {
                     let ids: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
-                    supported_model_intersection(&supported_models_for_template(spec), &ids)
+                    supported_model_intersection(&supported_models_for_preset(spec), &ids)
                         .into_iter()
                         .map(str::to_string)
                         .collect()
@@ -219,7 +219,7 @@ pub fn sync_fitted_model_registry() {
 }
 
 /// The model ids a preset serves over its protocol's wire format.
-fn supported_models_for_template(spec: &ProviderPresetSpec) -> Vec<&'static str> {
+fn supported_models_for_preset(spec: &ProviderPresetSpec) -> Vec<&'static str> {
     spec.baselines
         .iter()
         .filter(|model| {

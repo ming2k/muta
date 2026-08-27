@@ -1,10 +1,10 @@
-//! The `xai-oauth` provider template: xAI Grok over OpenAI-compatible chat
+//! The `xai-oauth` provider preset: xAI Grok over OpenAI-compatible chat
 //! completions (SuperGrok OAuth or `XAI_API_KEY`).
 
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::ProviderTemplateSpec;
+use super::ProviderPresetSpec;
 
 /// xAI Grok models over OpenAI-compatible chat completions (SuperGrok OAuth or
 /// `XAI_API_KEY`).
@@ -63,7 +63,7 @@ pub const MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "xai-oauth",
     baselines: MODELS,
     base_url: "https://api.x.ai/v1/chat/completions",

@@ -1,15 +1,15 @@
-//! The `copilot-oauth` provider template: GitHub Copilot subscription models
+//! The `copilot-oauth` provider preset: GitHub Copilot subscription models
 //! over OpenAI-compatible chat completions against `api.githubcopilot.com`.
 
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat};
 
-use super::ProviderTemplateSpec;
+use super::ProviderPresetSpec;
 
 /// The minimal model seed for a fresh GitHub Copilot instance, before its
 /// first live discovery completes. A Copilot instance uses `discovery: true`
 /// and `fitting: true` (see [`COPILOT`](crate::oauth::COPILOT) / the `copilot-oauth`
-/// template), so its real channel set is populated from
+/// preset), so its real channel set is populated from
 /// `GET api.githubcopilot.com/models` at runtime — this seed only needs one
 /// universally available id so a brand-new instance activates without a 400.
 /// `gpt-4o-mini` is unlocked on every Copilot plan (incl. Free/Student).
@@ -32,7 +32,7 @@ pub const MODELS: &[Model] = &[Model {
 
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
-pub(crate) const TEMPLATE_SPEC: ProviderTemplateSpec = ProviderTemplateSpec {
+pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     id: "copilot-oauth",
     baselines: MODELS,
     base_url: "https://api.githubcopilot.com/chat/completions",

@@ -109,24 +109,24 @@ impl AuthStore {
         self.tokens.get(provider_id)
     }
 
-    /// Get the token set for a provider instance, checking in hierarchical order:
-    /// 1. Exact provider instance id (e.g. "google-antigravity111", "work-chatgpt")
-    /// 2. Template id if set (e.g. "antigravity-oauth", "chatgpt-oauth")
+    /// Get the token set for a connection, checking in hierarchical order:
+    /// 1. Exact connection id (e.g. "google-antigravity111", "work-chatgpt")
+    /// 2. Preset id if set (e.g. "antigravity-oauth", "chatgpt-oauth")
     /// 3. Standard fallback key for the auth type (e.g. "google-antigravity", "chatgpt", "copilot", "xai")
     ///
-    /// This gives each custom instance its own distinct, isolated token namespace,
+    /// This gives each custom connection its own distinct, isolated token namespace,
     /// while preserving transparent backward compatibility for legacy configs.
     pub fn get_for_provider(
         &self,
         provider_id: &str,
-        template_id: Option<&str>,
+        preset_id: Option<&str>,
         auth: muta_contracts::ChannelAuth,
     ) -> Option<&TokenSet> {
         if let Some(tokens) = self.tokens.get(provider_id) {
             return Some(tokens);
         }
-        if let Some(tid) = template_id
-            && let Some(tokens) = self.tokens.get(tid)
+        if let Some(pid) = preset_id
+            && let Some(tokens) = self.tokens.get(pid)
         {
             return Some(tokens);
         }
