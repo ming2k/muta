@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.6] - 2026-08-28
+
 ### Changed
 
 - **TUI: activity bar is one breathing dot with a stall-only silence
