@@ -22,11 +22,9 @@
 //! [`clean_title`]: muta_contracts::clean_title
 //! [`RUNNER_TITLE`]: muta_contracts::RUNNER_TITLE
 
-use std::time::Duration;
-
 #[cfg(test)]
 use muta_contracts::Provider;
-use muta_contracts::{Message, ModelRequest, RUNNER_TITLE, Role, clean_title};
+use muta_contracts::{Message, Role};
 
 use crate::agent::Agent;
 
@@ -37,62 +35,18 @@ use crate::agent::Agent;
 /// full because the title usually captures what the session is *about*.
 const TRANSCRIPT_BUDGET_CHARS: usize = 2_000;
 
-/// Wall-clock budget for the title call. Title generation is best-effort: a
-/// stalled endpoint must not leak a background task forever. On timeout the
-/// caller simply gets `None` and the session keeps whatever title it had (or
-/// the first-user-message fallback).
-const RUNNER_TITLE_CALL_TIMEOUT: Duration = Duration::from_secs(45);
-
 impl Agent {
     /// Generate a session title from `transcript`, or `None` on failure.
     ///
-    /// A single `Provider::chat` call framed by the `RUNNER_TITLE` profile's
-    /// system prompt. The transcript is condensed to a compact excerpt
-    /// (`serialize_for_title`); the model's free-form answer is normalized
-    /// by [`clean_title`]. Best-effort throughout: provider errors, timeouts,
-    /// and empty/unparseable answers all return `None` so the caller can leave
-    /// the stored title untouched.
-    ///
-    /// Runs against the session's own provider (`self.provider`) — muta's
-    /// catalog has no "small model" concept, so a dedicated cheap channel is
-    /// out of scope (ADR-0022).
+    /// Delegated to the Harness [`Steward`]. The transcript is condensed to a
+    /// compact excerpt (`serialize_for_title`); the model's answer is normalized
+    /// by [`clean_title`].
     pub async fn generate_title(&self, transcript: &[Message]) -> Option<String> {
         let excerpt = serialize_for_title(transcript, TRANSCRIPT_BUDGET_CHARS);
         if excerpt.trim().is_empty() {
             return None;
         }
-        let messages = vec![
-            Message::new(Role::System, RUNNER_TITLE.system_prompt),
-            Message::new(
-                Role::User,
-                format!("Generate a title for this conversation:\n\n{excerpt}"),
-            ),
-        ];
-        // The title task is pure text-in/text-out. The primary round has
-        // already finished when this runs (auto-trigger is post-turn; `/title`
-        // is on-demand at idle), so the shared provider is not mid-request.
-        // The atomic request deliberately carries no tools, independent of
-        // whatever schemas the primary agent used on its preceding turn.
-        let response = match tokio::time::timeout(
-            RUNNER_TITLE_CALL_TIMEOUT,
-            self.provider.chat(ModelRequest::ephemeral(messages)),
-        )
-        .await
-        {
-            Ok(Ok(message)) => message,
-            Ok(Err(error)) => {
-                tracing::warn!(error = %error, "title runner provider call failed");
-                return None;
-            }
-            Err(_elapsed) => {
-                tracing::warn!(
-                    timeout_secs = RUNNER_TITLE_CALL_TIMEOUT.as_secs(),
-                    "title runner call timed out"
-                );
-                return None;
-            }
-        };
-        clean_title(&response.content)
+        self.steward().generate_title(excerpt).await
     }
 }
 
@@ -167,6 +121,7 @@ fn truncate(s: &str, max: usize) -> &str {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use muta_contracts::{ModelRequest, StewardTask};
     use std::sync::{Arc, Mutex};
 
     /// A provider double that returns a canned assistant message. Captures the
@@ -255,7 +210,7 @@ mod tests {
             .iter()
             .find(|m| m.role == Role::System)
             .expect("system message present");
-        assert_eq!(system.content, RUNNER_TITLE.system_prompt);
+        assert_eq!(system.content, muta_contracts::SessionTitlerTask.system_prompt());
         assert!(
             provider.last_tool_specs.lock().unwrap().is_empty(),
             "title requests must not inherit the agent's tool catalog"

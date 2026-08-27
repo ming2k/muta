@@ -758,4 +758,9 @@ impl Agent {
     pub fn clear_todos(&self) {
         *self.todos.lock().unwrap_or_else(|e| e.into_inner()) = muta_contracts::TodoList::default();
     }
+
+    /// Access the Steward cognitive attendant bound to this agent's provider.
+    pub fn steward(&self) -> crate::steward::Steward {
+        crate::steward::Steward::new(self.provider.clone())
+    }
 }

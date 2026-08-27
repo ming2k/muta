@@ -33,15 +33,16 @@ the pre-ADR-0047 convention, which older documents may still use. See
 
 ## Roles
 
-The architecture defines a three-tier agent hierarchy: **`Supervisor`**, **`Master`**, and **`Runner`**.
-`agent` is the umbrella term; the tiers define role, mission, and tool scope.
+The architecture defines a two-axis, three-plane model: **`Supervisor`** (fleet control), **`Master`** & **`Runner`** (operational core), and **`Steward`** (harness cognitive infrastructure).
+`agent` is the umbrella term; the roles define mission, scope, and planes (ADR-0150).
 
 | Term | Definition |
 |------|------------|
-| **agent** | Umbrella term for an autonomous execution engine (`Agent`, crate `muta-agent`) and its lifecycle protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). Every tier is an agent. |
+| **agent** | Umbrella term for an autonomous execution engine (`Agent`, crate `muta-agent`) and its lifecycle protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). |
 | **supervisor** | The singleton daemon-level agent orchestrating sessions, multi-session coordination, debug tracing, and global lifecycle. |
 | **master** | The session-level agent (exactly one active per session). Carries presets (e.g. Developer, Code Analyst) and manages subordinate runners. Owns session conversation and `[master]` config table (`hard_stop_turns`, `allow_model_stdin`, `doom_guard`). |
 | **runner** | A bounded sub-agent spawned by a master (via `runner` or `runner_code` tools) with fresh context, scoped tools, and specific missions. |
+| **steward** | The harness-internal cognitive attendant executing out-of-band, stateless, typed tasks (`StewardTask`: semantic loop detection, sanity verification, context compaction, session titling) for the Agent Harness. Zero-tool, fail-open. [ADR-0150](../adr/0150-two-axis-agent-architecture-and-harness-steward.md) |
 
 ## Scheduling
 
