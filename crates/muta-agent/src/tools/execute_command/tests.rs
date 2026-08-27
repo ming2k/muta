@@ -18,7 +18,7 @@ fn arguments(command: &str) -> String {
 #[test]
 fn idle_budget_scales_with_timeout() {
     use super::episodic::idle_budget_for;
-    // Default 30s call keeps the historical 10s budget.
+    // Small explicit budgets keep the one-third scaling.
     assert_eq!(
         idle_budget_for(Duration::from_secs(30)),
         Duration::from_secs(10)
@@ -32,10 +32,16 @@ fn idle_budget_scales_with_timeout() {
         idle_budget_for(Duration::from_secs(180)),
         Duration::from_secs(60)
     );
-    // …clamped to the 60s ceiling and the 5s floor.
+    // …clamped to the 480s ceiling: the default 1800s (30 min) wall budget
+    // tolerates 8 minutes of silence, so a compiling build (or output
+    // buffered by `… | tail`) is not killed at an arbitrary short mark.
+    assert_eq!(
+        idle_budget_for(Duration::from_secs(1800)),
+        Duration::from_secs(480)
+    );
     assert_eq!(
         idle_budget_for(Duration::from_secs(600)),
-        Duration::from_secs(60)
+        Duration::from_secs(200)
     );
     assert_eq!(
         idle_budget_for(Duration::from_secs(3)),
@@ -398,7 +404,7 @@ async fn test_persistent_terminal_preserves_state() {
 }
 
 #[test]
-fn execute_command_schema_documents_300s_default_timeout() {
+fn execute_command_schema_documents_1800s_default_timeout() {
     let tool = ExecuteCommandTool::new(None);
     let params = tool.parameters();
     let desc = params
@@ -408,7 +414,7 @@ fn execute_command_schema_documents_300s_default_timeout() {
         .and_then(|d| d.as_str())
         .expect("timeout description");
     assert!(
-        desc.contains("default 300"),
-        "schema description should state default 300s: {desc}"
+        desc.contains("default 1800"),
+        "schema description should state default 1800s: {desc}"
     );
 }

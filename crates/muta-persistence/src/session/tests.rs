@@ -1730,7 +1730,10 @@ async fn delegated_posture_round_trips_through_disk() {
     assert!(path.exists(), "materialised session persists the toggle");
 
     let loaded = SessionStore::for_path(path.clone());
-    assert!(loaded.delegated().await, "the posture survives persist + reload");
+    assert!(
+        loaded.delegated().await,
+        "the posture survives persist + reload"
+    );
 
     // Toggling off persists too.
     loaded.set_delegated(false).await.unwrap();
@@ -1760,7 +1763,8 @@ async fn delegated_toggle_alone_does_not_materialise_empty_session() {
     // The emptiness rule deliberately excludes the delegated flag: arming
     // delegated on a brand-new session with no dialogue must not create
     // a session file on disk (nothing to resume yet).
-    let directory = std::env::temp_dir().join(format!("muta-delegated-guard-{}", uuid::Uuid::new_v4()));
+    let directory =
+        std::env::temp_dir().join(format!("muta-delegated-guard-{}", uuid::Uuid::new_v4()));
     let path = directory.join("session.json");
     let store = SessionStore::for_path(path.clone());
     store.set_delegated(true).await.unwrap();
@@ -1780,7 +1784,8 @@ async fn delegated_event_replays_from_log() {
     // Event-sourced authority: a snapshot-less replay of the jsonl log
     // must rebuild the posture (the snapshot is only a cache; the log
     // wins).
-    let directory = std::env::temp_dir().join(format!("muta-delegated-log-{}", uuid::Uuid::new_v4()));
+    let directory =
+        std::env::temp_dir().join(format!("muta-delegated-log-{}", uuid::Uuid::new_v4()));
     let path = directory.join("session.json");
     let store = SessionStore::for_path(path.clone());
     store.set_round_counter(1).await.unwrap(); // materialise
@@ -2123,6 +2128,72 @@ async fn append_turn_persists_delta_and_survives_reload() {
     assert_eq!(recovered.len(), 4, "appended turns survive reload");
     assert_eq!(recovered[2].content, "tool output");
     assert_eq!(recovered[3].content, "done");
+
+    let _ = fs::remove_dir_all(directory);
+}
+
+#[tokio::test]
+async fn commit_turn_unifies_messages_counter_and_usage_in_one_event_batch() {
+    // `commit_turn` is the single persistence transaction the turn loop
+    // issues: message-tail delta + round counter + changed usage records,
+    // in one lock acquisition and at most one snapshot write. A fresh store
+    // must replay all three event kinds and recover the identical state.
+    let directory = std::env::temp_dir().join(format!("muta-commit-turn-{}", uuid::Uuid::new_v4()));
+    let path = directory.join("session.json");
+    let store = SessionStore::for_path(path.clone());
+    store
+        .replace_messages(vec![Message::new(
+            muta_contracts::Role::User,
+            "user prompt",
+        )])
+        .await
+        .unwrap();
+
+    let record = muta_contracts::RequestUsageRecord {
+        key: muta_contracts::RequestUsageKey {
+            session_id: store.id().await,
+            round: 1,
+            turn: 1,
+            ..Default::default()
+        },
+        status: muta_contracts::RequestUsageStatus::Completed,
+        ..Default::default()
+    };
+
+    let turn = vec![
+        Message::new(muta_contracts::Role::User, "user prompt"),
+        Message::new(muta_contracts::Role::Assistant, "done"),
+    ];
+    store
+        .commit_turn(CommitTurn {
+            messages: &turn,
+            round_counter: Some(3),
+            usage_records: std::slice::from_ref(&record),
+        })
+        .await
+        .unwrap();
+
+    // Live state reflects every mutation.
+    assert_eq!(store.model_window().await.len(), 2);
+    assert_eq!(store.round_counter().await, 3);
+
+    // Reload: the event log must replay to the same state.
+    let reloaded = SessionStore::for_path(path.clone());
+    assert_eq!(reloaded.model_window().await.len(), 2);
+    assert_eq!(reloaded.round_counter().await, 3);
+
+    // Committing the same window + counter + unchanged usage again is a
+    // no-op (idempotent re-settlement after a retry).
+    store
+        .commit_turn(CommitTurn {
+            messages: &turn,
+            round_counter: Some(3),
+            usage_records: std::slice::from_ref(&record),
+        })
+        .await
+        .unwrap();
+    assert_eq!(store.model_window().await.len(), 2);
+    assert_eq!(store.round_counter().await, 3);
 
     let _ = fs::remove_dir_all(directory);
 }

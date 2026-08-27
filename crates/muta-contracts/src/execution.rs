@@ -216,7 +216,8 @@ pub trait ExecutionEnvironment: Send + Sync {
     /// this environment's admitted workspace roots.
     ///
     /// Relative paths resolve against `workspace_root()`. Returns the resolved
-    /// path if it falls within `workspace_root()` or any entry in `additional_roots()`,
+    /// path if it falls within `workspace_root()` or any entry in `additional_roots()`
+    /// (plus the implicit platform temp roots — scratch files must be readable),
     /// or `FsError::PermissionDenied` if it attempts to escape containment.
     fn resolve_path(&self, raw: &str) -> Result<PathBuf, FsError> {
         let supplied = Path::new(raw);
@@ -229,6 +230,7 @@ pub trait ExecutionEnvironment: Send + Sync {
         let normalized = lexical_normalize(&target);
         let root_norm = lexical_normalize(self.workspace_root());
         let admitted = normalized.starts_with(&root_norm)
+            || admits_temp_path(&target)
             || self
                 .additional_roots()
                 .iter()
@@ -242,6 +244,43 @@ pub trait ExecutionEnvironment: Send + Sync {
             )))
         }
     }
+}
+
+/// The platform temporary directory, admitting both spellings when they differ.
+///
+/// macOS reports `TMPDIR` under `/var/folders/…/T/` while the same directory is
+/// canonically spelled `/private/var/folders/…/T/` (and `/tmp` vs `/private/tmp`
+/// on the default install). Both spellings of each root are admitted so a
+/// caller may use either the well-known name or the resolved physical path;
+/// see [`admits_temp_path`] / [`temp_roots`].
+pub fn temp_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = vec![std::env::temp_dir(), std::path::PathBuf::from("/tmp")];
+    // Canonical spellings too (macOS: /tmp → /private/tmp,
+    // /var/folders/… → /private/var/folders/…; Linux: usually identical, so
+    // the dedup below collapses them). Best-effort — an unresolvable dir just
+    // contributes its raw spelling.
+    for raw in [std::env::temp_dir(), std::path::PathBuf::from("/tmp")] {
+        if let Ok(canon) = std::fs::canonicalize(&raw) {
+            roots.push(canon);
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// Lexical containment check against the implicit temporary-root set.
+///
+/// Roots carry both the raw [`std::env::temp_dir`] / `/tmp` spellings and
+/// their canonicalized forms (macOS: `/private/tmp`), so a path spelled
+/// either way is admitted. Pure `starts_with` over [`lexical_normalize`] —
+/// no syscalls on the caller's hot path beyond the one-time root resolution
+/// inside [`temp_roots`].
+pub fn admits_temp_path(path: &Path) -> bool {
+    let normalized = lexical_normalize(path);
+    temp_roots()
+        .iter()
+        .any(|root| normalized.starts_with(lexical_normalize(root)))
 }
 
 /// Normalize `.` and `..` without consulting a host filesystem.
@@ -418,5 +457,41 @@ mod tests {
         assert!(env.resolve_path("../../etc/passwd").is_err());
         assert!(env.resolve_path("/etc/shadow").is_err());
         assert!(env.resolve_path("../other_unadmitted").is_err());
+    }
+
+    #[test]
+    fn temp_roots_admit_platform_scratch_dirs() {
+        let roots = temp_roots();
+        // The process temp dir (whatever it is) is always admitted, as is
+        // the well-known /tmp spelling on Unix. On Linux both spellings
+        // usually collapse to one entry.
+        assert!(roots.iter().any(|r| r == &std::env::temp_dir()));
+        if cfg!(unix) {
+            assert!(roots.iter().any(|r| r == Path::new("/tmp")));
+        }
+
+        // Containment: anything under temp is admitted, everything else is not.
+        let probe = std::env::temp_dir().join("muta-probe/scratch.txt");
+        assert!(admits_temp_path(&probe));
+        assert!(admits_temp_path(Path::new("/tmp/anything")));
+        assert!(!admits_temp_path(Path::new("/etc/passwd")));
+        assert!(!admits_temp_path(Path::new(
+            "/home/user/project/src/main.rs"
+        )));
+        // Traversal cannot escape a temp root.
+        assert!(!admits_temp_path(Path::new("/tmp/../etc/passwd")));
+    }
+
+    #[test]
+    fn resolve_path_admits_temp_paths() {
+        let env = MockEnv {
+            root: PathBuf::from("/home/user/project"),
+            additional: Vec::new(),
+        };
+        let tmp = std::env::temp_dir().join("muta-resolve-probe/build.log");
+        env.resolve_path(tmp.to_str().unwrap()).unwrap();
+        env.resolve_path("/tmp/scratch.txt").unwrap();
+        // Non-temp absolute paths stay denied.
+        assert!(env.resolve_path("/etc/shadow").is_err());
     }
 }

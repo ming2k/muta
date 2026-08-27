@@ -252,26 +252,34 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
 
     // Annotation slot: at most one lives here per frame. The two clauses
     // are phase-exclusive by construction — transport retries only occur in
-    // AwaitingModel, stream silence only after deltas have flowed *and*
-    // while a stream phase is still live (a tool exec has no stream that
-    // could go silent; its liveness story is the step clock).
-    let streaming = matches!(
+    // AwaitingModel (and own that slot while counting down), and stream
+    // silence only while a model request is still open (a tool exec has no
+    // HTTP stream that could go silent; its liveness story is the step
+    // clock). ADR-0154: what matters is a held connection with no tokens
+    // coming out, in either regime — overdue first byte or a flowing
+    // stream gone quiet.
+    let model_request_open = matches!(
         app.phase,
-        Some(crate::phase::Phase::Thinking | crate::phase::Phase::Answering)
+        Some(
+            crate::phase::Phase::AwaitingModel
+                | crate::phase::Phase::Thinking
+                | crate::phase::Phase::Answering
+        )
     );
-    let silent_clause_display = if streaming {
+    let silent_clause_display = if model_request_open {
         app.pulse
-            .silent_secs(std::time::Instant::now())
-            .map(|secs| format!(" · silent {secs}s"))
+            .stalled_secs(std::time::Instant::now())
+            .map(|secs| {
+                if app.pulse.saw_token() {
+                    format!(" · silent {secs}s")
+                } else {
+                    format!(" · no tokens {secs}s")
+                }
+            })
     } else {
         None
     };
     let clause = backoff.as_deref().or(silent_clause_display.as_deref());
-    let pulse_levels = if streaming {
-        app.pulse.levels(std::time::Instant::now())
-    } else {
-        None
-    };
     let transcript_render = view::draw_transcript(
         f,
         &mut layout_map,
@@ -283,10 +291,9 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             activity: &status,
             backoff_clause: clause,
             silent_clause: None,
-            pulse_levels, // A pending permission request forces the activity bar
-            // on (and tints it warning) so it stays the visible
-            // anchor above the permission sheet even if the loop
-            // has gone idle.
+            // A pending permission request forces the activity bar on (and
+            // tints it warning) so it stays the visible anchor above the
+            // permission sheet even if the loop has gone idle.
             awaiting_permission: app.pending_permission.is_some(),
             // ~100ms per phase keeps one breathing cycle near 1.2s
             // (SPINNER_PHASES steps); `breathing_color` wraps modulo.

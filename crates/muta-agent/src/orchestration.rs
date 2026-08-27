@@ -38,6 +38,7 @@ use muta_contracts::{
     repeat::DEFAULT_MAX_AGE_DAYS,
 };
 use muta_persistence::{
+    CommitTurn,
     config::Config,
     session::{ContextProjectionCheckpoint, ContextProjectionResult, SessionStore, run_compaction},
 };
@@ -589,9 +590,9 @@ pub async fn send_harness_state_for_session(
             retry_pending,
         }),
     ));
-    if let Some(performance) = muta_contracts::latest_turn_performance(
-        &session.request_usage_records().await,
-    ) {
+    if let Some(performance) =
+        muta_contracts::latest_turn_performance(&session.request_usage_records().await)
+    {
         let _ = tx.send(round_response(
             session_id,
             RoundEvent::TurnPerformance(performance),
@@ -1093,17 +1094,22 @@ pub async fn execute_round(
             let ledger = accounting_ledger.clone();
             let session_id = accounting_session_id.clone();
             Box::pin(async move {
-                session.append_turn(&snapshot).await?;
-                let round_counter = agent.round_count();
-                if round_counter != session.round_counter().await {
-                    session.set_round_counter(round_counter).await?;
-                }
-                if let Some(ledger) = ledger {
-                    session
-                        .set_request_usage_records(ledger.records_for_session(&session_id))
-                        .await?;
-                }
-                Ok(())
+                // One lock acquisition, one event batch, at most one snapshot
+                // write per turn — the three mutations a turn produces (new
+                // message tail, round counter, settled usage attempts) are a
+                // single persistence transaction, not three full-snapshot
+                // setters.
+                let usage_records = ledger
+                    .as_ref()
+                    .map(|ledger| ledger.records_for_session(&session_id));
+                let usage_slice = usage_records.as_deref().unwrap_or(&[]);
+                session
+                    .commit_turn(CommitTurn {
+                        messages: &snapshot,
+                        round_counter: Some(agent.round_count()),
+                        usage_records: usage_slice,
+                    })
+                    .await
             })
         }));
     }
@@ -1116,11 +1122,17 @@ pub async fn execute_round(
     // (ADR-0019) so it engages only once pressure crosses that fraction of the
     // window — not every turn — mirroring the mid-turn gate. Pruning also
     // self-limits to runs that reclaim meaningful space.
-    let mut request_estimate = agent.estimate_next_request_tokens(&round_history);
+    //
+    // The estimate is BPE tokenization over the whole prepared request —
+    // real CPU-bound work — so it runs on the blocking pool, never on the
+    // async executor (starving it stalls TUI rendering and stream forwarding).
+    // First estimate of a session pays full price once; later passes reuse
+    // the content-addressed weights cache (O(new bytes), not O(session)).
+    let mut request_estimate = estimate_off_executor(&agent, &round_history).await;
     if projection.prune && request_estimate.total_tokens > projection.budget.prune_threshold_tokens
     {
         prune_and_commit(&mut round_history, &session, &projection).await?;
-        request_estimate = agent.estimate_next_request_tokens(&round_history);
+        request_estimate = estimate_off_executor(&agent, &round_history).await;
     }
     if request_estimate.total_tokens > projection.budget.compaction_threshold_tokens {
         let _ = tx.send(round_response(
@@ -1514,6 +1526,22 @@ async fn persist_request_usage(
     session
         .set_request_usage_records(ledger.records_for_session(session_id))
         .await
+}
+
+/// Run one full request estimate on the blocking pool. `Agent` is `Send +
+/// Sync`; the model-request assembly and BPE tokenization are pure CPU work
+/// over immutable inputs, so `spawn_blocking` is safe and keeps the async
+/// executor free for stream forwarding and UI. Falls back to inline execution
+/// only if the runtime is shutting down (the round is tearing down anyway).
+async fn estimate_off_executor(agent: &Arc<Agent>, messages: &[Message]) -> RequestTokenEstimate {
+    let agent = Arc::clone(agent);
+    let snapshot = messages.to_vec();
+    tokio::task::spawn_blocking(move || agent.estimate_next_request_tokens(&snapshot))
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "estimate task aborted; treating pressure as zero");
+            RequestTokenEstimate::new(0, 0)
+        })
 }
 
 pub fn retry_delay_ms(

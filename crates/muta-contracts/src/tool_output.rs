@@ -504,7 +504,12 @@ impl ToolOutput {
     /// existing string-based transcript/UI render unchanged while structured
     /// data is also available. `Shell` reproduces the exact format historically
     /// emitted by the command tool, so migrating command execution to
-    /// [`ToolOutput::Shell`] is invisible to any consumer still reading text.
+    /// [`ToolOutput::Shell`] is invisible to any consumer still reading text —
+    /// with one deliberate addition: a killed run (`IdleBlocked` / `Timeout` /
+    /// `Cancelled`) appends a `[killed …]` note, because the model is the one
+    /// actor that can react to *why* the command died (retry non-interactively,
+    /// raise `timeout`, or stop) and the bare `Exit -1` it historically saw
+    /// carried none of that.
     pub fn to_text(&self) -> String {
         match self {
             ToolOutput::Text(s) => s.clone(),
@@ -522,8 +527,16 @@ impl ToolOutput {
                 stderr,
                 exit,
                 truncated,
+                termination,
                 ..
-            } => shell_to_text(stdout, stderr, *exit, *truncated),
+            } => {
+                let mut text = shell_to_text(stdout, stderr, *exit, *truncated);
+                if let Some(note) = termination_model_note(*termination) {
+                    text.push_str("\n\n");
+                    text.push_str(note);
+                }
+                text
+            }
             ToolOutput::Code {
                 text,
                 prefix,
@@ -696,6 +709,38 @@ fn shell_to_text(stdout: &str, stderr: &str, exit: Option<i32>, truncated: bool)
     }
 }
 
+/// The note appended to [`ToolOutput::to_text`] when a shell step was killed
+/// by the harness rather than exiting on its own. The model is the primary
+/// audience: it must know the command did not fail on its own merits but was
+/// interrupted, and what to change on retry. One line, fact first, remedy
+/// second — no prose beyond that.
+pub fn termination_model_note(termination: ShellTermination) -> Option<&'static str> {
+    match termination {
+        ShellTermination::Exited => None,
+        ShellTermination::IdleBlocked => Some(
+            "[killed by harness: no output for the idle budget — the command may \
+             still have been working (a compiling build, or output buffered by a \
+             pipe like `… | tail`) or waiting for stdin input you cannot answer. \
+             If it may finish, retry with a larger `timeout`; if it prompts for \
+             input, retry non-interactively (e.g. `yes | …`, `--passphrase-file`, \
+             SUDO_ASKPASS) instead of repeating the same command.]",
+        ),
+        ShellTermination::InteractiveBlocked => Some(
+            "[not executed: the command was classified as interactive and no \
+             input was supplied. Pass the credential via a flag or env var and \
+             retry non-interactively.]",
+        ),
+        ShellTermination::Timeout => Some(
+            "[killed by harness: wall-clock timeout reached — the command was \
+             still producing output. Retry with a larger `timeout`, or split the \
+             work into smaller steps.]",
+        ),
+        ShellTermination::Cancelled => {
+            Some("[killed by harness: cancelled by an operator interrupt.]")
+        }
+    }
+}
+
 /// Truncate `text` to at most `max_bytes` without splitting a multibyte UTF-8
 /// character. Returns a `&str` slice of `text`.
 ///
@@ -819,6 +864,48 @@ mod tests {
             detail: Some("stack\ntrace".into()),
         };
         assert_eq!(e.to_text(), "Error: boom\nstack\ntrace");
+    }
+
+    #[test]
+    fn shell_killed_run_appends_harness_note() {
+        // An exited run carries no note — the legacy text is exact.
+        let exited = ToolOutput::Shell {
+            command: "x".into(),
+            stdout: "hi\n".into(),
+            stderr: "".into(),
+            lines: Vec::new(),
+            exit: Some(0),
+            truncated: false,
+            termination: ShellTermination::Exited,
+        };
+        assert_eq!(exited.to_text(), "hi\n");
+
+        // A harness kill states the fact and the remedy; the model must be
+        // able to distinguish it from a genuine `Exit -1` failure.
+        for (term, needle) in [
+            (ShellTermination::IdleBlocked, "[killed by harness: no output"),
+            (
+                ShellTermination::Timeout,
+                "[killed by harness: wall-clock timeout reached",
+            ),
+            (ShellTermination::Cancelled, "[killed by harness: cancelled"),
+        ] {
+            let o = ToolOutput::Shell {
+                command: "x".into(),
+                stdout: "partial\n".into(),
+                stderr: "".into(),
+                lines: Vec::new(),
+                exit: None,
+                truncated: false,
+                termination: term,
+            };
+            let text = o.to_text();
+            assert!(
+                text.contains(needle),
+                "{term:?} note missing {needle:?}: {text}"
+            );
+            assert!(o.is_error(), "{term:?} killed run is a failure");
+        }
     }
 
     #[test]

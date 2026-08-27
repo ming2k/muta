@@ -259,6 +259,24 @@ pub struct Message {
     /// requests, which continue to use [`Message::to_wire`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sent_at_ms: Option<u64>,
+    /// This message's provider-visible shape is **permanently settled**: every
+    /// byte that will ever reach the provider for it is already fixed, and no
+    /// later assembly pass may transform it again.
+    ///
+    /// Set exactly once, when tool-output compaction freezes a historical
+    /// `Tool` message into its final truncated form (`trim_tool_output`). The
+    /// freeze is the *only* mutation a tool result ever takes: one turn after
+    /// the result lands the shape is chosen, and from then on the provider
+    /// sees byte-identical content every round. This is what makes the
+    /// server-side KV-cache prefix stable — without the flag, every assembly
+    /// pass re-derived the "historical" truncation from an ever-shifting
+    /// recency window and the prefix broke on two consecutive rounds.
+    ///
+    /// `to_wire` strips the flag (it is harness bookkeeping, not wire data);
+    /// session/event-log persistence keeps it so a resumed session replays
+    /// with the same frozen shapes.
+    #[serde(default)]
+    pub cache_frozen: bool,
 }
 
 /// Sidecar metadata for an runner run. Lives next to
@@ -339,6 +357,7 @@ impl Message {
             origin: None,
             timestamp: Some(unix_now()),
             sent_at_ms: None,
+            cache_frozen: false,
         }
     }
 
@@ -439,6 +458,7 @@ impl Message {
             origin: None,
             timestamp: Some(unix_now()),
             sent_at_ms: None,
+            cache_frozen: false,
         }
     }
 
@@ -503,6 +523,7 @@ impl Message {
             origin: None,
             timestamp: None,
             sent_at_ms: None,
+            cache_frozen: false,
         }
     }
 }
@@ -595,6 +616,7 @@ mod tests {
                 origin: None,
                 timestamp: None,
                 sent_at_ms: None,
+                cache_frozen: false,
             },
             inner_child,
         ];

@@ -22,6 +22,8 @@ pub const CLEARED_TOOL_PREFIX: &str = "[cleared tool result:";
 /// a later, higher-pressure pass can escalate truncation to a clear.
 /// Reports **tokens** (ADR-0120).
 const ELIDED_MARKER: &str = " tokens elided to relieve context ...]";
+/// Marker text baked into a frozen tool output at record time.
+const RECENT_COMPACTED_MARKER: &str = "Previous turn output compacted";
 
 /// Token size of a tool result above which a prune candidate is first
 /// *truncated* (a gentler tier that keeps the shape of the output) rather
@@ -618,6 +620,40 @@ fn truncate_middle(content: &str) -> String {
     format!("{head}\n[... {dropped}{ELIDED_MARKER}\n{tail}")
 }
 
+/// Freeze one historical tool output into its **final, single-pass** provider
+/// shape. This is the only compaction a tool result ever takes: whichever
+/// bound bites first (25 lines or 1200 chars) fixes the content once, with a
+/// marker carrying the true line/byte counts of what was dropped. The result
+/// is idempotent — freezing an already-frozen body is a no-op — and callers
+/// pair it with `Message::cache_frozen` so no later pass ever reshapes the
+/// message. Re-deriving the shape per assembly round (the previous
+/// position-driven ladder) broke the server-side KV-cache prefix on two
+/// consecutive rounds; freezing at record time keeps it stable forever
+/// (ADR-0137).
+pub fn freeze_tool_output(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() > 25 {
+        let kept = lines[..15].join("\n");
+        format!(
+            "{}\n\n[... {RECENT_COMPACTED_MARKER} ({} lines omitted, {} of {} bytes shown) ...]",
+            kept,
+            lines.len() - 15,
+            kept.len(),
+            content.len()
+        )
+    } else if content.len() > 1200 {
+        let prefix: String = content.chars().take(800).collect();
+        format!(
+            "{}\n\n[... {RECENT_COMPACTED_MARKER} ({} of {} bytes shown) ...]",
+            prefix,
+            prefix.len(),
+            content.len()
+        )
+    } else {
+        content.to_string()
+    }
+}
+
 pub fn estimate_message_tokens(message: &Message) -> i64 {
     let mut tokens = if message.content.is_empty() {
         0
@@ -654,6 +690,149 @@ pub fn estimate_message_tokens(message: &Message) -> i64 {
 
 pub fn estimate_string_tokens(s: &str) -> i64 {
     tokenizer::count_tokens(s) as i64
+}
+
+// ---------------------------------------------------------------------------
+// Incremental token accounting
+//
+// Messages are immutable once written: a user prompt, an assistant turn, and
+// a tool result each carry content that no later turn rewrites (the one
+// mutation a tool result takes — the one-pass cache freeze — changes it
+// exactly once, and the content hash below keys off the *new* bytes). Token
+// weights are therefore a pure function of message bytes and can be cached
+// content-addressed: the same message never pays for BPE tokenization twice,
+// no matter how many estimate passes, retries, or projections re-walk it.
+// ---------------------------------------------------------------------------
+
+/// A 128-bit fingerprint of every byte that feeds [`estimate_message_tokens`]
+/// for one message. Collisions across a session's lifetime are negligible
+/// (two different messages hashing identically would merely reuse a stale
+/// token count — an estimate, never a correctness boundary).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MessageContentFingerprint(pub u64, pub u64);
+
+/// Fingerprint the weight-relevant bytes of a message: content, per-tool-call
+/// names and arguments. Must stay in lockstep with
+/// [`estimate_message_tokens`] — any field it counts must appear here.
+fn message_fingerprint(message: &Message) -> MessageContentFingerprint {
+    let mut h1 = std::collections::hash_map::DefaultHasher::new();
+    let mut h2 = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    message.content.hash(&mut h1);
+    message.content.hash(&mut h2);
+    if let Some(calls) = message.tool_calls.as_ref() {
+        for call in calls {
+            call.name.hash(&mut h1);
+            call.arguments.hash(&mut h2);
+        }
+    }
+    MessageContentFingerprint(h1.finish(), h2.finish())
+}
+
+/// Thread-safe, content-addressed cache of per-message token weights. One
+/// instance lives on the [`crate`] agent for the session's lifetime; every
+/// estimate consults it, so the dominant BPE cost of an estimate collapses
+/// from O(total session bytes) to O(new bytes since the last pass).
+#[derive(Debug, Default)]
+pub struct MessageTokenWeights {
+    entries:
+        std::sync::Mutex<std::collections::HashMap<MessageContentFingerprint, std::sync::Arc<i64>>>,
+}
+
+impl MessageTokenWeights {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Weight for one message: cached when its exact bytes were weighted
+    /// before, freshly tokenized otherwise (then cached). Returns the shared
+    /// `Arc` so hot messages cost one pointer deref per estimate pass.
+    pub fn weight(&self, message: &Message) -> std::sync::Arc<i64> {
+        let fingerprint = message_fingerprint(message);
+        if let Ok(entries) = self.entries.lock()
+            && let Some(hit) = entries.get(&fingerprint)
+        {
+            return std::sync::Arc::clone(hit);
+        }
+        let fresh = std::sync::Arc::new(estimate_message_tokens(message));
+        if let Ok(mut entries) = self.entries.lock() {
+            // A concurrent writer may have inserted the same fingerprint while
+            // we tokenized; either copy serves — keep theirs to avoid churn.
+            match entries.get(&fingerprint) {
+                Some(existing) => return std::sync::Arc::clone(existing),
+                None => {
+                    entries.insert(fingerprint, std::sync::Arc::clone(&fresh));
+                }
+            }
+            // Session-lifetime bound: compaction keeps live windows bounded,
+            // and each entry is 24 bytes of key + 8 of payload; 256k entries
+            // (~8 MB) covers any real session many times over. This guard
+            // exists so a pathological stream-loop flood cannot grow the map
+            // without limit.
+            if entries.len() > 262_144 {
+                entries.clear();
+            }
+        }
+        fresh
+    }
+}
+
+/// Layered weights for one assembled request: per-message token counts in
+/// input order, plus the schema cost of every visible tool spec. Both are
+/// cheap to recombine into a [`RequestTokenEstimate`] without re-tokenizing
+/// anything.
+pub struct LayeredRequestWeights {
+    pub per_message: Vec<std::sync::Arc<i64>>,
+    pub tool_schema_tokens: usize,
+}
+
+impl LayeredRequestWeights {
+    /// Non-system history weight (the `history_tokens` denominator).
+    pub fn history_tokens(&self, messages: &[Message]) -> usize {
+        self.per_message
+            .iter()
+            .zip(messages)
+            .filter(|(_, message)| message.role != Role::System)
+            .map(|(tokens, _)| **tokens)
+            .sum::<i64>()
+            .max(0) as usize
+    }
+
+    /// Total prepared-request weight including the head system message.
+    pub fn prepared_tokens(&self) -> usize {
+        self.per_message.iter().map(|t| **t).sum::<i64>().max(0) as usize
+    }
+
+    pub fn total_tokens(&self) -> usize {
+        self.prepared_tokens()
+            .saturating_add(self.tool_schema_tokens)
+    }
+}
+
+/// Weight an assembled request through the shared cache. Semantics match
+/// [`estimate_message_tokens`] per message exactly — only the cost model
+/// changed (bytes tokenized once, ever), never the numbers.
+pub fn layered_request_weights(
+    request: &crate::ModelRequest,
+    weights: &MessageTokenWeights,
+) -> LayeredRequestWeights {
+    let per_message = request
+        .messages
+        .iter()
+        .map(|message| weights.weight(message))
+        .collect();
+    let tool_schema_tokens = request
+        .tool_specs
+        .iter()
+        .map(|spec| {
+            let val = serde_json::to_value(spec).unwrap_or(serde_json::Value::Null);
+            estimate_semantic_json_tokens(&val).max(0) as usize
+        })
+        .sum::<usize>();
+    LayeredRequestWeights {
+        per_message,
+        tool_schema_tokens,
+    }
 }
 
 /// Estimated token shape of a provider request.

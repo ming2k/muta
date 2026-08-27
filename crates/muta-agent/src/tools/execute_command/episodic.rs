@@ -78,10 +78,10 @@ pub async fn run_episodic_command(
     // the idle budget is killed early to surface prompt blocking fast.
     //
     // The budget scales with the caller's `timeout` (one third, clamped to
-    // [5s, 60s]) instead of a fixed 10s: a caller who budgets
-    // more time for a legitimately quiet command (long sleeps, network waits,
-    // `--quiet` builds) is not killed at an arbitrary short mark. The
-    // idle watchdog is clamped to [5s, 60s].
+    // [5s, 480s]): a caller who budgets more time for a legitimately quiet
+    // command (long compiles, network waits, `--quiet` builds, or output
+    // buffered by a pipe like `… | tail`) is not killed at an arbitrary
+    // short mark. The default (1800s) tolerates 8 minutes of silence.
     let idle_budget = idle_budget_for(timeout_duration);
     let timeout_deadline = tokio::time::Instant::now() + timeout_duration;
 
@@ -156,11 +156,13 @@ pub async fn run_episodic_command(
 
 /// Idle-watchdog budget derived from the caller's wall-clock `timeout`.
 ///
-/// One third of the timeout, clamped to [5s, 60s]: callers budgeting
-/// more room for a legitimately quiet command (long sleeps, network waits,
-/// `--quiet` builds) get proportionally more idle tolerance instead of
-/// being killed at a fixed short mark.
+/// One third of the timeout, clamped to [5s, 480s]: callers budgeting
+/// more room for a legitimately quiet command (long compiles, network
+/// waits, `--quiet` builds) get proportionally more idle tolerance, and
+/// even the default (1800s) tolerates 8 minutes of silence — which
+/// matters because output buffered by a pipe (`… | tail`) is
+/// indistinguishable from silence until the pipe closes.
 pub fn idle_budget_for(timeout: Duration) -> Duration {
     let third = timeout / 3;
-    third.clamp(Duration::from_secs(5), Duration::from_secs(60))
+    third.clamp(Duration::from_secs(5), Duration::from_secs(480))
 }

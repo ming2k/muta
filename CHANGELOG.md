@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **TUI: activity bar is one breathing dot with a stall-only silence
+  clause (ADR-0154).** The `●` breathing dot is now the row's only
+  indicator glyph: the two-cell block-density micro-meter (`██`) that
+  trailed it is retired, along with the byte-luminance channel that
+  shimmered the dot off `StreamDelta` pressure — continuous-output
+  feedback is noise on chrome, and the model bar's stream-rate gauge
+  already reports the number honestly. The master status label (and the
+  Activity modal's status) drops italic for upright brand text; oblique
+  type is a content-emphasis register (quotes, math), not a chrome
+  register. `BytePulse` becomes `TokenWatch`, answering exactly the
+  question that matters: the HTTP request is open, the connection is
+  held, but no token has arrived for too long. Two regimes with separate
+  tolerances — a fresh request's overdue first byte arms at 45s
+  (`· no tokens 52s`; TTFT is routinely slow on reasoning models and the
+  client timeout remains the real backstop), while a stream that already
+  flowed and went quiet arms at 8s (`· silent 9s`) — and the clause is
+  now computed across `AwaitingModel | Thinking | Answering`, not only
+  the streaming phases, so the held-connection case is visible from the
+  first request cycle. Tool execution keeps its step-clock liveness story
+  and never reports silence; transport retries still own the annotation
+  slot first while counting down.
+- **TUI: composer redesigned as a line frame (ADR: input-box):** the input
+  box is no longer a filled panel — it is a rounded line frame
+  (`╭─ … ─╮` / `│` / `╰─ … ─╯`) drawn with stroke glyphs on the plain
+  surface. The borders do double duty: the top border's `─` run inlays the
+  `as:` compose target (starting at the text column), and the bottom border
+  carries the Enter action plus a right-aligned char counter, so the meta
+  information reads as part of the line instead of as bars of tinted
+  background above/below the text. The `›` prompt glyph stays inside the
+  frame; focus is now carried by two stroke tokens
+  (`composer_frame` / `composer_frame_inactive`, surface mixed toward the
+  primary accent) instead of two panel backgrounds, and a blurred frame
+  sheds every inlay. Narrow widths degrade gracefully (counter first, then
+  the keys clause; the stroke run always closes both corners). The
+  composer's text column moved from 2 to 4 columns inside the box (rail +
+  gap + `›` + gap), which shifts completion-popup anchoring to match.
+- **Shell watchdog budgets (ADR-0153):** the idle-guard budget is now
+  `timeout/3` clamped to [5s, 480s] (was [5s, 60s]), and the default wall
+  timeout rose from 300s to 1800s (30 minutes). A silent-but-working
+  command — a compiling build, a network wait, or output buffered by a
+  pipe like `… | tail` — is no longer killed at an arbitrary 60s mark.
+- **Model-visible termination notes:** `ToolOutput::to_text()` now appends
+  a `[killed by harness: …]` note for `IdleBlocked` / `Timeout` /
+  `Cancelled` / `InteractiveBlocked` shell steps. The model previously saw
+  only a bare `Exit -1` with no indication the harness (not the command)
+  ended the run; the note states the cause and the retry remedy. TUI
+  footers state the fact without the old `--passphrase-file /
+  SUDO_ASKPASS` recipe, which read as noise when the real cause was a
+  compiling build.
+
+### Added
+
+- **Implicit temp-directory admission for file tools.** The platform temp
+  roots (`$TMPDIR`, `/tmp`, plus their canonical spellings — `/private/tmp` on
+  macOS) are now admitted to the built-in file tools alongside the primary
+  workspace and any configured additional roots, on all three containment
+  planes (`resolve_path`, `WorkspaceFsProvider::confined`, and the search
+  walk-root scope). Scratch workflows — spill files, staging dirs, probes —
+  work without configuring `[workspace].additional_roots`. Temp admission is
+  implicit and unconditional: not a trust domain, not persisted, not
+  revocable through `/trust`. The bash workspace sandbox is unchanged: its
+  Linux variant still mounts a fresh tmpfs on `/tmp`, so sandboxed commands
+  keep their private temp; the host's temp is deliberately *not* added to the
+  sandbox's additional-roots handle. (ADR-0152)
+
+### Changed
+
+- **Model bar splits the row and carries its own keyboard shortcuts.** The
+  strip below the input box now reads as two halves: the model identity group
+  (`model effort @<instance>`) anchors the left edge, and the gauges — context
+  usage and the latest-turn stream speed — pin right. Both gauge drill-downs
+  gained keyboard twins, surfaced as muted keycap hints directly after their
+  gauges (progressive disclosure: glance value → chord → modal): `Ctrl+O`
+  opens the context/token usage report (the context meter's click target),
+  `Ctrl+S` opens the performance report (the rate gauge's click target). Both
+  are `NoModal`-gated global bindings declared in the shared keymap registry,
+  so they appear in Help. The stream-rate gauge no longer renders a
+  `– tok/s` placeholder before the first completed turn — it (and its
+  keycap) stay hidden until a defensible sample exists, then refresh on every
+  completed turn. Under width pressure the keycap hints drop first, then the
+  instance suffix, then the reasoning tag, then the rate, then the context
+  meter; the model name is the last ambient item standing.
+  `docs/reference/tui/model-bar.md` updated to match.
+
 ## [0.36.5] - 2026-08-27
 
 ### Added

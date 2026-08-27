@@ -91,7 +91,9 @@ box and model bar are persistent (when chrome is visible):
 │ TODOS 2/5 · write the documentation           Ctrl+T expand │  ← todo bar
 │ QUEUE 1  {next item preview…}  Ctrl+P block  Ctrl+Q expand  │  ← queue bar
 │ ● making edits (23s · Esc Esc interrupt)                 │  ← activity bar
-│  > type here…                                               │  ← input box
+│ ╭────as: prompt────────────────────────────────────────╮ │  ← input box
+│ │ › type here…                                           │ │
+│ ╰────Enter send────────────────────────────────2 chars─╯ │
 │ k3 max @kimi-code  89.2k (8%)   47.8 tok/s                        │  ← model bar
 └─────────────────────────────────────────────────────────────┘
 ```

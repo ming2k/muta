@@ -89,19 +89,18 @@ pub(crate) const TOOL_STEP_CHILDREN_GAP_ROWS: usize = TOOL_STEP_SECTION_GAP_ROWS
 pub(crate) const REASONING_TRACE_BODY_TOP_GAP_ROWS: usize = 0;
 pub(crate) const REASONING_TRACE_BLOCK_GAP_ROWS: usize = 1;
 
-/// Gap rows between the bottom of the composer panel and the hint bar. The
-/// composer already pads itself with full panel-bg top/bottom chrome rows
-/// (`COMPOSER_VERTICAL_CHROME_ROWS`), which read as built-in separation from
-/// the bar below — an extra `surface` gap row on top of that just burns a
-/// transcript row for no visual gain, so the hint bar sits flush against the
-/// composer's bottom edge.
+/// Gap rows between the bottom of the composer frame and the bar below it.
+/// The composer's bottom border row (carrying the inlaid keys/counter
+/// information) reads as built-in separation — an extra `surface` gap row on
+/// top of that just burns a transcript row for no visual gain, so the next
+/// bar sits flush against the frame's bottom edge.
 pub(crate) const COMPOSER_HINT_GAP_ROWS: u16 = 0;
 
-/// Gap rows between the activity bar and the top of the composer panel.
-/// Mirrors [`COMPOSER_HINT_GAP_ROWS`] on the upper edge: the composer's top
-/// panel-bg padding row already separates its text from the live status line,
-/// so the activity bar sits flush against the composer with zero extra
-/// breathing room. Test-only since the footer stack made the zero structural
+/// Gap rows between the activity bar and the top of the composer frame.
+/// Mirrors [`COMPOSER_HINT_GAP_ROWS`] on the upper edge: the frame's top
+/// border row already separates its text from the live status line, so the
+/// activity bar sits flush against the composer with zero extra breathing
+/// room. Test-only since the footer stack made the zero structural
 /// (adjacent rows place flush by construction in `footer_stack::place`); the
 /// token stays as the recorded decision, asserted by `footer_stack`'s tests.
 #[cfg(test)]
@@ -196,17 +195,22 @@ pub(crate) const ENVOY_FOOTER_ROWS: u16 = 3;
 /// Horizontal inset applied to the footer area containing status/composer/hints.
 pub(crate) const FOOTER_H_INSET: u16 = TRANSCRIPT_H_INSET;
 
-/// Composer chrome consists of one top and one bottom padding row.
+/// Composer chrome is the rounded frame itself: one top border row and one
+/// bottom border row (both carry line glyphs / inlaid information), so the
+/// vertical budget is unchanged at two rows.
 pub(crate) const COMPOSER_VERTICAL_CHROME_ROWS: u16 = 2;
 pub(crate) const COMPOSER_MIN_HEIGHT: u16 = 3;
 pub(crate) const COMPOSER_MAX_HEIGHT_DIVISOR: u16 = 2;
-/// Columns reserved before the composer text: a `>` prompt glyph plus a space
-/// on the first wrapped line, matched by a two-space indent on every wrapped
-/// continuation line so the caret stays aligned.
-pub(crate) const COMPOSER_PROMPT_PREFIX_COLS: usize = 2;
+/// Columns reserved before the composer text: the frame's left border `│`
+/// rail, a gap, the `›` prompt glyph, and another gap on the first wrapped
+/// line; continuation lines indent the same amount so the caret stays
+/// aligned. The rail glyph occupies column 0 of the box, the text starts at
+/// column 4.
+pub(crate) const COMPOSER_PROMPT_PREFIX_COLS: usize = 4;
+/// Gap between the frame's left `│` rail and the `›` prompt glyph.
+pub(crate) const COMPOSER_RAIL_GAP_COLS: usize = 1;
 pub(crate) const COMPOSER_TEXT_ROW_OFFSET: u16 = 1;
 
-/// User message panels mirror the composer: outer gutter, gap, text, then
 /// User message panels used to reserve their own outer gutter matching
 /// [`TRANSCRIPT_H_INSET`]. Now that the horizontal inset is applied once at
 /// the stream entry point (`draw_transcript` → `band`), the outer gutter is
@@ -221,9 +225,10 @@ pub(crate) const USER_MESSAGE_TEXT_GAP_COLS: usize = 2;
 /// sent message never runs its text into the panel's right edge.
 pub(crate) const USER_MESSAGE_RIGHT_PAD_COLS: usize = 2;
 
-/// Inner right padding (in the input box's active/inactive background) kept
-/// clear of wrapped text inside the composer, mirroring the left prompt
-/// prefix so the box reads as a balanced panel.
+/// Inner right padding kept clear of wrapped text inside the composer so
+/// typing never runs into the frame's right `│` rail. Two columns: one of
+/// air plus the rail column itself is covered by the box width, so this is
+/// the air between the last glyph and the rail.
 pub(crate) const COMPOSER_RIGHT_PAD_COLS: usize = 2;
 
 // ── Modal overlays ───────────────────────────────────────────────────────

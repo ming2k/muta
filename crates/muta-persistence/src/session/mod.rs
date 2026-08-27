@@ -1920,6 +1920,8 @@ pub async fn run_doctor(project_root: Option<&std::path::Path>) -> Result<(), St
 
 mod fields;
 mod history;
+
+pub use history::CommitTurn;
 mod store;
 #[cfg(test)]
 mod tests;

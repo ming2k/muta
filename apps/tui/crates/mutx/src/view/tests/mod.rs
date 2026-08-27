@@ -27,7 +27,6 @@ fn render_full_view(
                 cell_selection: None,
                 backoff_clause: None,
                 silent_clause: None,
-                pulse_levels: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,

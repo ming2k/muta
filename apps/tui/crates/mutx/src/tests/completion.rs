@@ -14,10 +14,10 @@ fn mention_range_detects_at_start_of_input() {
 fn completion_anchor_aligns_slash_menu_with_composer_text_start() {
     // A `/command` replaces the whole input, so the popup hangs off the
     // start of the composer's text area — the rect's left edge plus the
-    // two-column prompt prefix.
+    // four-column prefix (frame rail + gap + `›` + gap).
     let rect = mutx_engine::Rect::new(0, 10, 80, 3);
     let x = completion_anchor_x("/pu", 3, rect, CompletionKind::Slash);
-    assert_eq!(x, rect.x + 2);
+    assert_eq!(x, rect.x + crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16);
 }
 
 #[test]
@@ -27,29 +27,35 @@ fn completion_anchor_aligns_path_menu_with_the_at_trigger() {
     let rect = mutx_engine::Rect::new(0, 10, 80, 3);
     let input = "look at @sr";
     let x = completion_anchor_x(input, input.len(), rect, CompletionKind::Path);
-    assert_eq!(x, rect.x + 2 + 8);
+    assert_eq!(
+        x,
+        rect.x + crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16 + 8
+    );
 }
 
 #[test]
 fn completion_anchor_follows_the_at_trigger_across_wraps() {
-    // A 10-column-wide text area (rect 14 wide minus the 2+2 composer
-    // padding) wraps `wrap this @sr` after `wrap this `; the `@` then starts
-    // the second text row at column 0, so the popup realigns to the text
-    // area's left edge instead of sticking to the pre-wrap column.
+    // An 8-column text area (rect 14 wide minus the 4+2 composer padding)
+    // wraps `wrap this @sr` after `wrap thi`; the `@` lands 2 columns into
+    // the second text row, so the popup follows it there.
     let rect = mutx_engine::Rect::new(0, 10, 14, 4);
     let input = "wrap this @sr";
     let x = completion_anchor_x(input, input.len(), rect, CompletionKind::Path);
-    assert_eq!(x, rect.x + 2);
+    assert_eq!(
+        x,
+        rect.x + crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16 + 2
+    );
 }
 
 #[test]
 fn completion_anchor_keeps_column_when_token_stays_on_one_row() {
-    // No wrap: the `@` at display column 10 keeps its column even on a
-    // narrow-ish box, so the popup tracks the token exactly.
+    // No wrap: the `@` at display column 8 keeps its column even on a
+    // narrow-ish box, so the popup tracks the token exactly. Text budget
+    // = 20 - 4 - 2 = 14 cols; `wrap this @sr` is 13 wide, fits one row.
     let rect = mutx_engine::Rect::new(0, 10, 20, 3);
     let input = "wrap this @sr";
     let x = completion_anchor_x(input, input.len(), rect, CompletionKind::Path);
-    assert_eq!(x, rect.x + 2 + 10);
+    assert_eq!(x, rect.x + 14); // 4 (prefix) + 10 (token column within text)
 }
 
 // ----- resolved `/command` highlight tests -----

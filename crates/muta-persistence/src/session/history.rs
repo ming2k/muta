@@ -2,6 +2,16 @@
 
 use super::*;
 
+/// One unified turn commit for [`SessionStore::commit_turn`]. `messages` is
+/// the full current window (O(delta) against the durable prefix);
+/// `round_counter` is committed only when it differs; `usage_records` are
+/// upserted only where they changed.
+pub struct CommitTurn<'a> {
+    pub messages: &'a [Message],
+    pub round_counter: Option<u64>,
+    pub usage_records: &'a [muta_contracts::RequestUsageRecord],
+}
+
 impl SessionStore {
     /// The durable round-interrupt records (C11): one per round stopped
     /// before completing, newest last. Pure projection state — never part
@@ -330,6 +340,141 @@ impl SessionStore {
                     .append(SessionEvent::MessagesAppended { messages: delta })?;
                 Persist::None
             }
+        };
+        match persist {
+            Persist::None => Ok(()),
+            Persist::Snapshot { path, data } => {
+                self.persist_off_runtime(path, data, self.blob_store.clone())
+                    .await
+            }
+        }
+    }
+
+    /// Commit everything a finished ReAct turn changed, in **one** lock
+    /// acquisition and at most **one** snapshot write:
+    ///
+    /// - `messages`: O(delta) `MessagesAppended` event for the new tail
+    ///   (identical semantics to [`Self::append_turn`]);
+    /// - `round_counter`: `RoundCounterSet` event when it advanced;
+    /// - `usage_records`: `RequestUsageUpsert` per changed attempt record.
+    ///
+    /// This is the persistence shape the turn loop actually needs — the old
+    /// flow issued the same three mutations as three separate setters, each
+    /// acquiring the state lock and each writing a full session snapshot, so
+    /// a turn with usage settlement paid three full JSON serializations and
+    /// two extra fsync pairs per turn. The event log stays authoritative for
+    /// replay; the snapshot is a cache that now refreshes once per turn.
+    pub async fn commit_turn(&self, commit: CommitTurn<'_>) -> Result<(), String> {
+        #[allow(clippy::large_enum_variant)]
+        enum Persist {
+            None,
+            Snapshot { path: PathBuf, data: SessionData },
+        }
+        let persist = {
+            let mut state = self.state.lock().await;
+            let mut persist = Persist::None;
+            let mut dirty = false;
+
+            // 1. Message-tail delta (append_turn semantics, verbatim).
+            let durable_len = state.data.model_window.len();
+            let prefix_matches = commit.messages.len() >= durable_len
+                && commit.messages[..durable_len]
+                    .iter()
+                    .zip(&state.data.model_window)
+                    .all(|(incoming, durable)| {
+                        // Compare the serialized forms: this is a
+                        // persistence-layer equivalence question ("would the
+                        // event log hold the same bytes?"), so JSON equality
+                        // is the honest definition — no new trait surface on
+                        // the contracts `Message`.
+                        match (
+                            serde_json::to_string(incoming),
+                            serde_json::to_string(durable),
+                        ) {
+                            (Ok(a), Ok(b)) => a == b,
+                            (Err(a), Err(b)) => a.to_string() == b.to_string(),
+                            _ => false,
+                        }
+                    });
+            if commit.messages.len() > durable_len && prefix_matches {
+                let delta = commit.messages[durable_len..].to_vec();
+                state.data.model_window.extend(delta.clone());
+                state.data.updated_at = unix_timestamp();
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state
+                    .event_log
+                    .append(SessionEvent::MessagesAppended { messages: delta })?;
+                dirty = true;
+            } else if commit.messages.len() != durable_len {
+                // Diverged (compaction/fork/replay) — full replace, exactly as
+                // `append_turn` does.
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state.event_log.append(SessionEvent::MessagesReplaced {
+                    messages: commit.messages.to_vec(),
+                })?;
+                state.data.model_window = commit.messages.to_vec();
+                state.data.updated_at = unix_timestamp();
+                dirty = true;
+            }
+
+            // 2. Round counter.
+            if let Some(counter) = commit.round_counter
+                && counter != state.data.round_counter
+            {
+                state.data.round_counter = counter;
+                state.data.updated_at = unix_timestamp();
+                state
+                    .event_log
+                    .append(SessionEvent::RoundCounterSet { counter })?;
+                dirty = true;
+            }
+
+            // 3. Usage records — upsert only the records that changed.
+            if !commit.usage_records.is_empty() {
+                if commit
+                    .usage_records
+                    .iter()
+                    .any(|record| record.key.session_id != state.data.id)
+                {
+                    return Err("request usage record belongs to another session".to_string());
+                }
+                let mut changed: Vec<muta_contracts::RequestUsageRecord> = Vec::new();
+                for record in commit.usage_records {
+                    let differs = state
+                        .data
+                        .request_usage_records
+                        .iter()
+                        .any(|existing| existing.key == record.key && existing != record);
+                    if differs {
+                        changed.push(record.clone());
+                    }
+                }
+                if !changed.is_empty() {
+                    for record in changed {
+                        state.event_log.append(SessionEvent::RequestUsageUpsert {
+                            record: record.clone(),
+                        })?;
+                        match state
+                            .data
+                            .request_usage_records
+                            .iter_mut()
+                            .find(|existing| existing.key == record.key)
+                        {
+                            Some(existing) => *existing = record,
+                            None => state.data.request_usage_records.push(record),
+                        }
+                    }
+                    state.data.updated_at = unix_timestamp();
+                    dirty = true;
+                }
+            }
+
+            if dirty {
+                let path = state.path.clone();
+                let data = state.data.clone();
+                persist = Persist::Snapshot { path, data };
+            }
+            persist
         };
         match persist {
             Persist::None => Ok(()),

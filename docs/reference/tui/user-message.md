@@ -29,7 +29,7 @@ Character-level semantic selection — only the dragged substring gets
 
 | Property | User message | Input box |
 |----------|-------------|-----------|
-| Background | `user_panel_bg` (dimmer) | `input_bg_active` / `input_bg_inactive` (own token pair) |
+| Shape | Filled panel (`user_panel_bg`) | Rounded line frame on the plain surface (no fill) |
 | Text color | `text_muted` | `text` |
 | Editable | No | Yes |
 

@@ -6,7 +6,10 @@ Read and mutate files and directory listings. `read_text`, `read_image`,
 
 Relative paths resolve from the primary workspace. An absolute path is
 accepted only when it is inside the primary or an explicitly admitted
-additional workspace root.
+additional workspace root — or the implicit platform temp roots
+(`$TMPDIR` and `/tmp` on Unix, both raw and canonical spellings), which are
+always admitted so scratch workflows (spill files, staging dirs, probes)
+work without configuring `[workspace].additional_roots`.
 
 ## `read_text`
 

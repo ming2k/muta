@@ -341,6 +341,13 @@ pub struct Agent {
     /// token-source report modal renders live. `None` for runners/tests that
     /// don't surface the report.
     token_ledger: std::sync::Mutex<Option<Arc<muta_contracts::TokenSourceLedger>>>,
+    /// Content-addressed per-message token weights (see
+    /// [`muta_contracts::MessageTokenWeights`]). Every estimate path consults
+    /// this, so BPE tokenization cost collapses from O(total session bytes)
+    /// per pass to O(new bytes since the last pass). Messages are immutable
+    /// once written, so the cache never needs invalidation: identical bytes
+    /// always yield identical weights.
+    token_weights: muta_contracts::MessageTokenWeights,
 }
 
 /// Capability handle for steering a running agent from the outside — the

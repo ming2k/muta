@@ -299,10 +299,10 @@ pub(super) struct UiRuntime {
     /// `None` = idle/bar hidden). Never holds transport setbacks — those live
     /// in [`Runtime::provider_retry`].
     pub phase: Arc<Mutex<Option<crate::phase::Phase>>>,
-    /// Byte-arrival pulse for the primary session: stamped by every
-    /// `StreamDelta` / `StreamReasoningDelta`, reset per model-request
-    /// cycle. Drives the dot's byte-pulse and the silent clause.
-    pub pulse: Arc<Mutex<crate::pulse::BytePulse>>,
+    /// Token-stall watch for the primary session: stamped by every
+    /// `StreamDelta` / `StreamReasoningDelta`, armed per model-request
+    /// cycle. Drives the silent clause (ADR-0154).
+    pub pulse: Arc<Mutex<crate::pulse::TokenWatch>>,
     pub provider_retry: Arc<Mutex<Option<crate::app::ProviderRetryState>>>,
     pub pending_permission: Arc<Mutex<VecDeque<PermissionRequest>>>,
     pub pending_question: Arc<Mutex<VecDeque<UserQuestionRequest>>>,
@@ -498,7 +498,7 @@ impl UiRuntime {
                 retry_pending: false,
             })),
             phase: Arc::new(Mutex::new(None)),
-            pulse: Arc::new(Mutex::new(crate::pulse::BytePulse::default())),
+            pulse: Arc::new(Mutex::new(crate::pulse::TokenWatch::default())),
             provider_retry: Arc::new(Mutex::new(None)),
             pending_permission: Arc::new(Mutex::new(VecDeque::new())),
             pending_question: Arc::new(Mutex::new(VecDeque::new())),

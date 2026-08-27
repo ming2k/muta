@@ -50,9 +50,7 @@ impl RequestUsageStatus {
 }
 
 /// Provenance of the counts attached to a request attempt.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum RequestUsageSource {
@@ -69,9 +67,7 @@ pub enum RequestUsageSource {
 /// timing: network transit, upstream queueing, and proxy buffering remain in
 /// the observation. `Provider` is reserved for adapters that receive explicit
 /// server-side generation telemetry.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum PerformanceTimingSource {
@@ -84,9 +80,7 @@ pub enum PerformanceTimingSource {
 /// Tokenizer behind the streamed-output count used for observed stream TPS.
 /// Provider-reported completion tokens remain the authoritative billing
 /// count; this source describes only the client-visible stream counter.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum StreamTokenSource {
@@ -104,9 +98,7 @@ pub enum StreamTokenSource {
 /// Every duration is a monotonic offset measured in microseconds. Optional
 /// fields stay absent for legacy records and for stages the active provider
 /// cannot expose; absence is never encoded as a fabricated zero.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct RequestPerformance {
     /// Request dispatch to the provider returning a live response stream
@@ -277,9 +269,7 @@ impl RequestUsageRecord {
 }
 
 /// Live, compact performance update for the latest settled model turn.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct TurnPerformanceSnapshot {
     pub round: u64,
@@ -990,18 +980,14 @@ impl TokenSourceReport {
                     && record.status == RequestUsageStatus::Completed
                     && record.performance.is_some()
             })
-            .max_by_key(|record| {
-                (record.key.round, record.key.turn, record.key.attempt)
-            })
+            .max_by_key(|record| (record.key.round, record.key.turn, record.key.attempt))
             .and_then(RequestUsageRecord::performance_snapshot)
     }
 }
 
 /// Slice counterpart of [`TokenSourceReport::latest_turn_performance`] for
 /// attach/resume paths that already hold the durable request records.
-pub fn latest_turn_performance(
-    records: &[RequestUsageRecord],
-) -> Option<TurnPerformanceSnapshot> {
+pub fn latest_turn_performance(records: &[RequestUsageRecord]) -> Option<TurnPerformanceSnapshot> {
     records
         .iter()
         .filter(|record| {
@@ -1557,7 +1543,9 @@ mod tests {
         let stream = performance.observed_stream_tps().expect("stream rate");
         assert!((stream - 100.0).abs() < f64::EPSILON);
         // E2E folds TTFT into the denominator: 101 tokens over 1.128 s.
-        let e2e = performance.e2e_output_tps(record.completion_tokens).expect("e2e");
+        let e2e = performance
+            .e2e_output_tps(record.completion_tokens)
+            .expect("e2e");
         assert!(
             (e2e - 101.0 * 1_000_000.0 / 1_128_000.0).abs() < 0.001,
             "unexpected e2e rate {e2e}"

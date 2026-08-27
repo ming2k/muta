@@ -1396,6 +1396,29 @@ pub(super) async fn dispatch_action(
                 viewed_session_id,
             );
         }
+        input::InputAction::OpenTokenReport => {
+            // Ctrl+O opens the context/token usage report — the keyboard
+            // twin of clicking the model bar's context meter. Identical
+            // destination and lifecycle as the click (retained view,
+            // ADR-0133; the attach-mode report fetch runs whenever the
+            // report is missing, inside `enter_panel`).
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::TokenReport,
+                runtime,
+                viewed_session_id,
+            );
+        }
+        input::InputAction::OpenPerformanceReport => {
+            // Ctrl+S opens the latest-turn performance report — the
+            // keyboard twin of clicking the model bar's stream-rate gauge.
+            enter_panel(
+                app,
+                crate::surfaces::PanelId::PerformanceReport,
+                runtime,
+                viewed_session_id,
+            );
+        }
         input::InputAction::FocusNextTarget => {
             // Ctrl+↓ (or ↓ while focused): advance to the next step.
             // From no focus this lands on the first (oldest) step.

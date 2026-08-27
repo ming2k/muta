@@ -12,4 +12,7 @@ pub use local::{
 pub use middleware::{SecretScrubMiddleware, SpillMiddleware, WorkspaceJailMiddleware};
 
 #[cfg(test)]
+pub(crate) use local::workspace_tests::workspace_tests_outside_scratch;
+
+#[cfg(test)]
 mod tests;

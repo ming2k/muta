@@ -26,6 +26,7 @@ pub(crate) fn resolve_search_root(
     let normalized = muta_contracts::execution::lexical_normalize(&target);
     let root_norm = muta_contracts::execution::lexical_normalize(workspace);
     let admitted = normalized.starts_with(&root_norm)
+        || muta_contracts::execution::admits_temp_path(&target)
         || additional_roots
             .iter()
             .any(|root| normalized.starts_with(muta_contracts::execution::lexical_normalize(root)));
@@ -41,16 +42,15 @@ pub(crate) fn resolve_search_root(
 }
 
 /// Human-readable admitted set for denial messages — names every root so a
-/// cross-project path miss is diagnosable instead of a bare refusal.
+/// cross-project path miss is diagnosable instead of a bare refusal. The
+/// implicit temp admission is summarized as one `$TMPDIR` token rather than
+/// spelling out platform-specific paths.
 pub(crate) fn admitted_roots_summary(workspace: &Path, additional_roots: &[PathBuf]) -> String {
-    if additional_roots.is_empty() {
-        workspace.display().to_string()
-    } else {
-        std::iter::once(workspace.display().to_string())
-            .chain(additional_roots.iter().map(|r| r.display().to_string()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
+    std::iter::once(workspace.display().to_string())
+        .chain(additional_roots.iter().map(|r| r.display().to_string()))
+        .chain(std::iter::once("$TMPDIR".to_string()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Clamp a caller-selected result limit to the public tool contract.

@@ -174,9 +174,10 @@ pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,
 };
 pub use pressure::{
-    CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, PruneOutcome, RequestTokenEstimate,
+    CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, LayeredRequestWeights,
+    MessageContentFingerprint, MessageTokenWeights, PruneOutcome, RequestTokenEstimate,
     estimate_bytes, estimate_draft_tokens, estimate_message_tokens, estimate_semantic_json_tokens,
-    estimate_tokens, prune_tool_results,
+    estimate_tokens, freeze_tool_output, layered_request_weights, prune_tool_results,
 };
 pub use secret::SecretString;
 pub use session_title::{TITLE_MAX_LEN, clean_title};

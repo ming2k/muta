@@ -343,11 +343,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let primary_root = tmp.path().join("workspace");
         let sibling_root = tmp.path().join("optics");
-        let unadmitted_root = tmp.path().join("unadmitted");
+        // Not under the tempdir: temp dirs are implicitly admitted, so the
+        // unadmitted denial fixture must live outside every admitted root.
+        let unadmitted_root =
+            crate::execution::workspace_tests_outside_scratch("denied-cross-tool");
+        let unadmitted_secret = unadmitted_root.join("secret.txt");
 
         std::fs::create_dir_all(primary_root.join("src")).unwrap();
         std::fs::create_dir_all(sibling_root.join("src")).unwrap();
-        std::fs::create_dir_all(&unadmitted_root).unwrap();
 
         std::fs::write(
             primary_root.join("src/main.rs"),
@@ -355,7 +358,10 @@ mod tests {
         )
         .unwrap();
         std::fs::write(sibling_root.join("src/lib.rs"), "pub fn optics() {}").unwrap();
-        std::fs::write(unadmitted_root.join("secret.txt"), "secret").unwrap();
+        std::fs::write(&unadmitted_secret, "secret").unwrap();
+
+        let unadmitted_abs = unadmitted_secret.to_string_lossy().into_owned();
+        let unadmitted_dir_abs = unadmitted_root.to_string_lossy().into_owned();
 
         let env = std::sync::Arc::new(
             crate::execution::WorkspaceExecutionEnvironment::with_additional_roots(
@@ -372,7 +378,7 @@ mod tests {
             .unwrap();
         assert!(list_sibling.contains("src/"));
         let list_unadmitted = list_tool
-            .call(&serde_json::json!({ "path": "../unadmitted" }).to_string())
+            .call(&serde_json::json!({ "path": unadmitted_dir_abs }).to_string())
             .await;
         assert!(list_unadmitted.is_err());
 
@@ -384,7 +390,7 @@ mod tests {
             .unwrap();
         assert!(find_sibling.contains("lib.rs"));
         let find_unadmitted = find_tool
-            .call(&serde_json::json!({ "path": "../unadmitted", "patterns": ["*"] }).to_string())
+            .call(&serde_json::json!({ "path": unadmitted_dir_abs, "patterns": ["*"] }).to_string())
             .await;
         assert!(find_unadmitted.is_err());
 
@@ -396,7 +402,7 @@ mod tests {
             .unwrap();
         assert!(search_sibling.contains("pub fn optics"));
         let search_unadmitted = search_tool
-            .call(&serde_json::json!({ "path": "../unadmitted", "query": "secret" }).to_string())
+            .call(&serde_json::json!({ "path": unadmitted_dir_abs, "query": "secret" }).to_string())
             .await;
         assert!(search_unadmitted.is_err());
 
@@ -408,7 +414,7 @@ mod tests {
             .unwrap();
         assert!(read_sibling.contains("pub fn optics"));
         let read_unadmitted = read_tool
-            .call(&serde_json::json!({ "path": "../unadmitted/secret.txt" }).to_string())
+            .call(&serde_json::json!({ "path": unadmitted_abs }).to_string())
             .await;
         assert!(read_unadmitted.is_err());
 
@@ -418,7 +424,7 @@ mod tests {
         assert!(write_sibling.contains("new.rs"));
         let write_unadmitted = write_tool
             .call(
-                &serde_json::json!({ "path": "../unadmitted/new.rs", "content": "bad" })
+                &serde_json::json!({ "path": unadmitted_root.join("new.rs"), "content": "bad" })
                     .to_string(),
             )
             .await;
@@ -432,7 +438,9 @@ mod tests {
             std::fs::read_to_string(sibling_root.join("src/lib.rs")).unwrap(),
             "pub fn optics_v2() {}"
         );
-        let edit_unadmitted = edit_tool.call(&serde_json::json!({ "path": "../unadmitted/secret.txt", "old_string": "secret", "new_string": "hacked" }).to_string()).await;
+        let edit_unadmitted = edit_tool.call(&serde_json::json!({ "path": unadmitted_abs, "old_string": "secret", "new_string": "hacked" }).to_string()).await;
         assert!(edit_unadmitted.is_err());
+
+        std::fs::remove_dir_all(&unadmitted_root).ok();
     }
 }

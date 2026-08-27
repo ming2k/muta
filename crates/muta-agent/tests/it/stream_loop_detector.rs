@@ -74,8 +74,7 @@ fn kmp_path_handles_long_units_wholly_periodic() {
 
 #[test]
 fn mixed_document_with_periodic_tail_reports_tail_extent() {
-    let head =
-        "The configuration file accepts nested tables and inline comments freely. ";
+    let head = "The configuration file accepts nested tables and inline comments freely. ";
     let unit = "==--==";
     let text = format!("{head}{}", unit.repeat(8));
     let obs = StreamLoopDetector::observe_periodic_tail(&text).unwrap();
@@ -132,7 +131,6 @@ fn digit_flood_below_budget_silent_above_budget_reported() {
     ));
 }
 
-
 #[test]
 fn detects_arbitrary_periodic_repetitions() {
     // Continuity-gated: a single nominal burst is reported by the mechanical
@@ -170,7 +168,9 @@ fn detects_unbounded_pi_and_digit_floods() {
     let mut detector = StreamLoopDetector::new(1024);
     let mut hit = None;
     for _ in 0..400 {
-        if let Some(pat) = detector.push_and_check("3.1415926535897932384626433832795028841971693993751058209749 ") {
+        if let Some(pat) =
+            detector.push_and_check("3.1415926535897932384626433832795028841971693993751058209749 ")
+        {
             hit = Some(pat);
             break;
         }

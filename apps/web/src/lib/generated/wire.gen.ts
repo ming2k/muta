@@ -536,7 +536,26 @@ timestamp?: number,
  * the TUI's displayed send time across resume without changing provider
  * requests, which continue to use [`Message::to_wire`].
  */
-sent_at_ms?: number, };
+sent_at_ms?: number, 
+/**
+ * This message's provider-visible shape is **permanently settled**: every
+ * byte that will ever reach the provider for it is already fixed, and no
+ * later assembly pass may transform it again.
+ *
+ * Set exactly once, when tool-output compaction freezes a historical
+ * `Tool` message into its final truncated form (`trim_tool_output`). The
+ * freeze is the *only* mutation a tool result ever takes: one turn after
+ * the result lands the shape is chosen, and from then on the provider
+ * sees byte-identical content every round. This is what makes the
+ * server-side KV-cache prefix stable — without the flag, every assembly
+ * pass re-derived the "historical" truncation from an ever-shifting
+ * recency window and the prefix broke on two consecutive rounds.
+ *
+ * `to_wire` strips the flag (it is harness bookkeeping, not wire data);
+ * session/event-log persistence keeps it so a resumed session replays
+ * with the same frozen shapes.
+ */
+cache_frozen: boolean, };
 
 /**
  * Handshake action selecting a daemon-observability stream instead of a

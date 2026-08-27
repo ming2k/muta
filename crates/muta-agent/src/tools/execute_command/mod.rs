@@ -25,7 +25,7 @@ struct ExecuteCommandArgs {
     #[tool(desc = "The shell command to execute")]
     command: String,
     #[tool(
-        desc = "Overall timeout in seconds (default 300). A command producing no output for timeout/3 (min 5s, max 60s) is still killed early as a blocked-command guard."
+        desc = "Overall timeout in seconds (default 1800 = 30 minutes). A command producing no output for timeout/3 (min 5s, max 480s) is killed early as a blocked-command guard."
     )]
     timeout: Option<u64>,
     #[tool(
@@ -42,7 +42,7 @@ struct WorkspaceExecuteCommandArgs {
     #[tool(desc = "The shell command to execute inside the workspace sandbox")]
     command: String,
     #[tool(
-        desc = "Overall timeout in seconds (default 300). A command producing no output for timeout/3 (min 5s, max 60s) is still killed early as a blocked-command guard."
+        desc = "Overall timeout in seconds (default 1800 = 30 minutes). A command producing no output for timeout/3 (min 5s, max 480s) is killed early as a blocked-command guard."
     )]
     timeout: Option<u64>,
 }
@@ -215,7 +215,7 @@ impl Tool for ExecuteCommandTool {
     ) -> Result<muta_contracts::ToolOutput, String> {
         let args: ExecuteCommandArgs =
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
-        let timeout_secs = args.timeout.unwrap_or(300);
+        let timeout_secs = args.timeout.unwrap_or(1800);
         let timeout_duration = Duration::from_secs(timeout_secs);
 
         let terminal_id = args.terminal_id.as_deref().or_else(|| {

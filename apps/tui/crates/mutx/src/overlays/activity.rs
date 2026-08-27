@@ -148,9 +148,10 @@ pub fn draw_activity_modal(
                     .fg(theme.warn())
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default()
-                    .fg(theme.brand())
-                    .add_modifier(Modifier::ITALIC)
+                // Upright brand text (ADR-0154): italic is a content-emphasis
+                // register (quotes, math), not a chrome register. Matches the
+                // activity bar's master label.
+                Style::default().fg(theme.brand())
             };
             let status_label = if let Some(retry) = provider_retry {
                 format!(

@@ -42,7 +42,10 @@ const MAX_FILES_PER_ROUND: usize = 10;
 /// persisted project root. Already-loaded files (a prior hidden
 /// `[File '...' loaded]` note in this conversation) are skipped so a repeated
 /// reference does not re-inject the body on every turn.
-pub(crate) fn inject_mentioned_files(workspace_root: Option<&Path>, messages: &mut Vec<Message>) {
+pub(crate) async fn inject_mentioned_files(
+    workspace_root: Option<&Path>,
+    messages: &mut Vec<Message>,
+) {
     let Some(root) = workspace_root else {
         // No persisted project root → file injection is disabled. Skill
         // injection still runs independently. Surfacing nothing (rather than
@@ -88,7 +91,16 @@ pub(crate) fn inject_mentioned_files(workspace_root: Option<&Path>, messages: &m
         if already_loaded.contains(&raw) {
             continue;
         }
-        match load_sandboxed(root, &raw) {
+        // Sandboxed resolution + read is real filesystem work (canonicalize,
+        // sniff, read): run it on the blocking pool so turn preparation never
+        // blocks the executor. Injection happens once per prompt; later
+        // requests and estimates reuse these bytes from the live window.
+        let task_root = root.to_path_buf();
+        let task_raw = raw.clone();
+        match tokio::task::spawn_blocking(move || load_sandboxed(&task_root, &task_raw))
+            .await
+            .unwrap_or_else(|error| Err(format!("injection task aborted: {error}")))
+        {
             Ok((resolved, bytes)) => {
                 let display = path_display(root, &resolved);
                 let content = render_file(&display, &bytes);
@@ -409,32 +421,32 @@ mod tests {
         );
     }
 
-    #[test]
-    fn inject_appends_hidden_message_for_file_ref() {
+    #[tokio::test]
+    async fn inject_appends_hidden_message_for_file_ref() {
         let tmp = tempdir();
         std::fs::write(tmp.join("lib.rs"), "pub fn x() {}").unwrap();
         let mut messages = vec![Message::new(Role::User, "review @file:lib.rs".to_string())];
-        inject_mentioned_files(Some(&tmp), &mut messages);
+        inject_mentioned_files(Some(&tmp), &mut messages).await;
         assert_eq!(messages.len(), 2);
         assert!(messages[1].hidden);
         assert!(messages[1].content.contains("[File 'lib.rs' loaded]"));
         assert!(messages[1].content.contains("pub fn x() {}"));
     }
 
-    #[test]
-    fn inject_skips_already_loaded_file() {
+    #[tokio::test]
+    async fn inject_skips_already_loaded_file() {
         let tmp = tempdir();
         std::fs::write(tmp.join("lib.rs"), "pub fn x() {}").unwrap();
         // First turn: loads it.
         let mut messages = vec![Message::new(Role::User, "@file:lib.rs".to_string())];
-        inject_mentioned_files(Some(&tmp), &mut messages);
+        inject_mentioned_files(Some(&tmp), &mut messages).await;
         assert_eq!(messages.len(), 2);
         // Second turn: mention it again — must NOT re-inject.
         messages.push(Message::new(
             Role::User,
             "and @file:lib.rs again".to_string(),
         ));
-        inject_mentioned_files(Some(&tmp), &mut messages);
+        inject_mentioned_files(Some(&tmp), &mut messages).await;
         // One user turn each + exactly one hidden load.
         assert_eq!(messages.len(), 3);
         assert_eq!(
@@ -446,10 +458,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn inject_without_workspace_root_is_noop() {
+    #[tokio::test]
+    async fn inject_without_workspace_root_is_noop() {
         let mut messages = vec![Message::new(Role::User, "@file:lib.rs".to_string())];
-        inject_mentioned_files(None, &mut messages);
+        inject_mentioned_files(None, &mut messages).await;
         assert_eq!(messages.len(), 1);
     }
 

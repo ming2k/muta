@@ -1,7 +1,9 @@
 # Panel top/bottom padding
 
-User messages and the input box pad their top and bottom edges with a **full
-row of solid panel background** — no characters, no transition glyphs.
+User messages pad their top and bottom edges with a **full row of solid
+panel background** — no characters, no transition glyphs. (The input box no
+longer pads: it is drawn as a rounded line frame — see
+[input box](input-box.md) — whose border rows are the padding.)
 
 ```text
   ┃                             ← top: full panel-bg padding row

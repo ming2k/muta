@@ -167,6 +167,7 @@ fn chord_token(code: KeyCode) -> &'static str {
             'p' => "p",
             'q' => "q",
             'r' => "r",
+            's' => "s",
             't' => "t",
             'u' => "u",
             'v' => "v",
@@ -222,6 +223,7 @@ fn display_token(code: KeyCode) -> &'static str {
             'p' => "P",
             'q' => "Q",
             'r' => "R",
+            's' => "S",
             't' => "T",
             'u' => "U",
             'v' => "V",
@@ -310,6 +312,7 @@ fn chord_str(prefix: &'static str, core: &'static str) -> &'static str {
         ("ctrl+", "p") => "ctrl+p",
         ("ctrl+", "q") => "ctrl+q",
         ("ctrl+", "r") => "ctrl+r",
+        ("ctrl+", "s") => "ctrl+s",
         ("ctrl+", "t") => "ctrl+t",
         ("ctrl+", "u") => "ctrl+u",
         ("ctrl+", "v") => "ctrl+v",
@@ -353,6 +356,7 @@ fn display_str(prefix: &'static str, core: &'static str) -> &'static str {
         ("Ctrl+", "P") => "Ctrl+P",
         ("Ctrl+", "Q") => "Ctrl+Q",
         ("Ctrl+", "R") => "Ctrl+R",
+        ("Ctrl+", "S") => "Ctrl+S",
         ("Ctrl+", "T") => "Ctrl+T",
         ("Ctrl+", "U") => "Ctrl+U",
         ("Ctrl+", "V") => "Ctrl+V",
@@ -486,6 +490,18 @@ impl Key {
         modifiers: KeyModifiers::CONTROL,
         code: KeyCode::Char('p'),
     };
+    /// Ctrl+O (open the context/token usage report) — the keyboard twin of
+    /// clicking the model bar's context meter.
+    pub const CTRL_O: Key = Key {
+        modifiers: KeyModifiers::CONTROL,
+        code: KeyCode::Char('o'),
+    };
+    /// Ctrl+S (open the latest-turn performance report) — the keyboard twin
+    /// of clicking the model bar's stream-rate gauge. "s" for "speed".
+    pub const CTRL_S: Key = Key {
+        modifiers: KeyModifiers::CONTROL,
+        code: KeyCode::Char('s'),
+    };
 }
 
 /// The precondition under which a binding is active.
@@ -523,6 +539,12 @@ pub enum Action {
     OpenTodos,
     /// Open the queue overview modal.
     OpenQueue,
+    /// Open the token/context usage report modal — the drill-down behind the
+    /// model bar's context meter (`Ctrl+O`).
+    OpenTokenReport,
+    /// Open the latest-turn performance report modal — the drill-down behind
+    /// the model bar's stream-rate gauge (`Ctrl+S`).
+    OpenPerformanceReport,
     /// Open the `/btw` asides list modal (ADR-0103 §5): live background
     /// asides, jump back in, or close one outright.
     OpenBtwList,
@@ -643,6 +665,36 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             action: Action::OpenViewSwitcher,
             description: "switch view",
         },
+        // Ctrl+O opens the context/token report — the keyboard twin of
+        // clicking the model bar's context meter (progressive disclosure:
+        // the glanceable `89.2k (8%)` gauge hides the full breakdown until
+        // asked for). `o` reads as "usage overview". NoModal-gated like the
+        // other open-* bindings. Ctrl+O is free: the ADR-0126 mid-round
+        // insert was removed, and the chord is not in the readline family
+        // the composer claims (Ctrl+A/E/W/U/K, Alt+B/F/D).
+        Binding {
+            key: Key {
+                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('o'),
+            },
+            gate: Gate::NoModal,
+            action: Action::OpenTokenReport,
+            description: "context usage report",
+        },
+        // Ctrl+S opens the latest-turn performance report — the keyboard twin
+        // of clicking the model bar's stream-rate gauge. `s` for "speed".
+        // It is not the conventional "save" anywhere in this TUI (the
+        // composer submits with Enter; sessions persist durably on their
+        // own), so the chord is safe to claim. NoModal-gated likewise.
+        Binding {
+            key: Key {
+                modifiers: KeyModifiers::CONTROL,
+                code: KeyCode::Char('s'),
+            },
+            gate: Gate::NoModal,
+            action: Action::OpenPerformanceReport,
+            description: "performance report",
+        },
         // `?` / `f1` / `ctrl+h` all open help, but they are context-sensitive (`?`
         // only fires on an empty prompt) and `ctrl+h` needs the Kitty protocol —
         // so they stay hand-routed in the input handler and are *documented* in
@@ -731,6 +783,8 @@ impl Registry {
                 Action::OpenModels => InputAction::OpenModels,
                 Action::OpenTodos => InputAction::OpenTodos,
                 Action::OpenQueue => InputAction::OpenQueue,
+                Action::OpenTokenReport => InputAction::OpenTokenReport,
+                Action::OpenPerformanceReport => InputAction::OpenPerformanceReport,
                 Action::OpenBtwList => InputAction::OpenBtwList,
                 Action::OpenViewSwitcher => InputAction::ViewSwitcherToggle,
                 Action::ToggleQueueBlock => InputAction::QueueToggleBlock,
@@ -824,6 +878,25 @@ mod tests {
         let registry = Registry::new();
         let action = registry.resolve(key(KeyCode::Char('p'), KeyModifiers::CONTROL), Modal::Help);
         assert_eq!(action, None);
+    }
+
+    #[test]
+    fn ctrl_o_and_ctrl_s_open_the_model_bar_drill_downs() {
+        // The model bar's two gauges carry keyboard twins: Ctrl+O opens the
+        // context/token report (the context meter's drill-down) and Ctrl+S
+        // the performance report (the stream rate's). Both are NoModal-gated
+        // like the other open-* bindings.
+        let registry = Registry::new();
+        let ctx = registry.resolve(key(KeyCode::Char('o'), KeyModifiers::CONTROL), Modal::None);
+        assert_eq!(ctx, Some(InputAction::OpenTokenReport));
+        let perf = registry.resolve(key(KeyCode::Char('s'), KeyModifiers::CONTROL), Modal::None);
+        assert_eq!(perf, Some(InputAction::OpenPerformanceReport));
+
+        // Inside a modal the gate swallows both chords.
+        let ctx = registry.resolve(key(KeyCode::Char('o'), KeyModifiers::CONTROL), Modal::Help);
+        assert_eq!(ctx, None);
+        let perf = registry.resolve(key(KeyCode::Char('s'), KeyModifiers::CONTROL), Modal::Help);
+        assert_eq!(perf, None);
     }
 
     #[test]
@@ -950,6 +1023,8 @@ mod tests {
         assert_eq!(Key::CTRL_T.display(), "Ctrl+T");
         assert_eq!(Key::CTRL_P.display(), "Ctrl+P");
         assert_eq!(Key::CTRL_Q.display(), "Ctrl+Q");
+        assert_eq!(Key::CTRL_O.display(), "Ctrl+O");
+        assert_eq!(Key::CTRL_S.display(), "Ctrl+S");
         let ctrl_shift_c = Key {
             modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             code: KeyCode::Char('c'),

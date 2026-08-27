@@ -206,6 +206,7 @@ pub fn into_message(
         origin: None,
         timestamp: Some(muta_contracts::todos::unix_now()),
         sent_at_ms: None,
+        cache_frozen: false,
     }
 }
 

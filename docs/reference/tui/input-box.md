@@ -4,27 +4,38 @@ The live editable prompt at the bottom of the frame.
 
 ## Appearance
 
+A rounded **line frame** (`╭─ … ─╮` / `│` / `╰─ … ─╯`) drawn with stroke
+glyphs on the plain surface — no filled panel. The borders do double duty:
+their runs of `─` inlay the meta information, so the line itself carries the
+box's state instead of bars of tinted background.
+
 ```text
-  ┃ as: prompt                        ← top row: compose target (meta row)
-  ┃ type here…                        ← text row(s)
-  ┃ Enter send             1.2k chars ← bottom row: keys + char count (meta row)
+  ╭────as: prompt────────────────────────────────────────────╮
+  │ › type here…                                              │
+  ╰────Enter send──────────────────────────────────1.2k chars─╯
 ```
 
 | Attribute | Value |
 |-----------|-------|
-| Background | `input_bg_active` (26, 28, 27) when the box owns the keyboard; `input_bg_inactive` (16, 17, 17) while a transcript step has focus (the pair is independent of every other surface token) |
-| Left/right margin | 2 cols of `app_bg` |
-| Accent bar | `┃` in `accent` (Build mode) or Plan-mode blue |
-| Text color | `text` (brighter than sent messages) |
-| Text indent | 4 cols (2 margin + `┃` + 1 leading space) |
-| Top/bottom padding rows | Double as the **meta rows** below — the top edge states the compose target, the bottom edge carries the key hints and char counter (both painted on the full panel-bg band, no half-block glyphs) |
+| Background | none — the frame's interior is the plain `app_bg`; the stroke, not a panel, marks the box |
+| Stroke | `composer_frame` (surface mixed 35% toward `primary`) when the box owns the keyboard; `composer_frame_inactive` (16% mix) while a transcript step has focus |
+| Corners | `╭ ╮ ╰ ╯`; rails `│` close every text row |
+| Prompt glyph | `›` inside the frame (brand accent when focused; ignition charges it toward the fire hue during an effort wave) |
+| Text color | `text` |
+| Text indent | 6 cols from the frame's left rail (rail + gap + `›` + gap) — same column as user-message text so the transcript and the input share one left margin |
+| Inlaid meta | Top border carries the compose target; bottom border carries the Enter action (left) and the char counter (right-aligned, one stroke before the corner) |
+| Blurred | The frame recedes to the inactive stroke and sheds every inlay — plain `╭────╮` / `╰────╯` runs |
+
+Width degradation: the counter drops first, then the keys clause; the plain
+stroke run always closes the corners at both ends (the frame never overflows
+or wraps).
 
 ## Meta rows
 
-The composer owns its own hint rows inside the box's padding bands (the old
+The composer's meta rows live **inside the border strokes** (the old
 standalone hint bar became the gauge-only [model bar](model-bar.md)):
 
-**Top row — the `as:` target.** One clause normally; two while a queue
+**Top border — the `as:` target.** One clause normally; two while a queue
 pointer is armed. The value hue encodes the *consequence class* of pressing
 `Enter`:
 
@@ -36,10 +47,10 @@ pointer is armed. The value hue encodes the *consequence class* of pressing
 | Mid-round, follow-up armed | `as: follow-up prompt` (`info` blue — Enter appends to the queue) |
 | Editing queued item #2 | `compose: follow-ups[#2] · edited · as: follow-up` (group tinted by delivery kind; `· edited` only while the buffer diverges from the stored text) |
 
-**Bottom row — the keys.** Left side states what the next `Enter` does,
-mirroring the `as:` verb; right side is a live char count of the draft
-(chars, never tokens — committed-token accounting lives exclusively on the
-model bar):
+**Bottom border — the keys.** Left side (after the lead-in) states what the
+next `Enter` does, mirroring the `as:` verb; right side is a live char count
+of the draft (chars, never tokens — committed-token accounting lives
+exclusively on the model bar):
 
 | Buffer state | Keys row (left) |
 |--------------|-----------------|
@@ -49,9 +60,9 @@ model bar):
 | Editing a queued item | `Enter save  Esc cancel` — both survive any width |
 | Stopped round parked for retry | `Enter send  /retry to retry` |
 
-Under width pressure the keys row compresses labels (`Tab follow-up mode` →
-`Tab follow-up`) before the char counter is ever dropped; the keys themselves
-are the last thing to go.
+Under width pressure the frame degrades top-down: the counter drops first,
+then the keys clause compresses labels (`Tab follow-up mode` →
+`Tab follow-up`); the stroke run always closes with both corners.
 
 ## Height growth
 
@@ -237,7 +248,8 @@ The rows `↑`/`↓` walk are **bound to the session, not the client window**:
 
 ## Source
 
-`draw_composer` in `render/composer.rs`. Rendered manually (not via a `Block`
-widget) so the panel can paint full panel-bg padding rows directly.
+`draw_composer` / `build_frame_border_row` in `render/composer.rs`. Rendered
+manually (not via a `Block` widget) so each border row can splice inlaid meta
+spans into the stroke run cell by cell.
 `INPUT_MSG_IDX = usize::MAX - 2` is the layout-map
 message index reserved for live input selection.

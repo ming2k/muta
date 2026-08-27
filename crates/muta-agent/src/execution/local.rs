@@ -3,11 +3,11 @@
 //! Executes filesystem operations and subprocess commands directly on the host OS.
 
 use async_trait::async_trait;
+use muta_contracts::SharedAdditionalRoots;
 use muta_contracts::execution::{
     DirEntry, ExecutionEnvironment, FsError, FsMetadata, FsProvider, ProcessOutput, ProcessRunner,
     ShellIsolation,
 };
-use muta_contracts::SharedAdditionalRoots;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -260,20 +260,18 @@ impl WorkspaceFsProvider {
         self.additional_roots.snapshot()
     }
 
-    /// Human-readable summary of the admitted set for denial messages.
+    /// Human-readable summary of the admitted set for denial messages. The
+    /// implicit temp admission appears as a `$TMPDIR` token rather than
+    /// platform-specific spellings.
     fn admitted_set(&self) -> String {
         let additional = self.additional_roots.snapshot();
-        if additional.is_empty() {
-            self.root.display().to_string()
-        } else {
-            let mut listed = self.root.display().to_string();
-            for extra in &additional {
-                listed.push_str(", ");
-                listed.push_str(&extra.display().to_string());
-            }
-            listed
+        let mut listed = self.root.display().to_string();
+        for extra in &additional {
+            listed.push_str(", ");
+            listed.push_str(&extra.display().to_string());
         }
-
+        listed.push_str(", $TMPDIR");
+        listed
     }
 
     fn confined(&self, path: &Path) -> Result<PathBuf, FsError> {
@@ -289,6 +287,7 @@ impl WorkspaceFsProvider {
             ))
         })?;
         let admitted = resolved.starts_with(&self.root)
+            || muta_contracts::execution::admits_temp_path(&resolved)
             || self
                 .additional_roots
                 .snapshot()
@@ -493,18 +492,42 @@ impl ExecutionEnvironment for WorkspaceExecutionEnvironment {
 }
 
 #[cfg(test)]
-mod workspace_tests {
+pub(crate) mod workspace_tests {
     use super::*;
 
     fn scratch() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
     }
 
+    /// A directory **outside** the workspace that is *not* under the implicit
+    /// temp roots, shared by every crate-internal denial fixture (including
+    /// `crate::tools::tests`). `tempfile::tempdir()` stopped qualifying as
+    /// "outside" once temp dirs became implicitly admitted, so denial fixtures
+    /// live under the repo's gitignored `target/test-scratch` area instead.
+    pub(crate) fn workspace_tests_outside_scratch(tag: &str) -> PathBuf {
+        // `<manifest>/../..` is the workspace root whose `/target/` is
+        // gitignored; anchoring there keeps fixture bytes out of both the
+        // temp set and any tracked tree, regardless of the test's cwd.
+        let repo_target = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("manifest has a workspace-root ancestor")
+            .join("target/test-scratch");
+        let dir = repo_target.join(format!(
+            "{}-{}-{}",
+            tag,
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[tokio::test]
     async fn workspace_fs_allows_inside_and_denies_outside() {
         let root = scratch();
-        let outside_root = scratch();
-        let outside = outside_root.path().join("secret.txt");
+        let outside_root = workspace_tests_outside_scratch("denied-fs");
+        let outside = outside_root.join("secret.txt");
         std::fs::write(&outside, "secret").unwrap();
         let env = WorkspaceExecutionEnvironment::new(root.path());
 
@@ -526,15 +549,36 @@ mod workspace_tests {
         assert_eq!(env.shell_isolation(), ShellIsolation::Host);
     }
 
+    #[tokio::test]
+    async fn temp_dir_paths_are_implicitly_admitted() {
+        let root = scratch();
+        let env = WorkspaceExecutionEnvironment::new(root.path());
+
+        // Absolute paths under the platform temp dir are admitted without any
+        // configured additional root, and both read and write flow through.
+        let scratch_file = std::env::temp_dir().join(format!(
+            "muta-temp-admission-{}-scratch.txt",
+            uuid::Uuid::new_v4().simple()
+        ));
+        env.fs().write(&scratch_file, b"temp").await.unwrap();
+        assert_eq!(env.fs().read(&scratch_file).await.unwrap(), b"temp");
+
+        // The canonical spelling (macOS: /private/…) is admitted too.
+        let canonical = scratch_file.canonicalize().unwrap();
+        assert_eq!(env.fs().read(&canonical).await.unwrap(), b"temp");
+
+        std::fs::remove_file(&scratch_file).unwrap();
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn additional_roots_widen_admission_without_losing_primary() {
         let root = scratch();
         let sibling = scratch(); // a separate project root
-        let stranger = scratch(); // neither root
+        let stranger = workspace_tests_outside_scratch("denied-roots");
         let sibling_file = sibling.path().join("api.rs");
         std::fs::write(&sibling_file, b"sibling").unwrap();
-        let stranger_file = stranger.path().join("secret.txt");
+        let stranger_file = stranger.join("secret.txt");
         std::fs::write(&stranger_file, b"secret").unwrap();
 
         let env = WorkspaceExecutionEnvironment::with_additional_roots(
@@ -580,14 +624,17 @@ mod workspace_tests {
         // handle-store and close it again after a revoke — with no rebuild
         // between — because every confined operation snapshots the live set.
         let root = scratch();
-        let sibling = scratch();
-        let sibling_file = sibling.path().join("api.rs");
+        // The revocable sibling must live outside the implicit temp roots:
+        // a tempdir sibling stays admitted regardless of the trust decision,
+        // making the revoke-deny assertion unreachable.
+        let sibling = workspace_tests_outside_scratch("trust-sibling");
+        let sibling_file = sibling.join("api.rs");
         std::fs::write(&sibling_file, b"sibling").unwrap();
         let env = WorkspaceExecutionEnvironment::new(root.path());
         let shared = env.shared_additional_roots();
 
         // Pre-grant: denied, with a quarantine hint when declared.
-        shared.declare_quarantined(vec![sibling.path().canonicalize().unwrap()]);
+        shared.declare_quarantined(vec![sibling.canonicalize().unwrap()]);
         assert!(matches!(
             env.fs().read(&sibling_file).await,
             Err(FsError::PermissionDenied(detail))
@@ -595,7 +642,7 @@ mod workspace_tests {
         ));
 
         // Grant: swap in the canonicalized root; same instance admits it.
-        let granted = sibling.path().canonicalize().unwrap();
+        let granted = sibling.canonicalize().unwrap();
         shared.store(vec![granted.clone()]);
         assert_eq!(env.fs().read(&sibling_file).await.unwrap(), b"sibling");
         // Admission consumed the quarantine entry (no stale hint remains).
@@ -627,8 +674,8 @@ mod workspace_tests {
     #[tokio::test]
     async fn workspace_fs_denies_symlink_escape() {
         let root = scratch();
-        let outside_root = scratch();
-        let outside = outside_root.path().join("secret.txt");
+        let outside_root = workspace_tests_outside_scratch("denied-symlink");
+        let outside = outside_root.join("secret.txt");
         std::fs::write(&outside, "secret").unwrap();
         std::os::unix::fs::symlink(&outside, root.path().join("escape")).unwrap();
         let env = WorkspaceExecutionEnvironment::new(root.path());
@@ -642,8 +689,8 @@ mod workspace_tests {
     #[tokio::test]
     async fn workspace_fs_denies_dangling_symlink_destination() {
         let root = scratch();
-        let outside_root = scratch();
-        let outside = outside_root.path().join("not-created.txt");
+        let outside_root = workspace_tests_outside_scratch("denied-dangling");
+        let outside = outside_root.join("not-created.txt");
         std::os::unix::fs::symlink(&outside, root.path().join("dangling")).unwrap();
         let env = WorkspaceExecutionEnvironment::new(root.path());
 
@@ -694,14 +741,20 @@ mod workspace_tests {
         use crate::tools::{FindFilesTool, ListDirTool, ReadImageTool, SearchTextTool};
         use muta_contracts::Tool;
 
-        let root = scratch();
-        let outside_root = scratch();
-        let outside_text = outside_root.path().join("secret.txt");
-        let outside_image = outside_root.path().join("secret.png");
+        // The workspace root itself must not live under the implicit temp
+        // roots: with temp admission, `../outside` from a tempdir workspace
+        // still resolves into the admitted set and the denial is unreachable.
+        // Anchoring both sides under target/test-scratch keeps the relative
+        // escape genuinely outside every admitted root.
+        let root = workspace_tests_outside_scratch("denied-discovery-ws");
+        let outside_root = workspace_tests_outside_scratch("denied-discovery-out");
+        // `root` is a `PathBuf` (not a `TempDir`), so construct with `&root`.
+        let outside_text = outside_root.join("secret.txt");
+        let outside_image = outside_root.join("secret.png");
         std::fs::write(&outside_text, "secret").unwrap();
         std::fs::write(&outside_image, b"not actually an image").unwrap();
         let env: std::sync::Arc<dyn ExecutionEnvironment> =
-            std::sync::Arc::new(WorkspaceExecutionEnvironment::new(root.path()));
+            std::sync::Arc::new(WorkspaceExecutionEnvironment::new(&root));
 
         let find_files = FindFilesTool::with_env(env.clone());
         let search_text = SearchTextTool::with_env(env.clone());
@@ -710,30 +763,27 @@ mod workspace_tests {
 
         assert!(
             find_files
-                .call(
-                    &serde_json::json!({ "patterns": ["*"], "path": outside_root.path() })
-                        .to_string()
-                )
+                .call(&serde_json::json!({ "patterns": ["*"], "path": &outside_root }).to_string())
                 .await
                 .unwrap_err()
                 .contains("outside the admitted workspace roots")
         );
         assert!(
             search_text
-                .call(&serde_json::json!({ "query": "secret", "path": outside_text }).to_string())
+                .call(&serde_json::json!({ "query": "secret", "path": &outside_text }).to_string())
                 .await
                 .unwrap_err()
                 .contains("outside the admitted workspace roots")
         );
         assert!(
-            list.call(&serde_json::json!({ "path": outside_root.path() }).to_string())
+            list.call(&serde_json::json!({ "path": &outside_root }).to_string())
                 .await
                 .unwrap_err()
                 .contains("outside the admitted workspace roots")
         );
         assert!(
             image
-                .call(&serde_json::json!({ "path": outside_image }).to_string())
+                .call(&serde_json::json!({ "path": &outside_image }).to_string())
                 .await
                 .unwrap_err()
                 .contains("outside the admitted workspace roots")

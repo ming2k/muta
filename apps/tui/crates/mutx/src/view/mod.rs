@@ -164,13 +164,11 @@ pub struct TranscriptView<'a> {
     /// label — e.g. `· retry 2/8 next in 4s` while a provider retry backs
     /// off. Muted styling; first casualty under width pressure.
     pub backoff_clause: Option<&'a str>,
-    /// Stream-silence note (`· silent 9s`) shown when a flowing stream has
-    /// gone quiet past the arming threshold. Phase-exclusive with the
-    /// transport clause, so the annotation slot never arbitrates.
+    /// Stream-silence note (`· silent 9s`, `· no tokens 52s`) shown while a
+    /// model request is open and no token has arrived within tolerance.
+    /// Phase-exclusive with the transport clause, so the annotation slot
+    /// never arbitrates.
     pub silent_clause: Option<&'a str>,
-    /// Decayed byte-pulse levels for the dot's Flowing channel. `None`
-    /// delegates to the breathing clock.
-    pub pulse_levels: Option<(f32, f32)>,
     /// Whether a tool permission request is awaiting the user's decision. When
     /// true the activity bar is forced visible even if the loop has gone idle,
     /// and its label reads as a permission state so the live status surface
@@ -425,7 +423,6 @@ pub fn draw_transcript(
         activity,
         backoff_clause,
         silent_clause,
-        pulse_levels,
         awaiting_permission,
         spinner_phase,
         input,
@@ -883,7 +880,6 @@ pub fn draw_transcript(
                     status: activity,
                     backoff_clause,
                     silent_clause: silent_clause.map(|s| s.to_string()),
-                    pulse_levels,
                     awaiting_permission,
                 },
                 spinner_phase,

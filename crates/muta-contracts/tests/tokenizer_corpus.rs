@@ -94,7 +94,7 @@ fn file_corpus_stays_within_two_percent() {
     // (path relative to this crate, reference count of the first 40 KB)
     let cases: &[(&str, usize)] = &[
         ("../../crates/muta-agent/src/agent/mod.rs", 10_478),
-        ("../../crates/muta-contracts/src/pressure.rs", 11_207),
+        ("../../crates/muta-contracts/src/pressure.rs", 10_855),
         ("../../crates/muta-agent/src/orchestration.rs", 10_411),
         ("../../README.zh-CN.md", 976),
         ("../../CHANGELOG.md", 10_285),

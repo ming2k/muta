@@ -480,6 +480,13 @@ pub enum InputAction {
     /// agent-owned and read-only in the TUI; the modal surfaces it on its own
     /// dedicated overlay, opened with `Ctrl+T`.
     OpenTodos,
+    /// Open the context/token usage report — the drill-down behind the model
+    /// bar's context meter. Keyboard twin of clicking that gauge (`Ctrl+O`).
+    OpenTokenReport,
+    /// Open the latest-turn performance report — the drill-down behind the
+    /// model bar's stream-rate gauge. Keyboard twin of clicking that gauge
+    /// (`Ctrl+S`).
+    OpenPerformanceReport,
     /// Move keyboard focus to the next activatable target. When no target is
     /// focused yet, focuses the first (oldest) step. Driven by `Ctrl+↓` and by
     /// `↓` while a step is already focused.

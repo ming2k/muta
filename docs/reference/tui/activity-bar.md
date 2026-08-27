@@ -15,47 +15,52 @@ below the model bar — and the task-list summary lives on its own todo bar abov
 ```
 
 The bar surfaces what the user most wants to know mid-round: the **master
-label** (the typed phase — steady brand italic) and the **elapsed** timer.
-During a provider backoff a **muted transport clause** appears beside
-(never instead of) the master label, counting down live: the workflow story
-("waiting for model") and the transport setback ("retry 2/8 next in 4s")
-are separate channels and never overwrite each other. Under width pressure
-segments die in a fixed order — full clause → compact clause (`· 2/8`) →
-clause gone → elapsed → label truncation → interrupt words — so the master
-label keeps its column budget intact.
+label** (the typed phase — steady upright brand text, ADR-0154) and the
+**elapsed** timer. During a provider backoff a **muted transport clause**
+appears beside (never instead of) the master label, counting down live: the
+workflow story ("waiting for model") and the transport setback ("retry 2/8
+next in 4s") are separate channels and never overwrite each other. Under
+width pressure segments die in a fixed order — full clause → compact clause
+(`· 2/8`) → clause gone → elapsed → label truncation → interrupt words — so
+the master label keeps its column budget intact.
 
-## The dot's three liveness regimes
+## The dot's two liveness regimes
 
 Exactly one mechanism drives the dot each frame (`classify_liveness` is a
-pure function; gate wins over everything, byte presence outranks the
-clock). All three quote real facts — motion here is always paid for by an
-event, never by the frame clock:
+pure function; gate wins over everything). The dot is the row's only
+indicator glyph — the former two-cell block-density micro-meter and the
+byte-luminance channel were retired by ADR-0154: continuous-output feedback
+is noise on chrome, and the honest stream rate lives on the
+[model bar](model-bar.md).
 
-| Regime | When | Dot | Meter cells |
-|--------|------|-----|-------------|
-| `Flowing` | A stream phase (`thinking` / `answering`) with at least one delta arrived | Byte-driven luminance: each delta injects energy that decays exponentially (fast ≈0.4s, slow ≈1.6s); a dark-ember floor (~28% brand mix) keeps inter-chunk quiet from reading as death | `▏..█` two-cell histogram of the same two channels — chunk pressure readable at a glance |
-| `Holding` | No stream armed (waiting for model, running a tool) | Classic slow breath (`breathing_color`) — seconds ticking are the only honest change to quote | hidden |
-| `Gated` | Permission / ask_user pending | Static amber, no motion — paused for a human; animating would lie about who is working | hidden |
+| Regime | When | Dot |
+|--------|------|-----|
+| `Breathing` | Default while a round runs (waiting for model, streaming, running a tool) | Classic slow breath (`breathing_color`) — seconds ticking are the only honest change to quote |
+| `Gated` | Permission / ask_user pending | Static amber, no motion — paused for a human; animating would lie about who is working |
 
 ```text
- ● answering █▆ 31s · 2m07s            Esc Esc interrupt   ← flowing
- ● making edits 12s · 2m07s            Esc Esc interrupt   ← holding
- ● awaiting permission                 Esc Esc interrupt   ← gated
+ ● answering 31s · 2m07s                Esc Esc interrupt   ← breathing
+ ● making edits 12s · 2m07s             Esc Esc interrupt   ← breathing
+ ● awaiting permission                  Esc Esc interrupt   ← gated
 ```
 
-The meter cells vanish outside stream phases on purpose: a tool execution
-has no stream to quote, and empty cells would imply a measurement where
-none exists.
+## Stall clause
 
-## Silence clause
+ADR-0154 inverted the question the bar asks about the stream: not "is
+output continuous" (retired with the meter) but "is a held connection
+going quiet too long" (`pulse::TokenWatch`). Two regimes with separate
+tolerances:
 
-Once deltas have flowed in the current turn and none has arrived for ≥8s
-(`pulse::SILENT_AFTER`, long enough to spare thinking models' natural
-inter-chunk pauses), the annotation slot shows `· silent Ns`. It is gated
-to stream phases only — silence means "this stream stopped producing", not
-"nothing is happening". The slot itself is exclusive by construction:
-transport retries live in `awaiting model`, silence in streaming phases,
-so the two clauses can never compete.
+| Regime | Condition | Threshold | Clause |
+|--------|-----------|-----------|--------|
+| Overdue first byte | Model request open (`waiting for model` / `thinking` / `answering`), no token yet | ≥45s (`FIRST_BYTE_AFTER` — TTFT is routinely slow on reasoning models; the client timeout remains the real backstop) | `· no tokens Ns` |
+| Stream gone quiet | At least one token arrived, then silence | ≥8s (`STREAM_SILENT_AFTER` — above thinking models' natural inter-chunk pauses) | `· silent Ns` |
+
+The clause is gated to phases where a model request is open; tool
+execution has no HTTP stream that could go silent, and its liveness story
+is the step clock. The annotation slot is exclusive by construction:
+transport retries own it first while counting down, so the two clauses can
+never compete.
 
 The structural counters — `round N · turn M · <model>` — no longer live on
 the bar. They take space and change rarely, so they moved into the
@@ -68,9 +73,9 @@ current prompt, round/turn/model/elapsed; Todos tab: the task list).
 |-----------|-------|
 | Location | 1 row directly above the input box |
 | Height | `ACTIVITY_BAR_ROWS = 1` while a round is active, 0 when idle |
-| Glyph | `●` (`spinner_glyph`), BOLD |
-| Glyph color | regime-dependent — see the three liveness regimes above; `Holding` is `breathing_color(phase, theme.brand(), theme.surface())` |
-| Master label color | `theme.brand()` + ITALIC |
+| Glyph | `●` (`spinner_glyph`), BOLD — the row's only indicator glyph (ADR-0154) |
+| Glyph color | regime-dependent — see the two liveness regimes above; `Breathing` is `breathing_color(phase, theme.brand(), theme.surface())` |
+| Master label color | `theme.brand()`, upright (italic retired by ADR-0154 — oblique type is a content register, not chrome) |
 | Transport clause color | `theme.muted()` — an annotation, not a headline |
 | Elapsed | `theme.muted()` |
 | Indent | 1 space |
@@ -144,7 +149,9 @@ retry`, because a backoff is a pause, not progress.
 ## Source
 
 `draw_activity_bar` in `render/chrome.rs`. Glyph from `spinner_glyph`;
-luminance sweep from `breathing_color` in the same module. Spinner phase
-driven by `app.spinner_tick` incremented once per frame. Round and turn values
-are mirrored from the round-admission and turn-start events by the response
+luminance sweep from `breathing_color` in the same module. Stall detection
+from `pulse::TokenWatch` (`arm` on each model-request cycle, `note_token`
+per delta, `stalled_secs` past the regime threshold). Spinner phase driven
+by `app.spinner_tick` incremented once per frame. Round and turn values are
+mirrored from the round-admission and turn-start events by the response
 listener.

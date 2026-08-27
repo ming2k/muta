@@ -190,7 +190,7 @@ It can be configured in two places:
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `workspace.additional_roots` | `[]` | Extra directories admitted alongside the project root. Relative paths resolve against the **project root** (never the process cwd); `~` expands to the user's home |
+| `workspace.additional_roots` | `[]` | Extra directories admitted alongside the project root. Relative paths resolve against the **project root** (never the process cwd); `~` expands to the user's home. The platform temp dirs (`$TMPDIR`, `/tmp`) are always admitted implicitly and need no entry |
 
 ```toml
 # .muta/config.toml (Project-local, trust-gated) or $XDG_CONFIG_HOME/muta/config.toml (Global)

@@ -156,6 +156,7 @@ impl Agent {
             )),
             agent_selection: std::sync::Mutex::new(agent_selection),
             token_ledger: std::sync::Mutex::new(None),
+            token_weights: muta_contracts::MessageTokenWeights::new(),
         }
     }
 
@@ -289,52 +290,48 @@ impl Agent {
     }
 
     /// Build one immutable provider request from a borrowed conversation window.
-    /// Implicit skill loading is evaluated on a private copy so estimates and
-    /// debug previews use the same projection without mutating durable state.
+    ///
+    /// No disk I/O happens here, ever: `@file:` injection ran once when the
+    /// prompt entered the live window (turn preparation), so this projection
+    /// — and every estimate built on it — reuses those bytes. The weights
+    /// cache makes the resulting request cheap to re-estimate; nothing in
+    /// this path can stall the executor behind filesystem reads.
     pub(super) fn model_request(&self, messages: &[Message]) -> muta_contracts::ModelRequest {
         let mut enriched = messages.to_vec();
+        // Skill injection is memory-only (bodies are cached in the registry),
+        // so keeping it here costs no I/O and keeps the debug preview honest
+        // about implicit loads.
         crate::conversation_context::inject_mentioned_skills(&self.skills_registry, &mut enriched);
-        crate::conversation_context::inject_mentioned_files(
-            self.workspace_root().as_deref(),
-            &mut enriched,
-        );
         let tools = self.visible_tools();
         let context = self.system_prompt_context(&tools);
         self.model_request_assembler
             .assemble(&enriched, &context, &tools)
     }
 
+    /// Weights for an assembled request through the session-wide
+    /// content-addressed cache. Semantics are byte-identical to tokenizing
+    /// every message afresh — only the cost model changed: each message's
+    /// bytes are BPE-tokenized exactly once per session lifetime (messages
+    /// are immutable once written), and every later estimate reuses the
+    /// cached weight. The dominant per-pass cost of an estimate therefore
+    /// scales with *new* bytes, not total session bytes.
+    pub(super) fn layered_weights(
+        &self,
+        request: &muta_contracts::ModelRequest,
+    ) -> muta_contracts::LayeredRequestWeights {
+        muta_contracts::layered_request_weights(request, &self.token_weights)
+    }
+
     pub(super) fn estimate_model_request(
+        &self,
         request: &muta_contracts::ModelRequest,
     ) -> RequestTokenEstimate {
+        let weights = self.layered_weights(request);
         // Per-message wire weight (not `estimate_tokens`, which intentionally
-        // includes persisted runner children the provider never sees), with
-        // each message tokenized exactly once — a prior version tokenized the
-        // non-system subset a second time (and cloned the whole message list
-        // to build it), doubling the dominant cost of every estimate.
-        let per_message: Vec<i64> = request
-            .messages
-            .iter()
-            .map(muta_contracts::estimate_message_tokens)
-            .collect();
-        let history_tokens = per_message
-            .iter()
-            .zip(&request.messages)
-            .filter(|(_, message)| message.role != Role::System)
-            .map(|(tokens, _)| *tokens)
-            .sum::<i64>()
-            .max(0) as usize;
-        let prepared_message_tokens = per_message.iter().sum::<i64>().max(0) as usize;
-        let tool_schema_tokens = request
-            .tool_specs
-            .iter()
-            .map(|spec| {
-                // Estimate over the full spec (name + description + the JSON
-                // Schema parameters), matching the old whole-Value estimate.
-                let val = serde_json::to_value(spec).unwrap_or(serde_json::Value::Null);
-                muta_contracts::estimate_semantic_json_tokens(&val).max(0) as usize
-            })
-            .sum::<usize>();
+        // includes persisted runner children the provider never sees).
+        let history_tokens = weights.history_tokens(&request.messages);
+        let prepared_message_tokens = weights.prepared_tokens();
+        let tool_schema_tokens = weights.tool_schema_tokens;
         let total_tokens = prepared_message_tokens.saturating_add(tool_schema_tokens);
 
         RequestTokenEstimate {
@@ -347,7 +344,7 @@ impl Agent {
     /// Estimate the complete next request at the same immutable request
     /// boundary the provider call uses.
     pub fn estimate_next_request_tokens(&self, messages: &[Message]) -> RequestTokenEstimate {
-        Self::estimate_model_request(&self.model_request(messages))
+        self.estimate_model_request(&self.model_request(messages))
     }
 
     /// Dev-only dry run: rebuild the head system message and auto-load any
@@ -554,10 +551,7 @@ impl Agent {
                 None,
                 completion,
             );
-            request.performance_snapshot(
-                completion,
-                muta_contracts::RequestUsageSource::Estimated,
-            )
+            request.performance_snapshot(completion, muta_contracts::RequestUsageSource::Estimated)
         }
     }
 
@@ -697,6 +691,10 @@ impl Agent {
             .context_prune_threshold_tokens
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        // With the content-addressed weights cache warm, the estimate here
+        // is a fingerprint walk over unchanged bytes plus O(new bytes) of
+        // fresh BPE — cheap enough to stay inline; the gate runs before the
+        // provider call, never concurrently with stream forwarding.
         if budget == 0 || self.estimate_next_request_tokens(messages).total_tokens <= budget {
             return Ok(());
         }

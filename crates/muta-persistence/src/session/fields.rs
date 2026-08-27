@@ -193,7 +193,9 @@ impl SessionStore {
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
-                state.event_log.append(SessionEvent::DelegatedSet { enabled })?;
+                state
+                    .event_log
+                    .append(SessionEvent::DelegatedSet { enabled })?;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };

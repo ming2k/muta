@@ -104,6 +104,15 @@ impl Entry {
 #[derive(Default)]
 pub struct SystemPromptRegistry {
     entries: Vec<Entry>,
+    /// Content-addressed memo of the last render: the fingerprint of the
+    /// [`SystemPromptContext`] it was rendered from, and the rendered
+    /// `Message`. The prompt is a pure function of the context, and turn
+    /// after turn it is byte-identical while the transcript grows — caching
+    /// it keeps every assemble pass to one hash over a few KB instead of
+    /// re-rendering every section and re-sorting ranks. Any context change
+    /// (delegation flip, toolset change, skills reload) produces a different
+    /// fingerprint and the next render replaces the memo.
+    render_memo: std::sync::Mutex<Option<(u64, u64, Message)>>,
 }
 
 /// Configuration error returned while composing a [`SystemPromptRegistry`].
@@ -192,7 +201,31 @@ impl SystemPromptRegistry {
     /// Sections that need a visual separator include a leading `\n` in their
     /// own `render`, so joining on a single `\n` reproduces the legacy
     /// `parts.join("\n")` layout exactly.
+    ///
+    /// The result is memoized against a fingerprint of `ctx`: the prompt is a
+    /// pure function of the context and is byte-identical across the turns of
+    /// a round (the transcript grows, the prompt does not), so repeat
+    /// assemblies cost one hash instead of a full re-render. A changed
+    /// context — delegation flip, toolset change, skills reload, section
+    /// enable/disable — fingerprints differently and re-renders.
     pub fn build_message(&self, ctx: &SystemPromptContext) -> Message {
+        let fingerprint = fingerprint_context(ctx);
+        if let Ok(memo) = self.render_memo.lock()
+            && let Some((h1, h2, message)) = memo.as_ref()
+            && (*h1, *h2) == fingerprint
+        {
+            return message.clone();
+        }
+        let message = self.render(ctx);
+        if let Ok(mut memo) = self.render_memo.lock() {
+            *memo = Some((fingerprint.0, fingerprint.1, message.clone()));
+        }
+        message
+    }
+
+    /// The unmemoized render path. Kept separate so the memo logic above is
+    /// the only place that decides between cached and fresh.
+    fn render(&self, ctx: &SystemPromptContext) -> Message {
         let mut active: Vec<(u32, String)> = self
             .entries
             .iter()
@@ -209,6 +242,28 @@ impl SystemPromptRegistry {
         Message::new(Role::System, body)
             .with_origin(InjectionOrigin::new(InjectionKind::SystemPrompt))
     }
+}
+
+/// Fingerprint every field that feeds section rendering. Must stay in
+/// lockstep with [`SystemPromptSection::render`] implementations — any field
+/// a section reads must appear here.
+fn fingerprint_context(ctx: &SystemPromptContext) -> (u64, u64) {
+    use std::hash::{Hash, Hasher};
+    let mut h1 = std::collections::hash_map::DefaultHasher::new();
+    let mut h2 = std::collections::hash_map::DefaultHasher::new();
+    ctx.identity_preamble.hash(&mut h1);
+    ctx.tool_names.hash(&mut h2);
+    ctx.model_guidance.hash(&mut h1);
+    ctx.provider_guidance.hash(&mut h2);
+    ctx.available_skills.hash(&mut h1);
+    ctx.delegated.hash(&mut h2);
+    ctx.project_rules.hash(&mut h1);
+    ctx.additional_workspace_roots.hash(&mut h2);
+    ctx.workspace_root.hash(&mut h1);
+    // Cross-perturb so swapping values between the two hashers cannot
+    // collide (h1=(a,·), h2=(·,b) vs h1=(b,·), h2=(·,a)).
+    h1.write_u64(h2.finish());
+    (h1.finish(), h2.finish())
 }
 
 #[cfg(test)]

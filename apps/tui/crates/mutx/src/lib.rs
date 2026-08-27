@@ -340,10 +340,11 @@ pub async fn run_tui(
     // `provider_retry`, never here — see `crate::phase`.
     let phase: Arc<Mutex<Option<Phase>>> = Arc::new(Mutex::new(None));
     let activity_clone = phase.clone();
-    // Byte-arrival pulse for the primary: every delta stamp is a heartbeat;
-    // reset on each new model-request cycle so old arrivals can't alias.
-    let pulse: Arc<Mutex<crate::pulse::BytePulse>> =
-        Arc::new(Mutex::new(crate::pulse::BytePulse::default()));
+    // Token-stall watch for the primary: every token re-stamps the stall
+    // clock; armed on each new model-request cycle so old arrivals can't
+    // alias.
+    let pulse: Arc<Mutex<crate::pulse::TokenWatch>> =
+        Arc::new(Mutex::new(crate::pulse::TokenWatch::default()));
     let pulse_clone = pulse.clone();
     let provider_retry: Arc<Mutex<Option<ProviderRetryState>>> = Arc::new(Mutex::new(None));
     let provider_retry_clone = provider_retry.clone();
@@ -919,10 +920,10 @@ pub async fn run_tui(
                                 // 1-indexed for display: turn 0 is the first
                                 // model request, shown as `turn 1`.
                                 *current_turn_clone.lock().await = turn;
-                                // Fresh model-request cycle: stale delta stamps
-                                // from the previous turn must not count as
-                                // liveness (or silence) of this one.
-                                pulse_clone.lock().await.reset();
+                                // Fresh model-request cycle: stale token
+                                // stamps from the previous turn must not
+                                // count as liveness (or silence) of this one.
+                                pulse_clone.lock().await.arm(Instant::now());
                             }
                             // View-scoped chrome: per-session structural
                             // counters (Activity modal's `round N · turn M`).
@@ -976,8 +977,8 @@ pub async fn run_tui(
                             // the model is writing the answer now.
                             if !routes_to_side {
                                 *activity_clone.lock().await = Some(Phase::Answering);
-                                // Heartbeat: this arrival proves bytes flow.
-                                pulse_clone.lock().await.inject(Instant::now());
+                                // Heartbeat: this arrival proves tokens flow.
+                                pulse_clone.lock().await.note_token(Instant::now());
                             }
                             chrome_updater.edit(|c| c.phase = Some(Phase::Answering));
                             let position = positions_by_session.get(&session_id).copied();
@@ -1124,7 +1125,7 @@ pub async fn run_tui(
                             // here (their summary deltas still prove thinking).
                             if !routes_to_side {
                                 *activity_clone.lock().await = Some(Phase::Thinking);
-                                pulse_clone.lock().await.inject(Instant::now());
+                                pulse_clone.lock().await.note_token(Instant::now());
                             }
                             chrome_updater.edit(|c| c.phase = Some(Phase::Thinking));
                             // surface only a reasoning summary, never their full
@@ -2142,7 +2143,7 @@ pub async fn run_tui(
         loop_status: LoopStatus::Idle,
         harness_retry_pending: false,
         phase: None,
-        pulse: crate::pulse::BytePulse::default(),
+        pulse: crate::pulse::TokenWatch::default(),
         provider_retry: None,
         delegated: false,
         todos: None,

@@ -25,13 +25,16 @@ use super::design::{
 use super::keymap::Key;
 use super::primitives::{contrast_fg, viewport_rect};
 
+
 /// Number of distinct luminance steps in one breathing cycle. At the 100ms
 /// spinner tick this is ~1.2s per cycle — calm, not frantic.
 pub const SPINNER_PHASES: usize = 12;
 
 /// The activity indicator glyph: a single dot whose luminance breathes (see
 /// [`breathing_color`]) rather than a cycling braille frame. Replaces the old
-/// braille spinner for a quieter, less busy feel.
+/// braille spinner for a quieter, less busy feel. The only indicator glyph on
+/// the row — the former two-cell block-density micro-meter (ADR-0154) is
+/// retired: one breathing dot is the whole liveness story.
 pub fn spinner_glyph() -> &'static str {
     "●"
 }
@@ -48,60 +51,35 @@ pub fn breathing_color(phase: usize, base: Color, bg: Color) -> Color {
 }
 
 /// Which mechanism drives the activity dot this frame. Exactly one wins —
-/// classified once, below, so the three channels can never fight over the
-/// same cells.
+/// classified once, below, so the channels can never fight over the same
+/// cells.
 ///
-/// * [`Liveness::Flowing`] — a stream has produced deltas and may produce
-///   more: luminance is byte-driven (`pulse::BytePulse`), not clock-driven.
-///   A dark-ember floor keeps inter-chunk quiet from reading as death.
-/// * [`Liveness::Holding`] — no stream is available to quote (waiting for
-///   the model, running a tool): the classic slow breath stands in.
+/// * [`Liveness::Breathing`] — the default while a round runs: the slow
+///   clock-driven breath. With ADR-0154 the byte-luminance channel is
+///   retired (one dot, one story); a held-connection stall is the annotation
+///   clause's job, not the glyph's.
 /// * [`Liveness::Gated`] — paused for a human decision: fully static amber.
 ///   Honest stillness; motion would lie about who is working.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Liveness {
-    Flowing { fast: f32, slow: f32 },
-    Holding,
+    Breathing,
     Gated,
 }
 
-/// Classify the frame's dot mechanism. Gate wins over everything; byte
-/// presence outranks the clock.
-pub fn classify_liveness(awaiting_permission: bool, pulse_levels: Option<(f32, f32)>) -> Liveness {
+/// Classify the frame's dot mechanism. Gate wins over everything.
+pub fn classify_liveness(awaiting_permission: bool) -> Liveness {
     if awaiting_permission {
         Liveness::Gated
     } else {
-        match pulse_levels {
-            Some((fast, slow)) => Liveness::Flowing { fast, slow },
-            None => Liveness::Holding,
-        }
+        Liveness::Breathing
     }
 }
-
-/// Ember floor: even fully-decayed energy keeps ~28% brand mix, so a quiet
-/// stream reads as "waiting for the next chunk", never "dead".
-const EMBER_FLOOR: f32 = 0.28;
 
 pub fn dot_color(liveness: Liveness, spinner_phase: usize, theme: &Theme) -> Color {
     match liveness {
         Liveness::Gated => theme.warning,
-        Liveness::Holding => breathing_color(spinner_phase, theme.brand(), theme.surface()),
-        Liveness::Flowing { fast, slow } => {
-            let t = (EMBER_FLOOR + (1.0 - EMBER_FLOOR) * slow + 0.12 * fast).clamp(0.0, 1.0);
-            let (br, bgc, bb) = rgb_of(theme.surface());
-            let (fr, fgc, fb) = rgb_of(theme.brand());
-            Color::Rgb(lerp_u8(br, fr, t), lerp_u8(bgc, fgc, t), lerp_u8(bb, fb, t))
-        }
+        Liveness::Breathing => breathing_color(spinner_phase, theme.brand(), theme.surface()),
     }
-}
-
-/// Block-density glyphs for the two-cell micro-meter (a decaying histogram
-/// of recent delta pressure): left cell = fast channel, right = slow.
-const METER_STEPS: [&str; 9] = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
-
-pub fn meter_cells(fast: f32, slow: f32) -> (&'static str, &'static str) {
-    let idx = |v: f32| ((v * 8.0).round() as usize).clamp(1, 8);
-    (METER_STEPS[idx(fast)], METER_STEPS[idx(slow)])
 }
 
 fn rgb_of(c: Color) -> (u8, u8, u8) {
@@ -165,13 +143,11 @@ pub struct ActivityBarView<'a> {
     /// Transport-setback clause rendered beside the label, muted. `None`
     /// when transport is healthy (silence is healthy).
     pub backoff_clause: Option<&'a str>,
-    /// Stream-silence clause (`· silent 9s`), armed only after the stream
-    /// has produced deltas and gone quiet past the threshold. `None` while
-    /// chunks are flowing (or no stream to quote).
+    /// Stream-silence clause (`· silent 9s`, `· no tokens 52s`), armed only
+    /// while a model request is open and no token has arrived within the
+    /// applicable tolerance (generous for the first byte, tighter once a
+    /// stream has flowed). `None` while tokens flow or the request is closed.
     pub silent_clause: Option<String>,
-    /// Decayed `(fast, slow)` byte-pulse levels when a stream is armed;
-    /// `None` hands the dot to the breathing clock.
-    pub pulse_levels: Option<(f32, f32)>,
     /// Warning-tinted gate state (permission / ask_user pending).
     pub awaiting_permission: bool,
 }
@@ -191,7 +167,6 @@ pub fn draw_activity_bar(
         status,
         backoff_clause,
         silent_clause,
-        pulse_levels,
         awaiting_permission,
     } = view;
     let status_active = !status.is_empty() && status != "idle";
@@ -300,9 +275,9 @@ pub fn draw_activity_bar(
 
     let mut spans: Vec<Span> = Vec::new();
     let spinner = spinner_glyph();
-    // Single arbiter for the dot's appearance this frame: byte-driven pulse,
-    // clock-driven breath, or gated stillness — never a blend of two.
-    let liveness = classify_liveness(awaiting_permission, pulse_levels);
+    // Single arbiter for the dot's appearance this frame: clock-driven
+    // breath or gated stillness — never a blend of two.
+    let liveness = classify_liveness(awaiting_permission);
     let spinner_color = dot_color(liveness, spinner_phase, theme);
 
     spans.push(Span::raw(" "));
@@ -313,18 +288,9 @@ pub fn draw_activity_bar(
             .add_modifier(Modifier::BOLD),
     ));
 
-    // Byte-pressure micro-meter: two cells quoting the recent delta
-    // histogram. Rendered only while the stream is flowing (in Holding/Gated
-    // phases there is no stream to quote — the cells vanish, `silence is
-    // healthy`).
-    if let Liveness::Flowing { fast, slow } = liveness {
-        let (fast_cell, slow_cell) = meter_cells(fast, slow);
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            format!("{fast_cell}{slow_cell}"),
-            Style::default().fg(theme.brand()),
-        ));
-    }
+    // Byte-pressure micro-meter retired (ADR-0154): the breathing dot is the
+    // row's only indicator glyph, and stalls speak through the silent
+    // clause, not through density glyphs.
 
     // Lead segment: the live status — the thing that changes frame to frame,
     // so it receives the left-to-right shimmer. The structural counters
@@ -346,16 +312,12 @@ pub fn draw_activity_bar(
                 .add_modifier(Modifier::BOLD),
         ));
     } else {
-        // Steady-state master label: brand + italic, no resident animation.
+        // Steady-state master label: brand, upright, no resident animation.
         // Every previous oscillation here was paid for by the frame clock,
         // not by work; the typed phase's own word changes are the honest
-        // freshness signal.
-        spans.push(Span::styled(
-            status,
-            Style::default()
-                .fg(theme.brand())
-                .add_modifier(Modifier::ITALIC),
-        ));
+        // freshness signal. Italic was retired with ADR-0154 — oblique type
+        // reads as content emphasis (quotes, math), wrong register for chrome.
+        spans.push(Span::styled(status, Style::default().fg(theme.brand())));
     }
 
     if visible_elapsed_width > 0 {
@@ -880,10 +842,11 @@ pub fn draw_completion_menu(
     }
 }
 
-/// Inputs for [`draw_model_bar`]. Ambient gauges only — model identity,
-/// context usage, stream rate. The Enter-action keys and the `as:` target row
-/// moved inside the composer ([`crate::components::composer_hints`]); session
-/// state (workspace path, `DELEGATED`) lives on the status bar below.
+/// Inputs for [`draw_model_bar`]. The split row's halves — model identity on
+/// the left, context usage and stream rate on the right. The Enter-action
+/// keys and the `as:` target row moved inside the composer
+/// ([`crate::components::composer_hints`]); session state (workspace path,
+/// `DELEGATED`) lives on the status bar below.
 pub struct ModelBarView<'a> {
     pub current_model: &'a str,
     /// Whether the model is available / offered by the active provider.
@@ -893,7 +856,8 @@ pub struct ModelBarView<'a> {
     pub reasoning_effort: Option<&'a str>,
     pub context_tokens: Option<usize>,
     /// Client-observed stream TPS of the latest completed principal ReAct
-    /// turn. `None` renders a discoverable unavailable value.
+    /// turn. `None` hides the gauge entirely until the first turn lands a
+    /// defensible sample; each completed turn refreshes it.
     pub last_turn_tps: Option<f64>,
     pub ignition_elapsed_ms: Option<u128>,
 }
@@ -919,10 +883,13 @@ pub struct ModelBarRects {
     pub context: Option<Rect>,
 }
 
-/// Draw the single-line model bar pinned below the input box. Ambient gauges
-/// only — model identity, context usage, and stream rate. The Enter-action
-/// keys moved inside the composer's bottom padding row; the `as:` target row
-/// lives in its top padding row ([`crate::components::composer_hints`]).
+/// Draw the single-line model bar pinned below the input box. The row splits
+/// in two: the model identity group (`model effort @instance`) anchors the
+/// left half, and the ambient gauges — context usage and the last turn's
+/// stream rate, each trailed by the keycap hint of its drill-down modal
+/// (`Ctrl+O` / `Ctrl+S`) — pin right. The Enter-action keys moved inside the
+/// composer's bottom padding row; the `as:` target row lives in its top
+/// padding row ([`crate::components::composer_hints`]).
 pub fn draw_model_bar(
     frame: &mut Frame,
     rect: Rect,
@@ -942,20 +909,20 @@ pub fn draw_model_bar(
     let bg = theme.surface();
     let full_w = rect.width as usize;
 
-    // --- Right cluster build inputs. The Enter-action sentence moved into
-    // the composer's bottom padding row, so the gauges own the whole row
-    // (degradation ladder unchanged); `inner` pads the row's left edge.
+    // --- Left cluster build inputs: the model identity group anchors the
+    // row's left edge (padded by `inner`); the context + rate gauges pin
+    // right. `MODEL_BAR_GAP_MIN` keeps the two halves from ever colliding.
     let inner = MODEL_BAR_INNER_PADDING;
 
-    // --- Right cluster: last-turn performance, context.
+    // --- Right cluster: context, last-turn performance.
     // Build each segment separately so we can drop optional ones when the
     // terminal is too narrow.
     let context_max = crate::providers::model_context_window(current_model);
 
-    // Build right-side segments independently. Model identity is the last
-    // ambient item to drop; reasoning effort drops first, then the instance
-    // suffix, then context usage, then the stream rate. The gauges own the
-    // whole row — there is no competing left cluster anymore.
+    // Build right-side segments independently. Under width pressure the
+    // right cluster's keycap hints drop first, then the instance suffix
+    // (pure provenance), then reasoning, then the stream rate, then context;
+    // the model name is the last item standing.
     let (model_label, model_style) = if current_model.is_empty() {
         (
             "(no model)".to_string(),
@@ -1039,66 +1006,111 @@ pub fn draw_model_bar(
         .sum::<usize>();
 
     // Performance segment: the latest completed principal turn's
-    // client-observed stream rate. It remains present as `– tok/s` before a
-    // defensible sample exists so the independent report stays discoverable.
-    let performance_label = last_turn_tps
+    // client-observed stream rate. Hidden entirely until a defensible sample
+    // exists (a `– tok/s` placeholder is noise before the first turn
+    // completes) — `Ctrl+S` and the report modal remain the discovery paths
+    // regardless, and each completed turn refreshes this value.
+    let performance_spans: Vec<Span<'static>> = last_turn_tps
         .filter(|rate| rate.is_finite() && *rate > 0.0)
-        .map_or_else(|| "– tok/s".to_string(), |rate| format!("{rate:.1} tok/s"));
-    let performance_spans = vec![Span::styled(
-        performance_label,
-        Style::default().fg(theme.info()).bg(bg),
-    )];
+        .map(|rate| {
+            vec![Span::styled(
+                format!("{rate:.1} tok/s"),
+                Style::default().fg(theme.info()).bg(bg),
+            )]
+        })
+        .unwrap_or_default();
     let performance_width = performance_spans
         .iter()
         .map(|span| span.content.width())
         .sum::<usize>();
+
+    // Progressive disclosure: both right-cluster gauges open a drill-down
+    // modal on click, so each carries its keyboard twin as a muted keycap
+    // hint — `Ctrl+O` for the context report, `Ctrl+S` for the performance
+    // report. The hints are the first thing to go under width pressure
+    // (below), which keeps the gauges themselves available longest.
+    let keycap_dim = |text: &str| {
+        Span::styled(
+            text.to_string(),
+            Style::default().fg(theme.muted()).bg(bg),
+        )
+    };
+    let context_keycap_width = Key::CTRL_O.display().width() + 1; // + leading space
+    let performance_keycap_width = Key::CTRL_S.display().width() + 1; // + leading space
 
     let mut show_model = model_width > 0;
     let mut show_reasoning = reasoning_width > 0;
     let mut show_instance = instance_width > 0;
     let mut show_performance = performance_width > 0;
     let mut show_context = context_seg_width > 0;
-    let right_width_for =
-        |performance: bool, model: bool, reasoning: bool, instance: bool, context: bool| {
-            // The model name, its reasoning effort, and the provider instance
-            // form one identity group (`Kimi K3 high @111xianyu`) joined by the
-            // tighter model gap; only the context segment sits across the wider
-            // segment gap.
-            let identity_count =
-                usize::from(model) + usize::from(reasoning) + usize::from(instance);
-            let identity_width = usize::from(model) * model_width
-                + usize::from(reasoning) * reasoning_width
-                + usize::from(instance) * instance_width
-                + identity_count.saturating_sub(1) * MODEL_BAR_MODEL_GAP;
-            let performance_width = usize::from(performance) * performance_width;
-            let context_width = usize::from(context) * context_seg_width;
-            let group_count =
-                usize::from(performance) + usize::from(identity_count > 0) + usize::from(context);
-            performance_width
-                + identity_width
-                + context_width
-                + group_count.saturating_sub(1) * MODEL_BAR_SEGMENT_GAP
-        };
+    let mut show_context_keycap = show_context;
+    let mut show_performance_keycap = show_performance;
+    let identity_width_for = |model: bool, reasoning: bool, instance: bool| {
+        let identity_count = usize::from(model) + usize::from(reasoning) + usize::from(instance);
+        usize::from(model) * model_width
+            + usize::from(reasoning) * reasoning_width
+            + usize::from(instance) * instance_width
+            + identity_count.saturating_sub(1) * MODEL_BAR_MODEL_GAP
+    };
+    let right_width_for = |performance: bool,
+                           performance_keycap: bool,
+                           context_keycap: bool,
+                           model: bool,
+                           reasoning: bool,
+                           instance: bool,
+                           context: bool| {
+        // The model name, its reasoning effort, and the provider instance
+        // form one identity group (`Kimi K3 high @111xianyu`) joined by the
+        // tighter model gap; the context and rate gauges sit across the
+        // wider segment gap, each optionally followed by its keycap hint.
+        let identity_width = identity_width_for(model, reasoning, instance);
+        let performance_width = usize::from(performance)
+            * (performance_width + usize::from(performance_keycap) * performance_keycap_width);
+        let context_width = usize::from(context)
+            * (context_seg_width + usize::from(context_keycap) * context_keycap_width);
+        let group_count = usize::from(performance) + usize::from(model || reasoning || instance) + usize::from(context);
+        performance_width
+            + identity_width
+            + context_width
+            + group_count.saturating_sub(1) * MODEL_BAR_SEGMENT_GAP
+    };
     let fits = |right_width: usize| {
         inner + if right_width > 0 { MODEL_BAR_GAP_MIN } else { 0 } + right_width <= full_w
     };
 
     let mut right_width = right_width_for(
         show_performance,
+        show_performance_keycap,
+        show_context_keycap,
         show_model,
         show_reasoning,
         show_instance,
         show_context,
     );
-    // Drop order under width pressure: the instance suffix first (pure
-    // provenance — nice-to-have), then reasoning, then the stream rate,
-    // then context, then the model name. There is no left cluster on this
-    // row anymore; the gauges degrade among themselves. (Session-state flags
-    // such as `DELEGATED` are not on this row — they live on the status bar.)
+    // Drop order under width pressure: the keycap hints first (progressive
+    // disclosure dies first — the gauges are the payload), then the instance
+    // suffix (pure provenance), then reasoning, then the stream rate, then
+    // context, then the model name. (Session-state flags such as
+    // `DELEGATED` are not on this row — they live on the status bar.)
+    if !fits(right_width) && (show_context_keycap || show_performance_keycap) {
+        show_context_keycap = false;
+        show_performance_keycap = false;
+        right_width = right_width_for(
+            show_performance,
+            show_performance_keycap,
+            show_context_keycap,
+            show_model,
+            show_reasoning,
+            show_instance,
+            show_context,
+        );
+    }
     if !fits(right_width) && show_instance {
         show_instance = false;
         right_width = right_width_for(
             show_performance,
+            show_performance_keycap,
+            show_context_keycap,
             show_model,
             show_reasoning,
             show_instance,
@@ -1109,6 +1121,8 @@ pub fn draw_model_bar(
         show_reasoning = false;
         right_width = right_width_for(
             show_performance,
+            show_performance_keycap,
+            show_context_keycap,
             show_model,
             show_reasoning,
             show_instance,
@@ -1117,8 +1131,11 @@ pub fn draw_model_bar(
     }
     if !fits(right_width) && show_performance {
         show_performance = false;
+        show_performance_keycap = false;
         right_width = right_width_for(
             show_performance,
+            show_performance_keycap,
+            show_context_keycap,
             show_model,
             show_reasoning,
             show_instance,
@@ -1127,8 +1144,11 @@ pub fn draw_model_bar(
     }
     if !fits(right_width) && show_context {
         show_context = false;
+        show_context_keycap = false;
         right_width = right_width_for(
             show_performance,
+            show_performance_keycap,
+            show_context_keycap,
             show_model,
             show_reasoning,
             show_instance,
@@ -1139,6 +1159,8 @@ pub fn draw_model_bar(
         show_model = false;
         right_width = right_width_for(
             show_performance,
+            show_performance_keycap,
+            show_context_keycap,
             show_model,
             show_reasoning,
             show_instance,
@@ -1149,24 +1171,31 @@ pub fn draw_model_bar(
     // Ignition label takeover: during the `M A X` label phase the identity
     // cluster (and the context segment — the label needs the room) renders
     // as the converging label instead; the caller's band tint paints the
-    // glow over it.
+    // glow over it. The label owns the identity cluster's width budget.
+    let label_budget = identity_width_for(show_model, show_reasoning, show_instance);
     let label_spans = ignition_elapsed_ms
-        .and_then(|ms| super::effort_ignition::label_cluster(right_width, ms, bg, theme));
+        .and_then(|ms| super::effort_ignition::label_cluster(label_budget, ms, bg, theme));
     let ignition_label_active = label_spans.is_some();
 
+    // Left cluster: the identity group, flush against the row's left edge.
+    // During the ignition label phase the takeover label renders here
+    // instead (it owns the whole identity width).
+    let mut left_spans: Vec<Span<'static>> = Vec::new();
     let mut right_spans: Vec<Span<'static>> = Vec::new();
     if let Some(label) = label_spans {
-        right_spans = label;
+        left_spans = label;
     } else {
         let identity_separator =
             || Span::styled(" ".repeat(MODEL_BAR_MODEL_GAP), Style::default().bg(bg));
         let group_separator =
             || Span::styled(" ".repeat(MODEL_BAR_SEGMENT_GAP), Style::default().bg(bg));
-        // Row order: model identity group → context usage → stream rate.
-        // The model anchors the row (leftmost), the context meter sits in
-        // the middle as the bridge between "what is answering" and "how
-        // fast", and the live speed signal lands at the row's tail where
-        // the eye lands last on a right-aligned strip.
+        // Split row: the identity group (model / effort / @instance) anchors
+        // the left half; the context meter and the stream rate pin right.
+        // The context meter reads as the bridge between "what is answering"
+        // and "how fast", and the live speed signal lands at the row's tail
+        // where the eye lands last on a right-aligned strip. Each gauge that
+        // has a drill-down modal carries its keycap hint right after its
+        // value.
         if show_model || show_reasoning || show_instance {
             let mut identity_started = false;
             for segment in [
@@ -1177,41 +1206,59 @@ pub fn draw_model_bar(
             .into_iter()
             .flatten()
             {
-                if !identity_started && !right_spans.is_empty() {
-                    right_spans.push(group_separator());
-                }
                 if identity_started {
-                    right_spans.push(identity_separator());
+                    left_spans.push(identity_separator());
                 }
                 identity_started = true;
-                right_spans.extend(segment);
+                left_spans.extend(segment);
             }
         }
-        // Context usage sits across the wider segment gap.
+        // Context usage sits across the wider segment gap; its keycap hint
+        // trails it as part of the same segment (they open the same modal).
         if show_context {
             if !right_spans.is_empty() {
                 right_spans.push(group_separator());
             }
             right_spans.extend(context_spans);
+            if show_context_keycap {
+                right_spans.push(Span::styled(" ", Style::default().bg(bg)));
+                right_spans.push(keycap_dim(Key::CTRL_O.display()));
+            }
         }
-        // Stream rate closes the row, across the wider gap.
+        // Stream rate closes the row, across the wider gap; its keycap hint
+        // trails it the same way.
         if show_performance {
             if !right_spans.is_empty() {
                 right_spans.push(group_separator());
             }
             right_spans.extend(performance_spans);
+            if show_performance_keycap {
+                right_spans.push(Span::styled(" ", Style::default().bg(bg)));
+                right_spans.push(keycap_dim(Key::CTRL_S.display()));
+            }
         }
     }
 
-    let left_used = inner; // gauges own the row: only the left pad remains
+    // Split layout: the identity cluster (model / effort / @instance) anchors
+    // the row's left edge; the gauges (context, stream rate) pin right. The
+    // middle fill absorbs the remaining width, so the two halves evenly own
+    // the row from their edges — `MODEL_BAR_GAP_MIN` guarantees they never
+    // collide.
+    let left_rendered_width: usize = left_spans.iter().map(|s| s.content.width()).sum();
     let right_rendered_width: usize = right_spans.iter().map(|s| s.content.width()).sum();
+    let left_used = inner + left_rendered_width;
 
     let gap = full_w
         .saturating_sub(left_used + right_width)
-        .max(if right_width > 0 { MODEL_BAR_GAP_MIN } else { 0 });
+        .max(if right_width > 0 && left_used > inner {
+            MODEL_BAR_GAP_MIN
+        } else {
+            0
+        });
 
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(8 + right_spans.len());
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(10 + right_spans.len());
     spans.push(Span::styled(" ".repeat(inner), Style::default().bg(bg)));
+    spans.extend(left_spans);
     spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
     spans.extend(right_spans);
     // Trailing fill so the row owns every cell on this line.
@@ -1224,36 +1271,20 @@ pub fn draw_model_bar(
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 
     // Compute the stream-rate and context-meter segments' screen rects so
-    // the caller can make them clickable. Under the model → context → rate
-    // order the segments are located by walking the right strip in render
+    // the caller can make them clickable. Under the identity → context →
+    // rate order the segments are located by walking the row in render
     // order; nothing is assumed about which segment is last.
-    let right_start = (inner + gap) as u16;
+    let right_start = (inner + left_rendered_width + gap) as u16;
     let mut performance_rect: Option<Rect> = None;
     let mut context_rect: Option<Rect> = None;
     if !ignition_label_active {
-        // Model identity group (`model effort @instance`, single-space
-        // joins), then the two meter segments across wider gaps — mirroring
-        // exactly the span assembly above, including "the first rendered
-        // segment gets no leading separator".
+        // The gauges sit right of the fill: context first, then the stream
+        // rate, across the wider segment gaps — mirroring exactly the span
+        // assembly above, including "the first rendered segment gets no
+        // leading separator". The identity group's width is already inside
+        // `right_start` via `left_rendered_width`.
         let mut x = right_start;
         let mut any_rendered = false;
-        if show_model || show_reasoning || show_instance {
-            let mut group_started = false;
-            for (shown, width) in [
-                (show_model, model_width),
-                (show_reasoning, reasoning_width),
-                (show_instance, instance_width),
-            ] {
-                if shown {
-                    if group_started {
-                        x += MODEL_BAR_MODEL_GAP as u16;
-                    }
-                    x += width as u16;
-                    group_started = true;
-                }
-            }
-            any_rendered = true;
-        }
         let mut advance = |width: usize, seg: &mut Option<Rect>, leading: bool| {
             if leading {
                 x += MODEL_BAR_SEGMENT_GAP as u16;
@@ -1262,11 +1293,19 @@ pub fn draw_model_bar(
             x += width as u16;
         };
         if show_context {
-            advance(context_seg_width, &mut context_rect, any_rendered);
+            advance(
+                context_seg_width + usize::from(show_context_keycap) * context_keycap_width,
+                &mut context_rect,
+                any_rendered,
+            );
             any_rendered = true;
         }
         if show_performance {
-            advance(performance_width, &mut performance_rect, any_rendered);
+            advance(
+                performance_width + usize::from(show_performance_keycap) * performance_keycap_width,
+                &mut performance_rect,
+                any_rendered,
+            );
         }
     }
     ModelBarRects {
@@ -1651,7 +1690,6 @@ mod tests {
                     status,
                     backoff_clause,
                     silent_clause: None,
-                    pulse_levels: None,
                     awaiting_permission: awaiting,
                 },
                 phase,
@@ -1690,7 +1728,6 @@ mod tests {
                     status,
                     backoff_clause,
                     silent_clause: None,
-                    pulse_levels: None,
                     awaiting_permission: awaiting,
                 },
                 phase,
@@ -1890,7 +1927,6 @@ mod tests {
                     status: "Working",
                     backoff_clause: None,
                     silent_clause: None,
-                    pulse_levels: None,
                     awaiting_permission: false,
                 },
                 0,
@@ -1919,7 +1955,6 @@ mod tests {
                     status: "retrying a provider request after a detailed transient failure",
                     backoff_clause: None,
                     silent_clause: None,
-                    pulse_levels: None,
                     awaiting_permission: false,
                 },
                 8,
@@ -1991,13 +2026,15 @@ mod tests {
         assert_eq!(text, "20.2k (8%)");
     }
 
-    /// Right-strip contract: the order is **model → context → stream
-    /// rate**, and under width pressure the instance suffix is the first
-    /// segment to hide (provenance is nice-to-have) while the model name,
+    /// Split-row contract: the identity group (`model effort @instance`)
+    /// anchors the left half, and the gauges (`context  Ctrl+O`, `rate
+    /// Ctrl+S`) pin right — reading left → right as **identity → context →
+    /// speed**. Under width pressure the keycap hints drop first, then the
+    /// instance suffix (provenance is nice-to-have) while the model name,
     /// effort tag, and context meter all still fit.
     #[test]
     fn model_bar_orders_model_then_context_then_speed() {
-        let row_text = |width: u16| -> String {
+        let row_text = |width: u16, tps: Option<f64>| -> String {
             let mut terminal = mutx_engine::TestTerminal::new(width, 1);
             terminal.draw(|f| {
                 draw_model_bar(
@@ -2008,6 +2045,7 @@ mod tests {
                         model_available: true,
                         provider_name: Some("kimi-code"),
                         reasoning_effort: Some("max"),
+                        last_turn_tps: tps,
                         ..Default::default()
                     },
                     &Theme::default(),
@@ -2019,32 +2057,57 @@ mod tests {
                 .collect::<String>()
         };
 
-        // Wide enough for everything: `model effort @instance  ctx  rate`
-        // in that left-to-right order on one row.
-        let wide = row_text(80);
+        // Wide enough for everything: `model effort @instance` left,
+        // `ctx Ctrl+O  rate Ctrl+S` right, in that left-to-right order.
+        let wide = row_text(80, Some(47.8));
         let model_pos = wide.find("kimi-k2.7-code").expect("model shown");
         let ctx_pos = wide.find("(0%)").expect("context meter shown");
-        let rate_pos = wide.find("tok/s").expect("stream-rate placeholder shown");
+        let rate_pos = wide.find("47.8 tok/s").expect("stream rate shown");
         assert!(
             model_pos < ctx_pos && ctx_pos < rate_pos,
-            "hint bar must read model → context → speed: {wide:?}"
+            "row must read identity → context → speed: {wide:?}"
         );
         let inst_pos = wide.find("@kimi-code").expect("instance suffix shown");
         assert!(model_pos < inst_pos, "instance follows the model: {wide:?}");
-
-        // Narrower row: the provenance suffix drops first while the model
-        // name, effort tag, context meter, and rate survive in order.
-        let narrow = row_text(40);
+        // Progressive disclosure: each gauge trails its drill-down keycap.
+        let ctx_key = wide.find("Ctrl+O").expect("context keycap hint shown");
+        let rate_key = wide.find("Ctrl+S").expect("performance keycap hint shown");
         assert!(
-            !narrow.contains('@'),
-            "instance should hide first: {narrow:?}"
+            ctx_pos < ctx_key && rate_pos < rate_key,
+            "keycaps trail their gauges: {wide:?}"
+        );
+
+        // No TPS sample yet: the rate gauge (and its keycap) hide entirely —
+        // no `– tok/s` placeholder noise before the first turn completes.
+        let cold = row_text(80, None);
+        assert!(
+            !cold.contains("tok/s") && !cold.contains("Ctrl+S"),
+            "rate gauge must hide without a sample: {cold:?}"
+        );
+        assert!(
+            cold.contains("(0%)") && cold.contains("Ctrl+O"),
+            "context gauge and its keycap survive: {cold:?}"
+        );
+
+        // Narrower row: the keycap hints drop first, then the provenance
+        // suffix, while the model name, effort tag, context meter, and rate
+        // survive in order.
+        let narrow = row_text(46, Some(47.8));
+        assert!(
+            !narrow.contains("Ctrl+O") && !narrow.contains("Ctrl+S"),
+            "keycap hints hide first: {narrow:?}"
         );
         let model_pos = narrow.find("kimi-k2.7-code").expect("model survives");
         let ctx_pos = narrow.find("(0%)").expect("context survives");
         let rate_pos = narrow.find("tok/s").expect("rate survives");
         assert!(
             model_pos < ctx_pos && ctx_pos < rate_pos,
-            "order must hold after dropping the suffix: {narrow:?}"
+            "order must hold after dropping the hints: {narrow:?}"
+        );
+        let tighter = row_text(40, Some(47.8));
+        assert!(
+            !tighter.contains('@'),
+            "instance should hide next: {tighter:?}"
         );
     }
 
@@ -2107,6 +2170,7 @@ mod tests {
                 ModelBarView {
                     current_model: "kimi-k2.7-code",
                     provider_name: None,
+                    last_turn_tps: Some(47.8),
                     ..Default::default()
                 },
                 &theme,
@@ -2118,15 +2182,16 @@ mod tests {
             ctx.x + ctx.width <= perf.x,
             "context meter must sit left of the stream-rate segment"
         );
-        // Both rects carry exactly their own segment's text.
+        // Both rects carry exactly their own segment's text — gauge value
+        // plus its trailing keycap hint (one click target per drill-down).
         let buf = terminal.buffer();
         let slice = |r: Rect| -> String {
             (r.x..r.x + r.width)
                 .map(|x| buf[(x, r.y)].symbol().to_string())
                 .collect::<String>()
         };
-        assert_eq!(slice(ctx), "0 (0%)", "context rect mismatch");
-        assert_eq!(slice(perf), "– tok/s", "rate rect mismatch");
+        assert_eq!(slice(ctx), "0 (0%) Ctrl+O", "context rect mismatch");
+        assert_eq!(slice(perf), "47.8 tok/s Ctrl+S", "rate rect mismatch");
     }
 
     #[test]

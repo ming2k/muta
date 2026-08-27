@@ -257,6 +257,24 @@ impl Agent {
                     &self.skills_registry,
                     messages,
                 );
+                // `@file:` injection happens exactly here — once per prompt,
+                // into the live window — so the projected request (and every
+                // estimate built on it) reuses the loaded bytes without ever
+                // touching the filesystem again. Loading asynchronously keeps
+                // the turn-preparation path off blocking reads.
+                crate::conversation_context::inject_mentioned_files(
+                    self.workspace_root().as_deref(),
+                    messages,
+                )
+                .await;
+                // Freeze every tool output that slid out of the recency
+                // protection window into its final provider shape, **before**
+                // the request snapshot is taken. One freeze per message per
+                // lifetime keeps the wire prefix byte-stable across rounds
+                // (KV-cache alignment, ADR-0137); without this the assembler
+                // would re-derive truncations from a shifting recency window
+                // and break the prefix on two consecutive rounds.
+                crate::model_request::freeze_for_cache_stability(messages, 6);
                 // TurnStart hooks belong to a logical ReAct turn, not to
                 // each network attempt. Run them once before checkpointing the
                 // request so retries cannot duplicate injected context or hook
@@ -275,7 +293,11 @@ impl Agent {
                     "internal error: provider request was not assembled".to_string(),
                 ));
             };
-            let request_estimate = Self::estimate_model_request(request);
+            // The estimate target is the already-assembled pending request,
+            // so with the content-addressed weights cache warm this is a
+            // fingerprint walk (hash-rate, not BPE-rate) over unchanged bytes
+            // — cheap enough to stay inline on the attempt path.
+            let request_estimate = self.estimate_model_request(request);
             let request_projection = request_estimate.total_tokens;
             let request_provider = self.provider.provider_id();
             let request_model = self.provider.model();
@@ -696,6 +718,7 @@ impl Agent {
                 origin: None,
                 timestamp: Some(muta_contracts::todos::unix_now()),
                 sent_at_ms: None,
+                cache_frozen: false,
             };
             if !valid_assistant_response(&response) {
                 return Err(empty_response_error(&response));

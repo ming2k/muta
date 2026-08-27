@@ -121,10 +121,7 @@ impl StewardOffice {
         let mission = steward_identity().mission;
         AgentIdentity::new(
             self.title(),
-            format!(
-                "{}, serving {mission}",
-                self.charter()
-            ),
+            format!("{}, serving {mission}", self.charter()),
         )
     }
 

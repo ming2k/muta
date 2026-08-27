@@ -214,7 +214,9 @@ mod tests {
         // by the collective Steward mission, followed by the task prompt.
         assert!(system.content.starts_with("Chronicler"));
         assert!(
-            system.content.contains(&muta_contracts::steward_identity().mission)
+            system
+                .content
+                .contains(&muta_contracts::steward_identity().mission)
         );
         assert!(
             system

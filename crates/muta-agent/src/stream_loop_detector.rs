@@ -239,8 +239,7 @@ impl StreamLoopDetector {
             Some(length) => {
                 // While the recent window stays data-dense, every streamed
                 // char is degenerate spend.
-                self.digit_budget_spent =
-                    self.digit_budget_spent.saturating_add(pushed_chars);
+                self.digit_budget_spent = self.digit_budget_spent.saturating_add(pushed_chars);
                 if self.digit_budget_spent >= self.max_degenerate_budget_chars {
                     self.digit_budget_spent = 0;
                     return Some(DegeneratePattern::UnboundedDigitStream { length });
@@ -360,9 +359,7 @@ impl StreamLoopDetector {
                 None => continue,
             };
             let run = n - run_start;
-            if run >= 2 * p
-                && best.is_none_or(|(b, bp)| run > b || (run == b && p < bp))
-            {
+            if run >= 2 * p && best.is_none_or(|(b, bp)| run > b || (run == b && p < bp)) {
                 best = Some((run, p));
             }
         }
@@ -473,9 +470,7 @@ impl StreamLoopDetector {
     pub fn trim_suffix(full_text: &str, pattern: &DegeneratePattern) -> String {
         const NOTE: &str = "[... stream truncated: repetitive pattern aborted ...]";
         match pattern {
-            DegeneratePattern::Periodic {
-                pattern: unit, ..
-            } => {
+            DegeneratePattern::Periodic { pattern: unit, .. } => {
                 if unit.is_empty() {
                     return full_text.to_string();
                 }

@@ -583,9 +583,9 @@ pub struct App {
     /// Typed activity-bar phase for the primary session (`None` = idle /
     /// bar hidden). Never holds transport setbacks — see `crate::phase`.
     pub phase: Option<crate::phase::Phase>,
-    /// Byte-arrival pulse mirrored from the runtime; drives the dot's
-    /// byte-pulse channel and the silent clause.
-    pub pulse: crate::pulse::BytePulse,
+    /// Token-stall watch mirrored from the runtime; drives the silent
+    /// clause.
+    pub pulse: crate::pulse::TokenWatch,
     pub provider_retry: Option<ProviderRetryState>,
     /// Whether all tool permissions are auto-approved this session
     /// (`--delegate` / `/delegate on`). Mirrored from the harness snapshot.

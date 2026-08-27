@@ -403,6 +403,7 @@ fn system_prompt_registry_reproduces_legacy_layout() {
      - Operating System: Unix-like (Linux/macOS)\n\
      - Native Shell: POSIX sh / bash\n\
      - Shell Syntax: Standard POSIX shell pipelines and syntax.\n\
+     - Temp Access: read/write to the platform temp directory (`$TMPDIR`, `/tmp` on Unix) is always admitted for scratch files — spill files, staging, probes — no additional roots required.\n\
      - Tool Guidance: ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_file`, `search_text`, `find_files`) over executing shell commands like `cat`, `grep`, `find`, `sed`, `echo >`.\n\
      \n\
      See the task through to a real result in this round. Don't stop at analysis \
@@ -1665,9 +1666,7 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
                 Some(format!("model-request turn={turn}"))
             }
             AgentEvent::ContextTokens(_) => Some("context-tokens".to_string()),
-            AgentEvent::SteerAdmitted(input) => {
-                Some(format!("steer-admitted {:?}", input.text))
-            }
+            AgentEvent::SteerAdmitted(input) => Some(format!("steer-admitted {:?}", input.text)),
             AgentEvent::AssistantDelta { delta, start } => {
                 Some(format!("assistant-delta start={start} {delta:?}"))
             }
@@ -1688,22 +1687,19 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
             }
             AgentEvent::ToolCancelled { name, .. } => Some(format!("tool-cancelled {name}")),
             AgentEvent::DelegatedChanged(enabled) => Some(format!("delegated {enabled}")),
-            AgentEvent::PermissionRequest(request) => {
-                Some(format!("permission-request {} {}", request.tool, request.scope))
-            }
+            AgentEvent::PermissionRequest(request) => Some(format!(
+                "permission-request {} {}",
+                request.tool, request.scope
+            )),
             AgentEvent::UserQuestionRequest(request) => {
                 Some(format!("user-question {}", request.questions.len()))
             }
-            AgentEvent::StdinRequest(request) => {
-                Some(format!(
-                    "stdin-request {} (secret={})",
-                    request.command, request.secret
-                ))
-            }
+            AgentEvent::StdinRequest(request) => Some(format!(
+                "stdin-request {} (secret={})",
+                request.command, request.secret
+            )),
             AgentEvent::Runner { .. } => Some("subtask".to_string()),
-            AgentEvent::TodosUpdated(list) => {
-                Some(format!("todos {} items", list.len()))
-            }
+            AgentEvent::TodosUpdated(list) => Some(format!("todos {} items", list.len())),
         })
         .collect()
 }

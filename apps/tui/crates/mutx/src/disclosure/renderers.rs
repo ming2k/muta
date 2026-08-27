@@ -952,8 +952,8 @@ fn termination_footer(
     match term {
         T::Exited => None,
         T::IdleBlocked => Some((
-            "killed at the no-output limit — likely waiting for stdin input. \
-             Retry non-interactively: --passphrase-file / SUDO_ASKPASS / `y | …`."
+            "killed by harness: no output within the idle-guard window — likely \
+             compiling, pipe-buffered output, or a stdin prompt."
                 .to_string(),
             warn_style,
         )),
@@ -964,8 +964,8 @@ fn termination_footer(
             warn_style,
         )),
         T::Timeout => Some((
-            "timed out — killed after the configured timeout. Retry with a \
-             larger `timeout` if it is legitimately long."
+            "killed by harness: overall timeout reached (command was still \
+             producing output)."
                 .to_string(),
             warn_style,
         )),
@@ -1155,7 +1155,9 @@ fn draw_command_content(
             || trimmed == "STDERR:"
             || trimmed.starts_with("(success, stderr):")
             || trimmed.starts_with("[Output truncated")
-            || trimmed.starts_with("[Output was large");
+            || trimmed.starts_with("[Output was large")
+            || trimmed.starts_with("[killed by harness")
+            || trimmed.starts_with("[not executed");
         let style = if is_marker { marker_style } else { base };
         let _ = emit_command_lines(
             ctx,

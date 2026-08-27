@@ -42,10 +42,10 @@ rests on a single optional state — the **focused step**
 | **Focused step** | One transcript step is reverse-highlighted | `Ctrl+↑` / `Ctrl+↓` (nearest step first) | `Esc`, or any printable character falls through to the prompt |
 
 While a step is focused, `↑`/`↓` cycle steps, `Enter` opens it, and the
-composer panel drops to its dimmer palette to signal "keys act on the
-step." Typing still lands in the prompt. `Tab` is completion-only (commits
-the highlighted slash/path suggestion when a menu is open, re-opens one
-that `Esc` dismissed); it is not a focus toggle.
+composer frame drops to its dimmer stroke and sheds its inlaid meta to signal
+"keys act on the step." Typing still lands in the prompt. `Tab` is
+completion-only (commits the highlighted slash/path suggestion when a menu is
+open, re-opens one that `Esc` dismissed); it is not a focus toggle.
 
 ## Components
 

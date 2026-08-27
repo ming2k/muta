@@ -6,6 +6,7 @@
 
 use crate::App;
 use crate::composer::{composer_text_width, composer_wrapped_pos};
+use crate::design::COMPOSER_PROMPT_PREFIX_COLS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandDoc {
@@ -130,7 +131,6 @@ pub fn completion_anchor_x(
     input_rect: mutx_engine::Rect,
     kind: CompletionKind,
 ) -> u16 {
-    const COMPOSER_PROMPT_PREFIX_COLS: u16 = 2;
     let text_width = composer_text_width(input_rect.width as usize);
     let trigger_byte = match kind {
         CompletionKind::Path => mention_range_at(input, byte_cursor)
@@ -139,7 +139,7 @@ pub fn completion_anchor_x(
         _ => 0,
     };
     let (_, col) = composer_wrapped_pos(input, text_width, trigger_byte);
-    input_rect.x + COMPOSER_PROMPT_PREFIX_COLS + col.min(text_width) as u16
+    input_rect.x + COMPOSER_PROMPT_PREFIX_COLS as u16 + col.min(text_width) as u16
 }
 
 pub fn resolved_slash_command_len(

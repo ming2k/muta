@@ -628,6 +628,19 @@ impl Theme {
     pub fn input_surface_inactive(&self) -> Color {
         self.input_bg_inactive
     }
+    /// Stroke color for the composer's rounded line frame while the box owns
+    /// the keyboard. A line carries no background, so its identity comes from
+    /// a quiet mix of the surface toward the primary accent — visible as a
+    /// stroke without re-introducing a filled panel.
+    pub fn composer_frame(&self) -> Color {
+        mix(self.app_bg, self.primary, 0.35)
+    }
+    /// Stroke color while the box is inert (focus on the transcript). The
+    /// frame recedes to nearly the surface tone so a step-focused transcript
+    /// keeps the visual foreground.
+    pub fn composer_frame_inactive(&self) -> Color {
+        mix(self.app_bg, self.primary, 0.16)
+    }
     /// Sent-user-message surface.
     pub fn user_surface(&self) -> Color {
         self.user_panel_bg

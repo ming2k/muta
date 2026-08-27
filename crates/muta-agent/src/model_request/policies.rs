@@ -78,6 +78,8 @@ impl SystemPromptSection for HostEnvironmentGuidance {
             "\n## Host Execution Environment\n\
              - Primary Workspace: `{ws}`\n\
              {shell_info}\n\
+             - Temp Access: read/write to the platform temp directory (`$TMPDIR`, `/tmp` on Unix) is always admitted \
+               for scratch files — spill files, staging, probes — no additional roots required.\n\
              - Tool Guidance: ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_file`, `search_text`, `find_files`) \
                over executing shell commands like `cat`, `grep`, `find`, `sed`, `echo >`."
         ))
