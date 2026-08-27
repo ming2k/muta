@@ -3,7 +3,7 @@
 //!
 //! Follows the bounded-envoy split of the retired `session_review` (ADR-0016):
 //! domain types and pure helpers live here in `muta-contracts`, while the
-//! LLM-backed runner that drives the [`TITLE`](crate::TITLE) profile lives in
+//! LLM-backed runner that drives the `TITLE` profile lives in
 //! `muta-agent`. There is no trait here because a
 //! title is a single concept rather than a set of extensible dimensions — the
 //! only shared logic is the pure post-processing that turns a model's free-form
@@ -19,7 +19,7 @@
 //! whether to keep it.
 
 /// Maximum character length of a generated title. Matches the constraint
-/// encoded in the [`TITLE`](crate::TITLE) profile's system prompt. Titles
+/// encoded in the `TITLE` profile's system prompt. Titles
 /// longer than this are hard-truncated with an ellipsis so the session picker
 /// row stays bounded regardless of what the model returns.
 pub const TITLE_MAX_LEN: usize = 50;

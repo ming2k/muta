@@ -5,7 +5,7 @@
 //! maintained its own oneshot lifecycle while sharing the same settlement
 //! rule (`requested/parked --> replied | cancelled`, see
 //! `docs/reference/state-model.md`). This module is the shared vocabulary
-//! that lets one broker ([`muta_agent::human_broker`]) own all three.
+//! that lets one broker (`muta_agent::human_broker`) own all three.
 //!
 //! The axis the old protocol lacked is *provenance*: who actually settled a
 //! request. A non-TTY headless client used to answer `ask_user` with the
@@ -38,7 +38,7 @@ pub enum HumanRequestKind {
 /// posture, so a question that would flow up to a nonexistent human fails
 /// fast in the child instead of parking forever.
 ///
-/// Legacy clients that predate the field default to [`Interactive`],
+/// Legacy clients that predate the field default to `Interactive`,
 /// preserving their behavior exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]

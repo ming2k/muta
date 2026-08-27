@@ -1,7 +1,7 @@
 //! Agent identity: who an `Agent` (re-exported by the agent
 //! crate) is and what it is for. Pure domain vocabulary — three strings and a
 //! formatter — with no agent-layer dependencies, so it lives in core alongside
-//! the role profiles ([`crate::PrincipalProfile`], [`crate::EnvoyProfile`]).
+//! the role profiles (`PrincipalProfile`, `EnvoyProfile`).
 //!
 //! Kept identity-agnostic: nothing here hardcodes "muta" or "coding". The
 //! embedding (a CLI, a server) supplies the fields, so the same engine can be
