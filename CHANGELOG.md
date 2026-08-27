@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.2] - 2026-08-27
+
+### Changed
+- Replaced long positional argument lists with self-describing parameter
+  structs across the TUI (`ComposerDrawOptions`, `BodyRenderOptions`,
+  `CodeGutterParams`, `RichLineParams`), agent (`NativeSearchParams`,
+  `AddProviderParams`, test `PolicyContext` builders), contracts
+  (`BeginRequestParams`), and runtime crates. Internal API hygiene
+  refactor with no intended behavioral changes.
+
 ## [0.36.1] - 2026-08-27
 
 ### Added
