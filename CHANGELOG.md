@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.6] - 2026-08-27
+
 ### Added
+
+- **Structured Command Acks & Notices:** `CommandResult::Ack` now carries
+  optional structured detail lines, rendered cleanly across TUI and Web
+  interfaces, with inline transcript notices recorded for YOLO posture
+  changes.
 
 - **MCP Streamable HTTP transport:** `[mcp.<name>]` now accepts a `url` key
   (e.g. `url = "https://example.com/mcp"`) alongside the existing `command`
@@ -4990,7 +4997,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.35.5...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.35.6...HEAD
+[0.35.6]: https://github.com/ming2k/muta/compare/v0.35.5...v0.35.6
 [0.35.5]: https://github.com/ming2k/muta/compare/v0.35.4...v0.35.5
 [0.35.4]: https://github.com/ming2k/muta/compare/v0.35.3...v0.35.4
 [0.35.3]: https://github.com/ming2k/muta/compare/v0.35.2...v0.35.3
