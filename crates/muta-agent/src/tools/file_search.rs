@@ -17,25 +17,24 @@ pub(crate) fn resolve_search_root(
     path: &str,
 ) -> Result<PathBuf, String> {
     let supplied = Path::new(path);
-    if supplied.is_absolute() {
-        if supplied.starts_with(workspace)
-            || additional_roots
-                .iter()
-                .any(|root| supplied.starts_with(root))
-        {
-            return Ok(supplied.to_path_buf());
-        }
-        return Err("Search path is outside the admitted workspace roots".to_string());
+    let target = if supplied.is_absolute() {
+        supplied.to_path_buf()
+    } else {
+        workspace.join(supplied)
+    };
+
+    let normalized = muta_contracts::execution::lexical_normalize(&target);
+    let root_norm = muta_contracts::execution::lexical_normalize(workspace);
+    let admitted = normalized.starts_with(&root_norm)
+        || additional_roots
+            .iter()
+            .any(|root| normalized.starts_with(muta_contracts::execution::lexical_normalize(root)));
+
+    if admitted {
+        Ok(target)
+    } else {
+        Err("Search path is outside the admitted workspace roots".to_string())
     }
-    if supplied.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        return Err("Search path must stay relative to the workspace root".to_string());
-    }
-    Ok(workspace.join(supplied))
 }
 
 /// Clamp a caller-selected result limit to the public tool contract.
@@ -178,6 +177,7 @@ mod tests {
         let additional = vec![PathBuf::from("/sibling")];
         assert!(resolve_search_root(Path::new("/workspace"), &additional, "src").is_ok());
         assert!(resolve_search_root(Path::new("/workspace"), &additional, "/sibling/src").is_ok());
+        assert!(resolve_search_root(Path::new("/workspace"), &additional, "../sibling/src").is_ok());
         assert!(resolve_search_root(Path::new("/workspace"), &additional, "../secret").is_err());
         assert!(resolve_search_root(Path::new("/workspace"), &additional, "/secret").is_err());
         assert_eq!(search_path_argument(r#"{"path":"src"}"#), "src");

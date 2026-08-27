@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 /// Physical containment required for shell commands in an execution environment.
@@ -206,6 +206,58 @@ pub trait ExecutionEnvironment: Send + Sync {
     fn shell_isolation(&self) -> ShellIsolation {
         ShellIsolation::Host
     }
+
+    /// Resolve a model- or caller-supplied path (relative or absolute) against
+    /// this environment's admitted workspace roots.
+    ///
+    /// Relative paths resolve against `workspace_root()`. Returns the resolved
+    /// path if it falls within `workspace_root()` or any entry in `additional_roots()`,
+    /// or `FsError::PermissionDenied` if it attempts to escape containment.
+    fn resolve_path(&self, raw: &str) -> Result<PathBuf, FsError> {
+        let supplied = Path::new(raw);
+        let target = if supplied.is_absolute() {
+            supplied.to_path_buf()
+        } else {
+            self.workspace_root().join(supplied)
+        };
+
+        let normalized = lexical_normalize(&target);
+        let root_norm = lexical_normalize(self.workspace_root());
+        let admitted = normalized.starts_with(&root_norm)
+            || self.additional_roots().iter().any(|extra| {
+                normalized.starts_with(lexical_normalize(extra))
+            });
+
+        if admitted {
+            Ok(target)
+        } else {
+            Err(FsError::PermissionDenied(format!(
+                "access to '{raw}' is outside the admitted workspace roots"
+            )))
+        }
+    }
+}
+
+/// Normalize `.` and `..` without consulting a host filesystem.
+///
+/// This deliberately works in terms of `Path::components`, so prefixes and
+/// root components retain their native Windows/Unix meaning.
+pub fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() && !normalized.has_root() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
 }
 
 /// Interceptor middleware for the tool execution pipeline.
@@ -232,5 +284,93 @@ pub trait ToolMiddleware: Send + Sync {
         _env: &dyn ExecutionEnvironment,
     ) -> Result<(), String> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockEnv {
+        root: PathBuf,
+        additional: Vec<PathBuf>,
+    }
+
+    struct MockFs;
+    #[async_trait]
+    impl FsProvider for MockFs {
+        async fn read(&self, _path: &Path) -> Result<Vec<u8>, FsError> { Ok(Vec::new()) }
+        async fn write(&self, _path: &Path, _content: &[u8]) -> Result<(), FsError> { Ok(()) }
+        async fn exists(&self, _path: &Path) -> bool { true }
+        async fn is_dir(&self, _path: &Path) -> bool { true }
+        async fn is_file(&self, _path: &Path) -> bool { false }
+        async fn list_dir(&self, _path: &Path) -> Result<Vec<DirEntry>, FsError> { Ok(Vec::new()) }
+        async fn create_dir_all(&self, _path: &Path) -> Result<(), FsError> { Ok(()) }
+        async fn remove_file(&self, _path: &Path) -> Result<(), FsError> { Ok(()) }
+        async fn metadata(&self, _path: &Path) -> Result<FsMetadata, FsError> {
+            Ok(FsMetadata { is_dir: true, is_file: false, is_symlink: false, len: 0 })
+        }
+    }
+
+    struct MockProcess;
+    #[async_trait]
+    impl ProcessRunner for MockProcess {
+        async fn exec(&self, _command: &str, _cwd: &Path, _env: Option<&HashMap<String, String>>, _timeout: Duration) -> Result<ProcessOutput, String> {
+            Ok(ProcessOutput { exit_code: Some(0), stdout: Vec::new(), stderr: Vec::new(), timed_out: false })
+        }
+    }
+
+    impl ExecutionEnvironment for MockEnv {
+        fn fs(&self) -> &dyn FsProvider { &MockFs }
+        fn process(&self) -> &dyn ProcessRunner { &MockProcess }
+        fn workspace_root(&self) -> &Path { &self.root }
+        fn additional_roots(&self) -> &[PathBuf] { &self.additional }
+    }
+
+    #[test]
+    fn test_lexical_normalize() {
+        assert_eq!(
+            lexical_normalize(Path::new("/workspace/src/../target")),
+            PathBuf::from("/workspace/target")
+        );
+        assert_eq!(
+            lexical_normalize(Path::new("/workspace/../optics")),
+            PathBuf::from("/optics")
+        );
+        assert_eq!(
+            lexical_normalize(Path::new("/workspace/./src/./main.rs")),
+            PathBuf::from("/workspace/src/main.rs")
+        );
+    }
+
+    #[test]
+    fn test_resolve_path_admitted_roots() {
+        let env = MockEnv {
+            root: PathBuf::from("/home/user/project"),
+            additional: vec![PathBuf::from("/home/user/optics")],
+        };
+
+        // Relative path inside primary root
+        assert_eq!(
+            env.resolve_path("src/main.rs").unwrap(),
+            PathBuf::from("/home/user/project/src/main.rs")
+        );
+
+        // Relative path into additional root
+        assert_eq!(
+            env.resolve_path("../optics/Cargo.toml").unwrap(),
+            PathBuf::from("/home/user/project/../optics/Cargo.toml")
+        );
+
+        // Absolute path into additional root
+        assert_eq!(
+            env.resolve_path("/home/user/optics/Cargo.toml").unwrap(),
+            PathBuf::from("/home/user/optics/Cargo.toml")
+        );
+
+        // Escape attempts rejected
+        assert!(env.resolve_path("../../etc/passwd").is_err());
+        assert!(env.resolve_path("/etc/shadow").is_err());
+        assert!(env.resolve_path("../other_unadmitted").is_err());
     }
 }
