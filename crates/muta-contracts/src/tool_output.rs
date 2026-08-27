@@ -205,7 +205,7 @@ pub enum StdinPolicy {
     /// 2. **Model-supplied** (opt-in): an runner profile or main config set
     ///    `allow_model_stdin`, which dynamically exposed a `stdin` parameter
     ///    in the command tool schema and the model filled it. For autonomous /
-    ///    autopilot flows where no human is reachable.
+    ///    delegated flows where no human is reachable.
     ///
     /// In both cases the bytes are buffered in the pipe ahead of the child's
     /// first read, so ordering relative to stdout is irrelevant.

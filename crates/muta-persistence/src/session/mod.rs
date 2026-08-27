@@ -208,10 +208,11 @@ pub(crate) struct SessionData {
     /// runs in full auto-approve mode (bypasses tool permission prompts).
     #[serde(
         default,
+        alias = "yolo",
         alias = "autopilot",
         skip_serializing_if = "std::ops::Not::not"
     )]
-    yolo: bool,
+    delegated: bool,
     /// Native DAG session tree (Schema v12).
     #[serde(default)]
     tree: muta_contracts::SessionTree,
@@ -244,7 +245,7 @@ impl Default for SessionData {
             commands: Vec::new(),
             round_interrupts: Vec::new(),
             retry_pending: None,
-            yolo: false,
+            delegated: false,
             tree: muta_contracts::SessionTree::default(),
         }
     }
@@ -272,8 +273,8 @@ impl SessionData {
     /// [`SessionStore::should_skip_persist`]) instead of re-deriving the
     /// condition inline, so the "what makes a session real" rule lives in
     /// exactly one place and cannot drift between setters.
-    /// The user-facing-emptiness rule deliberately excludes `autopilot`:
-    /// toggling autopilot on an otherwise-fresh session is a posture change
+    /// The user-facing-emptiness rule deliberately excludes `delegated`:
+    /// toggling delegated mode on an otherwise-fresh session is a posture change
     /// on a session that has nothing to resume yet, not substantive work —
     /// it must not materialize an empty session file. Once the session gains
     /// dialogue or other substantive state, the flag rides along like every
@@ -601,8 +602,8 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
             SessionEvent::RetryPendingCleared {} => {
                 data.retry_pending = None;
             }
-            SessionEvent::YoloSet { enabled } => {
-                data.yolo = *enabled;
+            SessionEvent::DelegatedSet { enabled } => {
+                data.delegated = *enabled;
             }
             SessionEvent::Reset { id } => {
                 let project_root = data.project_root.clone();
@@ -727,11 +728,11 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             },
         });
     }
-    if data.yolo {
+    if data.delegated {
         events.push(crate::events::EventEnvelope {
             seq: events.len() as u64,
             timestamp: data.updated_at,
-            event: SessionEvent::YoloSet { enabled: true },
+            event: SessionEvent::DelegatedSet { enabled: true },
         });
     }
     for record in &data.request_usage_records {

@@ -1,6 +1,6 @@
 //! Unified Interaction Controller & Posture Management (Phase 4).
 //!
-//! Consolidates previously fragmented interaction flags (`autopilot`,
+//! Consolidates previously fragmented interaction flags (the delegated flag,
 //! `human_posture`, `skip_interactive_input`, `allow_model_stdin`, `human_channel`,
 //! and `autonomous_fallback`) into a coherent, single-source-of-truth interaction
 //! state machine.
@@ -35,7 +35,7 @@ pub struct InteractionController {
     /// Baseline posture (Interactive vs Autonomous vs AutoReject).
     posture: Arc<AtomicU8>,
     /// YOLO mode flag (when true, auto-approves all tool permissions).
-    yolo: Arc<AtomicBool>,
+    delegated: Arc<AtomicBool>,
     /// Model-provided stdin support for shell tools.
     allow_model_stdin: Arc<AtomicBool>,
     /// Skip interactive shell input popups.
@@ -56,7 +56,7 @@ impl InteractionController {
     pub fn new(config: InteractionConfig) -> Self {
         Self {
             posture: Arc::new(AtomicU8::new(HumanChannelPosture::Interactive as u8)),
-            yolo: Arc::new(AtomicBool::new(false)),
+            delegated: Arc::new(AtomicBool::new(false)),
             allow_model_stdin: Arc::new(AtomicBool::new(config.allow_model_stdin)),
             skip_interactive_input: Arc::new(AtomicBool::new(config.skip_interactive_input)),
             fallback_policy: Mutex::new(config.fallback_policy),
@@ -81,12 +81,12 @@ impl InteractionController {
         self.posture.store(posture as u8, Ordering::Relaxed);
     }
 
-    pub fn yolo(&self) -> bool {
-        self.yolo.load(Ordering::Relaxed)
+    pub fn delegated(&self) -> bool {
+        self.delegated.load(Ordering::Relaxed)
     }
 
-    pub fn set_yolo(&self, value: bool) {
-        self.yolo.store(value, Ordering::Relaxed);
+    pub fn set_delegated(&self, value: bool) {
+        self.delegated.store(value, Ordering::Relaxed);
     }
 
     pub fn allow_model_stdin(&self) -> bool {
@@ -145,7 +145,7 @@ mod tests {
     fn interaction_controller_defaults() {
         let c = InteractionController::default();
         assert_eq!(c.human_posture(), HumanChannelPosture::Interactive);
-        assert!(!c.yolo());
+        assert!(!c.delegated());
         assert!(!c.allow_model_stdin());
         assert!(!c.skip_interactive_input());
         assert_eq!(
@@ -157,8 +157,8 @@ mod tests {
     #[test]
     fn interaction_controller_mutations() {
         let c = InteractionController::default();
-        c.set_yolo(true);
-        assert!(c.yolo());
+        c.set_delegated(true);
+        assert!(c.delegated());
         c.set_allow_model_stdin(true);
         assert!(c.allow_model_stdin());
         c.set_skip_interactive_input(true);

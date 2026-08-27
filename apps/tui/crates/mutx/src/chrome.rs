@@ -116,7 +116,7 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 /// ```
 /// The whole bar is transient (turn-scoped): it shows only while a round is
 /// active and is hidden while idle, so the row returns to the transcript.
-/// Session-state flags such as `autopilot` deliberately do not live here:
+/// Session-state flags such as `DELEGATED` deliberately do not live here:
 /// they live on the head row at the top of the view
 /// ([`crate::page_header::draw_page_header`]) so this row stays a pure activity surface. The
 /// persistent task-list summary lives on its own [`draw_todo_bar`], floated
@@ -714,7 +714,7 @@ pub fn draw_completion_menu(
 
 /// Inputs for [`draw_hint_bar`]. Carries the model + context-usage info that
 /// the old top header showed, now collapsed onto one row. Session-level state
-/// (workspace path, `autopilot`) deliberately lives on the status bar below,
+/// (workspace path, `DELEGATED`) deliberately lives on the status bar below,
 /// not here.
 pub struct HintBarView<'a> {
     pub current_model: &'a str,
@@ -1029,10 +1029,10 @@ pub fn draw_hint_bar(
         zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
     }
     // Drop order under width pressure: the instance suffix first (pure
-    // provenance — nice-to-have), then reasoning, then context, then the
-    // model name. The action on the left always wins last. (Session-state
-    // flags such as `autopilot` are not on this row — they live on the
-    // status bar.)
+    // provenance — nice-to-have), then reasoning, then the stream rate,
+    // then context, then the model name. The action on the left always
+    // wins last. (Session-state flags such as `DELEGATED` are not on this
+    // row — they live on the status bar.)
     if !fits(zone_pill_width, right_width) && show_instance {
         show_instance = false;
         right_width = right_width_for(show_performance, show_model, show_reasoning, show_instance, show_context);
@@ -1083,27 +1083,30 @@ pub fn draw_hint_bar(
             || Span::styled(" ".repeat(HINT_BAR_MODEL_GAP), Style::default().bg(bg));
         let group_separator =
             || Span::styled(" ".repeat(HINT_BAR_SEGMENT_GAP), Style::default().bg(bg));
-        if show_performance {
-            right_spans.extend(performance_spans);
-        }
-        // Identity group: `model effort @instance` — single-space joins.
-        let mut identity_started = false;
-        for segment in [
-            show_model.then_some(model_spans),
-            show_reasoning.then_some(reasoning_spans),
-            show_instance.then_some(instance_spans),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if !identity_started && !right_spans.is_empty() {
-                right_spans.push(group_separator());
+        // Row order: model identity group → context usage → stream rate.
+        // The model anchors the row (leftmost), the context meter sits in
+        // the middle as the bridge between "what is answering" and "how
+        // fast", and the live speed signal lands at the row's tail where
+        // the eye lands last on a right-aligned strip.
+        if show_model || show_reasoning || show_instance {
+            let mut identity_started = false;
+            for segment in [
+                show_model.then_some(model_spans),
+                show_reasoning.then_some(reasoning_spans),
+                show_instance.then_some(instance_spans),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if !identity_started && !right_spans.is_empty() {
+                    right_spans.push(group_separator());
+                }
+                if identity_started {
+                    right_spans.push(identity_separator());
+                }
+                identity_started = true;
+                right_spans.extend(segment);
             }
-            if identity_started {
-                right_spans.push(identity_separator());
-            }
-            identity_started = true;
-            right_spans.extend(segment);
         }
         // Context usage sits across the wider segment gap.
         if show_context {
@@ -1111,6 +1114,13 @@ pub fn draw_hint_bar(
                 right_spans.push(group_separator());
             }
             right_spans.extend(context_spans);
+        }
+        // Stream rate closes the row, across the wider gap.
+        if show_performance {
+            if !right_spans.is_empty() {
+                right_spans.push(group_separator());
+            }
+            right_spans.extend(performance_spans);
         }
     }
 
@@ -1135,24 +1145,57 @@ pub fn draw_hint_bar(
 
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 
-    // Compute the context-meter segment's screen rect so the caller can make
-    // it clickable. Context is the final segment whenever it survives the
-    // narrow-width priority pass.
+    // Compute the stream-rate and context-meter segments' screen rects so
+    // the caller can make them clickable. Under the model → context → rate
+    // order the segments are located by walking the right strip in render
+    // order; nothing is assumed about which segment is last.
     let right_start = (inner + zone_pill_width + gap) as u16;
     let mut performance_rect: Option<Rect> = None;
-    if show_performance && !ignition_label_active {
-        performance_rect = Some(Rect::new(
-            rect.x + right_start,
-            rect.y,
-            performance_width as u16,
-            rect.height,
-        ));
-    }
     let mut context_rect: Option<Rect> = None;
-    if show_context && !ignition_label_active {
-        let ctx_offset = (right_width - context_seg_width) as u16;
-        let x = rect.x + right_start + ctx_offset;
-        context_rect = Some(Rect::new(x, rect.y, context_seg_width as u16, rect.height));
+    if !ignition_label_active {
+        // Model identity group (`model effort @instance`, single-space
+        // joins), then the two meter segments across wider gaps — mirroring
+        // exactly the span assembly above, including "the first rendered
+        // segment gets no leading separator".
+        let mut x = right_start;
+        let mut any_rendered = false;
+        if show_model || show_reasoning || show_instance {
+            let mut group_started = false;
+            for (shown, width) in [
+                (show_model, model_width),
+                (show_reasoning, reasoning_width),
+                (show_instance, instance_width),
+            ] {
+                if shown {
+                    if group_started {
+                        x += HINT_BAR_MODEL_GAP as u16;
+                    }
+                    x += width as u16;
+                    group_started = true;
+                }
+            }
+            any_rendered = true;
+        }
+        let mut advance =
+            |width: usize, seg: &mut Option<Rect>, leading: bool| {
+                if leading {
+                    x += HINT_BAR_SEGMENT_GAP as u16;
+                }
+                *seg = Some(Rect::new(
+                    rect.x + x,
+                    rect.y,
+                    width as u16,
+                    rect.height,
+                ));
+                x += width as u16;
+            };
+        if show_context {
+            advance(context_seg_width, &mut context_rect, any_rendered);
+            any_rendered = true;
+        }
+        if show_performance {
+            advance(performance_width, &mut performance_rect, any_rendered);
+        }
     }
     HintBarRects {
         performance: performance_rect,
@@ -1822,11 +1865,12 @@ mod tests {
         assert_eq!(text, "20.2k (8%)");
     }
 
-    /// The `@<instance>` suffix is the first hint-bar segment to hide as the
-    /// row narrows: provenance is nice-to-have, so it drops while the model
-    /// name, reasoning tag, and context meter all still fit.
+    /// Right-strip contract: the order is **model → context → stream
+    /// rate**, and under width pressure the instance suffix is the first
+    /// segment to hide (provenance is nice-to-have) while the model name,
+    /// effort tag, and context meter all still fit.
     #[test]
-    fn narrow_hint_bar_hides_the_instance_suffix_first() {
+    fn hint_bar_orders_model_then_context_then_speed() {
         let messages: Vec<TranscriptMessage> = Vec::new();
         let row_text = |width: u16| -> String {
             let mut terminal = mutx_engine::TestTerminal::new(width, 1);
@@ -1851,21 +1895,31 @@ mod tests {
                 .collect::<String>()
         };
 
-        // Wide enough: the full cluster `model effort @instance  ctx` shows.
-        let wide = row_text(50);
-        assert!(wide.contains("@kimi-code"), "{wide:?}");
-        assert!(wide.contains("(0%)"), "{wide:?}");
-
-        // One column narrower and the instance suffix is gone — while the
-        // model name, the effort tag, and the context meter all survive.
-        let narrow = row_text(49);
+        // Wide enough for everything: `model effort @instance  ctx  rate`
+        // in that left-to-right order on one row.
+        let wide = row_text(64);
+        let model_pos = wide.find("kimi-k2.7-code").expect("model shown");
+        let ctx_pos = wide.find("(0%)").expect("context meter shown");
+        let rate_pos = wide.find("tok/s").expect("stream-rate placeholder shown");
         assert!(
-            !narrow.contains('@'),
-            "instance should hide first: {narrow:?}"
+            model_pos < ctx_pos && ctx_pos < rate_pos,
+            "hint bar must read model → context → speed: {wide:?}"
         );
-        assert!(narrow.contains("kimi-k2.7-code"), "{narrow:?}");
-        assert!(narrow.contains("max"), "{narrow:?}");
-        assert!(narrow.contains("(0%)"), "{narrow:?}");
+        let inst_pos = wide.find("@kimi-code").expect("instance suffix shown");
+        assert!(model_pos < inst_pos, "instance follows the model: {wide:?}");
+
+        // Narrower row: the provenance suffix drops first while the model
+        // name, effort tag, context meter, and rate survive in order.
+        let narrow = row_text(50);
+        assert!(!narrow.contains('@'), "instance should hide first: {narrow:?}");
+        assert!(!narrow.contains('@'), "instance should hide first: {narrow:?}");
+        let model_pos = narrow.find("kimi-k2.7-code").expect("model survives");
+        let ctx_pos = narrow.find("(0%)").expect("context survives");
+        let rate_pos = narrow.find("tok/s").expect("rate survives");
+        assert!(
+            model_pos < ctx_pos && ctx_pos < rate_pos,
+            "order must hold after dropping the suffix: {narrow:?}"
+        );
     }
 
     #[test]
@@ -1969,6 +2023,45 @@ mod tests {
             text.contains("Enter send  /retry to retry"),
             "row was {text:?}"
         );
+    }
+
+    /// Click targets must track the model → context → speed order: the
+    /// context rect sits before the rate rect, and each matches the text
+    /// actually painted in that column range.
+    #[test]
+    fn hint_bar_click_rects_follow_model_context_speed_order() {
+        let theme = Theme::default();
+        let mut terminal = mutx_engine::TestTerminal::new(80, 1);
+        let messages: Vec<TranscriptMessage> = Vec::new();
+        let mut captured = HintBarRects::default();
+        terminal.draw(|f| {
+            captured = draw_hint_bar(
+                f,
+                Rect::new(0, 0, 80, 1),
+                HintBarView {
+                    current_model: "kimi-k2.7-code",
+                    provider_name: None,
+                    messages: &messages,
+                    ..Default::default()
+                },
+                &theme,
+            );
+        });
+        let ctx = captured.context.expect("context rect present");
+        let perf = captured.performance.expect("performance rect present");
+        assert!(
+            ctx.x + ctx.width <= perf.x,
+            "context meter must sit left of the stream-rate segment"
+        );
+        // Both rects carry exactly their own segment's text.
+        let buf = terminal.buffer();
+        let slice = |r: Rect| -> String {
+            (r.x..r.x + r.width)
+                .map(|x| buf[(x, r.y)].symbol().to_string())
+                .collect::<String>()
+        };
+        assert_eq!(slice(ctx), "0 (0%)", "context rect mismatch");
+        assert_eq!(slice(perf), "– tok/s", "rate rect mismatch");
     }
 
     #[test]
@@ -2350,8 +2443,8 @@ mod tests {
             ("/models", "Switch the active model"),
             ("/tools", "Manage session tools (enable/disable)"),
             (
-                "/autopilot",
-                "Toggle autopilot mode — agent runs without human intervention (on/off)",
+                "/delegate",
+                "Toggle delegated autonomous mode — agent runs without human intervention (on/off)",
             ),
         ]
         .iter()
@@ -2395,7 +2488,7 @@ mod tests {
         let row_text: String = (first..=last)
             .filter_map(|x| buf.get(x, y).map(|c| c.symbol().to_string()))
             .collect();
-        assert!(row_text.starts_with("/autopilot"), "row was {row_text:?}");
+        assert!(row_text.starts_with("/delegate"), "row was {row_text:?}");
     }
 
     #[test]

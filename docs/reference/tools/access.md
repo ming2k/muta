@@ -73,7 +73,7 @@ providers, so they can be reworded freely without changing tool behavior.
 - [ADR-0012](../../adr/0012-toolaccess-tier-split.md) — the tier split decision.
 - [Envoy profiles](../../explanation/agent-design/envoys.md#profiles) —
   how the axes drive envoy tool admission.
-- [Autopilot operation](../../explanation/agent-design/autopilot.md) — the
+- [Delegated autonomous execution](../../explanation/agent-design/delegated-mode.md) — the
   design intent behind suppressing the broker prompt: what the flag enforces
   versus the broader no-intervention posture.
 - [ADR-0028](../../adr/0028-capability-allocation-scoped-writes.md) — the

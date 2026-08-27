@@ -34,7 +34,7 @@
 //!    broker: `Unspecified` skips all three.
 //! 3. **`Reject` is collective** — one reject rejects the whole pending batch
 //!    (owned by the permission store's `reply`, keyed on a reject decision).
-//! 4. **`autopilot` is not authority.** Scope, bash, and broker decisions are
+//! 4. **The delegated flag is not authority.** Scope, bash, and broker decisions are
 //!    identical for attended and unattended sessions. Only the executor decides
 //!    whether a missing grant can be requested interactively.
 //! 5. **`PermissionDenied` vs `Error`** distinguish user-aborts from hard
@@ -129,7 +129,7 @@ pub trait PermissionContext: Send + Sync {
     /// outcome — including the interactive confirm — is resolved inside the
     /// chain. There is no longer a chain-external re-evaluation.
     ///
-    /// This verdict is independent of attended/autopilot posture.
+    /// This verdict is independent of the attended/delegated posture.
     async fn check_bash_policy(&self, command: &str, arguments: &str) -> BashVerdict;
 
     /// The permission store, for synchronous permission checks (`is_allowed`).
@@ -149,8 +149,8 @@ pub struct PolicyContext<'a> {
     pub operation_scope: muta_contracts::OperationScope,
     pub disabled: std::collections::HashSet<String>,
     pub scoped_disabled: ScopedToolDisable,
-    /// When true (YOLO mode), all permissions are auto-approved.
-    pub yolo: bool,
+    /// When true (delegated autonomous execution mode), all permissions are auto-approved.
+    pub delegated: bool,
     /// Agent capabilities (hooks, bash policy, permission parking). Sync
     /// policies ignore this; async policies call through it.
     pub ctx: &'a dyn PermissionContext,
@@ -311,7 +311,7 @@ impl PermissionPolicy for ScopeGatePolicy {
         "scope-gate"
     }
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if ctx.yolo || matches!(ctx.scope_target, ScopeTarget::Unspecified) {
+        if ctx.delegated || matches!(ctx.scope_target, ScopeTarget::Unspecified) {
             return PolicyDecision::Pass;
         }
         if ctx.operation_scope.allows(&ctx.scope_target) {
@@ -377,7 +377,7 @@ impl PermissionPolicy for BashPolicy {
             BashVerdict::Allow => PolicyDecision::Pass,
             BashVerdict::Deny { output } => PolicyDecision::Deny { output },
             BashVerdict::Confirm { match_ } => {
-                if ctx.yolo {
+                if ctx.delegated {
                     // Under YOLO mode, dangerous commands requiring confirmation are auto-approved.
                     PolicyDecision::Pass
                 } else {
@@ -422,7 +422,7 @@ impl PermissionPolicy for BrokerPolicy {
         "broker"
     }
     async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if ctx.yolo {
+        if ctx.delegated {
             return PolicyDecision::Approve;
         }
         let submission = ctx.tool.permission_submission(ctx.arguments);
@@ -565,7 +565,7 @@ mod tests {
         name: &'a str,
         args: &'a str,
         target: ScopeTarget,
-        yolo: bool,
+        delegated: bool,
         op: muta_contracts::OperationScope,
         disabled: HashSet<String>,
         scoped: ScopedToolDisable,
@@ -582,7 +582,7 @@ mod tests {
             operation_scope: params.op,
             disabled: params.disabled,
             scoped_disabled: params.scoped,
-            yolo: params.yolo,
+            delegated: params.delegated,
             ctx: params.ctx,
         }
     }
@@ -617,7 +617,7 @@ mod tests {
             name: "execute_command",
             args: "{}",
             target: ScopeTarget::Unspecified,
-            yolo: false,
+            delegated: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -630,7 +630,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scope_gate_out_of_scope_passes_under_yolo() {
+    async fn scope_gate_out_of_scope_passes_when_delegated() {
         let (granted, _inside, outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
@@ -650,7 +650,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(outside),
-            yolo: true, // yolo
+            delegated: true, // delegated
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -683,7 +683,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(outside),
-            yolo: false, // attended
+            delegated: false, // attended
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -696,7 +696,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scope_gate_in_scope_passes_regardless_of_autopilot() {
+    async fn scope_gate_in_scope_passes_regardless_of_delegated() {
         // Inside the granted scope → always passes (broker applies as usual).
         let (granted, inside, _outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
@@ -717,7 +717,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(inside),
-            yolo: true,
+            delegated: true,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -753,7 +753,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(outside),
-            yolo: false,
+            delegated: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -789,7 +789,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(outside),
-            yolo: false,
+            delegated: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -800,7 +800,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broker_yolo_approves_automatically() {
+    async fn broker_delegated_approves_automatically() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/anywhere")),
@@ -816,7 +816,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/anywhere")),
-            yolo: true, // yolo
+            delegated: true, // delegated
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -845,7 +845,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/workspace/file")),
-            yolo: true,
+            delegated: true,
             op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),
@@ -874,7 +874,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
-            yolo: false,
+            delegated: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -910,7 +910,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(outside),
-            yolo: false,
+            delegated: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -944,7 +944,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(inside),
-            yolo: false,
+            delegated: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -973,7 +973,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
-            yolo: false,
+            delegated: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -1003,7 +1003,7 @@ mod tests {
             name: "read_text",
             args: "{}",
             target: ScopeTarget::Unspecified,
-            yolo: false,
+            delegated: false,
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -1037,7 +1037,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
-            yolo: false, // attended
+            delegated: false, // attended
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -1051,7 +1051,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chain_out_of_scope_yolo_approves() {
+    async fn chain_out_of_scope_delegated_approves() {
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
@@ -1070,7 +1070,7 @@ mod tests {
             name: "write_file",
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
-            yolo: true, // yolo
+            delegated: true, // delegated
             op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
@@ -1155,7 +1155,7 @@ mod tests {
             name: "view_file",
             args: "{}",
             target: ScopeTarget::Unspecified,
-            yolo: false,
+            delegated: false,
             op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),
@@ -1178,7 +1178,7 @@ mod tests {
             name: "execute_command",
             args: "cargo test",
             target: ScopeTarget::Command("cargo test".to_string()),
-            yolo: false,
+            delegated: false,
             op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),
@@ -1218,7 +1218,7 @@ mod tests {
             name: "execute_command",
             args: "cargo build",
             target: ScopeTarget::Command("cargo build".to_string()),
-            yolo: false,
+            delegated: false,
             op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),

@@ -20,7 +20,7 @@ One span grammar for the Entry header, followed by a 1-row gap, the concrete inv
 ```text
 ⌘ command · 21:39                     pending header
                                       ← 1-row blank gap
-  /autopilot on                       concrete command invocation
+  /delegate on                        concrete command invocation
 
 ⌘ command · 21:39                     completed header
                                       ← 1-row blank gap

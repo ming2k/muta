@@ -155,7 +155,7 @@ fn restored_slash_echoes_fold_into_command_components() {
             // A display-content slash shape (legacy sessions pre-ADR-0050).
             {
                 let mut m = Message::new(Role::User, "expanded prompt text");
-                m.display_content = Some("/yolo on".to_string());
+                m.display_content = Some("/delegate on".to_string());
                 m
             },
             Message::new(Role::User, "and me too"), // another real prompt

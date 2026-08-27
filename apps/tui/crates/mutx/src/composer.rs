@@ -193,7 +193,7 @@ pub fn cursor_screen_pos(
 /// hand, or left over after the paste was undone — renders as ordinary text
 /// so it never reads as an attachment that isn't there.
 ///
-/// The elevated autopilot state is no longer signalled here; it lives on the
+/// The elevated delegated state is no longer signalled here; it lives on the
 /// state bar directly below the input, separate from composer state.
 pub fn draw_composer(
     view: ComposerView<'_, '_>,

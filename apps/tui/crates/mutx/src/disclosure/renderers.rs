@@ -2395,7 +2395,7 @@ fn command_header_line(
 /// Every command entry is structured identically to a turn entry:
 /// - **Header**: `⌘ command` plus a right-aligned `HH:MM` timestamp
 /// - **Gap**: 1 blank row separating header and content body (`TURN_HEADER_BODY_GAP_ROWS`)
-/// - **Body**: The concrete invocation (e.g. `/autopilot on`) followed by result output blocks.
+/// - **Body**: The concrete invocation (e.g. `/delegate on`) followed by result output blocks.
 pub fn draw_command_result(
     ctx: &mut RenderCtx<'_, '_>,
     msg: &TranscriptMessage,
@@ -2542,7 +2542,7 @@ pub fn draw_ack_body(
         .saturating_sub(TRANSCRIPT_BODY_LEADING_INDENT as usize)
         .max(1);
 
-    // Headline: prominent (the command family tone, bold) so "YOLO mode ON"
+    // Headline: prominent (the command family tone, bold) so "Delegated mode ON"
     // reads as the outcome, not as detail noise.
     let title_style = Style::default()
         .fg(family_tone)

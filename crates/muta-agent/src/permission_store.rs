@@ -64,8 +64,8 @@ struct PermissionState {
 pub struct PermissionStore {
     state: Mutex<PermissionState>,
     persistence: Mutex<Option<PermissionPersistence>>,
-    /// When true, the agent runs in **yolo mode** — all tool permissions are auto-approved.
-    yolo: Mutex<bool>,
+    /// When true, the agent runs in delegated autonomous mode — all tool permissions are auto-approved.
+    delegated: Mutex<bool>,
 }
 
 /// Stable on-disk target for one project's permissions.
@@ -84,24 +84,24 @@ impl PermissionStore {
         Self {
             state: Mutex::new(PermissionState::default()),
             persistence: Mutex::new(None),
-            yolo: Mutex::new(false),
+            delegated: Mutex::new(false),
         }
     }
 
-    // ── yolo ────────────────────────────────────────────────────────
+    // ── delegated (autonomous execution posture) ────────────────────
 
-    pub fn yolo(&self) -> bool {
-        *lock(&self.yolo)
+    pub fn delegated(&self) -> bool {
+        *lock(&self.delegated)
     }
 
-    pub fn set_yolo(&self, value: bool) {
-        *lock(&self.yolo) = value;
+    pub fn set_delegated(&self, value: bool) {
+        *lock(&self.delegated) = value;
     }
 
     // Pending-request parking moved to the human-request broker
     // (ADR-0141, `muta_agent::human_broker`): one owner for permission /
     // ask_user / interactive-input oneshots, uniform exactly-once
-    // settlement, per-kind metrics. The store keeps only rules + autopilot.
+    // settlement, per-kind metrics. The store keeps only rules + the delegated flag.
 
     // ── allowlist ───────────────────────────────────────────────────────
 
@@ -476,7 +476,7 @@ mod tests {
     // receiver-and-timestamp behavior now lives there — see
     // `human_broker::tests::park_reply_settles_exactly_once` and
     // `human_broker::tests::cancel_all_settles_every_kind_with_none_or_reject`.
-    // The store keeps only rules + autopilot.
+    // The store keeps only rules + the delegated flag.
 
     // ── #3: revoked config rules must not resurrect on re-seed ──────────
 

@@ -180,7 +180,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         harness_retry_pending: false,
         activity_status: String::new(),
         provider_retry: None,
-        yolo: false,
+        delegated: false,
         todos: None,
         round_count: 0,
         current_turn: 0,

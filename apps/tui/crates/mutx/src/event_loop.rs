@@ -464,7 +464,7 @@ pub(super) struct UiRuntime {
     /// A toast-surfaced notice (`NoticeSurface::Toast`) the listener forwards
     /// instead of appending it to the transcript. The loop drains it each frame
     /// and shows it as a transient top-right bubble (command acknowledgments
-    /// such as `/autopilot on`), mirroring the copy-toast. Latest wins; a
+    /// such as `/delegate on`), mirroring the copy-toast. Latest wins; a
     /// pending older toast is replaced.
     pub notice_toast_signal: Arc<Mutex<Option<NoticeToastSignal>>>,
     /// Ordered protocol acknowledgements for the compact outbox. The response
@@ -486,7 +486,7 @@ impl UiRuntime {
             harness: Arc::new(Mutex::new(HarnessSnapshot {
                 loop_status: LoopStatus::Idle,
                 round_counter: 0,
-                yolo: false,
+                delegated: false,
                 workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
                 retry_pending: false,
             })),
@@ -1190,7 +1190,7 @@ async fn sync_runtime_state(
     let harness = runtime.harness.lock().await.clone();
     app.loop_status = harness.loop_status;
     app.harness_retry_pending = harness.retry_pending;
-    app.yolo = harness.yolo;
+    app.delegated = harness.delegated;
     app.activity_status = runtime.activity_status.lock().await.clone();
     app.provider_retry = runtime.provider_retry.lock().await.clone();
     app.session_context = runtime.session_context.lock().await.clone();

@@ -65,7 +65,7 @@ The architecture defines a two-axis, three-plane model: **`Supervisor`** (fleet 
 | **runner** | An isolated sub-agent spawned by a master to investigate or execute a sub-task; shares only the provider, running with fresh history and profile-filtered tools. |
 | **profile** | A declarative bundle (name, system-prompt fragment, and `ToolPolicy`) that scopes a runner's behavior. |
 | **`EXPLORE` profile** | Research role: pure read tools. Bound by the `runner` tool. |
-| **`CODE` profile** | Coding role: write-capable (admits `execute_command`/`edit_file`/`write_file`). Runs autopilot like built-in runners — delegation via `runner_code` is the authorization. |
+| **`CODE` profile** | Coding role: write-capable (admits `execute_command`/`edit_file`/`write_file`). Runs delegated (autonomous) like built-in runners — delegation via `runner_code` is the authorization. |
 | **`TITLE` profile** | Read-only role used to generate a session title in a single model call. [ADR-0022](../adr/0022-session-level-ai-title.md) |
 | **full-duplex** | Runners are not fire-and-forget: requests travel up to the master, replies travel down to the child. |
 
@@ -80,7 +80,7 @@ The architecture defines a two-axis, three-plane model: **`Supervisor`** (fleet 
 | **spatial workspace boundary** | The canonical primary workspace plus user-configured linked roots within which native file operations may occur. It does not load assets or authorize runtime operations. |
 | **runtime permission grant** | Authority for one concrete hazardous operation scope, granted Once, for the Session, or Always. It does not trust project assets or widen filesystem roots. |
 | **workspace sandbox** | The isolated variant of `execute_command` (`shell_isolation: Workspace`): commands run inside a container confined to the admitted workspace roots, with no host file or network access. Offered automatically when `muta_platform::workspace_sandbox::available()`. |
-| **autopilot** | A persisted interaction posture: never wait for confirmations, questions, or stdin. Missing grants fail immediately. [Autopilot operation](../explanation/agent-design/autopilot.md) |
+| **delegated autonomous mode** | A persisted interaction posture: never wait for confirmations, questions, or stdin. Missing grants fail immediately. Formerly `autopilot` (and earlier, an internal spelling now retired); the legacy words remain input aliases. [Delegated autonomous execution](../explanation/agent-design/delegated-mode.md) |
 | **`tool_call_id` pairing** | The wire requirement that every result message references a preceding call id; preserved across pruning and fallback. [Rounds and turns](../explanation/agent-design/rounds-and-turns.md) |
 
 ## Skills
@@ -178,7 +178,7 @@ before the round runs.
 | **model-request assembly** | The pure pre-provider projection that clones the current window, removes non-driving command echoes and legacy system messages, composes one fresh system message, and snapshots admitted tools into `ModelRequest`. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
 | **`SystemPromptSection`** | An agent-owned declarative system-prompt fragment with a stable id, rank, activation predicate, and renderer. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
 | **system-prompt registry** | Agent policy that sorts active `SystemPromptSection`s by rank and folds them into the singleton head system message of an ephemeral request. It does not construct user-role context or mutate the durable model window. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
-| **`SystemPromptContext`** | The agent-owned, read-only snapshot of live identity, admitted tool names, model/provider guidance, and autopilot state used by system-prompt sections. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
+| **`SystemPromptContext`** | The agent-owned, read-only snapshot of live identity, admitted tool names, model/provider guidance, and delegated-posture state used by system-prompt sections. [ADR-0056](../adr/0056-model-context-assembly-boundary.md) |
 | **harness context message** | A model-visible user-role message inserted by the harness rather than authored by the user. Common constructors enforce role, visibility, and provenance; lifecycle owners decide payload and insertion time. [Prompt and message assembly](../explanation/agent-design/prompt-assembly.md) |
 
 ## Architecture

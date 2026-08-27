@@ -61,8 +61,8 @@ pub struct BootstrapParams {
     pub startup: SessionStart,
     /// `--project` override; when `None`, the current directory is used.
     pub project_root: Option<PathBuf>,
-    /// `--yolo` at start: auto-approve all tool permissions.
-    pub yolo: bool,
+    /// `--delegate` at start (delegated autonomous execution): auto-approve all tool permissions.
+    pub delegated: bool,
     /// ADR-0141: the human-channel accountant this session reports into.
     /// Attach/detach on the WS layer ORs client postures into it; the
     /// harness's posture gate reads it before parking a human request.
@@ -184,7 +184,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ui,
         startup,
         project_root: project_override,
-        yolo: yolo_at_start,
+        delegated: delegated_at_start,
         human_channel,
         teardown_token,
     } = params;
@@ -690,12 +690,12 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         mcp_runtime_for_bg.refresh_all().await;
     });
     muta_agent::dynamic::spawn_refresh(McpCatalog::new(mcp_runtime.clone()));
-    if yolo_at_start {
-        agent.set_yolo(true);
-        if let Err(error) = session.set_yolo(true).await {
+    if delegated_at_start {
+        agent.set_delegated(true);
+        if let Err(error) = session.set_delegated(true).await {
             tracing::warn!(
                 error = %error,
-                "could not persist --yolo startup posture"
+                "could not persist --delegate startup posture"
             );
         }
         let _ = resp_tx.send(round_response(
@@ -704,13 +704,13 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 AgentNotice::new(
                     muta_contracts::NoticeKind::CommandAck,
                     muta_contracts::NoticeSeverity::Info,
-                    "YOLO mode ON",
+                    "Delegated mode ON",
                     muta_contracts::NoticeSource::Harness,
                 )
                 .with_surface(muta_contracts::NoticeSurface::Inline)
                 .with_body(
                     "All tool permissions are auto-approved this session.\n\
-                     Use `/yolo off` to return to interactive mode.",
+                     Use `/delegate off` to return to interactive mode.",
                 ),
             ),
         ));
@@ -805,7 +805,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Restore the session-scoped runtime state and fire SessionStart hooks.
     // Skipped entirely in Picker mode: the bootstrap session is a throwaway
     // fresh one, and the user has not chosen a session yet. The full restore
-    // (todos + disabled tools + round counter + autopilot + SessionStart
+    // (todos + disabled tools + round counter + the delegated flag + SessionStart
     // hooks) runs when a real session is opened from the picker — see
     // `handlers_slash`'s `restore_session_runtime`.
     if !is_picker {
@@ -822,21 +822,21 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         agent.restore_disabled_tools(session.disabled_tools().await);
         agent.restore_round_count(session.round_counter().await);
 
-        // Restore the session-scoped autopilot posture (ADR-0132). This is
+        // Restore the session-scoped delegated posture (ADR-0132). This is
         // the daemon-restart recovery path: a session that died unattended
         // reopens unattended — attach, lazy-resume, and boot rehost all flow
-        // through here. `--autopilot` ran earlier and may already have set
+        // through here. `--delegate` ran earlier and may already have set
         // the flag live; the store read is idempotent either way (same
-        // value, and `set_autopilot` on the store is a no-op guard), but the
+        // value, and `set_delegated` on the store is a no-op guard), but the
         // explicit flag above wins when both apply, matching the user's most
         // recent explicit intent.
-        let persisted_yolo = session.yolo().await;
-        if persisted_yolo && !agent.get_yolo() {
-            agent.set_yolo(true);
+        let persisted_delegated = session.delegated().await;
+        if persisted_delegated && !agent.delegated() {
+            agent.set_delegated(true);
             let restored_session_id = session.id().await;
             tracing::info!(
                 session = %restored_session_id,
-                "restored YOLO mode posture from session store"
+                "restored delegated-mode posture from session store"
             );
         }
 

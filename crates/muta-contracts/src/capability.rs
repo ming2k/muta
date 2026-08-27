@@ -688,7 +688,7 @@ impl OperationScope {
     /// `ScopeTarget` is admitted. `true` for the principal's default scope
     /// (`paths: None, commands: None`). A sandboxed scope (any `Some` dimension)
     /// returns `false`. Used by the principal's startup safety check: an
-    /// autopilot principal with an unrestricted scope runs with no permission
+    /// delegated principal with an unrestricted scope runs with no permission
     /// floor at all, which deserves a loud warning (#9).
     pub fn is_unrestricted(&self) -> bool {
         self.paths.is_none() && self.commands.is_none()

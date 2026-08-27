@@ -527,7 +527,7 @@ impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
 }
 
 /// Emit the current harness snapshot (mode, round counter, loop
-/// status, autopilot, retry affordance) to the UI.
+/// status, delegated flag, retry affordance) to the UI.
 ///
 /// `retry_pending` mirrors the session's durable `/retry` resume point when
 /// the harness is idle (the only state in which `/retry` is answerable). For
@@ -552,7 +552,7 @@ pub fn send_harness_state(
         RoundEvent::HarnessState(HarnessSnapshot {
             loop_status,
             round_counter,
-            yolo: agent.get_yolo(),
+            delegated: agent.delegated(),
             workspace_security: agent.workspace_security(),
             retry_pending: false,
         }),
@@ -584,7 +584,7 @@ pub async fn send_harness_state_for_session(
         RoundEvent::HarnessState(HarnessSnapshot {
             loop_status,
             round_counter,
-            yolo: agent.get_yolo(),
+            delegated: agent.delegated(),
             workspace_security: agent.workspace_security(),
             retry_pending,
         }),
@@ -1669,8 +1669,8 @@ pub fn relay_agent_event(
         AgentEvent::TodosUpdated(todos) => {
             round_response(session_id, RoundEvent::TodosUpdated(todos))
         }
-        AgentEvent::YoloChanged(enabled) => {
-            round_response(session_id, RoundEvent::YoloChanged(enabled))
+        AgentEvent::DelegatedChanged(enabled) => {
+            round_response(session_id, RoundEvent::DelegatedChanged(enabled))
         }
         AgentEvent::PermissionRequest(request) => {
             round_response(session_id, RoundEvent::PermissionRequest(request))

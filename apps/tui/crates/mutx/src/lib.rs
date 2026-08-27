@@ -311,7 +311,7 @@ pub async fn run_tui(
     let harness = Arc::new(Mutex::new(HarnessSnapshot {
         loop_status: LoopStatus::Idle,
         round_counter: initial_round_count,
-        yolo: false,
+        delegated: false,
         workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
         retry_pending: false,
     }));
@@ -484,7 +484,7 @@ pub async fn run_tui(
     // `UnsentInput`, drained by the event loop to restore the composer.
     let unsent_input_signal = Arc::new(Mutex::new(None::<event_loop::UnsentInput>));
     let unsent_input_signal_clone = unsent_input_signal.clone();
-    // Toast-surfaced notices (command acknowledgments such as `/autopilot on`)
+    // Toast-surfaced notices (command acknowledgments such as `/delegate on`)
     // are forwarded by the listener and drained by the loop into a transient
     // bubble, never entering the transcript.
     let notice_toast_signal = Arc::new(Mutex::new(None::<event_loop::NoticeToastSignal>));
@@ -758,7 +758,7 @@ pub async fn run_tui(
                                 // the retry disclosure.
                             } else if notice.surface == muta_contracts::NoticeSurface::Toast {
                                 // Toast-surfaced notices (command
-                                // acknowledgments such as `/autopilot on`) are
+                                // acknowledgments such as `/delegate on`) are
                                 // forwarded as a transient bubble instead of
                                 // being appended to the transcript. They carry
                                 // no conversational content, so polluting the
@@ -802,7 +802,7 @@ pub async fn run_tui(
                                 // (ADR-0091). Clearing the optimistic activity
                                 // surface here was what let a toast-only slash
                                 // reply leave the bar stuck on "queued" after
-                                // ADR-0088 migrated `/autopilot` from `Text` to
+                                // ADR-0088 migrated the mode toggle from `Text` to
                                 // `Notice`. Only collapse the surface when the
                                 // harness is actually idle: a slash reply
                                 // delivered mid-round must not tear down the
@@ -1119,7 +1119,7 @@ pub async fn run_tui(
                             // Identity-addressed append (ADR-0114): resolve the
                             // streaming Thinking entry for *this* (round, turn)
                             // by scanning backwards, not by "is last". A command
-                            // entry (`/autopilot`, shell passthrough) or a local
+                            // entry (`/delegate`, shell passthrough) or a local
                             // notice can be appended between reasoning deltas —
                             // under `last_mut()` addressing the next delta would
                             // fork the trace into a second Thinking entry. The
@@ -1468,7 +1468,7 @@ pub async fn run_tui(
                             // its reply. Queue them FIFO so none is lost; the UI shows
                             // one sheet at a time and hands off as each is resolved.
                             // Stays global regardless of session so the modal always
-                            // surfaces (ADR-0017: the side runs on autopilot, so in
+                            // surfaces (ADR-0017: the side runs delegated, so in
                             // practice only the primary ever reaches here).
                             pending_permission_clone.lock().await.push_back(request);
                             if !routes_to_side {
@@ -1655,9 +1655,9 @@ pub async fn run_tui(
                                 *todos_clone.lock().await = Some(list);
                             }
                         }
-                        RoundEvent::YoloChanged(enabled) => {
+                        RoundEvent::DelegatedChanged(enabled) => {
                             if !routes_to_side {
-                                harness_clone.lock().await.yolo = enabled;
+                                harness_clone.lock().await.delegated = enabled;
                             }
                         }
                         RoundEvent::RetryScheduled {
@@ -2090,7 +2090,7 @@ pub async fn run_tui(
         harness_retry_pending: false,
         activity_status: String::new(),
         provider_retry: None,
-        yolo: false,
+        delegated: false,
         todos: None,
         round_count: 0,
         current_turn: 0,
@@ -2362,7 +2362,7 @@ fn begin_stream(_messages: &mut Vec<TranscriptMessage>) {}
 ///
 /// Identity-addressed (ADR-0114): resolves the target by scanning backwards
 /// for the Thinking entry matching `(round, turn)`, **not** by "is the last
-/// message". Command entries (`/autopilot`, shell passthrough) and local
+/// message". Command entries (`/delegate`, shell passthrough) and local
 /// notices can be appended between reasoning deltas — under `last_mut()`
 /// addressing the next delta would fork the trace into a second Thinking
 /// entry (the "two Thinking blocks" bug).
@@ -2581,12 +2581,12 @@ mod describe_todos_change_tests {
 
     #[test]
     fn reasoning_delta_appends_across_an_intervening_command_entry() {
-        // Regression (ADR-0114): dispatching `/autopilot` mid-stream pushes a
+        // Regression (ADR-0114): dispatching `/delegate` mid-stream pushes a
         // CommandResult entry after the still-streaming Thinking entry. The
         // next reasoning delta must extend the *original* entry, not fork a
         // second Thinking block.
         let mut messages = vec![thinking_entry(8, 1, "the error chain is")];
-        messages.push(TranscriptMessage::pending_command("autopilot", "on").with_sent_at_ms(1_000));
+        messages.push(TranscriptMessage::pending_command("delegate", "on").with_sent_at_ms(1_000));
 
         let id = append_reasoning_delta(&mut messages, Some(8), Some(1), " now clear")
             .expect("must resolve the original thinking entry");
@@ -2648,7 +2648,7 @@ mod describe_todos_change_tests {
         text.round = Some(3);
         text.turn = Some(1);
         let mut messages = vec![text];
-        messages.push(TranscriptMessage::pending_command("autopilot", "on").with_sent_at_ms(1_000));
+        messages.push(TranscriptMessage::pending_command("delegate", "on").with_sent_at_ms(1_000));
 
         let id = append_stream_text_delta(&mut messages, Some(3), Some(1), "world")
             .expect("must resolve the original text entry");

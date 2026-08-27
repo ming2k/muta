@@ -201,7 +201,7 @@ paths — and any future tool source — pass through identical checks:
    whose target is outside the agent's granted paths — the main agent is
    unrestricted, an envoy is scoped by its profile. In-scope calls pass; an
    out-of-scope call is routed to the broker for the user to approve (or block
-   outright under autopilot, where no human can answer). See
+   outright in delegated mode, where no human can answer). See
    [ADR-0028](../../adr/0028-capability-allocation-scoped-writes.md).
 3. **Permission broker.** Write-capable calls are authorized against a
    scoped rule set. A cached *always* rule skips the prompt; otherwise

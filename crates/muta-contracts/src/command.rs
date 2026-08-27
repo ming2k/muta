@@ -384,7 +384,7 @@ mod tests {
                 detail: Some("detail".to_string()),
             },
             CommandResult::Ack {
-                title: "Autopilot ON".to_string(),
+                title: "Delegated mode ON".to_string(),
                 detail: Some(vec![
                     "File edits auto-approved".to_string(),
                     "Commands auto-approved".to_string(),

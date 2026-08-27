@@ -616,7 +616,7 @@ async fn list_reads_overview_and_count_without_decoding_message_bodies() {
 async fn list_overview_excludes_command_echoes_and_picks_last_real_prompt() {
     // Regression: the overview is the most recent user turn that is *not* a
     // non-driving command echo (ADR-0050). A session whose final input was a
-    // slash command (`/autopilot on`) or a shell passthrough must show its
+    // slash command (`/delegate on`) or a shell passthrough must show its
     // last genuine prompt instead — those echoes are agent operations, not
     // AI-conversation turns. This must hold through the deferred header
     // parse (which decodes `origin` as well as role/content).
@@ -633,7 +633,7 @@ async fn list_overview_excludes_command_echoes_and_picks_last_real_prompt() {
             Message::new(muta_contracts::Role::Assistant, "reply 2"),
             // Then non-driving echoes that must NOT become the overview
             // even though they are the last user-role messages:
-            Message::command_echo("/autopilot on"),
+            Message::command_echo("/delegate on"),
             Message::command_echo("/session open abc123"),
         ])
         .await
@@ -885,7 +885,7 @@ async fn detail_returns_full_last_prompt_and_metadata() {
             Message::new(muta_contracts::Role::User, long_prompt),
             Message::new(muta_contracts::Role::Assistant, "reply 2"),
             // A trailing command echo must NOT become the last prompt.
-            Message::command_echo("/autopilot on"),
+            Message::command_echo("/delegate on"),
         ])
         .await
         .unwrap();
@@ -907,7 +907,7 @@ async fn detail_returns_none_prompt_for_echo_only_session() {
     let path = directory.join("session.json");
     let store = SessionStore::for_path(path.clone());
     store
-        .replace_messages(vec![Message::command_echo("/autopilot on")])
+        .replace_messages(vec![Message::command_echo("/delegate on")])
         .await
         .unwrap();
     let id = store.id().await;
@@ -1713,36 +1713,36 @@ async fn session_runtime_state_round_trips_through_disk() {
 }
 
 #[tokio::test]
-async fn autopilot_posture_round_trips_through_disk() {
-    // ADR-0132: the autopilot posture is session-scoped persisted state.
+async fn delegated_posture_round_trips_through_disk() {
+    // ADR-0132: the delegated posture is session-scoped persisted state.
     // A daemon crash mid-unattended-session must reopen unattended — the
     // store, not the process, is the authority.
-    let directory = std::env::temp_dir().join(format!("muta-autopilot-{}", uuid::Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("muta-delegated-{}", uuid::Uuid::new_v4()));
     let path = directory.join("session.json");
     let store = SessionStore::for_path(path.clone());
-    assert!(!store.yolo().await, "fresh sessions start attended");
+    assert!(!store.delegated().await, "fresh sessions start attended");
 
     // Materialise the session first: a posture toggle alone on an empty
     // session must not materialise a file (is_user_facing_empty excludes
-    // yolo).
+    // delegated on an otherwise-empty session must not materialise it as non-empty;
     store.set_round_counter(1).await.unwrap();
-    store.set_yolo(true).await.unwrap();
+    store.set_delegated(true).await.unwrap();
     assert!(path.exists(), "materialised session persists the toggle");
 
     let loaded = SessionStore::for_path(path.clone());
-    assert!(loaded.yolo().await, "the posture survives persist + reload");
+    assert!(loaded.delegated().await, "the posture survives persist + reload");
 
     // Toggling off persists too.
-    loaded.set_yolo(false).await.unwrap();
+    loaded.set_delegated(false).await.unwrap();
     let reloaded = SessionStore::for_path(path.clone());
-    assert!(!reloaded.yolo().await);
+    assert!(!reloaded.delegated().await);
 
     // A same-value write is a no-op, not an event (log stays quiet).
     let events_before = {
         let state = reloaded.state.lock().await;
         state.event_log.load().map(|e| e.len()).unwrap_or(0)
     };
-    reloaded.set_yolo(false).await.unwrap();
+    reloaded.set_delegated(false).await.unwrap();
     let events_after = {
         let state = reloaded.state.lock().await;
         state.event_log.load().map(|e| e.len()).unwrap_or(0)
@@ -1756,58 +1756,58 @@ async fn autopilot_posture_round_trips_through_disk() {
 }
 
 #[tokio::test]
-async fn yolo_toggle_alone_does_not_materialise_empty_session() {
-    // The emptiness rule deliberately excludes yolo: arming
-    // yolo on a brand-new session with no dialogue must not create
+async fn delegated_toggle_alone_does_not_materialise_empty_session() {
+    // The emptiness rule deliberately excludes the delegated flag: arming
+    // delegated on a brand-new session with no dialogue must not create
     // a session file on disk (nothing to resume yet).
-    let directory = std::env::temp_dir().join(format!("muta-yolo-guard-{}", uuid::Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("muta-delegated-guard-{}", uuid::Uuid::new_v4()));
     let path = directory.join("session.json");
     let store = SessionStore::for_path(path.clone());
-    store.set_yolo(true).await.unwrap();
+    store.set_delegated(true).await.unwrap();
     assert!(
         !path.exists(),
         "a posture toggle alone must not materialise an empty session"
     );
     assert!(
-        store.yolo().await,
+        store.delegated().await,
         "the in-memory value still holds for the live process"
     );
     let _ = fs::remove_dir_all(directory);
 }
 
 #[tokio::test]
-async fn yolo_event_replays_from_log() {
+async fn delegated_event_replays_from_log() {
     // Event-sourced authority: a snapshot-less replay of the jsonl log
     // must rebuild the posture (the snapshot is only a cache; the log
     // wins).
-    let directory = std::env::temp_dir().join(format!("muta-yolo-log-{}", uuid::Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("muta-delegated-log-{}", uuid::Uuid::new_v4()));
     let path = directory.join("session.json");
     let store = SessionStore::for_path(path.clone());
     store.set_round_counter(1).await.unwrap(); // materialise
-    store.set_yolo(true).await.unwrap();
+    store.set_delegated(true).await.unwrap();
 
     // Drop the snapshot, keep the event log: reload must replay.
     let _ = std::fs::remove_file(&path);
     let replayed = SessionStore::for_path(path.clone());
     assert!(
-        replayed.yolo().await,
+        replayed.delegated().await,
         "the posture replays from the event log alone"
     );
     let _ = fs::remove_dir_all(directory);
 }
 
 #[tokio::test]
-async fn yolo_false_is_omitted_from_snapshot_json() {
+async fn delegated_false_is_omitted_from_snapshot_json() {
     // Canonical-JSON compatibility: an attended session serialises
     // without the key so legacy checksums stay byte-identical.
     let json = serde_json::to_string(&SessionData::default()).unwrap();
-    assert!(!json.contains("\"yolo\""));
+    assert!(!json.contains("\"delegated\""));
     let json_on = serde_json::to_string(&SessionData {
-        yolo: true,
+        delegated: true,
         ..SessionData::default()
     })
     .unwrap();
-    assert!(json_on.contains("\"yolo\":true"));
+    assert!(json_on.contains("\"delegated\":true"));
 }
 
 #[test]

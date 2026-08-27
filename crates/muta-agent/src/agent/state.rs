@@ -272,7 +272,7 @@ impl Agent {
             tool_names,
             model_guidance,
             provider_guidance,
-            yolo: self.get_yolo(),
+            delegated: self.delegated(),
             available_skills,
             project_rules: self
                 .project_rules
@@ -426,7 +426,7 @@ impl Agent {
     /// (the default), the bash schema exposes no `stdin` parameter and a
     /// command needing input either gets it from a human (interactive
     /// classifier → input panel) or fails fast. When on, the model may feed
-    /// a command's stdin directly — for autopilot/automatic flows.
+    /// a command's stdin directly — for delegated automatic flows.
     pub fn set_allow_model_stdin(&self, enabled: bool) {
         self.interaction.set_allow_model_stdin(enabled);
     }
@@ -452,9 +452,9 @@ impl Agent {
     /// Mirrors `[master] skip_interactive_input` in `config.toml`. When on,
     /// an interactive `bash` command (matched by the interactive classifier)
     /// never pops the inline input panel and instead runs with stdin closed —
-    /// fast failure with a non-interactive remedy, as under autopilot mode.
+    /// fast failure with a non-interactive remedy, as in delegated mode.
     /// Lets an operator who finds the prompt disruptive opt out of it without
-    /// turning the master itself autopilot.
+    /// turning the master itself delegated.
     pub fn set_skip_interactive_input(&self, enabled: bool) {
         self.interaction.set_skip_interactive_input(enabled);
     }

@@ -19,7 +19,7 @@ use super::{RunnerBarInfo, STEP_MIN_WIDTH, TRANSCRIPT_H_INSET, Theme};
 pub(crate) enum PageHeader<'a> {
     /// The Main session view: `SESSION` identity, the session's persistent-id
     /// tail, and the workspace on the left; the session mode (e.g.
-    /// `autopilot`) on the right.
+    /// `DELEGATED`) on the right.
     Session(&'a SessionHead<'a>),
     /// The `/btw` aside view (ADR-0103): identity + parent status on row 1;
     /// its shortcuts live on row 2 via [`draw_page_header_hints`].
@@ -115,10 +115,10 @@ pub(crate) struct SessionHead<'a> {
     /// Tilde-shortened workspace path (e.g. `~/projects/xx`). Already
     /// abbreviated by the caller; rendered as-is.
     pub workspace: &'a str,
-    /// `true` while the session runs in YOLO mode (`--yolo` /
-    /// `/yolo on`). Shown as a warning-toned `YOLO` tag on the
-    /// right — the session's persistent mode flag.
-    pub yolo: bool,
+    /// `true` while the session runs in delegated autonomous execution
+    /// mode (`--delegate` / `/delegate on`). Shown as a warning-toned
+    /// `DELEGATED` tag on the right — the session's persistent mode flag.
+    pub delegated: bool,
 }
 
 struct HeaderContent {
@@ -161,7 +161,7 @@ pub(crate) fn draw_page_header(
             badge: String::new(),
             primary: head.workspace.to_string(),
             meta: String::new(),
-            action: if head.yolo {
+            action: if head.delegated {
                 "DELEGATED ".to_string()
             } else {
                 String::new()
@@ -221,7 +221,7 @@ pub(crate) fn draw_page_header(
         }
         _ => fill.fg(theme.muted()),
     };
-    // The session mode flag (`autopilot`) reads as a persistent safety state,
+    // The session mode flag (`DELEGATED`) reads as a persistent safety state,
     // so it takes the warning tone; every other variant's right side is quiet
     // metadata (the `/btw` return hint, the Runner sibling count).
     let action_style = if matches!(header, PageHeader::Session(_)) {
@@ -915,7 +915,7 @@ mod tests {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
-            yolo: true,
+            delegated: true,
         };
         let row = rendered_row(80, PageHeader::Session(&head));
         assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
@@ -927,7 +927,7 @@ mod tests {
         let head = SessionHead {
             session_id: "ab",
             workspace: "~/work",
-            yolo: false,
+            delegated: false,
         };
         let row = rendered_row(40, PageHeader::Session(&head));
         assert!(row.starts_with("   SESSION ab ~/work"));
@@ -943,7 +943,7 @@ mod tests {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
-            yolo: true,
+            delegated: true,
         };
         let mut terminal = mutx_engine::TestTerminal::new(40, 1);
         terminal.draw(|frame| {

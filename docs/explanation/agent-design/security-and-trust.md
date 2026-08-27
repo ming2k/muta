@@ -81,8 +81,8 @@ Lifecycle Hook commands require an existing exact Hook rule; because Hooks run
 inside agent control flow, they fail closed rather than recursively opening a
 permission prompt.
 
-Autopilot is an interaction posture, not a fourth grant. An already-authorized
-operation behaves the same in attended and autopilot sessions. A missing grant
+Delegated autonomous mode is an interaction posture, not a fourth grant. An already-authorized
+operation behaves the same in attended and delegated sessions. A missing grant
 opens an approval prompt when a human is reachable and returns a clear
 `[permission required]` failure when no approver is available. The remedy is a
 runtime permission rule or interactive approval, never an asset-trust command.

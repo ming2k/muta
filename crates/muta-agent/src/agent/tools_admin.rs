@@ -190,8 +190,8 @@ impl Agent {
     pub(crate) fn visible_tools(&self) -> Vec<Arc<dyn Tool>> {
         // Delegate to the ToolManager's schema authority.
         // Under ADR-0137, tool schemas remain deterministic and invariant to maximize
-        // KV-cache reuse. Autopilot restrictions are enforced at runtime via PermissionPolicy.
-        self.tool_manager.loop_tools(self.get_yolo())
+        // KV-cache reuse. Delegated-mode restrictions are enforced at runtime via PermissionPolicy.
+        self.tool_manager.loop_tools(self.delegated())
     }
 
     /// Structured view of every installed tool, for the session modal's Tools

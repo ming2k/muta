@@ -36,8 +36,8 @@ impl Agent {
         *self.round_counter.lock().unwrap_or_else(|e| e.into_inner()) = count;
     }
 
-    pub fn get_yolo(&self) -> bool {
-        self.permissions.yolo()
+    pub fn delegated(&self) -> bool {
+        self.permissions.delegated()
     }
 
     /// ADR-0141: whether a human can currently answer this agent's parked
@@ -78,9 +78,9 @@ impl Agent {
         self.interaction.set_human_posture(posture);
     }
 
-    pub fn set_yolo(&self, enabled: bool) {
-        self.permissions.set_yolo(enabled);
-        self.interaction.set_yolo(enabled);
+    pub fn set_delegated(&self, enabled: bool) {
+        self.permissions.set_delegated(enabled);
+        self.interaction.set_delegated(enabled);
     }
 
     pub fn set_workspace_security(&self, snapshot: muta_contracts::WorkspaceSecuritySnapshot) {
@@ -198,7 +198,7 @@ impl Agent {
         self.set_doom_guard_config(profile.config.nudge);
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
-        self.set_yolo(profile.yolo);
+        self.set_delegated(profile.delegated);
     }
 
     /// Replace this agent's identity (name + mission, or a persona override).

@@ -325,9 +325,9 @@ export class DaemonStore {
   public todos = $state<TodoList>({ items: [], next_id: 1, updated_at_round: 0 });
   public contextTokens = $state<number | null>(null);
 
-  /** Harness-reported state (Welcome + HarnessState/AutopilotChanged events). */
+  /** Harness-reported state (Welcome + HarnessState/DelegatedChanged events). */
   public roundCounter = $state<number>(0);
-  public autopilot = $state<boolean>(false);
+  public delegated = $state<boolean>(false);
   /** Last live activity line ("waiting for model", …) from Activity events. */
   public activity = $state<string | null>(null);
   /** 0-indexed model-request position within the round (TurnStarted). */
@@ -1063,15 +1063,20 @@ export class DaemonStore {
       this.contextTokens = event.ContextTokens.tokens;
     } else if ("HarnessState" in event) {
       this.roundCounter = event.HarnessState.round_counter;
-      this.autopilot = event.HarnessState.yolo ?? (event.HarnessState as unknown as { autopilot?: boolean }).autopilot ?? false;
+      this.delegated = event.HarnessState.delegated ?? (event.HarnessState as unknown as { yolo?: boolean }).yolo ?? false;
       if (event.HarnessState.loop_status === "idle") {
         this.activity = null;
         this.currentTurn = null;
       }
-    } else if ("YoloChanged" in event) {
-      this.autopilot = event.YoloChanged;
-    } else if ("AutopilotChanged" in event) {
-      this.autopilot = (event as unknown as { AutopilotChanged: boolean }).AutopilotChanged;
+    } else if ("DelegatedChanged" in event) {
+      this.delegated = event.DelegatedChanged;
+    } else if ("YoloChanged" in event || "AutopilotChanged" in event) {
+      // Legacy wire spellings (pre-rename daemons) — read dynamically so the
+      // generated types stay the source of truth for the current name only.
+      this.delegated =
+        (event as unknown as { YoloChanged?: boolean }).YoloChanged ??
+        (event as unknown as { AutopilotChanged?: boolean }).AutopilotChanged ??
+        false;
     } else if ("RoundCompleted" in event) {
       this.lastRound = event.RoundCompleted;
       this.roundCounter = event.RoundCompleted.round;
@@ -1511,7 +1516,7 @@ export class DaemonStore {
     this.todos = { items: [], next_id: 1, updated_at_round: 0 };
     this.contextTokens = null;
     this.roundCounter = 0;
-    this.autopilot = false;
+    this.delegated = false;
     this.activity = null;
     this.currentTurn = null;
     this.lastRound = null;

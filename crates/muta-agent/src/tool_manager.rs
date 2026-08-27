@@ -11,7 +11,7 @@
 //! separate places that had to be kept consistent by hand:
 //!
 //! - [`Agent::installed_tools`](crate::Agent) — schema source (resolved ∪ dynamic);
-//! - [`Agent::visible_tools`](crate::Agent) — per-turn schema (installed − disabled − autopilot `ask_user`);
+//! - [`Agent::visible_tools`](crate::Agent) — per-turn schema (installed − disabled − delegated-mode `ask_user`);
 //! - the lookup inside [`Agent::execute_tool`](crate::Agent) — dispatch (resolved, then dynamic fallback).
 //!
 //! Each recomputed "static ∪ dynamic − mask" with its own code, so the three
@@ -162,10 +162,10 @@ impl ToolManager {
     /// The live tool set the model may see this turn: `installed` minus the
     /// disabled mask (user + hook-scoped).
     ///
-    /// Preserves a stable, deterministic tool schema across autopilot transitions
-    /// (ADR-0137) to prevent KV-cache invalidation. Autopilot restrictions on `ask_user`
+    /// Preserves a stable, deterministic tool schema across delegated-posture transitions
+    /// (ADR-0137) to prevent KV-cache invalidation. Delegated-mode restrictions on `ask_user`
     /// are enforced at execution time via PermissionPolicy Gate 6 (Runtime Gating).
-    pub(crate) fn loop_tools(&self, _autopilot: bool) -> Vec<Arc<dyn Tool>> {
+    pub(crate) fn loop_tools(&self, _delegated: bool) -> Vec<Arc<dyn Tool>> {
         let mut tools: Vec<Arc<dyn Tool>> = self
             .installed()
             .into_iter()
@@ -337,13 +337,13 @@ mod tests {
         let names: Vec<&str> = live.iter().map(|t| t.name()).collect();
         assert_eq!(names, vec!["ask_user"], "bash disabled; ask_user kept");
 
-        // Autopilot keeps ask_user in schema (Runtime Gating via PermissionPolicy Gate 6) for KV-cache stability.
-        let live_autopilot = m.loop_tools(true);
-        let names_ap: Vec<&str> = live_autopilot.iter().map(|t| t.name()).collect();
+        // Delegated mode keeps ask_user in schema (Runtime Gating via PermissionPolicy Gate 6) for KV-cache stability.
+        let live_delegated = m.loop_tools(true);
+        let names_ap: Vec<&str> = live_delegated.iter().map(|t| t.name()).collect();
         assert_eq!(
             names_ap,
             vec!["ask_user"],
-            "autopilot preserves schema for prompt cache"
+            "delegated mode preserves schema for prompt cache"
         );
     }
 

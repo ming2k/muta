@@ -3,7 +3,7 @@
 //!
 //! This is the largest handler — it fans the parsed command out across every
 //! `BuiltinCmd` variant (`/models`, `/mcp`, `/compact`, `/new`,
-//! `/permissions`, `/autopilot`, `/review`, `/search`, `/resume`,
+//! `/permissions`, `/delegate`, `/review`, `/search`, `/resume`,
 //! `/session`, `/sessions`, `/btw`, `/repeat`, `/schedule`, `/init`,
 //! `/skills`, `/skill`, `/export`, `/debug`, `/help`, `/exit`) plus the
 //! `None` arm that runs a user-defined project command.
@@ -278,17 +278,17 @@ async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args: &str) {
     match session.reset().await {
         Ok(id) => {
             // ADR-0132: `/reset` starts a *new* session. The persisted
-            // autopilot posture belongs to the old one — a fresh session
+            // delegated posture belongs to the old one — a fresh session
             // must not inherit an unattended posture the user has not
             // (re-)granted to it. The store's `reset` already minted fresh
-            // data (autopilot = false); re-align the live agent so the old
+            // data (delegated = false); re-align the live agent so the old
             // session's posture does not leak across the boundary, and
             // broadcast the (possibly de-escalated) posture so the TUI
             // badge stops lying about the new session.
-            let fresh_posture = session.yolo().await;
-            if agent.get_yolo() != fresh_posture {
-                agent.set_yolo(fresh_posture);
-                let _ = resp_tx.send(round_response(&id, RoundEvent::YoloChanged(fresh_posture)));
+            let fresh_posture = session.delegated().await;
+            if agent.delegated() != fresh_posture {
+                agent.set_delegated(fresh_posture);
+                let _ = resp_tx.send(round_response(&id, RoundEvent::DelegatedChanged(fresh_posture)));
             }
             agent.restore_round_count(session.round_counter().await);
             // C6: a fresh session has no provider pin, so the live provider
@@ -391,7 +391,7 @@ async fn restore_session_runtime(
     agent.restore_disabled_tools(session.disabled_tools().await);
     agent.restore_round_count(session.round_counter().await);
 
-    // Restore the session-scoped autopilot posture (ADR-0132). The flag is
+    // Restore the session-scoped delegated posture (ADR-0132). The flag is
     // now persisted on the session (`AutopilotSet`), so a resumed session —
     // whether via `/sessions <id>` in-process, a fresh attach after a daemon
     // crash, or a boot rehost — reopens in the posture it left. The restore
@@ -399,15 +399,15 @@ async fn restore_session_runtime(
     // unattended session to an attended one must de-escalate too, or the
     // attended session would silently run with the previous session's
     // blanket permissions.
-    let mut restored_yolo = session.yolo().await;
+    let mut restored_delegated = session.delegated().await;
     let mut restored_from_ledger = false;
-    if !restored_yolo {
+    if !restored_delegated {
         let commands = session.commands().await;
-        let was_yolo_on = commands
+        let was_delegated_on = commands
             .iter()
             .rev()
             .find_map(|rec| {
-                if (rec.name == "yolo" || rec.name == "autopilot")
+                if (rec.name == "yolo" || rec.name == "autopilot" || rec.name == "delegate")
                     && let Some(CommandResult::Ack { title, .. }) = &rec.result
                 {
                     let title = title.to_lowercase();
@@ -420,26 +420,26 @@ async fn restore_session_runtime(
                 None
             })
             .unwrap_or(false);
-        if was_yolo_on {
-            restored_yolo = true;
+        if was_delegated_on {
+            restored_delegated = true;
             restored_from_ledger = true;
-            let _ = session.set_yolo(true).await;
+            let _ = session.set_delegated(true).await;
         }
     }
 
-    if agent.get_yolo() != restored_yolo {
-        agent.set_yolo(restored_yolo);
+    if agent.delegated() != restored_delegated {
+        agent.set_delegated(restored_delegated);
         if restored_from_ledger {
             let notice = AgentNotice::new(
                 muta_contracts::NoticeKind::CommandAck,
                 muta_contracts::NoticeSeverity::Warning,
-                "YOLO mode restored",
+                "Delegated mode restored",
                 muta_contracts::NoticeSource::Harness,
             )
             .with_surface(muta_contracts::NoticeSurface::Inline)
             .with_body(
-                "This session was previously running in YOLO auto-approve mode. \
-                 Use `/yolo off` to return to interactive mode.",
+                "This session was previously running in delegated auto-approve mode. \
+                 Use `/delegate off` to return to interactive mode.",
             );
             let _ = resp_tx.send(round_response(
                 &session.id().await,
@@ -448,7 +448,7 @@ async fn restore_session_runtime(
         }
         let _ = resp_tx.send(round_response(
             &session.id().await,
-            RoundEvent::YoloChanged(restored_yolo),
+            RoundEvent::DelegatedChanged(restored_delegated),
         ));
     }
 
@@ -925,9 +925,9 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 }
             };
             // A bare `/delegate` (`None`) toggles the current state.
-            let enabled = next.unwrap_or_else(|| !agent.get_yolo());
-            agent.set_yolo(enabled);
-            if let Err(error) = session.set_yolo(enabled).await {
+            let enabled = next.unwrap_or_else(|| !agent.delegated());
+            agent.set_delegated(enabled);
+            if let Err(error) = session.set_delegated(enabled).await {
                 tracing::warn!(
                     error = %error,
                     "could not persist delegated posture; it will not survive a restart"
@@ -936,7 +936,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             // The ack is a headline plus dimmed explanation lines (never a
             // `•`-joined one-row squeeze); the command entry settles in place
             // with this body, so the mode change owns its own durable row.
-            // The current posture is carried by the `YoloChanged` chip, not a
+            // The current posture is carried by the `DelegatedChanged` chip, not a
             // second transcript entry.
             let (title, detail) = if enabled {
                 (
@@ -968,11 +968,11 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             .await;
             // No notice twin: the command entry's Ack body IS the durable,
             // surfaced record of this posture change (ADR-0091/0111); the
-            // live posture chip is `YoloChanged` below. A second inline
+            // live posture chip is `DelegatedChanged` below. A second inline
             // notice would double-render the same title + detail.
             let _ = resp_tx.send(round_response(
                 &session.id().await,
-                RoundEvent::YoloChanged(enabled),
+                RoundEvent::DelegatedChanged(enabled),
             ));
         }
         Some(BuiltinCmd::Master) => {
@@ -1002,10 +1002,10 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 }
                 Some(role) => match agent.apply_master_role(role) {
                     Some(resolved) => {
-                        let _ = session.set_yolo(agent.get_yolo()).await;
+                        let _ = session.set_delegated(agent.delegated()).await;
                         let _ = resp_tx.send(round_response(
                             &session.id().await,
-                            RoundEvent::YoloChanged(agent.get_yolo()),
+                            RoundEvent::DelegatedChanged(agent.delegated()),
                         ));
                         record_command(
                             session,
@@ -2577,11 +2577,6 @@ fn parse_delegate_arg(arg: &str) -> Result<Option<bool>, String> {
             "Unknown value '{other}'. Use `/delegate` to toggle, or `/delegate on|off`."
         )),
     }
-}
-
-#[allow(dead_code)]
-fn parse_yolo_arg(arg: &str) -> Result<Option<bool>, String> {
-    parse_delegate_arg(arg)
 }
 
 /// Split a `/schedule <when> <prompt>` argument string into `(time_spec,

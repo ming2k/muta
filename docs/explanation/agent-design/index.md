@@ -63,13 +63,13 @@ model of one agent round.
 8. [User questions](user-questions.md) — the `ask_user` tool that blocks a round
    to resolve ambiguity. The reference for the oneshot-channel blocking
    pattern the permission broker also uses.
-9. [Autopilot operation](autopilot.md) — the design intent of running
+9. [Delegated autonomous execution](delegated-mode.md) — the design intent of running
    without human intervention. Separates the *enforced* floor (the broker
    gate the flag controls) from the broader *expressed* posture
    (no confirmations, no questions), and the contexts where the flag is
    forced on. The autonomous counterpart to user questions, read as a pair.
 10. [Security and trust architecture](security-and-trust.md) — the three
-   orthogonal domains (Authority & Trust `/trust`, Interaction Posture `/autopilot`,
+   orthogonal domains (Authority & Trust `/trust`, Interaction Posture `/delegate`,
    and Execution Runtime/Sandbox), two-axis authority model, and content-bound
    extension attestation.
 11. [Skills](skills.md) — on-demand domain expertise: tool-based discovery,
@@ -123,7 +123,7 @@ user message
             └─ fallback? [Rounds and turns] parse tool call from text
        └─ per tool call:
             ├─ [Hooks] PreToolUse gate (matcher?) ── deny? → blocked
-            ├─ [Harness] authority chain — missing grant? attended → ask; autopilot → fail
+            ├─ [Harness] authority chain — missing grant? attended → ask; delegated → fail
             ├─ [Envoys] if call is `envoy`: spawn isolated child,
             │              stream SubTaskEvent back through the same pipeline
             ├─ [MCP]       if call is `mcp__*`: JSON-RPC over stdio

@@ -230,7 +230,7 @@ impl Provider for StreamWriteCallProvider {
 }
 
 /// A test-only profile that admits write tools *and* leaves the permission
-/// broker on (`autopilot: false`), so the child's write call surfaces a
+/// broker on (`delegated: false`), so the child's write call surfaces a
 /// `PermissionRequest` — the shape needed to exercise the full up→down
 /// round-trip through `RunnerTool` + the registry. Declared `const` because
 /// `RunnerTool::new` borrows the profile for `'static`.
@@ -244,14 +244,14 @@ const INTERACTIVE: RunnerPreset = RunnerPreset {
         command_allowlist: &[],
     },
     variant_pins: &[],
-    yolo: false,
+    delegated: false,
     allow_model_stdin: false,
 };
 
 #[tokio::test]
 async fn streaming_loop_fires_permission_broker_direct() {
     // Isolation: does run_streaming_with_events itself surface a permission
-    // request for a write tool when yolo is false? Decouples the
+    // request for a write tool when delegated is false? Decouples the
     // streaming driver from the RunnerTool wrapping.
     let ran = Arc::new(AtomicUsize::new(0));
     let agent = Arc::new(Agent::new(
@@ -259,7 +259,7 @@ async fn streaming_loop_fires_permission_broker_direct() {
         vec![Arc::new(BrokerGatedTool(Arc::clone(&ran))) as Arc<dyn Tool>],
         muta_agent::AgentIdentity::default(),
     ));
-    agent.set_yolo(false);
+    agent.set_delegated(false);
 
     let (evt_tx, mut evt_rx) = mpsc::unbounded_channel::<AgentEvent>();
     let a = Arc::clone(&agent);
@@ -291,7 +291,7 @@ async fn streaming_loop_fires_permission_broker_direct() {
 #[tokio::test]
 async fn runner_tool_registry_routes_reply_into_live_runner() {
     // End-to-end through RunnerTool with an interactive profile
-    // (`autopilot: false`): the child's execute-tier tool surfaces a
+    // (`delegated: false`): the child's execute-tier tool surfaces a
     // permission request UP as `RunnerEvent::PermissionRequest`, the tool
     // registers the child's handle by the parent `call_id`, and a reply pulled
     // from the registry resolves the parked oneshot so the tool runs. This is

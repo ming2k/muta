@@ -1478,13 +1478,13 @@ mod tests {
     /// A `sudo` command (matched by the interactive classifier) must, with
     /// `skip_interactive_input` on, run with stdin **closed** and emit **no**
     /// `InputRequest` — the inline panel never pops. This is the opt-out's core
-    /// contract and mirrors the autopilot path.
+    /// contract and mirrors the delegated-autonomous path.
     #[tokio::test]
     async fn skip_interactive_input_closes_stdin_without_input_request() {
         use muta_contracts::{AgentEvent, StdinPolicy};
         use tokio::sync::mpsc;
         let agent = stdin_test_agent();
-        agent.set_yolo(false);
+        agent.set_delegated(false);
         agent.set_skip_interactive_input(true);
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
@@ -1508,7 +1508,7 @@ mod tests {
         use muta_contracts::AgentEvent;
         use tokio::sync::mpsc;
         let agent = stdin_test_agent();
-        agent.set_yolo(false);
+        agent.set_delegated(false);
         agent.set_skip_interactive_input(false);
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();

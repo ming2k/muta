@@ -275,12 +275,12 @@ export type HarnessSnapshot = { loop_status: LoopStatus,
 round_counter: number, 
 /**
  * Whether tool permission prompts are bypassed this session
- * (`-y` / `/yolo on`). The TUI mirrors this into a
+ * (`-y` / `/delegate on`). The TUI mirrors this into a
  * visible badge so the elevated state is never silent.
  */
-yolo: boolean, 
+delegated: boolean, 
 /**
- * Workspace authority is independent from attended/autopilot posture.
+ * Workspace authority is independent from the attended/delegated posture.
  * Frontends surface this state continuously so authority is never implicit.
  */
 workspace_security: WorkspaceSecuritySnapshot, 
@@ -1004,7 +1004,7 @@ name: string,
 /**
  * Raw argument remainder after the command word.
  */
-args: string, result: CommandResult, } } | { "Error": string } | { "ToolCall": { id: string, name: string, arguments: string, } } | { "ToolResult": { id: string, name: string, output: string, structured: ToolOutput, duration_ms: number, } } | { "ToolStream": { id: string, stream: ToolStreamFrame, } } | { "ToolCancelled": { id: string, name: string, } } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "StdinRequest": StdinRequest } | { "Compacted": { archived_messages: number, window_tokens_before: number, window_tokens_after: number, } } | { "HarnessState": HarnessSnapshot } | { "TodosUpdated": TodoList } | { "YoloChanged": boolean } | { "RetryScheduled": { attempt: number, max_attempts: number, delay_ms: number, message: string, } } | { "Activity": string } | { "TurnStarted": { 
+args: string, result: CommandResult, } } | { "Error": string } | { "ToolCall": { id: string, name: string, arguments: string, } } | { "ToolResult": { id: string, name: string, output: string, structured: ToolOutput, duration_ms: number, } } | { "ToolStream": { id: string, stream: ToolStreamFrame, } } | { "ToolCancelled": { id: string, name: string, } } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "StdinRequest": StdinRequest } | { "Compacted": { archived_messages: number, window_tokens_before: number, window_tokens_after: number, } } | { "HarnessState": HarnessSnapshot } | { "TodosUpdated": TodoList } | { "DelegatedChanged": boolean } | { "RetryScheduled": { attempt: number, max_attempts: number, delay_ms: number, message: string, } } | { "Activity": string } | { "TurnStarted": { 
 /**
  * 1-indexed enclosing user round.
  */

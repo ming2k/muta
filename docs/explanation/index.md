@@ -40,7 +40,7 @@ before the individual docs.
 | [Envoys](agent-design/envoys.md) | The `envoy` tool's read-only child agent: isolation model, event streaming, and the TUI zoom view |
 | [MCP servers](agent-design/mcp.md) | Local stdio MCP server discovery, the `mcp__<server>__<tool>` wrapper, failure isolation, and access-tier gating |
 | [User questions](agent-design/user-questions.md) | How the `ask_user` tool blocks the agent, renders a modal, and returns answers |
-| [Autopilot operation](agent-design/autopilot.md) | The design intent of running without human intervention: what the flag enforces (the broker gate) versus the broader no-confirmations/no-questions posture it expresses, and where it is forced on |
+| [Delegated autonomous execution](agent-design/delegated-mode.md) | The design intent of running without human intervention: what the flag enforces (the broker gate) versus the broader no-confirmations/no-questions posture it expresses, and where it is forced on |
 | [Skills](agent-design/skills.md) | On-demand domain expertise: the catalog/body two-channel model, the source/priority cascade, and explicit versus implicit invocation |
 | [Lifecycle hooks](agent-design/hooks.md) | User-configured actions on the agent's lifecycle events (PreToolUse, Stop, SessionStart, PreCompact…): one event axis with capability implied by the event |
 | [Token accounting](agent-design/token-accounting.md) | How token counts are measured: upstream `usage` preferred with a char-class estimation fallback, the reported-vs-estimated ledger, and the accuracy report modal |

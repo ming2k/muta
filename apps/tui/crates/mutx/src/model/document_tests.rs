@@ -869,3 +869,42 @@ fn notice_strips_terminal_controls_from_crlf_http_errors() {
     );
     assert!(!n.raw.chars().any(|c| c.is_control() && c != '\n'));
 }
+
+/// Streaming thinking rows read as a live token spray (`✦ Thinking · N
+/// tokens`), not an estimate; finished traces settle to the final line with
+/// the duration and drop the live glyph.
+#[test]
+fn thinking_summary_sprays_tokens_then_settles() {
+    // Short stream: exact per-token count with the live glyph.
+    let streaming = TranscriptMessage::thinking("one two three four five");
+    let summary = streaming.thinking_summary().unwrap();
+    assert!(summary.starts_with("✦ Thinking · "), "got: {summary}");
+    assert!(summary.ends_with(" tokens"), "got: {summary}");
+    assert!(!summary.contains('~'), "no estimate tilde: {summary}");
+
+    // Deep into a trace the count floors to the quantum so the number
+    // climbs in steps instead of strobing every heartbeat.
+    let filler = "lorem ipsum ".repeat(600); // ≈ 1 800 tokens
+    let deep = TranscriptMessage::thinking(&filler);
+    let shown = deep
+        .thinking_summary()
+        .unwrap()
+        .trim_start_matches("✦ Thinking · ")
+        .trim_end_matches(" tokens")
+        .replace(' ', "")
+        .parse::<usize>()
+        .expect("numeric count");
+    let actual = muta_contracts::tokenizer::count_tokens(&filler);
+    assert!(shown <= actual && actual - shown < 25, "shown {shown} vs {actual}");
+
+    // Finished trace: no glyph, exact count, humanized duration.
+    let mut done = TranscriptMessage::thinking(filler);
+    done.set_thinking_duration(2_400);
+    let settled = done.thinking_summary().unwrap();
+    assert!(!settled.contains('✦'), "finished trace drops the glyph: {settled}");
+    assert!(
+        settled.starts_with(&format!("Thinking · {actual} tokens")),
+        "exact count when finished: {settled}"
+    );
+    assert!(settled.ends_with("2.4s"), "humanized duration: {settled}");
+}

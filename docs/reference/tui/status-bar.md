@@ -16,10 +16,11 @@ Every view shares this chrome slot:
 
 - **Session (Main):** `SESSION` identity, the persistent session-id tail
   (last 4 chars, dimmed), and the tilde-shortened workspace path on the
-  left; the session mode (`autopilot`) on the right. Row 2 appears only
-  while asides are live: the aside chip (`btw 2 · 1 running`) and
-  `F5 asides`. No interrupt pair — the activity bar's `Esc Esc interrupt`
-  hint (which spells the real double-Esc arming) is the authoritative copy.
+  left; the delegated-autonomous flag (`DELEGATED`) on the right. Row 2
+  appears only while asides are live: the aside chip (`btw 2 · 1 running`)
+  and `F5 asides`. No interrupt pair — the activity bar's
+  `Esc Esc interrupt` hint (which spells the real double-Esc arming) is the
+  authoritative copy.
 - **`/btw`:** `/btw` identity, "Side conversation", parent status. Row 2
   always shows `Ctrl-C back`, `F5 asides`, and `Esc interrupt aside`
   (while the aside's round runs) — the exit pair exists on no other
@@ -31,10 +32,10 @@ Every view shares this chrome slot:
 
 ## Session view appearance
 
-Autopilot mode active:
+Delegated autonomous mode active:
 
 ```text
- SESSION b3c4 ~/projects/xx                                     autopilot
+ SESSION b3c4 ~/projects/xx                                    DELEGATED
 ```
 
 Ordinary session (no mode flag):
@@ -56,20 +57,12 @@ The row never overflows.
 | `SESSION` title | BOLD, `text_primary` |
 | Session-id tail | Dimmed (`text_dim`), last 4 chars of the persistent id |
 | Workspace | `text_brand`, tilde-shortened |
-| `autopilot` flag | Warning tone + BOLD, right-aligned (before the trailing pad), only while autopilot is on |
+| `DELEGATED` flag | Warning tone + BOLD, right-aligned (before the trailing pad), only while delegated autonomous mode is on |
 | Background | `body` |
-
-## Visibility
-
-| Condition | Visible? |
-|-----------|----------|
-| Always (every view) | Yes |
-| Envoy zoom view | Yes (Envoy contextual header replaces Session head) |
-| `/btw` aside view | Yes (`/btw` contextual header replaces Session head) |
 
 ## Source
 
 `draw_page_header` / `PageHeader::Session` / `SessionHead` in
-`tui/page_header.rs`. The workspace path is tilde-shortened by `tilde_home`
-(`tui/chrome.rs`) from `App::cwd`. The `autopilot` flag arrives through
-`App::autopilot`.
+`page_header.rs`. The workspace path is tilde-shortened by `tilde_home`
+(`chrome.rs`) from `App::cwd`. The `DELEGATED` flag arrives through
+`App::delegated` (the harness snapshot's delegated-autonomous bit).

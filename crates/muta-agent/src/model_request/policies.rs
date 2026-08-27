@@ -207,7 +207,7 @@ impl SystemPromptSection for DelegatedModeGuidance {
         36
     }
     fn is_active(&self, ctx: &SystemPromptContext) -> bool {
-        ctx.yolo
+        ctx.delegated
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
         Some(String::from(DELEGATED_GUIDANCE))

@@ -311,13 +311,15 @@ fn switcher_filter_narrows_rows_and_matches_labels_and_hints() {
     reg.open(crate::surfaces::PanelId::Help);
     reg.open(crate::surfaces::PanelId::Btw);
 
-    // "mcp" matches the MCP label.
+    // "mcp" matches the MCP label and the Performance report (whose hint
+    // "turn rate" contains the subsequence m-c-p across words).
     let rows = reg.switcher_rows_filtered("mcp");
     assert_eq!(
         rows,
-        vec![crate::surfaces::SwitcherTarget::Panel(
-            crate::surfaces::PanelId::Mcp
-        )]
+        vec![
+            crate::surfaces::SwitcherTarget::Panel(crate::surfaces::PanelId::Mcp),
+            crate::surfaces::SwitcherTarget::Panel(crate::surfaces::PanelId::PerformanceReport),
+        ]
     );
 
     // "dash" matches the Dashboard label (a switchable full-screen view).

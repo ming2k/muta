@@ -644,7 +644,7 @@ describe("DaemonStore wire protocol", () => {
   });
 
   describe("state events", () => {
-    it("folds HarnessState/AutopilotChanged/RoundCompleted/Activity/Compacted", () => {
+    it("folds HarnessState/DelegatedChanged/RoundCompleted/Activity/Compacted", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
@@ -652,14 +652,14 @@ describe("DaemonStore wire protocol", () => {
       expect(store.activity).toBe("waiting for model");
 
       roundEvent(session, {
-        HarnessState: { loop_status: "idle", round_counter: 2, autopilot: true, retry_pending: false },
+        HarnessState: { loop_status: "idle", round_counter: 2, delegated: true, retry_pending: false },
       });
       expect(store.roundCounter).toBe(2);
-      expect(store.autopilot).toBe(true);
+      expect(store.delegated).toBe(true);
       expect(store.activity).toBeNull(); // idle clears the activity line
 
-      roundEvent(session, { AutopilotChanged: false });
-      expect(store.autopilot).toBe(false);
+      roundEvent(session, { DelegatedChanged: false });
+      expect(store.delegated).toBe(false);
 
       roundEvent(session, { Activity: "thinking" });
       roundEvent(session, {

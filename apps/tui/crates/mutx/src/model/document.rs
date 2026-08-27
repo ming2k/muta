@@ -184,7 +184,7 @@ pub enum MessageKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandPhase {
     /// Dispatched, no result yet. The row shows the invocation alone in the
-    /// muted running tone (`⌘ /autopilot`) — the input half of the component
+    /// muted running tone (`⌘ /delegate`) — the input half of the component
     /// is already durable in the transcript, so a slow command never leaves
     /// the user wondering whether it ran.
     Pending,
@@ -1923,13 +1923,28 @@ impl TranscriptMessage {
     /// Reports **tokens** (ADR-0120) — the unit of what this thinking block
     /// costs against the context window, not a scalar count of the text.
     ///
-    /// While the trace is still streaming (`duration_ms: None`) the token
-    /// count is quantized to a bucket (`~`-prefixed) rather than exact: the
-    /// streaming summary repaints on every render heartbeat, and an exact
-    /// count would dirty the row for nearly every delta — the per-frame
-    /// redraw churn the middle-component flicker is made of. A finished
-    /// trace reports the exact count.
+    /// Spray style: while the trace streams, the line leads with a live
+    /// glyph (`✦`) and counts tokens up as they arrive (`✦ Thinking · 148
+    /// tokens`), reading like a filling meter rather than an estimate.
+    /// A finished trace settles into its final form and appends the
+    /// duration (`Thinking · 1318 tokens · 2.4s`).
+    ///
+    /// Above [`Self::STREAM_COUNT_QUANTUM`] tokens the streamed count is
+    /// floored to a multiple of that quantum rather than reported exactly:
+    /// the streaming summary repaints on every render heartbeat, and a
+    /// per-token count would dirty the row for nearly every delta — the
+    /// per-frame redraw churn the middle-component flicker is made of.
+    /// The floor keeps the label changes O(n ÷ quantum) while the number
+    /// still climbs monotonically like a real count. A finished trace
+    /// reports the exact count.
     pub fn thinking_summary(&self) -> Option<String> {
+        /// Live-count floor applied while streaming (see method doc).
+        const STREAM_COUNT_QUANTUM: usize = 25;
+        /// Below this many tokens even the live count updates per token —
+        /// the trace is short enough that per-token increments are rare
+        /// relative to the render heartbeat.
+        const STREAM_EXACT_UNDER: usize = 100;
+
         let MessageKind::Thinking {
             content,
             duration_ms,
@@ -1941,25 +1956,17 @@ impl TranscriptMessage {
         let tokens = muta_contracts::tokenizer::count_tokens(content);
         Some(match duration_ms {
             None => {
-                // Bucket to steps that grow geometrically-ish: the label
-                // changes O(log n) times over a trace instead of O(tokens).
-                const BUCKETS: &[usize] = &[0, 25, 50, 100, 200, 350, 500, 750, 1000, 1500, 2000];
-                let bucket = BUCKETS
-                    .iter()
-                    .rev()
-                    .find(|&&edge| tokens >= edge)
-                    .copied()
-                    .unwrap_or(0);
-                if bucket == 0 {
-                    "Thinking …".to_string()
+                // Floor to the quantum once the count grows past the
+                // per-token regime so the number climbs in visible steps
+                // instead of strobing digit-by-digit every heartbeat.
+                let shown = if tokens < STREAM_EXACT_UNDER {
+                    tokens
                 } else {
-                    format!("Thinking (~{bucket} tokens)")
-                }
+                    tokens - tokens % STREAM_COUNT_QUANTUM
+                };
+                format!("✦ Thinking · {shown} tokens")
             }
-            Some(_) => format!(
-                "Thinking ({tokens} tokens, {})",
-                duration_text(*duration_ms)
-            ),
+            Some(ms) => format!("Thinking · {tokens} tokens · {}", duration_text(Some(*ms))),
         })
     }
 

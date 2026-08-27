@@ -1355,7 +1355,7 @@ components:
         - { $ref: '#/components/schemas/EventCompacted' }
         - { $ref: '#/components/schemas/EventHarnessState' }
         - { $ref: '#/components/schemas/EventTodosUpdated' }
-        - { $ref: '#/components/schemas/EventAutopilotChanged' }
+        - { $ref: '#/components/schemas/EventDelegatedChanged' }
         - { $ref: '#/components/schemas/EventRetryScheduled' }
         - { $ref: '#/components/schemas/EventActivity' }
         - { $ref: '#/components/schemas/EventTurnStarted' }
@@ -1456,11 +1456,16 @@ components:
       properties:
         HarnessState:
           type: object
-          required: [loop_status, round_counter, autopilot]
+          required: [loop_status, round_counter, delegated]
           properties:
             loop_status: { type: string, enum: [idle, running] }
             round_counter: { type: integer, minimum: 0 }
-            autopilot: { type: boolean }
+            delegated:
+              type: boolean
+              description: >-
+                Delegated autonomous execution posture (tool permission prompts
+                bypassed). Servers also accept the legacy `yolo`/`autopilot`
+                field spellings on deserialize; new writes use `delegated`.
           additionalProperties: false
       additionalProperties: false
     EventTodosUpdated:
@@ -1468,7 +1473,7 @@ components:
       required: [TodosUpdated]
       properties: { TodosUpdated: { $ref: '#/components/schemas/TodoList' } }
       additionalProperties: false
-    EventAutopilotChanged: { type: object, required: [AutopilotChanged], properties: { AutopilotChanged: { type: boolean } }, additionalProperties: false }
+    EventDelegatedChanged: { type: object, required: [DelegatedChanged], properties: { DelegatedChanged: { type: boolean } }, additionalProperties: false }
     EventRetryScheduled:
       type: object
       required: [RetryScheduled]

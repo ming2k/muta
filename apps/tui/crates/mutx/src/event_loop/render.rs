@@ -274,7 +274,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             session_head: Some(view::SessionHead {
                 session_id: viewed_session_id,
                 workspace: &app.current_workspace,
-                yolo: app.yolo,
+                delegated: app.delegated,
             }),
             todos: app.todos.as_ref(),
             // View-scoped: the elapsed-timer origin belongs to the viewed
@@ -1174,7 +1174,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         );
     } else if app.notice_toast_until.is_some() {
         // A toast-surfaced command acknowledgment (e.g.
-        // `/autopilot on`). Rendered only when no copy toast is
+        // `/delegate on`). Rendered only when no copy toast is
         // showing, since the two share the same top-right slot.
         view::draw_notice_toast(
             f,

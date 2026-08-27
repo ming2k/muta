@@ -18,7 +18,7 @@
 //!   is set.
 //! - **Confirm:** recursive `rm` of any other absolute path (e.g. `/var/db/x`)
 //!   or a parent-traversal target (e.g. `../sibling`). The command must leave
-//!   the project, so it requires explicit one-off authority. Under autopilot
+//!   the project, so it requires explicit one-off authority. In delegated mode
 //!   that missing authority fails immediately rather than changing verdict.
 //! - **Allow (fall through to the normal permission broker):** everything
 //!   else, i.e. recursive `rm` of a relative path inside the cwd such as

@@ -196,7 +196,7 @@ pub struct TranscriptView<'a> {
     pub page_hints: Option<page_header::PageHints<'a>>,
     /// Session identity for the Main view's head row: the persistent-id tail
     /// plus the tilde-shortened workspace on the left, and the session mode
-    /// (`autopilot`) on the right. `None` only in non-session contexts
+    /// (`DELEGATED`) on the right. `None` only in non-session contexts
     /// (tests/showcase) where no ambient session exists.
     pub session_head: Option<SessionHead<'a>>,
     /// Live unified task list, if any. Surfaced on the todo bar (a one-row
@@ -629,7 +629,7 @@ pub fn draw_transcript(
     // list, queue = outbox) lead; the activity bar sits flush above the input
     // box so the live status reads as part of the composer; the hint bar sits
     // flush below it and carries the next input action + model/context.
-    // Session-level state (workspace, mode flags such as `autopilot`) lives on
+    // Session-level state (workspace, mode flags such as `DELEGATED`) lives on
     // the head row at the top of the view, not on a bottom status bar.
     //
     // The zero-gap tokens (activity→composer, composer→hint) collapse to no

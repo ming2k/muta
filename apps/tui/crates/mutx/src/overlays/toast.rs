@@ -27,7 +27,7 @@ pub fn draw_copy_toast(frame: &mut Frame, message: &str, failed: bool, theme: &T
 }
 
 /// Draw a toast-surfaced notice (a command acknowledgment such as
-/// `/autopilot on`). The bubble's accent color follows the notice severity,
+/// `/delegate on`). The bubble's accent color follows the notice severity,
 /// reusing the same severity→color map as the inline notice renderer so the
 /// two stay visually consistent. Unlike the copy/armed toasts this is driven
 /// by a `RoundEvent::Notice` forwarded across the listener→loop boundary.

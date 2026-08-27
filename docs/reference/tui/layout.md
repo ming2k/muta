@@ -63,7 +63,7 @@ The top of every view carries a **head band** — an identity strip
 (ADR-0103 §3) whose second row is demand-driven (ADR-0104). Row 1 is
 identity and status; on the Main session view it shows `SESSION`, the
 session-id tail, and the workspace path on the left, plus the session mode
-(`autopilot`) on the right. Row 2 — the view-affordance legend — renders
+(`DELEGATED`) on the right. Row 2 — the view-affordance legend — renders
 only while the view has something page-specific to announce: the main
 view's live aside chip + `F5 asides` while asides are live, or the aside
 view's `Ctrl-C back` / `F5 asides` / `Esc interrupt aside`. Contextual
@@ -87,7 +87,7 @@ box and hint bar are persistent (when chrome is visible):
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ SESSION b3c4 ~/projects/xx                       autopilot │  ← head row
+│ SESSION b3c4 ~/projects/xx                      DELEGATED  │  ← head row
 │ TODOS 2/5 · write the documentation           Ctrl+T expand │  ← todo bar
 │ QUEUE 1  {next item preview…}  Ctrl+P block  Ctrl+Q expand  │  ← queue bar
 │ ● making edits (23s · Esc Esc interrupt)                 │  ← activity bar

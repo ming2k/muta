@@ -175,25 +175,25 @@ impl SessionStore {
         Ok(())
     }
 
-    /// The session-scoped YOLO posture. `false` = attended (default).
-    pub async fn yolo(&self) -> bool {
-        self.state.lock().await.data.yolo
+    /// The session-scoped delegated-autonomous posture. `false` = attended (default).
+    pub async fn delegated(&self) -> bool {
+        self.state.lock().await.data.delegated
     }
 
-    /// Replace the YOLO posture. Mirrors `Agent::get_yolo` so a
+    /// Replace the delegated-autonomous posture. Mirrors `Agent::delegated()` so a
     /// daemon restart restores the session in the posture it died in.
-    pub async fn set_yolo(&self, enabled: bool) -> Result<(), String> {
+    pub async fn set_delegated(&self, enabled: bool) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
-            if state.data.yolo == enabled {
+            if state.data.delegated == enabled {
                 return Ok(());
             }
-            state.data.yolo = enabled;
+            state.data.delegated = enabled;
             state.data.updated_at = unix_timestamp();
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
                 ensure_event_log_started(&state.event_log, &state.data)?;
-                state.event_log.append(SessionEvent::YoloSet { enabled })?;
+                state.event_log.append(SessionEvent::DelegatedSet { enabled })?;
             }
             (state.path.clone(), state.data.clone(), !empty_unpersisted)
         };

@@ -428,8 +428,8 @@ impl Agent {
             // input panel: no one is going to type into the prompt, so the
             // inline panel would either deadlock or just disrupt.
             // Close stdin instead — the command then fails fast with a non-interactive remedy.
-            if self.get_yolo() {
-                tracing::info!(command = %command, "interactive command stdin closed under yolo mode");
+            if self.delegated() {
+                tracing::info!(command = %command, "interactive command stdin closed in delegated mode");
                 return StdinPolicy::default();
             }
             if self.skip_interactive_input() {
@@ -475,7 +475,7 @@ impl Agent {
         // async because some gates await (hooks, bash policy). Outcomes:
         //   • Deny    → short-circuit with the policy's output.
         //   • Approve → proceed under existing authority.
-        //   • MissingAuthority → attended: ask once; autopilot: fail now.
+        //   • MissingAuthority → attended: ask once; delegated: fail now.
         //   • Pass    → (chain fallback) proceed.
         let target = tool.scope_target(&call.arguments);
         // Snapshot the disable masks and scope *before* the chain runs, then
@@ -503,7 +503,7 @@ impl Agent {
             operation_scope,
             disabled: disabled_snapshot,
             scoped_disabled: scoped_snapshot,
-            yolo: self.get_yolo(),
+            delegated: self.delegated(),
             ctx: self, // Agent: PermissionContext
         };
 
@@ -514,7 +514,7 @@ impl Agent {
                 return output;
             }
             crate::permission_policy::PolicyDecision::MissingAuthority { request, rule } => {
-                if self.get_yolo() {
+                if self.delegated() {
                     // Under YOLO mode, missing authority is auto-approved.
                 } else {
                     // The single interactive-park path. Both the broker (a
@@ -529,7 +529,7 @@ impl Agent {
                     };
                     // ADR-0141 posture gate: permissions fail closed when no
                     // human channel exists — a missing human cannot grant
-                    // authority. (Autopilot sessions reach this arm only with
+                    // authority. (Delegated sessions reach this arm only with
                     // an interactive watcher attached, so this is the belt to
                     // that braces.)
                     if self.human_posture() == HumanChannelPosture::Autonomous {
@@ -593,7 +593,7 @@ impl Agent {
         }
 
         if call.name == "ask_user" {
-            if self.get_yolo() {
+            if self.delegated() {
                 return ToolOutput::Text(
                     "ask_user is unavailable: this session is running in Delegated mode and no human \
                      is reachable to answer. Resolve the ambiguity yourself — pick the most \

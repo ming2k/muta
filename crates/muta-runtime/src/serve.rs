@@ -974,7 +974,7 @@ where
         // The agent handle does not ride on `BoundSession`, so read the
         // posture straight from the session store (ADR-0132: the store is
         // the source of truth for the persisted posture). A session that
-        // died unattended re-attaches with `autopilot: true` in this very
+        // died delegated re-attaches with `delegated: true` in this very
         // first snapshot — the badge paints immediately instead of waiting
         // for the next periodic `HarnessState`.
         //
@@ -987,7 +987,7 @@ where
         let snapshot = muta_contracts::HarnessSnapshot {
             loop_status: muta_contracts::LoopStatus::Idle,
             round_counter: bound.session.round_counter().await,
-            yolo: bound.session.yolo().await,
+            delegated: bound.session.delegated().await,
             workspace_security: bound.security.snapshot(bound.project_root()),
             retry_pending: bound.session.retry_pending().await.is_some(),
         };

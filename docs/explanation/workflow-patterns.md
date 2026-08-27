@@ -37,7 +37,7 @@ In this workflow, the developer and the agent work in an iterative loop:
 2. **Tool Execution & Safety Gating**: The agent reads project files,
    analyzes dependencies, executes test commands, and proposes code edits.
    Workspace authority and the physical sandbox decide what may run.
-   Attended mode can request a missing grant; `/autopilot on` makes the same
+   Attended mode can request a missing grant; `/delegate on` makes the same
    decision non-interactive and fails immediately when authority is missing.
 3. **Isolated Side Inquiries**: When the user has a tangent question that
    would otherwise pollute the main conversation context, the `/btw` command

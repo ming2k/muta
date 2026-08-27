@@ -107,7 +107,7 @@ row extends the steering without growing the executable command surface.
 Cron jobs **recur** (and fire their first run immediately); countdown and
 absolute jobs fire **once** and are then removed. Jobs are durable (survive
 restarts). Recurring cron jobs auto-expire after 30 days. `/schedule` is the
-clock-driven scheduler for autopilot, reminders, and one-shot timers.
+clock-driven scheduler for delegated runs, reminders, and one-shot timers.
 
 ### `/repeat`
 

@@ -491,7 +491,7 @@ async fn slash_dispatch_never_arms_activity_state() {
         session_id: "session-a".to_string(),
     };
 
-    super::event_loop::handle_send_slash(&mut app, &runtime, &session, "/yolo on".to_string())
+    super::event_loop::handle_send_slash(&mut app, &runtime, &session, "/delegate on".to_string())
         .await;
 
     assert!(

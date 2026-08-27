@@ -97,9 +97,10 @@ pub struct MasterPreset {
     pub operation_scope: OperationScope,
     /// Runtime execution knobs (hard stop, doom guard, model stdin).
     pub config: MasterRuntimeConfig,
-    /// Whether this principal runs in YOLO mode (auto-approves all tool permissions). Default
-    /// `false` — a top-level principal is interactive by contract.
-    pub yolo: bool,
+    /// Whether this principal runs in delegated autonomous execution mode
+    /// (auto-approves all tool permissions). Default `false` — a top-level
+    /// principal is interactive by contract.
+    pub delegated: bool,
 }
 
 impl MasterPreset {
@@ -113,7 +114,7 @@ impl MasterPreset {
             agent_selection: ToolSelection::unrestricted(),
             operation_scope: OperationScope::unrestricted(),
             config: MasterRuntimeConfig::default(),
-            yolo: false,
+            delegated: false,
         }
     }
 
@@ -158,9 +159,10 @@ impl MasterPreset {
         self
     }
 
-    /// Run attended (`false`, the default) or yolo mode (`true`).
-    pub fn with_yolo(mut self, yolo: bool) -> Self {
-        self.yolo = yolo;
+    /// Run attended (`false`, the default) or in delegated autonomous
+    /// execution mode (`true`).
+    pub fn with_delegated(mut self, delegated: bool) -> Self {
+        self.delegated = delegated;
         self
     }
 }
@@ -465,7 +467,7 @@ mod tests {
     fn with_identity_is_unrestricted_and_attended() {
         let p = MasterPreset::with_identity("code", AgentIdentity::new("n", "m"));
         assert_eq!(p.name, "code");
-        assert!(!p.yolo);
+        assert!(!p.delegated);
         // unrestricted selection ⇒ All scope, empty variant pins
         assert_eq!(p.agent_selection.scope, crate::ToolScope::All);
         assert!(p.agent_selection.variants.is_empty());
@@ -482,12 +484,12 @@ mod tests {
     #[test]
     fn builders_override_defaults() {
         let p = MasterPreset::with_identity("ops", AgentIdentity::default())
-            .with_yolo(true)
+            .with_delegated(true)
             .with_runtime_config(MasterRuntimeConfig {
                 hard_stop_turns: 7,
                 ..Default::default()
             });
-        assert!(p.yolo);
+        assert!(p.delegated);
         assert_eq!(p.config.hard_stop_turns, 7);
     }
 

@@ -72,7 +72,7 @@ vocabulary; the dispatch tools bind them by reference.
 | Profile | Bound by | Ceiling | Write grant | Gets |
 |---------|----------|---------|-------------|------|
 | `EXPLORE` | `envoy` tool | `Read` | none | Pure read tools (`read_text`, `find_files`, `list_dir`, `search_text`, …) |
-| `CODE` | `envoy_code` tool | `Write` | none | Read tools + `execute_command`, `edit_file`, `write_file`, `todo*` — a full coding surface; runs on autopilot, so the delegation *is* the authorization |
+| `CODE` | `envoy_code` tool | `Write` | none | Read tools + `execute_command`, `edit_file`, `write_file`, `todo*` — a full coding surface; runs delegated, so the delegation *is* the authorization |
 | `TITLE` | harness title generation | `Read` | none | No tools — a single `provider.chat()` call |
 | `MCP_SPECIALIST` | `envoy_mcp` tool | `Read` | none | Dynamic MCP tools in an isolated sandbox |
 
@@ -83,7 +83,7 @@ profiles reachable from a model tool call today; `TITLE` is an internal
 role. (A prior internal role, `REVIEW` — the retired `/review`
 diagnostic — has been removed.) `CODE` opts into `allow_user_interaction: true` so an
 `ask_user` request surfaces to the parent through the full-duplex channel.
-Every built-in envoy runs `autopilot: true` — including `CODE`: the
+Every built-in envoy runs `delegated: true` — including `CODE`: the
 principal's act of calling `envoy_code` is the authorization for the
 delegated task, so the child's writes and commands execute on the envoy's
 own authority rather than routing each one back through the permission
@@ -104,7 +104,7 @@ scoped-write role, but no built-in profile exercises them today.
 
 The one exception is `CODE`: a coding envoy needs the full edit surface
 (`execute_command` + `edit_file` + `write_file`), so it admits those tools by name. Like
-every other built-in envoy it runs **autopilot** — the delegation is the
+every other built-in envoy it runs **delegated** — the delegation is the
 authorization, so the user does not re-approve each nested write/command; the
 principal reviews the envoy's handoff instead. Admission says *whether* a
 tool may run; the `WriteScope` (for a future scoped profile) says *where*.

@@ -756,7 +756,7 @@ impl AgentNotice {
     /// Build an ephemeral, toast-surfaced acknowledgment of a slash command or
     /// configuration change (the *reply* to a command, not its invocation).
     ///
-    /// `title` is the one-line confirmation (e.g. `"Autopilot ON: …"`). The
+    /// `title` is the one-line confirmation (e.g. `"Delegated mode ON: …"`). The
     /// notice is `Info` severity and routed to the [`NoticeSurface::Toast`]
     /// surface so frontends show it as a transient bubble and do **not** append
     /// it to the transcript — it carries no conversational content. ADR-0050
@@ -799,7 +799,7 @@ pub enum NoticeKind {
     NudgeInjected,
     ReviewAlert,
     /// A harness-level acknowledgment of a slash command / configuration change
-    /// (e.g. `/autopilot on`, `--autopilot`, `/permissions clear`). These are
+    /// (e.g. `/delegate on`, `--delegate`, `/permissions clear`). These are
     /// status confirmations, not model output: they carry no conversational
     /// content, so frontends should surface them as a transient notification
     /// (toast) rather than appending them to the transcript as if the model
@@ -1193,10 +1193,11 @@ pub enum RoundEvent {
     /// `todo_update`). Mirrors [`AgentEvent::TodosUpdated`]. An empty list
     /// means "no active task list" and hides the sticky panel.
     TodosUpdated(crate::todos::TodoList),
-    /// The YOLO toggle changed. `yolo` = the agent runs in full auto-approve mode
-    /// (all permissions bypassed). Emitted by `/yolo` so the TUI can refresh its badge
-    /// without waiting for the next harness snapshot.
-    YoloChanged(bool),
+    /// The delegated-autonomous toggle changed. `true` = the agent runs in full
+    /// auto-approve mode (all permissions bypassed). Emitted by `/delegate` so
+    /// the TUI can refresh its badge without waiting for the next harness snapshot.
+    #[serde(alias = "YoloChanged", alias = "AutopilotChanged")]
+    DelegatedChanged(bool),
     RetryScheduled {
         attempt: usize,
         max_attempts: usize,
@@ -1331,11 +1332,11 @@ pub struct HarnessSnapshot {
     #[serde(default)]
     pub round_counter: u64,
     /// Whether tool permission prompts are bypassed this session
-    /// (`-y` / `/yolo on`). The TUI mirrors this into a
+    /// (`-y` / `/delegate on`). The TUI mirrors this into a
     /// visible badge so the elevated state is never silent.
-    #[serde(default, alias = "autopilot")]
-    pub yolo: bool,
-    /// Workspace authority is independent from attended/autopilot posture.
+    #[serde(default, alias = "yolo", alias = "autopilot")]
+    pub delegated: bool,
+    /// Workspace authority is independent from the attended/delegated posture.
     /// Frontends surface this state continuously so authority is never implicit.
     #[serde(default)]
     pub workspace_security: crate::WorkspaceSecuritySnapshot,
@@ -1623,7 +1624,7 @@ pub enum RunnerEvent {
     /// `reply_permission` (resolving the parked oneshot directly), unblocking
     /// the runner's pending tool. Only fires when
     /// the runner's profile does not suppress the broker (e.g. via
-    /// `autopilot`) — a read-only profile never produces one.
+    /// `delegated: true`) — a read-only profile never produces one.
     PermissionRequest(PermissionRequest),
     /// The runner called `ask_user` and is blocked awaiting answers.
     /// Full-duplex (ADR-0029): carries the questions *up*; the reply travels
@@ -1729,8 +1730,9 @@ pub enum AgentEvent {
     /// The task list changed (`todo` / `todo_update`). The TUI uses this to refresh the
     /// unified sticky panel above the input box.
     TodosUpdated(crate::todos::TodoList),
-    /// The YOLO toggle changed (via `/yolo`).
-    YoloChanged(bool),
+    /// The delegated-autonomous toggle changed (via `/delegate`).
+    #[serde(alias = "YoloChanged", alias = "AutopilotChanged")]
+    DelegatedChanged(bool),
     PermissionRequest(PermissionRequest),
     UserQuestionRequest(UserQuestionRequest),
     /// An interactive `bash` command needs a line of stdin from the operator.
@@ -2036,12 +2038,12 @@ mod tests {
         //   - severity Info (it is a status confirmation, not an error),
         //   - surface Toast (transient bubble, never appended to transcript),
         //   - source Harness (not the agent / a tool).
-        let notice = AgentNotice::command_ack("Autopilot ON: …");
+        let notice = AgentNotice::command_ack("Delegated mode ON: …");
         assert_eq!(notice.kind, NoticeKind::CommandAck);
         assert_eq!(notice.severity, NoticeSeverity::Info);
         assert_eq!(notice.surface, NoticeSurface::Toast);
         assert_eq!(notice.source, NoticeSource::Harness);
-        assert_eq!(notice.title, "Autopilot ON: …");
+        assert_eq!(notice.title, "Delegated mode ON: …");
         assert!(notice.body.is_none());
     }
 

@@ -122,11 +122,11 @@ pub enum SessionEvent {
     /// completed (naturally or via retry), or the session moved on and the
     /// point went stale. Snapshot semantics: the slot becomes `None`.
     RetryPendingCleared {},
-    /// The session's YOLO posture changed. Snapshot
-    /// semantics. Mirrors `Agent::get_yolo` so a daemon restart
+    /// The session's delegated-autonomous posture changed. Snapshot
+    /// semantics. Mirrors `Agent::delegated()` so a daemon restart
     /// restores the session in the same posture it died in.
-    #[serde(alias = "AutopilotSet")]
-    YoloSet { enabled: bool },
+    #[serde(alias = "YoloSet", alias = "AutopilotSet")]
+    DelegatedSet { enabled: bool },
 }
 
 /// Wrapper around a [`SessionEvent`] that adds metadata for ordering and

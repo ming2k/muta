@@ -39,10 +39,10 @@ The tools share one `RunnerRegistry` (call ids are globally unique, so a
 user's reply routes to the correct live child regardless of which tool spawned
 it) but register as distinct capabilities under different names, so they
 coexist in the parent toolset without one shadowing the other. `RUNNER_CODE` runs
-`autopilot: true` like other runners — the principal's act of
+`delegated: true` like other runners — the principal's act of
 calling `runner_code` is the authorization for the delegated task, so the
 child's writes and commands execute on the runner's own authority and do not
 route through the permission broker. (`ask_user` still uses the full-duplex
 channel.) See
 [ADR-0087](../../adr/0087-code-envoy-runs-autopilot.md)
-(supersedes ADR-0086's `autopilot: false`).
+(supersedes ADR-0086's attended default).

@@ -1687,7 +1687,7 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
                 Some(format!("tool-stream {} {:?}", id, stream))
             }
             AgentEvent::ToolCancelled { name, .. } => Some(format!("tool-cancelled {name}")),
-            AgentEvent::YoloChanged(enabled) => Some(format!("yolo {enabled}")),
+            AgentEvent::DelegatedChanged(enabled) => Some(format!("delegated {enabled}")),
             AgentEvent::PermissionRequest(request) => {
                 Some(format!("permission-request {} {}", request.tool, request.scope))
             }
@@ -2007,7 +2007,7 @@ async fn doom_guard_suppressed_when_disabled() {
 }
 
 #[tokio::test]
-async fn command_policy_confirm_auto_approves_under_yolo() {
+async fn command_policy_confirm_auto_approves_when_delegated() {
     let command = RecordingTool::read("execute_command", "COMMAND-OUT");
     let calls = command.calls_handle();
     let agent = Arc::new(Agent::new(
@@ -2018,7 +2018,7 @@ async fn command_policy_confirm_auto_approves_under_yolo() {
         vec![Arc::new(command)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_yolo(true);
+    agent.set_delegated(true);
 
     let mut messages = vec![Message::new(Role::User, "discard changes")];
     let outcome = agent
@@ -2218,9 +2218,9 @@ async fn ask_user_tool_unblocks_with_a_cancelled_result() {
 }
 
 #[tokio::test]
-async fn autopilot_reclaims_ask_user_and_short_circuits_stale_calls() {
+async fn delegated_reclaims_ask_user_and_short_circuits_stale_calls() {
     // The model still names ask_user (carried from an older tool list), but
-    // under autopilot the harness must not park on it. The call short-
+    // in delegated mode the harness must not park on it. The call short-
     // circuits with a refusal, no user-question event fires, and the round
     // completes without a human.
     let ask_args = serde_json::json!({
@@ -2242,7 +2242,7 @@ async fn autopilot_reclaims_ask_user_and_short_circuits_stale_calls() {
         vec![Arc::new(crate::tools::AskUserTool)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_yolo(true);
+    agent.set_delegated(true);
 
     let mut messages = vec![Message::new(Role::User, "choose")];
     let mut events = Vec::new();
@@ -2257,9 +2257,9 @@ async fn autopilot_reclaims_ask_user_and_short_circuits_stale_calls() {
     // No question was ever surfaced to a human.
     assert!(
         !lines.iter().any(|line| line.starts_with("user-question")),
-        "ask_user should not surface a question under yolo"
+        "ask_user should not surface a question in delegated mode"
     );
-    // The stale call was answered with the yolo refusal.
+    // The stale call was answered with the delegated-mode refusal.
     assert!(
         lines.iter().any(|line| {
             line.starts_with("tool-result ask_user") && line.contains("unavailable")
@@ -2268,7 +2268,7 @@ async fn autopilot_reclaims_ask_user_and_short_circuits_stale_calls() {
 }
 
 #[tokio::test]
-async fn yolo_preserves_schema_and_intercepts_ask_user_at_runtime() {
+async fn delegated_preserves_schema_and_intercepts_ask_user_at_runtime() {
     let agent = Agent::new(
         Arc::new(ScriptedProvider::new(vec![text_turn("ok")])),
         vec![Arc::new(crate::tools::AskUserTool)],
@@ -2277,12 +2277,12 @@ async fn yolo_preserves_schema_and_intercepts_ask_user_at_runtime() {
     let visible_before = agent.visible_tools();
     let names_before: Vec<&str> = visible_before.iter().map(|t| t.name()).collect();
     assert!(names_before.contains(&"ask_user"));
-    agent.set_yolo(true);
+    agent.set_delegated(true);
     let visible_after = agent.visible_tools();
     let names_after: Vec<&str> = visible_after.iter().map(|t| t.name()).collect();
     assert!(
         names_after.contains(&"ask_user"),
-        "ask_user schema is preserved under yolo mode for KV-cache stability, got {names_after:?}"
+        "ask_user schema is preserved in delegated mode for KV-cache stability, got {names_after:?}"
     );
 }
 

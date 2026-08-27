@@ -36,7 +36,7 @@ pub struct SystemPromptContext {
     pub provider_guidance: &'static str,
     /// Whether the agent is running in YOLO mode this round — with all tool
     /// permissions auto-approved and ask_user reclaimed.
-    pub yolo: bool,
+    pub delegated: bool,
     /// Available skills formatted as XML metadata for progressive disclosure.
     pub available_skills: String,
     /// Content-attested project instructions. Empty while the Rules asset

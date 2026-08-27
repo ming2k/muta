@@ -63,9 +63,9 @@
   </div>
 
   <div class="actions">
-    {#if daemon.autopilot}
-      <span class="badge autopilot" title="Autopilot: permission prompts are bypassed">
-        autopilot
+    {#if daemon.delegated}
+      <span class="badge delegated" title="Delegated: permission prompts are bypassed">
+        delegated
       </span>
     {/if}
     {#if daemon.providerInfo}
@@ -149,7 +149,7 @@
     flex-shrink: 0;
   }
 
-  .badge.autopilot {
+  .badge.delegated {
     font-family: var(--font-mono);
     font-size: 10px;
     padding: 2px 6px;

@@ -40,8 +40,8 @@ pub const THINKING_KEY: &str = "thinking";
 ///
 /// # Never pop the interactive-input panel for a command needing stdin
 /// # (sudo/gpg/passwd/…). Instead run it with stdin closed so it fails fast
-/// # with a non-interactive remedy hint — like autopilot mode, but without
-/// # turning the master itself autopilot.
+/// # with a non-interactive remedy hint — like delegated autonomous mode, but without
+/// # turning the master itself delegated.
 /// # skip_interactive_input = false
 ///
 /// # Doom-loop guard (variant-loop defense). On by default; one
@@ -79,13 +79,13 @@ pub struct MasterConfig {
     /// input-injection panel (with the command + a masked/plain field). When
     /// `true`, the panel is skipped — the command runs non-interactively,
     /// reads EOF immediately, and fails fast with a non-interactive remedy
-    /// hint, exactly as it would under autopilot mode. This is the right
+    /// hint, exactly as it would in delegated autonomous mode. This is the right
     /// setting for users who find the prompt disruptive and prefer to retry
     /// the command themselves (or let the model retry with a non-interactive
     /// form). Wired through `Agent::set_skip_interactive_input`.
     ///
     /// Note: this only governs the *interactive-input* path; it does not turn
-    /// the master autopilot, so ordinary tool confirmations still apply.
+    /// the master delegated, so ordinary tool confirmations still apply.
     pub skip_interactive_input: bool,
     /// ADR-0141: how an autonomous session (no human channel attached —
     /// piped headless, CI, cron) settles an `ask_user` question. Wire

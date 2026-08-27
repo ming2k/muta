@@ -137,9 +137,10 @@ pub struct RunnerPreset {
     /// *down* by the model's hard capability limit if the pinned variant is
     /// unusable. See [`ToolSet::resolve_for`].
     pub variant_pins: &'static [(&'static str, &'static str)],
-    /// Whether the spawned runner runs in **yolo mode**: auto-approves all
-    /// permissions without human intervention.
-    pub yolo: bool,
+    /// Whether a runner spawned under this profile runs in delegated
+    /// autonomous execution mode: auto-approves all permissions without
+    /// human intervention.
+    pub delegated: bool,
     /// Whether an runner spawned under this profile may have the **model**
     /// supply stdin bytes for an `execute_command` call it emits (the opt-in automatic-
     /// flow path). Default `false` for every built-in profile: autonomous
@@ -279,7 +280,7 @@ handful of turns, then answer.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    yolo: true,
+    delegated: true,
     allow_model_stdin: false,
 };
 
@@ -305,7 +306,7 @@ the title in the same language as the conversation.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    yolo: true,
+    delegated: true,
     allow_model_stdin: false,
 };
 
@@ -342,7 +343,7 @@ const CODING_TOOLS: &[&str] = &[
 /// implement a delegated task end-to-end, then hand back a technically
 /// complete summary. It is the analogue of kimi-code's `coder` subagent.
 ///
-/// Like every built-in runner, the role is **autonomous** (`autopilot: true`):
+/// Like every built-in runner, the role is **autonomous** (`delegated: true`):
 /// the principal's act of delegating a task via the `runner_code` tool *is* the
 /// authorization — the child runs its writes and commands on its own authority,
 /// without routing each one back through the permission broker. The broker
@@ -354,10 +355,10 @@ const CODING_TOOLS: &[&str] = &[
 ///   approval-gated tool), so an ambiguous requirement can be surfaced rather
 ///   than guessed; that path still uses the full-duplex channel
 ///   ([ADR-0029](../../adr/0029-full-duplex-subagent-communication.md)).
-/// - `autopilot: true` keeps the broker off for the child's writes/commands,
+/// - `delegated: true` keeps the broker off for the child's writes/commands,
 ///   matching every other built-in profile.
 ///
-/// ADR-0086 originally shipped this profile with `autopilot: false` (every
+/// ADR-0086 originally shipped this profile with an attended posture (every
 /// write/command user-approved); ADR-0087 reverses that to keep the
 /// delegation-as-authorization contract uniform across runners.
 ///
@@ -388,7 +389,7 @@ of turns, then answer.",
         command_allowlist: &[],
     },
     variant_pins: &[],
-    yolo: true,
+    delegated: true,
     allow_model_stdin: false,
 };
 
@@ -408,7 +409,7 @@ to the principal agent. Never output giant raw payloads if a clear summary answe
         command_allowlist: &[],
     },
     variant_pins: &[],
-    yolo: true,
+    delegated: true,
     allow_model_stdin: false,
 };
 
@@ -678,15 +679,15 @@ mod tests {
     /// ADR-0087: the principal's act of delegating via `runner_code` *is* the
     /// authorization, so RUNNER_CODE runs autonomous like every other built-in
     /// profile — the permission broker is the principal's gate, not the
-    /// runner's. Pins the value so ADR-0086's `autopilot: false` cannot
+    /// runner's. Pins the value so ADR-0086's attended posture cannot
     /// silently come back.
     // The assertion is constant by design: it pins the compiled-in `RUNNER_CODE`
     // profile value (see the doc comment above), not a computed property.
     #[allow(clippy::assertions_on_constants)]
     #[test]
-    fn code_profile_runs_yolo() {
+    fn code_profile_runs_delegated() {
         use crate::RUNNER_CODE;
-        assert!(RUNNER_CODE.yolo);
+        assert!(RUNNER_CODE.delegated);
     }
 
     #[test]
@@ -695,8 +696,8 @@ mod tests {
         // Pins the compiled-in profile value (delegation via `runner_mcp` is
         // the authorization, mirroring RUNNER_CODE above); constant by design.
         #[allow(clippy::assertions_on_constants)]
-        let yolo = RUNNER_MCP_SPECIALIST.yolo;
-        assert!(yolo);
+        let delegated = RUNNER_MCP_SPECIALIST.delegated;
+        assert!(delegated);
         // Dynamic / external tools admitted
         assert!(
             RUNNER_MCP_SPECIALIST

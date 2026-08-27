@@ -953,11 +953,11 @@ fn concurrent_turn_and_command_entries_render_and_expand_dynamically() {
 /// reveals the completed result body.
 #[test]
 fn command_component_pending_then_completed() {
-    let mut message = TranscriptMessage::pending_command("yolo", "on");
+    let mut message = TranscriptMessage::pending_command("delegate", "on");
 
     let pending = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
     assert!(
-        pending.contains("⌘ command") && pending.contains("/yolo on"),
+        pending.contains("⌘ command") && pending.contains("/delegate on"),
         "a pending row shows generic header with invocation in body:\n{pending}"
     );
     assert!(
@@ -965,7 +965,7 @@ fn command_component_pending_then_completed() {
         "a pending row shows no disclosure marker:\n{pending}"
     );
     assert!(
-        !pending.contains("YOLO mode ON"),
+        !pending.contains("Delegated mode ON"),
         "a pending row shows no reply:\n{pending}"
     );
 
@@ -973,7 +973,7 @@ fn command_component_pending_then_completed() {
     // headline + dimmed detail split (ADR-0106 two-tone ack).
     assert!(
         message.settle_command_result(muta_contracts::CommandResult::Ack {
-            title: "YOLO mode ON".to_string(),
+            title: "Delegated mode ON".to_string(),
             detail: Some(vec![
                 "File edits & creations are auto-approved".to_string(),
                 "Commands are auto-approved (catastrophic hard-denies retained)".to_string(),
@@ -984,14 +984,14 @@ fn command_component_pending_then_completed() {
     let completed = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
     assert!(
         completed.contains("⌘ command")
-            && completed.contains("/yolo on")
-            && completed.contains("YOLO mode ON"),
+            && completed.contains("/delegate on")
+            && completed.contains("Delegated mode ON"),
         "the settled entry renders its header, invocation, and result body:\n{completed}"
     );
     // The headline and its detail lines never collapse onto one row.
     let headline_rows = completed
         .lines()
-        .filter(|line| line.contains("YOLO mode ON"))
+        .filter(|line| line.contains("Delegated mode ON"))
         .count();
     let detail_rows = completed
         .lines()
@@ -1375,10 +1375,10 @@ fn command_component_renders_lead_symbols_and_timestamps() {
     let epoch_ms = 1_700_000_000_000; // Produces a deterministic HH:MM label
     let messages = vec![
         TranscriptMessage::command_result(
-            "yolo",
+            "delegate",
             "on",
             Some(muta_contracts::CommandResult::Ack {
-                title: "YOLO mode ON".to_string(),
+                title: "Delegated mode ON".to_string(),
                 detail: Some(vec!["All tool permissions are auto-approved".to_string()]),
             }),
         )
@@ -1388,11 +1388,11 @@ fn command_component_renders_lead_symbols_and_timestamps() {
 
     let grid = render_transcript_grid(&messages, 140, 18);
     assert!(
-        grid.contains("⌘ command") && grid.contains("/yolo on"),
+        grid.contains("⌘ command") && grid.contains("/delegate on"),
         "slash command must render with ⌘ command header and invocation in body:\n{grid}"
     );
     assert!(
-        grid.contains("YOLO mode ON"),
+        grid.contains("Delegated mode ON"),
         "ack headline must render in body:\n{grid}"
     );
     assert!(

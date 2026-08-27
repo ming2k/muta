@@ -583,8 +583,8 @@ pub struct App {
     pub activity_status: String,
     pub provider_retry: Option<ProviderRetryState>,
     /// Whether all tool permissions are auto-approved this session
-    /// (`--yolo` / `/yolo on`). Mirrored from the harness snapshot.
-    pub yolo: bool,
+    /// (`--delegate` / `/delegate on`). Mirrored from the harness snapshot.
+    pub delegated: bool,
     /// Unified task list, mirrored from `AgentResponse::TodosUpdated`. Shown
     /// inside the Activity modal (and no longer pinned above the input box) so
     /// the footer reclaims the vertical space. `None` (or an empty list)
@@ -906,7 +906,7 @@ pub struct App {
     pub copy_toast_message: String,
     pub copy_toast_failed: bool,
     /// A transient notice toast (command acknowledgments such as
-    /// `/autopilot on`, surfaced via `NoticeSurface::Toast`). Unlike the
+    /// `/delegate on`, surfaced via `NoticeSurface::Toast`). Unlike the
     /// inline `MessageKind::Notice`, this never enters the transcript: it
     /// renders as a top-right bubble that fades on its own, mirroring the copy
     /// toast. Severity drives the bubble's accent color. Held until

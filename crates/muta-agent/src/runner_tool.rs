@@ -736,14 +736,14 @@ impl RunnerTool {
             self.registry.register(id, _handle.clone());
         }
         // Full-duplex (ADR-0029): the broker gate is now profile-driven. The
-        // built-in profiles keep `autopilot: true` to preserve the legacy
-        // autonomous contract, but a profile with `autopilot: false` lets a
+        // built-in profiles keep `delegated: true` to preserve the legacy
+        // autonomous contract, but a profile with `delegated: false` lets a
         // runner's write/execute tool calls surface as
         // `RunnerEvent::PermissionRequest` up to the parent, with the user's
         // reply routed back down via the registry → handle →
         // `reply_permission` (the parked oneshot resolves directly, no inbox
         // drain needed).
-        runner.set_yolo(profile.yolo);
+        runner.set_delegated(profile.delegated);
         // ADR-0141: the child inherits the parent's human-channel posture
         // source. An interactive session's runners can ask the user through
         // the parent's channel (permission requests flow up via

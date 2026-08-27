@@ -958,7 +958,7 @@ impl SessionRegistry {
         // Created before the assemble because the scheduler is spawned
         // during it and receives the token as a spawn parameter.
         let cancel = CancellationToken::new();
-        // `autopilot: false` here is the *startup flag* (what `--autopilot`
+        // `delegated: false` here is the *startup flag* (what `--delegate`
         // passed on the command line), not the posture: ADR-0132 moved the
         // persisted posture into the session store, and the assemble's
         // resume path restores it from there — so a rehosted session reopens
@@ -972,7 +972,7 @@ impl SessionRegistry {
             ui,
             startup,
             project_root: Some(project_root.clone()),
-            yolo: false,
+            delegated: false,
             human_channel: Some(Arc::clone(&human_channel)),
             teardown_token: Some(cancel.clone()),
         })

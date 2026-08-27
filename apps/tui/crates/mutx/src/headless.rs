@@ -10,7 +10,7 @@ pub async fn run_headless(
     prompt: String,
     json: bool,
     project_override: Option<PathBuf>,
-    yolo: bool,
+    delegated: bool,
     remote: Option<String>,
     token: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -89,7 +89,7 @@ pub async fn run_headless(
         }
     };
 
-    if yolo {
+    if delegated {
         let _ = tx.send(AgentRequest::SlashCommand("/delegate on".to_string()));
     }
 
@@ -225,7 +225,7 @@ pub async fn run_headless(
                     }
                 }
                 RoundEvent::PermissionRequest(req) => {
-                    handle_permission_request(&tx, req, yolo, is_tty).await?;
+                    handle_permission_request(&tx, req, delegated, is_tty).await?;
                 }
                 RoundEvent::UserQuestionRequest(req) => {
                     handle_user_question_request(&tx, req, is_tty).await?;
@@ -360,10 +360,10 @@ async fn declare_session_end(
 async fn handle_permission_request(
     tx: &tokio::sync::mpsc::UnboundedSender<AgentRequest>,
     req: PermissionRequest,
-    yolo: bool,
+    delegated: bool,
     is_tty: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if yolo {
+    if delegated {
         let _ = tx.send(AgentRequest::PermissionReply {
             request_id: req.id,
             decision: PermissionDecision::Once,
