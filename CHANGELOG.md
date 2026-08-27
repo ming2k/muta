@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.3] - 2026-08-27
+
+### Added
+
+- **Per-attempt performance telemetry and the dedicated Performance report**
+  (ADR-0151): client-observed timing samples with a
+  `PerformanceTimingSource` discriminator, a `TurnPerformance` round event
+  surfaced by the runtime session driver, and a new `/performance` overlay in
+  the TUI, so throughput is reported per attempt instead of being averaged
+  into context accounting.
+- **Live additional-roots handle** (`SharedAdditionalRoots`, ADR-0147): trust
+  decisions recompute the admitted/denied additional root sets in place,
+  without rebuilding the toolset or restarting the session.
+
+### Changed
+
+- The stream-loop detector's steward review path no longer classifies a
+  repeated long expression as a loop.
+
 ## [0.36.2] - 2026-08-27
 
 ### Changed
