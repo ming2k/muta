@@ -66,7 +66,7 @@
 
 use super::Theme;
 
-mod renderers;
+pub(crate) mod renderers;
 mod state;
 pub use renderers::{
     StickyStep, draw_command_result, draw_provider_retry, draw_reasoning_trace,

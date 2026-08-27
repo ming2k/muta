@@ -37,6 +37,7 @@ use crate::model::layout::{InteractiveTarget, LayoutMap};
 use crate::model::selection::{CellDragInfo, SelectionState};
 
 use super::HeightCache;
+use crate::disclosure::renderers::RenderCtx;
 use super::disclosure::StickyStep;
 use super::theme::Theme;
 use crate::design::{MESSAGE_GAP_ROWS, TURN_HEADER_BODY_GAP_ROWS};
@@ -405,6 +406,16 @@ impl<'a, 'f> Stream<'a, 'f> {
         let msg = &self.messages[mi];
         let viewport_bottom = self.band.y + self.band.height;
 
+        // Snapshot the interaction state before the cursor borrow: once the
+        // RenderCtx holds &mut frame/layout_map/counters, only ctx fields move.
+        let hovered = self.hovered_step == Some(mi);
+        let focused_retry = self.focused_target == Some(InteractiveTarget::provider_retry(mi));
+        let focused_tool = self.focused_target == Some(InteractiveTarget::tool_step(mi));
+        let focused_thinking = self.focused_target == Some(InteractiveTarget::thinking(mi));
+        let focused_command =
+            self.focused_target == Some(InteractiveTarget::command_result(mi));
+        let focused_notice = self.focused_target == Some(InteractiveTarget::notice(mi));
+
         let body_before = self.content_lines;
         // Round-interrupt markers are terminal and immutable (C11): they join
         // the height-cache fast path alongside notices.
@@ -436,18 +447,22 @@ impl<'a, 'f> Stream<'a, 'f> {
                 self.skip_rows -= h as usize;
             }
         } else if msg.is_provider_retry() {
-            super::disclosure::draw_provider_retry(
+            let mut ctx = RenderCtx::from_cursor(
                 self.frame,
                 self.band,
-                msg,
-                mi,
+                self.band.width as usize,
                 self.theme,
                 self.layout_map,
                 &mut self.skip_rows,
                 &mut self.current_y,
                 &mut self.content_lines,
-                self.hovered_step == Some(mi),
-                self.focused_target == Some(InteractiveTarget::provider_retry(mi)),
+            );
+            super::disclosure::draw_provider_retry(
+                &mut ctx,
+                msg,
+                mi,
+                hovered,
+                focused_retry,
             );
         } else if msg.is_notice() {
             super::draw_notice(

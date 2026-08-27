@@ -43,7 +43,7 @@ use crate::design::TURN_HEADER_BODY_GAP_ROWS;
 /// positional cursor args threaded through every helper. This is the
 /// extraction seam for the tool-rendering redesign (ADR-0001); higher-level
 /// orchestration still constructs a `RenderCtx` at the boundary.
-pub(super) struct RenderCtx<'a, 'f: 'a> {
+pub(crate) struct RenderCtx<'a, 'f: 'a> {
     pub frame: &'a mut Frame<'f>,
     pub area: Rect,
     pub full_width: usize,
@@ -76,6 +76,21 @@ impl<'a, 'f: 'a> RenderCtx<'a, 'f> {
             skip_rows,
             y,
             content_lines,
+        }
+    }
+
+    /// Advance the cursor over `rows` unpainted blank rows, honoring
+    /// scroll-skip and the viewport clip. The accounting twin of [`Self::paint`]
+    /// for rows that produce no output (gaps, padding): `content_lines` still
+    /// grows so the scroll height stays honest.
+    pub fn advance_blank_rows(&mut self, rows: usize) {
+        for _ in 0..rows {
+            *self.content_lines += 1;
+            if *self.skip_rows > 0 {
+                *self.skip_rows = self.skip_rows.saturating_sub(1);
+            } else if *self.y < self.area.y + self.area.height {
+                *self.y += 1;
+            }
         }
     }
 
@@ -166,18 +181,15 @@ fn retry_duration(duration: std::time::Duration) -> String {
 /// message, so the transcript never accumulates one notice per attempt.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_provider_retry(
-    frame: &mut Frame,
-    transcript_area: Rect,
+    ctx: &mut RenderCtx<'_, '_>,
     msg: &TranscriptMessage,
     mi: usize,
-    theme: &Theme,
-    layout_map: &mut LayoutMap,
-    skip_rows: &mut usize,
-    current_y: &mut u16,
-    content_lines: &mut usize,
     hovered: bool,
     focused: bool,
 ) {
+    let theme = &*ctx.theme;
+    let transcript_area = ctx.area;
+    let full_width = ctx.full_width;
     let MessageKind::ProviderRetry {
         attempt,
         max_attempts,
@@ -222,17 +234,6 @@ pub fn draw_provider_retry(
     } else {
         MARKER_COLLAPSED
     };
-    let full_width = transcript_area.width as usize;
-    let mut ctx = RenderCtx::from_cursor(
-        frame,
-        transcript_area,
-        full_width,
-        theme,
-        layout_map,
-        skip_rows,
-        current_y,
-        content_lines,
-    );
     let used = 2 + summary.width();
     let summary_line = Line::from(vec![
         Span::styled(format!("{marker} "), Style::default().bg(bg).fg(color)),
