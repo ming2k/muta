@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.1] - 2026-08-27
+
+### Added
+
+- **Project Workspace Roots Trust Gate:** support linked workspace roots trust
+  domain (`TrustDomain::Roots`) in `WorkspaceSecuritySnapshot`, quarantine prompt,
+  and project-local `.muta/config.toml` `[workspace].additional_roots` merging.
+- **TUI Checklist Result Rendering:** support checklist item rendering
+  (`ResultKind::Checklist`) with completion glyphs (`☒`, `☐`, `✕`) and strikethrough
+  styling in tool outputs.
+
+### Changed
+
+- **Runner Terminology & Protocol Polish:** unified inline runner step display
+  and envoy-to-runner tool naming transitions across agent, contracts, and
+  documentation.
+- **Command Extraction & Normalization:** hardened executable extraction and
+  argument normalization for cross-platform scripts and command execution.
+
 ## [0.36.0] - 2026-08-27
 
 ### Added
@@ -5073,7 +5092,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.36.0...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.36.1...HEAD
+[0.36.1]: https://github.com/ming2k/muta/compare/v0.36.0...v0.36.1
 [0.36.0]: https://github.com/ming2k/muta/compare/v0.35.7...v0.36.0
 [0.35.7]: https://github.com/ming2k/muta/compare/v0.35.6...v0.35.7
 [0.35.6]: https://github.com/ming2k/muta/compare/v0.35.5...v0.35.6
