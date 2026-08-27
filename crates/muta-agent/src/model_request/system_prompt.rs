@@ -47,6 +47,8 @@ pub struct SystemPromptContext {
     /// `WorkspaceRootsGuidance` renders the cross-project admission notice
     /// only when it is non-empty.
     pub additional_workspace_roots: Vec<String>,
+    /// The primary workspace root path, if any.
+    pub workspace_root: Option<String>,
 }
 
 impl SystemPromptContext {

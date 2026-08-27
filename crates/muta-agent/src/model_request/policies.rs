@@ -41,6 +41,49 @@ impl SystemPromptSection for IdentityPreamble {
     }
 }
 
+/// Host operating system and shell environment guidance.
+/// Informs the model about the native OS, default shell dialect (e.g. PowerShell on Windows),
+/// path conventions, and emphasizes using built-in file tools over raw shell redirection.
+struct HostEnvironmentGuidance;
+
+impl SystemPromptSection for HostEnvironmentGuidance {
+    fn id(&self) -> &'static str {
+        "system.host_environment"
+    }
+    fn rank(&self) -> u32 {
+        12
+    }
+    fn is_active(&self, _ctx: &SystemPromptContext) -> bool {
+        true
+    }
+    fn render(&self, ctx: &SystemPromptContext) -> Option<String> {
+        let dialect = muta_platform::shell::native_shell_dialect();
+        let ws = ctx.workspace_root.as_deref().unwrap_or(".");
+
+        let shell_info = match dialect {
+            muta_platform::shell::ShellDialect::PowerShell => {
+                "- Operating System: Windows\n\
+                 - Native Shell: PowerShell (powershell.exe / pwsh)\n\
+                 - Shell Syntax: Use PowerShell cmdlets and syntax (e.g. `$env:VAR = 'val'`, `Get-ChildItem`, `Test-Path`). \
+                   Do NOT use Unix-only commands/syntax (such as `export`, `source`, `sed`, `awk`). Prefer cross-platform CLIs (cargo, git, npm)."
+            }
+            muta_platform::shell::ShellDialect::Posix => {
+                "- Operating System: Unix-like (Linux/macOS)\n\
+                 - Native Shell: POSIX sh / bash\n\
+                 - Shell Syntax: Standard POSIX shell pipelines and syntax."
+            }
+        };
+
+        Some(format!(
+            "\n## Host Execution Environment\n\
+             - Primary Workspace: `{ws}`\n\
+             {shell_info}\n\
+             - Tool Guidance: ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_file`, `search_text`, `find_files`) \
+               over executing shell commands like `cat`, `grep`, `find`, `sed`, `echo >`."
+        ))
+    }
+}
+
 /// Mission-neutral tone / output guidance. Currently empty — always inactive.
 /// Exists as a structural slot for future tone directives.
 struct ToneGuidance;
@@ -371,6 +414,7 @@ impl SystemPromptSection for RunnerRoleGuidance {
 pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     let mut registry = SystemPromptRegistry::new();
     registry.register(IdentityPreamble);
+    registry.register(HostEnvironmentGuidance);
     registry.register(ToneGuidance);
     registry.register(ModelGuidance);
     registry.register(ProviderGuidance);
@@ -391,6 +435,7 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
 pub fn runner_system_prompt_registry(preset: &str) -> SystemPromptRegistry {
     let mut registry = SystemPromptRegistry::new();
     registry.register(IdentityPreamble);
+    registry.register(HostEnvironmentGuidance);
     registry.register(RunnerRoleGuidance {
         preset: preset.to_string(),
     });

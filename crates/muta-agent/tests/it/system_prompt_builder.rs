@@ -93,3 +93,25 @@ fn embedding_configuration_errors_are_structured() {
         Err(SystemPromptRegistryError::UnknownId(id)) if id == "system.missing"
     ));
 }
+
+#[test]
+fn host_environment_guidance_renders_in_default_prompt() {
+    let agent = builder().build();
+    let mut messages = vec![Message::new(Role::User, "test prompt")];
+    agent.prepare_request_messages_debug(&mut messages);
+
+    assert_eq!(messages[0].role, Role::System);
+    assert!(
+        messages[0]
+            .content
+            .contains("## Host Execution Environment"),
+        "system message must include host environment section: {}",
+        messages[0].content
+    );
+    assert!(
+        messages[0]
+            .content
+            .contains("ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_file`"),
+        "system message must emphasize built-in tools"
+    );
+}

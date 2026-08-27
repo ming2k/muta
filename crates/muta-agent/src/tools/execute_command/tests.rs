@@ -371,6 +371,32 @@ async fn test_persistent_terminal_preserves_state() {
     }
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn test_persistent_terminal_preserves_state() {
+    let tool = ExecuteCommandTool::new(None);
+    let res1 = tool
+        .call_structured(
+            r#"{"command":"$env:MUTA_TEST_VAR = '12345'", "terminal_id": "test_sess_win"}"#,
+        )
+        .await
+        .expect("set env");
+    assert!(matches!(res1, muta_contracts::ToolOutput::Shell { .. }));
+
+    let res2 = tool
+        .call_structured(
+            r#"{"command":"Write-Output $env:MUTA_TEST_VAR", "terminal_id": "test_sess_win"}"#,
+        )
+        .await
+        .expect("read env");
+    match res2 {
+        muta_contracts::ToolOutput::Shell { stdout, .. } => {
+            assert_eq!(stdout.trim(), "12345");
+        }
+        other => panic!("expected Shell, got {:?}", other),
+    }
+}
+
 #[test]
 fn execute_command_schema_documents_300s_default_timeout() {
     let tool = ExecuteCommandTool::new(None);

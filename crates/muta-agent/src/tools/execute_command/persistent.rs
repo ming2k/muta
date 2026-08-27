@@ -59,7 +59,8 @@ impl PersistentTerminalSession {
             "__MUTA_PERSISTENT_TERM_DONE_{}__",
             uuid::Uuid::new_v4().simple()
         );
-        let cmd_payload = format!("{}\nprintf '\\n{}:%d\\n' $?\n", command, sentinel_id);
+        let cmd_payload = muta_platform::shell::native_shell_dialect()
+            .format_sentinel_command(command, &sentinel_id);
 
         self.stdin
             .write_all(cmd_payload.as_bytes())

@@ -284,6 +284,7 @@ impl Agent {
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect(),
+            workspace_root: self.workspace_root().map(|p| p.display().to_string()),
         }
     }
 
