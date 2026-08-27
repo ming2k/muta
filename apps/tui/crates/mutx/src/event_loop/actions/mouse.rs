@@ -198,6 +198,18 @@ pub(super) async fn handle_selection_start(
         );
     } else if app.active_modal() == Modal::None
         && app
+            .hint_performance_rect
+            .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
+    {
+        // Click the latest-turn stream rate → independent performance report.
+        super::enter_panel(
+            app,
+            crate::surfaces::PanelId::PerformanceReport,
+            runtime,
+            viewed_session_id,
+        );
+    } else if app.active_modal() == Modal::None
+        && app
             .hint_context_rect
             .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
     {

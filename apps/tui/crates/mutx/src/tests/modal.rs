@@ -1316,6 +1316,7 @@ fn exiting_an_aside_restores_the_primary_chrome_exactly() {
             current_turn: 1,
             round_started_at: Some(std::time::Instant::now()),
             can_retry: false,
+            last_turn_performance: None,
         },
     );
     // Re-entering (focus jump) must swap the aside's own chrome in.
@@ -1351,6 +1352,7 @@ fn reentering_a_running_aside_shows_its_own_chrome() {
             current_turn: 1,
             round_started_at: Some(std::time::Instant::now()),
             can_retry: false,
+            last_turn_performance: None,
         },
     );
     app.enter_side_view("side-2".to_string());

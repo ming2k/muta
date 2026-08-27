@@ -115,9 +115,46 @@ pub struct Bootstrap {
     /// reached nobody. Attach-time replay in `serve.rs` is the delivery
     /// mechanism instead.
     pub security: Arc<WorkspaceSecurityStore>,
+    /// Live additional-roots handle sharing state with the execution
+    /// environment. `/trust` grant/revoke and `/settings reload` recompute
+    /// the admitted set through it — effective on the next tool call.
+    pub shared_additional_roots: muta_contracts::SharedAdditionalRoots,
 }
 
 /// Ensure the four XDG application roots exist. Best-effort.
+/// Resolve one raw `[workspace].additional_roots` entry the same way the
+/// config loader does: expand `~`, make absolute against the project root,
+/// canonicalize. Returns `None` for anything that is not an existing
+/// directory outside the primary root — quarantine hints stay fail-closed.
+fn resolve_single_additional_root(
+    project_root: &std::path::Path,
+    raw: &str,
+) -> Option<std::path::PathBuf> {
+    let canonical_root =
+        std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let expanded = match raw {
+        "~" => home.clone(),
+        r => {
+            if let Some(rest) = r.strip_prefix("~/") {
+                home.as_ref().map(|h| h.join(rest))
+            } else {
+                let p = std::path::PathBuf::from(r);
+                Some(if p.is_absolute() { p } else { canonical_root.join(p) })
+            }
+        }
+    };
+    let path = expanded?;
+    let canonical = std::fs::canonicalize(path).ok()?;
+    if !canonical.is_dir() {
+        return None;
+    }
+    if canonical == canonical_root || canonical.starts_with(&canonical_root) {
+        return None;
+    }
+    Some(canonical)
+}
+
 pub fn ensure_app_roots() {
     let dirs = paths::get();
     for dir in [
@@ -381,6 +418,17 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 Vec::new()
             }
         };
+    // A quarantined (declared-but-untrusted) project roots table is kept
+    // visible for denial hints: the tools can then tell the model exactly
+    // which directory `/trust roots` would admit, instead of a bare refusal.
+    let quarantined_roots: Vec<std::path::PathBuf> = if security_snapshot.roots.is_trusted() {
+        Vec::new()
+    } else {
+        Config::load_project_additional_roots(&project_root)
+            .into_iter()
+            .filter_map(|raw| resolve_single_additional_root(&project_root, &raw))
+            .collect()
+    };
     // Hot-reloadable `[websearch]` handle: the web tools hold the same `Arc`
     // (via the tool context below), and `UpdateWebSearchConfig` /
     // `/settings reload` write into it, so backend/reader/proxy changes
@@ -394,6 +442,13 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             additional_roots.clone(),
         ),
     );
+    // Live admitted-root handle (ADR-0147): a `/trust roots` grant, `/trust
+    // revoke`, or `/settings reload` recomputes the set and swaps it in —
+    // the next confined operation snapshots it, no restart needed.
+    let shared_additional_roots = execution_env.shared_additional_roots();
+    if !quarantined_roots.is_empty() {
+        shared_additional_roots.declare_quarantined(quarantined_roots);
+    }
     let tool_ctx = {
         let mut builder = ToolContextBuilder::new();
         builder.provide(websearch_shared.clone());
@@ -414,6 +469,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             project_root.clone(),
             additional_roots.clone(),
         ));
+        builder.provide(shared_additional_roots.clone());
         builder.build()
     };
     let mut toolset: ToolSet = collect_toolset(&tool_ctx);
@@ -862,6 +918,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         runner_registry,
         mcp_runtime,
         workspace_security: workspace_security.clone(),
+        shared_additional_roots: shared_additional_roots.clone(),
         commands: commands_for_task,
         command_catalog: command_catalog.clone(),
         embedding_store: embedding_store_for_commands,
@@ -890,5 +947,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         command_catalog,
         agent: agent_for_session_end.clone(),
         security: workspace_security.clone(),
+        shared_additional_roots,
     })
 }

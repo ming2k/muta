@@ -589,6 +589,14 @@ pub async fn send_harness_state_for_session(
             retry_pending,
         }),
     ));
+    if let Some(performance) = muta_contracts::latest_turn_performance(
+        &session.request_usage_records().await,
+    ) {
+        let _ = tx.send(round_response(
+            session_id,
+            RoundEvent::TurnPerformance(performance),
+        ));
+    }
 }
 
 #[derive(Clone)]
@@ -1592,6 +1600,9 @@ pub fn relay_agent_event(
                 session_id,
                 RoundEvent::Activity("waiting for model".to_string()),
             )
+        }
+        AgentEvent::TurnPerformance(performance) => {
+            round_response(session_id, RoundEvent::TurnPerformance(performance))
         }
         AgentEvent::ContextTokens(snapshot) => {
             round_response(session_id, RoundEvent::ContextTokens(snapshot))

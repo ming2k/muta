@@ -92,7 +92,7 @@ box and hint bar are persistent (when chrome is visible):
 │ QUEUE 1  {next item preview…}  Ctrl+P block  Ctrl+Q expand  │  ← queue bar
 │ ● making edits (23s · Esc Esc interrupt)                 │  ← activity bar
 │  > type here…                                               │  ← input box
-│ Enter send         Kimi K3 max @kimi-code  89.2k (8%)       │  ← hint bar
+│ Enter send    47.8 tok/s   Kimi K3 max @kimi-code  89.2k (8%)    │  ← hint bar
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -107,7 +107,13 @@ units — follows the [join ladder](visual-language.md).) The structural counter
 (`round N › turn M · <model>`) deliberately do **not** appear on the bars;
 they live inside the Activity modal (opened by clicking the activity bar),
 along with the per-item todo breakdown. The hint bar carries the next input
-action plus model/context info. Session-level state (workspace, mode flags)
+action (left) plus three ambient clusters on the right: the latest-turn
+stream rate (`47.8 tok/s`, or `–` before a defensible sample), the model
+identity group (`model effort @instance`), and the context meter. The rate
+segment and the context meter are each clickable — they open the Performance
+report and the Context Usage report respectively; under width pressure the
+rate segment drops after the instance suffix and before the context meter.
+Session-level state (workspace, mode flags)
 lives on the head row at the top of the view, so none of the footer bars
 have to carry it. The footer is inset by
 `FOOTER_H_INSET = TRANSCRIPT_H_INSET = 2` cols on each side; all rows share

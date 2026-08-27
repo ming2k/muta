@@ -868,6 +868,7 @@ pub fn effort_ignition() -> io::Result<()> {
                     busy: false,
                     can_retry: false,
                     context_tokens: Some(12_400),
+                    last_turn_tps: Some(47.8),
                     ignition_elapsed_ms: elapsed_ms,
                     composer_send_mode: None,
                     queue_editing_badge: None,

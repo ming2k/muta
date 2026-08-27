@@ -1,5 +1,74 @@
 use super::*;
 
+/// A stream-loop cutoff is recoverable once per user round. A second cutoff
+/// ends generation so a model that ignores the guidance cannot consume the
+/// context indefinitely.
+const MAX_STREAM_LOOP_RECOVERIES: u8 = 1;
+const STREAM_LOOP_TURN_FIELD_CHARS: usize = 24_000;
+const STREAM_LOOP_PRECEDING_CONTEXT_CHARS: usize = 12_000;
+
+#[derive(Debug, Clone)]
+struct StreamLoopIncident {
+    pattern: crate::stream_loop_detector::DegeneratePattern,
+    channel: muta_contracts::StreamLoopChannel,
+}
+
+/// Keep the beginning and live tail of a large field. Most turns fit in full;
+/// the bound prevents one diagnostic call from exceeding the Steward model's
+/// context on an already-pathological stream. The explicit omission marker is
+/// evidence too: the reviewer knows it received a projection, not a seamless
+/// string.
+fn project_stream_loop_field(text: &str, max_chars: usize) -> String {
+    let char_count = text.chars().count();
+    if char_count <= max_chars {
+        return text.to_string();
+    }
+    let head_chars = max_chars / 3;
+    let tail_chars = max_chars.saturating_sub(head_chars);
+    let head: String = text.chars().take(head_chars).collect();
+    let tail: String = text
+        .chars()
+        .rev()
+        .take(tail_chars)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!(
+        "{head}\n\n[... {} characters omitted by harness projection ...]\n\n{tail}",
+        char_count.saturating_sub(max_chars)
+    )
+}
+
+/// Render the immediate conversational evidence that makes repeated output
+/// meaningful: the latest user request, assistant/tool observations, and
+/// command output. System and hidden control messages are excluded so a
+/// reviewer judges task content rather than harness instructions.
+fn stream_loop_preceding_context(messages: &[Message]) -> String {
+    let mut blocks = Vec::new();
+    let mut used = 0usize;
+    for message in messages.iter().rev() {
+        if message.hidden || message.role == Role::System || message.content.trim().is_empty() {
+            continue;
+        }
+        let role = match message.role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::Tool => "tool",
+            Role::System => continue,
+        };
+        let remaining = STREAM_LOOP_PRECEDING_CONTEXT_CHARS.saturating_sub(used);
+        if remaining == 0 {
+            break;
+        }
+        let body = project_stream_loop_field(message.content.trim(), remaining.min(6_000));
+        used = used.saturating_add(body.chars().count() + role.len() + 2);
+        blocks.push(format!("{role}: {body}"));
+    }
+    blocks.reverse();
+    blocks.join("\n\n")
+}
+
 pub(crate) struct ToolResultRecord<'a> {
     pub call: &'a ToolCall,
     pub call_id: &'a str,
@@ -10,6 +79,54 @@ pub(crate) struct ToolResultRecord<'a> {
 }
 
 impl Agent {
+    /// Ask L2 Steward whether an L1 mechanical candidate really warrants a
+    /// stream cutoff. A cleared candidate key is remembered for the remainder
+    /// of this provider response so intentional repeated data does not pause
+    /// for the same semantic review over and over. Any malformed/failed
+    /// Steward consultation returns `no` inside [`crate::steward::Steward`].
+    async fn steward_confirms_stream_loop(
+        &self,
+        messages: &[Message],
+        assistant_text: &str,
+        reasoning_text: &str,
+        channel: muta_contracts::StreamLoopChannel,
+        pattern: &crate::stream_loop_detector::DegeneratePattern,
+        cleared_candidates: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        let candidate_key = format!("{channel:?}:{pattern:?}");
+        if cleared_candidates.contains(&candidate_key) {
+            return false;
+        }
+        let verdict = self
+            .steward()
+            .review_stream_loop(muta_contracts::StreamLoopReviewInput {
+                heuristic_candidate: pattern.description(),
+                channel,
+                preceding_context: stream_loop_preceding_context(messages),
+                assistant_text: project_stream_loop_field(
+                    assistant_text,
+                    STREAM_LOOP_TURN_FIELD_CHARS,
+                ),
+                reasoning_text: project_stream_loop_field(
+                    reasoning_text,
+                    STREAM_LOOP_TURN_FIELD_CHARS,
+                ),
+            })
+            .await;
+        tracing::debug!(
+            ?channel,
+            pattern = %pattern.description(),
+            verdict = ?verdict,
+            "Steward reviewed in-flight stream-loop candidate"
+        );
+        if verdict.is_loop() {
+            true
+        } else {
+            cleared_candidates.insert(candidate_key);
+            false
+        }
+    }
+
     #[tracing::instrument(skip_all, name = "round", fields(streaming = true))]
     pub async fn run_streaming_with_events<F>(
         self: &Arc<Self>,
@@ -43,6 +160,7 @@ impl Agent {
                 ..RoundState::default()
             },
             turn_index: 0,
+            stream_loop_recoveries: 0,
             inbox_rx: self
                 .inbox_rx
                 .lock()
@@ -84,6 +202,7 @@ impl Agent {
                 ..RoundState::default()
             },
             turn_index: point.turns_committed,
+            stream_loop_recoveries: 0,
             inbox_rx: self
                 .inbox_rx
                 .lock()
@@ -159,14 +278,6 @@ impl Agent {
             let request_projection = request_estimate.total_tokens;
             let request_provider = self.provider.provider_id();
             let request_model = self.provider.model();
-            let mut request_accounting = RequestAccountingGuard::begin(
-                self,
-                cancel,
-                &request_provider,
-                &request_model,
-                round.turn_index,
-                request_projection,
-            );
             on_event(AgentEvent::ModelRequestStarted {
                 round: self.round_count(),
                 turn: round.turn_index,
@@ -178,6 +289,18 @@ impl Agent {
                     muta_contracts::ContextTokenSource::Projection,
                 ),
             ));
+            // Allocate the ledger attempt and start its monotonic clock only
+            // after local request-boundary events have been emitted. This is
+            // the actual provider-call boundary used by TTFT/E2E telemetry.
+            let mut request_accounting = RequestAccountingGuard::begin(
+                self,
+                cancel,
+                &request_provider,
+                &request_model,
+                round.turn_index,
+                request_projection,
+            );
+            request_accounting.start_request();
             // Race the model request against cancellation so an interrupt
             // while we're waiting on the network resolves promptly instead of
             // blocking until the first stream chunk arrives. The idle-timeout
@@ -191,7 +314,10 @@ impl Agent {
                     STREAM_IDLE_TIMEOUT,
                     self.provider.stream_chat_events(request.clone()),
                 ) => match result {
-                    Ok(Ok(stream)) => stream,
+                    Ok(Ok(stream)) => {
+                        request_accounting.mark_stream_ready();
+                        stream
+                    },
                     Ok(Err(error)) => {
                         let err_msg = error.to_string();
                         request_accounting.record_error(&err_msg);
@@ -226,7 +352,8 @@ impl Agent {
             let mut text_loop_detector = crate::stream_loop_detector::StreamLoopDetector::new(1024);
             let mut reasoning_loop_detector =
                 crate::stream_loop_detector::StreamLoopDetector::new(1024);
-            let mut loop_aborted: Option<crate::stream_loop_detector::DegeneratePattern> = None;
+            let mut stream_loop_incident: Option<StreamLoopIncident> = None;
+            let mut steward_cleared_candidates = std::collections::HashSet::new();
             // Finish-drain deadline (FINISH_DRAIN_GRACE). Once this turn's
             // stream has produced at least one delta, a cancellation no
             // longer wins the biased select outright: the stream gets one
@@ -273,7 +400,10 @@ impl Agent {
                     ) => {
                         let event = match event {
                             Ok(Some(event)) => event,
-                            Ok(None) => break,
+                            Ok(None) => {
+                                request_accounting.mark_stream_end();
+                                break;
+                            },
                             Err(_elapsed) if finish_drain.is_some() => {
                                 // The settle window expired with the stream
                                 // neither ended nor producing a chunk: the
@@ -303,9 +433,19 @@ impl Agent {
                         // was delivering, so a subsequent cancellation opens
                         // the settle window instead of discarding the turn.
                         turn_streamed = true;
-                        match event? {
+                        let event = match event {
+                            Ok(event) => event,
+                            Err(error) => {
+                                request_accounting.record_error(error.clone());
+                                return Err(HarnessError::from(error));
+                            }
+                        };
+                        request_accounting.observe_stream_event(
+                            &event,
+                            std::time::Instant::now(),
+                        );
+                        match event {
                             ProviderStreamEvent::TextDelta(delta) => {
-                                request_accounting.observe_output(&delta);
                                 content.push_str(&delta);
                                 on_event(AgentEvent::AssistantDelta {
                                     delta: delta.clone(),
@@ -313,16 +453,33 @@ impl Agent {
                                 });
                                 emitted_text = true;
                                 if let Some(pat) = text_loop_detector.push_and_check(&delta) {
-                                    tracing::warn!(
-                                        pattern = %pat.description(),
-                                        "in-flight text stream loop detected; aborting stream early"
-                                    );
-                                    loop_aborted = Some(pat);
-                                    break;
+                                    let channel =
+                                        muta_contracts::StreamLoopChannel::AssistantText;
+                                    if self
+                                        .steward_confirms_stream_loop(
+                                            messages,
+                                            &content,
+                                            &reasoning_content,
+                                            channel,
+                                            &pat,
+                                            &mut steward_cleared_candidates,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            pattern = %pat.description(),
+                                            "Steward confirmed in-flight text stream loop; aborting stream early"
+                                        );
+                                        stream_loop_incident = Some(StreamLoopIncident {
+                                            pattern: pat,
+                                            channel,
+                                        });
+                                        break;
+                                    }
+                                    text_loop_detector.reset();
                                 }
                             }
                             ProviderStreamEvent::ReasoningDelta(delta) => {
-                                request_accounting.observe_output(&delta);
                                 reasoning_content.push_str(&delta);
                                 on_event(AgentEvent::ReasoningDelta {
                                     delta: delta.clone(),
@@ -330,12 +487,29 @@ impl Agent {
                                 });
                                 emitted_reasoning = true;
                                 if let Some(pat) = reasoning_loop_detector.push_and_check(&delta) {
-                                    tracing::warn!(
-                                        pattern = %pat.description(),
-                                        "in-flight reasoning stream loop detected; aborting stream early"
-                                    );
-                                    loop_aborted = Some(pat);
-                                    break;
+                                    let channel = muta_contracts::StreamLoopChannel::Reasoning;
+                                    if self
+                                        .steward_confirms_stream_loop(
+                                            messages,
+                                            &content,
+                                            &reasoning_content,
+                                            channel,
+                                            &pat,
+                                            &mut steward_cleared_candidates,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            pattern = %pat.description(),
+                                            "Steward confirmed in-flight reasoning stream loop; aborting stream early"
+                                        );
+                                        stream_loop_incident = Some(StreamLoopIncident {
+                                            pattern: pat,
+                                            channel,
+                                        });
+                                        break;
+                                    }
+                                    reasoning_loop_detector.reset();
                                 }
                             }
                             ProviderStreamEvent::ToolCallDelta {
@@ -356,23 +530,21 @@ impl Agent {
                                     call.id.push_str(&id);
                                 }
                                 if let Some(name) = name {
-                                    request_accounting.observe_output(&name);
                                     call.name.push_str(&name);
                                 }
-                                request_accounting.observe_output(&arguments);
                                 call.arguments.push_str(&arguments);
                             }
                             ProviderStreamEvent::Usage(usage) => {
                                 // Take the last reported usage (providers may
                                 // emit one final usage chunk). Prefer it over
                                 // the local estimate at booking time.
-                                request_accounting.observe_usage(usage);
                                 streamed_usage = Some(usage);
                             }
                         }
                     }
                 }
             }
+            request_accounting.mark_stream_end();
             // Strict stream finalization (the same discipline praxion's
             // accumulator enforces at `finish()`): the stream must not end
             // mid-tool-call. A slot that accumulated id/argument bytes but
@@ -395,26 +567,77 @@ impl Agent {
                 }
             }
 
-            if let Some(ref pat) = loop_aborted {
-                content =
-                    crate::stream_loop_detector::StreamLoopDetector::trim_suffix(&content, pat);
-                let steer_msg = format!(
-                    "[System Directive: Output generation was truncated because it entered a {}. \
-                     Please synthesize your current conclusions directly, proceed to your next tool action, \
-                     or complete the task without repeating prior text.]",
-                    pat.description()
-                );
-                messages.push(crate::conversation_context::hidden_user(
-                    InjectionKind::LoopReviewNudge,
-                    steer_msg,
-                ));
-            }
+            // A detected loop cuts this provider stream, but it does not
+            // silently end the user's round. The first cutoff is a soft
+            // intervention: retain the partial response, visibly disclose the
+            // action, inject guidance, and make one fresh model request. If
+            // the recovery request loops too, stop after retaining its partial
+            // response and disclose the hard stop. Tool-call fragments from a
+            // cut stream are never executable intent.
+            let mut stream_loop_recovery_prompt = None;
+            let mut stream_loop_hard_stopped = false;
+            let stream_loop_notice = stream_loop_incident.as_ref().map(|incident| {
+                match incident.channel {
+                    muta_contracts::StreamLoopChannel::AssistantText => {
+                        content = crate::stream_loop_detector::StreamLoopDetector::trim_suffix(
+                            &content,
+                            &incident.pattern,
+                        );
+                    }
+                    muta_contracts::StreamLoopChannel::Reasoning => {
+                        reasoning_content =
+                            crate::stream_loop_detector::StreamLoopDetector::trim_suffix(
+                                &reasoning_content,
+                                &incident.pattern,
+                            );
+                    }
+                }
+                calls.clear();
+
+                if round.stream_loop_recoveries < MAX_STREAM_LOOP_RECOVERIES {
+                    round.stream_loop_recoveries += 1;
+                    stream_loop_recovery_prompt = Some(format!(
+                        "[System Directive: Your previous output was stopped because it entered a {}. \
+                         Synthesize the conclusions already reached, then take the next distinct action \
+                         or complete the task. Do not repeat the prior text.]",
+                        incident.pattern.description()
+                    ));
+                    AgentNotice::new(
+                        NoticeKind::NudgeInjected,
+                        NoticeSeverity::Warning,
+                        "Repetitive output stopped; recovery requested",
+                        NoticeSource::TurnGuard,
+                    )
+                    .with_body(format!(
+                        "The Harness Steward confirmed a {}. Its partial output was retained, and the agent received guidance to retry once without repeating it.",
+                        incident.pattern.description()
+                    ))
+                } else {
+                    stream_loop_hard_stopped = true;
+                    AgentNotice::new(
+                        NoticeKind::NudgeInjected,
+                        NoticeSeverity::Error,
+                        "Repetitive output stopped again; round ended",
+                        NoticeSource::TurnGuard,
+                    )
+                    .with_body(format!(
+                        "The Harness Steward confirmed that the guided recovery entered a {}. Generation was stopped to prevent a runaway stream; its partial output was retained.",
+                        incident.pattern.description()
+                    ))
+                }
+            });
 
             if emitted_text {
                 on_event(AgentEvent::AssistantEnd(content.clone()));
             }
             if emitted_reasoning {
                 on_event(AgentEvent::ReasoningEnd(reasoning_content.clone()));
+            }
+            if let Some(notice) = stream_loop_notice {
+                // Inline notices are retained in the transcript. A transient
+                // toast is too easy to miss for an action that changed the
+                // generated answer.
+                on_event(AgentEvent::Notice(notice));
             }
 
             calls.retain(|call| !call.name.is_empty());
@@ -480,12 +703,13 @@ impl Agent {
             // valid response is available. Any earlier return leaves it set
             // so orchestration can retry this exact request.
             round.pending_request = None;
-            self.book_turn_usage(
+            let performance = self.book_turn_usage(
                 &mut round.state,
                 &response,
                 streamed_usage.take(),
                 &mut request_accounting,
             );
+            on_event(AgentEvent::TurnPerformance(performance));
             messages.push(response.clone());
 
             // `emitted_text` means assistant text was already streamed to the
@@ -531,7 +755,15 @@ impl Agent {
             // answer can still force one more turn in this same round.
             let duration_ms = round.started_at.elapsed().as_millis() as u64;
             let mut continue_round = false;
-            if let Some((prompt, kind)) = self.stop_gate(&response).await {
+            if let Some(prompt) = stream_loop_recovery_prompt {
+                messages.push(crate::conversation_context::hidden_user(
+                    InjectionKind::LoopReviewNudge,
+                    prompt,
+                ));
+                continue_round = true;
+            } else if !stream_loop_hard_stopped
+                && let Some((prompt, kind)) = self.stop_gate(&response).await
+            {
                 messages.push(crate::conversation_context::hidden_user(kind, prompt));
                 continue_round = true;
             }

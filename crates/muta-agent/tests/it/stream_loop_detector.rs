@@ -66,6 +66,15 @@ fn does_not_falsely_trigger_on_code_and_text() {
 }
 
 #[test]
+fn repeated_long_expression_is_not_a_loop() {
+    let mut detector = StreamLoopDetector::new(1024);
+    let analysis = " Graph length u64 = 0x09bab64a at ~0x0ee84663? Then graph would span from 0x0ee84673 - ... hmm: if graph_len counts bytes of graph ending just before\n\
+        its own length field: graph_start = 0x0ee84663 - 0x09bab64a = 0x0ee84663 - 0x09bab64a";
+
+    assert!(detector.push_and_check(analysis).is_none());
+}
+
+#[test]
 fn trim_suffix_preserves_single_copy_and_truncation_notice() {
     let pattern = DegeneratePattern::Periodic {
         period: 3,

@@ -82,7 +82,8 @@ impl Tool for SearchTextTool {
         let limit = search_limit(args.limit)?;
         let path = args.path.as_deref().unwrap_or(".");
         let workspace = self.env.workspace_root().to_path_buf();
-        let search_root = resolve_search_root(&workspace, self.env.additional_roots(), path)?;
+        let additional_roots = self.env.additional_roots();
+        let search_root = resolve_search_root(&workspace, &additional_roots, path)?;
         self.env
             .fs()
             .metadata(&search_root)

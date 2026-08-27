@@ -231,133 +231,137 @@ breakdown, and a recent-request event log; see
 ## The Context Usage modal
 
 The hint bar's context meter — the `89.2k (8%)` indicator pinned to the
-bottom-right — is now **clickable**. Clicking it opens a centered, read-only
-**Context Usage** modal. The top shows the projected next-request size plus
-the session-average model output rate; the request-usage list groups the
-active session's attempts by user round, and a detail page expands a round
-into its model turns:
+bottom-right — is **clickable**. Clicking it opens a centered, read-only
+**Context Usage** modal that answers only *shape* questions: what the next
+request will contain, and which rounds cost what. Speed and latency live in
+the separate [Performance report](#the-performance-report), so neither view
+has to stretch one denominator across the other's question.
 
 ```text
-┌─ Context Usage ───────────────────────────────────────────┐
-│ Projected size       12.5k / 200.0k (6%)                  │
-│ Output rate          52.3 tok/s                           │
-│                                                          │
-│   Round      State        Tokens       TPS                │
-│ ▌1st         done          12.3k        48                │
-│   2nd        done           2.4k        61                │
-│                                                          │
-│                            ↑↓ select  ↵ turns  Esc close │
-└────────────────────────────────────────────────────────────┘
+Projected size   12.5k / 200.0k (6%)
+
+Round   State   Tokens   Turns
+▌1st    done    12.3k    2
+ 2nd    done     2.4k    1
+
+            ↑↓ select · ↵ turns · Esc close
 ```
 
-The top read-out has two peer key/value rows: **Projected size** and the
-session-wide **Output rate** — the average tokens/sec across *every* request
-the session made, not just the last round. Projected size folds any unsent
-composer draft into one total rather than presenting it as a `+n` addend.
-The draft breakdown separates the tokenized composer text from **message
-framing**: the approximate chat-template overhead for the role and message
-boundaries. The framing value carries a `~` prefix because provider templates
-vary. The label is "Output rate", not
-"Throughput", deliberately: throughput implies end-to-end processing speed,
-but this figure *excludes* tool execution, hooks, and human-decision pauses —
-it isolates how fast the model itself generated. It is computed as Σ output
-tokens ÷ Σ measured `generation_ms` over all terminal attempts — a
-time-weighted mean, so one long streaming request carries the weight it
-deserves instead of being averaged equally with a burst of short ones.
-Per-request spans are the same spans the detail page's `tok/s` column and
-each round's TPS cell divide by, so the summary, the round list, and the
-drill-in always agree. Envoy sub-agents are folded in symmetrically: their
-completion tokens reach the numerator and their own generation time reaches
-the denominator, so a delegating round does not show an inflated tok/s.
-Beneath it sits the round ledger table — no sub-heading, since the modal
-title already names the view and the column headers frame the rows. The
-table has four columns: **Round** (bare ordinal label), **State** (the
-round's aggregate lifecycle — `done` / `in flight` / `failed` / …, the
-only colored column), **Tokens**, and **TPS** — this round's *average*
-output rate: the round's output tokens ÷ the generation time its attempts
-actually measured (rendered `–` when nothing was timed: legacy bookings
-carry no timing, and an in-flight attempt has not sealed its clock yet).
-The turn count the TPS column replaced lives on in the drill-in's
-"Turns / attempts" row. Column widths are
-content-driven: every column sizes to its widest cell, and any leftover
-modal width is split evenly across the gaps between columns, so the table
-breathes instead of clumping at one edge. The selected round row is
-indicated solely by a subtle full-width background highlight — no arrow
-marker, no bold text. The redundant Total row (it restated the grand total
-already summarized by the context size) and the closing hint line were
-dropped.
+The top read-out is **Projected size**: the projected next-request size, fold-
+ing any unsent composer draft into one total rather than presenting it as a
+`+n` addend. The draft breakdown separates the tokenized composer text from
+message framing — the approximate chat-template overhead for role tags and
+message boundaries — and that framing value carries a `~` prefix because pro-
+vider templates vary.
 
-The report answers two questions at a glance:
+Beneath it sits the round ledger table with four columns: **Round** (bare ordi-
+nal label), **State** (the round's aggregate lifecycle — `done` / `in flight` /
+`failed` / …, the only colored column), **Tokens**, and **Turns** — the count of
+distinct model turns in the round; retries collapse into that count here and
+unfold in the drill-in. Column widths are content-driven and leftover modal
+width splits evenly across the gaps, so the table breathes instead of clump-
+ing left. The selected row is marked solely by a subtle full-width background
+highlight — no arrow marker, no bold text.
 
-- **"What would the next request contain?"** — the projected-size line is
-  available before the first request, refreshes after committed history
-  changes, and includes the current draft when one exists.
-- **"How fast is the model generating?"** — the output-rate line divides the
-  session's output tokens by its total *generation* time (the time the model
-  actually spent streaming, excluding tool execution and human-decision
-  pauses), while the TPS column answers the same question per round. A round
-  that was mostly waiting (permission prompts, `ask_user`) therefore does not
-  read as a slow model: only the model's own streaming span is in the
-  denominator.
-- **"Which round cost what?"** — the per-round totals make token spend
-  across the conversation visible at a glance; drilling into a round
-  exposes its individual model turns (and any retries). The detail page
-  keeps the same modal but switches its header to a breadcrumb
-  (`Context Usage › 1st round`) for hierarchy, and lists turns newest-first.
-  Only the **main** conversation's own turns are counted and shown — an
-  `envoy` tool call is a forked sub-conversation whose usage belongs to the
-  fork's own context, so it is deliberately excluded from both the round
-  totals and the detail table. Token totals in the table are tinted by
-  provenance — green when provider-reported, yellow when a local estimate —
-  with a legend beneath the table:
+An earlier revision replaced the Turns column with a per-round TPS cell. That
+cell moved out because its denominator — client-side dispatch-to-validation
+time — silently folded upstream queueing, prompt prefill, transport, and de-
+code into one figure that changed shape whenever the network did, making two
+sessions with identical decode pace look incomparable
+([ADR-0151](../../../adr/0151-request-performance-telemetry.md)).
 
-```
-┌─ Context Usage › 1st round ──────────────────────────────┐
-│ Total                2.9k                                 │
-│ Turns / attempts     2 / 3                                │
-│                                                          │
-│ Turns                                                    │
-│ Turn            State          Input  Output  Total  tok/s│
-│ 2nd             completed         —       —   2.4k      52│
-│ 1st - 2nd       completed       790      40    830      20│
-│ 1st             interrupted       —       —      —       –│
-│                                                          │
-│ Tokens:  green = provider-reported   yellow = local est.  │
-│                                  ↑↓ scroll  Esc rounds    │
-└────────────────────────────────────────────────────────────┘
+The report answers three questions at a glance:
+
+- **What would the next request contain?** The projected-size line exists be-
+  fore the first request, refreshes after committed history changes, and in-
+  cludes the current draft when one exists.
+- **Which round cost what?** Per-round token totals make spend visible at a
+  glance; drilling in exposes the round's individual attempts (and retries).
+- **How trustworthy are the numbers?** Drill-in token cells tint by provenance —
+  green when provider-reported, yellow when locally estimated — with a legend
+  beneath the table.
+
+The detail page switches the header to a breadcrumb
+(`Context Usage › 1st round`) and lists attempts newest-first. Only the main
+conversation's own requests are counted — an envoy call is a forked sub-con-
+versation whose usage belongs to that fork, so it is excluded from the round
+totals and the table:
+
+```text
+Total              2.9k
+Turns / attempts   2 / 3
+
+Turns
+Turn        State         Input   Output   Total
+2nd         completed         —        —    2.4k
+1st - 2nd   completed       790       40     830
+1st         interrupted       —        —       —
+
+Tokens:  green = provider-reported   yellow = local est.
 ```
 
-The turns table is **flattened**: one row per provider request *attempt*,
-newest-first. A turn with a single attempt shows a bare ordinal (`1st`,
-`2nd`); a retried turn shows its later attempts as `<turn> - <attempt>`
-(e.g. `1st - 2nd`), so a transient retry surfaces as its own row with its
-own state rather than a collapsed `×2` suffix.
+The turns table is flattened: one row per provider request attempt, newest-
+first. A single-attempt turn shows a bare ordinal (`1st`, `2nd`); a retried
+turn lists its later attempts as `<turn> - <attempt>` (for example `1st -
+2nd`), so a transient retry surfaces as its own row with its own lifecycle
+state rather than a collapsed `x2` suffix.
 
-The right-most **tok/s** column is the attempt's settled output rate:
-completion tokens ÷ the attempt's own measured generation span (request
-dispatch → validated response, booked into the request-usage record when the
-attempt settles). It renders `–` while the attempt is in flight, when no
-span was measured (a failure before any validated response, or a record
-persisted before timing existed), or when no completion tokens were booked.
+The table degrades atomically as the modal narrows: the Turn label flexes
+first, then whole column groups drop as units — the Input + Output split pair
+goes together, then the Tokens total — and inter-column gutters never squeeze
+cell by cell:
 
-The table degrades *atomically* as the modal narrows: the Turn label column
-flexes first, then whole column groups drop as units — the Input + Output
-split pair goes together, then the Tokens total, then tok/s — and the
-inter-column gutters never squeeze cell by cell. Right-aligned columns are
-dropped from the left, so the surviving tok/s column keeps hugging the right
-modal margin at every tier:
-
-```
-≥62 cols   Turn  State  Input  Output  Total  tok/s
-≥42 cols   Turn  State  Tokens  tok/s
-≥32 cols   Turn  State  tok/s
-<32 cols   Turn  State
+```text
+wide    Turn  State  Input  Output  Total
+mid     Turn  State  Tokens
+narrow  Turn  State
 ```
 
 The provenance legend beneath the table is responsive: it prefers the full
-`green = provider-reported   yellow = local estimate` wording, collapses to
-`green reported   yellow estimated` on narrower modals, and finally splits
-across two lines, so the explanation is never clipped mid-word.
+wording, collapses to `green reported   yellow estimated` on narrower modals,
+and finally splits across two lines, so the explanation is never clipped
+mid-word.
+
+## The Performance report
+
+Where Context Usage stops, the **Performance** report begins: click the
+latest-turn rate segment in the hint bar — between the Enter action and the
+model identity cluster — to open it. It is an independent retained panel with
+its own scroll and drill-down state, sharing nothing with Context Usage beyond
+the underlying attempt ledger. Its aggregates filter that ledger strictly: only
+the master conversation's *completed* attempts feed any rate, so failed retries
+can neither inflate nor deflate a pace figure.
+
+The summary block reports four explicitly labeled scopes, never one ambiguous
+number:
+
+| Scope | Definition |
+|-------|------------|
+| **TTFT** | Request dispatch to the first visible output event; session-wide `p50 · p95` |
+| **Stream rate** | Streamed output tokens excluding the first event's tokens, divided by the first-to-last-event span; needs at least two events or it renders `–` |
+| **E2E output rate** | Completion tokens divided by dispatch-to-validated-response span; deliberately includes TTFT |
+| **Server decode rate** | Reserved for provider-native generation telemetry; stays `–` until a provider supplies it |
+
+Excluding the first event's tokens matters because chunked transports often de-
+liver several tokens in the initial payload; counting them against stream time
+would flatter fast openers. A single-event stream has no defensible pace at
+all, so it renders `–` rather than a fabricated figure. Every client-derived
+number is labeled as client-observed: it includes network transit, upstream
+queueing, and proxy buffering, because a client cannot see past its socket. No
+ping-based correction is attempted — measuring a different path does not sub-
+tract latency, it manufactures precision ([ADR-0151](../../../adr/0151-request-performance-telemetry.md)).
+
+Below the summary sit the round table (**Round**, **State**, **First** visible-
+output time, **Stream**, **E2E**) and its drill-down (**Turn**, **State**,
+**TTFT**, **Stream**, **E2E**, **Q**), newest-first, with retries keeping their
+own rows and timings. **Q** grades provenance: `A` when provider-native decode
+telemetry backs the figures, `B` for provider-reported usage with client tim-
+ings, `C` for locally estimated usage. A dash means *unmeasured* — never zero.
+
+The sample also travels as structured data: each completed principal turn
+pushes a compact snapshot on the round-event channel so the hint segment up-
+dates live, and attaching to or resuming a session replays the newest stored
+sample from its durable record without waiting for fresh traffic.
 
 ## Current context vs. request usage
 

@@ -33,7 +33,23 @@ pub(crate) fn resolve_search_root(
     if admitted {
         Ok(target)
     } else {
-        Err("Search path is outside the admitted workspace roots".to_string())
+        Err(format!(
+            "Search path is outside the admitted workspace roots (admitted: {})",
+            admitted_roots_summary(workspace, additional_roots)
+        ))
+    }
+}
+
+/// Human-readable admitted set for denial messages — names every root so a
+/// cross-project path miss is diagnosable instead of a bare refusal.
+pub(crate) fn admitted_roots_summary(workspace: &Path, additional_roots: &[PathBuf]) -> String {
+    if additional_roots.is_empty() {
+        workspace.display().to_string()
+    } else {
+        std::iter::once(workspace.display().to_string())
+            .chain(additional_roots.iter().map(|r| r.display().to_string()))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 

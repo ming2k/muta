@@ -101,6 +101,7 @@ pub(crate) enum PanelId {
     Permissions,
     UsageStats,
     TokenReport,
+    PerformanceReport,
     Btw,
     /// The flat model picker (`Ctrl+M` / `/models`). A retained panel whose
     /// open parks the composer draft into its own per-panel slot
@@ -137,6 +138,7 @@ impl PanelId {
             PanelId::Permissions => Modal::Permissions,
             PanelId::UsageStats => Modal::UsageStats,
             PanelId::TokenReport => Modal::TokenReport,
+            PanelId::PerformanceReport => Modal::PerformanceReport,
             PanelId::Btw => Modal::Btw,
             PanelId::Models => Modal::Models,
             PanelId::Connections => Modal::Connections,
@@ -150,7 +152,7 @@ impl PanelId {
     /// Every panel id, in quick-switcher display order: reference surfaces
     /// first (Help, Activity, Todos), then manager lists, then reports,
     /// then the pickers.
-    pub(crate) const ALL: [PanelId; 16] = [
+    pub(crate) const ALL: [PanelId; 17] = [
         PanelId::Help,
         PanelId::Activity,
         PanelId::Todos,
@@ -160,6 +162,7 @@ impl PanelId {
         PanelId::Permissions,
         PanelId::UsageStats,
         PanelId::TokenReport,
+        PanelId::PerformanceReport,
         PanelId::Btw,
         PanelId::Models,
         PanelId::Connections,
@@ -181,6 +184,7 @@ impl PanelId {
             PanelId::Permissions => "Permissions",
             PanelId::UsageStats => "Usage stats",
             PanelId::TokenReport => "Context report",
+            PanelId::PerformanceReport => "Performance report",
             PanelId::Btw => "Asides (/btw)",
             PanelId::Models => "Switch model",
             PanelId::Connections => "Connections",
@@ -204,6 +208,7 @@ impl PanelId {
             PanelId::Permissions => "/permissions",
             PanelId::UsageStats => "/usage",
             PanelId::TokenReport => "context meter",
+            PanelId::PerformanceReport => "turn rate",
             PanelId::Btw => "F5 / /btw list",
             PanelId::Models => "Ctrl+M / /models",
             PanelId::Connections => "/connections",

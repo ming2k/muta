@@ -40,6 +40,7 @@ use muta_persistence::{
 use muta_skills::{ListSkillsTool, SkillRegistry, UseSkillTool};
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
@@ -136,6 +137,76 @@ async fn supersede_for_session_switch(
     agent.reject_pending_inputs();
     let _ = resp_tx.send(AgentResponse::PermissionsCleared);
     lifecycle.cancel_current().await;
+}
+
+/// Recompute the admitted additional-root set from the current trust state
+/// and swap it into the live handle (ADR-0147). This is the runtime half of
+/// "the workspace boundary takes shape at trust-decision time": a grant
+/// widens admission on the next confined operation; a revoke or reloaded
+/// config collapses it back to the primary. Replace semantics — never union
+/// with the previous set — keep fail-closed on every path.
+///
+/// Global roots are user-owned and always admitted; project roots only when
+/// the snapshot's `roots` domain is trusted. Resolution failures (missing or
+/// nested directories) drop that root and keep the rest, matching the
+/// startup loader's per-entry tolerance for live edits.
+pub(crate) fn apply_additional_roots(
+    handle: &muta_contracts::SharedAdditionalRoots,
+    effective: &Config,
+    project_root: &std::path::Path,
+    roots_state: muta_contracts::WorkspaceTrustState,
+) {
+    let merged = if roots_state.is_trusted() {
+        let mut all = effective.workspace.additional_roots.clone();
+        for root in Config::load_project_additional_roots(project_root) {
+            if !all.contains(&root) {
+                all.push(root);
+            }
+        }
+        all
+    } else {
+        // User-owned global entries stay; project declarations fall out.
+        effective.workspace.additional_roots.clone()
+    };
+    let resolved = resolve_roots_from_strings(&merged, project_root);
+    handle.store(resolved);
+}
+
+/// Resolve raw root strings to the canonical existing-directory set, mirroring
+/// the startup filter: expand `~`, make absolute against the project root,
+/// canonicalize, require a directory outside the primary, dedupe.
+fn resolve_roots_from_strings(raws: &[String], project_root: &std::path::Path) -> Vec<PathBuf> {
+    let canonical_root =
+        std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let mut resolved = Vec::new();
+    for raw in raws {
+        let expanded = match raw.as_str() {
+            "~" => home.clone(),
+            r => {
+                if let Some(rest) = r.strip_prefix("~/") {
+                    home.as_ref().map(|h| h.join(rest))
+                } else {
+                    let p = std::path::PathBuf::from(r);
+                    Some(if p.is_absolute() { p } else { canonical_root.join(p) })
+                }
+            }
+        };
+        let Some(path) = expanded else { continue };
+        let Ok(canonical) = std::fs::canonicalize(&path) else {
+            continue;
+        };
+        if !canonical.is_dir() {
+            continue;
+        }
+        if canonical == canonical_root || canonical.starts_with(&canonical_root) {
+            continue;
+        }
+        if !resolved.contains(&canonical) {
+            resolved.push(canonical);
+        }
+    }
+    resolved
 }
 
 /// Session-switch companion to [`supersede_for_session_switch`]: tear down
@@ -607,6 +678,9 @@ pub(crate) struct SlashEnv<'a> {
     pub agent: &'a Arc<Agent>,
     pub mcp_runtime: &'a Arc<McpRuntime>,
     pub workspace_security: &'a Arc<WorkspaceSecurityStore>,
+    /// Live additional-roots handle: a `/trust` grant or revoke recomputes
+    /// the admitted set through it, effective on the next tool call.
+    pub shared_additional_roots: &'a muta_contracts::SharedAdditionalRoots,
     pub resp_tx: &'a mpsc::UnboundedSender<AgentResponse>,
     pub session: &'a Arc<SessionStore>,
     pub lifecycle: &'a Arc<RoundLifecycle>,
@@ -634,6 +708,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
         agent,
         mcp_runtime,
         workspace_security,
+        shared_additional_roots,
         resp_tx,
         session,
         lifecycle,
@@ -713,6 +788,16 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     reloaded.merge_project_additional_roots(project_roots);
                 }
             }
+            // Live admitted-root swap (ADR-0147): the recomputed set replaces
+            // — never unions — so an untrusted roots domain collapses
+            // admission back to the primary immediately.
+            apply_additional_roots(
+                shared_additional_roots,
+                &reloaded,
+                project_root_for_side,
+                security_snapshot.roots,
+            );
+
             // MCP: diff + (re)connect/disconnect. The next request picks up the
             // new tool set automatically (visible_tools recomputes each turn).
             let report = mcp_runtime.reconfigure(reloaded.mcp.clone()).await;
@@ -1046,6 +1131,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         provider_usage,
                         mcp_runtime: env.mcp_runtime,
                         workspace_security: env.workspace_security,
+                        shared_additional_roots: env.shared_additional_roots,
                         base_tools_for_side: env.base_tools_for_side,
                         skills_registry: env.skills_registry.clone(),
                         skills_registry_for_commands: env.skills_registry_for_commands,
@@ -1696,6 +1782,14 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             return;
                         }
                     };
+                    // Live boundary update: the grant lands on the next
+                    // confined tool call — no session restart required.
+                    apply_additional_roots(
+                        shared_additional_roots,
+                        &Config::load(),
+                        project_root_for_side,
+                        report.snapshot.roots,
+                    );
                     let granted = if granted.is_empty() {
                         "none (the selected domains have no project assets)".to_string()
                     } else {
@@ -1755,6 +1849,15 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     } else {
                         format!(" Disconnected MCP: {}.", report.removed_mcp.join(", "))
                     };
+                    // Live boundary update: collapse admission back to the
+                    // primary root immediately — revoke must never wait for a
+                    // restart to take effect.
+                    apply_additional_roots(
+                        shared_additional_roots,
+                        &Config::load(),
+                        project_root_for_side,
+                        report.snapshot.roots,
+                    );
                     let message = if revoked {
                         format!(
                             "Project asset trust revoked. MCP, skills, hooks, rules, and project commands were unloaded.{removed}"

@@ -507,6 +507,11 @@ fn checkpoint_tool_signature(call: &ToolCall) -> String {
 pub(crate) struct StreamingRoundState {
     state: RoundState,
     turn_index: usize,
+    /// Number of in-flight stream-loop recoveries already attempted in this
+    /// user round. The first detected loop gets one guided retry; a recurrence
+    /// is a hard stop. This state survives transient provider retries with the
+    /// rest of the round checkpoint.
+    stream_loop_recoveries: u8,
     inbox_rx: Option<mpsc::UnboundedReceiver<AgentOp>>,
     started_at: std::time::Instant,
     pending_request: Option<muta_contracts::ModelRequest>,
@@ -622,6 +627,9 @@ pub(crate) struct SingleToolOutcome {
 struct RequestAccountingGuard {
     ledger: Option<Arc<muta_contracts::TokenSourceLedger>>,
     key: Option<muta_contracts::RequestUsageKey>,
+    round: u64,
+    turn: u32,
+    attempt: u32,
     cancel: CancellationToken,
     projected_prompt_tokens: i64,
     observed_completion_tokens: i64,
@@ -631,11 +639,19 @@ struct RequestAccountingGuard {
     observed_usage: Option<TokenUsage>,
     error: Option<String>,
     settled: bool,
-    /// Started when the provider request was dispatched, stopped once a valid
-    /// assistant response is available (before any tool dispatch). The
-    /// elapsed span is the round's *generation* time — the honest denominator
-    /// for tokens/sec that excludes tool execution and human-decision pauses.
+    /// Monotonic performance anchors. The request clock starts at the actual
+    /// provider-call boundary, after local projection/events. Stream events
+    /// are sampled as the provider stream yields them; missing stages remain
+    /// `None` rather than becoming fabricated zero-duration measurements.
     started_at: Option<std::time::Instant>,
+    stream_ready_at: Option<std::time::Instant>,
+    first_output_at: Option<std::time::Instant>,
+    first_visible_output_at: Option<std::time::Instant>,
+    last_output_at: Option<std::time::Instant>,
+    stream_end_at: Option<std::time::Instant>,
+    validated_at: Option<std::time::Instant>,
+    first_output_fragment: String,
+    output_events: u32,
     generation_ms: u64,
 }
 
@@ -662,9 +678,15 @@ impl RequestAccountingGuard {
                 projected_prompt_tokens: projected_prompt_tokens as i64,
             })
         });
+        let round = agent.round_count();
+        let turn = turn_index.saturating_add(1) as u32;
+        let attempt = key.as_ref().map_or(1, |key| key.attempt);
         Self {
             ledger,
             key,
+            round,
+            turn,
+            attempt,
             cancel: cancel.clone(),
             projected_prompt_tokens: projected_prompt_tokens as i64,
             observed_completion_tokens: 0,
@@ -672,9 +694,34 @@ impl RequestAccountingGuard {
             observed_usage: None,
             error: None,
             settled: false,
-            started_at: Some(std::time::Instant::now()),
+            started_at: None,
+            stream_ready_at: None,
+            first_output_at: None,
+            first_visible_output_at: None,
+            last_output_at: None,
+            stream_end_at: None,
+            validated_at: None,
+            first_output_fragment: String::new(),
+            output_events: 0,
             generation_ms: 0,
         }
+    }
+
+    /// Start the monotonic request clock at the provider-call boundary.
+    fn start_request(&mut self) {
+        self.started_at.get_or_insert_with(std::time::Instant::now);
+    }
+
+    /// The provider returned a live response stream (normally after response
+    /// headers were received).
+    fn mark_stream_ready(&mut self) {
+        self.stream_ready_at
+            .get_or_insert_with(std::time::Instant::now);
+    }
+
+    fn mark_stream_end(&mut self) {
+        self.stream_end_at
+            .get_or_insert_with(std::time::Instant::now);
     }
 
     fn record_error(&mut self, err: impl Into<String>) {
@@ -692,6 +739,65 @@ impl RequestAccountingGuard {
         // "completion tokens" and a 130 050 tok/s rate from exactly that).
         self.output_counter.push(text);
         self.observed_completion_tokens = self.output_counter.tokens() as i64;
+    }
+
+    /// Observe one provider stream event at a single monotonic instant. One
+    /// tool-call event may carry both a name and arguments; they share the
+    /// same event timestamp and first-event token bucket.
+    fn observe_stream_event(
+        &mut self,
+        event: &muta_contracts::ProviderStreamEvent,
+        received_at: std::time::Instant,
+    ) {
+        let mut fragments: Vec<&str> = Vec::new();
+        let visible = match event {
+            muta_contracts::ProviderStreamEvent::TextDelta(delta) => {
+                if !delta.is_empty() {
+                    fragments.push(delta);
+                }
+                true
+            }
+            muta_contracts::ProviderStreamEvent::ReasoningDelta(delta) => {
+                if !delta.is_empty() {
+                    fragments.push(delta);
+                }
+                false
+            }
+            muta_contracts::ProviderStreamEvent::ToolCallDelta {
+                name, arguments, ..
+            } => {
+                if let Some(name) = name.as_deref().filter(|name| !name.is_empty()) {
+                    fragments.push(name);
+                }
+                if !arguments.is_empty() {
+                    fragments.push(arguments);
+                }
+                false
+            }
+            muta_contracts::ProviderStreamEvent::Usage(usage) => {
+                self.observe_usage(*usage);
+                return;
+            }
+        };
+
+        if fragments.is_empty() {
+            return;
+        }
+        let first_event = self.first_output_at.is_none();
+        if first_event {
+            self.first_output_at = Some(received_at);
+        }
+        if visible && self.first_visible_output_at.is_none() {
+            self.first_visible_output_at = Some(received_at);
+        }
+        self.last_output_at = Some(received_at);
+        self.output_events = self.output_events.saturating_add(1);
+        for fragment in fragments {
+            if first_event {
+                self.first_output_fragment.push_str(fragment);
+            }
+            self.observe_output(fragment);
+        }
     }
 
     /// Close the stream counter (finalizing the unfinished trailing pretoken)
@@ -713,8 +819,52 @@ impl RequestAccountingGuard {
     /// time never inflates the measured generation span. Safe to call more
     /// than once within one guard; only the first call records a span.
     fn seal_generation(&mut self) {
-        if let Some(start) = self.started_at.take() {
-            self.generation_ms = start.elapsed().as_millis() as u64;
+        if self.validated_at.is_some() {
+            return;
+        }
+        let end = std::time::Instant::now();
+        self.validated_at = Some(end);
+        self.stream_end_at.get_or_insert(end);
+        if let Some(start) = self.started_at {
+            self.generation_ms = end.saturating_duration_since(start).as_millis() as u64;
+        }
+    }
+
+    fn performance(&self) -> muta_contracts::RequestPerformance {
+        let offset = |end: Option<std::time::Instant>| {
+            Some(end?.saturating_duration_since(self.started_at?).as_micros() as u64)
+        };
+        let span = |start: Option<std::time::Instant>, end: Option<std::time::Instant>| {
+            Some(end?.saturating_duration_since(start?).as_micros() as u64)
+        };
+        muta_contracts::RequestPerformance {
+            stream_ready_us: offset(self.stream_ready_at),
+            ttft_us: offset(self.first_output_at),
+            visible_ttft_us: offset(self.first_visible_output_at),
+            stream_us: span(self.first_output_at, self.last_output_at),
+            tail_us: span(self.last_output_at, self.stream_end_at),
+            e2e_us: offset(self.validated_at),
+            streamed_output_tokens: self.observed_completion_tokens.max(0) as u64,
+            first_output_tokens: muta_contracts::count_tokens(&self.first_output_fragment) as u64,
+            output_events: self.output_events,
+            timing_source: muta_contracts::PerformanceTimingSource::ClientObserved,
+            stream_token_source: muta_contracts::StreamTokenSource::Cl100k,
+            ..Default::default()
+        }
+    }
+
+    fn performance_snapshot(
+        &self,
+        completion_tokens: i64,
+        usage_source: muta_contracts::RequestUsageSource,
+    ) -> muta_contracts::TurnPerformanceSnapshot {
+        muta_contracts::TurnPerformanceSnapshot {
+            round: self.round,
+            turn: self.turn,
+            attempt: self.attempt,
+            completion_tokens: completion_tokens.max(0) as u64,
+            usage_source,
+            performance: self.performance(),
         }
     }
 
@@ -744,12 +894,13 @@ impl RequestAccountingGuard {
         }
         self.seal_generation();
         if let (Some(ledger), Some(key)) = (&self.ledger, &self.key) {
-            ledger.settle_request_with_error(
+            ledger.settle_request_with_performance_and_error(
                 key,
                 status,
                 usage,
                 estimated_completion_tokens,
                 self.generation_ms,
+                Some(self.performance()),
                 error,
             );
         }

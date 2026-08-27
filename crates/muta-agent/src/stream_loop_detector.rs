@@ -1,8 +1,7 @@
 //! In-flight streaming loop detector and circuit breaker.
 //!
-//! Evaluates incoming token stream chunks in real-time (O(N) per chunk, <1µs latency)
-//! to detect and abort degenerative text patterns before they burn tokens or pollute
-//! the context window:
+//! Evaluates incoming token stream chunks in real time to detect degenerative
+//! text patterns before they burn tokens or pollute the context window:
 //!
 //! 1. **Arbitrary Periodic Loops (`abab`, `abcabc`, `abcdabcd...`)**:
 //!    Detected via the KMP String Periodicity Theorem (Prefix Function $\pi$-table).
@@ -159,7 +158,12 @@ impl StreamLoopDetector {
                 1..=2 => 8, // Single/double char (e.g. `..`, `==`): need 8+ reps to avoid false positives
                 3..=5 => 4, // Short word/code (e.g. `abc`): need 4+ reps
                 6..=16 => 3, // Phrase: need 3+ reps
-                _ => 2,     // Long multi-line pattern: 2+ full repetitions
+                // A long phrase appearing twice is ordinary prose: writers
+                // restate equations, paths, commands, and quoted text for
+                // emphasis or comparison. Two copies therefore carry too
+                // little evidence to stop a live model stream. Three copies
+                // still catch a runaway long-form cycle promptly.
+                _ => 3,
             };
 
             // Avoid triggering on pure whitespace indentation repetitions
@@ -365,6 +369,15 @@ mod tests {
             }
         "#;
         assert!(detector.push_and_check(normal_code).is_none());
+    }
+
+    #[test]
+    fn does_not_treat_a_repeated_long_expression_as_a_loop() {
+        let mut detector = StreamLoopDetector::new(1024);
+        let analysis = " Graph length u64 = 0x09bab64a at ~0x0ee84663? Then graph would span from 0x0ee84673 - ... hmm: if graph_len counts bytes of graph ending just before\n\
+            its own length field: graph_start = 0x0ee84663 - 0x09bab64a = 0x0ee84663 - 0x09bab64a";
+
+        assert!(detector.push_and_check(analysis).is_none());
     }
 
     #[test]

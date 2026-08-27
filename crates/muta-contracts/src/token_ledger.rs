@@ -50,13 +50,159 @@ impl RequestUsageStatus {
 }
 
 /// Provenance of the counts attached to a request attempt.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS,
+)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum RequestUsageSource {
     #[default]
     Unknown,
     Reported,
     Estimated,
+}
+
+/// Where an attempt's timing samples were captured.
+///
+/// Client-observed timing is authoritative for the experience at this
+/// process boundary, but it must not be presented as provider-internal model
+/// timing: network transit, upstream queueing, and proxy buffering remain in
+/// the observation. `Provider` is reserved for adapters that receive explicit
+/// server-side generation telemetry.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS,
+)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum PerformanceTimingSource {
+    #[default]
+    Unknown,
+    ClientObserved,
+    Provider,
+}
+
+/// Tokenizer behind the streamed-output count used for observed stream TPS.
+/// Provider-reported completion tokens remain the authoritative billing
+/// count; this source describes only the client-visible stream counter.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS,
+)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum StreamTokenSource {
+    #[default]
+    Unknown,
+    /// The provider supplied output-token identities/counts for the stream.
+    Provider,
+    /// The client counted streamed output with its exact `cl100k_base`
+    /// implementation. Exact for matching models; an approximation otherwise.
+    Cl100k,
+}
+
+/// High-resolution performance telemetry for one concrete provider attempt.
+///
+/// Every duration is a monotonic offset measured in microseconds. Optional
+/// fields stay absent for legacy records and for stages the active provider
+/// cannot expose; absence is never encoded as a fabricated zero.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS,
+)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct RequestPerformance {
+    /// Request dispatch to the provider returning a live response stream
+    /// (normally HTTP response headers received).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stream_ready_us: Option<u64>,
+    /// Request dispatch to the first output-bearing event (text, reasoning,
+    /// or tool-call payload) observed by the client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ttft_us: Option<u64>,
+    /// Request dispatch to the first user-visible assistant text event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub visible_ttft_us: Option<u64>,
+    /// First output-bearing event to the last output-bearing event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stream_us: Option<u64>,
+    /// Last output-bearing event to the provider stream ending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tail_us: Option<u64>,
+    /// Request dispatch to a complete, validated assistant response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub e2e_us: Option<u64>,
+    /// Client-counted output tokens across streamed text, reasoning, and tool
+    /// payloads. Kept separate from provider-reported completion usage.
+    #[serde(default)]
+    pub streamed_output_tokens: u64,
+    /// Tokens carried by the first output-bearing event. These tokens are
+    /// excluded from the observed stream-rate numerator because they already
+    /// existed when the stream clock began.
+    #[serde(default)]
+    pub first_output_tokens: u64,
+    /// Number of output-bearing stream events observed.
+    #[serde(default)]
+    pub output_events: u32,
+    #[serde(default)]
+    pub timing_source: PerformanceTimingSource,
+    #[serde(default)]
+    pub stream_token_source: StreamTokenSource,
+    /// Optional provider-native queue time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider_queue_us: Option<u64>,
+    /// Optional provider-native prompt-prefill time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider_prefill_us: Option<u64>,
+    /// Optional provider-native decode duration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider_decode_us: Option<u64>,
+    /// Token count paired with `provider_decode_us` by the provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provider_output_tokens: Option<u64>,
+}
+
+impl RequestPerformance {
+    /// Client-observed stream rate, excluding the first output event from the
+    /// numerator. A single event or a zero-length span has no defensible rate.
+    pub fn observed_stream_tps(self) -> Option<f64> {
+        let stream_us = self.stream_us?;
+        let tokens = self
+            .streamed_output_tokens
+            .checked_sub(self.first_output_tokens)?;
+        if stream_us == 0 || tokens == 0 || self.output_events < 2 {
+            return None;
+        }
+        Some(tokens as f64 * 1_000_000.0 / stream_us as f64)
+    }
+
+    /// Provider-native model decode rate when the upstream supplied both the
+    /// decode duration and the matching generated-token count.
+    pub fn provider_decode_tps(self) -> Option<f64> {
+        let decode_us = self.provider_decode_us?;
+        let tokens = self.provider_output_tokens?.checked_sub(1)?;
+        if decode_us == 0 || tokens == 0 {
+            return None;
+        }
+        Some(tokens as f64 * 1_000_000.0 / decode_us as f64)
+    }
+
+    /// End-to-end output rate using the provider/ledger completion count and
+    /// the client-observed request-to-validation duration.
+    pub fn e2e_output_tps(self, completion_tokens: i64) -> Option<f64> {
+        let e2e_us = self.e2e_us?;
+        if e2e_us == 0 || completion_tokens <= 0 {
+            return None;
+        }
+        Some(completion_tokens as f64 * 1_000_000.0 / e2e_us as f64)
+    }
 }
 
 /// Stable identity of a concrete network attempt. A ReAct turn may have
@@ -104,12 +250,56 @@ pub struct RequestUsageRecord {
     /// persisted before this field existed (they deserialize to the default).
     #[serde(default)]
     pub generation_ms: u64,
+    /// Structured latency/stream telemetry. `None` identifies legacy records
+    /// without inventing zero-duration samples.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub performance: Option<RequestPerformance>,
     /// Epoch timestamp in milliseconds when this attempt was dispatched.
     #[serde(default)]
     pub started_at_ms: u64,
     /// Detailed failure reason / error payload if this attempt failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+impl RequestUsageRecord {
+    /// A compact pushed snapshot for hint bars and other live surfaces.
+    pub fn performance_snapshot(&self) -> Option<TurnPerformanceSnapshot> {
+        Some(TurnPerformanceSnapshot {
+            round: self.key.round,
+            turn: self.key.turn,
+            attempt: self.key.attempt,
+            completion_tokens: self.completion_tokens.max(0) as u64,
+            usage_source: self.source,
+            performance: self.performance?,
+        })
+    }
+}
+
+/// Live, compact performance update for the latest settled model turn.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS,
+)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct TurnPerformanceSnapshot {
+    pub round: u64,
+    pub turn: u32,
+    pub attempt: u32,
+    pub completion_tokens: u64,
+    #[serde(default)]
+    pub usage_source: RequestUsageSource,
+    pub performance: RequestPerformance,
+}
+
+impl TurnPerformanceSnapshot {
+    pub fn observed_stream_tps(self) -> Option<f64> {
+        self.performance.observed_stream_tps()
+    }
+
+    pub fn e2e_output_tps(self) -> Option<f64> {
+        self.performance
+            .e2e_output_tps(self.completion_tokens as i64)
+    }
 }
 
 impl RequestUsageRecord {
@@ -445,12 +635,13 @@ impl TokenSourceLedger {
         estimated_completion_tokens: i64,
         generation_ms: u64,
     ) {
-        self.settle_request_with_error(
+        self.settle_request_with_performance_and_error(
             key,
             status,
             usage,
             estimated_completion_tokens,
             generation_ms,
+            None,
             None,
         );
     }
@@ -465,6 +656,31 @@ impl TokenSourceLedger {
         generation_ms: u64,
         error: Option<String>,
     ) {
+        self.settle_request_with_performance_and_error(
+            key,
+            status,
+            usage,
+            estimated_completion_tokens,
+            generation_ms,
+            None,
+            error,
+        );
+    }
+
+    /// Terminally settle one attempt with structured performance telemetry.
+    /// The legacy `generation_ms` remains populated for wire/session
+    /// compatibility; new performance surfaces use `performance` exclusively.
+    #[allow(clippy::too_many_arguments)]
+    pub fn settle_request_with_performance_and_error(
+        &self,
+        key: &RequestUsageKey,
+        status: RequestUsageStatus,
+        usage: Option<crate::TokenUsage>,
+        estimated_completion_tokens: i64,
+        generation_ms: u64,
+        performance: Option<RequestPerformance>,
+        error: Option<String>,
+    ) {
         if !status.is_terminal() {
             return;
         }
@@ -477,6 +693,9 @@ impl TokenSourceLedger {
         }
         record.status = status;
         record.generation_ms = generation_ms;
+        if performance.is_some() {
+            record.performance = performance;
+        }
         if error.is_some() {
             record.error = error;
         }
@@ -755,6 +974,43 @@ pub struct TokenSourceRow {
 pub struct TokenSourceReport {
     pub rows: Vec<TokenSourceRow>,
     pub grand_total: TokenSourceTotals,
+}
+
+impl TokenSourceReport {
+    /// Most recent completed primary-model attempt carrying structured
+    /// performance telemetry. Runner actors are deliberately excluded from
+    /// the session hint: it describes the principal conversation's last
+    /// model turn.
+    pub fn latest_turn_performance(&self) -> Option<TurnPerformanceSnapshot> {
+        self.rows
+            .iter()
+            .flat_map(|row| row.requests.iter())
+            .filter(|record| {
+                record.key.actor_id == "master"
+                    && record.status == RequestUsageStatus::Completed
+                    && record.performance.is_some()
+            })
+            .max_by_key(|record| {
+                (record.key.round, record.key.turn, record.key.attempt)
+            })
+            .and_then(RequestUsageRecord::performance_snapshot)
+    }
+}
+
+/// Slice counterpart of [`TokenSourceReport::latest_turn_performance`] for
+/// attach/resume paths that already hold the durable request records.
+pub fn latest_turn_performance(
+    records: &[RequestUsageRecord],
+) -> Option<TurnPerformanceSnapshot> {
+    records
+        .iter()
+        .filter(|record| {
+            record.key.actor_id == "master"
+                && record.status == RequestUsageStatus::Completed
+                && record.performance.is_some()
+        })
+        .max_by_key(|record| (record.key.round, record.key.turn, record.key.attempt))
+        .and_then(RequestUsageRecord::performance_snapshot)
 }
 
 #[cfg(test)]
@@ -1253,5 +1509,229 @@ mod tests {
         // Missing key / never-reported key -> None.
         assert!(ledger.last_reported_turn("openai", "gpt-5").is_none());
         assert!(ledger.last_reported_turn("mistral", "large").is_none());
+    }
+
+    fn sample_performance() -> RequestPerformance {
+        RequestPerformance {
+            stream_ready_us: Some(41_000),
+            ttft_us: Some(120_000),
+            visible_ttft_us: Some(125_000),
+            stream_us: Some(1_000_000),
+            tail_us: Some(8_000),
+            e2e_us: Some(1_128_000),
+            streamed_output_tokens: 101,
+            first_output_tokens: 1,
+            output_events: 101,
+            timing_source: PerformanceTimingSource::ClientObserved,
+            stream_token_source: StreamTokenSource::Cl100k,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn performance_settlement_stores_telemetry_and_rate_helpers() {
+        let ledger = TokenSourceLedger::new();
+        let key = ledger.begin_request("s1", "openai", "gpt-4o", 1, 1, 100);
+        ledger.settle_request_with_performance_and_error(
+            &key,
+            RequestUsageStatus::Completed,
+            Some(crate::TokenUsage {
+                prompt_tokens: 100,
+                completion_tokens: 101,
+                total_tokens: 201,
+                ..Default::default()
+            }),
+            0,
+            1_128,
+            Some(sample_performance()),
+            None,
+        );
+
+        let record = &ledger.records_for_session("s1")[0];
+        let performance = record.performance.expect("telemetry stored");
+        assert_eq!(performance.ttft_us, Some(120_000));
+        assert_eq!(performance.output_events, 101);
+
+        // Stream rate excludes the first event's tokens from the numerator:
+        // 100 tokens over 1_000_000 µs → exactly 100 tok/s.
+        let stream = performance.observed_stream_tps().expect("stream rate");
+        assert!((stream - 100.0).abs() < f64::EPSILON);
+        // E2E folds TTFT into the denominator: 101 tokens over 1.128 s.
+        let e2e = performance.e2e_output_tps(record.completion_tokens).expect("e2e");
+        assert!(
+            (e2e - 101.0 * 1_000_000.0 / 1_128_000.0).abs() < 0.001,
+            "unexpected e2e rate {e2e}"
+        );
+        // No provider-native telemetry yet → decode rate stays absent, never 0.
+        assert_eq!(performance.provider_decode_tps(), None);
+
+        // The hint-bar snapshot projection carries the same sample.
+        let snapshot = record.performance_snapshot().expect("snapshot");
+        assert_eq!(snapshot.round, 1);
+        assert_eq!(snapshot.completion_tokens, 101);
+        assert_eq!(snapshot.observed_stream_tps(), Some(stream));
+    }
+
+    #[test]
+    fn legacy_settlement_keeps_performance_none_and_json_round_trips() {
+        // Legacy path (no telemetry argument): the field must stay None, both
+        // in memory and across a persist/reload JSON round trip that predates
+        // the field (serde default).
+        let ledger = TokenSourceLedger::new();
+        let key = ledger.begin_request("s1", "openai", "gpt-4o", 1, 1, 100);
+        ledger.settle_request(&key, RequestUsageStatus::Completed, None, 42, 900);
+        let legacy = &ledger.records_for_session("s1")[0];
+        assert!(legacy.performance.is_none());
+
+        let json = serde_json::to_string(legacy).expect("serialize");
+        let reloaded: RequestUsageRecord = serde_json::from_str(&json).expect("deserialize");
+        assert!(reloaded.performance.is_none());
+        assert_eq!(reloaded.generation_ms, 900);
+
+        // A fresh JSON payload carrying telemetry round trips losslessly.
+        let timed = RequestUsageRecord {
+            key: legacy.key.clone(),
+            status: RequestUsageStatus::Completed,
+            source: RequestUsageSource::Reported,
+            completion_tokens: 10,
+            generation_ms: 500,
+            performance: Some(sample_performance()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&timed).expect("serialize");
+        let reloaded: RequestUsageRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(reloaded.performance, Some(sample_performance()));
+    }
+
+    #[test]
+    fn reported_upgrade_preserves_fresh_but_not_stale_performance() {
+        // Terminal replay rules: an estimated settlement followed by a
+        // reported one upgrades counts — and the newer call's telemetry wins
+        // because it describes the authoritative measurement pass. A
+        // *reported* record, however, can never be rewritten by a later
+        // estimate replay, so its telemetry survives untouched too.
+        let ledger = TokenSourceLedger::new();
+        let key = ledger.begin_request("s1", "openai", "gpt-4o", 1, 1, 100);
+
+        ledger.settle_request_with_performance_and_error(
+            &key,
+            RequestUsageStatus::Completed,
+            None,
+            40,
+            800,
+            Some(sample_performance()),
+            None,
+        );
+        // Reported upgrade: usage + fresher telemetry replace the estimate.
+        let upgraded = RequestPerformance {
+            ttft_us: Some(90_000),
+            ..sample_performance()
+        };
+        ledger.settle_request_with_performance_and_error(
+            &key,
+            RequestUsageStatus::Completed,
+            Some(crate::TokenUsage {
+                completion_tokens: 60,
+                total_tokens: 160,
+                ..Default::default()
+            }),
+            0,
+            700,
+            Some(upgraded),
+            None,
+        );
+        let record = &ledger.records_for_session("s1")[0];
+        assert_eq!(record.source, RequestUsageSource::Reported);
+        assert_eq!(record.performance.map(|p| p.ttft_us), Some(Some(90_000)));
+
+        // A later estimate replay can neither downgrade the usage nor the
+        // settled telemetry.
+        ledger.settle_request_with_performance_and_error(
+            &key,
+            RequestUsageStatus::Completed,
+            None,
+            99,
+            5_000,
+            None,
+            None,
+        );
+        let record = &ledger.records_for_session("s1")[0];
+        assert_eq!(record.source, RequestUsageSource::Reported);
+        assert_eq!(record.completion_tokens, 60);
+        assert_eq!(record.performance.map(|p| p.ttft_us), Some(Some(90_000)));
+    }
+
+    #[test]
+    fn latest_turn_performance_picks_newest_completed_master_attempt() {
+        let ledger = TokenSourceLedger::new();
+        let older = ledger.begin_request("s1", "openai", "gpt-4o", 1, 1, 0);
+        ledger.settle_request_with_performance_and_error(
+            &older,
+            RequestUsageStatus::Completed,
+            None,
+            10,
+            100,
+            Some(sample_performance()),
+            None,
+        );
+        // A non-completed newer attempt must not become the hint sample.
+        let failed = ledger.begin_request("s1", "openai", "gpt-4o", 2, 1, 0);
+        ledger.settle_request_with_performance_and_error(
+            &failed,
+            RequestUsageStatus::Failed,
+            None,
+            0,
+            50,
+            Some(sample_performance()),
+            Some("boom".to_string()),
+        );
+        // A runner actor is excluded even when completed.
+        let envoy = ledger.begin_request_for_actor(BeginRequestParams {
+            session_id: "s1",
+            actor_id: "runner:call_1",
+            provider: "openai",
+            model: "gpt-4o",
+            round: 2,
+            turn: 2,
+            projected_prompt_tokens: 0,
+        });
+        ledger.settle_request_with_performance_and_error(
+            &envoy,
+            RequestUsageStatus::Completed,
+            None,
+            500,
+            400,
+            Some(sample_performance()),
+            None,
+        );
+        // Newest completed master attempt.
+        let newest = ledger.begin_request("s1", "openai", "gpt-4o", 2, 3, 0);
+        let newest_performance = RequestPerformance {
+            visible_ttft_us: Some(777_000),
+            ..sample_performance()
+        };
+        ledger.settle_request_with_performance_and_error(
+            &newest,
+            RequestUsageStatus::Completed,
+            None,
+            20,
+            300,
+            Some(newest_performance),
+            None,
+        );
+
+        let report = ledger.snapshot();
+        let latest = report.latest_turn_performance().expect("a master sample");
+        assert_eq!((latest.round, latest.turn), (2, 3));
+        assert_eq!(latest.performance.visible_ttft_us, Some(777_000));
+
+        // Slice counterpart agrees for persisted-record paths.
+        let records = ledger.records_for_session("s1");
+        let slice_latest = latest_turn_performance(&records).expect("slice");
+        assert_eq!(slice_latest, latest);
+
+        // Nothing qualified → None rather than a fabricated default sample.
+        let empty = TokenSourceLedger::new();
+        assert!(empty.snapshot().latest_turn_performance().is_none());
     }
 }

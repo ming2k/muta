@@ -87,7 +87,8 @@ pub use mesh::{MeshAddress, MeshEnvelope, MeshMessage, MeshRoute, mesh_ids};
 pub use steward::{
     RiskLevel, SanityCheckInput, SanityCheckVerdict, SanityVerifierTask, SemanticLoopInput,
     SemanticLoopSentinelTask, SemanticLoopVerdict, SessionTitleOutput, SessionTitlerInput,
-    SessionTitlerTask, StewardModelPreference, StewardTask,
+    SessionTitlerTask, StewardModelPreference, StewardTask, StreamLoopChannel,
+    StreamLoopReviewInput, StreamLoopReviewerTask, StreamLoopVerdict, steward_identity,
 };
 pub use tier::AgentTier;
 pub mod history;
@@ -98,9 +99,10 @@ pub mod pressure;
 pub mod token_ledger;
 pub mod tokenizer;
 pub use token_ledger::{
-    BeginRequestParams, RequestUsageKey, RequestUsageRecord, RequestUsageSource,
-    RequestUsageStatus, TokenSourceLedger, TokenSourceReport, TokenSourceRow, TokenSourceTotals,
-    TokenTurn, UsageStatSink,
+    BeginRequestParams, PerformanceTimingSource, RequestPerformance, RequestUsageKey,
+    RequestUsageRecord, RequestUsageSource, RequestUsageStatus, StreamTokenSource,
+    TokenSourceLedger, TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn,
+    TurnPerformanceSnapshot, UsageStatSink, latest_turn_performance,
 };
 pub mod usage_stats;
 pub use usage_stats::{
@@ -111,6 +113,7 @@ pub mod doom_guard_config;
 pub mod execution;
 pub mod secret;
 pub mod security;
+pub mod shared_roots;
 pub use execution::{
     DirEntry, ExecutionEnvironment, FsError, FsMetadata, FsProvider, ProcessOutput, ProcessRunner,
     ShellIsolation, ToolMiddleware,
@@ -124,6 +127,7 @@ pub use session_tree::{
     CompactionPayload, SessionEntry, SessionEntryId, SessionEntryKind, SessionTree,
 };
 pub mod skills_config;
+pub use shared_roots::SharedAdditionalRoots;
 pub mod tool_registry;
 pub mod web_config;
 pub use capability::{

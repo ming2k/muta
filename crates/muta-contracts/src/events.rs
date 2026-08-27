@@ -1216,6 +1216,11 @@ pub enum RoundEvent {
         /// 0-indexed model-request position within `round`.
         turn: usize,
     },
+    /// One concrete provider attempt completed with client-observed
+    /// performance telemetry. This is pushed at the ReAct-turn boundary so
+    /// hint bars update immediately; detailed history remains queryable from
+    /// the request ledger.
+    TurnPerformance(crate::TurnPerformanceSnapshot),
     StreamStart,
     StreamDelta(String),
     StreamReasoningDelta(String),
@@ -1681,6 +1686,9 @@ pub enum AgentEvent {
         /// hooks and immediately before it is sent to the provider.
         context_tokens: usize,
     },
+    /// A provider request completed and its high-resolution performance
+    /// sample was sealed before any tool dispatch.
+    TurnPerformance(crate::TurnPerformanceSnapshot),
     /// Provider-reported context after a completed request. This supersedes the
     /// pre-request projection for that session until its context mutates again.
     ContextTokens(ContextTokenSnapshot),

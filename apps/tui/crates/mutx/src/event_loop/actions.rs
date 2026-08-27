@@ -1221,6 +1221,7 @@ pub(super) async fn dispatch_action(
                     app.config_detail_scroll = 0;
                 }
                 Modal::TokenReport => app.token_report_scroll = 0,
+                Modal::PerformanceReport => app.performance_report_scroll = 0,
                 _ => {}
             }
         }
@@ -1233,6 +1234,20 @@ pub(super) async fn dispatch_action(
                 if has_turns {
                     app.token_report_detail = true;
                     app.token_report_scroll = 0;
+                }
+            }
+        }
+        input::InputAction::PerformanceReportActivate => {
+            if app.active_modal() == Modal::PerformanceReport
+                && !app.performance_report_detail
+            {
+                let has_rounds = app
+                    .token_source_report(viewed_session_id)
+                    .map(|report| view::performance_report_round_count(&report) > 0)
+                    .unwrap_or(false);
+                if has_rounds {
+                    app.performance_report_detail = true;
+                    app.performance_report_scroll = 0;
                 }
             }
         }
@@ -2211,7 +2226,7 @@ pub(super) fn enter_panel(
             app.usage_stats = None;
             Some(AgentRequest::QueryUsageStats { event_cap: 200 })
         }
-        PanelId::TokenReport if app.token_ledger.is_none() => {
+        PanelId::TokenReport | PanelId::PerformanceReport if app.token_ledger.is_none() => {
             app.token_report = None;
             Some(AgentRequest::QueryTokenUsage {
                 session_id: viewed_session_id.to_string(),

@@ -491,10 +491,13 @@ async fn streaming_tool_deltas_are_reassembled_and_executed() {
         AgentEvent::ToolCall { name, arguments, .. }
             if name == "stream_read" && arguments == "{\"value\":1}"
     )));
-    assert!(matches!(
-        events.last(),
-        Some(AgentEvent::AssistantEnd(content)) if content == "done"
-    ));
+    // The turn-performance telemetry now trails the terminal AssistantEnd
+    // (emitted at the ReAct-turn boundary, after the response is sealed), so
+    // assert on the last *content* event rather than the literal last event.
+    assert!(events.iter().rev().any(|event| matches!(
+        event,
+        AgentEvent::AssistantEnd(content) if content == "done"
+    )));
 }
 
 #[tokio::test]
@@ -1508,20 +1511,43 @@ fn turn(calls: &[(&str, &str, &str)]) -> Vec<ProviderStreamEvent> {
 
 struct ScriptedProvider {
     turns: std::sync::Mutex<std::collections::VecDeque<Vec<ProviderStreamEvent>>>,
+    steward_replies: std::sync::Mutex<std::collections::VecDeque<String>>,
+    steward_requests: std::sync::Mutex<Vec<muta_contracts::ModelRequest>>,
 }
 
 impl ScriptedProvider {
     fn new(turns: Vec<Vec<ProviderStreamEvent>>) -> Self {
         Self {
             turns: std::sync::Mutex::new(turns.into_iter().collect()),
+            steward_replies: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            steward_requests: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    fn with_steward_replies(self, replies: &[&str]) -> Self {
+        *self
+            .steward_replies
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) =
+            replies.iter().map(|reply| (*reply).to_string()).collect();
+        self
     }
 }
 
 #[async_trait]
 impl Provider for ScriptedProvider {
-    async fn chat(&self, _request: muta_contracts::ModelRequest) -> Result<Message, String> {
-        Err("scripted provider is streaming-only".to_string())
+    async fn chat(&self, request: muta_contracts::ModelRequest) -> Result<Message, String> {
+        self.steward_requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(request);
+        let reply = self
+            .steward_replies
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pop_front()
+            .unwrap_or_else(|| "no".to_string());
+        Ok(Message::new(Role::Assistant, reply))
     }
 
     async fn stream_chat(
@@ -1628,56 +1654,55 @@ impl Tool for RecordingTool {
 fn transcript(events: &[AgentEvent]) -> Vec<String> {
     events
         .iter()
-        .map(|event| match event {
+        .filter_map(|event| match event {
+            // High-resolution performance samples are non-deterministic by
+            // construction; dropped so transcripts stay stable across runs.
+            AgentEvent::TurnPerformance(_) => None,
             AgentEvent::Notice(notice) => {
-                format!("notice {:?} {:?}", notice.kind, notice.title)
+                Some(format!("notice {:?} {:?}", notice.kind, notice.title))
             }
             AgentEvent::ModelRequestStarted { turn, .. } => {
-                format!("model-request turn={turn}")
+                Some(format!("model-request turn={turn}"))
             }
-            AgentEvent::ContextTokens(_) => "context-tokens".to_string(),
+            AgentEvent::ContextTokens(_) => Some("context-tokens".to_string()),
             AgentEvent::SteerAdmitted(input) => {
-                format!("steer-admitted {:?}", input.text)
+                Some(format!("steer-admitted {:?}", input.text))
             }
             AgentEvent::AssistantDelta { delta, start } => {
-                format!("assistant-delta start={start} {delta:?}")
+                Some(format!("assistant-delta start={start} {delta:?}"))
             }
-            AgentEvent::AssistantEnd(content) => format!("assistant-end {content:?}"),
-            AgentEvent::AssistantDiscard => "assistant-discard".to_string(),
+            AgentEvent::AssistantEnd(content) => Some(format!("assistant-end {content:?}")),
+            AgentEvent::AssistantDiscard => Some("assistant-discard".to_string()),
             AgentEvent::ReasoningDelta { delta, start } => {
-                format!("reasoning-delta start={start} {delta:?}")
+                Some(format!("reasoning-delta start={start} {delta:?}"))
             }
-            AgentEvent::ReasoningEnd(content) => format!("reasoning-end {content:?}"),
+            AgentEvent::ReasoningEnd(content) => Some(format!("reasoning-end {content:?}")),
             AgentEvent::ToolCall {
                 name, arguments, ..
-            } => {
-                format!("tool-call {name} {arguments}")
-            }
+            } => Some(format!("tool-call {name} {arguments}")),
             AgentEvent::ToolResult { name, output, .. } => {
-                format!("tool-result {name} {output:?}")
+                Some(format!("tool-result {name} {output:?}"))
             }
             AgentEvent::ToolStream { id, stream } => {
-                format!("tool-stream {} {:?}", id, stream)
+                Some(format!("tool-stream {} {:?}", id, stream))
             }
-            AgentEvent::ToolCancelled { name, .. } => {
-                format!("tool-cancelled {name}")
-            }
-            AgentEvent::YoloChanged(enabled) => format!("yolo {enabled}"),
+            AgentEvent::ToolCancelled { name, .. } => Some(format!("tool-cancelled {name}")),
+            AgentEvent::YoloChanged(enabled) => Some(format!("yolo {enabled}")),
             AgentEvent::PermissionRequest(request) => {
-                format!("permission-request {} {}", request.tool, request.scope)
+                Some(format!("permission-request {} {}", request.tool, request.scope))
             }
             AgentEvent::UserQuestionRequest(request) => {
-                format!("user-question {}", request.questions.len())
+                Some(format!("user-question {}", request.questions.len()))
             }
             AgentEvent::StdinRequest(request) => {
-                format!(
+                Some(format!(
                     "stdin-request {} (secret={})",
                     request.command, request.secret
-                )
+                ))
             }
-            AgentEvent::Runner { .. } => "subtask".to_string(),
+            AgentEvent::Runner { .. } => Some("subtask".to_string()),
             AgentEvent::TodosUpdated(list) => {
-                format!("todos {} items", list.len())
+                Some(format!("todos {} items", list.len()))
             }
         })
         .collect()
@@ -3038,13 +3063,60 @@ async fn in_flight_streaming_loop_detector_aborts_and_steers() {
     ];
 
     let agent = Arc::new(Agent::new(
-        Arc::new(ScriptedProvider::new(vec![degenerative_stream])),
+        Arc::new(
+            ScriptedProvider::new(vec![degenerative_stream, text_turn("Recovered summary.")])
+                .with_steward_replies(&["yes"]),
+        ),
         Vec::new(),
         crate::AgentIdentity::default(),
     ));
 
-    let (_events, outcome) = run_golden_round(&agent, "test", PermissionDecision::Once).await;
+    let (events, outcome) = run_golden_round(&agent, "test", PermissionDecision::Once).await;
     let round_outcome = outcome.expect("round completes");
+
+    assert_eq!(round_outcome.message.content, "Recovered summary.");
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::AssistantEnd(content) if content.contains("[... stream truncated")
+        )),
+        "the partial looping response is retained before recovery"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Notice(notice)
+                if notice.severity == NoticeSeverity::Warning
+                    && notice.title == "Repetitive output stopped; recovery requested"
+        )),
+        "the soft intervention must be visible"
+    );
+    assert!(events.iter().all(|event| !matches!(
+        event,
+        AgentEvent::AssistantEnd(content) if content.contains("never reached extra text")
+    )));
+}
+
+#[tokio::test]
+async fn repeated_stream_loop_hard_stop_is_visible() {
+    let degenerative_stream = || {
+        vec![
+            ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
+            ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
+            ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
+        ]
+    };
+    let agent = Arc::new(Agent::new(
+        Arc::new(
+            ScriptedProvider::new(vec![degenerative_stream(), degenerative_stream()])
+                .with_steward_replies(&["yes", "yes"]),
+        ),
+        Vec::new(),
+        crate::AgentIdentity::default(),
+    ));
+
+    let (events, outcome) = run_golden_round(&agent, "test", PermissionDecision::Once).await;
+    let round_outcome = outcome.expect("hard stream stop retains a terminal partial response");
 
     assert!(
         round_outcome
@@ -3052,10 +3124,91 @@ async fn in_flight_streaming_loop_detector_aborts_and_steers() {
             .content
             .contains("[... stream truncated")
     );
-    assert!(
-        !round_outcome
-            .message
-            .content
-            .contains("never reached extra text")
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Notice(notice)
+            if notice.severity == NoticeSeverity::Error
+                && notice.title == "Repetitive output stopped again; round ended"
+    )));
+}
+
+#[tokio::test]
+async fn reasoning_stream_loop_trims_reasoning_without_rewriting_answer() {
+    let looping_reasoning = vec![
+        ProviderStreamEvent::TextDelta("Answer prefix.".to_string()),
+        ProviderStreamEvent::ReasoningDelta("repeating private trace\n".to_string()),
+        ProviderStreamEvent::ReasoningDelta("repeating private trace\n".to_string()),
+        ProviderStreamEvent::ReasoningDelta("repeating private trace\n".to_string()),
+    ];
+    let agent = Arc::new(Agent::new(
+        Arc::new(
+            ScriptedProvider::new(vec![looping_reasoning, text_turn("Recovered answer.")])
+                .with_steward_replies(&["yes"]),
+        ),
+        Vec::new(),
+        crate::AgentIdentity::default(),
+    ));
+
+    let (events, outcome) = run_golden_round(&agent, "test", PermissionDecision::Once).await;
+    assert_eq!(
+        outcome.expect("reasoning loop recovers").message.content,
+        "Recovered answer."
     );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::AssistantEnd(content) if content == "Answer prefix."
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::ReasoningEnd(content) if content.contains("[... stream truncated")
+    )));
+}
+
+#[tokio::test]
+async fn steward_clears_legitimate_repeated_reverse_engineering_data() {
+    let repeated_dump = "00401000: 90 90 90 90    nop nop nop nop\n";
+    let provider = Arc::new(
+        ScriptedProvider::new(vec![vec![
+            ProviderStreamEvent::TextDelta(repeated_dump.to_string()),
+            ProviderStreamEvent::TextDelta(repeated_dump.to_string()),
+            ProviderStreamEvent::TextDelta(repeated_dump.to_string()),
+            ProviderStreamEvent::TextDelta("Dump complete; continuing analysis.".to_string()),
+        ]])
+        .with_steward_replies(&["no"]),
+    );
+    let agent = Arc::new(Agent::new(
+        provider.clone(),
+        Vec::new(),
+        crate::AgentIdentity::default(),
+    ));
+
+    let (events, outcome) = run_golden_round(
+        &agent,
+        "Inspect this repeated disassembly block.",
+        PermissionDecision::Once,
+    )
+    .await;
+    let content = outcome
+        .expect("Steward-cleared stream completes")
+        .message
+        .content;
+    assert!(content.contains("Dump complete; continuing analysis."));
+    assert!(!content.contains("[... stream truncated"));
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, AgentEvent::Notice(notice) if notice.source == NoticeSource::TurnGuard)),
+        "an L1 candidate cleared by Steward must not surface as an intervention"
+    );
+
+    let requests = provider
+        .steward_requests
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    assert_eq!(requests.len(), 1, "one candidate gets one L2 review");
+    let system = &requests[0].messages[0].content;
+    let evidence = &requests[0].messages[1].content;
+    assert!(system.starts_with("You are Steward,"));
+    assert!(evidence.contains("Inspect this repeated disassembly block."));
+    assert!(evidence.contains(repeated_dump.trim()));
 }

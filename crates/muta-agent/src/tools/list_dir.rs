@@ -58,7 +58,8 @@ impl Tool for ListDirTool {
         let limit = search_limit(args.limit)?;
         let path = args.path.as_deref().unwrap_or(".");
         let workspace = self.env.workspace_root();
-        let directory = resolve_search_root(workspace, self.env.additional_roots(), path)?;
+        let additional_roots = self.env.additional_roots();
+        let directory = resolve_search_root(workspace, &additional_roots, path)?;
         let metadata = self
             .env
             .fs()

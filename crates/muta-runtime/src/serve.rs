@@ -1002,6 +1002,21 @@ where
             .send(WsMessage::Text(frame.into()))
             .await
             .map_err(|e| format!("send retry-pending restore: {e}"))?;
+        if let Some(performance) = muta_contracts::latest_turn_performance(
+            &bound.session.request_usage_records().await,
+        ) {
+            let frame = serde_json::to_string(&Wire::Response {
+                response: AgentResponse::Round {
+                    session_id: bound.session.id().await,
+                    event: muta_contracts::RoundEvent::TurnPerformance(performance),
+                },
+            })
+            .map_err(|e| format!("serialize performance restore: {e}"))?;
+            ws_sink
+                .send(WsMessage::Text(frame.into()))
+                .await
+                .map_err(|e| format!("send performance restore: {e}"))?;
+        }
     }
     let req_tx = bound.req_tx.clone();
     let mut rx = bound.events.subscribe();

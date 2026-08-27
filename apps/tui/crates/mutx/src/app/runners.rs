@@ -347,6 +347,10 @@ impl App {
                 current_turn: self.current_turn,
                 round_started_at: self.round_started_at,
                 can_retry: self.loop_status.is_idle() && self.harness_retry_pending,
+                last_turn_performance: self
+                    .session_chrome
+                    .get(&self.current_session_id)
+                    .and_then(|chrome| chrome.last_turn_performance),
             });
         }
         if let Some(chrome) = self.session_chrome.get(&side_id).cloned() {

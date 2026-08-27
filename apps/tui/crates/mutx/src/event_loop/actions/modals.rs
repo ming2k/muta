@@ -518,6 +518,18 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                 app.modal_index = (app.modal_index + count - 1) % count;
             }
         }
+        Modal::PerformanceReport => {
+            if app.performance_report_detail {
+                app.performance_report_scroll = app.performance_report_scroll.saturating_sub(1);
+            } else {
+                let count = app
+                    .token_source_report(viewed_session_id)
+                    .map(|report| view::performance_report_round_count(&report))
+                    .unwrap_or(0)
+                    .max(1);
+                app.modal_index = (app.modal_index + count - 1) % count;
+            }
+        }
         Modal::UsageStats => {
             // The usage overlay scrolls as one body (no per-row selection).
             app.usage_stats_scroll = app.usage_stats_scroll.saturating_sub(1);
@@ -652,6 +664,18 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                 let count = app
                     .token_source_report(viewed_session_id)
                     .map(|report| view::token_report_round_count(&report))
+                    .unwrap_or(0)
+                    .max(1);
+                app.modal_index = (app.modal_index + 1) % count;
+            }
+        }
+        Modal::PerformanceReport => {
+            if app.performance_report_detail {
+                app.performance_report_scroll = app.performance_report_scroll.saturating_add(1);
+            } else {
+                let count = app
+                    .token_source_report(viewed_session_id)
+                    .map(|report| view::performance_report_round_count(&report))
                     .unwrap_or(0)
                     .max(1);
                 app.modal_index = (app.modal_index + 1) % count;

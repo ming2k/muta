@@ -236,6 +236,10 @@ pub struct SessionChrome {
     /// hint bar only offers `/retry` for a round that actually stopped
     /// before completing.
     pub can_retry: bool,
+    /// Latest completed principal ReAct turn's performance sample. Kept
+    /// session-scoped so primary and `/btw` views never borrow each other's
+    /// hint-bar measurement.
+    pub last_turn_performance: Option<muta_contracts::TurnPerformanceSnapshot>,
 }
 
 /// Whether [`App::adopt_as_draft`] may clobber a composer that currently
@@ -330,6 +334,9 @@ pub struct App {
     /// `89.2k (8%)` indicator), so a click on it opens the TokenReport modal.
     /// `None` when the hint bar or context meter is not shown.
     pub hint_context_rect: Option<mutx_engine::Rect>,
+    /// Screen rect of the last-turn stream-rate segment in the hint bar.
+    /// Clicking it opens the independent PerformanceReport modal.
+    pub hint_performance_rect: Option<mutx_engine::Rect>,
     /// Shared token-source ledger (reported vs. estimated token accounting),
     /// read by the TokenReport modal. `Some` in the standalone path (the
     /// in-process harness shares this ledger); `None` in attach mode, where
@@ -350,6 +357,11 @@ pub struct App {
     /// `true` when the TokenReport modal is drilled into one round's ReAct-turn
     /// usage; `false` when it shows the session's round list.
     pub token_report_detail: bool,
+    /// Scroll offset and hierarchy state for the independent performance
+    /// report. It shares the request-ledger snapshot as a data source but no
+    /// navigation or rendering state with Context Usage.
+    pub performance_report_scroll: usize,
+    pub performance_report_detail: bool,
     /// Cross-session usage-statistics report fetched on demand from the
     /// harness (`QueryUsageStats`, ADR-0122). Session-independent: it
     /// aggregates the durable store under `data/usage/`, which survives

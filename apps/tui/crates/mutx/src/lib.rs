@@ -625,6 +625,11 @@ pub async fn run_tui(
                                 .await
                                 .insert(session_id.clone(), snapshot);
                         }
+                        RoundEvent::TurnPerformance(performance) => {
+                            chrome_updater.edit(|chrome| {
+                                chrome.last_turn_performance = Some(performance);
+                            });
+                        }
                         RoundEvent::SteerUnavailable { input_id } => {
                             // The round closed before a steer could be admitted.
                             // The entry flips to `HeldNextRound`: the turn ended
@@ -2024,11 +2029,14 @@ pub async fn run_tui(
         sticky_rect: None,
         activity_rect: None,
         hint_context_rect: None,
+        hint_performance_rect: None,
         token_ledger,
         token_report: None,
         context_tokens: None,
         token_report_scroll: 0,
         token_report_detail: false,
+        performance_report_scroll: 0,
+        performance_report_detail: false,
         usage_stats: None,
         usage_stats_scroll: 0,
         todos_rect: None,

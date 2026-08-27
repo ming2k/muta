@@ -93,6 +93,8 @@ impl App {
                 && self.session_info_detail)
             && !(active_panel == Some(crate::surfaces::PanelId::TokenReport)
                 && self.token_report_detail)
+            && !(active_panel == Some(crate::surfaces::PanelId::PerformanceReport)
+                && self.performance_report_detail)
             && !(view == View::Settings
                 && (self.config_custom_editing
                     || self.websearch_editing.is_some()
@@ -115,6 +117,7 @@ impl App {
             Modal::Permissions => Some(PanelId::Permissions),
             Modal::UsageStats => Some(PanelId::UsageStats),
             Modal::TokenReport => Some(PanelId::TokenReport),
+            Modal::PerformanceReport => Some(PanelId::PerformanceReport),
             Modal::Btw => Some(PanelId::Btw),
             Modal::Config => {
                 self.surfaces.show_view(View::Settings);
@@ -170,6 +173,7 @@ impl App {
                 }
             },
             Modal::TokenReport => Some((&mut self.token_report_scroll, None)),
+            Modal::PerformanceReport => Some((&mut self.performance_report_scroll, None)),
             Modal::UsageStats => Some((&mut self.usage_stats_scroll, None)),
             Modal::OauthPending => Some((&mut self.oauth_scroll, None)),
             Modal::ProviderPreset => Some((&mut self.preset_scroll, None)),
@@ -425,6 +429,9 @@ impl App {
         if id == crate::surfaces::PanelId::TokenReport {
             self.token_report_detail = false;
         }
+        if id == crate::surfaces::PanelId::PerformanceReport {
+            self.performance_report_detail = false;
+        }
         if id == crate::surfaces::PanelId::Queue
             && let Some(sid) = self.queue_exit_session.take()
         {
@@ -508,6 +515,11 @@ impl App {
                 self.token_report_scroll = 0;
                 self.token_report_detail = false;
             }
+            PanelId::PerformanceReport => {
+                self.token_report = None;
+                self.performance_report_scroll = 0;
+                self.performance_report_detail = false;
+            }
             PanelId::Btw => {
                 self.btw_list.clear();
                 self.btw_scroll = 0;
@@ -588,6 +600,11 @@ impl App {
                 self.token_report_scroll = 0;
                 true
             }
+            Modal::PerformanceReport if self.performance_report_detail => {
+                self.performance_report_detail = false;
+                self.performance_report_scroll = 0;
+                true
+            }
             Modal::Sessions if self.session_info_detail => {
                 self.session_info_detail = false;
                 self.session_detail = None;
@@ -636,6 +653,7 @@ impl App {
             crate::surfaces::PanelId::Permissions => self.permissions_scroll,
             crate::surfaces::PanelId::UsageStats => self.usage_stats_scroll,
             crate::surfaces::PanelId::TokenReport => self.token_report_scroll,
+            crate::surfaces::PanelId::PerformanceReport => self.performance_report_scroll,
             crate::surfaces::PanelId::Btw => self.btw_scroll,
             crate::surfaces::PanelId::HistorySearch => self.history_scroll,
             crate::surfaces::PanelId::Models | crate::surfaces::PanelId::Connections => {
@@ -661,6 +679,9 @@ impl App {
             crate::surfaces::PanelId::Permissions => self.permissions_scroll = scroll,
             crate::surfaces::PanelId::UsageStats => self.usage_stats_scroll = scroll,
             crate::surfaces::PanelId::TokenReport => self.token_report_scroll = scroll,
+            crate::surfaces::PanelId::PerformanceReport => {
+                self.performance_report_scroll = scroll;
+            }
             crate::surfaces::PanelId::Btw => self.btw_scroll = scroll,
             crate::surfaces::PanelId::HistorySearch => self.history_scroll = scroll,
             crate::surfaces::PanelId::Models | crate::surfaces::PanelId::Connections => {
@@ -742,6 +763,10 @@ impl App {
             current_turn: self.current_turn,
             round_started_at: self.round_started_at,
             can_retry: self.loop_status.is_idle() && self.harness_retry_pending,
+            last_turn_performance: self
+                .session_chrome
+                .get(&self.current_session_id)
+                .and_then(|chrome| chrome.last_turn_performance),
         }
     }
 

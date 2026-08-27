@@ -510,7 +510,7 @@ impl Agent {
         response: &Message,
         streamed_usage: Option<TokenUsage>,
         request: &mut RequestAccountingGuard,
-    ) {
+    ) -> muta_contracts::TurnPerformanceSnapshot {
         // Seal the generation clock now, while we hold a validated assistant
         // response and before any tool dispatch, so tool execution never
         // inflates the measured generation span.
@@ -535,6 +535,10 @@ impl Agent {
                 Some(usage),
                 0,
             );
+            request.performance_snapshot(
+                usage.completion_tokens,
+                muta_contracts::RequestUsageSource::Reported,
+            )
         } else {
             // Estimate both sides of the request. The old fallback counted
             // only the assistant response while the reported path counted
@@ -550,6 +554,10 @@ impl Agent {
                 None,
                 completion,
             );
+            request.performance_snapshot(
+                completion,
+                muta_contracts::RequestUsageSource::Estimated,
+            )
         }
     }
 

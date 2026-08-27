@@ -169,6 +169,7 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
             | super::Modal::Activity
             | super::Modal::Queue
             | super::Modal::TokenReport
+            | super::Modal::PerformanceReport
             | super::Modal::UsageStats
             | super::Modal::Host
             | super::Modal::Btw
@@ -195,6 +196,7 @@ fn scrolls_own_body(modal: super::Modal) -> bool {
             | super::Modal::Permissions
             | super::Modal::Config
             | super::Modal::TokenReport
+            | super::Modal::PerformanceReport
             | super::Modal::UsageStats
             | super::Modal::OauthPending
             | super::Modal::ProviderPreset
@@ -442,6 +444,8 @@ pub enum InputAction {
     HostPromptSubmit,
     /// Drill into the selected turn's model-round usage. Bound to `Enter`.
     TokenReportActivate,
+    /// Drill into the selected round's request-performance attempts.
+    PerformanceReportActivate,
     /// Delete the currently-selected session in the sessions picker.
     DeleteSelectedSession,
     /// Create a brand new session from the sessions picker ('n' / 'N').
@@ -1527,6 +1531,9 @@ pub fn process_event(
                         super::Modal::Config => InputAction::ConfigActivate,
                         super::Modal::Activity => InputAction::CloseModal,
                         super::Modal::TokenReport => InputAction::TokenReportActivate,
+                        super::Modal::PerformanceReport => {
+                            InputAction::PerformanceReportActivate
+                        }
                         super::Modal::UsageStats => InputAction::CloseModal,
                         super::Modal::None => {
                             if context.has_focused_target {
@@ -2399,6 +2406,7 @@ pub fn process_event(
                         }
                         super::Modal::Help => InputAction::ScrollUp,
                         super::Modal::TokenReport => InputAction::ModalUp,
+                        super::Modal::PerformanceReport => InputAction::ModalUp,
                         super::Modal::UsageStats => InputAction::ScrollUp,
                         super::Modal::None => {
                             if context.has_focused_target {
@@ -2482,6 +2490,7 @@ pub fn process_event(
                         }
                         super::Modal::Help => InputAction::ScrollDown,
                         super::Modal::TokenReport => InputAction::ModalDown,
+                        super::Modal::PerformanceReport => InputAction::ModalDown,
                         super::Modal::UsageStats => InputAction::ScrollDown,
                         super::Modal::None => {
                             if context.has_focused_target {

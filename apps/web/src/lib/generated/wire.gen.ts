@@ -317,7 +317,7 @@ export type HookEventKind = "SessionStart" | "SessionEnd" | "UserPromptSubmit" |
  * posture, so a question that would flow up to a nonexistent human fails
  * fast in the child instead of parking forever.
  *
- * Legacy clients that predate the field default to [`Interactive`],
+ * Legacy clients that predate the field default to `Interactive`,
  * preserving their behavior exactly.
  */
 export type HumanChannelPosture = "Interactive" | "Autonomous";
@@ -636,6 +636,17 @@ export type NoticeSurface = "inline" | "toast" | "banner";
  */
 export type PatchOp = "Create" | "Edit" | "Delete";
 
+/**
+ * Where an attempt's timing samples were captured.
+ *
+ * Client-observed timing is authoritative for the experience at this
+ * process boundary, but it must not be presented as provider-internal model
+ * timing: network transit, upstream queueing, and proxy buffering remain in
+ * the observation. `Provider` is reserved for adapters that receive explicit
+ * server-side generation telemetry.
+ */
+export type PerformanceTimingSource = "unknown" | "client_observed" | "provider";
+
 export type PermissionDecision = "Once" | "Session" | "Always" | "Reject";
 
 export type PermissionRequest = { id: string, tool: string, 
@@ -670,7 +681,7 @@ elevation: boolean,
  */
 one_off: boolean, 
 /**
- * Origin label identifying which subagent/runner produced this request (ADR-0138).
+ * Origin label identifying which runner produced this request (ADR-0138).
  * `None` for top-level principal calls; e.g. `Some("runner #a1b2 · mcp_specialist")`.
  */
 origin?: string | null, 
@@ -696,7 +707,7 @@ command: string,
  */
 process_group_killable: boolean, 
 /**
- * Standard pkill pattern (e.g. "pkill -P $PID" or "pkill -f <command>").
+ * Standard pkill pattern (e.g. "pkill -P $PID" or "pkill -f <command\>").
  */
 pkill_target: string, 
 /**
@@ -831,10 +842,76 @@ export type QueuedMessage = { id: string, text: string, display_text?: string, i
 /**
  * Who actually settled a parked human request. The anti-fabrication
  * invariant: only a reply that crossed a client connection resolves as
- * [`User`]. Policy settlements are generated agent-side and are labeled
+ * [`ReplyProvenance::User`]. Policy settlements are generated agent-side and are labeled
  * so the model can never mistake them for human intent.
  */
 export type ReplyProvenance = "User" | { "Policy": { policy: AutonomousFallbackPolicy, } };
+
+/**
+ * High-resolution performance telemetry for one concrete provider attempt.
+ *
+ * Every duration is a monotonic offset measured in microseconds. Optional
+ * fields stay absent for legacy records and for stages the active provider
+ * cannot expose; absence is never encoded as a fabricated zero.
+ */
+export type RequestPerformance = { 
+/**
+ * Request dispatch to the provider returning a live response stream
+ * (normally HTTP response headers received).
+ */
+stream_ready_us?: number, 
+/**
+ * Request dispatch to the first output-bearing event (text, reasoning,
+ * or tool-call payload) observed by the client.
+ */
+ttft_us?: number, 
+/**
+ * Request dispatch to the first user-visible assistant text event.
+ */
+visible_ttft_us?: number, 
+/**
+ * First output-bearing event to the last output-bearing event.
+ */
+stream_us?: number, 
+/**
+ * Last output-bearing event to the provider stream ending.
+ */
+tail_us?: number, 
+/**
+ * Request dispatch to a complete, validated assistant response.
+ */
+e2e_us?: number, 
+/**
+ * Client-counted output tokens across streamed text, reasoning, and tool
+ * payloads. Kept separate from provider-reported completion usage.
+ */
+streamed_output_tokens: number, 
+/**
+ * Tokens carried by the first output-bearing event. These tokens are
+ * excluded from the observed stream-rate numerator because they already
+ * existed when the stream clock began.
+ */
+first_output_tokens: number, 
+/**
+ * Number of output-bearing stream events observed.
+ */
+output_events: number, timing_source: PerformanceTimingSource, stream_token_source: StreamTokenSource, 
+/**
+ * Optional provider-native queue time.
+ */
+provider_queue_us?: number, 
+/**
+ * Optional provider-native prompt-prefill time.
+ */
+provider_prefill_us?: number, 
+/**
+ * Optional provider-native decode duration.
+ */
+provider_decode_us?: number, 
+/**
+ * Token count paired with `provider_decode_us` by the provider.
+ */
+provider_output_tokens?: number, };
 
 /**
  * Estimated token shape of a provider request.
@@ -844,6 +921,11 @@ export type ReplyProvenance = "User" | { "Policy": { policy: AutonomousFallbackP
  * freshly composed system message and visible tool schemas.
  */
 export type RequestTokenEstimate = { history_tokens: number, overhead_tokens: number, total_tokens: number, };
+
+/**
+ * Provenance of the counts attached to a request attempt.
+ */
+export type RequestUsageSource = "unknown" | "reported" | "estimated";
 
 /**
  * The durable `/retry` resume point: everything a later round needs to
@@ -930,7 +1012,7 @@ round: number,
 /**
  * 0-indexed model-request position within `round`.
  */
-turn: number, } } | "StreamStart" | { "StreamDelta": string } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "StreamEnd": string } | "StreamDiscard" | { "UnsentInput": { prompt: string, images: Array<ImagePart>, } } | { "EnvoyCompat": { parent_call_id: string, event: RunnerEvent, } };
+turn: number, } } | { "TurnPerformance": TurnPerformanceSnapshot } | "StreamStart" | { "StreamDelta": string } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "StreamEnd": string } | "StreamDiscard" | { "UnsentInput": { prompt: string, images: Array<ImagePart>, } } | { "EnvoyCompat": { parent_call_id: string, event: RunnerEvent, } };
 
 /**
  * A durable record of one round being stopped before its natural terminal
@@ -1182,6 +1264,13 @@ prompt: string,
 secret: boolean, };
 
 /**
+ * Tokenizer behind the streamed-output count used for observed stream TPS.
+ * Provider-reported completion tokens remain the authoritative billing
+ * count; this source describes only the client-visible stream counter.
+ */
+export type StreamTokenSource = "unknown" | "provider" | "cl100k";
+
+/**
  * Full standalone theme file loaded from `$XDG_CONFIG_HOME/muta/themes/<id>.toml`.
  */
 export type ThemeFile = { id: string, name: string, description: string, author: string | null, version: string | null, colors: ColorSchemeConfig, components: ComponentThemesConfig | null, };
@@ -1350,7 +1439,12 @@ export type ToolStreamFrame = { "Stdout": string } | { "Stderr": string };
  * expands to [`TrustDomain::ALL`]. Persisting an aggregate grant would create
  * a second source of truth and make a concrete domain impossible to revoke.
  */
-export type TrustDomain = "mcp" | "skills" | "hooks" | "rules";
+export type TrustDomain = "mcp" | "skills" | "hooks" | "rules" | "roots";
+
+/**
+ * Live, compact performance update for the latest settled model turn.
+ */
+export type TurnPerformanceSnapshot = { round: number, turn: number, attempt: number, completion_tokens: number, usage_source: RequestUsageSource, performance: RequestPerformance, };
 
 /**
  * A single question inside an `ask_user` tool call.
@@ -1383,7 +1477,7 @@ export type UserQuestionOption = { label: string, description?: string, };
  */
 export type UserQuestionRequest = { id: string, questions: Array<UserQuestion>, 
 /**
- * Origin label identifying which subagent/runner produced this request (ADR-0138).
+ * Origin label identifying which runner produced this request (ADR-0138).
  */
 origin?: string | null, };
 
@@ -1479,7 +1573,11 @@ hooks: WorkspaceTrustState,
 /**
  * Trust status for project instructions and slash commands.
  */
-rules: WorkspaceTrustState, };
+rules: WorkspaceTrustState, 
+/**
+ * Trust status for project-declared linked workspace roots.
+ */
+roots: WorkspaceTrustState, };
 
 /**
  * Trust state for one project-authored asset domain.

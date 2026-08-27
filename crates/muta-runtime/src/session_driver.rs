@@ -72,6 +72,9 @@ pub struct SessionDriver {
     pub mcp_runtime: Arc<McpRuntime>,
     /// Workspace execution authority and content-bound extension trust.
     pub workspace_security: Arc<WorkspaceSecurityStore>,
+    /// Live additional-roots handle: trust decisions recompute the admitted
+    /// set through it, effective on the next confined tool call.
+    pub shared_additional_roots: muta_contracts::SharedAdditionalRoots,
     /// User-defined `/<name>` commands (`commands_for_task` in the old code).
     pub commands: Arc<HashMap<String, CustomCommand>>,
     /// Backend-owned command vocabulary used by both attach metadata and the
@@ -140,6 +143,7 @@ impl SessionDriver {
             runner_registry,
             mcp_runtime,
             workspace_security,
+            shared_additional_roots,
             commands: commands_for_task,
             command_catalog,
             embedding_store: embedding_store_for_commands,
@@ -690,6 +694,7 @@ impl SessionDriver {
                             agent: &agent,
                             mcp_runtime: &mcp_runtime,
                             workspace_security: &workspace_security,
+                            shared_additional_roots: &shared_additional_roots,
                             resp_tx: &resp_tx,
                             session: &session,
                             lifecycle: &lifecycle,

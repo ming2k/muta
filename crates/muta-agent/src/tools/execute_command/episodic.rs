@@ -41,7 +41,8 @@ pub async fn run_episodic_command(
         let mut invocation = match isolation {
             muta_contracts::ShellIsolation::Host => muta_platform::shell::native_shell(command),
             muta_contracts::ShellIsolation::Workspace => {
-                workspace_sandbox_shell(command, env.workspace_root(), env.additional_roots())?
+                let additional_roots = env.additional_roots();
+                workspace_sandbox_shell(command, env.workspace_root(), &additional_roots)?
             }
         };
         invocation

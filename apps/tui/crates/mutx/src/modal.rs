@@ -138,6 +138,10 @@ pub enum Modal {
     /// Opened by clicking the context meter in the hint bar. Esc /
     /// outside-click closes.
     TokenReport,
+    /// Client-observed model-request performance, grouped by user round with
+    /// a per-turn/attempt drill-down. Opened by clicking the last-turn stream
+    /// rate in the hint bar.
+    PerformanceReport,
     /// Usage statistics (`/usage`, ADR-0122): the durable cross-session view
     /// — daily token totals, per-`(provider, model)` breakdown, and the
     /// recent terminal-request event log. Data comes from the
@@ -248,6 +252,7 @@ impl Modal {
                 | Modal::Models
                 | Modal::Connections
                 | Modal::TokenReport
+                | Modal::PerformanceReport
                 | Modal::UsageStats
                 | Modal::Btw
                 | Modal::Tree

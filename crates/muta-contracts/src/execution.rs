@@ -198,8 +198,13 @@ pub trait ExecutionEnvironment: Send + Sync {
     /// (ADR-0142). Empty for the default single-root environment; shell
     /// sandboxes bind each entry read-write and path confinement admits
     /// anything under them.
-    fn additional_roots(&self) -> &[PathBuf] {
-        &[]
+    ///
+    /// Returns an owned snapshot rather than a borrowed slice: the admitted
+    /// set is live state (ADR-0147 trust decisions recompute it mid-session),
+    /// so implementers backed by the [`super::SharedAdditionalRoots`] handle
+    /// must clone under a short lock instead of exposing one.
+    fn additional_roots(&self) -> Vec<PathBuf> {
+        Vec::new()
     }
 
     /// Required containment for shell-capable tools.
@@ -363,8 +368,8 @@ mod tests {
         fn workspace_root(&self) -> &Path {
             &self.root
         }
-        fn additional_roots(&self) -> &[PathBuf] {
-            &self.additional
+        fn additional_roots(&self) -> Vec<PathBuf> {
+            self.additional.clone()
         }
     }
 

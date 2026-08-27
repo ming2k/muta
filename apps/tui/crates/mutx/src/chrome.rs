@@ -729,6 +729,9 @@ pub struct HintBarView<'a> {
     /// Whether the previous turn ended in an unrecovered error and is eligible for /retry.
     pub can_retry: bool,
     pub context_tokens: Option<usize>,
+    /// Client-observed stream TPS of the latest completed principal ReAct
+    /// turn. `None` renders a discoverable unavailable value.
+    pub last_turn_tps: Option<f64>,
     pub ignition_elapsed_ms: Option<u128>,
     pub composer_send_mode: Option<crate::app::ComposerSendMode>,
     pub queue_editing_badge: Option<String>,
@@ -745,11 +748,19 @@ impl<'a> Default for HintBarView<'a> {
             busy: false,
             can_retry: false,
             context_tokens: None,
+            last_turn_tps: None,
             ignition_elapsed_ms: None,
             composer_send_mode: None,
             queue_editing_badge: None,
         }
     }
+}
+
+/// Fine-grained click targets painted inside the hint bar.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HintBarRects {
+    pub performance: Option<Rect>,
+    pub context: Option<Rect>,
 }
 
 #[derive(Clone, Copy)]
@@ -828,7 +839,7 @@ pub fn draw_hint_bar(
     rect: Rect,
     view: HintBarView<'_>,
     theme: &Theme,
-) -> Option<Rect> {
+) -> HintBarRects {
     let HintBarView {
         current_model,
         model_available,
@@ -838,6 +849,7 @@ pub fn draw_hint_bar(
         busy,
         can_retry,
         context_tokens,
+        last_turn_tps,
         ignition_elapsed_ms,
         composer_send_mode,
         queue_editing_badge,
@@ -859,7 +871,7 @@ pub fn draw_hint_bar(
     );
     let mut zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
 
-    // --- Right cluster: model name and context bar.
+    // --- Right cluster: last-turn performance, model identity, context.
     // Build each segment separately so we can drop optional ones when the
     // terminal is too narrow.
     let context_max = crate::providers::model_context_window(current_model);
@@ -952,11 +964,28 @@ pub fn draw_hint_bar(
         .map(|span| span.content.width())
         .sum::<usize>();
 
+    // Performance segment: the latest completed principal turn's
+    // client-observed stream rate. It remains present as `– tok/s` before a
+    // defensible sample exists so the independent report stays discoverable.
+    let performance_label = last_turn_tps
+        .filter(|rate| rate.is_finite() && *rate > 0.0)
+        .map_or_else(|| "– tok/s".to_string(), |rate| format!("{rate:.1} tok/s"));
+    let performance_spans = vec![Span::styled(
+        performance_label,
+        Style::default().fg(theme.info()).bg(bg),
+    )];
+    let performance_width = performance_spans
+        .iter()
+        .map(|span| span.content.width())
+        .sum::<usize>();
+
     let mut show_model = model_width > 0;
     let mut show_reasoning = reasoning_width > 0;
     let mut show_instance = instance_width > 0;
+    let mut show_performance = performance_width > 0;
     let mut show_context = context_seg_width > 0;
-    let right_width_for = |model: bool, reasoning: bool, instance: bool, context: bool| {
+    let right_width_for =
+        |performance: bool, model: bool, reasoning: bool, instance: bool, context: bool| {
         // The model name, its reasoning effort, and the provider instance
         // form one identity group (`Kimi K3 high @111xianyu`) joined by the
         // tighter model gap; only the context segment sits across the wider
@@ -966,16 +995,26 @@ pub fn draw_hint_bar(
             + usize::from(reasoning) * reasoning_width
             + usize::from(instance) * instance_width
             + identity_count.saturating_sub(1) * HINT_BAR_MODEL_GAP;
+        let performance_width = usize::from(performance) * performance_width;
         let context_width = usize::from(context) * context_seg_width;
-        let group_gap = usize::from(identity_count > 0 && context) * HINT_BAR_SEGMENT_GAP;
-        identity_width + context_width + group_gap
+        let group_count = usize::from(performance) + usize::from(identity_count > 0) + usize::from(context);
+        performance_width
+            + identity_width
+            + context_width
+            + group_count.saturating_sub(1) * HINT_BAR_SEGMENT_GAP
     };
     let fits = |left_width: usize, right_width: usize| {
         inner + left_width + if right_width > 0 { HINT_BAR_GAP_MIN } else { 0 } + right_width
             <= full_w
     };
 
-    let mut right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
+    let mut right_width = right_width_for(
+        show_performance,
+        show_model,
+        show_reasoning,
+        show_instance,
+        show_context,
+    );
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Compact;
         zone_spans = input_action_spans(
@@ -996,15 +1035,19 @@ pub fn draw_hint_bar(
     // status bar.)
     if !fits(zone_pill_width, right_width) && show_instance {
         show_instance = false;
-        right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
+        right_width = right_width_for(show_performance, show_model, show_reasoning, show_instance, show_context);
     }
     if !fits(zone_pill_width, right_width) && show_reasoning {
         show_reasoning = false;
-        right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
+        right_width = right_width_for(show_performance, show_model, show_reasoning, show_instance, show_context);
+    }
+    if !fits(zone_pill_width, right_width) && show_performance {
+        show_performance = false;
+        right_width = right_width_for(show_performance, show_model, show_reasoning, show_instance, show_context);
     }
     if !fits(zone_pill_width, right_width) && show_context {
         show_context = false;
-        right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
+        right_width = right_width_for(show_performance, show_model, show_reasoning, show_instance, show_context);
     }
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Tiny;
@@ -1021,7 +1064,7 @@ pub fn draw_hint_bar(
     }
     if !fits(zone_pill_width, right_width) && show_model {
         show_model = false;
-        right_width = right_width_for(show_model, show_reasoning, show_instance, show_context);
+        right_width = right_width_for(show_performance, show_model, show_reasoning, show_instance, show_context);
     }
 
     // Ignition label takeover: during the `M A X` label phase the identity
@@ -1030,6 +1073,7 @@ pub fn draw_hint_bar(
     // glow over it.
     let label_spans = ignition_elapsed_ms
         .and_then(|ms| super::effort_ignition::label_cluster(right_width, ms, bg, theme));
+    let ignition_label_active = label_spans.is_some();
 
     let mut right_spans: Vec<Span<'static>> = Vec::new();
     if let Some(label) = label_spans {
@@ -1039,6 +1083,9 @@ pub fn draw_hint_bar(
             || Span::styled(" ".repeat(HINT_BAR_MODEL_GAP), Style::default().bg(bg));
         let group_separator =
             || Span::styled(" ".repeat(HINT_BAR_SEGMENT_GAP), Style::default().bg(bg));
+        if show_performance {
+            right_spans.extend(performance_spans);
+        }
         // Identity group: `model effort @instance` — single-space joins.
         let mut identity_started = false;
         for segment in [
@@ -1049,6 +1096,9 @@ pub fn draw_hint_bar(
         .into_iter()
         .flatten()
         {
+            if !identity_started && !right_spans.is_empty() {
+                right_spans.push(group_separator());
+            }
             if identity_started {
                 right_spans.push(identity_separator());
             }
@@ -1088,14 +1138,26 @@ pub fn draw_hint_bar(
     // Compute the context-meter segment's screen rect so the caller can make
     // it clickable. Context is the final segment whenever it survives the
     // narrow-width priority pass.
+    let right_start = (inner + zone_pill_width + gap) as u16;
+    let mut performance_rect: Option<Rect> = None;
+    if show_performance && !ignition_label_active {
+        performance_rect = Some(Rect::new(
+            rect.x + right_start,
+            rect.y,
+            performance_width as u16,
+            rect.height,
+        ));
+    }
     let mut context_rect: Option<Rect> = None;
-    if show_context {
-        let right_start = (inner + zone_pill_width + gap) as u16;
+    if show_context && !ignition_label_active {
         let ctx_offset = (right_width - context_seg_width) as u16;
         let x = rect.x + right_start + ctx_offset;
         context_rect = Some(Rect::new(x, rect.y, context_seg_width as u16, rect.height));
     }
-    context_rect
+    HintBarRects {
+        performance: performance_rect,
+        context: context_rect,
+    }
 }
 
 /// Abbreviate an absolute path to its native `~`-relative form so the workspace reads as a

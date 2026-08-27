@@ -336,7 +336,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         // a completed round, and a compaction can drop the notice entirely).
         let can_retry = !busy && viewed_chrome.can_retry;
         let queue_editing_badge = app.queue_pointer_badge(viewed_session_id);
-        app.hint_context_rect = view::draw_hint_bar(
+        let hint_rects = view::draw_hint_bar(
             f,
             hint_rect,
             view::HintBarView {
@@ -348,6 +348,9 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 busy,
                 can_retry,
                 context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
+                last_turn_tps: viewed_chrome
+                    .last_turn_performance
+                    .and_then(|sample| sample.observed_stream_tps()),
                 ignition_elapsed_ms: app
                     .effort_ignition_epoch
                     .map(|epoch| epoch.elapsed().as_millis()),
@@ -356,8 +359,11 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             },
             &app.theme,
         );
+        app.hint_performance_rect = hint_rects.performance;
+        app.hint_context_rect = hint_rects.context;
     } else {
         app.hint_context_rect = None;
+        app.hint_performance_rect = None;
     }
 
     // The input box is only shown when no overlay modal is open. The
@@ -933,6 +939,24 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 app.token_report_detail,
                 loading,
                 &mut app.token_report_scroll,
+                &app.theme,
+                &app.selection,
+                &mut layout_map,
+            ))
+        }
+        Modal::PerformanceReport => {
+            let report = app.token_source_report(viewed_session_id);
+            let loading = app.token_ledger.is_none() && report.is_none();
+            let report = report.unwrap_or_default();
+            Some(view::draw_performance_report_modal(
+                f,
+                &report,
+                app.modal_index.min(
+                    view::performance_report_round_count(&report).saturating_sub(1),
+                ),
+                app.performance_report_detail,
+                loading,
+                &mut app.performance_report_scroll,
                 &app.theme,
                 &app.selection,
                 &mut layout_map,

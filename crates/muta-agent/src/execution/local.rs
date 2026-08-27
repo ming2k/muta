@@ -7,6 +7,7 @@ use muta_contracts::execution::{
     DirEntry, ExecutionEnvironment, FsError, FsMetadata, FsProvider, ProcessOutput, ProcessRunner,
     ShellIsolation,
 };
+use muta_contracts::SharedAdditionalRoots;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -206,11 +207,16 @@ impl ExecutionEnvironment for LocalExecutionEnvironment {
 /// Filesystem provider that physically confines every operation to the
 /// admitted root set (ADR-0142: the workspace root plus any configured
 /// additional roots).
+///
+/// The additional set lives behind a [`SharedAdditionalRoots`] handle so a
+/// runtime trust decision (`/trust roots`, `/trust revoke`, `/settings
+/// reload`) re-admits or collapses it live — every operation snapshots the
+/// current set, so there is no stale clone and no restart needed.
 #[derive(Debug, Clone)]
 struct WorkspaceFsProvider {
     inner: LocalFsProvider,
     root: PathBuf,
-    additional_roots: Vec<PathBuf>,
+    additional_roots: SharedAdditionalRoots,
 }
 
 impl WorkspaceFsProvider {
@@ -219,7 +225,7 @@ impl WorkspaceFsProvider {
         Self {
             inner: LocalFsProvider::new(),
             root,
-            additional_roots: Vec::new(),
+            additional_roots: SharedAdditionalRoots::empty(),
         }
     }
 
@@ -227,37 +233,47 @@ impl WorkspaceFsProvider {
     /// root keeps its exclusive duties — relative resolution and every
     /// project-bound decision; additional roots only expand containment.
     fn with_additional_roots(mut self, additional: Vec<PathBuf>) -> Self {
-        self.additional_roots = additional
+        let admitted = Self::sanitize(&self.root, additional);
+        self.additional_roots = SharedAdditionalRoots::new(admitted);
+        self
+    }
+
+    /// The canonical admitted subset of `additional`: existing directories,
+    /// outside the primary, deduped. Shared by construction and by live
+    /// trust-decision recomputes so both paths enforce identical rules.
+    fn sanitize(root: &Path, additional: Vec<PathBuf>) -> Vec<PathBuf> {
+        additional
             .into_iter()
             .filter_map(|extra| std::fs::canonicalize(extra).ok())
             .filter(|extra| extra.is_dir())
-            .filter(|extra| *extra != self.root && !extra.starts_with(&self.root))
+            .filter(|extra| *extra != root && !extra.starts_with(root))
             .fold(Vec::new(), |mut roots, extra| {
                 if !roots.contains(&extra) {
                     roots.push(extra);
                 }
                 roots
-            });
-        self
+            })
     }
 
     /// Canonicalized additional roots admitted alongside the primary.
-    fn additional_roots(&self) -> &[PathBuf] {
-        self.additional_roots.as_slice()
+    fn additional_roots(&self) -> Vec<PathBuf> {
+        self.additional_roots.snapshot()
     }
 
     /// Human-readable summary of the admitted set for denial messages.
     fn admitted_set(&self) -> String {
-        if self.additional_roots.is_empty() {
+        let additional = self.additional_roots.snapshot();
+        if additional.is_empty() {
             self.root.display().to_string()
         } else {
             let mut listed = self.root.display().to_string();
-            for extra in &self.additional_roots {
+            for extra in &additional {
                 listed.push_str(", ");
                 listed.push_str(&extra.display().to_string());
             }
             listed
         }
+
     }
 
     fn confined(&self, path: &Path) -> Result<PathBuf, FsError> {
@@ -275,6 +291,7 @@ impl WorkspaceFsProvider {
         let admitted = resolved.starts_with(&self.root)
             || self
                 .additional_roots
+                .snapshot()
                 .iter()
                 .any(|extra| resolved.starts_with(extra));
         if admitted {
@@ -283,11 +300,28 @@ impl WorkspaceFsProvider {
             // call cannot reinterpret a different lexical route.
             Ok(resolved)
         } else {
-            Err(FsError::PermissionDenied(format!(
+            let mut detail = format!(
                 "'{}' is outside the admitted workspace roots [{}]",
                 path.display(),
                 self.admitted_set()
-            )))
+            );
+            // Close the denial loop (ADR-0147): name a declared-but-still
+            // quarantined linked root so the refusal becomes actionable —
+            // `/trust roots` admits it live, no restart.
+            let hinted = self
+                .additional_roots
+                .quarantined()
+                .into_iter()
+                .find(|extra| resolved.starts_with(extra));
+            if let Some(extra) = hinted {
+                detail.push_str(&format!(
+                    "; this path sits under linked root '{}' declared in \
+                     .muta/config.toml [workspace].additional_roots, which is \
+                     quarantined until you approve it with `/trust roots`",
+                    extra.display()
+                ));
+            }
+            Err(FsError::PermissionDenied(detail))
         }
     }
 }
@@ -416,8 +450,17 @@ impl WorkspaceExecutionEnvironment {
     }
 
     /// Canonicalized additional roots admitted alongside the primary (ADR-0142).
-    pub fn additional_roots(&self) -> &[PathBuf] {
+    pub fn additional_roots(&self) -> Vec<PathBuf> {
         self.fs.additional_roots()
+    }
+
+    /// The live admitted-root handle. Bootstrap provides a clone of this into
+    /// the tool context so a trust decision (`/trust roots`, `/trust revoke`,
+    /// `/settings reload`) can swap the set without rebuilding the toolset;
+    /// every confined operation snapshots it, so the change lands on the next
+    /// tool call — no restart.
+    pub fn shared_additional_roots(&self) -> SharedAdditionalRoots {
+        self.fs.additional_roots.clone()
     }
 }
 
@@ -440,7 +483,7 @@ impl ExecutionEnvironment for WorkspaceExecutionEnvironment {
         &self.workspace_root
     }
 
-    fn additional_roots(&self) -> &[PathBuf] {
+    fn additional_roots(&self) -> Vec<PathBuf> {
         self.fs.additional_roots()
     }
 
@@ -527,6 +570,43 @@ mod workspace_tests {
             env.additional_roots(),
             &[sibling.path().canonicalize().unwrap()]
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn trust_decision_rewires_admission_live() {
+        // ADR-0147: the boundary takes shape at trust-decision time. The
+        // same environment instance must admit a linked root after a grant
+        // handle-store and close it again after a revoke — with no rebuild
+        // between — because every confined operation snapshots the live set.
+        let root = scratch();
+        let sibling = scratch();
+        let sibling_file = sibling.path().join("api.rs");
+        std::fs::write(&sibling_file, b"sibling").unwrap();
+        let env = WorkspaceExecutionEnvironment::new(root.path());
+        let shared = env.shared_additional_roots();
+
+        // Pre-grant: denied, with a quarantine hint when declared.
+        shared.declare_quarantined(vec![sibling.path().canonicalize().unwrap()]);
+        assert!(matches!(
+            env.fs().read(&sibling_file).await,
+            Err(FsError::PermissionDenied(detail))
+                if detail.to_string().contains("/trust roots")
+        ));
+
+        // Grant: swap in the canonicalized root; same instance admits it.
+        let granted = sibling.path().canonicalize().unwrap();
+        shared.store(vec![granted.clone()]);
+        assert_eq!(env.fs().read(&sibling_file).await.unwrap(), b"sibling");
+        // Admission consumed the quarantine entry (no stale hint remains).
+        assert!(shared.quarantined().is_empty());
+
+        // Revoke: collapse back to primary-only; deny returns.
+        shared.store(Vec::new());
+        assert!(matches!(
+            env.fs().read(&sibling_file).await,
+            Err(FsError::PermissionDenied(_))
+        ));
     }
 
     #[tokio::test]

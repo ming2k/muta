@@ -16,7 +16,8 @@ use std::time::Duration;
 use muta_contracts::{
     Message, ModelRequest, Provider, Role, SanityCheckInput, SanityCheckVerdict,
     SanityVerifierTask, SemanticLoopInput, SemanticLoopSentinelTask, SemanticLoopVerdict,
-    SessionTitleOutput, SessionTitlerInput, SessionTitlerTask, StewardTask, clean_title,
+    SessionTitleOutput, SessionTitlerInput, SessionTitlerTask, StewardTask, StreamLoopReviewInput,
+    StreamLoopReviewerTask, StreamLoopVerdict, clean_title, steward_identity,
 };
 
 /// Errors that can occur during a Steward task consultation.
@@ -70,8 +71,12 @@ impl Steward {
         input: T::Input,
     ) -> Result<T::Output, StewardError> {
         let timeout = Duration::from_millis(task.timeout_ms());
+        let identity = steward_identity().preamble();
         let messages = vec![
-            Message::new(Role::System, task.system_prompt()),
+            Message::new(
+                Role::System,
+                format!("{identity}\n\n{}", task.system_prompt()),
+            ),
             Message::new(Role::User, task.render_prompt(&input)),
         ];
 
@@ -83,12 +88,23 @@ impl Steward {
         .map_err(|_| StewardError::Timeout(timeout))?
         .map_err(StewardError::ProviderError)?;
 
-        let content = response.content.trim();
-        if content.is_empty() {
+        // Steward requests are out-of-band harness work. Drain their
+        // provider-opaque side channels immediately so a concurrent primary
+        // stream cannot accidentally book the Steward's usage or thinking
+        // signature as part of the user's turn.
+        let _ = self.provider.take_last_usage();
+        let _ = self.provider.take_last_provider_meta();
+
+        let content = response.content.as_str();
+        if content.trim().is_empty() {
             return Err(StewardError::EmptyResponse);
         }
 
-        parse_structured_json::<T::Output>(content)
+        task.parse_output(content)
+            .map_err(|error| StewardError::DeserializationError {
+                error,
+                raw: content.to_string(),
+            })
     }
 
     /// Consult with automatic fallback (Fail-Open pattern).
@@ -130,6 +146,17 @@ impl Steward {
         self.consult_with_fallback(task, input, fallback).await
     }
 
+    /// Confirm or clear an L1 in-flight stream-loop candidate.
+    ///
+    /// The output grammar is the strict bare-token contract owned by
+    /// [`StreamLoopReviewerTask`]. Any timeout, provider failure, or malformed
+    /// answer is fail-open `no`: an infrastructure judgment can authorize a
+    /// cutoff only with an explicit valid `yes`.
+    pub async fn review_stream_loop(&self, input: StreamLoopReviewInput) -> StreamLoopVerdict {
+        self.consult_with_fallback(StreamLoopReviewerTask, input, StreamLoopVerdict::No)
+            .await
+    }
+
     /// Specialized helper: Verify sanity of a proposed action or string.
     pub async fn verify_sanity(
         &self,
@@ -169,31 +196,6 @@ impl Steward {
             }
         }
     }
-}
-
-/// Extract and parse JSON from model output, stripping markdown formatting if present.
-fn parse_structured_json<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, StewardError> {
-    let cleaned = strip_markdown_code_fence(raw);
-    serde_json::from_str(cleaned).map_err(|e| StewardError::DeserializationError {
-        error: e.to_string(),
-        raw: raw.to_string(),
-    })
-}
-
-/// Strip wrapping ```json ... ``` code fences from model outputs.
-fn strip_markdown_code_fence(s: &str) -> &str {
-    let trimmed = s.trim();
-    if let Some(rest) = trimmed.strip_prefix("```json")
-        && let Some(inner) = rest.strip_suffix("```")
-    {
-        return inner.trim();
-    }
-    if let Some(rest) = trimmed.strip_prefix("```")
-        && let Some(inner) = rest.strip_suffix("```")
-    {
-        return inner.trim();
-    }
-    trimmed
 }
 
 #[cfg(test)]
@@ -250,6 +252,36 @@ mod tests {
             .check_semantic_loop(vec!["read_text".into()], "context".into())
             .await;
         assert!(!verdict.is_loop); // fail-open default
+    }
+
+    #[tokio::test]
+    async fn stream_loop_review_accepts_only_strict_yes_or_no() {
+        let input = StreamLoopReviewInput {
+            heuristic_candidate: "periodic suffix".to_string(),
+            channel: muta_contracts::StreamLoopChannel::AssistantText,
+            preceding_context: "user requested a hex dump".to_string(),
+            assistant_text: "00 00 00".to_string(),
+            reasoning_text: String::new(),
+        };
+        let yes = Steward::new(Arc::new(MockProvider {
+            response: Ok("yes".to_string()),
+        }))
+        .review_stream_loop(input.clone())
+        .await;
+        assert_eq!(yes, StreamLoopVerdict::Yes);
+
+        for malformed in ["YES", "{\"verdict\":\"yes\"}", "yes, this is a loop"] {
+            let verdict = Steward::new(Arc::new(MockProvider {
+                response: Ok(malformed.to_string()),
+            }))
+            .review_stream_loop(input.clone())
+            .await;
+            assert_eq!(
+                verdict,
+                StreamLoopVerdict::No,
+                "fail open for {malformed:?}"
+            );
+        }
     }
 
     #[tokio::test]

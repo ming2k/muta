@@ -273,34 +273,6 @@ fn list_body(
         ));
     }
 
-    // Session-average model output rate: every settled attempt's output
-    // tokens divided by the total time the model actually spent generating
-    // (excluding tool execution, hooks, and human-decision pauses, but
-    // including any runner's generation once its output tokens are counted
-    // too), so this reflects the server's real efficiency rather than how
-    // long tools ran or how long the user deliberated. "Output rate" is more
-    // honest than "Throughput" — throughput implies end-to-end processing
-    // speed, whereas this deliberately excludes everything except model
-    // generation.
-    //
-    // This is the *session-wide* mean, not the latest round's: summing
-    // token-time across attempts (Σ tokens / Σ ms, weighted by how long each
-    // request actually streamed) rather than averaging per-round rates, so a
-    // short fast round cannot drag a long slow one up. Only attempts that
-    // have a per-attempt rate at all contribute (measured span and booked
-    // output tokens), and it divides exactly the quantities the per-round
-    // TPS column and the per-attempt `tok/s` column divide, so all three
-    // views always agree. The per-round TPS column in the table below
-    // carries the per-round story.
-    let session_rate = session_output_rate(report);
-    let session_rate_label = fmt_rate_label(session_rate);
-    body.push(kv_styled(
-        "Output rate",
-        &session_rate_label,
-        Style::default().fg(theme.fg()),
-        theme,
-    ));
-
     body.push(Line::from(""));
 
     if rounds.is_empty() {
@@ -312,14 +284,10 @@ fn list_body(
         return (body, None);
     }
 
-    // The round table has four content-sized columns — Round, State, Tokens,
-    // TPS — and any leftover modal width is split evenly across the gaps
-    // between them, so the columns breathe instead of clumping at the left.
-    // The TPS column is this round's average output rate (output tokens ÷
-    // the round's total measured generation time); the turn count it
-    // replaced lives on in the drill-in's "Turns / attempts" row.
+    // Context Usage owns token shape only. Performance timing lives in the
+    // independent Performance report opened from the hint-bar rate segment.
     let mut tokens_w = "Tokens".width();
-    let mut rate_w = TPS_HEADER.len();
+    let mut turns_w = "Turns".width();
     let mut state_w = "State".width();
     for round in &rounds {
         let t = if round.totals.has_tokens() {
@@ -328,13 +296,13 @@ fn list_body(
             "—".to_string()
         };
         tokens_w = tokens_w.max(t.width());
-        rate_w = rate_w.max(fmt_round_rate(round).width());
+        turns_w = turns_w.max(round.turns.len().to_string().width());
         state_w = state_w.max(round_state(round).width());
     }
     // The label column is sized to its content (header + bare ordinals),
     // capped so a very long label truncates rather than crowding the others.
     let label_budget = body_width
-        .saturating_sub(state_w + tokens_w + rate_w)
+        .saturating_sub(state_w + tokens_w + turns_w)
         .max(8);
     let label_w = ["Round"]
         .into_iter()
@@ -347,7 +315,7 @@ fn list_body(
     // Remaining width after all columns → split into equal gaps between the
     // four columns (3 inter-column gaps) plus a small left indent.
     const LEFT_INSET: usize = 2;
-    let used = LEFT_INSET + label_w + state_w + tokens_w + rate_w;
+    let used = LEFT_INSET + label_w + state_w + tokens_w + turns_w;
     let gaps = 3usize;
     let total_gap = body_width.saturating_sub(used);
     // Distribute remainder as evenly as possible; leftover cells go to the
@@ -382,7 +350,7 @@ fn list_body(
         ),
         gap_span(2, header_bg),
         Span::styled(
-            format!("{:>width$}", TPS_HEADER, width = rate_w),
+            format!("{:>width$}", "Turns", width = turns_w),
             Style::default().bg(header_bg).fg(theme.muted()),
         ),
     ]));
@@ -403,7 +371,7 @@ fn list_body(
         } else {
             "—".to_string()
         };
-        let rate_text = fmt_round_rate(round);
+        let turns_text = round.turns.len().to_string();
         let (state_text, state_style) = round_state_styled(round, theme);
 
         if is_selected {
@@ -421,7 +389,7 @@ fn list_body(
             ),
             gap_span(2, bg),
             Span::styled(
-                format!("{rate_text:>width$}", width = rate_w),
+                format!("{turns_text:>width$}", width = turns_w),
                 Style::default().bg(bg).fg(theme.muted()),
             ),
         ]));
@@ -519,10 +487,9 @@ fn detail_body(
     // floor), then whole *column groups* drop as atoms — never a gap shrink.
     // Columns are dropped from the left so the right edge keeps hugging the
     // modal margin at every tier:
-    //   ≥62   input · output · total · tok/s
-    //   ≥42   tokens · tok/s
-    //   ≥32   tok/s only
-    //   <32   state alone
+    //   wide  input · output · total
+    //   mid   tokens
+    //   narrow state alone
     let columns = AttemptColumns::for_width(body_width);
     columns.push_header(&mut body, body_width, theme);
     for a in &attempts {
@@ -611,16 +578,14 @@ const ATTEMPT_STATE_W: usize = 16;
 /// column group drops as a unit instead.
 const ATTEMPT_LABEL_MIN: usize = 6;
 
-/// The four-column layout ladder for the detail turns table.
+/// Responsive token-column ladder for the detail turns table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AttemptColumns {
-    /// Turn · State · Input · Output · Total · tok/s (≥62 cols).
+    /// Turn · State · Input · Output · Total.
     Split,
-    /// Turn · State · Tokens · tok/s (≥46 cols).
+    /// Turn · State · Tokens.
     Total,
-    /// Turn · State · tok/s (≥37 cols).
-    Rate,
-    /// Turn · State (<37 cols).
+    /// Turn · State.
     State,
 }
 
@@ -631,12 +596,10 @@ impl AttemptColumns {
         let fits = |columns: usize| {
             body_width >= ATTEMPT_LABEL_MIN + ATTEMPT_STATE_W + columns * ATTEMPT_COLUMN_W
         };
-        if fits(4) {
+        if fits(3) {
             Self::Split
-        } else if fits(2) {
-            Self::Total
         } else if fits(1) {
-            Self::Rate
+            Self::Total
         } else {
             Self::State
         }
@@ -645,9 +608,8 @@ impl AttemptColumns {
     /// Number of atomic right-aligned columns this layout carries.
     fn column_count(&self) -> usize {
         match self {
-            Self::Split => 4,
-            Self::Total => 2,
-            Self::Rate => 1,
+            Self::Split => 3,
+            Self::Total => 1,
             Self::State => 0,
         }
     }
@@ -667,9 +629,8 @@ impl AttemptColumns {
             Span::styled(format_padded_left("State", ATTEMPT_STATE_W), muted),
         ];
         let headers: &[&str] = match self {
-            Self::Split => &["Input", "Output", "Total", "tok/s"],
-            Self::Total => &["Tokens", "tok/s"],
-            Self::Rate => &["tok/s"],
+            Self::Split => &["Input", "Output", "Total"],
+            Self::Total => &["Tokens"],
             Self::State => &[],
         };
         for title in headers {
@@ -678,9 +639,8 @@ impl AttemptColumns {
         body.push(Line::from(spans));
     }
 
-    /// One attempt row: flexible label · state · the layout's atomic columns.
-    /// Token counts are tinted by the attempt's source; the tok/s cell stays
-    /// muted (a pace metric, not a billing count).
+    /// One attempt row: flexible label · state · token columns. Token counts
+    /// are tinted by the attempt's source.
     fn push_row(
         &self,
         body: &mut Vec<Line<'static>>,
@@ -693,7 +653,6 @@ impl AttemptColumns {
         let label = truncate_str(&attempt_label(a.turn, a.attempt), label_w);
         let (state, state_style) = attempt_state(rec, theme);
         let value_style = attempt_source_style(rec, theme);
-        let rate_style = Style::default().fg(theme.muted());
 
         let known_split = rec.prompt_tokens > 0 || rec.completion_tokens > 0;
         let (input, output) = if known_split {
@@ -709,19 +668,15 @@ impl AttemptColumns {
         } else {
             "—".to_string()
         };
-        let rate = fmt_attempt_rate(rec);
-
         // Cells are appended left-to-right in the same atomic units as the
-        // header, so the tok/s column always hugs the right modal margin.
+        // header.
         let cells: Vec<(String, Style)> = match self {
             Self::Split => vec![
                 (input, value_style),
                 (output, value_style),
                 (total, value_style),
-                (rate, rate_style),
             ],
-            Self::Total => vec![(total, value_style), (rate, rate_style)],
-            Self::Rate => vec![(rate, rate_style)],
+            Self::Total => vec![(total, value_style)],
             Self::State => vec![],
         };
 
@@ -746,100 +701,6 @@ impl AttemptColumns {
             ]));
         }
     }
-}
-
-/// One attempt's settled output rate: completion tokens ÷ measured generation
-/// span. Renders `–` whenever the rate would be meaningless: the attempt is
-/// still in flight, no generation span was measured (failed before a validated
-/// response, or persisted before timing was recorded), or the completion side
-/// was never booked. Untinted by provenance — it is a pace metric, not a
-/// billing count, so it stays muted next to the tinted token columns.
-fn fmt_attempt_rate(record: &RequestUsageRecord) -> String {
-    if record.status == RequestUsageStatus::InFlight || record.generation_ms == 0 {
-        return "–".to_string();
-    }
-    if record.completion_tokens <= 0 {
-        return "–".to_string();
-    }
-    let rate = record.completion_tokens as f64 * 1000.0 / record.generation_ms as f64;
-    if rate > 0.0 && rate < 10.0 {
-        // Below ~10 tok/s one decimal keeps 8.5 from reading as 9 while the
-        // cell stays within the fixed 9-column width.
-        format!("{rate:.1}")
-    } else {
-        format!("{rate:.0}")
-    }
-}
-
-/// Header label of the round table's per-round average output-rate column.
-/// "TPS" (tokens per second) matches the modal's TUI-wide throughput
-/// vocabulary; the drill-in's per-attempt column keeps its finer "tok/s"
-/// spelling.
-const TPS_HEADER: &str = "TPS";
-
-/// Format a tok/s value for a cell: integer when ≥10, one decimal below
-/// that (so 8.5 does not read as 9), `–` when there is no rate.
-fn fmt_rate_value(rate: f64) -> String {
-    if rate > 0.0 && rate < 10.0 {
-        format!("{rate:.1}")
-    } else if rate >= 10.0 {
-        format!("{rate:.0}")
-    } else {
-        "–".to_string()
-    }
-}
-
-/// Same rate with the ` tok/s` unit, for the key/value summary row. Always
-/// one decimal — unlike the width-constrained table cells, this line has
-/// room, and a session average over many requests is rarely a round number.
-fn fmt_rate_label(rate: f64) -> String {
-    if rate > 0.0 {
-        format!("{rate:.1} tok/s")
-    } else {
-        "–".to_string()
-    }
-}
-
-/// The round's average output rate: the output tokens the round's *timed*
-/// attempts generated ÷ the generation time they actually measured (Σ tokens
-/// / Σ ms, weighted by streaming time). Only attempts that have a per-attempt
-/// rate at all contribute (see [`RoundUsage::timed_generation_ms`]), so this
-/// is exactly the weighted mean of the drill-in's `tok/s` column — the list
-/// and the detail page always agree. A round where nothing was timed renders
-/// `–` rather than a fabricated figure: legacy `record*` bookings carry no
-/// timing, and an in-flight attempt has not sealed its clock yet.
-fn fmt_round_rate(round: &RoundUsage) -> String {
-    if round.timed_generation_ms == 0 || round.timed_output_tokens <= 0 {
-        return "–".to_string();
-    }
-    fmt_rate_value(round.timed_output_tokens as f64 * 1000.0 / round.timed_generation_ms as f64)
-}
-
-/// Whole-session average output rate across every terminal attempt in the
-/// report, including runner sub-conversations (symmetrically: their output
-/// tokens and their generation spans both count, so a delegating round is
-/// not inflated). Σ tokens / Σ ms over the *entire* session rather than a
-/// mean of per-round rates, so one long streaming request carries the
-/// weight it deserves. Untimed attempts are excluded from both sides, for
-/// the same reason as in [`fmt_round_rate`]. Returns `0.0` when nothing was
-/// measured, which the caller renders as `–`.
-fn session_output_rate(report: &TokenSourceReport) -> f64 {
-    let mut output_tokens = 0i64;
-    let mut generation_ms = 0u64;
-    for record in report.rows.iter().flat_map(|row| row.requests.iter()) {
-        if !record.status.is_terminal()
-            || record.generation_ms == 0
-            || record.completion_tokens <= 0
-        {
-            continue;
-        }
-        output_tokens = output_tokens.saturating_add(record.completion_tokens.max(0));
-        generation_ms = generation_ms.saturating_add(record.generation_ms);
-    }
-    if generation_ms == 0 || output_tokens <= 0 {
-        return 0.0;
-    }
-    output_tokens as f64 * 1000.0 / generation_ms as f64
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -932,17 +793,6 @@ impl UsageTotals {
 struct RoundUsage {
     number: u64,
     totals: UsageTotals,
-    /// Output tokens ÷ measured generation time, accumulated over only the
-    /// attempts that have a per-attempt rate at all (a measured span *and*
-    /// booked completion tokens — the same conditions under which the
-    /// drill-in's `tok/s` column renders a number instead of `–`). An
-    /// untimed attempt (a failure before any validated response, or a legacy
-    /// booking with no timing) would inflate the average — its tokens would
-    /// reach the numerator while its time never reaches the denominator — so
-    /// it is excluded from both sides and the round renders `–` when nothing
-    /// was timed.
-    timed_output_tokens: i64,
-    timed_generation_ms: u64,
     turns: BTreeMap<(bool, String, u32), TurnUsage>,
 }
 
@@ -951,8 +801,6 @@ impl RoundUsage {
         Self {
             number,
             totals: UsageTotals::default(),
-            timed_output_tokens: 0,
-            timed_generation_ms: 0,
             turns: BTreeMap::new(),
         }
     }
@@ -966,14 +814,6 @@ impl RoundUsage {
             ..Default::default()
         });
         turn.add_record(record);
-        if record.generation_ms > 0 && record.completion_tokens > 0 {
-            self.timed_output_tokens = self
-                .timed_output_tokens
-                .saturating_add(record.completion_tokens);
-            self.timed_generation_ms = self
-                .timed_generation_ms
-                .saturating_add(record.generation_ms);
-        }
         self.totals.add_record(record);
     }
 
@@ -1424,33 +1264,25 @@ mod tests {
         // and so were the closing rule and the hint line.
         assert!(!list.contains("Total"));
         assert!(!list.contains("inspect its model turns"));
-        // The Turns column was replaced by the round's average TPS (the turn
-        // count lives in the drill-in), and a dedicated State column carries
-        // the lifecycle signal (no "…" / "›" suffix glyphs).
+        // Context Usage owns lifecycle, token totals, and turn counts only;
+        // request latency/pace lives in the independent Performance modal.
         assert!(!list.contains('›'));
-        assert!(!list.contains("Turns"));
+        assert!(list.contains("Turns"));
         assert!(list.contains("State"));
-        assert!(list.contains("TPS"));
+        assert!(!list.contains("TPS"));
+        assert!(!list.contains("tok/s"));
+        assert!(!list.contains("Output rate"));
         assert!(list.contains("done"));
-        // "Output rate" is now the *session-wide* average, derived from the
-        // ledger: the only timed attempt is round 2's retry (40 output tokens
-        // over 2 s) → 20.0 tok/s. The untimed attempts contribute tokens but
-        // no time, so they cannot drag the average.
-        assert!(list.contains("Output rate"));
-        assert!(list.contains("20.0 tok/s"));
-        // Per-round TPS cells: round 2's timed retry → "20"; round 3 (75
-        // estimated tokens, untimed) → "–". Find them on their own rows so a
-        // substring collision can't fake a pass.
-        let rate_cell = |label: &str| {
+        let turn_cell = |label: &str| {
             list_body_lines
                 .iter()
                 .find(|line| line.spans.iter().any(|s| s.content.trim() == label))
                 .and_then(|line| line.spans.last())
                 .map(|s| s.content.trim().to_string())
-                .unwrap_or_else(|| panic!("no TPS cell on the {label} round row"))
+                .unwrap_or_else(|| panic!("no Turns cell on the {label} round row"))
         };
-        assert_eq!(rate_cell("3rd"), "–");
-        assert_eq!(rate_cell("2nd"), "20");
+        assert_eq!(turn_cell("3rd"), "1");
+        assert_eq!(turn_cell("2nd"), "2");
         // Rounds are newest-first: the latest (3rd) round is row 0, so the
         // modal opens on the most recent user exchange.
         let pos_3rd = list.find("3rd").expect("3rd round label");
@@ -1490,23 +1322,7 @@ mod tests {
         // The token-source legend is rendered beneath the turns table.
         assert!(detail_text.contains("green"));
         assert!(detail_text.contains("local estimate"));
-        // The detail table carries a per-attempt output-rate column. The
-        // retried attempt settled with 40 completion tokens over a 2 s
-        // measured generation span → "20" tok/s; the untimed attempt (an
-        // interrupt with no measured span) and the legacy-estimated turn
-        // render a dash instead.
-        assert!(detail_text.contains("tok/s"));
-        let rate_for = |turn_label: &str| -> String {
-            detail
-                .iter()
-                .find(|line| line.spans.iter().any(|s| s.content.trim() == turn_label))
-                .and_then(|line| line.spans.last())
-                .map(|s| s.content.trim().to_string())
-                .unwrap_or_else(|| panic!("no rate cell for turn {turn_label}"))
-        };
-        assert_eq!(rate_for("1st - 2nd"), "20");
-        assert_eq!(rate_for("1st"), "–");
-        assert_eq!(rate_for("2nd"), "–");
+        assert!(!detail_text.contains("tok/s"));
         // The detail page's title is now the breadcrumb, not an in-body
         // "2nd round" heading.
         assert!(!detail_text.contains("2nd round"));
@@ -1597,7 +1413,7 @@ mod tests {
         assert_eq!(round_row_label(112), "112th");
     }
 
-    /// The round table has four columns (Round / State / Tokens / TPS),
+    /// The round table has four columns (Round / State / Tokens / Turns),
     /// each content-sized, with leftover width split evenly across the
     /// inter-column gaps. The token column must align across the header and
     /// every data row, and each row fills the full body width (selection band
@@ -1652,7 +1468,7 @@ mod tests {
         assert_eq!(data_rows.len(), 2, "expected two round data rows");
 
         // Span layout is identical for header and data rows:
-        //   [indent, label, gap0, state, gap1, tokens, gap2, rate]
+        //   [indent, label, gap0, state, gap1, tokens, gap2, turns]
         // so the token value lives at span index 5 in every row. Its leading
         // column offset is the cumulative width of spans 0..5.
         const TOKEN_SPAN_IDX: usize = 5;
@@ -1691,9 +1507,7 @@ mod tests {
         let theme = Theme::default();
         let ledger = muta_contracts::TokenSourceLedger::new();
 
-        // Turn 1: reported usage (green), 40 completion tokens over a 2 s
-        // measured generation span → 20 tok/s. Turn 2: estimated (yellow)
-        // with no measured span → the rate cell renders a dash.
+        // Turn 1: reported usage (green). Turn 2: estimated (yellow).
         let t1 = ledger.begin_request("session", "relay", "model-a", 2, 1, 0);
         ledger.settle_request(
             &t1,
@@ -1751,19 +1565,6 @@ mod tests {
         assert!(detail_text.contains("yellow"));
         assert!(detail_text.contains("local estimate"));
 
-        // The per-attempt rate column: the reported turn shows its settled
-        // output rate (40 completion tokens / 2 s = 20 tok/s), the untimed
-        // estimated turn shows a dash.
-        let rate_cell = |turn_label: &str| {
-            detail
-                .iter()
-                .find(|line| line.spans.iter().any(|s| s.content.trim() == turn_label))
-                .and_then(|line| line.spans.last())
-                .map(|s| s.content.trim().to_string())
-                .unwrap_or_else(|| panic!("no rate cell for turn {turn_label}"))
-        };
-        assert_eq!(rate_cell("1st"), "20");
-        assert_eq!(rate_cell("2nd"), "–");
     }
 
     /// The detail turns table degrades in whole column groups as the modal
@@ -1808,60 +1609,46 @@ mod tests {
                 .expect("table header row")
         };
 
-        // ≥62: full split. The label column (not the gutters) absorbs slack:
-        // at 62 exactly the label sits at its 6-cell floor.
-        let wide = header_at(62);
-        for title in ["Input", "Output", "Total", "tok/s"] {
+        // ≥52: full token split. The label column (not the gutters) absorbs
+        // slack; at 52 exactly the label sits at its 6-cell floor.
+        let wide = header_at(52);
+        for title in ["Input", "Output", "Total"] {
             assert!(
                 wide.contains(title),
-                "62-col header missing {title:?}; header = {wide:?}"
+                "52-col header missing {title:?}; header = {wide:?}"
             );
         }
         assert_eq!(
             wide.find("State"),
             Some(6),
-            "label must be at its floor at 62"
+            "label must be at its floor at 52"
         );
         // Header and every row fill the body width exactly.
-        let wide_rows = detail_body(&report, 0, 62, &theme);
+        let wide_rows = detail_body(&report, 0, 52, &theme);
         for line in wide_rows.iter().filter(|l| {
             l.spans
                 .iter()
                 .any(|s| s.content.trim() == "1st" || s.content.trim() == "Turn")
         }) {
             let w: usize = line.spans.iter().map(|s| s.content.width()).sum();
-            assert_eq!(w, 62, "row must fill body width exactly");
+            assert_eq!(w, 52, "row must fill body width exactly");
         }
 
-        // 61: the Input+Output pair drops as one atom — never half a pair,
-        // never a squeezed gutter.
-        let compact = header_at(61);
+        // 51: the Input/Output split drops as one atom.
+        let compact = header_at(51);
         assert!(!compact.contains("Input"));
         assert!(!compact.contains("Output"));
         assert!(compact.contains("Tokens"));
-        assert!(compact.contains("tok/s"));
-
-        // 41: the Tokens column drops; tok/s survives alone and still hugs
-        // the right edge.
-        let rate_only = header_at(41);
-        assert!(!rate_only.contains("Tokens"), "rate_only = {rate_only:?}");
-        assert!(rate_only.contains("tok/s"));
-        assert!(
-            rate_only.ends_with("tok/s"),
-            "tok/s must hug the right margin: {rate_only:?}"
-        );
 
         // 31: every value column is gone as a unit; only label + state remain.
         let bare = header_at(31);
-        assert!(!bare.contains("tok/s"));
+        assert!(!bare.contains("Tokens"));
         assert!(bare.trim_end().ends_with("State"));
 
         // Tier boundaries agree with the width formula.
-        assert_eq!(AttemptColumns::for_width(62), AttemptColumns::Split);
-        assert_eq!(AttemptColumns::for_width(61), AttemptColumns::Total);
-        assert_eq!(AttemptColumns::for_width(42), AttemptColumns::Total);
-        assert_eq!(AttemptColumns::for_width(41), AttemptColumns::Rate);
-        assert_eq!(AttemptColumns::for_width(32), AttemptColumns::Rate);
+        assert_eq!(AttemptColumns::for_width(52), AttemptColumns::Split);
+        assert_eq!(AttemptColumns::for_width(51), AttemptColumns::Total);
+        assert_eq!(AttemptColumns::for_width(32), AttemptColumns::Total);
         assert_eq!(AttemptColumns::for_width(31), AttemptColumns::State);
     }
 
@@ -1950,110 +1737,6 @@ mod tests {
         let pos_2nd = detail_text.find("2nd").expect("2nd turn");
         let pos_1st = detail_text.find("1st").expect("1st turn");
         assert!(pos_2nd < pos_1st, "master turns newest-first");
-    }
-
-    /// Throughput is shown at three scopes — per attempt (the drill-in's
-    /// `tok/s` column), per round (the list's `TPS` column), and per session
-    /// (the `Output rate` row) — and all three divide the same quantities, so
-    /// they must agree: a round's TPS is the time-weighted mean of its
-    /// attempts' rates, and the session rate is the time-weighted mean across
-    /// rounds. Untimed attempts (a failure before any validated response, a
-    /// legacy booking, an in-flight record) are excluded from both sides of
-    /// every quotient rather than inflating it, and a scope with nothing
-    /// timed renders `–`.
-    #[test]
-    fn throughput_agrees_across_attempt_round_and_session_scopes() {
-        let theme = Theme::default();
-        let ledger = muta_contracts::TokenSourceLedger::new();
-
-        // Round 2: two timed attempts — 60 output tokens over 1 s (60 tok/s)
-        // and 40 output tokens over 2 s (20 tok/s). The round's TPS must be
-        // the *time-weighted* mean (100 tokens / 3 s ≈ 33.3), not the plain
-        // mean of the two rates (40).
-        let r2a = ledger.begin_request("session", "relay", "model-a", 2, 1, 0);
-        ledger.settle_request(
-            &r2a,
-            RequestUsageStatus::Completed,
-            Some(muta_contracts::TokenUsage {
-                prompt_tokens: 100,
-                completion_tokens: 60,
-                total_tokens: 160,
-                ..Default::default()
-            }),
-            0,
-            1_000,
-        );
-        let r2b = ledger.begin_request("session", "relay", "model-a", 2, 2, 0);
-        ledger.settle_request(
-            &r2b,
-            RequestUsageStatus::Completed,
-            Some(muta_contracts::TokenUsage {
-                prompt_tokens: 200,
-                completion_tokens: 40,
-                total_tokens: 240,
-                ..Default::default()
-            }),
-            0,
-            2_000,
-        );
-        // Round 3: untimed (interrupted before a validated response, 500
-        // estimated tokens booked but no measured span) → its TPS is `–` and
-        // it contributes to neither side of the session average.
-        let r3 = ledger.begin_request("session", "relay", "model-a", 3, 1, 0);
-        ledger.settle_request(&r3, RequestUsageStatus::Interrupted, None, 500, 0);
-        let report = ledger.snapshot_for_session("session");
-
-        let (list_lines, _follow) = list_body(&report, None, 0, 0, 0, 0, 80, &theme);
-        let list = body_text(&list_lines);
-        let tps_cell = |label: &str| {
-            list_lines
-                .iter()
-                .find(|line| line.spans.iter().any(|s| s.content.trim() == label))
-                .and_then(|line| line.spans.last())
-                .map(|s| s.content.trim().to_string())
-                .unwrap_or_else(|| panic!("no TPS cell on the {label} round row"))
-        };
-        // Round 2: 100 tokens / 3 s → 33.3, rendered in the column's integer
-        // form ("33", one decimal is reserved for sub-10 rates). Round 3:
-        // nothing timed → "–".
-        assert_eq!(tps_cell("2nd"), "33");
-        assert_eq!(tps_cell("3rd"), "–");
-        // Session average spans exactly round 2's timed attempts: 100 tokens
-        // / 3 s → 33.3 tok/s, always one decimal on this row.
-        assert!(list.contains("Output rate"));
-        assert!(list.contains("33.3 tok/s"), "list was: {list}");
-
-        // The drill-in's per-attempt rates aggregate to the round's cell.
-        let detail = detail_body(&report, 0, 80, &theme); // newest round = 3rd
-        assert!(
-            body_text(&detail).contains("500"),
-            "the untimed round still shows its token totals"
-        );
-        let detail = detail_body(&report, 1, 80, &theme); // round 2
-        let rate_for = |turn_label: &str| {
-            detail
-                .iter()
-                .find(|line| line.spans.iter().any(|s| s.content.trim() == turn_label))
-                .and_then(|line| line.spans.last())
-                .map(|s| s.content.trim().to_string())
-                .unwrap_or_else(|| panic!("no rate cell for turn {turn_label}"))
-        };
-        assert_eq!(rate_for("2nd"), "20");
-        assert_eq!(rate_for("1st"), "60");
-
-        // A report with nothing timed at all: the session row renders the
-        // dash rather than a fabricated (or infinite) figure.
-        let empty = muta_contracts::TokenSourceLedger::new();
-        let only_untimed = empty.begin_request("session", "relay", "model-a", 1, 1, 0);
-        empty.settle_request(&only_untimed, RequestUsageStatus::Completed, None, 80, 0);
-        let report = empty.snapshot_for_session("session");
-        let (lines, _) = list_body(&report, None, 0, 0, 0, 0, 80, &theme);
-        let session_rate_span = lines
-            .iter()
-            .find(|line| line.spans.iter().any(|s| s.content.trim() == "Output rate"))
-            .and_then(|line| line.spans.last())
-            .expect("Output rate row with a value span");
-        assert_eq!(session_rate_span.content.trim(), "–");
     }
 
     /// A row that mixes legacy `record*` bookings (turns) with lifecycle

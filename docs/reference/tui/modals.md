@@ -117,10 +117,10 @@ the vocabulary is fixed by geometry:
   session id) lives on the shell.
 - A **panel** is a *retained modal* — one of the browse overlays (Help,
   Activity, Todos, Tools, MCP, Skills, Permissions, Usage statistics,
-  Context report, Asides, Models, Connections, History, Queue, Sessions,
-  Session tree) that floats over the active view and keeps the
-  create/show/hide/switch/close lifecycle of ADR-0139: retained cursor and
-  scroll, per-panel parked drafts, MRU presence in the quick switcher.
+  Context report, Performance report, Asides, Models, Connections, History,
+  Queue, Sessions, Session tree) that floats over the active view and keeps
+  the create/show/hide/switch/close lifecycle of ADR-0139: retained cursor
+  and scroll, per-panel parked drafts, MRU presence in the quick switcher.
   Retention is orthogonal to geometry: a panel is still a modal.
 - Request sheets, the quick switcher, child editors, drill-ins, toasts, and
   completion menus are neither: they are transient surfaces over whatever
@@ -677,6 +677,7 @@ sentinel. Migrated surfaces:
 | Help (`?`) | The whole cheat sheet — keycap labels and descriptions |
 | Usage Statistics (`/usage`) | Summary KV, daily/model tables, event log |
 | Context Usage (`/usage` → round drill-in) | The round's KV read-out, turns table, legend |
+| Performance report (hint-bar rate segment → round drill-in) | Summary scopes, round table, per-attempt timing table |
 | Activity modal (Activity / Todos) | Prompt, status detail, last failure, todo items |
 | Sessions `i` info sub-view | Session id, title, timestamps, full last prompt |
 | History `Tab` preview | The full prompt text of the focused entry |

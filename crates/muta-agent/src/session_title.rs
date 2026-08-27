@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_title_uses_title_profile_system_prompt() {
+    async fn generate_title_uses_steward_identity_and_title_task_prompt() {
         let (agent, provider) = agent_with_reply("Some title").await;
         let _ = agent
             .generate_title(&transcript_of_opening("a session about rust"))
@@ -210,9 +210,15 @@ mod tests {
             .iter()
             .find(|m| m.role == Role::System)
             .expect("system message present");
-        assert_eq!(
-            system.content,
-            muta_contracts::SessionTitlerTask.system_prompt()
+        assert!(
+            system
+                .content
+                .starts_with(&muta_contracts::steward_identity().preamble())
+        );
+        assert!(
+            system
+                .content
+                .ends_with(muta_contracts::SessionTitlerTask.system_prompt())
         );
         assert!(
             provider.last_tool_specs.lock().unwrap().is_empty(),
