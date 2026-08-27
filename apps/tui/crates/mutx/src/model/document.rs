@@ -1589,7 +1589,11 @@ impl TranscriptMessage {
                 // the model call that precedes the first child event.
                 _ => activity.clone(),
             };
+            // A transport wait (provider backoff) is a pause, not progress:
+            // bare phrase, same rule as `awaiting approval` above — `running`
+            // would falsely claim forward motion.
             match current {
+                Some(current) if current.starts_with("waiting to retry") => current,
                 Some(current) => format!("running {current}"),
                 None => "running".to_string(),
             }

@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Stream-loop detection judges continuity and budget, not instantaneous
+  state.** The in-flight `StreamLoopDetector` no longer fires edge-triggered
+  on a nominally long periodic suffix — the behavior that made table borders,
+  rules, and other legitimate decorations trigger an L2 review on nearly every
+  decorated response. A mechanical verdict now requires ~3KB of *continuous*
+  periodic dwell (`MIN_DWELL_CHARS`): suspicion accumulates only while the
+  tail keeps extending the same periodic run (`DwellTrail`) and discharges to
+  zero the moment it breaks, so transient repetition is resolved locally
+  without waking the Stream Sentinel at all. Digit/data floods are likewise
+  gated behind a cumulative ~8K-char budget with geometric decay when density
+  lapses. Periodic analysis itself is exact: KMP weak-periodicity (no
+  divisibility requirement, so sliding-window drain cannot phase-flip the
+  observation) with a ≥4-copy evidence floor against cross-aligned prose
+  accidents, plus a bounded ≤64-unit tail-run scan for documents that merely
+  end in repetition. `trim_suffix` peels literal unit copies byte-exactly.
+  There is deliberately no glyph whitelist: the escape hatch is behavioral
+  (did the output stop repeating), never lexical. Scripted runaway tests were
+  rescaled; the reverse-engineering-dump fixture now asserts **zero** Steward
+  consultations as the acceptance criterion for local resolution.
+- **Steward tasks now carry offices.** "Steward" was a collective noun with a
+  single shared identity; following the Runner-preset pattern, each
+  `StewardTask` declares its station of duty via the new `StewardOffice` enum:
+  `StreamSentinel` (live stream loop adjudication, owned by
+  `StreamLoopReviewerTask`), `RoundSentinel` (`SemanticLoopSentinelTask`),
+  `SanityWarden` (`SanityVerifierTask`), and `Chronicler`
+  (`SessionTitlerTask`). Offices carry a proper title ("You are the Stream
+  Sentinel — …"), a one-line charter embedded office-first in the consult
+  system prompt (still anchored by the collective Steward mission), a stable
+  `id()` for telemetry/config keys (`stream_sentinel`, …), default model
+  staffing (`FlashLite` tier for Chronicler work, `Flash` for sentinels), and
+  serde-stable snake_case spelling. Unassigned custom tasks keep the plain
+  collective preamble. Offices sharpen persona and attribution without
+  weakening the zero-tool invariant: office-holders remain stateless,
+  single-shot judgments by construction.
+- **Completed the delegated-autonomous rename end to end.** v0.36 renamed the
+  user-facing surface (`/delegate`, `--delegate`, `DELEGATED` badge) but left
+  ~180 internal identifiers on the retired internal spelling. All live
+  identifiers now use the `delegated` name: wire contract
+  `HarnessSnapshot.delegated` + `RoundEvent::DelegatedChanged`,
+  `MasterPreset.delegated` / `with_delegated`, runner profile fields,
+  `Agent::delegated()` / `set_delegated()`, `PolicyContext.delegated`,
+  persistence `SessionData.delegated` + `SessionStore::delegated()` /
+  `set_delegated()` + `SessionEvent::DelegatedSet`, bootstrap
+  `BootstrapParams.delegated`, TUI `App::delegated` /
+  `CliArgs::delegated` / `SessionHead::delegated`, and the web store's
+  `daemon.delegated`. Back-compat is preserved at every boundary: CLI flags
+  `--yolo/-y/--auto/--autopilot` and slash aliases `/yolo`, `/auto`,
+  `/autopilot` still dispatch to `/delegate`; session snapshots and wire
+  payloads deserialize legacy `yolo`/`autopilot` field spellings via serde
+  aliases; `YoloChanged`/`AutopilotChanged` events and
+  `/yolo off`-era command records remain readable. ADRs are historical
+  records and keep their original wording.
+- The explainer `docs/explanation/agent-design/autopilot.md` is renamed to
+  `delegated-mode.md` with a naming-history section; reference docs
+  (glossary, commands, configuration, hint bar, head band, AsyncAPI schema)
+  now use the delegated vocabulary.
+- Fixed pre-existing failures uncovered while auditing: the
+  `switcher_filter_narrows` test expectation did not account for the new
+  Performance report panel matching "mcp" fuzzily.
+
 ## [0.36.3] - 2026-08-27
 
 ### Added

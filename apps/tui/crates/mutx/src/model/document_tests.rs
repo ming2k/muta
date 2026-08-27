@@ -895,13 +895,19 @@ fn thinking_summary_sprays_tokens_then_settles() {
         .parse::<usize>()
         .expect("numeric count");
     let actual = muta_contracts::tokenizer::count_tokens(&filler);
-    assert!(shown <= actual && actual - shown < 25, "shown {shown} vs {actual}");
+    assert!(
+        shown <= actual && actual - shown < 25,
+        "shown {shown} vs {actual}"
+    );
 
     // Finished trace: no glyph, exact count, humanized duration.
     let mut done = TranscriptMessage::thinking(filler);
     done.set_thinking_duration(2_400);
     let settled = done.thinking_summary().unwrap();
-    assert!(!settled.contains('✦'), "finished trace drops the glyph: {settled}");
+    assert!(
+        !settled.contains('✦'),
+        "finished trace drops the glyph: {settled}"
+    );
     assert!(
         settled.starts_with(&format!("Thinking · {actual} tokens")),
         "exact count when finished: {settled}"

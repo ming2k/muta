@@ -15,6 +15,19 @@ In the Muta agent architecture:
 
 Instead of polluting the `Runner` pool with non-tool internal prompts (like session titling) or relying solely on brittle heuristic regexes for loop detection, the Steward provides a unified, typed execution substrate for all harness-internal LLM invocations.
 
+## 1.1 Offices: the Steward corps, by station of duty
+
+"Steward" is a collective noun, like Runner. Each [`StewardTask`](../../../crates/muta-contracts/src/steward.rs) therefore declares an **office** (`StewardOffice`) — the station whose judgment it performs:
+
+| Office | Title | Task | Charter |
+|---|---|---|---|
+| `StreamSentinel` | Stream Sentinel | `StreamLoopReviewerTask` | Confirms/clears mechanical stream-loop candidates; one bare-token verdict, fail-open |
+| `RoundSentinel` | Round Sentinel | `SemanticLoopSentinelTask` | Reviews round trajectories for doom loops; prescribes one escape nudge |
+| `SanityWarden` | Sanity Warden | `SanityVerifierTask` | Audits critical payloads; uncertainty always passes |
+| `Chronicler` | Chronicler | `SessionTitlerTask` | Transforms transcripts into metadata; describes, never judges next actions |
+
+The consult system prompt is identity-first: the office charter opens it, anchored by the collective Steward mission. Offices also pin default model staffing (sentinels at `Flash`, the Chronicler at `FlashLite`). The zero-tool invariant is unchanged — an office is a *name and a charter*, not a tool grant.
+
 ---
 
 ## 2. The `StewardTask` Contract

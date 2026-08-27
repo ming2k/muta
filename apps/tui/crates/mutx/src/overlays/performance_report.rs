@@ -92,12 +92,7 @@ pub fn draw_performance_report_modal(
                 FooterHint::always(keyvocab::ESC, "close"),
             ]
         };
-        (
-            vec![HeaderPart::title("Performance")],
-            body,
-            footer,
-            follow,
-        )
+        (vec![HeaderPart::title("Performance")], body, footer, follow)
     };
 
     let desired = body.len() as u16 + modal_chrome_rows(geometry.modal_spec());
@@ -158,7 +153,11 @@ fn list_body(
         "TTFT",
         &match (percentile(&ttfts, 50), percentile(&ttfts, 95)) {
             (Some(p50), Some(p95)) => {
-                format!("p50 {} · p95 {}", fmt_duration_us(p50), fmt_duration_us(p95))
+                format!(
+                    "p50 {} · p95 {}",
+                    fmt_duration_us(p50),
+                    fmt_duration_us(p95)
+                )
             }
             _ => "–".to_string(),
         },
@@ -245,7 +244,13 @@ fn list_body(
                 e2e[index].as_str(),
             ],
             widths,
-            [theme.fg(), state_color, theme.muted(), theme.fg(), theme.muted()],
+            [
+                theme.fg(),
+                state_color,
+                theme.muted(),
+                theme.fg(),
+                theme.muted(),
+            ],
             bg,
         ));
     }
@@ -291,12 +296,7 @@ fn detail_body(
     body.push(Line::from(""));
     body.push(section_heading("Turns / attempts", theme));
 
-    let attempts = round
-        .attempts
-        .iter()
-        .rev()
-        .copied()
-        .collect::<Vec<_>>();
+    let attempts = round.attempts.iter().rev().copied().collect::<Vec<_>>();
     let labels = attempts
         .iter()
         .map(|record| attempt_label(record))
@@ -356,7 +356,14 @@ fn detail_body(
                 quality[index].as_str(),
             ],
             widths,
-            [theme.fg(), state_color, theme.muted(), theme.fg(), theme.muted(), theme.info()],
+            [
+                theme.fg(),
+                state_color,
+                theme.muted(),
+                theme.fg(),
+                theme.muted(),
+                theme.info(),
+            ],
             theme.panel(),
         ));
         if let Some(error) = record.error.as_deref().filter(|error| !error.is_empty()) {
@@ -398,9 +405,7 @@ fn performance_rounds(report: &TokenSourceReport) -> Vec<PerformanceRound<'_>> {
         .collect()
 }
 
-fn successful<'a>(
-    round: &'a PerformanceRound<'a>,
-) -> impl Iterator<Item = &'a RequestUsageRecord> {
+fn successful<'a>(round: &'a PerformanceRound<'a>) -> impl Iterator<Item = &'a RequestUsageRecord> {
     round
         .attempts
         .iter()
@@ -409,7 +414,10 @@ fn successful<'a>(
 }
 
 fn round_first_ttft_us(round: &PerformanceRound<'_>) -> Option<u64> {
-    round.attempts.iter().find_map(|record| observed_ttft_us(record))
+    round
+        .attempts
+        .iter()
+        .find_map(|record| observed_ttft_us(record))
 }
 
 fn observed_ttft_us(record: &RequestUsageRecord) -> Option<u64> {
@@ -452,7 +460,10 @@ fn aggregate_e2e_tps<'a>(records: impl Iterator<Item = &'a RequestUsageRecord>) 
     let mut tokens = 0u64;
     let mut duration = 0u64;
     for record in records {
-        let Some(e2e_us) = record.performance.and_then(|performance| performance.e2e_us) else {
+        let Some(e2e_us) = record
+            .performance
+            .and_then(|performance| performance.e2e_us)
+        else {
             continue;
         };
         if e2e_us == 0 || record.completion_tokens <= 0 {
@@ -468,9 +479,10 @@ fn aggregate_decode_tps<'a>(records: impl Iterator<Item = &'a RequestUsageRecord
     let mut tokens = 0u64;
     let mut duration = 0u64;
     for performance in records.filter_map(|record| record.performance) {
-        let (Some(decode_us), Some(output_tokens)) =
-            (performance.provider_decode_us, performance.provider_output_tokens)
-        else {
+        let (Some(decode_us), Some(output_tokens)) = (
+            performance.provider_decode_us,
+            performance.provider_output_tokens,
+        ) else {
             continue;
         };
         let Some(decode_tokens) = output_tokens.checked_sub(1) else {
@@ -508,10 +520,7 @@ fn quality_label(record: &RequestUsageRecord) -> &'static str {
     }
 }
 
-fn round_state(
-    round: &PerformanceRound<'_>,
-    theme: &Theme,
-) -> (&'static str, mutx_engine::Color) {
+fn round_state(round: &PerformanceRound<'_>, theme: &Theme) -> (&'static str, mutx_engine::Color) {
     let statuses = round.attempts.iter().map(|record| record.status);
     let mut in_flight = false;
     let mut failed = false;
@@ -538,10 +547,7 @@ fn round_state(
     }
 }
 
-fn attempt_state(
-    record: &RequestUsageRecord,
-    theme: &Theme,
-) -> (&'static str, mutx_engine::Color) {
+fn attempt_state(record: &RequestUsageRecord, theme: &Theme) -> (&'static str, mutx_engine::Color) {
     match record.status {
         RequestUsageStatus::InFlight => ("in flight", theme.info()),
         RequestUsageStatus::Completed => ("completed", theme.ok()),
@@ -620,13 +626,16 @@ fn section_heading(text: &str, theme: &Theme) -> Line<'static> {
 
 fn fmt_rate(rate: Option<f64>) -> String {
     rate.filter(|rate| rate.is_finite() && *rate > 0.0)
-        .map_or_else(|| "–".to_string(), |rate| {
-            if rate < 10.0 {
-                format!("{rate:.1}")
-            } else {
-                format!("{rate:.0}")
-            }
-        })
+        .map_or_else(
+            || "–".to_string(),
+            |rate| {
+                if rate < 10.0 {
+                    format!("{rate:.1}")
+                } else {
+                    format!("{rate:.0}")
+                }
+            },
+        )
 }
 
 fn fmt_rate_label(rate: Option<f64>) -> String {
@@ -749,7 +758,10 @@ mod tests {
 
     #[test]
     fn aggregation_separates_ttft_from_stream_rate() {
-        let records = [record(1, 1, 500_000, 1_000_000), record(2, 1, 2_000_000, 1_000_000)];
+        let records = [
+            record(1, 1, 500_000, 1_000_000),
+            record(2, 1, 2_000_000, 1_000_000),
+        ];
         let stream = aggregate_stream_tps(records.iter()).expect("stream rate");
         assert!((stream - 100.0).abs() < 0.001);
         let e2e = aggregate_e2e_tps(records.iter()).expect("e2e rate");
@@ -759,7 +771,11 @@ mod tests {
     #[test]
     fn single_event_has_no_stream_rate() {
         let mut sample = record(1, 1, 10, 10);
-        sample.performance.as_mut().expect("performance").output_events = 1;
+        sample
+            .performance
+            .as_mut()
+            .expect("performance")
+            .output_events = 1;
         assert_eq!(aggregate_stream_tps([&sample].into_iter()), None);
     }
 }

@@ -341,8 +341,8 @@ impl App {
         // overwriting would silently destroy the primary's parked state.
         if self.saved_primary_chrome.is_none() {
             self.saved_primary_chrome = Some(SessionChrome {
-                activity: self.activity_status.clone(),
-                responding: self.round_started_at.is_some() || !self.activity_status.is_empty(),
+                phase: self.phase.clone(),
+                responding: self.round_started_at.is_some() || self.phase.is_some(),
                 round_count: self.round_count,
                 current_turn: self.current_turn,
                 round_started_at: self.round_started_at,
@@ -358,7 +358,7 @@ impl App {
         } else {
             // First entry: the aside has no chrome history yet — a fresh,
             // idle surface. Clearing rather than inheriting is the point.
-            self.activity_status.clear();
+            self.phase = None;
             self.round_started_at = None;
             self.round_count = 0;
             self.current_turn = 0;
@@ -384,7 +384,7 @@ impl App {
             // No snapshot exists only in a legacy in-process state that
             // predates the snapshot write; clear to a neutral surface and
             // let the next frame's per-session bookkeeping rebuild it.
-            self.activity_status.clear();
+            self.phase = None;
             self.round_started_at = None;
         }
         self.in_side_view = false;

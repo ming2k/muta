@@ -87,7 +87,7 @@ pub use mesh::{MeshAddress, MeshEnvelope, MeshMessage, MeshRoute, mesh_ids};
 pub use steward::{
     RiskLevel, SanityCheckInput, SanityCheckVerdict, SanityVerifierTask, SemanticLoopInput,
     SemanticLoopSentinelTask, SemanticLoopVerdict, SessionTitleOutput, SessionTitlerInput,
-    SessionTitlerTask, StewardModelPreference, StewardTask, StreamLoopChannel,
+    SessionTitlerTask, StewardModelPreference, StewardOffice, StewardTask, StreamLoopChannel,
     StreamLoopReviewInput, StreamLoopReviewerTask, StreamLoopVerdict, steward_identity,
 };
 pub use tier::AgentTier;

@@ -1564,7 +1564,6 @@ mod tests {
         assert!(detail_text.contains("provider-reported"));
         assert!(detail_text.contains("yellow"));
         assert!(detail_text.contains("local estimate"));
-
     }
 
     /// The detail turns table degrades in whole column groups as the modal

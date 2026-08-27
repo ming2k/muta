@@ -1238,9 +1238,7 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::PerformanceReportActivate => {
-            if app.active_modal() == Modal::PerformanceReport
-                && !app.performance_report_detail
-            {
+            if app.active_modal() == Modal::PerformanceReport && !app.performance_report_detail {
                 let has_rounds = app
                     .token_source_report(viewed_session_id)
                     .map(|report| view::performance_report_round_count(&report) > 0)

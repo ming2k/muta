@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_title_uses_steward_identity_and_title_task_prompt() {
+    async fn generate_title_uses_chronicler_office_and_title_task_prompt() {
         let (agent, provider) = agent_with_reply("Some title").await;
         let _ = agent
             .generate_title(&transcript_of_opening("a session about rust"))
@@ -210,10 +210,11 @@ mod tests {
             .iter()
             .find(|m| m.role == Role::System)
             .expect("system message present");
+        // Office-first identity: opens with the Chronicler charter, anchored
+        // by the collective Steward mission, followed by the task prompt.
+        assert!(system.content.starts_with("Chronicler"));
         assert!(
-            system
-                .content
-                .starts_with(&muta_contracts::steward_identity().preamble())
+            system.content.contains(&muta_contracts::steward_identity().mission)
         );
         assert!(
             system

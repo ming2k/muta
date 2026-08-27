@@ -117,7 +117,8 @@ impl Agent {
             ?channel,
             pattern = %pattern.description(),
             verdict = ?verdict,
-            "Steward reviewed in-flight stream-loop candidate"
+            office = StewardOffice::StreamSentinel.id(),
+            "stream-loop candidate reviewed by Stream Sentinel"
         );
         if verdict.is_loop() {
             true

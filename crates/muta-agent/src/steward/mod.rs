@@ -65,13 +65,32 @@ impl Steward {
     }
 
     /// Consult the steward with a typed [`StewardTask`].
+    ///
+    /// The on-duty identity is office-first: when the task is staffed at an
+    /// office ([`StewardTask::office`]), its charter-signed identity opens
+    /// the system prompt anchored by the collective Steward mission;
+    /// unassigned tasks keep the plain collective preamble.
     pub async fn consult<T: StewardTask>(
         &self,
         task: T,
         input: T::Input,
     ) -> Result<T::Output, StewardError> {
         let timeout = Duration::from_millis(task.timeout_ms());
-        let identity = steward_identity().preamble();
+        let (identity, office_id) = match task.office() {
+            Some(office) => {
+                let id = office.id();
+                let mission = steward_identity().mission;
+                let office_identity = office.identity();
+                (
+                    format!(
+                        "{}, serving {mission}. {}",
+                        office_identity.name, office_identity.mission
+                    ),
+                    id,
+                )
+            }
+            None => (steward_identity().preamble(), "unassigned"),
+        };
         let messages = vec![
             Message::new(
                 Role::System,
@@ -79,6 +98,7 @@ impl Steward {
             ),
             Message::new(Role::User, task.render_prompt(&input)),
         ];
+        tracing::debug!(task = task.name(), office = office_id, "steward consult");
 
         let response = tokio::time::timeout(
             timeout,

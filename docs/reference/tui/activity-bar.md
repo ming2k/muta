@@ -10,16 +10,22 @@ below the hint bar — and the task-list summary lives on its own todo bar above
 ## Appearance
 
 ```text
- ● making edits (23s · Esc Esc interrupt)
+ ● waiting for model [23s] · retry 2/8 next in 4s    Esc Esc interrupt
+ └─ master label     └─ elapsed  └─ transport clause  └─ fixed hint
 ```
 
-The bar surfaces what the user most wants to know mid-round: the **live
-status** (lead, shimmering muted → brand sweep) and the **elapsed** timer
-inside the interrupt hint. Segments are omitted when there is nothing to
-report, so a plain round reads simply:
+The bar surfaces what the user most wants to know mid-round: the **master
+label** (the typed phase — shimmering muted → brand sweep) and the
+**elapsed** timer. During a provider backoff a third, **muted transport
+clause** appears beside (never instead of) the master label, counting down
+live: the workflow story ("waiting for model") and the transport setback
+("retry 2/8 next in 4s") are separate channels and never overwrite each
+other. Under width pressure segments die in a fixed order — full clause →
+compact clause (`· 2/8`) → clause gone → elapsed → label truncation →
+interrupt words — so the master label keeps its column budget intact.
 
 ```text
- ● making edits (3s · Esc Esc interrupt)
+ ● making edits [3s]                                  Esc Esc interrupt
 ```
 
 The structural counters — `round N · turn M · <model>` — no longer live on
@@ -35,7 +41,8 @@ current prompt, round/turn/model/elapsed; Todos tab: the task list).
 | Height | `ACTIVITY_BAR_ROWS = 1` while a round is active, 0 when idle |
 | Glyph | `●` (`spinner_glyph`), BOLD |
 | Glyph color | `breathing_color(phase, theme.brand(), theme.surface())` — a cosine luminance sweep between brand and surface so the dot breathes at roughly 10 fps instead of cycling braille frames |
-| Status text color | `theme.brand()` + ITALIC |
+| Master label color | `theme.brand()` + ITALIC |
+| Transport clause color | `theme.muted()` — an annotation, not a headline |
 | Elapsed | `theme.muted()` |
 | Indent | 1 space |
 
@@ -77,17 +84,30 @@ session.
 
 ## Activity labels
 
-| Tool / phase | Label |
-|--------------|-------|
+Labels are folded once — in `mutx::phase::Phase::classify` — from the wire's
+free-form `Activity` strings into a typed phase enum; the bar, modal, and
+per-session chrome all render from that enum, never from re-parsed text. A
+test (`phase::tests::vocabulary_closure`) pins every backend label to a
+named variant, so adding a label on the agent side fails the TUI test first
+by design and unknown labels degrade to a verbatim passthrough instead of
+going blank.
+
+| Phase | Label |
+|-------|-------|
 | Queued (a chat round admitted, not yet running) | `queued` |
-| Waiting for provider | `waiting for model` |
-| `read_text` / `find_files` / `list_dir` / `use_skill` | `exploring` |
-| `search_text` | `searching codebase` |
-| `write_file` / `edit_file` | `making edits` |
-| `execute_command` | `running command` |
-| MCP tools (`mcp__*`) | `using MCP` |
+| Request assembly | `preparing context` |
+| Waiting for provider (first byte or retry in flight) | `waiting for model` |
+| Reasoning stream producing deltas | `thinking` |
+| Answer stream producing deltas | `answering` |
+| Tool execution | `exploring` / `searching codebase` / `making edits` / `running command` / `updating tasks` / `running runner` / `using MCP` |
+| Human gate (permission / ask_user) | `awaiting permission` |
 | Finalizing stream | `finalizing response` |
-| Provider retry | `retry 1/15 · next in 6.6s` (or `running · 1.2s` once active) — error details displayed in Activity modal |
+
+Transport setbacks own **no label**: a provider backoff renders as the
+muted clause `· retry 2/8 next in 4s` beside whatever master label is live,
+and its details stay in the Activity modal. The runner-side peek row
+likewise shows bare `waiting to retry …` rather than `running waiting to
+retry`, because a backoff is a pause, not progress.
 
 ## Source
 

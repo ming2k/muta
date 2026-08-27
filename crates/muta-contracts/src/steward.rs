@@ -25,13 +25,123 @@ use crate::AgentIdentity;
 ///
 /// Steward is deliberately not a Master or Runner persona: it has no tools,
 /// owns no conversation, and performs one stateless cognitive judgment for
-/// the harness. Individual [`StewardTask`] prompts specialize this identity
-/// without replacing it.
+/// the harness. The office system ([`StewardOffice`]) names *which* judgment
+/// a given call performs; [`steward_identity`] remains the shared anchor.
 pub fn steward_identity() -> AgentIdentity {
     AgentIdentity::new(
         "Steward",
         "the stateless, zero-tool cognitive attendant for the Agent Harness",
     )
+}
+
+/// The office (station of duty) a Steward consultation serves.
+///
+/// "Steward" is a collective noun — like Runner, it needs instantiation
+/// before work can be delegated. Each office carries the name its holder
+/// signs with, a one-line charter stating what it judges and what it must
+/// never do, and the model tier it is staffed at. Offices sharpen prompt
+/// persona and telemetry attribution without turning any of them into a
+/// tool-wielding agent: an office-holder remains stateless, single-shot,
+/// and zero-tool by construction ([`StewardTask::system_prompt`] embeds the
+/// charter; the zero-tool invariant lives in the engine, not in prompts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StewardOffice {
+    /// Watches live provider output mid-stream and confirms or clears
+    /// mechanical loop candidates before they burn the context window.
+    /// The heaviest casualty risk in the Steward corps: it adjudicates
+    /// exactly once per candidate under a strict bare-token contract.
+    #[default]
+    StreamSentinel,
+    /// Reviews recent round transcripts for self-reinforcing trajectories
+    /// (same read, same failing test) that per-call guards cannot see, and
+    /// prescribes an escape nudge.
+    RoundSentinel,
+    /// Audits critical payloads (destructive commands, large rewrites)
+    /// before dispatch. Fail-open unless a concrete hazard is named.
+    SanityWarden,
+    /// Distills session metadata — titles, summaries, compaction digests.
+    /// Pure transformation: describes what happened, never judges how to
+    /// proceed.
+    Chronicler,
+}
+
+impl StewardOffice {
+    /// Proper name this office's holder signs with, e.g. `"Stream Sentinel"`.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::StreamSentinel => "Stream Sentinel",
+            Self::RoundSentinel => "Round Sentinel",
+            Self::SanityWarden => "Sanity Warden",
+            Self::Chronicler => "Chronicler",
+        }
+    }
+
+    /// Machine-stable identifier, e.g. `"stream_sentinel"` — telemetry keys,
+    /// config knobs (`steward.<id>.model`), log fields.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::StreamSentinel => "stream_sentinel",
+            Self::RoundSentinel => "round_sentinel",
+            Self::SanityWarden => "sanity_warden",
+            Self::Chronicler => "chronicler",
+        }
+    }
+
+    /// One-line charter: what this office exists to judge, phrased as
+    /// identity ("You are …") so prompts can embed it verbatim.
+    pub fn charter(self) -> &'static str {
+        match self {
+            Self::StreamSentinel => {
+                "You are the Stream Sentinel — you watch a live model stream \
+                 and decide whether a flagged repetition is degenerate output \
+                 or legitimate content such as tables, rules, or data."
+            }
+            Self::RoundSentinel => {
+                "You are the Round Sentinel — you review recent rounds and \
+                 judge whether the agent's tool-use trajectory is stuck in a \
+                 non-progressing loop, then prescribe one escape nudge."
+            }
+            Self::SanityWarden => {
+                "You are the Sanity Warden — you audit one critical payload \
+                 and decide whether it contains a concrete hazard worth \
+                 blocking; uncertainty always resolves to pass."
+            }
+            Self::Chronicler => {
+                "You are the Chronicler — you transform transcript material \
+                 into faithful metadata; you describe, you never editorialize \
+                 about next actions."
+            }
+        }
+    }
+
+    /// Full identity for this office: the collective anchored by
+    /// [`steward_identity`], specialized by the office charter.
+    pub fn identity(self) -> AgentIdentity {
+        let mission = steward_identity().mission;
+        AgentIdentity::new(
+            self.title(),
+            format!(
+                "{}, serving {mission}",
+                self.charter()
+            ),
+        )
+    }
+
+    /// Default model tier this office is staffed at. A task may override via
+    /// [`StewardTask::model_preference`]; offices carry the base staffing so
+    /// new tasks inherit sensible economics.
+    pub fn default_model_preference(self) -> StewardModelPreference {
+        match self {
+            // Sentinels arbitrate live streams / active rounds: latency is
+            // part of correctness, but misjudgment is costlier than a slow
+            // title, so they get the standard fast tier.
+            Self::StreamSentinel | Self::RoundSentinel => StewardModelPreference::Flash,
+            Self::SanityWarden => StewardModelPreference::Flash,
+            // Titling and compaction tolerate latency entirely.
+            Self::Chronicler => StewardModelPreference::FlashLite,
+        }
+    }
 }
 
 /// Supported model tiers for Steward tasks.
@@ -57,6 +167,13 @@ pub trait StewardTask: Send + Sync {
 
     /// Human-readable task name for telemetry and diagnostics.
     fn name(&self) -> &'static str;
+
+    /// The office (station of duty) this task is staffed at. Default keeps
+    /// custom tasks unassigned; the engine falls back to the collective
+    /// [`steward_identity`] for them.
+    fn office(&self) -> Option<StewardOffice> {
+        None
+    }
 
     /// System instructions framing the steward's specialized cognitive role.
     fn system_prompt(&self) -> &'static str;
@@ -156,6 +273,10 @@ impl StewardTask for StreamLoopReviewerTask {
         "stream_loop_reviewer"
     }
 
+    fn office(&self) -> Option<StewardOffice> {
+        Some(StewardOffice::StreamSentinel)
+    }
+
     fn system_prompt(&self) -> &'static str {
         "Act as the Harness Stream Loop Reviewer. L1 found a mechanical repetition pattern in an incomplete model turn. Decide whether generation is actually trapped in an unproductive loop and should be stopped now.\n\
          Answer `no` when repetition is intentional task content, including reverse-engineering data, disassembly, hex dumps, address tables, byte arrays, logs, quoted source, equations, enumerations, or comparisons. Long or repetitive output is not itself a loop.\n\
@@ -220,6 +341,10 @@ impl StewardTask for SemanticLoopSentinelTask {
 
     fn name(&self) -> &'static str {
         "semantic_loop_sentinel"
+    }
+
+    fn office(&self) -> Option<StewardOffice> {
+        Some(StewardOffice::RoundSentinel)
     }
 
     fn system_prompt(&self) -> &'static str {
@@ -294,6 +419,10 @@ impl StewardTask for SanityVerifierTask {
         "sanity_verifier"
     }
 
+    fn office(&self) -> Option<StewardOffice> {
+        Some(StewardOffice::SanityWarden)
+    }
+
     fn system_prompt(&self) -> &'static str {
         "You are the Harness Sanity Verifier. Your job is to verify whether an action or string proposed by the agent is rational, safe, and aligned with its stated justification.\n\
          Respond in strict JSON with schema:\n\
@@ -344,6 +473,10 @@ impl StewardTask for SessionTitlerTask {
         "session_titler"
     }
 
+    fn office(&self) -> Option<StewardOffice> {
+        Some(StewardOffice::Chronicler)
+    }
+
     fn system_prompt(&self) -> &'static str {
         "You are a session-titling steward. You are shown an excerpt of a conversation and asked for a short title that captures what the session is about.\n\
          Respond in strict JSON with schema: {\"title\": \"<3-7 words title>\"}.\n\
@@ -380,6 +513,63 @@ mod tests {
 
         let titler = SessionTitlerTask;
         assert_eq!(titler.name(), "session_titler");
+    }
+
+    #[test]
+    fn offices_bind_to_the_right_tasks() {
+        assert_eq!(
+            StreamLoopReviewerTask.office(),
+            Some(StewardOffice::StreamSentinel)
+        );
+        assert_eq!(
+            SemanticLoopSentinelTask.office(),
+            Some(StewardOffice::RoundSentinel)
+        );
+        assert_eq!(
+            SanityVerifierTask.office(),
+            Some(StewardOffice::SanityWarden)
+        );
+        assert_eq!(SessionTitlerTask.office(), Some(StewardOffice::Chronicler));
+        // Custom tasks default to unassigned.
+        #[derive(Default)]
+        struct Custom;
+        impl StewardTask for Custom {
+            type Input = ();
+            type Output = ();
+            fn name(&self) -> &'static str {
+                "custom"
+            }
+            fn system_prompt(&self) -> &'static str {
+                ""
+            }
+            fn render_prompt(&self, _input: &()) -> String {
+                String::new()
+            }
+        }
+        assert_eq!(Custom.office(), None);
+    }
+
+    #[test]
+    fn office_identities_embed_charter_and_collective() {
+        for office in [
+            StewardOffice::StreamSentinel,
+            StewardOffice::RoundSentinel,
+            StewardOffice::SanityWarden,
+            StewardOffice::Chronicler,
+        ] {
+            let identity = office.identity();
+            assert!(identity.name.contains(office.title()));
+            assert!(
+                identity.mission.contains(&steward_identity().mission),
+                "office mission must anchor to the collective Steward identity"
+            );
+            assert!(!office.id().is_empty());
+        }
+        // Serde round trip keeps config keys stable.
+        let json = serde_json::to_string(&StewardOffice::StreamSentinel).unwrap();
+        assert_eq!(json, "\"stream_sentinel\"");
+        let back: StewardOffice = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, StewardOffice::StreamSentinel);
     }
 
     #[test]

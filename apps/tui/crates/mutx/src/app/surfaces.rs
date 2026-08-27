@@ -757,8 +757,8 @@ impl App {
             return chrome.clone();
         }
         SessionChrome {
-            activity: self.activity_status.clone(),
-            responding: self.round_started_at.is_some() || !self.activity_status.is_empty(),
+            phase: self.phase.clone(),
+            responding: self.round_started_at.is_some() || self.phase.is_some(),
             round_count: self.round_count,
             current_turn: self.current_turn,
             round_started_at: self.round_started_at,
@@ -775,7 +775,7 @@ impl App {
     /// view swaps; per-event updates during a round go through the
     /// listener's routing instead.
     pub(super) fn apply_chrome(&mut self, chrome: &SessionChrome) {
-        self.activity_status = chrome.activity.clone();
+        self.phase = chrome.phase.clone();
         self.round_started_at = chrome.round_started_at;
         self.round_count = chrome.round_count;
         self.current_turn = chrome.current_turn;

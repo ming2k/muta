@@ -75,17 +75,26 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     // also be reached through `app` at the same time. It is restored once
     // `view_messages` is no longer borrowed (see below).
     let mut height_cache = std::mem::take(&mut app.layout_height_cache);
-    // View-scoped chrome: render the activity text of whichever session the
-    // user is viewing — the focused aside's own entry inside `/btw`, the
-    // primary's otherwise. This is the aside-view activity-bar fix: the
-    // displayed bar tracks the *viewed* session, never a global blend.
+    // View-scoped chrome: render the phase of whichever session the user is
+    // viewing — the focused aside's own entry inside `/btw`, the primary's
+    // otherwise. This is the aside-view activity-bar fix: the displayed bar
+    // tracks the *viewed* session, never a global blend. A pending permission
+    // sheet overrides the phase with its gate label (warning hue downstream).
     let viewed_chrome = app.viewed_chrome();
-    let activity_for_display = viewed_chrome.activity.as_str();
+    let gate_phase = app
+        .pending_permission
+        .is_some()
+        .then_some(crate::phase::Phase::AwaitingUser);
     let status = display_status(
         app.loop_status,
-        activity_for_display,
-        app.pending_permission.is_some(),
+        gate_phase.as_ref().or(viewed_chrome.phase.as_ref()),
     );
+    // Transport-setback clause: rides *beside* the master label (never in its
+    // slot), counting down while a provider retry backs off.
+    let backoff_clause = app
+        .provider_retry
+        .as_ref()
+        .map(|retry| format!(" · {}", retry.summary(std::time::Instant::now())));
 
     // Compute the displayed input text first so the transcript layout can
     // reserve the right height for a wrapping, growing input box.
@@ -249,6 +258,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             selection: &app.selection,
             cell_selection: app.drag.cell_info.as_ref(),
             activity: &status,
+            backoff_clause: backoff_clause.as_deref(),
             // A pending permission request forces the activity bar
             // on (and tints it warning) so it stays the visible
             // anchor above the permission sheet even if the loop
@@ -951,9 +961,8 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             Some(view::draw_performance_report_modal(
                 f,
                 &report,
-                app.modal_index.min(
-                    view::performance_report_round_count(&report).saturating_sub(1),
-                ),
+                app.modal_index
+                    .min(view::performance_report_round_count(&report).saturating_sub(1)),
                 app.performance_report_detail,
                 loading,
                 &mut app.performance_report_scroll,

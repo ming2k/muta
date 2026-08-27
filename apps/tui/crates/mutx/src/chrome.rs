@@ -112,8 +112,11 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 ///
 /// Layout:
 /// ```text
-/// <spinner> <status> [<elapsed>]                    Esc Esc interrupt
+/// <spinner> <status> [<elapsed>] [· retry N/M next in Xs]   Esc Esc interrupt
 /// ```
+/// The transport clause is an annotation channel, not a status: it appears
+/// only while a provider retry backs off, counts down live, and is the first
+/// segment dropped when width runs out.
 /// The whole bar is transient (turn-scoped): it shows only while a round is
 /// active and is hidden while idle, so the row returns to the transcript.
 /// Session-state flags such as `DELEGATED` deliberately do not live here:
@@ -143,18 +146,34 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 ///
 /// Returns `Some(rect)` when the bar is drawn so the event loop can hit-test
 /// clicks and open the Activity modal; `None` when the bar is hidden (idle).
+/// The activity bar's per-frame inputs, aggregated to keep the draw
+/// signature within clippy's argument budget and give every segment a name.
+pub struct ActivityBarView<'a> {
+    /// Master-slot label (the typed phase's text).
+    pub status: &'a str,
+    /// Transport-setback clause rendered beside the label, muted. `None`
+    /// when transport is healthy (silence is healthy).
+    pub backoff_clause: Option<&'a str>,
+    /// Warning-tinted gate state (permission / ask_user pending).
+    pub awaiting_permission: bool,
+}
+
 pub fn draw_activity_bar(
     frame: &mut Frame,
     rect: Rect,
     round_started_at: Option<Instant>,
-    status: &str,
-    awaiting_permission: bool,
+    view: ActivityBarView<'_>,
     spinner_phase: usize,
     theme: &Theme,
 ) -> Option<Rect> {
     // The bar is a single transient LEFT segment (spinner + shimmering status
     // + elapsed/interrupt hint + pursuit) shown only while a
     // turn is active. With nothing to report it is hidden entirely.
+    let ActivityBarView {
+        status,
+        backoff_clause,
+        awaiting_permission,
+    } = view;
     let status_active = !status.is_empty() && status != "idle";
     let dim = Style::default().fg(theme.muted());
 
@@ -187,13 +206,66 @@ pub fn draw_activity_bar(
         0
     };
     let interrupt_gap = if show_interrupt_keys { SEGMENT_GAP } else { 0 };
-    let elapsed_width = elapsed.as_deref().map(UnicodeWidthStr::width).unwrap_or(0);
-    let show_elapsed = elapsed.is_some()
-        && available_width
-            >= prefix_width + MIN_STATUS_WIDTH + elapsed_width + interrupt_gap + interrupt_width;
-    let visible_elapsed_width = if show_elapsed { elapsed_width } else { 0 };
+    // Transport clause sits between the master label and the elapsed timer.
+    // Degradation order under width pressure (most to least expendable):
+    //   full clause → compact clause → clause gone → elapsed → status
+    //   truncation → interrupt words.
+    // The clause never steals so much as a column from an intact master
+    // label, and the interrupt affordance is the last thing to die.
+    let full_clause = backoff_clause.unwrap_or("");
+    let full_clause_w = UnicodeWidthStr::width(full_clause);
+    let compact_clause = backoff_clause.map(|clause| {
+        // `· retry 2/8 next in 4s` → `· 2/8` when the full text can't fit.
+        let attempt = clause
+            .split("retry ")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .unwrap_or("");
+        format!(" · {attempt}")
+    });
+    let compact_clause_w = compact_clause
+        .as_deref()
+        .map(UnicodeWidthStr::width)
+        .unwrap_or(0);
+    let status_natural_w = UnicodeWidthStr::width(status);
+    let elapsed_text = elapsed.clone().unwrap_or_default();
+    let elapsed_w = UnicodeWidthStr::width(elapsed_text.as_str());
+    let fixed_tail = interrupt_gap + interrupt_width;
+    // Does the row fit with this exact segment recipe?
+    let fits = |status_w: usize, clause_w: usize, elapsed_on: bool| -> bool {
+        let el = if elapsed_on { elapsed_w } else { 0 };
+        prefix_width + status_w + clause_w + el + fixed_tail <= available_width
+    };
+    enum Clause {
+        Full,
+        Compact,
+        None,
+    }
+    let (clause_choice, visible_elapsed_width) = if fits(status_natural_w, full_clause_w, true) {
+        (Clause::Full, elapsed_w)
+    } else if fits(status_natural_w, full_clause_w, false) {
+        (Clause::Full, 0)
+    } else if fits(status_natural_w, compact_clause_w, false) {
+        (Clause::Compact, 0)
+    } else if fits(status_natural_w, 0, true) {
+        (Clause::None, elapsed_w)
+    } else {
+        // Last resort: give up elapsed, then give up status length itself.
+        (Clause::None, 0)
+    };
+    let visible_clause_width = match clause_choice {
+        Clause::Full => full_clause_w,
+        Clause::Compact => compact_clause_w,
+        Clause::None => 0,
+    };
+    let clause_for_display = match clause_choice {
+        Clause::Full => Some(full_clause),
+        Clause::Compact => compact_clause.as_deref(),
+        Clause::None => None,
+    };
     let status_width = available_width
-        .saturating_sub(prefix_width + visible_elapsed_width + interrupt_gap + interrupt_width);
+        .saturating_sub(prefix_width + visible_clause_width + visible_elapsed_width + fixed_tail)
+        .max(MIN_STATUS_WIDTH.min(available_width));
     let status = truncate_for_bar(status, status_width);
 
     let mut spans: Vec<Span> = Vec::new();
@@ -231,8 +303,15 @@ pub fn draw_activity_bar(
         spans.extend(shimmer_spans(&status, spinner_phase, theme));
     }
 
-    if show_elapsed {
-        spans.push(Span::styled(elapsed.unwrap_or_default(), dim));
+    if visible_elapsed_width > 0 {
+        spans.push(Span::styled(elapsed_text, dim));
+    }
+
+    // Transport clause: muted by design — it must read as an annotation on
+    // the live status, never the headline. Sits at the right edge it ticks
+    // toward, ahead of the fixed interrupt keys.
+    if visible_clause_width > 0 {
+        spans.push(Span::styled(clause_for_display.unwrap_or_default(), dim));
     }
 
     // The interrupt affordance is a separate, right-pinned segment. This
@@ -986,23 +1065,25 @@ pub fn draw_hint_bar(
     let mut show_context = context_seg_width > 0;
     let right_width_for =
         |performance: bool, model: bool, reasoning: bool, instance: bool, context: bool| {
-        // The model name, its reasoning effort, and the provider instance
-        // form one identity group (`Kimi K3 high @111xianyu`) joined by the
-        // tighter model gap; only the context segment sits across the wider
-        // segment gap.
-        let identity_count = usize::from(model) + usize::from(reasoning) + usize::from(instance);
-        let identity_width = usize::from(model) * model_width
-            + usize::from(reasoning) * reasoning_width
-            + usize::from(instance) * instance_width
-            + identity_count.saturating_sub(1) * HINT_BAR_MODEL_GAP;
-        let performance_width = usize::from(performance) * performance_width;
-        let context_width = usize::from(context) * context_seg_width;
-        let group_count = usize::from(performance) + usize::from(identity_count > 0) + usize::from(context);
-        performance_width
-            + identity_width
-            + context_width
-            + group_count.saturating_sub(1) * HINT_BAR_SEGMENT_GAP
-    };
+            // The model name, its reasoning effort, and the provider instance
+            // form one identity group (`Kimi K3 high @111xianyu`) joined by the
+            // tighter model gap; only the context segment sits across the wider
+            // segment gap.
+            let identity_count =
+                usize::from(model) + usize::from(reasoning) + usize::from(instance);
+            let identity_width = usize::from(model) * model_width
+                + usize::from(reasoning) * reasoning_width
+                + usize::from(instance) * instance_width
+                + identity_count.saturating_sub(1) * HINT_BAR_MODEL_GAP;
+            let performance_width = usize::from(performance) * performance_width;
+            let context_width = usize::from(context) * context_seg_width;
+            let group_count =
+                usize::from(performance) + usize::from(identity_count > 0) + usize::from(context);
+            performance_width
+                + identity_width
+                + context_width
+                + group_count.saturating_sub(1) * HINT_BAR_SEGMENT_GAP
+        };
     let fits = |left_width: usize, right_width: usize| {
         inner + left_width + if right_width > 0 { HINT_BAR_GAP_MIN } else { 0 } + right_width
             <= full_w
@@ -1035,19 +1116,43 @@ pub fn draw_hint_bar(
     // row — they live on the status bar.)
     if !fits(zone_pill_width, right_width) && show_instance {
         show_instance = false;
-        right_width = right_width_for(show_performance, show_model, show_reasoning, show_instance, show_context);
+        right_width = right_width_for(
+            show_performance,
+            show_model,
+            show_reasoning,
+            show_instance,
+            show_context,
+        );
     }
     if !fits(zone_pill_width, right_width) && show_reasoning {
         show_reasoning = false;
-        right_width = right_width_for(show_performance, show_model, show_reasoning, show_instance, show_context);
+        right_width = right_width_for(
+            show_performance,
+            show_model,
+            show_reasoning,
+            show_instance,
+            show_context,
+        );
     }
     if !fits(zone_pill_width, right_width) && show_performance {
         show_performance = false;
-        right_width = right_width_for(show_performance, show_model, show_reasoning, show_instance, show_context);
+        right_width = right_width_for(
+            show_performance,
+            show_model,
+            show_reasoning,
+            show_instance,
+            show_context,
+        );
     }
     if !fits(zone_pill_width, right_width) && show_context {
         show_context = false;
-        right_width = right_width_for(show_performance, show_model, show_reasoning, show_instance, show_context);
+        right_width = right_width_for(
+            show_performance,
+            show_model,
+            show_reasoning,
+            show_instance,
+            show_context,
+        );
     }
     if !fits(zone_pill_width, right_width) {
         action_density = ActionDensity::Tiny;
@@ -1064,7 +1169,13 @@ pub fn draw_hint_bar(
     }
     if !fits(zone_pill_width, right_width) && show_model {
         show_model = false;
-        right_width = right_width_for(show_performance, show_model, show_reasoning, show_instance, show_context);
+        right_width = right_width_for(
+            show_performance,
+            show_model,
+            show_reasoning,
+            show_instance,
+            show_context,
+        );
     }
 
     // Ignition label takeover: during the `M A X` label phase the identity
@@ -1176,19 +1287,13 @@ pub fn draw_hint_bar(
             }
             any_rendered = true;
         }
-        let mut advance =
-            |width: usize, seg: &mut Option<Rect>, leading: bool| {
-                if leading {
-                    x += HINT_BAR_SEGMENT_GAP as u16;
-                }
-                *seg = Some(Rect::new(
-                    rect.x + x,
-                    rect.y,
-                    width as u16,
-                    rect.height,
-                ));
-                x += width as u16;
-            };
+        let mut advance = |width: usize, seg: &mut Option<Rect>, leading: bool| {
+            if leading {
+                x += HINT_BAR_SEGMENT_GAP as u16;
+            }
+            *seg = Some(Rect::new(rect.x + x, rect.y, width as u16, rect.height));
+            x += width as u16;
+        };
         if show_context {
             advance(context_seg_width, &mut context_rect, any_rendered);
             any_rendered = true;
@@ -1559,14 +1664,27 @@ mod tests {
     use super::*;
 
     fn activity_row_text(width: u16, status: &str, phase: usize) -> String {
+        activity_row_text_with_clause(width, status, None, false, phase)
+    }
+
+    fn activity_row_text_with_clause(
+        width: u16,
+        status: &str,
+        backoff_clause: Option<&str>,
+        awaiting: bool,
+        phase: usize,
+    ) -> String {
         let mut terminal = mutx_engine::TestTerminal::new(width, 1);
         terminal.draw(|frame| {
             draw_activity_bar(
                 frame,
                 Rect::new(0, 0, width, 1),
                 None,
-                status,
-                false,
+                crate::chrome::ActivityBarView {
+                    status,
+                    backoff_clause,
+                    awaiting_permission: awaiting,
+                },
                 phase,
                 &Theme::default(),
             );
@@ -1579,18 +1697,31 @@ mod tests {
             .collect::<String>()
     }
 
-    /// Render the activity bar with `awaiting_permission` set and collect the
-    /// foreground color of each cell, so a test can assert the permission state
-    /// paints in the warning hue rather than the shimmer palette.
+    /// Render the activity bar and collect the foreground color of each cell,
+    /// so a test can assert e.g. the permission state paints in the warning
+    /// hue rather than the shimmer palette.
     fn activity_row_colors(width: u16, status: &str, awaiting: bool, phase: usize) -> Vec<Color> {
+        activity_row_colors_with_clause(width, status, None, awaiting, phase)
+    }
+
+    fn activity_row_colors_with_clause(
+        width: u16,
+        status: &str,
+        backoff_clause: Option<&str>,
+        awaiting: bool,
+        phase: usize,
+    ) -> Vec<Color> {
         let mut terminal = mutx_engine::TestTerminal::new(width, 1);
         terminal.draw(|frame| {
             draw_activity_bar(
                 frame,
                 Rect::new(0, 0, width, 1),
                 None,
-                status,
-                awaiting,
+                crate::chrome::ActivityBarView {
+                    status,
+                    backoff_clause,
+                    awaiting_permission: awaiting,
+                },
                 phase,
                 &Theme::default(),
             );
@@ -1677,6 +1808,40 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>()
+    }
+
+    #[test]
+    fn backoff_clause_renders_beside_status_and_degrades_narrow() {
+        // Master label keeps the workflow story; the transport countdown is a
+        // separate, muted clause — never replacing the label.
+        let wide = activity_row_text_with_clause(
+            100,
+            "waiting for model",
+            Some(" · retry 2/8 next in 4s"),
+            false,
+            0,
+        );
+        assert!(wide.contains("waiting for model"), "{wide:?}");
+        assert!(wide.contains("retry 2/8 next in 4s"), "{wide:?}");
+
+        // Under width pressure the compact attempt counter survives and the
+        // master label is still intact.
+        let narrow = activity_row_text_with_clause(
+            44,
+            "waiting for model",
+            Some(" · retry 2/8 next in 4s"),
+            false,
+            0,
+        );
+        assert!(narrow.contains("waiting for model"), "{narrow:?}");
+        assert!(
+            narrow.contains("2/8") || !narrow.contains("next in"),
+            "compact form should drop the countdown tail: {narrow:?}"
+        );
+
+        // No clause configured → no stray separators.
+        let plain = activity_row_text_with_clause(80, "answering", None, false, 0);
+        assert!(plain.contains("answering"), "{plain:?}");
     }
 
     #[test]
@@ -1770,8 +1935,11 @@ mod tests {
                 frame,
                 Rect::new(0, 0, 80, 1),
                 None,
-                "Working",
-                false,
+                ActivityBarView {
+                    status: "Working",
+                    backoff_clause: None,
+                    awaiting_permission: false,
+                },
                 0,
                 &Theme::default(),
             );
@@ -1794,8 +1962,11 @@ mod tests {
                 frame,
                 Rect::new(0, 0, 36, 1),
                 None,
-                "retrying a provider request after a detailed transient failure",
-                false,
+                ActivityBarView {
+                    status: "retrying a provider request after a detailed transient failure",
+                    backoff_clause: None,
+                    awaiting_permission: false,
+                },
                 8,
                 &Theme::default(),
             );
@@ -1911,8 +2082,14 @@ mod tests {
         // Narrower row: the provenance suffix drops first while the model
         // name, effort tag, context meter, and rate survive in order.
         let narrow = row_text(50);
-        assert!(!narrow.contains('@'), "instance should hide first: {narrow:?}");
-        assert!(!narrow.contains('@'), "instance should hide first: {narrow:?}");
+        assert!(
+            !narrow.contains('@'),
+            "instance should hide first: {narrow:?}"
+        );
+        assert!(
+            !narrow.contains('@'),
+            "instance should hide first: {narrow:?}"
+        );
         let model_pos = narrow.find("kimi-k2.7-code").expect("model survives");
         let ctx_pos = narrow.find("(0%)").expect("context survives");
         let rate_pos = narrow.find("tok/s").expect("rate survives");

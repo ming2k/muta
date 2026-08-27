@@ -4,10 +4,10 @@
 //! ([`draw_transcript`] / [`TranscriptView`]); it also re-exports the drawing
 //! surface (chrome, composer, overlays, theme, …) the shell consumes.
 
+pub use crate::chrome::{ActivityBarView, draw_activity_bar, draw_todo_bar};
 pub use crate::chrome::{
     HintBarView, QueueBarView, QueueItemView, draw_completion_menu, draw_hint_bar, draw_queue_bar,
 };
-pub use crate::chrome::{draw_activity_bar, draw_todo_bar};
 pub use crate::composer::{
     ComposerDrawOptions, INPUT_MSG_IDX, draw_composer, draw_composer_highlighted,
     draw_composer_igniting,
@@ -46,11 +46,11 @@ pub use crate::overlays::{
     draw_btw_modal, draw_config_view, draw_connections_modal, draw_copy_toast,
     draw_custom_provider_editor, draw_dashboard, draw_help_modal, draw_history_panel,
     draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal, draw_notice_toast,
-    draw_oauth_pending, draw_permission_sheet, draw_permissions_manager, draw_preset_chooser,
-    draw_provider_delete_confirm, draw_question_modal, draw_queue_modal, draw_session_preview,
-    draw_performance_report_modal, draw_sessions_modal, draw_skills_modal,
-    draw_token_report_modal, draw_tools_modal, draw_tree_modal, draw_usage_stats_modal,
-    performance_report_round_count, token_report_round_count,
+    draw_oauth_pending, draw_performance_report_modal, draw_permission_sheet,
+    draw_permissions_manager, draw_preset_chooser, draw_provider_delete_confirm,
+    draw_question_modal, draw_queue_modal, draw_session_preview, draw_sessions_modal,
+    draw_skills_modal, draw_token_report_modal, draw_tools_modal, draw_tree_modal,
+    draw_usage_stats_modal, performance_report_round_count, token_report_round_count,
 };
 use crate::page_header;
 pub(crate) use crate::page_header::{
@@ -159,6 +159,10 @@ pub struct TranscriptView<'a> {
     /// Empty / "idle" means the status bar is hidden; every other value
     /// (including "responding") keeps the bar up for the full round lifecycle.
     pub activity: &'a str,
+    /// Transport-setback clause rendered beside (never inside) the master
+    /// label — e.g. `· retry 2/8 next in 4s` while a provider retry backs
+    /// off. Muted styling; first casualty under width pressure.
+    pub backoff_clause: Option<&'a str>,
     /// Whether a tool permission request is awaiting the user's decision. When
     /// true the activity bar is forced visible even if the loop has gone idle,
     /// and its label reads as a permission state so the live status surface
@@ -411,6 +415,7 @@ pub fn draw_transcript(
         selection,
         cell_selection,
         activity,
+        backoff_clause,
         awaiting_permission,
         spinner_phase,
         input,
@@ -864,8 +869,11 @@ pub fn draw_transcript(
                 frame,
                 rect,
                 round_started_at,
-                activity,
-                awaiting_permission,
+                ActivityBarView {
+                    status: activity,
+                    backoff_clause,
+                    awaiting_permission,
+                },
                 spinner_phase,
                 theme,
             )

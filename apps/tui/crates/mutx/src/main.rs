@@ -269,7 +269,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Mode::Fresh => {
-            run_attached(None, true, project_override, delegated_at_start, false, prompt).await
+            run_attached(
+                None,
+                true,
+                project_override,
+                delegated_at_start,
+                false,
+                prompt,
+            )
+            .await
         }
     }
 }

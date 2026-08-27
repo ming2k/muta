@@ -295,7 +295,10 @@ pub(super) struct UiRuntime {
     /// Latest AI-visible context size for the primary session.
     pub context_tokens: Arc<Mutex<HashMap<String, muta_contracts::ContextTokenSnapshot>>>,
     pub harness: Arc<Mutex<HarnessSnapshot>>,
-    pub activity_status: Arc<Mutex<String>>,
+    /// Typed activity-bar phase (the single fold of wire `Activity` labels;
+    /// `None` = idle/bar hidden). Never holds transport setbacks — those live
+    /// in [`Runtime::provider_retry`].
+    pub phase: Arc<Mutex<Option<crate::phase::Phase>>>,
     pub provider_retry: Arc<Mutex<Option<crate::app::ProviderRetryState>>>,
     pub pending_permission: Arc<Mutex<VecDeque<PermissionRequest>>>,
     pub pending_question: Arc<Mutex<VecDeque<UserQuestionRequest>>>,
@@ -490,7 +493,7 @@ impl UiRuntime {
                 workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
                 retry_pending: false,
             })),
-            activity_status: Arc::new(Mutex::new(String::new())),
+            phase: Arc::new(Mutex::new(None)),
             provider_retry: Arc::new(Mutex::new(None)),
             pending_permission: Arc::new(Mutex::new(VecDeque::new())),
             pending_question: Arc::new(Mutex::new(VecDeque::new())),
@@ -1191,7 +1194,7 @@ async fn sync_runtime_state(
     app.loop_status = harness.loop_status;
     app.harness_retry_pending = harness.retry_pending;
     app.delegated = harness.delegated;
-    app.activity_status = runtime.activity_status.lock().await.clone();
+    app.phase = runtime.phase.lock().await.clone();
     app.provider_retry = runtime.provider_retry.lock().await.clone();
     app.session_context = runtime.session_context.lock().await.clone();
     app.todos = runtime.todos.lock().await.clone();
@@ -2355,17 +2358,21 @@ pub(super) async fn run_app_loop(
     }
 }
 
-pub(super) fn tool_activity_status(name: &str) -> &'static str {
+pub(crate) fn tool_verb_for(name: &str) -> crate::phase::ToolVerb {
     match name {
         "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" | "fetch_url"
-        | "webfetch" => "exploring",
-        "search_text" | "search_web" | "websearch" => "searching codebase",
-        "write_file" | "edit_file" => "making edits",
-        "run_command" | "execute_command" | "bash" => "running command",
-        "write_todos" | "update_todo" | "todo" | "todo_update" => "updating tasks",
-        "spawn_runner" | "runner" | "runner_code" | "runner_mcp" => "running runner",
-        name if name.starts_with("mcp__") => "using MCP",
-        _ => "using tool",
+        | "webfetch" => crate::phase::ToolVerb::Exploring,
+        "search_text" | "search_web" | "websearch" => crate::phase::ToolVerb::Searching,
+        "write_file" | "edit_file" => crate::phase::ToolVerb::Editing,
+        "run_command" | "execute_command" | "bash" => crate::phase::ToolVerb::Running,
+        "write_todos" | "update_todo" | "todo" | "todo_update" => {
+            crate::phase::ToolVerb::UpdatingTasks
+        }
+        "spawn_runner" | "runner" | "runner_code" | "runner_mcp" => {
+            crate::phase::ToolVerb::Delegating
+        }
+        n if n.starts_with("mcp__") => crate::phase::ToolVerb::Mcp,
+        _ => crate::phase::ToolVerb::Generic,
     }
 }
 
@@ -2693,25 +2700,19 @@ fn show_local_toast(
 
 pub(super) fn display_status(
     loop_status: LoopStatus,
-    activity: &str,
-    awaiting_permission: bool,
+    phase: Option<&crate::phase::Phase>,
 ) -> String {
-    let activity = if awaiting_permission {
-        "awaiting permission"
-    } else {
-        activity
-    };
-    match (loop_status, activity) {
-        (LoopStatus::Idle, "") => "idle".to_string(),
-        (LoopStatus::Idle, activity) => activity.to_string(),
-        // "running" is implied by the activity bar's spinner + live status,
-        // so it would be redundant noise ahead of the status. Drop
-        // it and show the activity alone — but fall back to "preparing" when
-        // no specific activity has landed yet (the gap between turn start
-        // and the first `AgentResponse::Activity`), so the activity bar
-        // always has a non-empty label to anchor the breathing dot against.
-        (LoopStatus::Running, "") => "preparing".to_string(),
-        (LoopStatus::Running, activity) => activity.to_string(),
+    match (loop_status, phase) {
+        (LoopStatus::Idle, None) => "idle".to_string(),
+        // The spinner + live label already say "running"; the bare word would
+        // be redundant noise ahead of the status. Fall back to "preparing"
+        // only in the gap between round start and the first phase fact (the
+        // window before `TurnStarted` lands), so the breathing dot always has
+        // a non-empty label to anchor against.
+        (LoopStatus::Running, None) => "preparing".to_string(),
+        (LoopStatus::Idle, Some(phase)) | (LoopStatus::Running, Some(phase)) => {
+            phase.label().into_owned()
+        }
     }
 }
 

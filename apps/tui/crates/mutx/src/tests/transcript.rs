@@ -310,25 +310,23 @@ fn command_row_layout_classifies_by_result_shape() {
 
 #[test]
 fn tool_activity_is_semantic_and_loop_progress_is_preserved() {
+    use crate::phase::{Phase, ToolVerb};
     assert_eq!(
-        event_loop::tool_activity_status("search_text"),
-        "searching codebase"
+        event_loop::tool_verb_for("search_text"),
+        ToolVerb::Searching
     );
     assert_eq!(
-        event_loop::tool_activity_status("edit_file"),
+        Phase::Tool(event_loop::tool_verb_for("edit_file")).label(),
         "making edits"
     );
     assert_eq!(
-        event_loop::tool_activity_status("mcp__github__search"),
-        "using MCP"
+        event_loop::tool_verb_for("mcp__github__search"),
+        ToolVerb::Mcp
     );
+    let running = Phase::Tool(ToolVerb::Running);
     assert_eq!(
-        display_status(LoopStatus::Running, "running command", false),
+        display_status(LoopStatus::Running, Some(&running)),
         "running command"
-    );
-    assert_eq!(
-        display_status(LoopStatus::Running, "running command", true),
-        "awaiting permission"
     );
 }
 

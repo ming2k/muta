@@ -501,7 +501,7 @@ async fn slash_dispatch_never_arms_activity_state() {
         "a command must not arm is_responding"
     );
     assert!(
-        runtime.activity_status.lock().await.is_empty(),
+        runtime.phase.lock().await.is_none(),
         "a command must not paint an optimistic activity label"
     );
     assert!(
@@ -1265,7 +1265,7 @@ fn adopt_caret_head_and_tail_break_selection() {
 fn aside_view_does_not_inherit_the_primary_activity_bar() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     // The primary is mid-round with live chrome.
-    app.activity_status = "responding".to_string();
+    app.phase = Some(crate::phase::Phase::Answering);
     app.round_started_at = Some(std::time::Instant::now());
     app.round_count = 7;
     app.current_turn = 3;
@@ -1275,7 +1275,7 @@ fn aside_view_does_not_inherit_the_primary_activity_bar() {
     app.enter_side_view("side-1".to_string());
     assert!(app.in_side_view);
     assert!(
-        app.viewed_chrome().activity.is_empty(),
+        app.viewed_chrome().phase.is_none(),
         "a new aside starts idle, not 'responding'"
     );
     assert_eq!(
@@ -1290,7 +1290,7 @@ fn aside_view_does_not_inherit_the_primary_activity_bar() {
 
     // The primary's chrome is parked, not destroyed.
     let parked = app.saved_primary_chrome.as_ref().expect("primary parked");
-    assert_eq!(parked.activity, "responding");
+    assert_eq!(parked.phase, Some(crate::phase::Phase::Answering));
     assert_eq!(parked.round_count, 7);
     assert_eq!(parked.current_turn, 3);
     assert!(parked.round_started_at.is_some());
@@ -1299,7 +1299,7 @@ fn aside_view_does_not_inherit_the_primary_activity_bar() {
 #[test]
 fn exiting_an_aside_restores_the_primary_chrome_exactly() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.activity_status = "running tool: bash".to_string();
+    app.phase = Some(crate::phase::Phase::Tool(crate::phase::ToolVerb::Running));
     let started = std::time::Instant::now();
     app.round_started_at = Some(started);
     app.round_count = 12;
@@ -1310,7 +1310,7 @@ fn exiting_an_aside_restores_the_primary_chrome_exactly() {
     app.session_chrome.insert(
         "side-9".to_string(),
         crate::app::SessionChrome {
-            activity: "thinking".to_string(),
+            phase: Some(crate::phase::Phase::Thinking),
             responding: true,
             round_count: 1,
             current_turn: 1,
@@ -1321,7 +1321,10 @@ fn exiting_an_aside_restores_the_primary_chrome_exactly() {
     );
     // Re-entering (focus jump) must swap the aside's own chrome in.
     app.enter_side_view("side-9".to_string());
-    assert_eq!(app.viewed_chrome().activity, "thinking");
+    assert!(matches!(
+        app.viewed_chrome().phase,
+        Some(crate::phase::Phase::Thinking)
+    ));
     assert_eq!(app.viewed_chrome().round_count, 1);
 
     // Leaving restores the primary's parked chrome bit-for-bit: the primary
@@ -1329,7 +1332,10 @@ fn exiting_an_aside_restores_the_primary_chrome_exactly() {
     app.exit_side_view();
     assert!(!app.in_side_view);
     let chrome = app.viewed_chrome();
-    assert_eq!(chrome.activity, "running tool: bash");
+    assert_eq!(
+        chrome.phase,
+        Some(crate::phase::Phase::Tool(crate::phase::ToolVerb::Running))
+    );
     assert_eq!(chrome.round_count, 12);
     assert_eq!(chrome.current_turn, 2);
     assert!(chrome.round_started_at.is_some());
@@ -1339,14 +1345,14 @@ fn exiting_an_aside_restores_the_primary_chrome_exactly() {
 fn reentering_a_running_aside_shows_its_own_chrome() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     // The primary is idle.
-    app.activity_status.clear();
+    app.phase = None;
     app.round_started_at = None;
 
     // A background aside is streaming (its listener-maintained entry).
     app.session_chrome.insert(
         "side-2".to_string(),
         crate::app::SessionChrome {
-            activity: "responding".to_string(),
+            phase: Some(crate::phase::Phase::Answering),
             responding: true,
             round_count: 2,
             current_turn: 1,
@@ -1357,7 +1363,7 @@ fn reentering_a_running_aside_shows_its_own_chrome() {
     );
     app.enter_side_view("side-2".to_string());
     let chrome = app.viewed_chrome();
-    assert_eq!(chrome.activity, "responding");
+    assert_eq!(chrome.phase, Some(crate::phase::Phase::Answering));
     assert!(chrome.responding);
     assert_eq!(chrome.round_count, 2);
     assert!(

@@ -1531,9 +1531,7 @@ pub fn process_event(
                         super::Modal::Config => InputAction::ConfigActivate,
                         super::Modal::Activity => InputAction::CloseModal,
                         super::Modal::TokenReport => InputAction::TokenReportActivate,
-                        super::Modal::PerformanceReport => {
-                            InputAction::PerformanceReportActivate
-                        }
+                        super::Modal::PerformanceReport => InputAction::PerformanceReportActivate,
                         super::Modal::UsageStats => InputAction::CloseModal,
                         super::Modal::None => {
                             if context.has_focused_target {

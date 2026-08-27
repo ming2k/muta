@@ -39,6 +39,7 @@ pub mod input;
 pub mod interaction;
 pub mod keymap;
 pub mod paths;
+pub mod phase;
 pub mod question_model;
 pub mod step_interaction;
 mod terminal;
@@ -84,6 +85,7 @@ pub(crate) use view::*;
 
 // Misc helpers shared with the shell.
 pub(crate) mod fuzzy;
+pub(crate) use crate::phase::Phase;
 pub(crate) mod modal;
 pub(crate) mod providers;
 pub(crate) mod surfaces;
@@ -331,8 +333,11 @@ pub async fn run_tui(
     // HarnessState so the activity bar can render a live `<elapsed>` segment.
     let round_started_at: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
     let round_started_at_clone = round_started_at.clone();
-    let activity_status = Arc::new(Mutex::new(String::new()));
-    let activity_clone = activity_status.clone();
+    // Typed activity-bar phase: the single fold of wire `Activity` labels.
+    // `None` = idle (bar hidden). Transport setbacks live in
+    // `provider_retry`, never here — see `crate::phase`.
+    let phase: Arc<Mutex<Option<Phase>>> = Arc::new(Mutex::new(None));
+    let activity_clone = phase.clone();
     let provider_retry: Arc<Mutex<Option<ProviderRetryState>>> = Arc::new(Mutex::new(None));
     let provider_retry_clone = provider_retry.clone();
     let pending_permission = Arc::new(Mutex::new(VecDeque::<PermissionRequest>::new()));
@@ -812,7 +817,7 @@ pub async fn run_tui(
                                 // surface when the harness truly goes idle.
                                 if harness_clone.lock().await.loop_status.is_idle() {
                                     ir_clone.store(false, Ordering::SeqCst);
-                                    activity_clone.lock().await.clear();
+                                    *activity_clone.lock().await = None;
                                 }
                             }
                         }
@@ -868,20 +873,21 @@ pub async fn run_tui(
                             }
                             if !routes_to_side && harness_clone.lock().await.loop_status.is_idle() {
                                 ir_clone.store(false, Ordering::SeqCst);
-                                activity_clone.lock().await.clear();
+                                *activity_clone.lock().await = None;
                             }
                         }
                         RoundEvent::Activity(status) => {
                             // View-scoped chrome: record this session's own
-                            // activity text regardless of which view is
-                            // focused; only the primary also drives the
-                            // displayed global activity state.
+                            // phase regardless of which view is focused; only
+                            // the primary also drives the displayed global
+                            // activity state.
+                            let folded = Phase::classify(&status);
                             chrome_updater.edit(|c| {
-                                c.activity = status.clone();
+                                c.phase = Some(folded.clone());
                                 c.responding = true;
                             });
                             if !routes_to_side {
-                                *activity_clone.lock().await = status;
+                                *activity_clone.lock().await = Some(folded);
                                 ir_clone.store(true, Ordering::SeqCst);
                             }
                         }
@@ -912,7 +918,15 @@ pub async fn run_tui(
                             chrome_updater.edit(|c| {
                                 c.round_count = round;
                                 c.current_turn = turn;
+                                // A new model-request cycle is the strongest
+                                // fact about what is in flight — stronger than
+                                // any folded label. Stamp AwaitingModel even if
+                                // the `waiting for model` label never arrives.
+                                c.phase = Some(Phase::AwaitingModel);
                             });
+                            if !routes_to_side {
+                                *activity_clone.lock().await = Some(Phase::AwaitingModel);
+                            }
                         }
                         RoundEvent::StreamStart => {
                             // A stream lifecycle event is not visible transcript content.
@@ -934,16 +948,25 @@ pub async fn run_tui(
                                 if c.round_started_at.is_none() {
                                     c.round_started_at = Some(std::time::Instant::now());
                                 }
-                                if c.activity.is_empty() {
-                                    c.activity = "responding".to_string();
+                                // First byte proves the request left; upgrade
+                                // out of AwaitingModel unless a more specific
+                                // stream phase already won the slot.
+                                if !matches!(c.phase, Some(Phase::Thinking | Phase::Answering)) {
+                                    c.phase = Some(Phase::Answering);
                                 }
                             });
                             if !routes_to_side {
                                 ir_clone.store(true, Ordering::SeqCst);
-                                *activity_clone.lock().await = "responding".to_string();
+                                *activity_clone.lock().await = Some(Phase::Answering);
                             }
                         }
                         RoundEvent::StreamDelta(delta) => {
+                            // Visible-text deltas outrank the reasoning phase:
+                            // the model is writing the answer now.
+                            if !routes_to_side {
+                                *activity_clone.lock().await = Some(Phase::Answering);
+                            }
+                            chrome_updater.edit(|c| c.phase = Some(Phase::Answering));
                             let position = positions_by_session.get(&session_id).copied();
                             let round = position.map(|(round, _)| round);
                             let turn = position.map(|(_, turn)| turn);
@@ -985,7 +1008,7 @@ pub async fn run_tui(
                         RoundEvent::StreamEnd(final_content) => {
                             if !routes_to_side {
                                 ir_clone.store(true, Ordering::SeqCst);
-                                *activity_clone.lock().await = "finalizing response".to_string();
+                                *activity_clone.lock().await = Some(Phase::Finalizing);
                             }
                             let position = positions_by_session.get(&session_id).copied();
                             let round = position.map(|(round, _)| round);
@@ -1079,11 +1102,17 @@ pub async fn run_tui(
                                 *unsent_input_signal_clone.lock().await =
                                     Some(event_loop::UnsentInput { prompt, images });
                                 ir_clone.store(false, Ordering::SeqCst);
-                                activity_clone.lock().await.clear();
+                                *activity_clone.lock().await = None;
                             }
                         }
                         RoundEvent::StreamReasoningDelta(delta) => {
-                            // Hidden-chain models (GPT-5.x, `ReasoningSummary`)
+                            // Phase fact before anything else: the reasoning
+                            // stream is alive. Hidden-chain models also land
+                            // here (their summary deltas still prove thinking).
+                            if !routes_to_side {
+                                *activity_clone.lock().await = Some(Phase::Thinking);
+                            }
+                            chrome_updater.edit(|c| c.phase = Some(Phase::Thinking));
                             // surface only a reasoning summary, never their full
                             // chain. Disclosing even that summary as a
                             // `MessageKind::Thinking` message would leave a
@@ -1219,7 +1248,7 @@ pub async fn run_tui(
                         } => {
                             if !routes_to_side {
                                 *activity_clone.lock().await =
-                                    event_loop::tool_activity_status(&name).to_string();
+                                    Some(Phase::Tool(event_loop::tool_verb_for(&name)));
                             }
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
@@ -1268,7 +1297,7 @@ pub async fn run_tui(
                             duration_ms,
                         } => {
                             if !routes_to_side {
-                                *activity_clone.lock().await = "thinking".to_string();
+                                *activity_clone.lock().await = Some(Phase::Thinking);
                             }
                             let (provider, model) =
                                 event_loop::attribution(&cp_clone, &cm_clone).await;
@@ -1416,8 +1445,7 @@ pub async fn run_tui(
                                         .insert(req.id.clone(), parent_call_id.clone());
                                     pending_permission_clone.lock().await.push_back(req.clone());
                                     if !routes_to_side {
-                                        *activity_clone.lock().await =
-                                            "awaiting permission".to_string();
+                                        *activity_clone.lock().await = Some(Phase::AwaitingUser);
                                         ir_clone.store(true, Ordering::SeqCst);
                                     }
                                 }
@@ -1428,8 +1456,7 @@ pub async fn run_tui(
                                         .insert(req.id.clone(), parent_call_id.clone());
                                     pending_question_clone.lock().await.push_back(req.clone());
                                     if !routes_to_side {
-                                        *activity_clone.lock().await =
-                                            "awaiting user input".to_string();
+                                        *activity_clone.lock().await = Some(Phase::AwaitingUser);
                                         ir_clone.store(true, Ordering::SeqCst);
                                     }
                                 }
@@ -1472,21 +1499,21 @@ pub async fn run_tui(
                             // practice only the primary ever reaches here).
                             pending_permission_clone.lock().await.push_back(request);
                             if !routes_to_side {
-                                *activity_clone.lock().await = "awaiting permission".to_string();
+                                *activity_clone.lock().await = Some(Phase::AwaitingUser);
                                 ir_clone.store(true, Ordering::SeqCst);
                             }
                         }
                         RoundEvent::UserQuestionRequest(request) => {
                             pending_question_clone.lock().await.push_back(request);
                             if !routes_to_side {
-                                *activity_clone.lock().await = "awaiting user input".to_string();
+                                *activity_clone.lock().await = Some(Phase::AwaitingUser);
                                 ir_clone.store(true, Ordering::SeqCst);
                             }
                         }
                         RoundEvent::StdinRequest(request) => {
                             pending_input_clone.lock().await.push_back(request);
                             if !routes_to_side {
-                                *activity_clone.lock().await = "awaiting command stdin".to_string();
+                                *activity_clone.lock().await = Some(Phase::AwaitingUser);
                                 ir_clone.store(true, Ordering::SeqCst);
                             }
                         }
@@ -1535,11 +1562,14 @@ pub async fn run_tui(
                                         if c.round_started_at.is_none() {
                                             c.round_started_at = Some(std::time::Instant::now());
                                         }
-                                        if c.activity.is_empty() {
-                                            c.activity = "running".to_string();
+                                        // Round start before any wire phase fact:
+                                        // hold the generic slot; the first phase
+                                        // event overwrites it within the tick.
+                                        if c.phase.is_none() {
+                                            c.phase = Some(Phase::Preparing);
                                         }
                                     } else {
-                                        c.activity.clear();
+                                        c.phase = None;
                                         c.current_turn = 0;
                                         c.round_started_at = None;
                                     }
@@ -1623,7 +1653,11 @@ pub async fn run_tui(
                                     for message in messages_clone.write().await.iter_mut() {
                                         message.cancel_pending_command();
                                     }
-                                    activity_clone.lock().await.clear();
+                                    // Round end clears the master phase; the bar
+                                    // hides on the next frame. The transport
+                                    // channel (`provider_retry`) is retired by
+                                    // its own events, not here.
+                                    *activity_clone.lock().await = None;
                                     *current_turn_clone.lock().await = 0;
                                     *round_started_at_clone.lock().await = None;
                                 }
@@ -1675,7 +1709,12 @@ pub async fn run_tui(
                                 failure: message,
                             });
                             if !routes_to_side {
-                                *activity_clone.lock().await = "waiting to retry".to_string();
+                                // Transport setback, not a workflow phase: the
+                                // master label stays on what is actually being
+                                // retried (the model request); the countdown
+                                // rides the dedicated clause channel
+                                // (`provider_retry`).
+                                *activity_clone.lock().await = Some(Phase::AwaitingModel);
                                 ir_clone.store(true, Ordering::SeqCst);
                             }
                         }
@@ -1706,7 +1745,7 @@ pub async fn run_tui(
                             push_local_notice(&mut msgs, NoticeSeverity::Error, message);
                             if !routes_to_side {
                                 ir_clone.store(false, Ordering::SeqCst);
-                                activity_clone.lock().await.clear();
+                                *activity_clone.lock().await = None;
                             }
                         }
                     } // end inner `match event`
@@ -1765,7 +1804,7 @@ pub async fn run_tui(
                 }
                 AgentResponse::PermissionsCleared => {
                     pending_permission_clone.lock().await.clear();
-                    activity_clone.lock().await.clear();
+                    *activity_clone.lock().await = None;
                 }
                 AgentResponse::ProviderKeys(status) => {
                     *key_status_clone.lock().await = status.into_iter().collect();
@@ -2088,7 +2127,7 @@ pub async fn run_tui(
         session_context: None,
         loop_status: LoopStatus::Idle,
         harness_retry_pending: false,
-        activity_status: String::new(),
+        phase: None,
         provider_retry: None,
         delegated: false,
         todos: None,
@@ -2251,7 +2290,7 @@ pub async fn run_tui(
             current_model,
             context_tokens,
             harness,
-            activity_status,
+            phase,
             provider_retry,
             pending_permission,
             pending_question,

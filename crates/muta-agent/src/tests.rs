@@ -3053,14 +3053,24 @@ async fn scheduler_serializes_conflicting_writes() {
 
 #[tokio::test]
 async fn in_flight_streaming_loop_detector_aborts_and_steers() {
-    let degenerative_stream = vec![
-        ProviderStreamEvent::TextDelta("Initial reasoning.\n".to_string()),
-        ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
-        ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
-        ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
-        ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
-        ProviderStreamEvent::TextDelta("never reached extra text".to_string()),
-    ];
+    // Dwell-scaled runaway: ~138 x 23-char lines clears the 3K dwell bar.
+    let degenerative_stream = (0..140).fold(
+        vec![
+            ProviderStreamEvent::TextDelta("Initial reasoning.\n".to_string()),
+            ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
+        ],
+        |mut acc, _| {
+            acc.push(ProviderStreamEvent::TextDelta(
+                "repeating line of code\n".to_string(),
+            ));
+            acc
+        },
+    );
+    // The cut keeps partial output; the final delta must never be emitted.
+    let mut degenerative_stream = degenerative_stream;
+    degenerative_stream.push(ProviderStreamEvent::TextDelta(
+        "never reached extra text".to_string(),
+    ));
 
     let agent = Arc::new(Agent::new(
         Arc::new(
@@ -3099,12 +3109,13 @@ async fn in_flight_streaming_loop_detector_aborts_and_steers() {
 
 #[tokio::test]
 async fn repeated_stream_loop_hard_stop_is_visible() {
+    // The detector now escalates on *continuous dwell* (~3KB of unbroken
+    // periodic tail), so the scripted runaway must be long enough to
+    // legitimately clear that bar — a genuine doom loop does so easily.
     let degenerative_stream = || {
-        vec![
-            ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
-            ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
-            ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
-        ]
+        (0..160)
+            .map(|_| ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()))
+            .collect::<Vec<_>>()
     };
     let agent = Arc::new(Agent::new(
         Arc::new(
@@ -3134,12 +3145,16 @@ async fn repeated_stream_loop_hard_stop_is_visible() {
 
 #[tokio::test]
 async fn reasoning_stream_loop_trims_reasoning_without_rewriting_answer() {
-    let looping_reasoning = vec![
-        ProviderStreamEvent::TextDelta("Answer prefix.".to_string()),
-        ProviderStreamEvent::ReasoningDelta("repeating private trace\n".to_string()),
-        ProviderStreamEvent::ReasoningDelta("repeating private trace\n".to_string()),
-        ProviderStreamEvent::ReasoningDelta("repeating private trace\n".to_string()),
-    ];
+    // Dwell-scaled scripted runaway: 160 x 24-char lines (~3.8K > dwell bar).
+    let looping_reasoning = (0..160).fold(
+        vec![ProviderStreamEvent::TextDelta("Answer prefix.".to_string())],
+        |mut acc, _| {
+            acc.push(ProviderStreamEvent::ReasoningDelta(
+                "repeating private trace\n".to_string(),
+            ));
+            acc
+        },
+    );
     let agent = Arc::new(Agent::new(
         Arc::new(
             ScriptedProvider::new(vec![looping_reasoning, text_turn("Recovered answer.")])
@@ -3166,6 +3181,10 @@ async fn reasoning_stream_loop_trims_reasoning_without_rewriting_answer() {
 
 #[tokio::test]
 async fn steward_clears_legitimate_repeated_reverse_engineering_data() {
+    // Under dwell semantics this data never escalates at all: each line ends
+    // in "nop", so the periodic trail acquits every push (the digits do not
+    // dominate density either). The mechanical layer resolves legitimate
+    // content locally — the Steward must not even be consulted.
     let repeated_dump = "00401000: 90 90 90 90    nop nop nop nop\n";
     let provider = Arc::new(
         ScriptedProvider::new(vec![vec![
@@ -3205,10 +3224,10 @@ async fn steward_clears_legitimate_repeated_reverse_engineering_data() {
         .steward_requests
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    assert_eq!(requests.len(), 1, "one candidate gets one L2 review");
-    let system = &requests[0].messages[0].content;
-    let evidence = &requests[0].messages[1].content;
-    assert!(system.starts_with("You are Steward,"));
-    assert!(evidence.contains("Inspect this repeated disassembly block."));
-    assert!(evidence.contains(repeated_dump.trim()));
+    // Zero consultations: the mechanical layer never escalated, so the
+    // Stream Sentinel was not woken — the entire point of dwell semantics.
+    assert!(
+        requests.is_empty(),
+        "legitimate repeated data must resolve locally without an L2 review"
+    );
 }

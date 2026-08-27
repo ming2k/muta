@@ -178,7 +178,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         session_context: None,
         loop_status: LoopStatus::Idle,
         harness_retry_pending: false,
-        activity_status: String::new(),
+        phase: None,
         provider_retry: None,
         delegated: false,
         todos: None,

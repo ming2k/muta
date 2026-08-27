@@ -207,7 +207,7 @@ pub fn format_retry_duration(duration: std::time::Duration) -> String {
     }
 }
 
-/// The view-scoped chrome of one session: the activity-bar text, the
+/// The view-scoped chrome of one session: the typed activity phase, the
 /// responding flag, and the structural round/turn counters. Each session —
 /// the primary and every live `/btw` aside — owns an entry in
 /// [`App::session_chrome`], and a view renders exclusively from the entry of
@@ -218,9 +218,9 @@ pub fn format_retry_duration(duration: std::time::Duration) -> String {
 /// actually streaming.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionChrome {
-    /// Activity-bar text ("" when idle). Per session: a background aside's
-    /// "running" status lives in its own entry, invisible to the main view.
-    pub activity: String,
+    /// Typed activity phase (None when idle). Per session: a background
+    /// aside's live phase lives in its own entry, invisible to the main view.
+    pub phase: Option<crate::phase::Phase>,
     /// Whether this session currently has a live round (drives the
     /// breathing/spinner animation and Esc-to-interrupt arming).
     pub responding: bool,
@@ -580,7 +580,9 @@ pub struct App {
     /// build the primary's retry affordance. Asides read their own
     /// `SessionChrome::can_retry`.
     pub harness_retry_pending: bool,
-    pub activity_status: String,
+    /// Typed activity-bar phase for the primary session (`None` = idle /
+    /// bar hidden). Never holds transport setbacks — see `crate::phase`.
+    pub phase: Option<crate::phase::Phase>,
     pub provider_retry: Option<ProviderRetryState>,
     /// Whether all tool permissions are auto-approved this session
     /// (`--delegate` / `/delegate on`). Mirrored from the harness snapshot.

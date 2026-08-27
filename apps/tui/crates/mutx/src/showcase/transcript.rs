@@ -49,6 +49,7 @@ pub fn run() -> io::Result<()> {
                     selection: &selection,
                     cell_selection: None,
                     activity: "showcase render check",
+                    backoff_clause: None,
                     awaiting_permission: false,
                     spinner_phase: (scroll as usize) % 8,
                     input: "Resize the terminal, scroll, or switch fixtures...",

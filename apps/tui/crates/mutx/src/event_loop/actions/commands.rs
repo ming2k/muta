@@ -152,7 +152,7 @@ pub(super) async fn handle_send_chat(
             let expanded = composer_attachments::strip_orphan_image_chips(&expanded, images.len());
             if !app.in_side_view {
                 runtime.is_responding.store(true, Ordering::SeqCst);
-                *runtime.activity_status.lock().await = "queued".to_string();
+                *runtime.phase.lock().await = Some(crate::phase::Phase::Queued);
             }
             app.idle_sessions.remove(viewed_session_id);
             app.running_sessions.insert(viewed_session_id.to_string());
