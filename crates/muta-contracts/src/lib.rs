@@ -45,8 +45,9 @@ pub use command::{CommandRecord, CommandResult, CommandStatus, SearchHit};
 
 pub mod completion;
 pub use completion::{
-    CommandAlias, CommandCatalog, CommandExample, CommandSpec, CommandSuggestion,
-    ComposerCompletion, ComposerCompletionKind, InputCompletion, InputCompletionKind,
+    CommandAlias, CommandCatalog, CommandExample, CommandSpec, CommandSubcommandSpec,
+    CommandSuggestion, ComposerCompletion, ComposerCompletionKind, InputCompletion,
+    InputCompletionKind,
 };
 
 pub mod tool_output;

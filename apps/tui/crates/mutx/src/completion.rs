@@ -10,12 +10,15 @@ use crate::composer::{composer_text_width, composer_wrapped_pos};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandDoc {
     pub name: String,
+    /// The single prose introduction (contract has exactly one field).
     pub summary: String,
-    pub description: String,
     pub usage: Vec<String>,
     pub examples: Vec<(String, String)>,
     pub intent_keywords: Vec<String>,
     pub category: Option<String>,
+    /// First-token verbs (`/schedule list` → `list`) with their own
+    /// introductions; rendered after the parent's usage block.
+    pub subcommands: Vec<(String, String)>,
 }
 
 impl CommandDoc {
@@ -23,7 +26,6 @@ impl CommandDoc {
         Self {
             name: spec.name.clone(),
             summary: spec.summary.clone(),
-            description: spec.description.clone(),
             usage: spec.usage.clone(),
             examples: spec
                 .examples
@@ -32,6 +34,11 @@ impl CommandDoc {
                 .collect(),
             intent_keywords: spec.intent_keywords.clone(),
             category: spec.category.clone(),
+            subcommands: spec
+                .subcommands
+                .iter()
+                .map(|sub| (sub.name.clone(), sub.summary.clone()))
+                .collect(),
         }
     }
 }

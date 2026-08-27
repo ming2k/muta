@@ -29,6 +29,8 @@ fn transcript_content_rect_spans_band_and_gap_rows() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
+                silent_clause: None,
+                pulse_levels: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,

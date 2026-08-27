@@ -84,6 +84,8 @@ pub fn run() -> io::Result<()> {
                     cell_selection: None,
                     activity: "",
                     backoff_clause: None,
+                    silent_clause: None,
+                    pulse_levels: None,
                     awaiting_permission: false,
                     spinner_phase: 0,
                     input: "",

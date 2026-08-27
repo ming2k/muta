@@ -805,7 +805,7 @@ pub fn effort_ignition() -> io::Result<()> {
 
     use crate::effort_ignition::{self, ignition_finished};
     use crate::model::selection::SelectionState;
-    use crate::view::{HintBarView, draw_composer_igniting, draw_hint_bar};
+    use crate::view::{ModelBarView, draw_composer_igniting, draw_model_bar};
 
     let theme = Theme::default();
     struct State {
@@ -853,25 +853,21 @@ pub fn effort_ignition() -> io::Result<()> {
                     record: false,
                     image_count: 0,
                     paste_count: 0,
+                    hints: crate::components::composer_hints::ComposerHints::default(),
                 },
                 (true, elapsed_ms),
             );
-            draw_hint_bar(
+            draw_model_bar(
                 f,
                 hint_rect,
-                HintBarView {
+                ModelBarView {
                     current_model: "k3",
                     model_available: true,
                     provider_name: Some("kimi-code"),
-                    messages: &[],
                     reasoning_effort: Some("max"),
-                    busy: false,
-                    can_retry: false,
                     context_tokens: Some(12_400),
                     last_turn_tps: Some(47.8),
                     ignition_elapsed_ms: elapsed_ms,
-                    composer_send_mode: None,
-                    queue_editing_badge: None,
                 },
                 &theme,
             );

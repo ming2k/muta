@@ -108,12 +108,14 @@ fn completions_settings_triggers_and_subcommands() {
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     assert_eq!(labels, vec!["/settings reload"]);
 
-    // Legacy /config <space> also suggests /settings reload
+    // Legacy /config <space> completes against /settings' verbs but keeps
+    // the alias spelling the user typed — alias rewriting happens only at
+    // dispatch, never in the completion popup.
     app.input = "/config ".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    assert_eq!(labels, vec!["/settings reload"]);
+    assert_eq!(labels, vec!["/config reload"]);
 }
 
 #[test]
@@ -174,7 +176,7 @@ fn completions_candidates_carry_rich_doc_for_inspector() {
     assert!(models_cand.doc.is_some());
     let doc = models_cand.doc.as_ref().unwrap();
     assert_eq!(doc.name, "/models");
-    assert!(!doc.description.is_empty());
+    assert!(!doc.summary.is_empty());
     assert!(!doc.usage.is_empty());
     assert!(!doc.examples.is_empty());
     assert_eq!(doc.category.as_deref(), Some("Model"));

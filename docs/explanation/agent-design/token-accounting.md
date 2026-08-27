@@ -332,15 +332,22 @@ the underlying attempt ledger. Its aggregates filter that ledger strictly: only
 the master conversation's *completed* attempts feed any rate, so failed retries
 can neither inflate nor deflate a pace figure.
 
-The summary block reports four explicitly labeled scopes, never one ambiguous
+The summary block reports three explicitly labeled scopes, never one ambiguous
 number:
 
 | Scope | Definition |
 |-------|------------|
-| **TTFT** | Request dispatch to the first visible output event; session-wide `p50 · p95` |
+| **TTFT** | Request dispatch to the first visible output event; session-wide median |
 | **Stream rate** | Streamed output tokens excluding the first event's tokens, divided by the first-to-last-event span; needs at least two events or it renders `–` |
 | **E2E output rate** | Completion tokens divided by dispatch-to-validated-response span; deliberately includes TTFT |
-| **Server decode rate** | Reserved for provider-native generation telemetry; stays `–` until a provider supplies it |
+
+TTFT folds its per-attempt samples into a session-wide **median** rather than
+percentiles. A TUI session yields only a handful of completed attempts, and
+with nearest-rank sampling every upper percentile beyond the median collapses
+into "the worst attempt" (p95 equals max for n ≤ 20), dressing a single tail
+sample up as statistics. The median stays stable as sessions grow, while the
+tail it does not summarize remains visible row by row in the round tables
+below.
 
 Excluding the first event's tokens matters because chunked transports often de-
 liver several tokens in the initial payload; counting them against stream time

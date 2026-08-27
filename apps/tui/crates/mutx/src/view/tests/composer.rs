@@ -58,6 +58,8 @@ fn input_box_grows_with_wrapped_content() {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     backoff_clause: None,
+                    silent_clause: None,
+                    pulse_levels: None,
                     activity: "",
                     awaiting_permission: false,
                     spinner_phase: 0,
@@ -136,7 +138,8 @@ fn draw_composer_records_region_for_empty_input() {
             true,
             0,
             0,
-        );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
     });
 
     // The empty text row sits one line below the box's top edge.
@@ -178,7 +181,8 @@ fn draw_composer_wraps_and_positions_caret() {
             true,
             0,
             0,
-        );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
     });
 }
 
@@ -217,7 +221,8 @@ fn draw_composer_caret_flush_against_final_grapheme() {
                 false,
                 0,
                 0,
-            );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
         });
         let cursor = match terminal.cursor() {
             mutx_engine::CursorState::Visible(x, y) => (x, y),
@@ -264,6 +269,7 @@ fn draw_composer_highlighted_accents_only_the_command_token() {
                 record: false,
                 image_count: 0,
                 paste_count: 0,
+                hints: crate::components::composer_hints::ComposerHints::default(),
             },
             "/repeat".len(),
         );
@@ -318,6 +324,7 @@ fn draw_composer_highlight_clamps_at_wrap_boundary() {
                 record: false,
                 image_count: 0,
                 paste_count: 0,
+                hints: crate::components::composer_hints::ComposerHints::default(),
             },
             "/sessions".len(),
         );
@@ -368,7 +375,8 @@ fn draw_composer_paints_paste_and_image_chips_distinctly() {
             false,
             1,
             1,
-        );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
     });
     let buf = terminal.buffer();
     let text_y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -462,7 +470,8 @@ fn draw_composer_leaves_orphan_chip_labels_as_plain_text() {
             false,
             0,
             0,
-        );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
     });
     let buf = terminal.buffer();
     let text_y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -526,7 +535,7 @@ fn draw_composer_colors_only_backed_chips_when_mixed() {
             false,
             0, // image_count: no image payload staged,
             1, // paste_count: one paste payload staged,
-        );
+            crate::components::composer_hints::ComposerHints::default());
     });
     let buf = terminal.buffer();
     let text_y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -603,7 +612,8 @@ fn draw_composer_chip_keeps_identity_color_under_selection() {
             false,
             0,
             1,
-        );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
     });
     let buf = terminal.buffer();
     let text_y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -655,7 +665,8 @@ fn draw_composer_chip_pill_continues_across_wrap() {
             false,
             1,
             0,
-        );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
     });
     let buf = terminal.buffer();
     let panel_bg = theme.input_surface();
@@ -664,7 +675,10 @@ fn draw_composer_chip_pill_continues_across_wrap() {
     // panel padding) must carry the chip band, proving the pill survives
     // the wrap instead of reverting to plain text on the continuation row.
     let chip_glyphs: Vec<char> = image_chip.chars().filter(|c| *c != ' ').collect();
-    for row in 0..5u16 {
+    // Row 0 is the `as:` meta row and row 4 the keys row (neither is chip
+    // territory); chip text starts on the prompt row (row 1) and may wrap
+    // into the rows below, up to the keys row.
+    for row in 1..4u16 {
         for col in 0..16u16 {
             let cell = buf.get(col, row).expect("row cell");
             if chip_glyphs.contains(&cell.symbol().chars().next().unwrap_or('\0')) {
@@ -726,7 +740,8 @@ fn cursor_screen_pos_matches_drawn_caret() {
                 false,
                 0,
                 0,
-            );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
         });
         let drawn = match terminal.cursor() {
             mutx_engine::CursorState::Visible(x, y) => (x, y),
@@ -811,7 +826,8 @@ fn composer_cjk_selection_covers_full_width_glyphs() {
             false,
             0,
             0,
-        );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
     });
     let g = terminal.buffer();
     let y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -876,7 +892,8 @@ fn composer_two_cjk_select_all_has_no_extra_glyph_or_tail_highlight() {
             false,
             0,
             0,
-        );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
     });
 
     let y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -952,7 +969,8 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
             true,
             0,
             0,
-        );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
     });
     let anchor = layout_map.cursor_at(rect.x + 2, rect.y + text_row).unwrap();
     assert_eq!(anchor.byte_offset, 0);
@@ -984,7 +1002,8 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
                 false,
                 0,
                 0,
-            );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
         });
         (0..10u16)
             .map(|c| t.buffer().get(c, text_row).unwrap().bg)
@@ -1064,6 +1083,8 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
+                silent_clause: None,
+                pulse_levels: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -1110,7 +1131,8 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
             false,
             0,
             0,
-        );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
     });
 
     let buffer = terminal.buffer();
@@ -1229,13 +1251,14 @@ fn composer_focused_and_unfocused_panels_render_distinct_backgrounds() {
                 false,
                 0,
                 0,
-            );
+            crate::components::composer_hints::ComposerHints::default(),
+                    );
         });
         let buffer = terminal.buffer();
-        // A point inside the panel: the top padding row is painted
-        // unconditionally, so it carries the panel background.
+        // A point inside the panel: the top row (the composer's `as:` meta
+        // row when focused, plain padding when blurred) is painted
+        // unconditionally, so it carries the panel background either way.
         let cell = &buffer[(0, 0)];
-        assert_eq!(cell.symbol(), " ", "top padding row must be blank");
         cell.bg
     };
 
@@ -1291,6 +1314,8 @@ fn queued_user_message_renders_badge_and_dimmer_bg() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
+                silent_clause: None,
+                pulse_levels: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -1378,6 +1403,8 @@ fn held_insert_renders_the_held_label_and_dimmer_bg() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
+                silent_clause: None,
+                pulse_levels: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -1547,6 +1574,8 @@ fn h1_underline_clamps_with_emoji_grapheme() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
+                silent_clause: None,
+                pulse_levels: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,

@@ -734,6 +734,11 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
     let start_instant = std::time::Instant::now();
     // The ledger identity of this invocation (ADR-0091): command word without
     // the leading slash, plus the raw argument remainder.
+    //
+    // Alias normalization happens exactly once, HERE, and only in the ledger
+    // identity — `cmd` keeps whatever spelling the user submitted. Completion
+    // never rewrites an alias mid-typing (aliases are first-class candidates),
+    // so dispatch is the single point where `/config` becomes `/settings`.
     let name = parts[0].trim_start_matches('/');
     let args = cmd.strip_prefix(parts[0]).unwrap_or("").trim();
     match BuiltinCmd::from_slash(parts[0]) {

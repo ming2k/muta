@@ -95,6 +95,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         .provider_retry
         .as_ref()
         .map(|retry| format!(" · {}", retry.summary(std::time::Instant::now())));
+    let backoff = backoff_clause.clone();
 
     // Compute the displayed input text first so the transcript layout can
     // reserve the right height for a wrapping, growing input box.
@@ -249,6 +250,28 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         .collect();
     let queue_modal_items: Vec<view::QueueItemView> = queue_items.clone();
 
+    // Annotation slot: at most one lives here per frame. The two clauses
+    // are phase-exclusive by construction — transport retries only occur in
+    // AwaitingModel, stream silence only after deltas have flowed *and*
+    // while a stream phase is still live (a tool exec has no stream that
+    // could go silent; its liveness story is the step clock).
+    let streaming = matches!(
+        app.phase,
+        Some(crate::phase::Phase::Thinking | crate::phase::Phase::Answering)
+    );
+    let silent_clause_display = if streaming {
+        app.pulse
+            .silent_secs(std::time::Instant::now())
+            .map(|secs| format!(" · silent {secs}s"))
+    } else {
+        None
+    };
+    let clause = backoff.as_deref().or(silent_clause_display.as_deref());
+    let pulse_levels = if streaming {
+        app.pulse.levels(std::time::Instant::now())
+    } else {
+        None
+    };
     let transcript_render = view::draw_transcript(
         f,
         &mut layout_map,
@@ -258,8 +281,9 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             selection: &app.selection,
             cell_selection: app.drag.cell_info.as_ref(),
             activity: &status,
-            backoff_clause: backoff_clause.as_deref(),
-            // A pending permission request forces the activity bar
+            backoff_clause: clause,
+            silent_clause: None,
+            pulse_levels, // A pending permission request forces the activity bar
             // on (and tints it warning) so it stays the visible
             // anchor above the permission sheet even if the loop
             // has gone idle.
@@ -339,24 +363,22 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         let model_available = active_provider_row
             .is_none_or(|row| row.models.iter().any(|m| m == &app.current_model));
         let busy = app.running_sessions.contains(viewed_session_id);
+        let _ = busy; // keys-row input; consumed by the composer draw below
         // `/retry` affordance (ADR-0128): offered exactly while the viewed
         // session has a stopped round parked for retry — mirrored from the
         // session-scoped harness snapshot into `SessionChrome`, never
         // re-derived by scanning the transcript (an error notice can follow
         // a completed round, and a compaction can drop the notice entirely).
         let can_retry = !busy && viewed_chrome.can_retry;
-        let queue_editing_badge = app.queue_pointer_badge(viewed_session_id);
-        let hint_rects = view::draw_hint_bar(
+        let _ = can_retry; // retry affordance now renders on the composer keys row
+        let model_bar_rects = view::draw_model_bar(
             f,
             hint_rect,
-            view::HintBarView {
+            view::ModelBarView {
                 current_model: &app.current_model,
                 model_available,
                 provider_name: hint_instance,
-                messages: view_messages,
                 reasoning_effort: hint_reasoning,
-                busy,
-                can_retry,
                 context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
                 last_turn_tps: viewed_chrome
                     .last_turn_performance
@@ -364,13 +386,11 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 ignition_elapsed_ms: app
                     .effort_ignition_epoch
                     .map(|epoch| epoch.elapsed().as_millis()),
-                composer_send_mode: Some(app.composer_send_mode),
-                queue_editing_badge,
             },
             &app.theme,
         );
-        app.hint_performance_rect = hint_rects.performance;
-        app.hint_context_rect = hint_rects.context;
+        app.hint_performance_rect = model_bar_rects.performance;
+        app.hint_context_rect = model_bar_rects.context;
     } else {
         app.hint_context_rect = None;
         app.hint_performance_rect = None;
@@ -461,12 +481,37 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let byte_cursor = app.byte_cursor();
             let image_count = app.pending_images.len();
             let paste_count = app.pending_text_pastes.len();
+            // Compose-target derivation happens while `&app` borrows are
+            // still immutable; the result is an owned value the composer can
+            // consume after taking its mutable borrows.
+            let queue_editing = app.queue_editing_target(viewed_session_id);
+            let busy = app.running_sessions.contains(viewed_session_id);
+            let composer_hints = {
+                use crate::components::composer_hints::{
+                    ComposerHints, QueueEditKind, compose_target,
+                };
+                ComposerHints {
+                    compose_target: compose_target(
+                        busy,
+                        Some(app.composer_send_mode),
+                        queue_editing.map(|(kind, number)| match kind {
+                            crate::model::document::UserMessageOrigin::Steer => {
+                                (QueueEditKind::Steer, number)
+                            }
+                            _ => (QueueEditKind::FollowUp, number),
+                        }),
+                        slash_len.is_some(),
+                    ),
+                    can_retry: !busy && viewed_chrome.can_retry,
+                }
+            };
             let composer_options = view::ComposerDrawOptions {
                 focused: !step_focused,
                 show_caret,
                 record: true,
                 image_count,
                 paste_count,
+                hints: composer_hints,
             };
             match slash_len {
                 Some(len) => view::draw_composer_highlighted(
@@ -520,6 +565,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         true,
                         image_count,
                         paste_count,
+                        composer_hints,
                     ),
                 },
             }

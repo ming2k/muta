@@ -317,6 +317,43 @@ impl App {
         None
     }
 
+    /// Resolve the queue pointer to a structured `(origin-kind, 1-based
+    /// position)` pair for the composer's `compose:` clause. Structured form
+    /// of [`Self::queue_pointer_badge`]'s label; `None` when disarmed.
+    pub fn queue_editing_target(
+        &self,
+        session_id: &str,
+    ) -> Option<(crate::model::document::UserMessageOrigin, usize)> {
+        let id = self.queue_pointer.as_deref()?;
+        let mut steer_count = 0;
+        for msg in self.messages.iter().chain(self.side_messages.iter()) {
+            if msg.delivery == crate::model::document::DeliveryStatus::Queued
+                && msg.origin == crate::model::document::UserMessageOrigin::Steer
+            {
+                steer_count += 1;
+                if msg.insert_id.as_deref() == Some(id) {
+                    return Some((
+                        crate::model::document::UserMessageOrigin::Steer,
+                        steer_count,
+                    ));
+                }
+            }
+        }
+        let mut followup_count = 0;
+        for item in self.pending_dispatch.iter() {
+            if item.session_id == session_id && item.state == QueuedDispatchState::Waiting {
+                followup_count += 1;
+                if item.id == id {
+                    return Some((
+                        crate::model::document::UserMessageOrigin::FollowUp,
+                        followup_count,
+                    ));
+                }
+            }
+        }
+        None
+    }
+
     /// Resolve [`Self::queue_pointer`] to the live follow-up item it points at, if any.
     pub fn queue_pointer_target(&self, session_id: &str) -> Option<&QueuedDispatch> {
         let id = self.queue_pointer.as_deref()?;

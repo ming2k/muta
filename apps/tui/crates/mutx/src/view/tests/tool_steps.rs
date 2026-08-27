@@ -53,6 +53,8 @@ fn runner_view_groups_children_into_turn_bands() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
+                silent_clause: None,
+                pulse_levels: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -161,6 +163,8 @@ fn runner_step_and_view_render_without_panicking() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
+                silent_clause: None,
+                pulse_levels: None,
                 activity: "running runner",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -204,6 +208,8 @@ fn runner_step_and_view_render_without_panicking() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
+                silent_clause: None,
+                pulse_levels: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -309,6 +315,8 @@ fn height_cache_skip_path_matches_full_layout() {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     backoff_clause: None,
+                    silent_clause: None,
+                    pulse_levels: None,
                     activity: "",
                     awaiting_permission: false,
                     spinner_phase: 0,
@@ -417,6 +425,8 @@ fn expanded_edit_diff_height_is_scroll_independent() {
                     selection: &SelectionState::None,
                     cell_selection: None,
                     backoff_clause: None,
+                    silent_clause: None,
+                    pulse_levels: None,
                     activity: "",
                     awaiting_permission: false,
                     spinner_phase: 0,
@@ -526,6 +536,8 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
                 selection: &SelectionState::None,
                 cell_selection: None,
                 backoff_clause: None,
+                silent_clause: None,
+                pulse_levels: None,
                 activity: "responding",
                 awaiting_permission: false,
                 spinner_phase: 0,
@@ -564,7 +576,7 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
             + crate::design::QUEUE_BAR_ROWS
             + crate::design::ACTIVITY_BAR_ROWS
             + rendered.input_rect.height // composer
-            + crate::design::HINT_BAR_ROWS;
+            + crate::design::MODEL_BAR_ROWS;
     // The terminal is 30 rows; the head is absent here, so the footer
     // band starts at 30 - footer_h.
     let band_y = 30 - footer_h;
@@ -606,7 +618,7 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
     );
     assert_eq!(
         Some(rendered.hint_rect),
-        footer_stack::rect_of(&rendered.footer, FooterRowId::Hint),
+        footer_stack::rect_of(&rendered.footer, FooterRowId::ModelBar),
         "hint bar rect appears in the registry exactly as returned"
     );
     assert_eq!(
@@ -617,7 +629,7 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
                 + QUEUE_BAR_ROWS
                 + ACTIVITY_BAR_ROWS
                 + rendered.input_rect.height,
-            HINT_BAR_ROWS
+            MODEL_BAR_ROWS
         ),
         "hint bar rect matches the legacy offset"
     );

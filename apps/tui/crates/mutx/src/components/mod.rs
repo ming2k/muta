@@ -1,3 +1,4 @@
+pub(super) mod composer_hints;
 pub(super) mod footer;
 pub(super) mod keycap;
 pub(super) mod list;

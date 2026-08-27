@@ -31,7 +31,7 @@ attribute join; the wide gap before the legend is R3 — see the
 | Legend | `Ctrl+T` + ` expand` | keycap (`theme.brand()` + BOLD) + `theme.muted()` |
 
 The legend keeps a guaranteed `BAR_LEGEND_GAP_MIN` columns of breathing
-room from the preview — wider than the hint bar's 2-col gap — so a
+room from the preview — wider than the model bar's 2-col gap — so a
 truncated item never butts its `…` against the keycap. Under width pressure the
 legend drops the `expand` label (keeping just the `Ctrl+T` keycap), then drops
 entirely, so the tag, progress, and preview on the left always survive. The

@@ -1,8 +1,12 @@
-//! Backend-owned command catalog shared by every frontend.
+//! Backend-owned command vocabulary shared by every frontend.
+//!
+//! Commands are *harness commands*: control-plane operations owned by the
+//! session harness (invoked from a composer as `/name`). The daemon owns the
+//! vocabulary; frontends only render it.
 
 use serde::{Deserialize, Serialize};
 
-/// One concrete example for a slash command.
+/// One concrete example for a harness command (invoked as `/name`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct CommandExample {
@@ -10,13 +14,16 @@ pub struct CommandExample {
     pub description: String,
 }
 
-/// A canonical slash command and all metadata needed for completion/help.
+/// A canonical harness command and all metadata needed for completion/help.
+///
+/// Exactly one prose field exists: [`CommandSpec::summary`]. It doubles as the
+/// menu line and the inspector/detail text, so keep it informative on its own
+/// (a second long-form field would just drift back into near-duplicate prose).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct CommandSpec {
     pub name: String,
     pub summary: String,
-    pub description: String,
     #[serde(default)]
     pub usage: Vec<String>,
     #[serde(default)]
@@ -26,6 +33,22 @@ pub struct CommandSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub category: Option<String>,
+    /// First-token verbs this command accepts (`/schedule list` → `list`),
+    /// each with its own one-line introduction. Progressive disclosure: the
+    /// parent's list stays lean; subcommand detail appears only after the
+    /// user types the space.
+    #[serde(default)]
+    pub subcommands: Vec<CommandSubcommandSpec>,
+}
+
+/// One first-token verb of a harness command.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct CommandSubcommandSpec {
+    pub name: String,
+    /// One-line introduction shown when completing `/cmd <cursor>`; keep it
+    /// distinct from the sibling lines and from the parent summary.
+    pub summary: String,
 }
 
 /// A non-command trigger that steers users to a canonical command.
@@ -37,7 +60,11 @@ pub struct CommandSuggestion {
     pub reason: String,
 }
 
-/// Accepted compatibility spelling and its canonical command.
+/// An accepted compatibility spelling (`/setup`) and its canonical command
+/// (`/init`). Aliases are first-class completion candidates: they surface
+/// under their own name — never rewritten into the target mid-completion —
+/// so the user's mental model ("I typed `set`, I pick `setup`") is preserved.
+/// The composer submits the alias text verbatim; dispatch resolves it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct CommandAlias {

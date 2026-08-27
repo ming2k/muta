@@ -22,8 +22,8 @@ mapping, driving the view layer through the borrowed `TranscriptView` seam.
 │  Activity bar                                 (0 or 1 row)  │
 │  Todo bar                                      (0 or 1 row)  │
 │  Queue bar                                     (0 or 2 rows) │
-│  Input box                         (2 + wrapped lines)  │
-│  Hint bar                                       (1 row)  │
+│  Input box             (2 + wrapped lines, meta rows built in)  │
+│  Model bar                                       (1 row) │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -52,7 +52,7 @@ that `Esc` dismissed); it is not a focus toggle.
 | Component | Description |
 |-----------|-------------|
 | [User message](user-message.md) | Sent prompts on a dimmer panel with `┃` bar |
-| [Input box](input-box.md) | Live editable prompt on a brighter panel |
+| [Input box](input-box.md) | Live editable prompt on a brighter panel; its padding rows are the composer-owned meta rows (`as:` target + Enter keys + char count) |
 | [Assistant text](assistant-text.md) | Regular markdown text, 4-space indent |
 | [Code block](code-block.md) | Borderless code with `┃` bar + line-number gutter |
 | [Expandable step](expandable-step.md) | Shared shape for collapsible transcript entries |
@@ -63,7 +63,7 @@ that `Esc` dismissed); it is not a focus toggle.
 | [Envoy view](envoy-view.md) | Inline envoy step + zoomed-in child stream + navigation bar + focus stack |
 | [Activity bar](activity-bar.md) | Breathing-dot liveness anchor + live status label + elapsed; clickable to open the Activity modal |
 | [Todo bar](todo-bar.md) | One-row task-list summary: `TODOS` tag · done/total progress · current item; click to open the Activity modal on the Todos tab |
-| [Hint bar](hint-line.md) | Next-Enter action sentence + model/reasoning/context cluster |
+| [Model bar](model-bar.md) | Ambient gauges: model name + reasoning tier + `@instance` · context usage · stream rate |
 | [Head row](status-bar.md) | Ambient session state at the top of every view: session identity + workspace (left) + mode flags (right) |
 | [Modals](modals.md) | Models, Model editor, Sessions, Session, History, Question, Permission, Tool-step detail, Help, Toasts |
 | [Render components](components.md) | Reusable view-layer components: modal pages, lists, scroll bodies, footers, toasts, notices, and option rows |

@@ -525,6 +525,8 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
                 selection: &selection,
                 cell_selection: None,
                 backoff_clause: None,
+                silent_clause: None,
+                pulse_levels: None,
                 activity: "",
                 awaiting_permission: false,
                 spinner_phase: 0,

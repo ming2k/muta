@@ -5,7 +5,7 @@ input box (below the ambient [todo bar](todo-bar.md) and queue bar). It
 unifies the live status label and the breathing-dot liveness anchor into one
 click-to-open bar. Long-lived session-state flags (`DELEGATED` and friends)
 are deliberately absent — they live on the dedicated [head row](status-bar.md)
-below the hint bar — and the task-list summary lives on its own todo bar above.
+below the model bar — and the task-list summary lives on its own todo bar above.
 
 ## Appearance
 
@@ -15,18 +15,47 @@ below the hint bar — and the task-list summary lives on its own todo bar above
 ```
 
 The bar surfaces what the user most wants to know mid-round: the **master
-label** (the typed phase — shimmering muted → brand sweep) and the
-**elapsed** timer. During a provider backoff a third, **muted transport
-clause** appears beside (never instead of) the master label, counting down
-live: the workflow story ("waiting for model") and the transport setback
-("retry 2/8 next in 4s") are separate channels and never overwrite each
-other. Under width pressure segments die in a fixed order — full clause →
-compact clause (`· 2/8`) → clause gone → elapsed → label truncation →
-interrupt words — so the master label keeps its column budget intact.
+label** (the typed phase — steady brand italic) and the **elapsed** timer.
+During a provider backoff a **muted transport clause** appears beside
+(never instead of) the master label, counting down live: the workflow story
+("waiting for model") and the transport setback ("retry 2/8 next in 4s")
+are separate channels and never overwrite each other. Under width pressure
+segments die in a fixed order — full clause → compact clause (`· 2/8`) →
+clause gone → elapsed → label truncation → interrupt words — so the master
+label keeps its column budget intact.
+
+## The dot's three liveness regimes
+
+Exactly one mechanism drives the dot each frame (`classify_liveness` is a
+pure function; gate wins over everything, byte presence outranks the
+clock). All three quote real facts — motion here is always paid for by an
+event, never by the frame clock:
+
+| Regime | When | Dot | Meter cells |
+|--------|------|-----|-------------|
+| `Flowing` | A stream phase (`thinking` / `answering`) with at least one delta arrived | Byte-driven luminance: each delta injects energy that decays exponentially (fast ≈0.4s, slow ≈1.6s); a dark-ember floor (~28% brand mix) keeps inter-chunk quiet from reading as death | `▏..█` two-cell histogram of the same two channels — chunk pressure readable at a glance |
+| `Holding` | No stream armed (waiting for model, running a tool) | Classic slow breath (`breathing_color`) — seconds ticking are the only honest change to quote | hidden |
+| `Gated` | Permission / ask_user pending | Static amber, no motion — paused for a human; animating would lie about who is working | hidden |
 
 ```text
- ● making edits [3s]                                  Esc Esc interrupt
+ ● answering █▆ 31s · 2m07s            Esc Esc interrupt   ← flowing
+ ● making edits 12s · 2m07s            Esc Esc interrupt   ← holding
+ ● awaiting permission                 Esc Esc interrupt   ← gated
 ```
+
+The meter cells vanish outside stream phases on purpose: a tool execution
+has no stream to quote, and empty cells would imply a measurement where
+none exists.
+
+## Silence clause
+
+Once deltas have flowed in the current turn and none has arrived for ≥8s
+(`pulse::SILENT_AFTER`, long enough to spare thinking models' natural
+inter-chunk pauses), the annotation slot shows `· silent Ns`. It is gated
+to stream phases only — silence means "this stream stopped producing", not
+"nothing is happening". The slot itself is exclusive by construction:
+transport retries live in `awaiting model`, silence in streaming phases,
+so the two clauses can never compete.
 
 The structural counters — `round N · turn M · <model>` — no longer live on
 the bar. They take space and change rarely, so they moved into the
@@ -40,16 +69,19 @@ current prompt, round/turn/model/elapsed; Todos tab: the task list).
 | Location | 1 row directly above the input box |
 | Height | `ACTIVITY_BAR_ROWS = 1` while a round is active, 0 when idle |
 | Glyph | `●` (`spinner_glyph`), BOLD |
-| Glyph color | `breathing_color(phase, theme.brand(), theme.surface())` — a cosine luminance sweep between brand and surface so the dot breathes at roughly 10 fps instead of cycling braille frames |
+| Glyph color | regime-dependent — see the three liveness regimes above; `Holding` is `breathing_color(phase, theme.brand(), theme.surface())` |
 | Master label color | `theme.brand()` + ITALIC |
 | Transport clause color | `theme.muted()` — an annotation, not a headline |
 | Elapsed | `theme.muted()` |
 | Indent | 1 space |
 
-The breathing sweep is the TUI's single liveness anchor — every other
+The dot is the TUI's single liveness anchor — every other
 running indicator (tool step, thinking marker) holds a steady
 accent so this dot is the only thing in the user's peripheral vision that
-moves. See [ADR-0008](../../adr/0008-single-breathing-anchor.md).
+moves. The master label carries no resident animation on purpose: an early
+shimmer was paid for by the frame clock rather than by any work event, and
+the typed phase's own word changes are the honest freshness signal. See
+[ADR-0008](../../adr/0008-single-breathing-anchor.md).
 
 ## Visibility
 

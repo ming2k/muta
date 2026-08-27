@@ -69,7 +69,7 @@ The view modules live flat under `apps/tui/crates/mutx/src/`, grouped by concern
 | `disclosure/` | Expandable-step disclosure: state machine, sticky-pin tracking, step renderers. |
 | `layout/` | Transcript arrangement strategies (`default` / `legacy`). |
 | `theme.rs` / `design.rs` | Color scheme + non-color design tokens (spacing, gutters, row counts). |
-| `chrome.rs` / `composer.rs` / `primitives.rs` / `text_layout.rs` / … | Drawing leaves: activity/state/hint bars, input composer, rect helpers, text wrapping. |
+| `chrome.rs` / `composer.rs` / `primitives.rs` / `text_layout.rs` / … | Drawing leaves: activity/state/model bars, input composer, rect helpers, text wrapping. |
 | `model/` | Semantic data model: `document` (`TranscriptMessage`, `Block`, markdown parsing), `layout` (`LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing), `selection` (`SelectionState`). |
 | `fuzzy` / `providers` / `modal` / `completion` | Helpers shared with the shell. |
 

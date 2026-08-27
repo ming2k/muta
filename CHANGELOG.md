@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.5] - 2026-08-27
+
+### Added
+
+- **Model bar replaces the hint bar.** The single strip pinned below the
+  input box is now an ambient gauge row — model (with its reasoning-effort
+  tier and `@<instance>` provenance suffix), context usage, and latest-turn
+  stream speed (`– tok/s` until a defensible sample exists) — degrading in a
+  fixed order on narrow terminals. Everything *actionable* about the composer
+  moved inside the box instead: the `as:` target row and the next-`Enter`
+  keys row are composer-owned meta rows painted in the panel's own padding
+  bands (`composer_hints`), tinted to blend with the box rather than the
+  outer surface. Documented in the new `docs/reference/tui/model-bar.md`.
+- **Byte-driven activity-bar liveness (`pulse`).** `BytePulse` turns
+  `StreamDelta` arrival times into an excited-decay energy accumulator and a
+  two-cell block-density micro-meter. Decay is stamped lazily at read time —
+  the stored value carries its injection instant — so levels are a pure
+  function of `now`: no animation timer, no per-frame bookkeeping.
+- **Structured queue-edit targeting.** The queue pointer now resolves to an
+  `(origin-kind, 1-based position)` pair (`App::queue_editing_target`) so the
+  composer's `as:` clause can precisely name an in-place edit of a queued
+  steer or follow-up message.
+
+### Changed
+
+- **Slash-command completion is backend-owned vocabulary.** The daemon's
+  command catalog is the single source of truth for harness commands; the
+  TUI only renders rows it receives. `/model` completion now expands declared
+  subcommands (each carrying its own one-line introduction) and falls back to
+  expanding bracketed options out of usage signatures for legacy tables, so
+  no frontend hard-codes a second copy of the command tree.
+- Performance report: removed the `Server decode` summary row and the static
+  `Timing client observed` line. Both were permanently empty/static because no
+  adapter currently supplies provider-native timing; the reserved ledger fields
+  (`provider_decode_us`, `provider_output_tokens`, …) are unchanged so a future
+  adapter can surface server-side decode telemetry without protocol changes.
+- Performance report: the TTFT summary now reports a single session-wide
+  median instead of `p50 · p95`. With only a handful of attempts per TUI
+  session, upper percentiles collapse to "the worst attempt" (nearest-rank
+  p95 equals max for n ≤ 20) and read as false precision; per-attempt tails
+  stay visible in the per-round drill-down table.
+
 ## [0.36.4] - 2026-08-27
 
 ### Changed

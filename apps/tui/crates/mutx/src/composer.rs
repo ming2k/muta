@@ -203,6 +203,7 @@ pub fn draw_composer(
     record: bool,
     image_count: usize,
     paste_count: usize,
+    hints: crate::components::composer_hints::ComposerHints,
 ) {
     draw_composer_impl(
         view,
@@ -213,6 +214,7 @@ pub fn draw_composer(
             record,
             image_count,
             paste_count,
+            hints,
         },
         None,
         None,
@@ -226,6 +228,9 @@ pub struct ComposerDrawOptions {
     pub record: bool,
     pub image_count: usize,
     pub paste_count: usize,
+    /// Owned meta-row inputs: what the buffer is and what Enter does. Built
+    /// by the caller before the mutable composer borrow begins.
+    pub hints: crate::components::composer_hints::ComposerHints,
 }
 
 /// The effort-ignition variant of [`draw_composer`]: `prompt_accent` carries
@@ -270,6 +275,7 @@ fn draw_composer_impl(
         record,
         image_count,
         paste_count,
+        hints,
     } = options;
     let ComposerView {
         frame,
@@ -346,11 +352,26 @@ fn draw_composer_impl(
     // avoids relying on font-dependent `▄`/`▀` rasterization and stays
     // identical across every terminal.
     let top_edge = Span::styled(" ".repeat(full_w), Style::default().bg(panel_bg));
-    let bottom_edge = Span::styled(" ".repeat(full_w), Style::default().bg(panel_bg));
+    // (The old bottom-padding span row is gone: the keys row now closes the
+    // box with real content.)
 
-    // Top edge: a full panel-bg padding row, giving the text below a full
-    // row of breathing room instead of the old half-block transition.
-    lines.push(Line::from(top_edge.clone()));
+
+    // Top edge: a full panel-bg padding row carrying the composer's `as:`
+    // target row — what the buffer is now and what commit will make of it.
+    // Falls back to pure panel-bg while unfocused/blurred so the meta row
+    // never competes with a step-focused transcript.
+    let top_edge = if focused {
+        Line::from(
+            crate::components::composer_hints::compose_target_spans(
+                hints.compose_target,
+                theme,
+                panel_bg,
+            ),
+        )
+    } else {
+        Line::from(top_edge.clone())
+    };
+    lines.push(top_edge);
 
     // Text rows: `› ` marks the first logical line and a two-space indent
     // marks every wrapped continuation, so the box reads as a shell-style
@@ -464,9 +485,44 @@ fn draw_composer_impl(
         }
     }
 
-    // Bottom edge: a full panel-bg padding row, closing the box with the same
-    // breathing room as the top.
-    lines.push(Line::from(bottom_edge));
+    // Bottom edge: the keys row — what the next Enter does (left) and how
+    // many chars the buffer carries (right). Keycaps tint with `panel_bg` so
+    // they blend into the box; the row degrades by width ladder before the
+    // counter is ever dropped.
+    {
+        let keys_width =
+            full_w.saturating_sub(COMPOSER_PROMPT_PREFIX_COLS + COMPOSER_RIGHT_PAD_COLS)
+                .max(8);
+        use crate::components::composer_hints::{
+            ActionDensity, format_char_count, keys_row_spans,
+        };
+        let density = ActionDensity::for_width(keys_width);
+        let mut row = keys_row_spans(hints.can_retry, density, hints.compose_target, theme, panel_bg);
+        let used: usize = row.iter().map(|span| str_len(&span.content)).sum();
+        let count_label = format_char_count(input.chars().count());
+        let count_cols = str_len(&count_label) + COMPOSER_RIGHT_PAD_COLS;
+        let gap = full_w.saturating_sub(used + count_cols);
+        // Degrade the counter before the row ever overflows: if keys + counter
+        // no longer fit with at least one filler column, drop the counter and
+        // let the padded tail close the row (keys are the non-negotiable part).
+        if gap >= 1 {
+            row.push(Span::styled(" ".repeat(gap), Style::default().bg(panel_bg)));
+            row.push(Span::styled(
+                count_label,
+                Style::default().fg(theme.muted()).bg(panel_bg),
+            ));
+            row.push(Span::styled(
+                " ".repeat(COMPOSER_RIGHT_PAD_COLS),
+                Style::default().bg(panel_bg),
+            ));
+        } else {
+            row.push(Span::styled(
+                padded_tail(full_w, used),
+                Style::default().bg(panel_bg),
+            ));
+        }
+        lines.push(Line::from(row));
+    }
 
     frame.render_widget(Paragraph::new(lines), input_rect);
 

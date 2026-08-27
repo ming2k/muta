@@ -62,9 +62,11 @@ pub(crate) enum FooterRowId {
     /// permission sheet's anchor — but kept in the id set so the stack can
     /// place it like any other row.
     Composer,
-    /// The hint bar (Enter action + model/context cluster). Its context-meter
-    /// segment has its own finer hit rect recorded by `draw_hint_bar`.
-    Hint,
+    /// The model bar (model identity, context usage, stream rate). Its
+    /// context-meter segment has its own finer hit rect recorded by
+    /// `draw_model_bar`. The Enter-action keys and the `as:` target row live
+    /// inside the composer row above, not here.
+    ModelBar,
 }
 
 /// The result of placing a footer stack: every placed row's rect, plus the
@@ -171,7 +173,7 @@ mod tests {
                 height: 3,
             },
             FooterRow {
-                id: FooterRowId::Hint,
+                id: FooterRowId::ModelBar,
                 height: 1,
             },
         ]
@@ -194,7 +196,7 @@ mod tests {
             (FooterRowId::Queue, 12),
             (FooterRowId::Activity, 13),
             (FooterRowId::Composer, 14),
-            (FooterRowId::Hint, 17),
+            (FooterRowId::ModelBar, 17),
         ];
         for (idx, (id, y)) in expect.iter().enumerate() {
             assert_eq!(rects[idx].0, *id, "row {idx} id");
@@ -204,7 +206,7 @@ mod tests {
         }
         // Heights match each row's declared height.
         assert_eq!(rects[4].1.height, 3, "composer height");
-        assert_eq!(rects[5].1.y, 17, "hint directly below the composer");
+        assert_eq!(rects[5].1.y, 17, "model bar directly below the composer");
     }
 
     /// A hidden row (height 0) keeps its slot but places nothing; the rows

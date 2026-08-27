@@ -58,7 +58,7 @@ The theme engine adheres to a **3-tier design token architecture**:
 | `heading_fg` | (190, 194, 181) | Markdown headings |
 | `quote_fg` | (156, 145, 118) | Blockquotes |
 | `dim_fg` | (94, 99, 94) | Line-number gutter, tool name |
-| `primary` | (142, 161, 145) | Brand / selection; hint-line keys; `┃` bars; breathing-dot indicator |
+| `primary` | (142, 161, 145) | Brand / selection; model-bar keys; `┃` bars; breathing-dot indicator |
 | `success` | (117, 148, 117) | Completed tool status; context-usage indicator < 70% |
 | `info` | (128, 153, 156) | Running tool status, thinking marker |
 | `warning` | (181, 149, 93) | Warnings; context-usage indicator 70–90% |

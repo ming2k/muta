@@ -481,7 +481,7 @@ that exposes a free-text input.
 
 Unlike other centered modals, the question modal uses the **None** recess
 policy — the surface is not dimmed or occluded and the footer is not
-collapsed, so the transcript, activity bar, input box, and hint bar all stay
+collapsed, so the transcript, activity bar, input box, and model bar all stay
 fully visible at full brightness. The modal panel simply floats on top with
 its own solid background.
 

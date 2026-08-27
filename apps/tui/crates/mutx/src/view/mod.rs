@@ -6,7 +6,8 @@
 
 pub use crate::chrome::{ActivityBarView, draw_activity_bar, draw_todo_bar};
 pub use crate::chrome::{
-    HintBarView, QueueBarView, QueueItemView, draw_completion_menu, draw_hint_bar, draw_queue_bar,
+    ModelBarView, QueueBarView, QueueItemView, draw_completion_menu, draw_model_bar,
+    draw_queue_bar,
 };
 pub use crate::composer::{
     ComposerDrawOptions, INPUT_MSG_IDX, draw_composer, draw_composer_highlighted,
@@ -18,7 +19,7 @@ pub(crate) use crate::design::{
     ACTIVITY_BAR_ROWS, BASH_FOLD_HEAD_ROWS, BASH_FOLD_TAIL_ROWS, CODE_BAND_GUTTER_GAP,
     CODE_BAND_GUTTER_MIN_WIDTH, COMPOSER_MAX_HEIGHT_DIVISOR, COMPOSER_MIN_HEIGHT,
     COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS,
-    ENVOY_FOOTER_ROWS, FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS, HINT_BAR_ROWS, MIN_TERMINAL_COLS,
+    ENVOY_FOOTER_ROWS, FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS, MODEL_BAR_ROWS, MIN_TERMINAL_COLS,
     MIN_TERMINAL_ROWS, PAGE_HEADER_ROWS, QUEUE_BAR_ROWS, REASONING_TRACE_BLOCK_GAP_ROWS,
     REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH, TODO_BAR_ROWS, TOOL_STEP_BODY_INDENT_COLS,
     TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT,
@@ -163,6 +164,13 @@ pub struct TranscriptView<'a> {
     /// label — e.g. `· retry 2/8 next in 4s` while a provider retry backs
     /// off. Muted styling; first casualty under width pressure.
     pub backoff_clause: Option<&'a str>,
+    /// Stream-silence note (`· silent 9s`) shown when a flowing stream has
+    /// gone quiet past the arming threshold. Phase-exclusive with the
+    /// transport clause, so the annotation slot never arbitrates.
+    pub silent_clause: Option<&'a str>,
+    /// Decayed byte-pulse levels for the dot's Flowing channel. `None`
+    /// delegates to the breathing clock.
+    pub pulse_levels: Option<(f32, f32)>,
     /// Whether a tool permission request is awaiting the user's decision. When
     /// true the activity bar is forced visible even if the loop has gone idle,
     /// and its label reads as a permission state so the live status surface
@@ -416,6 +424,8 @@ pub fn draw_transcript(
         cell_selection,
         activity,
         backoff_clause,
+        silent_clause,
+        pulse_levels,
         awaiting_permission,
         spinner_phase,
         input,
@@ -617,7 +627,7 @@ pub fn draw_transcript(
     let hint_height: u16 = if chrome_hidden || in_runner {
         0
     } else {
-        HINT_BAR_ROWS
+        MODEL_BAR_ROWS
     };
     // The composer/hint gap is 0 and the activity/composer gap is 0: the
     // hint bar sits flush against the composer's bottom edge and the activity
@@ -665,7 +675,7 @@ pub fn draw_transcript(
                 height: input_box_height,
             },
             FooterRow {
-                id: FooterRowId::Hint,
+                id: FooterRowId::ModelBar,
                 height: hint_height,
             },
         ]
@@ -872,6 +882,8 @@ pub fn draw_transcript(
                 ActivityBarView {
                     status: activity,
                     backoff_clause,
+                    silent_clause: silent_clause.map(|s| s.to_string()),
+                    pulse_levels,
                     awaiting_permission,
                 },
                 spinner_phase,
@@ -886,11 +898,11 @@ pub fn draw_transcript(
         .filter(|_| input_box_height > 0)
         .unwrap_or_default();
 
-    // The hint bar sits directly below the input box, carrying the input action
-    // plus ambient model/context info. Its rect is computed even though
-    // its draw call is delegated to the app loop (which owns the masked input
-    // state and the context-token source).
-    let hint_rect = footer_stack::rect_of(&placed_footer, FooterRowId::Hint)
+    // The model bar sits directly below the input box, carrying the ambient
+    // gauges (model/context/rate). Its rect is computed even though its draw
+    // call is delegated to the app loop (which owns the context-token
+    // source); composer-owned rows live inside `input_rect` itself.
+    let hint_rect = footer_stack::rect_of(&placed_footer, FooterRowId::ModelBar)
         .filter(|_| hint_height > 0)
         .unwrap_or_default();
 

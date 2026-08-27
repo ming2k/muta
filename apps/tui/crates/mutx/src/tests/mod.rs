@@ -179,6 +179,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         loop_status: LoopStatus::Idle,
         harness_retry_pending: false,
         phase: None,
+        pulse: crate::pulse::BytePulse::default(),
         provider_retry: None,
         delegated: false,
         todos: None,

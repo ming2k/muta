@@ -151,16 +151,7 @@ fn list_body(
 
     body.push(kv(
         "TTFT",
-        &match (percentile(&ttfts, 50), percentile(&ttfts, 95)) {
-            (Some(p50), Some(p95)) => {
-                format!(
-                    "p50 {} · p95 {}",
-                    fmt_duration_us(p50),
-                    fmt_duration_us(p95)
-                )
-            }
-            _ => "–".to_string(),
-        },
+        &median(&ttfts).map_or_else(|| "–".to_string(), |value| fmt_duration_us(value)),
         theme,
     ));
     body.push(kv(
@@ -173,13 +164,6 @@ fn list_body(
         &fmt_rate_label(aggregate_e2e_tps(successful.iter().copied())),
         theme,
     ));
-    let provider_decode = aggregate_decode_tps(successful.iter().copied());
-    body.push(kv(
-        "Server decode",
-        &provider_decode.map_or_else(|| "–".to_string(), |rate| fmt_rate_label(Some(rate))),
-        theme,
-    ));
-    body.push(kv("Timing", "client observed", theme));
     body.push(Line::from(""));
 
     if rounds.is_empty() {
@@ -475,34 +459,22 @@ fn aggregate_e2e_tps<'a>(records: impl Iterator<Item = &'a RequestUsageRecord>) 
     (tokens > 0 && duration > 0).then(|| tokens as f64 * 1_000_000.0 / duration as f64)
 }
 
-fn aggregate_decode_tps<'a>(records: impl Iterator<Item = &'a RequestUsageRecord>) -> Option<f64> {
-    let mut tokens = 0u64;
-    let mut duration = 0u64;
-    for performance in records.filter_map(|record| record.performance) {
-        let (Some(decode_us), Some(output_tokens)) = (
-            performance.provider_decode_us,
-            performance.provider_output_tokens,
-        ) else {
-            continue;
-        };
-        let Some(decode_tokens) = output_tokens.checked_sub(1) else {
-            continue;
-        };
-        if decode_us == 0 || decode_tokens == 0 {
-            continue;
-        }
-        tokens = tokens.saturating_add(decode_tokens);
-        duration = duration.saturating_add(decode_us);
+/// Nearest-rank median of a pre-sorted sample.
+///
+/// The session summary deliberately reports the TTFT median only: with the
+/// handful of requests a TUI session produces, upper percentiles collapse to
+/// "the worst attempt" and read as false precision, while the median stays
+/// stable as sessions grow. Per-attempt tails remain visible in the
+/// per-round drill-down table below.
+fn median(sorted: &[u64]) -> Option<u64> {
+    let middle = sorted.len() / 2;
+    if sorted.len() % 2 == 1 {
+        sorted.get(middle).copied()
+    } else {
+        let low = *sorted.get(middle.checked_sub(1)?)?;
+        let high = *sorted.get(middle)?;
+        Some((low + high) / 2)
     }
-    (tokens > 0 && duration > 0).then(|| tokens as f64 * 1_000_000.0 / duration as f64)
-}
-
-fn percentile(sorted: &[u64], percentile: usize) -> Option<u64> {
-    if sorted.is_empty() {
-        return None;
-    }
-    let index = (sorted.len().saturating_sub(1) * percentile).div_ceil(100);
-    sorted.get(index).copied()
 }
 
 fn quality_label(record: &RequestUsageRecord) -> &'static str {
@@ -777,5 +749,15 @@ mod tests {
             .expect("performance")
             .output_events = 1;
         assert_eq!(aggregate_stream_tps([&sample].into_iter()), None);
+    }
+
+    #[test]
+    fn median_handles_odd_even_and_empty_samples() {
+        assert_eq!(median(&[]), None);
+        assert_eq!(median(&[7]), Some(7));
+        // Even count: mean of the two middle values, rounded down.
+        assert_eq!(median(&[3, 9]), Some(6));
+        assert_eq!(median(&[1, 2, 100]), Some(2));
+        assert_eq!(median(&[1, 2, 4, 101]), Some(3));
     }
 }

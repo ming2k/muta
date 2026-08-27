@@ -77,25 +77,26 @@ impl CommandCategory {
     }
 }
 
-/// Rich metadata and specification for a command.
+/// Rich metadata and specification for a harness command.
 ///
 /// Contains:
 /// - `name`: The canonical slash-prefixed name (e.g. `"/schedule"`)
-/// - `summary`: Short description for compact lists & scanning (<= 30-40 chars)
-/// - `description`: Detailed explanation for the inspector/help panel
+/// - `summary`: THE single prose introduction (<= 30-60 chars); used verbatim
+///   in compact lists, the inspector panel, and `/help`
 /// - `usage`: Syntax signatures and parameters
 /// - `examples`: Concrete practical invocations with inline explanations
 /// - `intent_keywords`: Synonyms and intent cues used to guess what command the user wants
 /// - `category`: Logical grouping
+/// - `subcommands`: First-token verbs with their own introductions
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
     pub name: &'static str,
     pub summary: &'static str,
-    pub description: &'static str,
     pub usage: &'static [&'static str],
     pub examples: &'static [(&'static str, &'static str)],
     pub intent_keywords: &'static [&'static str],
     pub category: CommandCategory,
+    pub subcommands: &'static [(&'static str, &'static str)],
 }
 
 /// Single source of truth for the built-in slash-command vocabulary.
@@ -113,11 +114,11 @@ macro_rules! define_builtin_commands {
     ( $(
         $variant:ident = $name:literal : {
             summary: $summary:literal,
-            description: $desc:literal,
             usage: [ $( $usage:literal ),* $(,)? ],
             examples: [ $( ($ex_cmd:literal, $ex_desc:literal) ),* $(,)? ],
             intent_keywords: [ $( $kw:literal ),* $(,)? ],
             category: $cat:ident,
+            $( subcommands: [ $( ($sub_name:literal, $sub_summary:literal) ),* $(,)? ] ,)?
         }
     ),+ $(,)? ) => {
         /// The set of built-in slash commands. Generated from a single
@@ -132,18 +133,18 @@ macro_rules! define_builtin_commands {
             /// declaration order.
             pub const ALL: &[(&'static str, &'static str)] = &[ $( ($name, $summary) ),+ ];
 
-            /// Every built-in command specification with detailed description,
-            /// usage signatures, examples, and intent keywords.
+            /// Every built-in command specification with usage signatures,
+            /// examples, intent keywords, and declared subcommands.
             pub const SPECS: &'static [CommandSpec] = &[
                 $(
                     CommandSpec {
                         name: $name,
                         summary: $summary,
-                        description: $desc,
                         usage: &[ $( $usage ),* ],
                         examples: &[ $( ($ex_cmd, $ex_desc) ),* ],
                         intent_keywords: &[ $( $kw ),* ],
                         category: CommandCategory::$cat,
+                        subcommands: &subcommands![ $($($sub_name, $sub_summary),*)? ],
                     }
                 ),+
             ];
@@ -177,10 +178,18 @@ macro_rules! define_builtin_commands {
     };
 }
 
+/// Helper behind `define_builtin_commands!`: an omitted `subcommands: […]`
+/// entry becomes an empty slice instead of a macro syntax error.
+macro_rules! subcommands {
+    () => { &[] as &[(&'static str, &'static str)] };
+    ( $($name:literal, $summary:literal),* $(,)? ) => {
+        &( [ $( ($name, $summary) ),* ] ) as &[(&'static str, &'static str)]
+    };
+}
+
 define_builtin_commands! {
     Models = "/models" : {
-        summary: "Switch the active model",
-        description: "Opens the interactive model switcher overlay or changes the active LLM provider and model for the session. Preserves conversation context across model switches.",
+        summary: "Switch the active model (context preserved)",
         usage: ["/models"],
         examples: [("/models", "Open model selector modal")],
         intent_keywords: ["model", "llm", "switch", "provider", "gpt", "claude", "gemini", "deepseek", "change-model"],
@@ -188,7 +197,6 @@ define_builtin_commands! {
     },
     Connections = "/connections" : {
         summary: "Manage LLM provider connections",
-        description: "Inspect and configure upstream API endpoints, API keys, bearer tokens, and custom base URLs for supported LLM providers.",
         usage: ["/connections"],
         examples: [("/connections", "Open provider connection manager")],
         intent_keywords: ["connection", "provider", "api-key", "auth", "endpoint", "credentials", "token", "login"],
@@ -196,23 +204,20 @@ define_builtin_commands! {
     },
     Tools = "/tools" : {
         summary: "Manage session tools (enable/disable)",
-        description: "Interactive overlay to toggle individual built-in and MCP tools on or off for the live session.",
         usage: ["/tools"],
         examples: [("/tools", "Open tool management overlay")],
         intent_keywords: ["tools", "tool", "function", "bash", "toggle", "disable", "enable", "mcp-tools"],
         category: Tools,
     },
     Mcp = "/mcp" : {
-        summary: "Manage MCP servers (enable/disable, reconnect)",
-        description: "Inspect Model Context Protocol (MCP) servers, view tool manifests, check status, and reconnect failed or modified servers.",
+        summary: "Manage MCP servers (status, reconnect)",
         usage: ["/mcp"],
         examples: [("/mcp", "Inspect and manage MCP servers")],
         intent_keywords: ["mcp", "server", "protocol", "context", "reconnect", "mcp-server"],
         category: Tools,
     },
     Compact = "/compact" : {
-        summary: "Compact older complete rounds now",
-        description: "Summarize and prune older conversation rounds into durable context memory, freeing context window space while retaining critical decisions.",
+        summary: "Compact older rounds into durable context memory",
         usage: ["/compact"],
         examples: [("/compact", "Trigger immediate conversation compaction")],
         intent_keywords: ["compact", "compress", "summarize", "prune", "truncate", "shrink", "clean-context", "context"],
@@ -220,7 +225,6 @@ define_builtin_commands! {
     },
     New = "/new" : {
         summary: "Start a new session, keeping history",
-        description: "Starts a fresh conversation session with an empty transcript while keeping previous sessions safe in persistent storage. Typing /clear or /reset guides you here.",
         usage: ["/new"],
         examples: [("/new", "Start a fresh session")],
         intent_keywords: ["clear", "reset", "clean", "restart", "fresh", "cls", "wipe", "blank", "new-session"],
@@ -228,31 +232,37 @@ define_builtin_commands! {
     },
     Permissions = "/permissions" : {
         summary: "Show or clear always-allowed tool rules",
-        description: "Inspect active explicit authority rules or clear the persisted per-workspace grants.",
         usage: ["/permissions", "/permissions clear"],
         examples: [("/permissions", "Show active permission rules"), ("/permissions clear", "Clear process-local auto-allow rules")],
         intent_keywords: ["permission", "allow", "rule", "policy", "security", "approve", "always-allow", "grant"],
         category: Config,
+        subcommands: [
+            ("clear", "Clear all always-allowed tool rules"),
+        ],
     },
     Settings = "/settings" : {
-        summary: "Inspect or reload settings",
-        description: "Open the Settings overlay (theme, appearance, layout) or reload config.toml live with '/settings reload'.",
+        summary: "Open Settings overlay (theme, appearance)",
         usage: ["/settings", "/settings reload"],
         examples: [("/settings", "Open Settings overlay"), ("/settings reload", "Re-read and apply config.toml live")],
-        intent_keywords: ["settings", "config", "preferences", "theme", "themes", "appearance", "options", "color", "layout", "reload", "conf", "setting", "setup"],
+        intent_keywords: ["settings", "config", "preferences", "theme", "themes", "appearance", "options", "color", "layout", "reload", "conf"],
         category: Config,
+        subcommands: [
+            ("reload", "Re-read and apply config.toml live"),
+        ],
     },
     Delegate = "/delegate" : {
         summary: "Toggle delegated autonomous execution mode",
-        description: "Toggles delegated mode: empowers AI to make autonomous decisions, auto-approves tool permissions, and resolves ambiguities self-reliantly.",
         usage: ["/delegate", "/delegate on", "/delegate off"],
         examples: [("/delegate on", "Enable delegated autonomous mode"), ("/delegate off", "Return to interactive confirmation mode")],
         intent_keywords: ["delegate", "delegation", "auto", "autopilot", "yolo", "autonomous", "unattended", "headless", "skip-confirm", "auto-approve", "bypass"],
         category: Automation,
+        subcommands: [
+            ("on", "Enable autonomous decisions and tool auto-approval"),
+            ("off", "Return to interactive confirmation mode"),
+        ],
     },
     Master = "/master" : {
         summary: "Switch master agent persona and role",
-        description: "Switch between master persona roles (code, architect, reviewer, security) to adjust persona tone, focus, and capability boundaries.",
         usage: ["/master", "/master [code|architect|reviewer|security]"],
         examples: [("/master architect", "Switch to system design & analysis focus"), ("/master reviewer", "Read-only code review mode")],
         intent_keywords: ["master", "role", "persona", "mode", "identity", "architect", "reviewer", "security", "switch-role"],
@@ -260,7 +270,6 @@ define_builtin_commands! {
     },
     Search = "/search" : {
         summary: "Semantic search over session history",
-        description: "Search across the current project's past session transcripts and messages using semantic/vector search.",
         usage: ["/search <query>"],
         examples: [("/search auth token handling", "Find past discussions on authentication")],
         intent_keywords: ["search", "find", "query", "grep", "history", "lookup", "recall", "past-messages"],
@@ -268,7 +277,6 @@ define_builtin_commands! {
     },
     Sessions = "/sessions" : {
         summary: "Browse or resume past sessions",
-        description: "Open the interactive session history picker to search, preview, resume, or delete stored sessions. Can also resume directly by ID prefix.",
         usage: ["/sessions", "/sessions <id>"],
         examples: [("/sessions", "Open interactive session picker"), ("/sessions 0195", "Resume session matching prefix")],
         intent_keywords: ["sessions", "session", "resume", "continue", "history", "list", "reopen", "browse", "switch-session"],
@@ -276,7 +284,6 @@ define_builtin_commands! {
     },
     Fork = "/fork" : {
         summary: "Fork conversation into a child session",
-        description: "Fork the current conversation transcript into an independent child session for branching experiments or alternate approaches.",
         usage: ["/fork"],
         examples: [("/fork", "Branch current conversation into a child session")],
         intent_keywords: ["fork", "branch", "clone", "duplicate", "split", "copy-session"],
@@ -284,7 +291,6 @@ define_builtin_commands! {
     },
     Tree = "/tree" : {
         summary: "Visual DAG session tree and branch navigation",
-        description: "Open the interactive session DAG tree viewer to inspect conversation branches, jump between nodes, and fork new branches.",
         usage: ["/tree"],
         examples: [("/tree", "Open interactive DAG session tree")],
         intent_keywords: ["tree", "dag", "branch", "branches", "lineage", "timeline", "history-tree", "checkout"],
@@ -292,7 +298,6 @@ define_builtin_commands! {
     },
     Diff = "/diff" : {
         summary: "View workspace modifications made in this session",
-        description: "Inspect the aggregated git-aware diff of all file modifications and creations produced across the current conversation branch.",
         usage: ["/diff"],
         examples: [("/diff", "View workspace file changes")],
         intent_keywords: ["diff", "changes", "modified", "patch", "git-diff", "review-changes"],
@@ -300,7 +305,6 @@ define_builtin_commands! {
     },
     Undo = "/undo" : {
         summary: "Undo the last conversation turn and file changes",
-        description: "Revert the most recent assistant turn, jumping back one step in the DAG session tree and discarding uncommitted modifications.",
         usage: ["/undo"],
         examples: [("/undo", "Undo last turn")],
         intent_keywords: ["undo", "revert", "rollback", "back", "pop", "discard-turn"],
@@ -308,71 +312,79 @@ define_builtin_commands! {
     },
     Dashboard = "/dashboard" : {
         summary: "Session daemon control dashboard",
-        description: "Open the full-screen session dashboard to monitor live daemon sessions, view activity, inspect logs, and manage connections.",
         usage: ["/dashboard"],
         examples: [("/dashboard", "Open full-screen session dashboard")],
         intent_keywords: ["dashboard", "host", "daemon", "monitor", "status", "overview", "dock", "fleet"],
         category: System,
     },
     Usage = "/usage" : {
-        summary: "Cross-session usage statistics",
-        description: "Open the usage-statistics overlay: daily token totals, per-model breakdown, and the recent request event log. Data comes from a durable store under data/usage/ that survives session cleanup, so it reflects every day's real consumption.",
+        summary: "Cross-session token usage statistics overlay",
         usage: ["/usage"],
         examples: [("/usage", "Open the usage statistics overlay")],
         intent_keywords: ["usage", "stats", "statistics", "tokens", "tokens-per-day", "daily", "consumption", "spend", "quota"],
         category: System,
     },
     Btw = "/btw" : {
-        summary: "Open a side conversation (aside)",
-        description: "Open an aside conversation forked from the current context that runs in the background without interrupting the main task.",
+        summary: "Open a background side conversation (aside)",
         usage: ["/btw", "/btw <prompt>", "/btw list"],
         examples: [("/btw explain this regex", "Ask a quick side question"), ("/btw list", "Open active asides list modal")],
         intent_keywords: ["btw", "aside", "side", "subtask", "parallel", "quick", "note", "by-the-way"],
         category: Session,
+        subcommands: [
+            ("list", "Open the active asides modal"),
+        ],
     },
     Repeat = "/repeat" : {
-        summary: "Schedule a recurring cron prompt",
-        description: "Schedule a prompt on a recurring 5-field cron pattern (e.g. '*/5 * * * *'). Runs first turn immediately and persists across restarts.",
+        summary: "Schedule a recurring 5-field cron prompt",
         usage: ["/repeat <cron> <prompt>", "/repeat list", "/repeat cancel <id>"],
         examples: [("/repeat \"*/10 * * * *\" \"check health\"", "Schedule recurring health check")],
         intent_keywords: ["repeat", "cron", "loop", "interval", "periodic", "recurring"],
         category: Automation,
+        subcommands: [
+            ("list", "List armed cron schedules"),
+            ("cancel", "Cancel one schedule by id"),
+            ("help", "Show /repeat usage"),
+        ],
     },
     Schedule = "/schedule" : {
-        summary: "Schedule a prompt (cron or countdown)",
-        description: "Schedule a prompt: recurring cron ('0 9 * * 1-5'), countdown ('10m', '2h30m'), or absolute time ('14:00', 'tomorrow 09:00').",
+        summary: "Schedule a prompt (cron, countdown, or absolute)",
         usage: ["/schedule <when> <prompt>", "/schedule list", "/schedule cancel <id>"],
         examples: [("/schedule 15m \"run test suite\"", "Run one-shot in 15 minutes"), ("/schedule \"0 9 * * 1-5\" \"standup\"", "Run every weekday morning")],
         intent_keywords: ["schedule", "cron", "timer", "alarm", "later", "in", "countdown", "at", "remind", "delay"],
         category: Automation,
+        subcommands: [
+            ("list", "List scheduled prompts (recurring and one-shot)"),
+            ("cancel", "Cancel one schedule by id"),
+            ("help", "Show /schedule time-form syntax"),
+        ],
     },
     Skills = "/skills" : {
-        summary: "List or reload available skills",
-        description: "Browse discovered project and user skills with their descriptions and paths, or rescan skill directories.",
+        summary: "Browse available skills or rescan folders",
         usage: ["/skills", "/skills list", "/skills reload"],
         examples: [("/skills", "List available skills"), ("/skills reload", "Rescan skill folders")],
         intent_keywords: ["skills", "skill", "plugin", "extension", "capabilities", "reload-skills"],
         category: Tools,
+        subcommands: [
+            ("list", "List discovered project and user skills"),
+            ("reload", "Rescan skill directories now"),
+        ],
     },
     Skill = "/skill" : {
         summary: "Load a skill by name",
-        description: "Load a specific skill into the current session context to activate specialized instructions and tool capabilities.",
         usage: ["/skill <name>"],
         examples: [("/skill rust-expert", "Load the rust-expert skill")],
         intent_keywords: ["skill", "load-skill", "use-skill", "import-skill", "activate-skill"],
         category: Tools,
     },
     Init = "/init" : {
-        summary: "Initialize a .muta/ config tree",
-        description: "Scaffold a project-local .muta/ directory structure for custom commands, skills, MCP servers, and hooks.",
+        summary: "Scaffold a project-local .muta/ config tree",
         usage: ["/init [path]"],
         examples: [("/init", "Initialize .muta in current directory")],
-        intent_keywords: ["init", "scaffold", "setup", "bootstrap", "create-config"],
+        intent_keywords: ["init", "scaffold", "bootstrap", "create-config"],
         category: Project,
     },
     Trust = "/trust" : {
         summary: "Trust project-authored asset domains",
-        description: "Trust the exact current content of project MCP, skills, hooks, and rules independently from filesystem boundaries and runtime permissions.",
         usage: ["/trust", "/trust [all|mcp|skills|hooks|rules|status|revoke]"],
         examples: [
             ("/trust", "Trust every present project asset domain"),
@@ -385,10 +397,18 @@ define_builtin_commands! {
         ],
         intent_keywords: ["trust", "authorize", "asset-trust", "project-assets", "security"],
         category: Project,
+        subcommands: [
+            ("all", "Trust every present project asset domain"),
+            ("mcp", "Trust project MCP definitions only"),
+            ("skills", "Trust project skills only"),
+            ("hooks", "Trust project hooks only"),
+            ("rules", "Trust project rules only"),
+            ("status", "Show trust state for every asset domain"),
+            ("revoke", "Revoke every asset-domain grant"),
+        ],
     },
     Untrust = "/untrust" : {
         summary: "Revoke project asset trust",
-        description: "Revoke every content-bound project asset grant and unload project MCP, skills, hooks, rules, and commands.",
         usage: ["/untrust"],
         examples: [("/untrust", "Revoke all project asset trust")],
         intent_keywords: ["untrust", "revoke", "quarantine", "asset-trust"],
@@ -396,23 +416,24 @@ define_builtin_commands! {
     },
     Export = "/export" : {
         summary: "Export conversation to clipboard as Markdown",
-        description: "Renders the full conversation transcript (prompts, answers, tool calls and results) and copies it to the system clipboard.",
         usage: ["/export"],
         examples: [("/export", "Copy conversation markdown to clipboard")],
         intent_keywords: ["export", "copy", "share", "clipboard", "markdown", "dump", "save"],
         category: Session,
     },
     Debug = "/debug" : {
-        summary: "Debug tools (tracing & preview)",
-        description: "Developer tools: toggle network round-trip tracing with '/debug trace on|off' or dry-run next request body with '/debug preview'.",
+        summary: "Dev tools: request tracing and body preview",
         usage: ["/debug trace [on|off]", "/debug preview"],
         examples: [("/debug trace on", "Enable request tracing"), ("/debug preview", "Dry run next LLM request payload")],
         intent_keywords: ["debug", "trace", "log", "dry-run", "inspect", "troubleshoot"],
         category: Debug,
+        subcommands: [
+            ("trace", "Toggle provider round-trip capture on/off"),
+            ("preview", "Dry-run next provider wire body to disk"),
+        ],
     },
     Retry = "/retry" : {
         summary: "Retry last failed model request",
-        description: "Re-sends the last failed or interrupted request to the active model provider.",
         usage: ["/retry"],
         examples: [("/retry", "Retry last request")],
         intent_keywords: ["retry", "again", "resend", "redo", "re-run"],
@@ -420,7 +441,6 @@ define_builtin_commands! {
     },
     Help = "/help" : {
         summary: "Show available commands and keybindings",
-        description: "Open the comprehensive help modal or display reference documentation for slash commands and keyboard shortcuts.",
         usage: ["/help [topic]"],
         examples: [("/help", "Open help guide"), ("/help schedule", "Show help for /schedule")],
         intent_keywords: ["help", "man", "docs", "guide", "info", "usage", "?", "shortcuts", "keybindings"],
@@ -428,7 +448,6 @@ define_builtin_commands! {
     },
     Exit = "/exit" : {
         summary: "Exit the program",
-        description: "Gracefully shut down the active session and exit the terminal application.",
         usage: ["/exit"],
         examples: [("/exit", "Exit application")],
         intent_keywords: ["exit", "quit", "q", "leave", "bye", "shutdown"],
@@ -437,9 +456,12 @@ define_builtin_commands! {
 }
 
 impl BuiltinCmd {
-    /// Backward-compatible aliases for renamed commands. These resolve exactly
-    /// like their canonical target but are deliberately absent from
-    /// [`BuiltinCmd::ALL`], so they never appear in completion or `/help`.
+    /// Backward-compatible aliases for renamed commands. Unlike the legacy
+    /// behaviour, aliases are **first-class completion candidates** (see
+    /// `CommandAlias` in `muta-contracts`): typing `/set` offers a `setup`
+    /// row that stays `/setup` when selected — the alias is only resolved to
+    /// its target at dispatch time. They remain absent from
+    /// [`BuiltinCmd::ALL`] so `/help` keeps listing canonical names only.
     fn from_alias(input: &str) -> Option<Self> {
         match input {
             // `/host` was the pre-dashboard name (it leaked the daemon "host"
@@ -556,7 +578,6 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
         .map(|spec| muta_contracts::CommandSpec {
             name: spec.name.to_string(),
             summary: spec.summary.to_string(),
-            description: spec.description.to_string(),
             usage: spec
                 .usage
                 .iter()
@@ -576,6 +597,14 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
                 .map(|keyword| (*keyword).to_string())
                 .collect(),
             category: Some(spec.category.label().to_string()),
+            subcommands: spec
+                .subcommands
+                .iter()
+                .map(|(name, summary)| muta_contracts::CommandSubcommandSpec {
+                    name: (*name).to_string(),
+                    summary: (*summary).to_string(),
+                })
+                .collect(),
         })
         .collect::<Vec<_>>();
     commands.extend(
@@ -584,11 +613,11 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
             .map(|(name, summary)| muta_contracts::CommandSpec {
                 name: name.clone(),
                 summary: summary.clone(),
-                description: summary.clone(),
                 usage: vec![name.clone()],
                 examples: Vec::new(),
                 intent_keywords: Vec::new(),
                 category: Some("Project".to_string()),
+                subcommands: Vec::new(),
             }),
     );
 
@@ -600,6 +629,9 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
             ("/session", "/sessions"),
             ("/config", "/settings"),
             ("/reload", "/settings"),
+            ("/yolo", "/delegate"),
+            ("/auto", "/delegate"),
+            ("/autopilot", "/delegate"),
         ]
         .into_iter()
         .map(|(name, target)| muta_contracts::CommandAlias {
@@ -781,11 +813,31 @@ mod tests {
                 "summary must not be empty for {}",
                 spec.name
             );
+            // Single-prose-field invariant: summaries carry the whole
+            // introduction now, so they must be self-sufficient.
             assert!(
-                !spec.description.is_empty(),
-                "description must not be empty for {}",
-                spec.name
+                spec.summary.chars().count() >= 12,
+                "summary is too short to stand alone for {}: {}",
+                spec.name,
+                spec.summary
             );
+            // Subcommand declarations must be unique per command: duplicates
+            // would render as two completion rows with the same insert text.
+            let mut seen_subs = std::collections::HashSet::new();
+            for (sub_name, sub_summary) in spec.subcommands {
+                assert!(
+                    seen_subs.insert(*sub_name),
+                    "duplicate subcommand '{}' on {}",
+                    sub_name,
+                    spec.name
+                );
+                assert!(
+                    !sub_summary.is_empty(),
+                    "subcommand summary must not be empty for {} {}",
+                    spec.name,
+                    sub_name
+                );
+            }
             assert!(
                 !spec.usage.is_empty(),
                 "usage must not be empty for {}",

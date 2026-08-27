@@ -102,7 +102,7 @@ restored sessions), so the answer surfaces without opening the zoom.
 
 The message stream above is rendered by the same `draw_transcript` pass as
 the root conversation, just against `focused_messages()` instead of
-`self.messages`. The footer (activity bar, input box, hint bar)
+`self.messages`. The footer (activity bar, input box, model bar)
 collapses to 0 height — the zoomed view is read-only, and the navigation
 bar is its only chrome. See [Frame layout → Envoy zoom view](layout.md#envoy-zoom-view)
 for the rect math.

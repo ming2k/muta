@@ -69,32 +69,59 @@ impl InputCompletionEngine {
         };
         let replace_end = input.chars().count();
 
+        // ---- Second stage: `/cmd <cursor>` completes first-token verbs ----
+        // Progressive disclosure: the command menu stays a lean list of
+        // canonical names; the subcommand tier (with its own introductions)
+        // only appears once the user has committed to a parent and typed a
+        // space.
         if current.contains(char::is_whitespace) {
-            let command_name = current.split_whitespace().next().unwrap_or_default();
-            if let Some(spec) = self.catalog.find(command_name) {
-                let canonical_input = self
-                    .catalog
-                    .alias(command_name)
-                    .map(|alias| current.replacen(command_name, &alias.target, 1))
-                    .unwrap_or_else(|| current.clone());
-
-                let mut candidates = Vec::new();
-                for usage in &spec.usage {
-                    for expanded in expand_usage_options(usage) {
-                        if !candidates.contains(&expanded) {
-                            candidates.push(expanded);
-                        }
-                    }
-                }
-
-                return candidates
-                    .into_iter()
-                    .filter(|cand| cand.to_lowercase().starts_with(&canonical_input))
-                    .map(|cand| slash_item(&cand, &spec.summary, replace_end, spec, false))
-                    .collect();
-            }
+            return self.complete_subcommand(input, &current, replace_end);
         }
 
+        // ---- First stage: `/pre<cursor>` completes command names ----
+        //
+        // Aliases are first-class candidates here (not silently rewritten):
+        // typing `/set` offers an alias row that *stays* the alias when
+        // selected — dispatch resolves it. The row leads with `(alias)` and
+        // carries both spellings in its description so the flyout explains
+        // exactly what will be submitted and what it will run.
+        let mut items = Vec::new();
+        for spec in &self.catalog.commands {
+            if spec.name.to_lowercase().starts_with(&current) {
+                items.push(slash_item(&spec.name, &spec.summary, replace_end, spec, false));
+            }
+        }
+        for alias in &self.catalog.aliases {
+            let name = alias.name.to_lowercase();
+            if !name.starts_with(&current) {
+                continue;
+            }
+            let target_summary = self
+                .catalog
+                .find(&alias.target)
+                .map(|spec| spec.summary.as_str())
+                .unwrap_or_default();
+            items.push(InputCompletion {
+                label: alias.name.clone(),
+                description: format!(
+                    "(alias of {}) {}",
+                    alias.target,
+                    if target_summary.is_empty() {
+                        alias.target.clone()
+                    } else {
+                        format!("{target_summary}")
+                    }
+                ),
+                insert_text: alias.name.clone(),
+                replace_start: 0,
+                replace_end,
+                kind: InputCompletionKind::Slash,
+                command: self.catalog.find(&alias.target).cloned(),
+            });
+        }
+
+        // Trigger-word steering ("did you mean" for retired foreign idioms)
+        // keeps intent completion from duplicating the steered target.
         let trigger_suggestion = self
             .catalog
             .suggestions
@@ -113,19 +140,18 @@ impl InputCompletionEngine {
                 }
             });
         let trigger_target = trigger_suggestion.as_ref().map(|item| item.label.clone());
+        items.extend(trigger_suggestion);
 
-        let exact = self
-            .catalog
-            .commands
-            .iter()
-            .filter(|spec| spec.name.to_lowercase().starts_with(&current))
-            .map(|spec| slash_item(&spec.name, &spec.summary, replace_end, spec, false));
-
-        let intent = (!trigger.is_empty())
+        // Intent keywords ("fork" → /tree) still steer toward canonical
+        // commands, but only where no exact/prefix/alias candidate already
+        // covers the query. Collected first so `items` is only borrowed
+        // immutably here.
+        let intent: Vec<InputCompletion> = (!trigger.is_empty())
             .then(|| {
                 self.catalog.commands.iter().filter_map(|spec| {
                     if spec.name.to_lowercase().starts_with(&current)
                         || trigger_target.as_deref() == Some(spec.name.as_str())
+                        || items.iter().any(|item| item.label == spec.name)
                     {
                         return None;
                     }
@@ -143,12 +169,94 @@ impl InputCompletionEngine {
                 })
             })
             .into_iter()
-            .flatten();
+            .flatten()
+            .collect();
 
-        trigger_suggestion
+        items.extend(intent);
+        items
+    }
+
+    /// Complete the second token of `/cmd <query>` against the parent's
+    /// declared [`CommandSpec::subcommands`]. The returned rows carry their
+    /// own one-line introduction instead of repeating the parent summary.
+    /// When a parent declares nothing, fall back to expanding bracketed
+    /// options (`[on|off]`) out of the usage signatures so legacy tables keep
+    /// offering something.
+    fn complete_subcommand(
+        &self,
+        input: &str,
+        current_lower: &str,
+        replace_end: usize,
+    ) -> Vec<InputCompletion> {
+        // Only the second token is completable. `/trust ` (trailing space,
+        // empty verb) or `/trust st<cursor>` qualify; anything deeper
+        // (`/debug trace on<cursor>`) is already a real argument, not a
+        // subcommand position.
+        let mut tokens = current_lower.split_whitespace();
+        let command_name = tokens.next().unwrap_or_default().to_string();
+        let Some(spec) = self.catalog.find(&command_name) else {
+            return Vec::new();
+        };
+        let cursor_in_trailing_space = current_lower.ends_with(char::is_whitespace);
+        let token_count = current_lower.split_whitespace().count();
+        let matches_second_token_position = match (cursor_in_trailing_space, token_count) {
+            (true, 1) => true,
+            (false, 2) => true,
+            _ => false,
+        };
+        // The in-progress verb ("" when the caret sits right after the
+        // separating space).
+        let trailing = if cursor_in_trailing_space {
+            ""
+        } else {
+            current_lower.split_whitespace().nth(1).unwrap_or("")
+        };
+
+        if matches_second_token_position && !spec.subcommands.is_empty() {
+            let typed_parent_len = command_name.len(); // bytes, ASCII-safe (slash + name)
+            return spec
+                .subcommands
+                .iter()
+                .filter(|sub| sub.name.starts_with(trailing))
+                .map(|sub| InputCompletion {
+                    label: format!("{} {}", command_name, sub.name),
+                    description: sub.summary.clone(),
+                    insert_text: format!(
+                        "{} {}",
+                        &input[..typed_parent_len.min(input.len())],
+                        sub.name
+                    ),
+                    replace_start: 0,
+                    replace_end,
+                    kind: InputCompletionKind::Slash,
+                    command: Some(spec.clone()),
+                })
+                .collect();
+        }
+
+        // Legacy fallback: expand `[a|b]` options out of the usage strings
+        // as full-command candidates. Covers bracketed parameter slots
+        // beyond the verb position (`/debug trace <cursor>` → on|off) and
+        // parents that declare no verbs. Alias spellings stay transparent
+        // here (`/session o` completes against /sessions' usage), because
+        // every accepted row visibly carries its full literal text.
+        let mut candidates = Vec::new();
+        for usage in &spec.usage {
+            for expanded in expand_usage_options(usage) {
+                if !candidates.contains(&expanded) {
+                    candidates.push(expanded);
+                }
+            }
+        }
+        let canonical_input = self
+            .catalog
+            .alias(&command_name)
+            .map(|alias| current_lower.replacen(command_name.as_str(), &alias.target, 1))
+            .unwrap_or_else(|| current_lower.to_string());
+        candidates
             .into_iter()
-            .chain(exact)
-            .chain(intent)
+            .filter(|cand| cand.to_lowercase().starts_with(&canonical_input))
+            .map(|cand| slash_item(&cand, &spec.summary, replace_end, spec, false))
             .collect()
     }
 
@@ -591,7 +699,8 @@ mod tests {
         };
         assert!(items.is_empty());
 
-        // /trust offers only the closed asset-domain grammar.
+        // /trust offers only the closed asset-domain grammar, each verb with
+        // its own introduction (not the parent summary).
         let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(12, "/trust ".into(), 7).await
         else {
@@ -610,6 +719,19 @@ mod tests {
                 "/trust revoke"
             ]
         );
+        for item in &items {
+            assert_ne!(
+                item.description, "(via '') ",
+                "subcommand rows must carry their own summary"
+            );
+        }
+        let status_row = items.iter().find(|i| i.label == "/trust status").unwrap();
+        assert!(
+            status_row.description.contains("trust state"),
+            "status row shows its own introduction, got: {}",
+            status_row.description
+        );
+        assert_eq!(status_row.kind, InputCompletionKind::Slash);
 
         // Removed subcommands stay absent.
         let AgentResponse::ComposerCompletions { items, .. } =
@@ -654,6 +776,110 @@ mod tests {
                 "/master security"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn slash_aliases_are_first_class_candidates() {
+        let engine = InputCompletionEngine::new(catalog(), PathBuf::from("."));
+
+        // Typing `/set` offers the /settings alias `/setup`… wait — no: the
+        // alias table has no `/setup`; it offers `/session`, `/config` and
+        // friends by prefix. The important property: an alias row keeps its
+        // OWN name as insert text (never rewritten to the target mid-typing).
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(20, "/confi".into(), 6).await
+        else {
+            panic!("unexpected response")
+        };
+        let config_row = items.iter().find(|i| i.label == "/config").expect(
+            "alias /config surfaces for prefix /confi",
+        );
+        assert_eq!(config_row.insert_text, "/config");
+        assert!(
+            config_row.description.starts_with("(alias of /settings)"),
+            "row explains both spellings: {}",
+            config_row.description
+        );
+        // The flyout doc is the target's spec.
+        assert_eq!(
+            config_row.command.as_ref().map(|spec| spec.name.as_str()),
+            Some("/settings")
+        );
+
+        // The canonical command row exists alongside, with plain summary.
+        let settings_row = items
+            .iter()
+            .find(|i| i.label == "/settings")
+            .expect("canonical /settings also offered");
+        assert!(!settings_row.description.starts_with("(alias"));
+
+        // Exact alias input does NOT get silently swapped: inserting stays
+        // the alias spelling; resolution is dispatch's job.
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(21, "/config".into(), 7).await
+        else {
+            panic!("unexpected response")
+        };
+        let row = items
+            .iter()
+            .find(|i| i.label == "/config")
+            .expect("alias row persists at exact match");
+        assert_eq!(row.insert_text, "/config");
+    }
+
+    #[tokio::test]
+    async fn slash_subcommands_have_own_introductions_and_stop_at_depth_two() {
+        let engine = InputCompletionEngine::new(catalog(), PathBuf::from("."));
+
+        // After a declared parent + space, verbs complete with their own copy.
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(30, "/schedule ".into(), 10).await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["/schedule list", "/schedule cancel", "/schedule help"]);
+        for item in &items {
+            assert_ne!(
+                item.description, "Schedule a prompt (cron, countdown, or absolute)",
+                "verb rows must not parrot the parent summary"
+            );
+        }
+        let cancel = items.iter().find(|i| i.label == "/schedule cancel").unwrap();
+        assert!(cancel.description.contains("by id"));
+        // Insert restores the typed parent exactly and appends the verb.
+        assert_eq!(cancel.insert_text, "/schedule cancel");
+
+        // Prefix filter on the verb token.
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(31, "/schedule c".into(), 11).await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["/schedule cancel"]);
+
+        // Depth guard: three tokens deep is NOT a subcommand position
+        // (`/debug trace ` already completed `trace`; the next slot belongs
+        // to trace's own on|off usage fallback, not subcommand matching).
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(32, "/debug pre".into(), 10).await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["/debug preview"]);
+
+        // Commands without declarations keep the legacy usage-expansion
+        // fallback (bracketed options out of usage strings).
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(33, "/debug t".into(), 8).await
+        else {
+            panic!("unexpected response")
+        };
+        // `/debug` HAS declarations now — this exercises the declared path:
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["/debug trace"]);
     }
 
     #[test]

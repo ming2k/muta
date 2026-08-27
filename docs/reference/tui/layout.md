@@ -13,7 +13,7 @@ owns every cell rather than leaving gaps at the terminal emulator's default
 color. Components then render inside the **viewport**: `frame.area()`
 inset by `VIEWPORT_TOP_MARGIN = 1` row at the top only
 (`VIEWPORT_BOTTOM_MARGIN = 0`, `VIEWPORT_H_MARGIN = 0`), so components span
-the full terminal width and the hint bar pins flush against the terminal's
+the full terminal width and the model bar pins flush against the terminal's
 bottom edge. The top margin row is the only cell row kept as pure `app_bg`
 on every frame.
 
@@ -53,10 +53,10 @@ The default. A two-chunk vertical split inside `draw_transcript`:
 │  Todo bar (optional, 0 or 1 row)                   │          │
 │  Queue bar (optional, 0 or 2 rows)                 │ chunks[1]│
 │  Input box (grows with text, capped)               │          │
-│  Hint bar (1 row, persistent)                      │          │
+│  Model bar (1 row, persistent)                     │          │
 │  Status bar (1 row, persistent)                   ┘          │
 └──────────────────────────────────────────────────────────────┘
-  (bottom edge: the hint bar pins flush — no bottom viewport margin)
+  (bottom edge: the model bar pins flush — no bottom viewport margin)
 ```
 
 The top of every view carries a **head band** — an identity strip
@@ -75,7 +75,7 @@ legend). See [Head band](status-bar.md).
 
 The footer's height is the sum of its rows. The activity, todo, and queue
 bars are optional and collapse to 0 when they have nothing to show; the input
-box and hint bar are persistent (when chrome is visible):
+box and model bar are persistent (when chrome is visible):
 
 | Row | Height | When present |
 |-----|--------|--------------|
@@ -83,7 +83,7 @@ box and hint bar are persistent (when chrome is visible):
 | Todo bar | `TODO_BAR_ROWS = 1` | A non-empty task list exists; not in envoy view; chrome visible. `TODOS` tag · done/total progress · current-item preview. Click to open the Activity modal on the Todos tab. See [Todo bar](todo-bar.md). |
 | Queue bar | `QUEUE_BAR_ROWS = 1` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. `QUEUE` identity · count · inline preview of the next item to pop · key legend (`Ctrl+P` block/resume, `Ctrl+Q` expand). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `Ctrl+P`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
 | Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 3` | Not in envoy view; chrome visible |
-| Hint bar | `HINT_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Carries the next-Enter action (left) and the model/`@instance`/reasoning/context cluster (right). |
+| Model bar | `MODEL_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Ambient gauges only: model name + reasoning tier + `@instance` · context usage · stream rate. |
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -92,7 +92,7 @@ box and hint bar are persistent (when chrome is visible):
 │ QUEUE 1  {next item preview…}  Ctrl+P block  Ctrl+Q expand  │  ← queue bar
 │ ● making edits (23s · Esc Esc interrupt)                 │  ← activity bar
 │  > type here…                                               │  ← input box
-│ Enter send    47.8 tok/s   Kimi K3 max @kimi-code  89.2k (8%)    │  ← hint bar
+│ k3 max @kimi-code  89.2k (8%)   47.8 tok/s                        │  ← model bar
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -106,7 +106,7 @@ rows — the ` · ` between progress and preview, the whitespace between keycap
 units — follows the [join ladder](visual-language.md).) The structural counters
 (`round N › turn M · <model>`) deliberately do **not** appear on the bars;
 they live inside the Activity modal (opened by clicking the activity bar),
-along with the per-item todo breakdown. The hint bar carries the next input
+along with the per-item todo breakdown. The model bar carries the ambient gauges while the composer carries the next input
 action (left) plus three ambient clusters on the right: the latest-turn
 stream rate (`47.8 tok/s`, or `–` before a defensible sample), the model
 identity group (`model effort @instance`), and the context meter. The rate
@@ -155,7 +155,7 @@ not the root conversation.
 | Transcript (children) | `Min(0)` | fills |
 | Envoy bar | `Length(ENVOY_BAR_ROWS = 1)` | 1 |
 
-The activity bar, todo bar, queue bar, input box, and hint bar
+The activity bar, todo bar, queue bar, input box, and model bar
 all collapse to 0 — the zoomed view is read-only, with the navigation bar as
 its only chrome.
 See [Envoy view](envoy-view.md) for the focus stack that drives this
@@ -170,7 +170,7 @@ its normal height and darkens the whole live surface in place
 transcript and chrome stay visible for context while the centered panel reads
 as the focal layer. The **Takeover** policy (the sessions picker only) instead
 collapses the entire footer (activity bar, todo bar, queue bar, input box,
-hint bar) to 0 height and fully occludes the surface. The one
+model bar) to 0 height and fully occludes the surface. The one
 **None**-recess surface is the [permission sheet](modals.md#permission-sheet),
 which is inline (no dimming, no footer collapse) and replaces only the
 input-box area.
@@ -186,7 +186,7 @@ input-box area.
 │            │                                    │            │
 │            ╰────────────────────────────────────╯            │
 │                                                              │
-│footer = 0 (activity, state, input, hint bars all hidden)      │
+│footer = 0 (activity, state, input, model bars all hidden)      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -225,7 +225,7 @@ inset is applied to its *text* only — as pad spans inside `draw_page_header`
 ```
 
 The footer shares the same inset (`FOOTER_H_INSET = TRANSCRIPT_H_INSET`),
-so the activity bar, input box, and hint bar all line up
+so the activity bar, input box, and model bar all line up
 with the transcript content above.
 
 ## Transcript viewport behavior
@@ -251,7 +251,7 @@ with the transcript content above.
 | Activity bar height | 1 row | `ACTIVITY_BAR_ROWS` |
 | Todo bar height | 1 row | `TODO_BAR_ROWS` |
 | Queue bar height | 1 row | `QUEUE_BAR_ROWS` |
-| Hint bar height | 1 row | `HINT_BAR_ROWS` |
+| Model bar height | 1 row | `MODEL_BAR_ROWS` |
 | Status bar height | 1 row | `STATUS_BAR_ROWS` |
 | Envoy bar height | 1 row | `ENVOY_BAR_ROWS` |
 | Input box min height | 3 rows (top transition + 1 text + bottom transition) | `COMPOSER_MIN_HEIGHT` |

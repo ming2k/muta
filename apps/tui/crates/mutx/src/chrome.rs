@@ -1,7 +1,10 @@
 //! Transient chrome around the input box: the activity bar with an animated
 //! breathing-dot indicator, the one-row todo bar that surfaces the live task
-//! list, the completion menu anchored above the input, and the persistent hint
-//! bar pinned below the input. The activity bar (transient liveness) and the
+//! list, the completion menu anchored above the input, and the persistent
+//! model bar pinned below the input (model identity, context usage, stream
+//! rate). Composer-owned meta rows (`as:` target and Enter keys) live inside
+//! [`crate::composer`] and its `components::composer_hints` helpers; this bar
+//! carries only ambient gauges. The activity bar (transient liveness) and the
 //! todo bar (the agent's live task list) are the click targets that open the
 //! Activity modal.
 
@@ -11,14 +14,13 @@ use mutx_engine::{
 use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::model::document::TranscriptMessage;
 use crate::model::layout::LayoutMap;
 
 use super::Theme;
-use super::components::keycap::{keycap_span, keycap_style};
+use super::components::keycap::keycap_span;
 use super::design::{
-    BAR_LEGEND_GAP_MIN, HINT_BAR_GAP_MIN, HINT_BAR_INNER_PADDING, HINT_BAR_MODEL_GAP,
-    HINT_BAR_SEGMENT_GAP, JOIN_ENUMERATE_COLS,
+    BAR_LEGEND_GAP_MIN, MODEL_BAR_GAP_MIN, MODEL_BAR_INNER_PADDING, MODEL_BAR_MODEL_GAP,
+    MODEL_BAR_SEGMENT_GAP, JOIN_ENUMERATE_COLS,
 };
 use super::keymap::Key;
 use super::primitives::{contrast_fg, viewport_rect};
@@ -26,12 +28,6 @@ use super::primitives::{contrast_fg, viewport_rect};
 /// Number of distinct luminance steps in one breathing cycle. At the 100ms
 /// spinner tick this is ~1.2s per cycle — calm, not frantic.
 pub const SPINNER_PHASES: usize = 12;
-
-/// The shimmer crosses the full status label every two seconds. The app's
-/// animation phase advances every 100ms, so 20 phases produce one sweep.
-const SHIMMER_PHASES: usize = 20;
-const SHIMMER_PADDING: usize = 6;
-const SHIMMER_HALF_WIDTH: f32 = 4.0;
 
 /// The activity indicator glyph: a single dot whose luminance breathes (see
 /// [`breathing_color`]) rather than a cycling braille frame. Replaces the old
@@ -51,6 +47,63 @@ pub fn breathing_color(phase: usize, base: Color, bg: Color) -> Color {
     Color::Rgb(lerp_u8(br, fr, t), lerp_u8(bgc, fgc, t), lerp_u8(bb, fb, t))
 }
 
+/// Which mechanism drives the activity dot this frame. Exactly one wins —
+/// classified once, below, so the three channels can never fight over the
+/// same cells.
+///
+/// * [`Liveness::Flowing`] — a stream has produced deltas and may produce
+///   more: luminance is byte-driven (`pulse::BytePulse`), not clock-driven.
+///   A dark-ember floor keeps inter-chunk quiet from reading as death.
+/// * [`Liveness::Holding`] — no stream is available to quote (waiting for
+///   the model, running a tool): the classic slow breath stands in.
+/// * [`Liveness::Gated`] — paused for a human decision: fully static amber.
+///   Honest stillness; motion would lie about who is working.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Liveness {
+    Flowing { fast: f32, slow: f32 },
+    Holding,
+    Gated,
+}
+
+/// Classify the frame's dot mechanism. Gate wins over everything; byte
+/// presence outranks the clock.
+pub fn classify_liveness(awaiting_permission: bool, pulse_levels: Option<(f32, f32)>) -> Liveness {
+    if awaiting_permission {
+        Liveness::Gated
+    } else {
+        match pulse_levels {
+            Some((fast, slow)) => Liveness::Flowing { fast, slow },
+            None => Liveness::Holding,
+        }
+    }
+}
+
+/// Ember floor: even fully-decayed energy keeps ~28% brand mix, so a quiet
+/// stream reads as "waiting for the next chunk", never "dead".
+const EMBER_FLOOR: f32 = 0.28;
+
+pub fn dot_color(liveness: Liveness, spinner_phase: usize, theme: &Theme) -> Color {
+    match liveness {
+        Liveness::Gated => theme.warning,
+        Liveness::Holding => breathing_color(spinner_phase, theme.brand(), theme.surface()),
+        Liveness::Flowing { fast, slow } => {
+            let t = (EMBER_FLOOR + (1.0 - EMBER_FLOOR) * slow + 0.12 * fast).clamp(0.0, 1.0);
+            let (br, bgc, bb) = rgb_of(theme.surface());
+            let (fr, fgc, fb) = rgb_of(theme.brand());
+            Color::Rgb(lerp_u8(br, fr, t), lerp_u8(bgc, fgc, t), lerp_u8(bb, fb, t))
+        }
+    }
+}
+
+/// Block-density glyphs for the two-cell micro-meter (a decaying histogram
+/// of recent delta pressure): left cell = fast channel, right = slow.
+const METER_STEPS: [&str; 9] = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
+
+pub fn meter_cells(fast: f32, slow: f32) -> (&'static str, &'static str) {
+    let idx = |v: f32| ((v * 8.0).round() as usize).clamp(1, 8);
+    (METER_STEPS[idx(fast)], METER_STEPS[idx(slow)])
+}
+
 fn rgb_of(c: Color) -> (u8, u8, u8) {
     match c {
         Color::Rgb(r, g, b) => (r, g, b),
@@ -62,46 +115,6 @@ fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
     (a as f32 + (b as f32 - a as f32) * t)
         .round()
         .clamp(0.0, 255.0) as u8
-}
-
-/// Render an animated luminance band across the live status label. The muted
-/// base keeps the row quiet while the brand-colored highlight supplies a clear
-/// left-to-right liveness cue.
-fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.is_empty() {
-        return Vec::new();
-    }
-
-    let period = chars.len() + SHIMMER_PADDING * 2;
-    let sweep = (phase % SHIMMER_PHASES) as f32 / SHIMMER_PHASES as f32 * period as f32;
-    let base = rgb_of(theme.muted());
-    let highlight = rgb_of(theme.brand());
-
-    chars
-        .into_iter()
-        .enumerate()
-        .map(|(index, ch)| {
-            let position = index as f32 + SHIMMER_PADDING as f32;
-            let distance = (position - sweep).abs();
-            let intensity = if distance <= SHIMMER_HALF_WIDTH {
-                let x = std::f32::consts::PI * distance / SHIMMER_HALF_WIDTH;
-                0.5 * (1.0 + x.cos())
-            } else {
-                0.0
-            };
-            let color = Color::Rgb(
-                lerp_u8(base.0, highlight.0, intensity),
-                lerp_u8(base.1, highlight.1, intensity),
-                lerp_u8(base.2, highlight.2, intensity),
-            );
-            let mut style = Style::default().fg(color).add_modifier(Modifier::ITALIC);
-            if intensity >= 0.65 {
-                style = style.add_modifier(Modifier::BOLD);
-            }
-            Span::styled(ch.to_string(), style)
-        })
-        .collect()
 }
 
 /// Draw the transient activity bar that sits directly above the input box
@@ -146,14 +159,19 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 ///
 /// Returns `Some(rect)` when the bar is drawn so the event loop can hit-test
 /// clicks and open the Activity modal; `None` when the bar is hidden (idle).
-/// The activity bar's per-frame inputs, aggregated to keep the draw
-/// signature within clippy's argument budget and give every segment a name.
 pub struct ActivityBarView<'a> {
     /// Master-slot label (the typed phase's text).
     pub status: &'a str,
     /// Transport-setback clause rendered beside the label, muted. `None`
     /// when transport is healthy (silence is healthy).
     pub backoff_clause: Option<&'a str>,
+    /// Stream-silence clause (`· silent 9s`), armed only after the stream
+    /// has produced deltas and gone quiet past the threshold. `None` while
+    /// chunks are flowing (or no stream to quote).
+    pub silent_clause: Option<String>,
+    /// Decayed `(fast, slow)` byte-pulse levels when a stream is armed;
+    /// `None` hands the dot to the breathing clock.
+    pub pulse_levels: Option<(f32, f32)>,
     /// Warning-tinted gate state (permission / ask_user pending).
     pub awaiting_permission: bool,
 }
@@ -172,6 +190,8 @@ pub fn draw_activity_bar(
     let ActivityBarView {
         status,
         backoff_clause,
+        silent_clause,
+        pulse_levels,
         awaiting_permission,
     } = view;
     let status_active = !status.is_empty() && status != "idle";
@@ -212,17 +232,27 @@ pub fn draw_activity_bar(
     //   truncation → interrupt words.
     // The clause never steals so much as a column from an intact master
     // label, and the interrupt affordance is the last thing to die.
-    let full_clause = backoff_clause.unwrap_or("");
+    // Clause slot: at most one annotation ever occupies it — by
+    // construction they are phase-exclusive (transport clause lives in
+    // AwaitingModel, silence clause only once a stream has flowed).
+    let effective_full = backoff_clause.or_else(|| silent_clause.as_deref());
+    let full_clause = effective_full.unwrap_or("");
     let full_clause_w = UnicodeWidthStr::width(full_clause);
-    let compact_clause = backoff_clause.map(|clause| {
-        // `· retry 2/8 next in 4s` → `· 2/8` when the full text can't fit.
-        let attempt = clause
-            .split("retry ")
-            .nth(1)
-            .and_then(|rest| rest.split_whitespace().next())
-            .unwrap_or("");
-        format!(" · {attempt}")
-    });
+    // Compact form exists only for the retry countdown (`· retry 2/8 …` →
+    // `· 2/8`): the attempt counter earns its width even when tight. A
+    // silence note is more expendable and simply leaves the row first.
+    let compact_clause = if backoff_clause.is_some() {
+        backoff_clause.map(|clause| {
+            let attempt = clause
+                .split("retry ")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or("");
+            format!(" · {attempt}")
+        })
+    } else {
+        None
+    };
     let compact_clause_w = compact_clause
         .as_deref()
         .map(UnicodeWidthStr::width)
@@ -270,7 +300,10 @@ pub fn draw_activity_bar(
 
     let mut spans: Vec<Span> = Vec::new();
     let spinner = spinner_glyph();
-    let spinner_color = breathing_color(spinner_phase, theme.brand(), theme.surface());
+    // Single arbiter for the dot's appearance this frame: byte-driven pulse,
+    // clock-driven breath, or gated stillness — never a blend of two.
+    let liveness = classify_liveness(awaiting_permission, pulse_levels);
+    let spinner_color = dot_color(liveness, spinner_phase, theme);
 
     spans.push(Span::raw(" "));
     spans.push(Span::styled(
@@ -279,6 +312,19 @@ pub fn draw_activity_bar(
             .fg(spinner_color)
             .add_modifier(Modifier::BOLD),
     ));
+
+    // Byte-pressure micro-meter: two cells quoting the recent delta
+    // histogram. Rendered only while the stream is flowing (in Holding/Gated
+    // phases there is no stream to quote — the cells vanish, `silence is
+    // healthy`).
+    if let Liveness::Flowing { fast, slow } = liveness {
+        let (fast_cell, slow_cell) = meter_cells(fast, slow);
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("{fast_cell}{slow_cell}"),
+            Style::default().fg(theme.brand()),
+        ));
+    }
 
     // Lead segment: the live status — the thing that changes frame to frame,
     // so it receives the left-to-right shimmer. The structural counters
@@ -300,7 +346,16 @@ pub fn draw_activity_bar(
                 .add_modifier(Modifier::BOLD),
         ));
     } else {
-        spans.extend(shimmer_spans(&status, spinner_phase, theme));
+        // Steady-state master label: brand + italic, no resident animation.
+        // Every previous oscillation here was paid for by the frame clock,
+        // not by work; the typed phase's own word changes are the honest
+        // freshness signal.
+        spans.push(Span::styled(
+            status,
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(Modifier::ITALIC),
+        ));
     }
 
     if visible_elapsed_width > 0 {
@@ -617,6 +672,9 @@ pub fn draw_completion_menu(
                 crate::completion::CompletionItemKind::IntentSuggestion { .. } => {
                     format!("➜ {}", c.label)
                 }
+                // Alias candidates keep their own name — they are submitted
+                // verbatim; the right-hand description explains the target.
+                _ if c.description.starts_with("(alias of ") => format!("{} ↝", c.label),
                 _ => c.label.clone(),
             };
 
@@ -651,9 +709,9 @@ pub fn draw_completion_menu(
             let max_text_w = (doc_width as usize).saturating_sub(2).max(10);
             let mut insp_lines = Vec::new();
 
-            // Line 1: Command name + [Category]
+            // Line 1: Command name + [Category] (+ alias annotation)
             let cat_label = doc.category.as_deref().unwrap_or("Command");
-            let header_spans = vec![
+            let mut header_spans = vec![
                 Span::styled(" ", Style::default().bg(doc_bg)),
                 Span::styled(
                     &doc.name,
@@ -670,7 +728,35 @@ pub fn draw_completion_menu(
                         .add_modifier(Modifier::DIM),
                 ),
             ];
-            insp_lines.push(Line::from(header_spans));
+            // The active completion's row description doubles as the alias
+            // annotation: `(alias of /settings) <target summary>`. Detect it
+            // once so the alias tier adds exactly one extra line over the
+            // target's own doc (which the body below already renders).
+            let row_note = selected_idx
+                .and_then(|idx| completions.get(idx))
+                .map(|c| c.description.as_str());
+            let alias_of = row_note.and_then(|note| note.strip_prefix("(alias of "))
+                .and_then(|rest| rest.split_once(')'))
+                .map(|(target, _)| target.trim().to_string());
+            if let Some(target) = alias_of {
+                header_spans.push(Span::styled(
+                    "  (alias)",
+                    Style::default()
+                        .bg(doc_bg)
+                        .fg(theme.warn())
+                        .add_modifier(Modifier::BOLD),
+                ));
+                insp_lines.push(Line::from(header_spans));
+                insp_lines.push(Line::from(vec![
+                    Span::styled(" ", Style::default().bg(doc_bg)),
+                    Span::styled(
+                        format!("Submit `{}` → runs `{target}`", doc.name),
+                        Style::default().bg(doc_bg).fg(theme.warn()),
+                    ),
+                ]));
+            } else {
+                insp_lines.push(Line::from(header_spans));
+            }
 
             // Line 2..: Summary (wrapped)
             if !doc.summary.is_empty() {
@@ -688,20 +774,7 @@ pub fn draw_completion_menu(
                 }
             }
 
-            // Line 3..: Detailed Description (wrapped)
-            if !doc.description.is_empty() && doc.description != doc.summary {
-                for wl in crate::text_layout::wrap_text(&doc.description, max_text_w) {
-                    insp_lines.push(Line::from(vec![
-                        Span::styled(" ", Style::default().bg(doc_bg)),
-                        Span::styled(
-                            wl.text.to_string(),
-                            Style::default().bg(doc_bg).fg(theme.muted()),
-                        ),
-                    ]));
-                }
-            }
-
-            // Line 4..: Usage (wrapped)
+            // Line 3..: Usage (wrapped)
             if !doc.usage.is_empty() {
                 let usage_str = format!("Usage: {}", doc.usage.join("  |  "));
                 for wl in crate::text_layout::wrap_text(&usage_str, max_text_w) {
@@ -713,6 +786,22 @@ pub fn draw_completion_menu(
                                 .bg(doc_bg)
                                 .fg(theme.brand())
                                 .add_modifier(Modifier::DIM),
+                        ),
+                    ]));
+                }
+            }
+
+            // Line 4..: Subcommands, each with its own introduction — the
+            // detail tier of the progressive disclosure (the menu row only
+            // shows the parent; the flyout explains the verbs).
+            for (sub_name, sub_summary) in &doc.subcommands {
+                let sub_str = format!("  {sub_name} — {sub_summary}");
+                for wl in crate::text_layout::wrap_text(&sub_str, max_text_w) {
+                    insp_lines.push(Line::from(vec![
+                        Span::styled(" ", Style::default().bg(doc_bg)),
+                        Span::styled(
+                            wl.text.to_string(),
+                            Style::default().bg(doc_bg).fg(theme.muted()),
                         ),
                     ]));
                 }
@@ -791,176 +880,82 @@ pub fn draw_completion_menu(
     }
 }
 
-/// Inputs for [`draw_hint_bar`]. Carries the model + context-usage info that
-/// the old top header showed, now collapsed onto one row. Session-level state
-/// (workspace path, `DELEGATED`) deliberately lives on the status bar below,
-/// not here.
-pub struct HintBarView<'a> {
+/// Inputs for [`draw_model_bar`]. Ambient gauges only — model identity,
+/// context usage, stream rate. The Enter-action keys and the `as:` target row
+/// moved inside the composer ([`crate::components::composer_hints`]); session
+/// state (workspace path, `DELEGATED`) lives on the status bar below.
+pub struct ModelBarView<'a> {
     pub current_model: &'a str,
     /// Whether the model is available / offered by the active provider.
     /// When `false`, the model is displayed as unavailable/missing (e.g. delisted).
     pub model_available: bool,
     pub provider_name: Option<&'a str>,
-    #[allow(dead_code)]
-    pub messages: &'a [TranscriptMessage],
     pub reasoning_effort: Option<&'a str>,
-    pub busy: bool,
-    /// Whether the previous turn ended in an unrecovered error and is eligible for /retry.
-    pub can_retry: bool,
     pub context_tokens: Option<usize>,
     /// Client-observed stream TPS of the latest completed principal ReAct
     /// turn. `None` renders a discoverable unavailable value.
     pub last_turn_tps: Option<f64>,
     pub ignition_elapsed_ms: Option<u128>,
-    pub composer_send_mode: Option<crate::app::ComposerSendMode>,
-    pub queue_editing_badge: Option<String>,
 }
 
-impl<'a> Default for HintBarView<'a> {
+impl<'a> Default for ModelBarView<'a> {
     fn default() -> Self {
         Self {
             current_model: "",
             model_available: true,
             provider_name: None,
-            messages: &[],
             reasoning_effort: None,
-            busy: false,
-            can_retry: false,
             context_tokens: None,
             last_turn_tps: None,
             ignition_elapsed_ms: None,
-            composer_send_mode: None,
-            queue_editing_badge: None,
         }
     }
 }
 
-/// Fine-grained click targets painted inside the hint bar.
+/// Fine-grained click targets painted inside the model bar.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct HintBarRects {
+pub struct ModelBarRects {
     pub performance: Option<Rect>,
     pub context: Option<Rect>,
 }
 
-#[derive(Clone, Copy)]
-enum ActionDensity {
-    Full,
-    Compact,
-    Tiny,
-}
-
-/// Build the left side of the bottom row as a short action sentence: send
-/// when idle, or steer/follow-up when the agent is mid-round.
-fn input_action_spans(
-    busy: bool,
-    can_retry: bool,
-    composer_send_mode: Option<crate::app::ComposerSendMode>,
-    queue_editing_badge: Option<&str>,
-    density: ActionDensity,
-    theme: &Theme,
-    bg: Color,
-) -> Vec<Span<'static>> {
-    let key_style = keycap_style(theme).bg(bg);
-    let hint_style = Style::default().fg(theme.muted()).bg(bg);
-    let compact = matches!(density, ActionDensity::Compact | ActionDensity::Tiny);
-    let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
-
-    if let Some(badge) = queue_editing_badge {
-        spans.push(Span::styled(format!(" {badge}"), hint_style));
-        spans.push(Span::styled("  ", hint_style));
-        spans.push(Span::styled(Key::ESC.display(), key_style));
-        spans.push(Span::styled(" cancel", hint_style));
-    } else if busy {
-        match composer_send_mode.unwrap_or_default() {
-            crate::app::ComposerSendMode::Steer => {
-                spans.push(Span::styled(" steer", hint_style));
-                spans.push(Span::styled("  ", hint_style));
-                spans.push(Span::styled(Key::TAB.display(), key_style));
-                spans.push(Span::styled(
-                    if compact {
-                        " follow-up"
-                    } else {
-                        " follow-up mode"
-                    },
-                    hint_style,
-                ));
-            }
-            crate::app::ComposerSendMode::FollowUp => {
-                spans.push(Span::styled(" follow-up", hint_style));
-                spans.push(Span::styled("  ", hint_style));
-                spans.push(Span::styled(Key::TAB.display(), key_style));
-                spans.push(Span::styled(
-                    if compact { " steer" } else { " steer mode" },
-                    hint_style,
-                ));
-            }
-        }
-    } else if can_retry {
-        spans.push(Span::styled(" send", hint_style));
-        spans.push(Span::styled("  ", hint_style));
-        spans.push(Span::styled("/retry", key_style));
-        if !compact {
-            spans.push(Span::styled(" to retry", hint_style));
-        }
-    } else {
-        spans.push(Span::styled(" send", hint_style));
-    }
-
-    spans
-}
-
-/// Draw the single-line hint bar pinned below the input box. Carries the
-/// action performed by the next Enter (left) plus the model name and
-/// context-usage info (right) that the old top header showed, collapsed onto
-/// one row so the transcript reclaims vertical space.
-pub fn draw_hint_bar(
+/// Draw the single-line model bar pinned below the input box. Ambient gauges
+/// only — model identity, context usage, and stream rate. The Enter-action
+/// keys moved inside the composer's bottom padding row; the `as:` target row
+/// lives in its top padding row ([`crate::components::composer_hints`]).
+pub fn draw_model_bar(
     frame: &mut Frame,
     rect: Rect,
-    view: HintBarView<'_>,
+    view: ModelBarView<'_>,
     theme: &Theme,
-) -> HintBarRects {
-    let HintBarView {
+) -> ModelBarRects {
+    let ModelBarView {
         current_model,
         model_available,
         provider_name,
-        messages: _,
         reasoning_effort,
-        busy,
-        can_retry,
         context_tokens,
         last_turn_tps,
         ignition_elapsed_ms,
-        composer_send_mode,
-        queue_editing_badge,
     } = view;
 
     let bg = theme.surface();
     let full_w = rect.width as usize;
 
-    // --- Left cluster: one sentence describing what the next Enter does.
-    let mut action_density = ActionDensity::Full;
-    let mut zone_spans = input_action_spans(
-        busy,
-        can_retry,
-        composer_send_mode,
-        queue_editing_badge.as_deref(),
-        action_density,
-        theme,
-        bg,
-    );
-    let mut zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
+    // --- Right cluster build inputs. The Enter-action sentence moved into
+    // the composer's bottom padding row, so the gauges own the whole row
+    // (degradation ladder unchanged); `inner` pads the row's left edge.
+    let inner = MODEL_BAR_INNER_PADDING;
 
-    // --- Right cluster: last-turn performance, model identity, context.
+    // --- Right cluster: last-turn performance, context.
     // Build each segment separately so we can drop optional ones when the
     // terminal is too narrow.
     let context_max = crate::providers::model_context_window(current_model);
 
-    let inner = HINT_BAR_INNER_PADDING;
-
     // Build right-side segments independently. Model identity is the last
     // ambient item to drop; reasoning effort drops first, then the instance
-    // suffix, then context usage. The input action always wins when the row
-    // cannot hold both clusters.
+    // suffix, then context usage, then the stream rate. The gauges own the
+    // whole row — there is no competing left cluster anymore.
     let (model_label, model_style) = if current_model.is_empty() {
         (
             "(no model)".to_string(),
@@ -1074,7 +1069,7 @@ pub fn draw_hint_bar(
             let identity_width = usize::from(model) * model_width
                 + usize::from(reasoning) * reasoning_width
                 + usize::from(instance) * instance_width
-                + identity_count.saturating_sub(1) * HINT_BAR_MODEL_GAP;
+                + identity_count.saturating_sub(1) * MODEL_BAR_MODEL_GAP;
             let performance_width = usize::from(performance) * performance_width;
             let context_width = usize::from(context) * context_seg_width;
             let group_count =
@@ -1082,11 +1077,10 @@ pub fn draw_hint_bar(
             performance_width
                 + identity_width
                 + context_width
-                + group_count.saturating_sub(1) * HINT_BAR_SEGMENT_GAP
+                + group_count.saturating_sub(1) * MODEL_BAR_SEGMENT_GAP
         };
-    let fits = |left_width: usize, right_width: usize| {
-        inner + left_width + if right_width > 0 { HINT_BAR_GAP_MIN } else { 0 } + right_width
-            <= full_w
+    let fits = |right_width: usize| {
+        inner + if right_width > 0 { MODEL_BAR_GAP_MIN } else { 0 } + right_width <= full_w
     };
 
     let mut right_width = right_width_for(
@@ -1096,25 +1090,12 @@ pub fn draw_hint_bar(
         show_instance,
         show_context,
     );
-    if !fits(zone_pill_width, right_width) {
-        action_density = ActionDensity::Compact;
-        zone_spans = input_action_spans(
-            busy,
-            can_retry,
-            composer_send_mode,
-            queue_editing_badge.as_deref(),
-            action_density,
-            theme,
-            bg,
-        );
-        zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
-    }
     // Drop order under width pressure: the instance suffix first (pure
     // provenance — nice-to-have), then reasoning, then the stream rate,
-    // then context, then the model name. The action on the left always
-    // wins last. (Session-state flags such as `DELEGATED` are not on this
-    // row — they live on the status bar.)
-    if !fits(zone_pill_width, right_width) && show_instance {
+    // then context, then the model name. There is no left cluster on this
+    // row anymore; the gauges degrade among themselves. (Session-state flags
+    // such as `DELEGATED` are not on this row — they live on the status bar.)
+    if !fits(right_width) && show_instance {
         show_instance = false;
         right_width = right_width_for(
             show_performance,
@@ -1124,7 +1105,7 @@ pub fn draw_hint_bar(
             show_context,
         );
     }
-    if !fits(zone_pill_width, right_width) && show_reasoning {
+    if !fits(right_width) && show_reasoning {
         show_reasoning = false;
         right_width = right_width_for(
             show_performance,
@@ -1134,7 +1115,7 @@ pub fn draw_hint_bar(
             show_context,
         );
     }
-    if !fits(zone_pill_width, right_width) && show_performance {
+    if !fits(right_width) && show_performance {
         show_performance = false;
         right_width = right_width_for(
             show_performance,
@@ -1144,7 +1125,7 @@ pub fn draw_hint_bar(
             show_context,
         );
     }
-    if !fits(zone_pill_width, right_width) && show_context {
+    if !fits(right_width) && show_context {
         show_context = false;
         right_width = right_width_for(
             show_performance,
@@ -1154,20 +1135,7 @@ pub fn draw_hint_bar(
             show_context,
         );
     }
-    if !fits(zone_pill_width, right_width) {
-        action_density = ActionDensity::Tiny;
-        zone_spans = input_action_spans(
-            busy,
-            can_retry,
-            composer_send_mode,
-            queue_editing_badge.as_deref(),
-            action_density,
-            theme,
-            bg,
-        );
-        zone_pill_width = zone_spans.iter().map(|s| s.content.width()).sum::<usize>();
-    }
-    if !fits(zone_pill_width, right_width) && show_model {
+    if !fits(right_width) && show_model {
         show_model = false;
         right_width = right_width_for(
             show_performance,
@@ -1191,9 +1159,9 @@ pub fn draw_hint_bar(
         right_spans = label;
     } else {
         let identity_separator =
-            || Span::styled(" ".repeat(HINT_BAR_MODEL_GAP), Style::default().bg(bg));
+            || Span::styled(" ".repeat(MODEL_BAR_MODEL_GAP), Style::default().bg(bg));
         let group_separator =
-            || Span::styled(" ".repeat(HINT_BAR_SEGMENT_GAP), Style::default().bg(bg));
+            || Span::styled(" ".repeat(MODEL_BAR_SEGMENT_GAP), Style::default().bg(bg));
         // Row order: model identity group → context usage → stream rate.
         // The model anchors the row (leftmost), the context meter sits in
         // the middle as the bridge between "what is answering" and "how
@@ -1235,16 +1203,15 @@ pub fn draw_hint_bar(
         }
     }
 
-    let left_used = inner + zone_pill_width;
+    let left_used = inner; // gauges own the row: only the left pad remains
     let right_rendered_width: usize = right_spans.iter().map(|s| s.content.width()).sum();
 
     let gap = full_w
         .saturating_sub(left_used + right_width)
-        .max(if right_width > 0 { HINT_BAR_GAP_MIN } else { 0 });
+        .max(if right_width > 0 { MODEL_BAR_GAP_MIN } else { 0 });
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(8 + right_spans.len());
     spans.push(Span::styled(" ".repeat(inner), Style::default().bg(bg)));
-    spans.extend(zone_spans);
     spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
     spans.extend(right_spans);
     // Trailing fill so the row owns every cell on this line.
@@ -1260,7 +1227,7 @@ pub fn draw_hint_bar(
     // the caller can make them clickable. Under the model → context → rate
     // order the segments are located by walking the right strip in render
     // order; nothing is assumed about which segment is last.
-    let right_start = (inner + zone_pill_width + gap) as u16;
+    let right_start = (inner + gap) as u16;
     let mut performance_rect: Option<Rect> = None;
     let mut context_rect: Option<Rect> = None;
     if !ignition_label_active {
@@ -1279,7 +1246,7 @@ pub fn draw_hint_bar(
             ] {
                 if shown {
                     if group_started {
-                        x += HINT_BAR_MODEL_GAP as u16;
+                        x += MODEL_BAR_MODEL_GAP as u16;
                     }
                     x += width as u16;
                     group_started = true;
@@ -1289,7 +1256,7 @@ pub fn draw_hint_bar(
         }
         let mut advance = |width: usize, seg: &mut Option<Rect>, leading: bool| {
             if leading {
-                x += HINT_BAR_SEGMENT_GAP as u16;
+                x += MODEL_BAR_SEGMENT_GAP as u16;
             }
             *seg = Some(Rect::new(rect.x + x, rect.y, width as u16, rect.height));
             x += width as u16;
@@ -1302,7 +1269,7 @@ pub fn draw_hint_bar(
             advance(performance_width, &mut performance_rect, any_rendered);
         }
     }
-    HintBarRects {
+    ModelBarRects {
         performance: performance_rect,
         context: context_rect,
     }
@@ -1683,6 +1650,8 @@ mod tests {
                 crate::chrome::ActivityBarView {
                     status,
                     backoff_clause,
+                    silent_clause: None,
+                    pulse_levels: None,
                     awaiting_permission: awaiting,
                 },
                 phase,
@@ -1720,6 +1689,8 @@ mod tests {
                 crate::chrome::ActivityBarView {
                     status,
                     backoff_clause,
+                    silent_clause: None,
+                    pulse_levels: None,
                     awaiting_permission: awaiting,
                 },
                 phase,
@@ -1732,26 +1703,6 @@ mod tests {
             .iter()
             .map(|cell| cell.fg)
             .collect()
-    }
-
-    #[test]
-    fn activity_bar_shimmers_and_always_shows_interrupt_hint() {
-        let theme = Theme::default();
-        let initial_colors: Vec<Color> = shimmer_spans("Working", 0, &theme)
-            .iter()
-            .map(|span| span.style.fg)
-            .collect();
-        let swept_colors: Vec<Color> = shimmer_spans("Working", 8, &theme)
-            .iter()
-            .map(|span| span.style.fg)
-            .collect();
-
-        assert_ne!(initial_colors, swept_colors);
-        assert!(swept_colors.iter().any(|color| *color != theme.muted()));
-
-        let row = activity_row_text(80, "Working", 8);
-        assert!(row.contains("Working"));
-        assert!(row.contains("Esc Esc interrupt"));
     }
 
     #[test]
@@ -1938,6 +1889,8 @@ mod tests {
                 ActivityBarView {
                     status: "Working",
                     backoff_clause: None,
+                    silent_clause: None,
+                    pulse_levels: None,
                     awaiting_permission: false,
                 },
                 0,
@@ -1965,6 +1918,8 @@ mod tests {
                 ActivityBarView {
                     status: "retrying a provider request after a detailed transient failure",
                     backoff_clause: None,
+                    silent_clause: None,
+                    pulse_levels: None,
                     awaiting_permission: false,
                 },
                 8,
@@ -2041,19 +1996,17 @@ mod tests {
     /// segment to hide (provenance is nice-to-have) while the model name,
     /// effort tag, and context meter all still fit.
     #[test]
-    fn hint_bar_orders_model_then_context_then_speed() {
-        let messages: Vec<TranscriptMessage> = Vec::new();
+    fn model_bar_orders_model_then_context_then_speed() {
         let row_text = |width: u16| -> String {
             let mut terminal = mutx_engine::TestTerminal::new(width, 1);
             terminal.draw(|f| {
-                draw_hint_bar(
+                draw_model_bar(
                     f,
                     Rect::new(0, 0, width, 1),
-                    HintBarView {
+                    ModelBarView {
                         current_model: "kimi-k2.7-code",
                         model_available: true,
                         provider_name: Some("kimi-code"),
-                        messages: &messages,
                         reasoning_effort: Some("max"),
                         ..Default::default()
                     },
@@ -2068,7 +2021,7 @@ mod tests {
 
         // Wide enough for everything: `model effort @instance  ctx  rate`
         // in that left-to-right order on one row.
-        let wide = row_text(64);
+        let wide = row_text(80);
         let model_pos = wide.find("kimi-k2.7-code").expect("model shown");
         let ctx_pos = wide.find("(0%)").expect("context meter shown");
         let rate_pos = wide.find("tok/s").expect("stream-rate placeholder shown");
@@ -2081,11 +2034,7 @@ mod tests {
 
         // Narrower row: the provenance suffix drops first while the model
         // name, effort tag, context meter, and rate survive in order.
-        let narrow = row_text(50);
-        assert!(
-            !narrow.contains('@'),
-            "instance should hide first: {narrow:?}"
-        );
+        let narrow = row_text(40);
         assert!(
             !narrow.contains('@'),
             "instance should hide first: {narrow:?}"
@@ -2100,19 +2049,17 @@ mod tests {
     }
 
     #[test]
-    fn hint_bar_renders_model_and_context() {
+    fn model_bar_renders_model_and_context() {
         let theme = Theme::default();
         let mut terminal = mutx_engine::TestTerminal::new(80, 3);
-        let messages = vec![TranscriptMessage::new(muta_contracts::Role::User, "hi")];
         terminal.draw(|f| {
-            draw_hint_bar(
+            draw_model_bar(
                 f,
                 Rect::new(0, 2, 80, 1),
-                HintBarView {
+                ModelBarView {
                     current_model: "mock-model",
                     model_available: true,
                     provider_name: Some("mock-instance"),
-                    messages: &messages,
                     ..Default::default()
                 },
                 &theme,
@@ -2121,18 +2068,17 @@ mod tests {
     }
 
     #[test]
-    fn hint_bar_renders_unavailable_model_indicator() {
+    fn model_bar_renders_unavailable_model_indicator() {
         let theme = Theme::default();
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|f| {
-            draw_hint_bar(
+            draw_model_bar(
                 f,
                 Rect::new(0, 0, 80, 1),
-                HintBarView {
+                ModelBarView {
                     current_model: "old-delisted-model",
                     model_available: false,
                     provider_name: Some("zai-code"),
-                    messages: &[],
                     ..Default::default()
                 },
                 &theme,
@@ -2149,76 +2095,18 @@ mod tests {
     }
 
     #[test]
-    fn hint_bar_describes_the_current_enter_action() {
-        fn row_text(terminal: &mut mutx_engine::TestTerminal, busy: bool) -> String {
-            let mut captured = String::new();
-            terminal.draw(|f| {
-                let view = HintBarView {
-                    busy,
-                    ..Default::default()
-                };
-                draw_hint_bar(f, Rect::new(0, 0, 80, 1), view, &Theme::default());
-            });
-            let buf = terminal.buffer();
-            let bw = buf.area().width as usize;
-            for x in 0..bw {
-                let cell = &buf.content[x];
-                captured.push_str(cell.symbol());
-            }
-            captured
-        }
-
-        let mut terminal = mutx_engine::TestTerminal::new(80, 1);
-        assert!(row_text(&mut terminal, false).contains("Enter send"));
-        assert!(row_text(&mut terminal, true).contains("Enter steer"));
-    }
-
-    #[test]
-    fn hint_bar_shows_retry_guidance_when_can_retry() {
+    fn model_bar_click_rects_follow_model_context_speed_order() {
         let theme = Theme::default();
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
-        terminal.draw(|frame| {
-            draw_hint_bar(
-                frame,
-                Rect::new(0, 0, 80, 1),
-                HintBarView {
-                    current_model: "mock-model",
-                    model_available: true,
-                    provider_name: None,
-                    messages: &[],
-                    can_retry: true,
-                    ..Default::default()
-                },
-                &theme,
-            );
-        });
-        let buf = terminal.buffer();
-        let text = (0..buf.area().width as usize)
-            .map(|x| buf.content[x].symbol().to_string())
-            .collect::<String>();
-        assert!(
-            text.contains("Enter send  /retry to retry"),
-            "row was {text:?}"
-        );
-    }
 
-    /// Click targets must track the model → context → speed order: the
-    /// context rect sits before the rate rect, and each matches the text
-    /// actually painted in that column range.
-    #[test]
-    fn hint_bar_click_rects_follow_model_context_speed_order() {
-        let theme = Theme::default();
-        let mut terminal = mutx_engine::TestTerminal::new(80, 1);
-        let messages: Vec<TranscriptMessage> = Vec::new();
-        let mut captured = HintBarRects::default();
+        let mut captured = ModelBarRects::default();
         terminal.draw(|f| {
-            captured = draw_hint_bar(
+            captured = draw_model_bar(
                 f,
                 Rect::new(0, 0, 80, 1),
-                HintBarView {
+                ModelBarView {
                     current_model: "kimi-k2.7-code",
                     provider_name: None,
-                    messages: &messages,
                     ..Default::default()
                 },
                 &theme,
@@ -2242,107 +2130,18 @@ mod tests {
     }
 
     #[test]
-    fn hint_bar_enter_keycap_uses_the_unified_brand_color() {
-        // The "Enter" keycap on the hint bar must route through the unified
-        // keycap style (brand + bold) so it matches every other keycap in the
-        // app (activity bar, queue bar, modal footers) instead of a divergent
-        // fg tone. The 'E' of "Enter" sits right after the 1-space indent.
-        let theme = Theme::default();
-        let mut terminal = mutx_engine::TestTerminal::new(80, 1);
-        terminal.draw(|frame| {
-            draw_hint_bar(
-                frame,
-                Rect::new(0, 0, 80, 1),
-                HintBarView {
-                    ..Default::default()
-                },
-                &theme,
-            );
-        });
-        let cells = terminal.buffer().content.clone();
-        // Layout: [indent(1)] [Enter(5)] [ send]. 'E' lands at index 1.
-        assert_eq!(cells[1].symbol(), "E", "expected 'Enter' at col 1");
-        assert_eq!(
-            cells[1].fg(),
-            theme.brand(),
-            "Enter keycap not brand-colored"
-        );
-        assert!(
-            cells[1].style.add.contains(Modifier::BOLD),
-            "Enter keycap not bold"
-        );
-        // The surface tint must cover the keycap cell.
-        assert_eq!(
-            cells[1].bg(),
-            theme.surface(),
-            "Enter keycap not on surface"
-        );
-    }
-
-    #[test]
-    fn hint_bar_busy_shows_queue_action() {
-        // When the agent is mid-round, Enter steers by default
-        let mut terminal = mutx_engine::TestTerminal::new(120, 1);
-        terminal.draw(|frame| {
-            draw_hint_bar(
-                frame,
-                Rect::new(0, 0, 120, 1),
-                HintBarView {
-                    current_model: "mock",
-                    busy: true,
-                    ..Default::default()
-                },
-                &Theme::default(),
-            );
-        });
-        let buffer = terminal.buffer();
-        let text = (0..buffer.area().width as usize)
-            .map(|x| buffer.content[x].symbol().to_string())
-            .collect::<String>();
-        assert!(
-            text.contains("Enter steer  Tab follow-up mode"),
-            "row was {text:?}"
-        );
-    }
-
-    #[test]
-    fn narrow_hint_bar_preserves_the_enter_action_before_metadata() {
-        let mut terminal = mutx_engine::TestTerminal::new(36, 1);
-        terminal.draw(|frame| {
-            draw_hint_bar(
-                frame,
-                Rect::new(0, 0, 36, 1),
-                HintBarView {
-                    current_model: "mock",
-                    reasoning_effort: Some("high"),
-                    busy: true,
-                    ..Default::default()
-                },
-                &Theme::default(),
-            );
-        });
-        let text = terminal
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(text.contains("Enter steer"), "row was {text:?}");
-    }
-
-    #[test]
-    fn hint_bar_reasoning_tag_shows_effort_when_set() {
-        // Render the full hint row for three effort states and read back the
+    fn model_bar_reasoning_tag_shows_effort_when_set() {
+        // Render the full model row for three effort states and read back the
         // whole line: the bare `{effort}` tag must appear right after the
         // model name when reasoning is in use and be absent entirely
         // otherwise.
         fn row_text(effort: Option<&str>) -> String {
             let mut terminal = mutx_engine::TestTerminal::new(80, 1);
             terminal.draw(|f| {
-                draw_hint_bar(
+                draw_model_bar(
                     f,
                     Rect::new(0, 0, 80, 1),
-                    HintBarView {
+                    ModelBarView {
                         current_model: "mock",
                         reasoning_effort: effort,
                         ..Default::default()
@@ -2373,17 +2172,17 @@ mod tests {
     }
 
     #[test]
-    fn hint_bar_shows_the_instance_suffix_after_the_model_name() {
+    fn model_bar_shows_the_instance_suffix_after_the_model_name() {
         // The `@<instance>` suffix must trail the model name so identical
         // models served by different instances stay attributable — and must
         // vanish entirely when no instance is known.
         fn row_text(provider_name: Option<&str>) -> String {
             let mut terminal = mutx_engine::TestTerminal::new(80, 1);
             terminal.draw(|f| {
-                draw_hint_bar(
+                draw_model_bar(
                     f,
                     Rect::new(0, 0, 80, 1),
-                    HintBarView {
+                    ModelBarView {
                         current_model: "mock",
                         provider_name,
                         ..Default::default()
@@ -2415,17 +2214,17 @@ mod tests {
     }
 
     #[test]
-    fn hint_bar_full_cluster_orders_model_effort_instance() {
+    fn model_bar_full_cluster_orders_model_effort_instance() {
         // The right cluster reads `Kimi K3 max @kimi-code  89.2k (8%)` —
         // effort tight after the model name, the @instance provenance last.
         // The identity group (`model effort @instance`) joins with single
         // spaces; only the context segment sits across the wider gap.
         let mut terminal = mutx_engine::TestTerminal::new(120, 1);
         terminal.draw(|f| {
-            draw_hint_bar(
+            draw_model_bar(
                 f,
                 Rect::new(0, 0, 120, 1),
-                HintBarView {
+                ModelBarView {
                     current_model: "mock",
                     provider_name: Some("kimi-code"),
                     reasoning_effort: Some("max"),
@@ -2452,17 +2251,17 @@ mod tests {
     }
 
     #[test]
-    fn hint_bar_ignition_label_takes_over_the_identity_cluster() {
+    fn model_bar_ignition_label_takes_over_the_identity_cluster() {
         // During the ignition's label phase the right cluster swaps the whole
         // `model effort @instance  ctx` identity for the converging `M A X`
         // label; once the phase ends the normal cluster returns.
         fn row_text(elapsed_ms: Option<u128>) -> String {
             let mut terminal = mutx_engine::TestTerminal::new(100, 1);
             terminal.draw(|f| {
-                draw_hint_bar(
+                draw_model_bar(
                     f,
                     Rect::new(0, 0, 100, 1),
-                    HintBarView {
+                    ModelBarView {
                         current_model: "k3",
                         provider_name: Some("kimi-code"),
                         reasoning_effort: Some("max"),
@@ -2692,8 +2491,7 @@ mod tests {
         let theme = Theme::default();
         let doc = crate::completion::CommandDoc {
             name: "/schedule".to_string(),
-            summary: "Schedule a prompt".to_string(),
-            description: "Schedule a prompt on a cron or countdown".to_string(),
+            summary: "Schedule a prompt on a cron or countdown".to_string(),
             usage: vec!["/schedule <when> <prompt>".to_string()],
             examples: vec![(
                 "/schedule 15m \"test\"".to_string(),
@@ -2701,6 +2499,10 @@ mod tests {
             )],
             intent_keywords: vec!["timer".to_string()],
             category: Some("Automation".to_string()),
+            subcommands: vec![
+                ("list".to_string(), "List scheduled prompts".to_string()),
+                ("cancel".to_string(), "Cancel one schedule by id".to_string()),
+            ],
         };
         let completions = vec![crate::completion::Completion {
             label: "/schedule".to_string(),

@@ -104,7 +104,11 @@ export type ClientIdentity = "Native" | "OpenCode" | "ClaudeCode" | "Codex" | "C
 export type ColorSchemeConfig = { background: string, surface: string, text: string, muted: string, accent: string, success: string, warning: string, error: string, };
 
 /**
- * Accepted compatibility spelling and its canonical command.
+ * An accepted compatibility spelling (`/setup`) and its canonical command
+ * (`/init`). Aliases are first-class completion candidates: they surface
+ * under their own name — never rewritten into the target mid-completion —
+ * so the user's mental model ("I typed `set`, I pick `setup`") is preserved.
+ * The composer submits the alias text verbatim; dispatch resolves it.
  */
 export type CommandAlias = { name: string, target: string, };
 
@@ -119,7 +123,7 @@ export type CommandCatalog = { commands: Array<CommandSpec>,
 aliases: Array<CommandAlias>, suggestions: Array<CommandSuggestion>, };
 
 /**
- * One concrete example for a slash command.
+ * One concrete example for a harness command (invoked as `/name`).
  */
 export type CommandExample = { command: string, description: string, };
 
@@ -184,14 +188,35 @@ trigger: string,
 next: string, } } | { "ConfigReload": { details: Array<string>, } } | { "Compacted": { rounds_compacted: number, } } | { "ScheduledList": { entries: Array<string>, } };
 
 /**
- * A canonical slash command and all metadata needed for completion/help.
+ * A canonical harness command and all metadata needed for completion/help.
+ *
+ * Exactly one prose field exists: [`CommandSpec::summary`]. It doubles as the
+ * menu line and the inspector/detail text, so keep it informative on its own
+ * (a second long-form field would just drift back into near-duplicate prose).
  */
-export type CommandSpec = { name: string, summary: string, description: string, usage: Array<string>, examples: Array<CommandExample>, intent_keywords: Array<string>, category?: string, };
+export type CommandSpec = { name: string, summary: string, usage: Array<string>, examples: Array<CommandExample>, intent_keywords: Array<string>, category?: string, 
+/**
+ * First-token verbs this command accepts (`/schedule list` → `list`),
+ * each with its own one-line introduction. Progressive disclosure: the
+ * parent's list stays lean; subcommand detail appears only after the
+ * user types the space.
+ */
+subcommands: Array<CommandSubcommandSpec>, };
 
 /**
  * Terminal status of a slash-command invocation.
  */
 export type CommandStatus = "success" | "error" | "user_cancelled";
+
+/**
+ * One first-token verb of a harness command.
+ */
+export type CommandSubcommandSpec = { name: string, 
+/**
+ * One-line introduction shown when completing `/cmd <cursor>`; keep it
+ * distinct from the sibling lines and from the parent summary.
+ */
+summary: string, };
 
 /**
  * A non-command trigger that steers users to a canonical command.

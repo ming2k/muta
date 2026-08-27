@@ -5,9 +5,9 @@ The live editable prompt at the bottom of the frame.
 ## Appearance
 
 ```text
-  ┃                                   ← top padding (full panel-bg row)
+  ┃ as: prompt                        ← top row: compose target (meta row)
   ┃ type here…                        ← text row(s)
-  ┃                                   ← bottom padding (full panel-bg row)
+  ┃ Enter send             1.2k chars ← bottom row: keys + char count (meta row)
 ```
 
 | Attribute | Value |
@@ -17,7 +17,41 @@ The live editable prompt at the bottom of the frame.
 | Accent bar | `┃` in `accent` (Build mode) or Plan-mode blue |
 | Text color | `text` (brighter than sent messages) |
 | Text indent | 4 cols (2 margin + `┃` + 1 leading space) |
-| Top/bottom padding | Full panel-bg rows (no half-block glyphs — a cell can only carry one bg color, so a solid row is identical across terminals) |
+| Top/bottom padding rows | Double as the **meta rows** below — the top edge states the compose target, the bottom edge carries the key hints and char counter (both painted on the full panel-bg band, no half-block glyphs) |
+
+## Meta rows
+
+The composer owns its own hint rows inside the box's padding bands (the old
+standalone hint bar became the gauge-only [model bar](model-bar.md)):
+
+**Top row — the `as:` target.** One clause normally; two while a queue
+pointer is armed. The value hue encodes the *consequence class* of pressing
+`Enter`:
+
+| Buffer state | Top row |
+|--------------|---------|
+| Plain draft | `as: prompt` (default fg) |
+| Resolved `/command` | `as: command` (`brand` + BOLD, echoing the in-box command highlight) |
+| Mid-round, steering armed | `as: steer prompt` (`warn` amber — Enter interrupts the running round) |
+| Mid-round, follow-up armed | `as: follow-up prompt` (`info` blue — Enter appends to the queue) |
+| Editing queued item #2 | `compose: follow-ups[#2] · edited · as: follow-up` (group tinted by delivery kind; `· edited` only while the buffer diverges from the stored text) |
+
+**Bottom row — the keys.** Left side states what the next `Enter` does,
+mirroring the `as:` verb; right side is a live char count of the draft
+(chars, never tokens — committed-token accounting lives exclusively on the
+model bar):
+
+| Buffer state | Keys row (left) |
+|--------------|-----------------|
+| Idle plain draft | `Enter send` |
+| Mid-round, steering armed | `Enter steer  Tab follow-up mode` (primary verb amber) |
+| Mid-round, follow-up armed | `Enter follow-up  Tab steer mode` (primary verb info blue) |
+| Editing a queued item | `Enter save  Esc cancel` — both survive any width |
+| Stopped round parked for retry | `Enter send  /retry to retry` |
+
+Under width pressure the keys row compresses labels (`Tab follow-up mode` →
+`Tab follow-up`) before the char counter is ever dropped; the keys themselves
+are the last thing to go.
 
 ## Height growth
 

@@ -107,24 +107,25 @@ pub(crate) const COMPOSER_HINT_GAP_ROWS: u16 = 0;
 #[cfg(test)]
 pub(crate) const ACTIVITY_COMPOSER_GAP_ROWS: u16 = 0;
 
-/// Hint bar: a single-line strip pinned directly below the input box that
-/// surfaces only the next input action (left) plus the model and context-usage
-/// info (right). It intentionally does **not** carry long-lived session state —
-/// that lives on the head row at the top of the view. Always one row tall when
-/// visible (hidden only while an overlay modal replaces the chrome).
-pub(crate) const HINT_BAR_ROWS: u16 = 1;
-/// Internal left indent of hint-bar content, matching the composer's prompt
+/// Model bar: a single-line strip pinned directly below the input box that
+/// surfaces the ambient gauges — model identity, context usage, stream rate.
+/// The Enter-action keys and the `as:` target row live inside the composer's
+/// own padding rows. It intentionally does **not** carry long-lived session
+/// state — that lives on the head row at the top of the view. Always one row
+/// tall when visible (hidden only while an overlay modal replaces the chrome).
+pub(crate) const MODEL_BAR_ROWS: u16 = 1;
+/// Internal left indent of model-bar content, matching the composer's prompt
 /// prefix feel.
-pub(crate) const HINT_BAR_INNER_PADDING: usize = 1;
-/// Minimum gap between the left input-action cluster and the right-aligned
-/// model/context cluster.
-pub(crate) const HINT_BAR_GAP_MIN: usize = 2;
-/// Gap between adjacent right-aligned hint segments.
-pub(crate) const HINT_BAR_SEGMENT_GAP: usize = 2;
+pub(crate) const MODEL_BAR_INNER_PADDING: usize = 1;
+/// Minimum gap between the model-identity cluster and the right-aligned
+/// context/rate cluster.
+pub(crate) const MODEL_BAR_GAP_MIN: usize = 2;
+/// Gap between adjacent right-aligned gauge segments.
+pub(crate) const MODEL_BAR_SEGMENT_GAP: usize = 2;
 /// Gap *inside* the model-identity group (`model effort @instance`) — these
 /// three tokens read as one identity, so they sit tighter than the gap
 /// between the identity group and the context-usage segment.
-pub(crate) const HINT_BAR_MODEL_GAP: usize = 1;
+pub(crate) const MODEL_BAR_MODEL_GAP: usize = 1;
 
 /// Activity bar: the transient liveness row (breathing-dot indicator + live
 /// status label + elapsed timer) shown directly above the input box while a
