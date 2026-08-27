@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-08-27
+
 ### Added
 
+- **Harness Steward Plane & Typed Cognitive Contracts (ADR-0150):** partitioned
+  the agent architecture into Operational Core (Master/Runner), Fleet Control
+  Plane (Supervisor), and Harness Infrastructure Plane (Steward). Introduced
+  typed `StewardTask` contracts for semantic loop detection (`SemanticLoopSentinelTask`),
+  sanity checks (`SanityVerifierTask`), and session titling (`SessionTitlerTask`),
+  executing out-of-band, stateless, and fail-open.
+- **In-flight Stream Loop Detector:** stream loop detector (`StreamLoopDetector`,
+  `DegeneratePattern`) and self-healing circuit breaker that inspects token and
+  chunk repetition cycles during streaming responses to abort runaway token loops.
 - **TUI: paste copied files as attachments.** Copying an image file in a file
   manager (Nautilus, Dolphin, Finder, Explorer) and pressing Ctrl+V in the
   composer now stages it as an `[Image #N]` attachment instead of inserting
@@ -17,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Read per-platform: `text/uri-list` / `x-special/gnome-copied-files`
   (Linux), Finder file URLs (`osascript`, macOS), `CF_HDROP`
   (PowerShell `Get-Clipboard -Format FileDropList`, Windows).
+
+### Changed
+
+- **Autonomous execution mode naming:** refactored and standardized YOLO mode
+  to delegated autonomous execution mode across CLI, runtime, and documentation.
+- **Workspace path resolution & admission:** unified path resolution and admission
+  for additional roots across contracts and agent runtime.
+- **Host environment & shell dialect:** enhanced platform guidance and cross-platform
+  shell dialect detection.
 
 ## [0.35.7] - 2026-08-27
 
@@ -5053,7 +5073,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.35.7...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.36.0...HEAD
+[0.36.0]: https://github.com/ming2k/muta/compare/v0.35.7...v0.36.0
 [0.35.7]: https://github.com/ming2k/muta/compare/v0.35.6...v0.35.7
 [0.35.6]: https://github.com/ming2k/muta/compare/v0.35.5...v0.35.6
 [0.35.5]: https://github.com/ming2k/muta/compare/v0.35.4...v0.35.5
