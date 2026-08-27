@@ -86,7 +86,7 @@ impl CommandCatalog {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub enum InputCompletionKind {
+pub enum ComposerCompletionKind {
     Slash,
     Intent,
     PathFile,
@@ -94,7 +94,9 @@ pub enum InputCompletionKind {
     PathExplicit,
 }
 
-/// One completion edit produced by the daemon.
+pub type InputCompletionKind = ComposerCompletionKind;
+
+/// One completion edit produced by the daemon for the composer.
 ///
 /// Replacement offsets are Unicode-scalar indices, not UTF-8 byte offsets or
 /// JavaScript UTF-16 code units. That gives every frontend one stable wire
@@ -102,7 +104,7 @@ pub enum InputCompletionKind {
 /// the final edit boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub struct InputCompletion {
+pub struct ComposerCompletion {
     /// Text shown in the completion menu.
     pub label: String,
     pub description: String,
@@ -113,8 +115,10 @@ pub struct InputCompletion {
     pub insert_text: String,
     pub replace_start: usize,
     pub replace_end: usize,
-    pub kind: InputCompletionKind,
+    pub kind: ComposerCompletionKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub command: Option<CommandSpec>,
 }
+
+pub type InputCompletion = ComposerCompletion;

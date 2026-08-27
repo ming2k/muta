@@ -266,17 +266,17 @@ describe("DaemonStore wire protocol", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
-      store.requestInputCompletions("/mo", 3);
+      store.requestComposerCompletions("/mo", 3);
       expect(session.sentJson(session.sent.length - 1)).toEqual({
         type: "Request",
-        CompleteInput: { request_id: 2, input: "/mo", cursor: 3 },
+        CompleteComposer: { request_id: 2, text: "/mo", cursor: 3 },
       });
-      store.requestInputCompletions("/mod", 4);
+      store.requestComposerCompletions("/mod", 4);
       session.message({
         type: "Response",
-        InputCompletions: {
+        ComposerCompletions: {
           request_id: 2,
-          input: "/mo",
+          text: "/mo",
           cursor: 3,
           items: [{
             label: "/models",
@@ -288,13 +288,13 @@ describe("DaemonStore wire protocol", () => {
           }],
         },
       });
-      expect(store.inputCompletions).toEqual([]);
+      expect(store.composerCompletions).toEqual([]);
 
       session.message({
         type: "Response",
-        InputCompletions: {
+        ComposerCompletions: {
           request_id: 3,
-          input: "/mod",
+          text: "/mod",
           cursor: 4,
           items: [{
             label: "/models",
@@ -306,7 +306,7 @@ describe("DaemonStore wire protocol", () => {
           }],
         },
       });
-      expect(store.inputCompletions.map((item) => item.label)).toEqual(["/models"]);
+      expect(store.composerCompletions.map((item) => item.label)).toEqual(["/models"]);
     });
   });
 
@@ -539,16 +539,16 @@ describe("DaemonStore wire protocol", () => {
 
       roundEvent(session, { ToolCall: { id: "call-1", name: "task", arguments: "{}" } });
       runnerEvent(session, {
-        InputRequest: { id: "i1", command: "sudo x", prompt: "password", secret: true },
+        StdinRequest: { id: "i1", command: "sudo x", prompt: "password", secret: true },
       });
-      expect(store.pendingInput?.request.id).toBe("i1");
-      expect(store.pendingInput?.origin.parentCallId).toBe("call-1");
+      expect(store.pendingStdin?.request.id).toBe("i1");
+      expect(store.pendingStdin?.origin.parentCallId).toBe("call-1");
 
-      store.replyInput("x");
-      expect(store.pendingInput).toBeNull();
+      store.replyStdin("x");
+      expect(store.pendingStdin).toBeNull();
       expect(session.sentJson(1)).toEqual({
         type: "Request",
-        InputReply: { request_id: "i1", text: "x", parent_call_id: "call-1" },
+        StdinReply: { request_id: "i1", text: "x", parent_call_id: "call-1" },
       });
     });
   });
@@ -590,18 +590,18 @@ describe("DaemonStore wire protocol", () => {
       expect(store.restoredDraft).toBeNull();
     });
 
-    it("UserInputInserted dedupes the optimistic echo but appends new text", () => {
+    it("SteerAdmitted dedupes the optimistic echo but appends new text", () => {
       const store = new DaemonStore();
       const session = attachSession(store);
 
-      store.sendChat("hello");
+      store.sendPrompt("hello");
       roundEvent(session, {
-        UserInputInserted: { id: "q1", text: "hello", sent_at_ms: Date.now() },
+        SteerAdmitted: { id: "q1", text: "hello", images: [], sent_at_ms: Date.now() },
       });
       expect(store.feed).toHaveLength(1); // deduped against the echo
 
       roundEvent(session, {
-        UserInputInserted: { id: "q2", text: "world", sent_at_ms: Date.now() },
+        SteerAdmitted: { id: "q2", text: "world", images: [], sent_at_ms: Date.now() },
       });
       expect(store.feed).toHaveLength(2);
       const item = store.feed[1];
@@ -835,13 +835,13 @@ describe("DaemonStore wire protocol", () => {
       const session = attachSession(store);
       // sent[0] is the attach Select frame.
 
-      store.sendChat("/help");
+      store.sendPrompt("/help");
       expect(session.sentJson(1)).toEqual({ type: "Request", SlashCommand: "/help" });
 
-      store.sendChat("hi", [{ mime: "image/png", data: "AA==" }]);
+      store.sendPrompt("hi", [{ mime: "image/png", data: "AA==" }]);
       expect(session.sentJson(2)).toEqual({
         type: "Request",
-        Chat: {
+        Prompt: {
           text: "hi",
           images: [{ mime: "image/png", data: "AA==" }],
           sent_at_ms: expect.any(Number),
@@ -859,11 +859,11 @@ describe("DaemonStore wire protocol", () => {
     });
 
     it("requestFrame flattens the request next to the type tag", () => {
-      const frame = requestFrame({ Chat: { text: "hi", images: [] } });
-      expect(frame.startsWith('{"type":"Request","Chat"')).toBe(true);
+      const frame = requestFrame({ Prompt: { text: "hi", images: [] } });
+      expect(frame.startsWith('{"type":"Request","Prompt"')).toBe(true);
       const parsed = JSON.parse(frame) as Record<string, unknown>;
       expect(parsed).not.toHaveProperty("request");
-      expect(parsed.Chat).toEqual({ text: "hi", images: [] });
+      expect(parsed.Prompt).toEqual({ text: "hi", images: [] });
     });
   });
 

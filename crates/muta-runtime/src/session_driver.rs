@@ -360,7 +360,7 @@ impl SessionDriver {
                     )
                     .await;
                 }
-                AgentRequest::InputReply {
+                AgentRequest::StdinReply {
                     request_id,
                     text,
                     parent_call_id,
@@ -709,15 +709,15 @@ impl SessionDriver {
                     )
                     .await;
                 }
-                AgentRequest::CompleteInput {
+                AgentRequest::CompleteComposer {
                     request_id,
-                    input,
+                    text,
                     cursor,
                 } => {
                     let _ =
-                        resp_tx.send(completion_engine.complete(request_id, input, cursor).await);
+                        resp_tx.send(completion_engine.complete(request_id, text, cursor).await);
                 }
-                AgentRequest::Chat {
+                AgentRequest::Prompt {
                     text,
                     images,
                     sent_at_ms,
@@ -737,9 +737,12 @@ impl SessionDriver {
                     )
                     .await;
                 }
-                AgentRequest::Steer { session_id, input } => {
+                AgentRequest::Steer {
+                    session_id,
+                    message,
+                } => {
                     crate::handlers_chat::steer(
-                        &side, &agent, &session, &resp_tx, session_id, input,
+                        &side, &agent, &session, &resp_tx, session_id, message,
                     )
                     .await;
                 }
@@ -752,7 +755,10 @@ impl SessionDriver {
                     )
                     .await;
                 }
-                AgentRequest::FollowUp { session_id, input } => {
+                AgentRequest::FollowUp {
+                    session_id,
+                    message,
+                } => {
                     crate::handlers_chat::follow_up(
                         SideEnv {
                             side: &side,
@@ -763,7 +769,7 @@ impl SessionDriver {
                             config: &config,
                         },
                         session_id,
-                        input,
+                        message,
                     )
                     .await;
                 }
@@ -899,7 +905,7 @@ impl SessionDriver {
 fn round_owned_request(req: &AgentRequest) -> bool {
     matches!(
         req,
-        AgentRequest::Chat { .. }
+        AgentRequest::Prompt { .. }
             | AgentRequest::FollowUp { .. }
             | AgentRequest::Steer { .. }
             | AgentRequest::CancelSteer { .. }
@@ -913,7 +919,7 @@ fn round_owned_request(req: &AgentRequest) -> bool {
 /// no-op — the round's own events own the display, and re-emitting a running
 /// snapshot would reset the TUI's round timer/turn counters (ADR-0091).
 async fn needs_activity_reconcile(req: &AgentRequest, lifecycle: &RoundLifecycle) -> bool {
-    !matches!(req, AgentRequest::CompleteInput { .. })
+    !matches!(req, AgentRequest::CompleteComposer { .. })
         && !round_owned_request(req)
         && !lifecycle.is_running().await
 }
@@ -1045,14 +1051,14 @@ mod tests {
 
     #[test]
     fn round_owned_requests_close_their_own_activity_lifecycle() {
-        assert!(round_owned_request(&AgentRequest::Chat {
+        assert!(round_owned_request(&AgentRequest::Prompt {
             text: "hi".to_string(),
             images: vec![image()],
             sent_at_ms: Some(1),
         }));
         assert!(round_owned_request(&AgentRequest::FollowUp {
             session_id: "s".to_string(),
-            input: muta_contracts::QueuedMessage {
+            message: muta_contracts::QueuedMessage {
                 id: "i".to_string(),
                 text: "hi".to_string(),
                 display_text: None,
@@ -1062,7 +1068,7 @@ mod tests {
         }));
         assert!(round_owned_request(&AgentRequest::Steer {
             session_id: "s".to_string(),
-            input: muta_contracts::QueuedMessage {
+            message: muta_contracts::QueuedMessage {
                 id: "i".to_string(),
                 text: "hi".to_string(),
                 display_text: None,
@@ -1115,7 +1121,7 @@ mod tests {
             answers: Vec::new(),
             parent_call_id: None,
         }));
-        assert!(!round_owned_request(&AgentRequest::InputReply {
+        assert!(!round_owned_request(&AgentRequest::StdinReply {
             request_id: "r".to_string(),
             text: "y".to_string(),
             parent_call_id: None,
@@ -1161,7 +1167,7 @@ mod tests {
         // its own terminal idle snapshot.
         assert!(
             !needs_activity_reconcile(
-                &AgentRequest::Chat {
+                &AgentRequest::Prompt {
                     text: "hi".to_string(),
                     images: Vec::new(),
                     sent_at_ms: None,
@@ -1169,7 +1175,7 @@ mod tests {
                 &lifecycle,
             )
             .await,
-            "chat closes its own lifecycle"
+            "prompt closes its own lifecycle"
         );
         assert!(
             !needs_activity_reconcile(

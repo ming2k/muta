@@ -1786,7 +1786,7 @@ fn auto_dispatch_ready_round(app: &mut App) {
         app.running_sessions.insert(session_id.clone());
         let _ = app.tx.send(AgentRequest::FollowUp {
             session_id,
-            input: muta_contracts::QueuedMessage {
+            message: muta_contracts::QueuedMessage {
                 id: dispatch.id,
                 text: expanded_text,
                 display_text: Some(dispatch.text),

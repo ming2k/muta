@@ -17,7 +17,7 @@ export type AgentNotice = { id: string, kind: NoticeKind, severity: NoticeSeveri
  */
 surface: NoticeSurface, title: string, body?: string, source: NoticeSource, };
 
-export type AgentRequest = { "Chat": { text: string, images: Array<ImagePart>, sent_at_ms?: number, } } | { "Steer": { session_id: string, input: QueuedMessage, } } | { "CancelSteer": { session_id: string, input_id: string, } } | { "FollowUp": { session_id: string, input: QueuedMessage, } } | { "SlashCommand": string } | { "CompleteInput": { request_id: number, input: string, cursor: number, } } | "Interrupt" | "EndSession" | { "PermissionReply": { request_id: string, decision: PermissionDecision, 
+export type AgentRequest = { "Prompt": { text: string, images: Array<ImagePart>, sent_at_ms?: number, } } | { "Steer": { session_id: string, message: QueuedMessage, } } | { "CancelSteer": { session_id: string, input_id: string, } } | { "FollowUp": { session_id: string, message: QueuedMessage, } } | { "SlashCommand": string } | { "CompleteComposer": { request_id: number, text: string, cursor: number, } } | "Interrupt" | "EndSession" | { "PermissionReply": { request_id: string, decision: PermissionDecision, 
 /**
  * Full-duplex (ADR-0029): when the reply targets a permission
  * request surfaced by a *runner* (carried up as a
@@ -36,7 +36,7 @@ parent_call_id: string | null, } } | { "UserQuestionReply": { request_id: string
  * side agent question. See [`AgentRequest::PermissionReply`] for the
  * routing contract.
  */
-parent_call_id: string | null, } } | { "InputReply": { request_id: string, text: string, parent_call_id: string | null, } } | { "SwitchProvider": { provider_type: string, model: string, api_key: SecretString | null, base_url: string | null, } } | { "AddProvider": { name: string, protocol: string, base_url: string, api_key: SecretString, user_agent: string | null, models: Array<string>, 
+parent_call_id: string | null, } } | { "StdinReply": { request_id: string, text: string, parent_call_id: string | null, } } | { "SwitchProvider": { provider_type: string, model: string, api_key: SecretString | null, base_url: string | null, } } | { "AddProvider": { name: string, protocol: string, base_url: string, api_key: SecretString, user_agent: string | null, models: Array<string>, 
 /**
  * How the seeded channels authenticate. Default (`ApiKey`) keeps the
  * historical behavior; `XaiOAuth` marks SuperGrok channels whose live
@@ -208,6 +208,32 @@ export type CommandThemeConfig = { idle_bg: string | null, hover_bg: string | nu
  */
 export type ComponentThemesConfig = { input: InputThemeConfig | null, crate: CrateThemeConfig | null, diff: DiffThemeConfig | null, command: CommandThemeConfig | null, };
 
+/**
+ * One completion edit produced by the daemon for the composer.
+ *
+ * Replacement offsets are Unicode-scalar indices, not UTF-8 byte offsets or
+ * JavaScript UTF-16 code units. That gives every frontend one stable wire
+ * representation; clients translate to their native string indexing only at
+ * the final edit boundary.
+ */
+export type ComposerCompletion = { 
+/**
+ * Text shown in the completion menu.
+ */
+label: string, description: string, 
+/**
+ * Exact text the client splices over `replace_start..replace_end`.
+ * This is separate from `label` so backend-owned edit behavior (for
+ * example consuming an `@` trigger or appending a trailing space) does
+ * not leak back into frontend code.
+ */
+insert_text: string, replace_start: number, replace_end: number, kind: ComposerCompletionKind, command?: CommandSpec, };
+
+/**
+ * Semantic kind of one backend-produced composer completion.
+ */
+export type ComposerCompletionKind = "slash" | "intent" | "path_file" | "path_dir" | "path_explicit";
+
 export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource, overhead_tokens?: number | null, history_tokens?: number | null, };
 
 /**
@@ -300,7 +326,7 @@ export type HumanChannelPosture = "Interactive" | "Autonomous";
  * Which of the three parked protocols a request belongs to. Carried on
  * every parked request so cancellation, hooks, and metrics can be uniform.
  */
-export type HumanRequestKind = "Permission" | "Question" | "Input";
+export type HumanRequestKind = "Permission" | "Question" | "Stdin";
 
 /**
  * An inline image attached to a message.
@@ -353,54 +379,6 @@ kind: InjectionKind,
  * that fired. `None` when the kind alone is self-describing.
  */
 reason?: string, };
-
-/**
- * One completion edit produced by the daemon.
- *
- * Replacement offsets are Unicode-scalar indices, not UTF-8 byte offsets or
- * JavaScript UTF-16 code units. That gives every frontend one stable wire
- * representation; clients translate to their native string indexing only at
- * the final edit boundary.
- */
-export type InputCompletion = { 
-/**
- * Text shown in the completion menu.
- */
-label: string, description: string, 
-/**
- * Exact text the client splices over `replace_start..replace_end`.
- * This is separate from `label` so backend-owned edit behavior (for
- * example consuming an `@` trigger or appending a trailing space) does
- * not leak back into frontend code.
- */
-insert_text: string, replace_start: number, replace_end: number, kind: InputCompletionKind, command?: CommandSpec, };
-
-/**
- * Semantic kind of one backend-produced composer completion.
- */
-export type InputCompletionKind = "slash" | "intent" | "path_file" | "path_dir" | "path_explicit";
-
-/**
- * Request sent from the agent to the TUI when a `bash` command is classified
- * interactive and needs a line of input the agent cannot supply itself
- * (L3.5 β — the default human-input path). The TUI shows an inline input
- * panel; the operator's reply is sent back as an [`InputReply`]. If the
- * operator dismisses it (Esc), an empty reply cancels the command.
- */
-export type InputRequest = { id: string, 
-/**
- * The command that needs input, shown for context.
- */
-command: string, 
-/**
- * A human-readable prompt describing what to enter (e.g. "sudo password",
- * "passphrase", "confirmation").
- */
-prompt: string, 
-/**
- * Whether to mask the typed input (passwords/passphrases).
- */
-secret: boolean, };
 
 /**
  * Component-specific override for the live prompt / input box.
@@ -944,7 +922,7 @@ name: string,
 /**
  * Raw argument remainder after the command word.
  */
-args: string, result: CommandResult, } } | { "Error": string } | { "ToolCall": { id: string, name: string, arguments: string, } } | { "ToolResult": { id: string, name: string, output: string, structured: ToolOutput, duration_ms: number, } } | { "ToolStream": { id: string, stream: ToolStreamFrame, } } | { "ToolCancelled": { id: string, name: string, } } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "InputRequest": InputRequest } | { "Compacted": { archived_messages: number, window_tokens_before: number, window_tokens_after: number, } } | { "HarnessState": HarnessSnapshot } | { "TodosUpdated": TodoList } | { "YoloChanged": boolean } | { "RetryScheduled": { attempt: number, max_attempts: number, delay_ms: number, message: string, } } | { "Activity": string } | { "TurnStarted": { 
+args: string, result: CommandResult, } } | { "Error": string } | { "ToolCall": { id: string, name: string, arguments: string, } } | { "ToolResult": { id: string, name: string, output: string, structured: ToolOutput, duration_ms: number, } } | { "ToolStream": { id: string, stream: ToolStreamFrame, } } | { "ToolCancelled": { id: string, name: string, } } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "StdinRequest": StdinRequest } | { "Compacted": { archived_messages: number, window_tokens_before: number, window_tokens_after: number, } } | { "HarnessState": HarnessSnapshot } | { "TodosUpdated": TodoList } | { "YoloChanged": boolean } | { "RetryScheduled": { attempt: number, max_attempts: number, delay_ms: number, message: string, } } | { "Activity": string } | { "TurnStarted": { 
 /**
  * 1-indexed enclosing user round.
  */
@@ -1041,7 +1019,7 @@ generation_ms: number, };
  * the TUI can render nested tool steps and streaming output inside the parent
  * tool step.
  */
-export type RunnerEvent = { "Started": { profile: string, } } | { "Notice": AgentNotice } | { "StreamStart": { round: number, turn: number, } } | { "StreamDelta": string } | { "StreamEnd": string } | { "StreamReasoningStart": { round: number, turn: number, } } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "ToolCall": { id: string, name: string, arguments: string, round: number, turn: number, } } | { "ToolResult": { id: string, name: string, output: string, duration_ms: number, } } | { "Activity": string } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "InputRequest": InputRequest };
+export type RunnerEvent = { "Started": { profile: string, } } | { "Notice": AgentNotice } | { "StreamStart": { round: number, turn: number, } } | { "StreamDelta": string } | { "StreamEnd": string } | { "StreamReasoningStart": { round: number, turn: number, } } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "ToolCall": { id: string, name: string, arguments: string, round: number, turn: number, } } | { "ToolResult": { id: string, name: string, output: string, duration_ms: number, } } | { "Activity": string } | { "PermissionRequest": PermissionRequest } | { "UserQuestionRequest": UserQuestionRequest } | { "StdinRequest": StdinRequest };
 
 /**
  * Sidecar metadata for an runner run. Lives next to
@@ -1181,6 +1159,27 @@ export type ShellStream = "Out" | "Err";
  * [`ShellTermination::Exited`].
  */
 export type ShellTermination = "Exited" | "IdleBlocked" | "InteractiveBlocked" | "Timeout" | "Cancelled";
+
+/**
+ * Request sent from the agent to the TUI when a `bash` command is classified
+ * interactive and needs a line of stdin the agent cannot supply itself.
+ * The TUI shows an inline input panel; the operator's reply is sent back as a [`StdinReply`].
+ * If the operator dismisses it (Esc), an empty reply cancels the command.
+ */
+export type StdinRequest = { id: string, 
+/**
+ * The command that needs input, shown for context.
+ */
+command: string, 
+/**
+ * A human-readable prompt describing what to enter (e.g. "sudo password",
+ * "passphrase", "confirmation").
+ */
+prompt: string, 
+/**
+ * Whether to mask the typed input (passwords/passphrases).
+ */
+secret: boolean, };
 
 /**
  * Full standalone theme file loaded from `$XDG_CONFIG_HOME/muta/themes/<id>.toml`.

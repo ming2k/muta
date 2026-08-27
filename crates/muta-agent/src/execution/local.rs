@@ -663,7 +663,7 @@ mod workspace_tests {
                 .call(r#"{"patterns":["*"],"path":"../outside"}"#)
                 .await
                 .unwrap_err()
-                .contains("relative to the workspace")
+                .contains("outside the admitted workspace roots")
         );
     }
 

@@ -105,12 +105,12 @@ pub async fn run_headless(
     }
 
     // Dispatch the prompt
-    tx.send(AgentRequest::Chat {
+    tx.send(AgentRequest::Prompt {
         text: prompt,
         images: Vec::new(),
         sent_at_ms: None,
     })
-    .map_err(|e| format!("could not send chat request: {e}"))?;
+    .map_err(|e| format!("could not send prompt request: {e}"))?;
 
     let is_tty = io::stderr().is_terminal();
     let mut accumulated_text = String::new();

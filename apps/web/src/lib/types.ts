@@ -46,17 +46,20 @@ import type {
   AttachAction,
   CommandRecord,
   CommandCatalog,
-  InputCompletion,
+  ComposerCompletion,
   ImagePart,
   Message,
   MonitorEvent,
   PermissionDecision,
   ProviderPickerSnapshot,
+  QueuedMessage,
   RoundEvent,
   RoundInterrupt,
   RoundSummary,
   SessionOverview,
 } from "./generated/wire.gen.js";
+
+export type QueuedUserInput = QueuedMessage;
 
 // ---------------------------------------------------------------------------
 // Agent requests (client → daemon), as flattened into `Wire::Request`.
@@ -140,11 +143,11 @@ export type AgentResponse =
   | { ProviderPicker: ProviderPickerSnapshot }
   | { ProviderSwitched: { provider: string; model: string } }
   | {
-      InputCompletions: {
+      ComposerCompletions: {
         request_id: number;
-        input: string;
+        text: string;
         cursor: number;
-        items: InputCompletion[];
+        items: ComposerCompletion[];
       };
     }
   // Unit variant: `{"ConversationCleared":null}` — it carries no id; the

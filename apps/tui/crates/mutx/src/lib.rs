@@ -1460,10 +1460,10 @@ pub async fn run_tui(
                                 ir_clone.store(true, Ordering::SeqCst);
                             }
                         }
-                        RoundEvent::InputRequest(request) => {
+                        RoundEvent::StdinRequest(request) => {
                             pending_input_clone.lock().await.push_back(request);
                             if !routes_to_side {
-                                *activity_clone.lock().await = "awaiting command input".to_string();
+                                *activity_clone.lock().await = "awaiting command stdin".to_string();
                                 ir_clone.store(true, Ordering::SeqCst);
                             }
                         }
@@ -1832,15 +1832,15 @@ pub async fn run_tui(
                     // across every session.
                     *usage_stats_clone.lock().await = Some(report);
                 }
-                AgentResponse::InputCompletions {
+                AgentResponse::ComposerCompletions {
                     request_id,
-                    input,
+                    text,
                     cursor,
                     items,
                 } => {
                     *completion_signal_clone.lock().await = Some(event_loop::CompletionSignal {
                         request_id,
-                        input,
+                        input: text,
                         cursor,
                         items,
                     });

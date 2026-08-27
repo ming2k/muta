@@ -113,6 +113,9 @@ fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
             app.copy_toast_failed = false;
             app.copy_toast_until = Some(std::time::Instant::now() + Duration::from_millis(1800));
         }
+        ClipboardRead::Files(paths) => {
+            apply_composer_files_paste(app, paths);
+        }
         ClipboardRead::Text(text) => {
             // Large pastes (multi-line or long enough to balloon the input
             // box) are staged behind a `[Pasted text #N +M lines (size)]`
@@ -156,6 +159,84 @@ fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
     }
 }
 
+/// Paste of file references (files copied in a file manager). Image files are
+/// staged as `[Image #N]` attachments through the same pipeline as image-data
+/// pastes; non-image files are skipped and reported in the toast rather than
+/// silently dropped, matching the vision-rejection behavior above.
+fn apply_composer_files_paste(app: &mut App, paths: Vec<std::path::PathBuf>) {
+    let mut attached: Option<usize> = None;
+    let mut skipped = 0usize;
+    let mut vision_blocked = false;
+
+    for path in paths {
+        let Some((data, mime)) = read_image_file(&path) else {
+            skipped += 1;
+            continue;
+        };
+        if !resolve_model(&app.current_model).vision {
+            vision_blocked = true;
+            break;
+        }
+        let raw_size = data.len();
+        let encoded = clipboard::base64_image(&data);
+        app.pending_images.push(ImagePart {
+            mime,
+            data: encoded,
+        });
+        let n = app.pending_images.len();
+        insert_chip_at_cursor(app, &image_chip(n, raw_size));
+        attached = Some(n);
+    }
+
+    app.copy_toast_message = match (attached, skipped, vision_blocked) {
+        (Some(_), 0, false) => {
+            let n = app.pending_images.len();
+            format!(
+                "{n} image{} attached — enter to send",
+                if n == 1 { "" } else { "s" }
+            )
+        }
+        (Some(_), skipped, false) => {
+            format!(
+                "{} attached — skipped {skipped} non-image file{}",
+                if app.pending_images.len() == 1 {
+                    "1 image"
+                } else {
+                    "images"
+                },
+                if skipped == 1 { "" } else { "s" },
+            )
+        }
+        (None, skipped, false) => {
+            format!(
+                "skipped {skipped} file{} — only images can be attached",
+                if skipped == 1 { "" } else { "s" }
+            )
+        }
+        (_, _, true) => format!(
+            "{} does not support images — paste ignored",
+            app.current_model,
+        ),
+    };
+    app.copy_toast_failed = !matches!((attached, vision_blocked), (Some(_), false));
+    app.copy_toast_until = Some(std::time::Instant::now() + Duration::from_millis(2000));
+}
+
+/// Read a pasted file's bytes if it is a supported image, keyed by extension
+/// (`ImagePart.mime` drives the provider payload; clipboard pastes are always
+/// PNG but file copies can be any raster format the workspace enables).
+fn read_image_file(path: &std::path::Path) -> Option<(Vec<u8>, String)> {
+    let mime = match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => return None,
+    };
+    let data = std::fs::read(path).ok()?;
+    (!data.is_empty()).then(|| (data, mime.to_string()))
+}
+
 /// Question-modal "Other" field paste. Unlike the readline modals, this field
 /// owns its own buffer (`QuestionModel::other_text`) rather than borrowing
 /// `App::input`, so it can't reuse [`apply_modal_field_paste`]. The text is
@@ -194,6 +275,11 @@ fn apply_question_other_paste(app: &mut App, read: ClipboardRead) {
             app.copy_toast_failed = true;
             app.copy_toast_until = Some(std::time::Instant::now() + Duration::from_millis(1200));
         }
+        ClipboardRead::Files(..) => {
+            app.copy_toast_message = "can't paste files into this field".to_string();
+            app.copy_toast_failed = true;
+            app.copy_toast_until = Some(std::time::Instant::now() + Duration::from_millis(1200));
+        }
         ClipboardRead::Empty => {
             app.copy_toast_message = "clipboard is empty".to_string();
             app.copy_toast_failed = true;
@@ -203,8 +289,8 @@ fn apply_question_other_paste(app: &mut App, read: ClipboardRead) {
 }
 /// to preserve single-line semantics (the provider editor's API-key and
 /// model-id fields, the picker filter, and the history search query are all
-/// single-line). Image pastes are dropped with a short toast since the
-/// modal field has no attachment staging. See [`apply_clipboard_paste`].
+/// single-line). Image and file pastes are dropped with a short toast since
+/// the modal field has no attachment staging. See [`apply_clipboard_paste`].
 fn apply_modal_field_paste(app: &mut App, read: ClipboardRead) {
     match read {
         ClipboardRead::Text(text) => {
@@ -235,6 +321,11 @@ fn apply_modal_field_paste(app: &mut App, read: ClipboardRead) {
             // Modal fields are single-line text; images are not attachable
             // here. Surface a brief toast so the paste is not silently lost.
             app.copy_toast_message = "can't paste image into this field".to_string();
+            app.copy_toast_failed = true;
+            app.copy_toast_until = Some(std::time::Instant::now() + Duration::from_millis(1200));
+        }
+        ClipboardRead::Files(..) => {
+            app.copy_toast_message = "can't paste files into this field".to_string();
             app.copy_toast_failed = true;
             app.copy_toast_until = Some(std::time::Instant::now() + Duration::from_millis(1200));
         }

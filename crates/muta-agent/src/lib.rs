@@ -162,6 +162,8 @@ pub mod round_lifecycle;
 pub use round_lifecycle::{ParkedInterrupt, RoundBegin, RoundLifecycle};
 pub mod session_title;
 mod shell_input;
+pub mod stream_loop_detector;
+pub use stream_loop_detector::{DegeneratePattern, StreamLoopDetector};
 use muta_skills as skills;
 pub mod execution;
 pub mod tool_call;

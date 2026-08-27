@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **TUI: paste copied files as attachments.** Copying an image file in a file
+  manager (Nautilus, Dolphin, Finder, Explorer) and pressing Ctrl+V in the
+  composer now stages it as an `[Image #N]` attachment instead of inserting
+  the file's path as text. Multi-file pastes attach every supported image and
+  skip non-images with a toast; plain text copies still paste as text.
+  Read per-platform: `text/uri-list` / `x-special/gnome-copied-files`
+  (Linux), Finder file URLs (`osascript`, macOS), `CF_HDROP`
+  (PowerShell `Get-Clipboard -Format FileDropList`, Windows).
+
 ## [0.35.7] - 2026-08-27
 
 ### Changed

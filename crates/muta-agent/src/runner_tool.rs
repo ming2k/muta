@@ -1111,11 +1111,11 @@ impl RunnerTool {
                 }
                 on_event(muta_contracts::RunnerEvent::UserQuestionRequest(request));
             }
-            // L3.5 β: an interactive `bash` inside the runner needs operator
-            // input; forward the request up so the parent harness can surface
+            // An interactive `bash` inside the runner needs operator
+            // stdin; forward the request up so the parent harness can surface
             // it, with the reply routed back down via `reply_input`.
-            muta_contracts::AgentEvent::InputRequest(request) => {
-                on_event(muta_contracts::RunnerEvent::InputRequest(request));
+            muta_contracts::AgentEvent::StdinRequest(request) => {
+                on_event(muta_contracts::RunnerEvent::StdinRequest(request));
             }
             _ => {}
         }

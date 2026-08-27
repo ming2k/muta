@@ -26,14 +26,17 @@ import type {
   CommandResult,
   RunnerEvent,
   ImagePart,
-  InputCompletion,
-  InputRequest,
+  ComposerCompletion,
+  ComposerCompletion as InputCompletion,
+  StdinRequest,
+  StdinRequest as InputRequest,
   Message,
   MonitorFrame,
   MonitoredSession,
   PermissionDecision,
   PermissionRequest,
   ProviderPickerSnapshot,
+  QueuedMessage,
   QueuedUserInput,
   RoundEvent,
   RoundInterrupt,
@@ -79,7 +82,7 @@ const CLIENT_VERSION: string =
  * in its window; sending it is what opts this client into protocol-number
  * negotiation instead of product-version equality.
  */
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 
 /** Reconnect base delay for both channels; doubles per failure, capped. */
 const RECONNECT_BASE_MS = 1000;
@@ -117,10 +120,12 @@ export interface PendingQuestion {
   origin: RequestOrigin;
 }
 
-export interface PendingInput {
-  request: InputRequest;
+export interface PendingStdin {
+  request: StdinRequest;
   origin: RequestOrigin;
 }
+
+export type PendingInput = PendingStdin;
 
 /** One transient user-visible notice/error line. */
 export interface Toast {
@@ -343,9 +348,15 @@ export class DaemonStore {
     suggestions: [],
   });
   /** Latest race-checked completion edits produced by the daemon. */
-  public inputCompletions = $state<InputCompletion[]>([]);
+  public composerCompletions = $state<ComposerCompletion[]>([]);
+  public get inputCompletions(): ComposerCompletion[] {
+    return this.composerCompletions;
+  }
+  public set inputCompletions(v: ComposerCompletion[]) {
+    this.composerCompletions = v;
+  }
   private completionRequestId = 0;
-  private completionRequestState: { input: string; cursor: number } | null = null;
+  private completionRequestState: { text: string; cursor: number } | null = null;
 
   /**
    * Effective `[websearch]` configuration (presence-only view — API keys are
@@ -356,7 +367,13 @@ export class DaemonStore {
 
   public pendingPermission = $state<PendingPermission | null>(null);
   public pendingQuestion = $state<PendingQuestion | null>(null);
-  public pendingInput = $state<PendingInput | null>(null);
+  public pendingStdin = $state<PendingStdin | null>(null);
+  public get pendingInput(): PendingStdin | null {
+    return this.pendingStdin;
+  }
+  public set pendingInput(v: PendingStdin | null) {
+    this.pendingStdin = v;
+  }
 
   public toasts = $state<Toast[]>([]);
   public sessionError = $state<string | null>(null);
@@ -856,16 +873,27 @@ export class DaemonStore {
         provider: resp.ProviderSwitched.provider,
         model: resp.ProviderSwitched.model,
       };
-    } else if ("InputCompletions" in resp) {
-      const result = resp.InputCompletions;
+    } else if ("ComposerCompletions" in resp) {
+      const result = resp.ComposerCompletions;
       const state = this.completionRequestState;
       if (
         state !== null &&
         result.request_id === this.completionRequestId &&
-        result.input === state.input &&
+        result.text === state.text &&
         result.cursor === state.cursor
       ) {
-        this.inputCompletions = result.items;
+        this.composerCompletions = result.items;
+      }
+    } else if ("InputCompletions" in resp) {
+      const result = (resp as { InputCompletions: { request_id: number; input: string; cursor: number; items: ComposerCompletion[] } }).InputCompletions;
+      const state = this.completionRequestState;
+      if (
+        state !== null &&
+        result.request_id === this.completionRequestId &&
+        result.input === state.text &&
+        result.cursor === state.cursor
+      ) {
+        this.composerCompletions = result.items;
       }
     } else if ("ConversationCleared" in resp) {
       // `/new` blanked the transcript: the harness switched this attached
@@ -1025,21 +1053,25 @@ export class DaemonStore {
       this.pendingPermission = { request: event.PermissionRequest, origin: TOP_LEVEL_ORIGIN };
     } else if ("UserQuestionRequest" in event) {
       this.pendingQuestion = { request: event.UserQuestionRequest, origin: TOP_LEVEL_ORIGIN };
+    } else if ("StdinRequest" in event) {
+      this.pendingStdin = { request: event.StdinRequest, origin: TOP_LEVEL_ORIGIN };
     } else if ("InputRequest" in event) {
-      this.pendingInput = { request: event.InputRequest, origin: TOP_LEVEL_ORIGIN };
+      this.pendingStdin = { request: (event as { InputRequest: StdinRequest }).InputRequest, origin: TOP_LEVEL_ORIGIN };
     } else if ("TodosUpdated" in event) {
       this.todos = event.TodosUpdated;
     } else if ("ContextTokens" in event) {
       this.contextTokens = event.ContextTokens.tokens;
     } else if ("HarnessState" in event) {
       this.roundCounter = event.HarnessState.round_counter;
-      this.autopilot = event.HarnessState.autopilot;
+      this.autopilot = event.HarnessState.yolo ?? (event.HarnessState as unknown as { autopilot?: boolean }).autopilot ?? false;
       if (event.HarnessState.loop_status === "idle") {
         this.activity = null;
         this.currentTurn = null;
       }
+    } else if ("YoloChanged" in event) {
+      this.autopilot = event.YoloChanged;
     } else if ("AutopilotChanged" in event) {
-      this.autopilot = event.AutopilotChanged;
+      this.autopilot = (event as unknown as { AutopilotChanged: boolean }).AutopilotChanged;
     } else if ("RoundCompleted" in event) {
       this.lastRound = event.RoundCompleted;
       this.roundCounter = event.RoundCompleted.round;
@@ -1079,10 +1111,20 @@ export class DaemonStore {
         `Retry ${r.attempt}/${r.max_attempts} in ${Math.round(r.delay_ms / 1000)}s`,
         r.message,
       );
+    } else if ("SteerAdmitted" in event) {
+      this.appendInsertedInput(event.SteerAdmitted);
+    } else if ("FollowUpStarted" in event) {
+      this.appendInsertedInput(event.FollowUpStarted);
+    } else if ("SteerUnavailable" in event) {
+      this.pushToast(
+        "info",
+        "Steer deferred",
+        "The round stopped accepting steering input first; it will run next round.",
+      );
     } else if ("UserInputInserted" in event) {
-      this.appendInsertedInput(event.UserInputInserted);
+      this.appendInsertedInput((event as { UserInputInserted: QueuedMessage }).UserInputInserted);
     } else if ("NextRoundStarted" in event) {
-      this.appendInsertedInput(event.NextRoundStarted);
+      this.appendInsertedInput((event as { NextRoundStarted: QueuedMessage }).NextRoundStarted);
     } else if ("UserInputUnavailable" in event) {
       this.pushToast(
         "info",
@@ -1096,8 +1138,11 @@ export class DaemonStore {
       this.pushToast("error", "Turn error", event.Error);
     } else if ("UnsentInput" in event) {
       this.handleUnsentInput(event.UnsentInput);
+    } else if ("EnvoyCompat" in event) {
+      this.handleRunnerEvent(event.EnvoyCompat.parent_call_id, event.EnvoyCompat.event);
     } else if ("Runner" in event) {
-      this.handleRunnerEvent(event.Runner.parent_call_id, event.Runner.event);
+      const runner = (event as { Runner: { parent_call_id: string; event: RunnerEvent } }).Runner;
+      this.handleRunnerEvent(runner.parent_call_id, runner.event);
     }
     // UserInputCancelled / UserInputCancelFailed concern queued inserts this
     // client never issues; nothing to surface.
@@ -1189,8 +1234,12 @@ export class DaemonStore {
       this.pendingQuestion = { request: event.UserQuestionRequest, origin };
       return;
     }
+    if ("StdinRequest" in event) {
+      this.pendingStdin = { request: event.StdinRequest, origin };
+      return;
+    }
     if ("InputRequest" in event) {
-      this.pendingInput = { request: event.InputRequest, origin };
+      this.pendingStdin = { request: (event as { InputRequest: StdinRequest }).InputRequest, origin };
       return;
     }
     if (!parent) return; // stray runner event for a tool we never saw
@@ -1288,15 +1337,20 @@ export class DaemonStore {
 
   /** Request completion from the daemon. `cursorUtf16` is the textarea's
    * native offset; the wire uses Unicode-scalar indices across all clients. */
-  public requestInputCompletions(input: string, cursorUtf16: number) {
-    const cursor = Array.from(input.slice(0, cursorUtf16)).length;
+  public requestComposerCompletions(text: string, cursorUtf16: number) {
+    const cursor = Array.from(text.slice(0, cursorUtf16)).length;
     const requestId = ++this.completionRequestId;
-    this.completionRequestState = { input, cursor };
-    this.inputCompletions = [];
-    this.send({ CompleteInput: { request_id: requestId, input, cursor } });
+    this.completionRequestState = { text, cursor };
+    this.composerCompletions = [];
+    this.send({ CompleteComposer: { request_id: requestId, text, cursor } });
   }
 
-  public sendChat(text: string, images: ImagePart[] = []) {
+  /** Legacy alias for `requestComposerCompletions`. */
+  public requestInputCompletions(input: string, cursorUtf16: number) {
+    this.requestComposerCompletions(input, cursorUtf16);
+  }
+
+  public sendPrompt(text: string, images: ImagePart[] = []) {
     const trimmed = text.trim();
     if (!trimmed && images.length === 0) return;
     if (trimmed.startsWith("/")) {
@@ -1320,7 +1374,12 @@ export class DaemonStore {
       },
     });
     // `images` is required on the wire (no serde default on the Rust field).
-    this.send({ Chat: { text: trimmed, images, sent_at_ms: Date.now() } });
+    this.send({ Prompt: { text: trimmed, images, sent_at_ms: Date.now() } });
+  }
+
+  /** Legacy alias for `sendPrompt`. */
+  public sendChat(text: string, images: ImagePart[] = []) {
+    this.sendPrompt(text, images);
   }
 
   public interrupt() {
@@ -1381,16 +1440,21 @@ export class DaemonStore {
     this.pendingQuestion = null;
   }
 
-  public replyInput(text: string) {
-    if (!this.pendingInput) return;
+  public replyStdin(text: string) {
+    if (!this.pendingStdin) return;
     this.send({
-      InputReply: {
-        request_id: this.pendingInput.request.id,
+      StdinReply: {
+        request_id: this.pendingStdin.request.id,
         text,
-        parent_call_id: this.pendingInput.origin.parentCallId,
+        parent_call_id: this.pendingStdin.origin.parentCallId,
       },
     });
-    this.pendingInput = null;
+    this.pendingStdin = null;
+  }
+
+  /** Legacy alias for `replyStdin`. */
+  public replyInput(text: string) {
+    this.replyStdin(text);
   }
 
   /** Consume the restored composer draft (one-shot). */

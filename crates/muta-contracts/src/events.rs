@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum AgentRequest {
-    Chat {
+    /// Submit a user prompt to start an interactive round.
+    #[serde(alias = "Chat")]
+    Prompt {
         text: String,
         images: Vec<ImagePart>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -16,13 +18,14 @@ pub enum AgentRequest {
         #[ts(optional)]
         sent_at_ms: Option<u64>,
     },
-    /// Queue steering input into a round that is already running. The target
+    /// Queue steering message into a round that is already running. The target
     /// session is explicit so a frontend can keep composing in a side view
     /// (or switch views) without accidentally steering the wrong agent. The
-    /// input is admitted atomically at the next safe turn boundary.
+    /// message is admitted atomically at the next safe turn boundary.
     Steer {
         session_id: String,
-        input: QueuedMessage,
+        #[serde(alias = "input")]
+        message: QueuedMessage,
     },
     /// Cancel a not-yet-admitted [`AgentRequest::Steer`]. The agent linearizes
     /// cancellation against boundary admission: exactly one of
@@ -35,16 +38,19 @@ pub enum AgentRequest {
     /// the active round finishes (or start an explicit session round).
     FollowUp {
         session_id: String,
-        input: QueuedMessage,
+        #[serde(alias = "input")]
+        message: QueuedMessage,
     },
     SlashCommand(String),
     /// Ask the daemon to complete the composer input at `cursor`. Cursor and
     /// response edit offsets are Unicode-scalar indices so native and browser
     /// clients share one indexing contract. `request_id` lets clients discard
     /// a response that raced newer typing.
-    CompleteInput {
+    #[serde(alias = "CompleteInput")]
+    CompleteComposer {
         request_id: u64,
-        input: String,
+        #[serde(alias = "input")]
+        text: String,
         cursor: usize,
     },
     Interrupt,
@@ -82,11 +88,11 @@ pub enum AgentRequest {
         /// routing contract.
         parent_call_id: Option<String>,
     },
-    /// Reply to an [`AgentEvent::InputRequest`] (L3.5 β): the operator's input
-    /// for an interactive `bash` command, routed back to the parked oneshot.
-    /// `parent_call_id` mirrors the question/permission replies for runner
+    /// Reply to an interactive command's standard input request ([`AgentEvent::StdinRequest`]),
+    /// routed back to the parked oneshot. `parent_call_id` mirrors the question/permission replies for runner
     /// routing.
-    InputReply {
+    #[serde(alias = "InputReply")]
+    StdinReply {
         request_id: String,
         text: String,
         parent_call_id: Option<String>,
@@ -535,14 +541,16 @@ pub enum AgentResponse {
         session_id: String,
         event: RoundEvent,
     },
-    /// Backend-owned completion result for [`AgentRequest::CompleteInput`].
-    /// The echoed input/cursor make stale-response rejection explicit even for
+    /// Backend-owned completion result for [`AgentRequest::CompleteComposer`].
+    /// The echoed text/cursor make stale-response rejection explicit even for
     /// clients that restart their local request counter after reconnecting.
-    InputCompletions {
+    #[serde(alias = "InputCompletions")]
+    ComposerCompletions {
         request_id: u64,
-        input: String,
+        #[serde(alias = "input")]
+        text: String,
         cursor: usize,
-        items: Vec<crate::InputCompletion>,
+        items: Vec<crate::ComposerCompletion>,
     },
     /// Coarse status of the primary session, surfaced to a side view's banner
     /// while the user is inside a `/btw`. Emitted by the session registry's
@@ -1169,9 +1177,10 @@ pub enum RoundEvent {
     },
     PermissionRequest(PermissionRequest),
     UserQuestionRequest(UserQuestionRequest),
-    /// Mirrors [`AgentEvent::InputRequest`]: an interactive `bash` command
-    /// needs operator input (L3.5 β).
-    InputRequest(InputRequest),
+    /// Mirrors [`AgentEvent::StdinRequest`]: an interactive `bash` command
+    /// needs operator stdin.
+    #[serde(alias = "InputRequest")]
+    StdinRequest(StdinRequest),
     /// A context projection (compaction or prune) was committed. Token
     /// samples of the active window around the projection (ADR-0120).
     Compacted {
@@ -1613,9 +1622,10 @@ pub enum RunnerEvent {
     /// fires for profiles with `allow_user_interaction: true`.
     UserQuestionRequest(UserQuestionRequest),
     /// The runner's `bash` tool classified a command interactive and needs
-    /// operator input (L3.5 β). Carries the request *up*; the reply travels
-    /// back *down* through the runner handle's `reply_input`.
-    InputRequest(InputRequest),
+    /// operator stdin. Carries the request *up*; the reply travels
+    /// back *down* through the runner handle's `reply_stdin`.
+    #[serde(alias = "InputRequest")]
+    StdinRequest(StdinRequest),
 }
 
 /// Steering operations a parent can submit into a running agent's inbox — the
@@ -1711,10 +1721,11 @@ pub enum AgentEvent {
     YoloChanged(bool),
     PermissionRequest(PermissionRequest),
     UserQuestionRequest(UserQuestionRequest),
-    /// An interactive `bash` command needs a line of input from the operator
-    /// (L3.5 β). The TUI shows an inline input panel; the reply travels back
-    /// as [`AgentRequest::InputReply`].
-    InputRequest(InputRequest),
+    /// An interactive `bash` command needs a line of stdin from the operator.
+    /// The TUI shows an inline input panel; the reply travels back
+    /// as [`AgentRequest::StdinReply`].
+    #[serde(alias = "InputRequest")]
+    StdinRequest(StdinRequest),
     /// An runner spawned by a tool (e.g. `task`) emitted an event.
     Runner {
         parent_call_id: String,
@@ -1826,13 +1837,12 @@ pub struct UserQuestionReply {
 }
 
 /// Request sent from the agent to the TUI when a `bash` command is classified
-/// interactive and needs a line of input the agent cannot supply itself
-/// (L3.5 β — the default human-input path). The TUI shows an inline input
-/// panel; the operator's reply is sent back as an [`InputReply`]. If the
-/// operator dismisses it (Esc), an empty reply cancels the command.
+/// interactive and needs a line of stdin the agent cannot supply itself.
+/// The TUI shows an inline input panel; the operator's reply is sent back as a [`StdinReply`].
+/// If the operator dismisses it (Esc), an empty reply cancels the command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
-pub struct InputRequest {
+pub struct StdinRequest {
     pub id: String,
     /// The command that needs input, shown for context.
     pub command: String,
@@ -1843,14 +1853,18 @@ pub struct InputRequest {
     pub secret: bool,
 }
 
-/// Reply sent from the TUI back to the agent carrying the operator's input.
+pub type InputRequest = StdinRequest;
+
+/// Reply sent from the TUI back to the agent carrying the operator's stdin input.
 /// An empty `text` signals cancellation (the command runs with closed stdin
 /// and fails fast with a non-interactive remedy hint).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InputReply {
+pub struct StdinReply {
     pub request_id: String,
     pub text: String,
 }
+
+pub type InputReply = StdinReply;
 
 /// A complete, render-ready picture of the live session, sent from the harness
 /// to the TUI for the session-context modal. Every pane in that modal reads

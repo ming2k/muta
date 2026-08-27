@@ -484,7 +484,7 @@ impl App {
             });
             let _ = self.tx.send(AgentRequest::Steer {
                 session_id: session_id.to_string(),
-                input: muta_contracts::QueuedMessage {
+                message: muta_contracts::QueuedMessage {
                     id: id.clone(),
                     text: expanded,
                     display_text: Some(text),

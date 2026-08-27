@@ -36,9 +36,9 @@ impl InputCompletionEngine {
             Some(cursor_byte) => self.complete_items(&input, cursor_byte).await,
             None => Vec::new(),
         };
-        AgentResponse::InputCompletions {
+        AgentResponse::ComposerCompletions {
             request_id,
-            input,
+            text: input,
             cursor,
             items,
         }
@@ -561,14 +561,14 @@ mod tests {
     #[tokio::test]
     async fn slash_matching_and_intent_are_backend_owned() {
         let engine = InputCompletionEngine::new(catalog(), PathBuf::from("."));
-        let AgentResponse::InputCompletions { items, .. } =
+        let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(7, "/mod".into(), 4).await
         else {
             panic!("unexpected response")
         };
         assert!(items.iter().any(|item| item.label == "/models"));
 
-        let AgentResponse::InputCompletions { items, .. } =
+        let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(8, "/theme".into(), 6).await
         else {
             panic!("unexpected response")
@@ -584,7 +584,7 @@ mod tests {
         let engine = InputCompletionEngine::new(catalog(), PathBuf::from("."));
 
         // Retired command has no completion surface.
-        let AgentResponse::InputCompletions { items, .. } =
+        let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(10, "/extensions ".into(), 12).await
         else {
             panic!("unexpected response")
@@ -592,7 +592,7 @@ mod tests {
         assert!(items.is_empty());
 
         // /trust offers only the closed asset-domain grammar.
-        let AgentResponse::InputCompletions { items, .. } =
+        let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(12, "/trust ".into(), 7).await
         else {
             panic!("unexpected response")
@@ -612,7 +612,7 @@ mod tests {
         );
 
         // Removed subcommands stay absent.
-        let AgentResponse::InputCompletions { items, .. } =
+        let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(13, "/trust w".into(), 8).await
         else {
             panic!("unexpected response")
@@ -621,7 +621,7 @@ mod tests {
         assert!(labels.is_empty());
 
         // /debug trace offers on and off
-        let AgentResponse::InputCompletions { items, .. } =
+        let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(14, "/debug trace ".into(), 13).await
         else {
             panic!("unexpected response")
@@ -630,7 +630,7 @@ mod tests {
         assert_eq!(labels, vec!["/debug trace on", "/debug trace off"]);
 
         // /debug trace of filters to /debug trace off
-        let AgentResponse::InputCompletions { items, .. } =
+        let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(15, "/debug trace of".into(), 15).await
         else {
             panic!("unexpected response")
@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(labels, vec!["/debug trace off"]);
 
         // /master offers 4 roles
-        let AgentResponse::InputCompletions { items, .. } =
+        let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(16, "/master ".into(), 8).await
         else {
             panic!("unexpected response")
@@ -694,7 +694,7 @@ mod tests {
         std::fs::create_dir(temp.path().join("src")).unwrap();
         std::fs::write(temp.path().join("src/main.rs"), "fn main() {}").unwrap();
         let engine = InputCompletionEngine::new(catalog(), temp.path().to_path_buf());
-        let AgentResponse::InputCompletions { items, .. } =
+        let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(1, "look @main".into(), 10).await
         else {
             panic!("unexpected response")

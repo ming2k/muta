@@ -496,7 +496,7 @@ async fn run_attached(
             yolo_pending = false;
         }
         if let Some(prompt) = initial_prompt.take() {
-            let _ = tx.send(muta_contracts::AgentRequest::Chat {
+            let _ = tx.send(muta_contracts::AgentRequest::Prompt {
                 text: prompt,
                 images: Vec::new(),
                 sent_at_ms: None,

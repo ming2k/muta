@@ -1106,7 +1106,7 @@ impl TranscriptMessage {
         match event {
             RunnerEvent::PermissionRequest(_)
             | RunnerEvent::UserQuestionRequest(_)
-            | RunnerEvent::InputRequest(_) => *awaiting = true,
+            | RunnerEvent::StdinRequest(_) => *awaiting = true,
             RunnerEvent::ToolCall { .. }
             | RunnerEvent::ToolResult { .. }
             | RunnerEvent::StreamStart { .. }
@@ -1287,7 +1287,7 @@ impl TranscriptMessage {
             // handler can attach without changing the event shape).
             RunnerEvent::PermissionRequest(_)
             | RunnerEvent::UserQuestionRequest(_)
-            | RunnerEvent::InputRequest(_) => {}
+            | RunnerEvent::StdinRequest(_) => {}
         }
         true
     }

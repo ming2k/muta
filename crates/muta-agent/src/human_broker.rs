@@ -137,7 +137,7 @@ impl HumanRequestBroker {
         match kind {
             HumanRequestKind::Permission => 0,
             HumanRequestKind::Question => 1,
-            HumanRequestKind::Input => 2,
+            HumanRequestKind::Stdin => 2,
         }
     }
 
@@ -258,7 +258,7 @@ impl HumanRequestBroker {
             let cancelled_reply = match kind {
                 HumanRequestKind::Permission => HumanReply::Permission(PermissionDecision::Reject),
                 HumanRequestKind::Question => HumanReply::Question(None),
-                HumanRequestKind::Input => HumanReply::Input(None),
+                HumanRequestKind::Stdin => HumanReply::Stdin(None),
             };
             let _ = sender.send(Settled {
                 reply: cancelled_reply,
@@ -293,7 +293,7 @@ impl HumanRequestBroker {
             let cancelled_reply = match kind {
                 HumanRequestKind::Permission => HumanReply::Permission(PermissionDecision::Reject),
                 HumanRequestKind::Question => HumanReply::Question(None),
-                HumanRequestKind::Input => HumanReply::Input(None),
+                HumanRequestKind::Stdin => HumanReply::Stdin(None),
             };
             let _ = sender.send(Settled {
                 reply: cancelled_reply,
@@ -394,7 +394,7 @@ mod tests {
         let broker = HumanRequestBroker::new();
         let q = broker.park("q".into(), HumanRequestKind::Question);
         let p = broker.park("p".into(), HumanRequestKind::Permission);
-        let i = broker.park("i".into(), HumanRequestKind::Input);
+        let i = broker.park("i".into(), HumanRequestKind::Stdin);
         broker.cancel_all();
         assert!(matches!(
             block_on_settled(q).reply,
@@ -404,11 +404,11 @@ mod tests {
             block_on_settled(p).reply,
             HumanReply::Permission(PermissionDecision::Reject)
         ));
-        assert!(matches!(block_on_settled(i).reply, HumanReply::Input(None)));
+        assert!(matches!(block_on_settled(i).reply, HumanReply::Stdin(None)));
         for kind in [
             HumanRequestKind::Permission,
             HumanRequestKind::Question,
-            HumanRequestKind::Input,
+            HumanRequestKind::Stdin,
         ] {
             let m = broker.metrics_snapshot(kind);
             assert_eq!((m.parked, m.cancelled), (1, 1), "{kind:?}");

@@ -6,6 +6,7 @@
 //! native system clipboard (arboard).
 
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 
@@ -156,25 +157,37 @@ fn base64_encode(input: &str) -> String {
 pub enum ClipboardRead {
     /// An image (PNG bytes) plus its MIME type.
     Image { data: Vec<u8>, mime: String },
+    /// File references (e.g. files copied in a file manager). These are
+    /// absolute local paths; remote or unresolvable entries are dropped at
+    /// read time.
+    Files(Vec<PathBuf>),
     /// Plain text.
     Text(String),
     /// The clipboard is empty or unreadable.
     Empty,
 }
 
-/// Read the system clipboard, preferring an image over text (mirrors opencode).
+/// Read the system clipboard, preferring an image, then file references,
+/// then text (mirrors opencode).
 ///
 /// Image bytes come straight from the platform clipboard owner (`wl-paste` on
 /// Wayland, `xclip` on X11, `osascript` on macOS) as PNG, so no re-encoding is
-/// needed. Text falls back to `arboard`. Everything runs off the event loop:
-/// external commands are awaited asynchronously and arboard (which is `!Send`)
-/// runs in a blocking task.
+/// needed. File references are read from the file-list flavors a file manager
+/// puts on the clipboard when you "copy" a file (`text/uri-list` on Linux,
+/// Finder's file URL on macOS, `CF_HDROP` via PowerShell on Windows). Text
+/// falls back to `arboard`. Everything runs off the event loop: external
+/// commands are awaited asynchronously and arboard (which is `!Send`) runs in
+/// a blocking task.
 pub async fn read() -> ClipboardRead {
     if let Some(bytes) = read_image_bytes().await {
         return ClipboardRead::Image {
             data: bytes,
             mime: "image/png".to_string(),
         };
+    }
+    let files = read_file_paths().await;
+    if !files.is_empty() {
+        return ClipboardRead::Files(files);
     }
     match read_text().await {
         Ok(Some(text)) if !text.is_empty() => ClipboardRead::Text(text),
@@ -218,9 +231,223 @@ async fn read_image_bytes() -> Option<Vec<u8>> {
     None
 }
 
+/// Read file references from the system clipboard, as produced by "Copy" on
+/// one or more files in a file manager. Returns an empty vec when the
+/// clipboard holds no recognizable local file list (e.g. plain text from an
+/// editor), so callers can fall through to text.
+///
+/// Per-platform channels (no crate covers all of them — `arboard` has no
+/// file-list API and the X11-only crates miss Wayland):
+/// - Linux: `text/uri-list` via `wl-paste` / `xclip`, plus GNOME's
+///   `x-special/gnome-copied-files` ("copy\nfile://…") fallback.
+/// - macOS: Finder's file URLs via `osascript`.
+/// - Windows: `CF_HDROP` via PowerShell's `Get-Clipboard -Format FileDropList`.
+async fn read_file_paths() -> Vec<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        // Prefer uri-list (both KDE and GNOME provide it). GNOME also
+        // exposes a line-prefixed flavor; try it when the uri-list target
+        // is absent. A bare-text fallback catches KDE builds that only put
+        // a plain local path on the clipboard.
+        if let Some(bytes) = read_command_output("wl-paste", &["-t", "text/uri-list"]).await
+            && let Some(paths) = parse_uri_list(&String::from_utf8_lossy(&bytes))
+        {
+            return paths;
+        }
+        if let Some(bytes) = read_command_output(
+            "xclip",
+            &["-selection", "clipboard", "-t", "text/uri-list", "-o"],
+        )
+        .await
+            && let Some(paths) = parse_uri_list(&String::from_utf8_lossy(&bytes))
+        {
+            return paths;
+        }
+        for (command, args) in [
+            ("wl-paste", &["-t", "x-special/gnome-copied-files"][..]),
+            (
+                "xclip",
+                &[
+                    "-selection",
+                    "clipboard",
+                    "-t",
+                    "x-special/gnome-copied-files",
+                    "-o",
+                ][..],
+            ),
+        ] {
+            if let Some(bytes) = read_command_output(command, args).await
+                && let Some(paths) = parse_gnome_copied_files(&String::from_utf8_lossy(&bytes))
+            {
+                return paths;
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(paths) = read_macos_file_urls().await {
+            return paths;
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(output) = read_command_stdout(
+            "powershell",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$d = Get-Clipboard -Format FileDropList; if ($d) { $d | ForEach-Object { $_.FullName } }",
+            ],
+        )
+        .await
+        {
+            return output
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute() && path.exists())
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+/// Decode a percent-encoded URI component (`%20` etc.). Invalid escapes pass
+/// through verbatim; UTF-8 is lossy-decoded. Operates on raw bytes so a
+/// truncated escape before a multi-byte character can never slice across a
+/// char boundary. Small inline helper keeps the reader dependency-free.
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
+        {
+            out.push(high << 4 | low);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Hex digit value, or `None` for anything else.
+fn hex_val(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Convert one `file://` URI to a local absolute path, or `None` when it
+/// points at a remote host / isn't a file URI.
+fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    // Split `{host}/{path}` at the first slash: `file:///a` has an empty
+    // host and path `/a`; `file://server/share` is remote and dropped.
+    let slash = rest.find('/')?;
+    let host = &rest[..slash];
+    if !host.is_empty() && host != "localhost" {
+        return None;
+    }
+    let decoded = percent_decode(&rest[slash..]);
+    // file:///C:/… decodes to `/C:/…`, which is not a rooted Windows path;
+    // drop the leading slash when a drive letter follows.
+    #[cfg(target_os = "windows")]
+    let decoded = {
+        if let Some(drive) = decoded.strip_prefix('/')
+            && drive
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphabetic)
+            && drive.as_bytes().get(1) == Some(&b':')
+        {
+            drive.to_string()
+        } else {
+            decoded
+        }
+    };
+    let path = Path::new(&decoded);
+    path.is_absolute().then(|| path.to_path_buf())
+}
+
+/// Parse an RFC 2483 `text/uri-list` payload into existing local file paths.
+/// Returns `None` when nothing in the payload is a resolvable local file —
+/// that lets callers fall through to other flavors instead of swallowing a
+/// non-file paste as an empty attachment.
+fn parse_uri_list(payload: &str) -> Option<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for line in payload.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(path) = file_uri_to_path(line)
+            && path.exists()
+        {
+            paths.push(path);
+        }
+    }
+    (!paths.is_empty()).then_some(paths)
+}
+
+/// Parse GNOME's `x-special/gnome-copied-files` payload: an operation verb
+/// ("copy" / "cut") followed by one URI per line.
+fn parse_gnome_copied_files(payload: &str) -> Option<Vec<PathBuf>> {
+    let mut lines = payload
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && *line != "copy" && *line != "cut");
+    let mut paths = Vec::new();
+    for line in lines.by_ref() {
+        if let Some(path) = file_uri_to_path(line)
+            && path.exists()
+        {
+            paths.push(path);
+        }
+    }
+    (!paths.is_empty()).then_some(paths)
+}
+
+#[cfg(target_os = "macos")]
+async fn read_macos_file_urls() -> Option<Vec<PathBuf>> {
+    let script = "POSIX path of (the clipboard as «class furl»)";
+    let output = tokio::process::Command::new("osascript")
+        .args(["-e", script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    // Multi-file copies: Finder leaves the furl flavor holding only the
+    // first item, which is good enough for single attachments; treat every
+    // returned line as a candidate path.
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut paths = Vec::new();
+    for line in text.lines() {
+        let path = PathBuf::from(line.trim());
+        if path.is_absolute() && path.exists() {
+            paths.push(path);
+        }
+    }
+    (!paths.is_empty()).then_some(paths)
+}
+
 /// Capture a command's stdout as bytes, returning `None` if the command is
 /// missing or exits non-zero (e.g. the clipboard holds no image).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 async fn read_command_output(command: &str, args: &[&str]) -> Option<Vec<u8>> {
     let output = tokio::process::Command::new(command)
         .args(args)
@@ -332,5 +559,58 @@ mod tests {
     #[tokio::test]
     async fn command_clipboard_receives_utf8_input() {
         copy_with_command("cat", &[], "test😀").await.unwrap();
+    }
+
+    #[test]
+    fn percent_decode_decodes_escapes_and_passes_malformed_through() {
+        assert_eq!(
+            percent_decode("/home/user/my%20shot.png"),
+            "/home/user/my shot.png"
+        );
+        // Multi-byte UTF-8 (%E4%B8%AD = 中) survives the byte-level decode.
+        assert_eq!(percent_decode("/tmp/%E4%B8%AD.png"), "/tmp/中.png");
+        // Truncated or malformed escapes pass through verbatim.
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%2"), "%2");
+        assert_eq!(percent_decode("%zz"), "%zz");
+        assert_eq!(percent_decode("/plain.png"), "/plain.png");
+        // A malformed escape directly before a multi-byte character must not
+        // panic slicing mid-char (regression: byte-indexed parser).
+        assert_eq!(percent_decode("%zz%E4%B8%AD"), "%zz中");
+    }
+
+    #[test]
+    fn file_uri_rejects_non_file_and_remote_forms() {
+        assert_eq!(
+            file_uri_to_path("file:///home/u/pic.png"),
+            Some(PathBuf::from("/home/u/pic.png"))
+        );
+        assert_eq!(file_uri_to_path("https://example.com/a.png"), None);
+        // Remote host form (file://host/path) is dropped.
+        assert_eq!(file_uri_to_path("file://server/share/pic.png"), None);
+        // Percent-encoded spaces resolve to real paths.
+        assert_eq!(
+            file_uri_to_path("file:///home/u/my%20pic.png"),
+            Some(PathBuf::from("/home/u/my pic.png"))
+        );
+    }
+
+    #[test]
+    fn uri_list_parses_comments_blank_lines_and_skips_missing_files() {
+        let payload = "# comment line\n\nfile:///etc/hostname\nfile:///nonexistent/missing.png\n";
+        let parsed = parse_uri_list(payload).expect("at least one resolvable path");
+        assert_eq!(parsed, vec![PathBuf::from("/etc/hostname")]);
+        // No resolvable local file at all → None so callers fall through.
+        assert_eq!(parse_uri_list("file:///nonexistent/missing.png\n"), None);
+        assert_eq!(parse_uri_list("# only a comment\n"), None);
+    }
+
+    #[test]
+    fn gnome_copied_files_strips_operation_verb() {
+        let payload = "copy\nfile:///etc/hostname\n";
+        let parsed = parse_gnome_copied_files(payload).expect("verb + one path");
+        assert_eq!(parsed, vec![PathBuf::from("/etc/hostname")]);
+        let cut = parse_gnome_copied_files("cut\nfile:///nonexistent/x.png\n");
+        assert_eq!(cut, None, "unresolvable-only payload falls through");
     }
 }

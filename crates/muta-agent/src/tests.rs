@@ -395,8 +395,15 @@ fn system_prompt_registry_reproduces_legacy_layout() {
     agent.prepare_request_messages_debug(&mut messages);
     let prompt = &messages[0].content;
 
-    // preamble \n\n persistence.
+    // preamble \n\n host env \n\n persistence.
     let expected = "You are muta, an expert AI coding assistant.\n\
+     \n\
+     ## Host Execution Environment\n\
+     - Primary Workspace: `.`\n\
+     - Operating System: Unix-like (Linux/macOS)\n\
+     - Native Shell: POSIX sh / bash\n\
+     - Shell Syntax: Standard POSIX shell pipelines and syntax.\n\
+     - Tool Guidance: ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_file`, `search_text`, `find_files`) over executing shell commands like `cat`, `grep`, `find`, `sed`, `echo >`.\n\
      \n\
      See the task through to a real result in this round. Don't stop at analysis \
      or a partial fix — carry the work through implementation and verification. \
@@ -1662,9 +1669,9 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
             AgentEvent::UserQuestionRequest(request) => {
                 format!("user-question {}", request.questions.len())
             }
-            AgentEvent::InputRequest(request) => {
+            AgentEvent::StdinRequest(request) => {
                 format!(
-                    "input-request {} (secret={})",
+                    "stdin-request {} (secret={})",
                     request.command, request.secret
                 )
             }
@@ -3018,3 +3025,28 @@ async fn scheduler_serializes_conflicting_writes() {
         "both writes eventually produce a result"
     );
 }
+
+#[tokio::test]
+async fn in_flight_streaming_loop_detector_aborts_and_steers() {
+    let degenerative_stream = vec![
+        ProviderStreamEvent::TextDelta("Initial reasoning.\n".to_string()),
+        ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
+        ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
+        ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
+        ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()),
+        ProviderStreamEvent::TextDelta("never reached extra text".to_string()),
+    ];
+
+    let agent = Arc::new(Agent::new(
+        Arc::new(ScriptedProvider::new(vec![degenerative_stream])),
+        Vec::new(),
+        crate::AgentIdentity::default(),
+    ));
+
+    let (_events, outcome) = run_golden_round(&agent, "test", PermissionDecision::Once).await;
+    let round_outcome = outcome.expect("round completes");
+
+    assert!(round_outcome.message.content.contains("[... stream truncated"));
+    assert!(!round_outcome.message.content.contains("never reached extra text"));
+}
+

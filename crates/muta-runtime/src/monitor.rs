@@ -139,9 +139,9 @@ impl MonitorTracker {
                         .unwrap_or_else(|| "question pending".to_string()),
                 );
             }
-            RoundEvent::InputRequest(request) => {
+            RoundEvent::StdinRequest(request) => {
                 self.status = SessionStatus::NeedsInput;
-                self.note = Some(format!("input: {}", truncate(&request.prompt, 80)));
+                self.note = Some(format!("stdin: {}", truncate(&request.prompt, 80)));
             }
             RoundEvent::StreamStart | RoundEvent::StreamDelta(_) | RoundEvent::StreamEnd(_) => {
                 // Model output is flowing again: any human-decision overlay

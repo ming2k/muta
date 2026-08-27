@@ -1,6 +1,6 @@
 <script lang="ts">
   import { daemon } from "../stores/daemon.svelte.js";
-  import type { ImagePart, InputCompletion } from "../types.js";
+  import type { ImagePart, ComposerCompletion } from "../types.js";
 
   interface PendingImage {
     part: ImagePart;
@@ -8,18 +8,18 @@
     previewUrl: string;
   }
 
-  let inputVal = $state("");
+  let draft = $state("");
   let textareaEl: HTMLTextAreaElement;
   let fileInputEl: HTMLInputElement;
   let images = $state<PendingImage[]>([]);
   let completionMatches = $derived(
-    daemon.inputCompletions
+    daemon.composerCompletions
       .filter(
         (item) =>
           !(
             item.replace_start === 0 &&
-            item.label === inputVal &&
-            item.replace_end === Array.from(inputVal).length
+            item.label === draft &&
+            item.replace_end === Array.from(draft).length
           ),
       )
       .slice(0, 6),
@@ -33,12 +33,12 @@
   // asynchronous restore never clobbers in-progress typing (mirrors the
   // TUI's `DraftAdoption::OnlyIfIdle`).
   $effect(() => {
-    const draft = daemon.restoredDraft;
-    if (!draft) return;
+    const restored = daemon.restoredDraft;
+    if (!restored) return;
     daemon.takeRestoredDraft();
-    inputVal = draft.text;
+    draft = restored.text;
     clearImages();
-    for (const part of draft.images) {
+    for (const part of restored.images) {
       images.push({ part, previewUrl: `data:${part.mime};base64,${part.data}` });
     }
     resize();
@@ -47,7 +47,7 @@
   // Report composer idleness so the daemon's UnsentInput handler can decide
   // between adopting the restored draft and keeping in-progress typing.
   $effect(() => {
-    daemon.composerIdle = inputVal.length === 0 && images.length === 0;
+    daemon.composerIdle = draft.length === 0 && images.length === 0;
   });
 
   function resize() {
@@ -65,14 +65,14 @@
   }
 
   function handleSend() {
-    const text = inputVal.trim();
+    const text = draft.trim();
     if ((!text && images.length === 0) || !daemon.sessionAttached) return;
-    daemon.sendChat(
+    daemon.sendPrompt(
       text,
       images.map((i) => i.part),
     );
-    inputVal = "";
-    daemon.requestInputCompletions("", 0);
+    draft = "";
+    daemon.requestComposerCompletions("", 0);
     clearImages();
     resize();
   }
@@ -86,7 +86,7 @@
 
   function handleInput() {
     resize();
-    daemon.requestInputCompletions(inputVal, textareaEl?.selectionStart ?? inputVal.length);
+    daemon.requestComposerCompletions(draft, textareaEl?.selectionStart ?? draft.length);
   }
 
   function readFile(file: File): Promise<PendingImage | null> {
@@ -141,8 +141,8 @@
   }
 
   function insertCommand(cmd: string) {
-    inputVal = cmd;
-    daemon.requestInputCompletions(cmd, cmd.length);
+    draft = cmd;
+    daemon.requestComposerCompletions(cmd, cmd.length);
     if (textareaEl) {
       textareaEl.focus();
     }
@@ -152,16 +152,16 @@
     return Array.from(text).slice(0, scalarIndex).join("").length;
   }
 
-  function acceptCompletion(item: InputCompletion) {
-    const start = scalarToUtf16(inputVal, item.replace_start);
-    const end = scalarToUtf16(inputVal, item.replace_end);
-    inputVal = inputVal.slice(0, start) + item.insert_text + inputVal.slice(end);
+  function acceptCompletion(item: ComposerCompletion) {
+    const start = scalarToUtf16(draft, item.replace_start);
+    const end = scalarToUtf16(draft, item.replace_end);
+    draft = draft.slice(0, start) + item.insert_text + draft.slice(end);
     const caret = start + item.insert_text.length;
     resize();
     queueMicrotask(() => {
       textareaEl?.focus();
       textareaEl?.setSelectionRange(caret, caret);
-      daemon.requestInputCompletions(inputVal, caret);
+      daemon.requestComposerCompletions(draft, caret);
     });
   }
 </script>
@@ -181,7 +181,7 @@
 
     <textarea
       bind:this={textareaEl}
-      bind:value={inputVal}
+      bind:value={draft}
       onkeydown={handleKeyDown}
       oninput={handleInput}
       onpaste={handlePaste}
@@ -231,7 +231,7 @@
         <button
           class="send-btn"
           aria-label="Send message"
-          disabled={(!inputVal.trim() && images.length === 0) || !daemon.sessionAttached}
+          disabled={(!draft.trim() && images.length === 0) || !daemon.sessionAttached}
           onclick={handleSend}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

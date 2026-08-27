@@ -336,7 +336,7 @@ impl SessionRegistry {
                 "session '{session_id}' is not hosted on this server"
             ));
         };
-        let _ = e.req_tx.send(AgentRequest::Chat {
+        let _ = e.req_tx.send(AgentRequest::Prompt {
             text,
             images: Vec::new(),
             sent_at_ms: None,

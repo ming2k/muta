@@ -374,18 +374,18 @@ impl Agent {
         // caller's non-interactive remedy path).
         if self.human_posture() == HumanChannelPosture::Autonomous {
             self.human_broker
-                .metrics_note_refused(HumanRequestKind::Input);
+                .metrics_note_refused(HumanRequestKind::Stdin);
             tracing::info!("autonomous posture: interactive stdin refused, running closed");
             return None;
         }
         let receiver = self
             .human_broker
-            .park(request.id.clone(), HumanRequestKind::Input);
+            .park(request.id.clone(), HumanRequestKind::Stdin);
         tracing::info!(%secret, "requesting operator input for interactive command");
-        let _ = event_tx.send(AgentEvent::InputRequest(request.clone()));
+        let _ = event_tx.send(AgentEvent::StdinRequest(request.clone()));
         let settled = receiver.await.ok().map(|s| s.reply);
         match settled {
-            Some(HumanReply::Input(Some(reply))) if !reply.text.is_empty() => {
+            Some(HumanReply::Stdin(Some(reply))) if !reply.text.is_empty() => {
                 Some(StdinPolicy::Prefilled { data: reply.text })
             }
             _ => None,

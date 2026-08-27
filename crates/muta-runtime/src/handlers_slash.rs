@@ -1545,7 +1545,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     // scheduler handles the rest); one-shot jobs wait for their
                     // scheduled fire time and are NOT run now.
                     if !trigger.is_once() {
-                        let _ = req_tx_for_commands.send(AgentRequest::Chat {
+                        let _ = req_tx_for_commands.send(AgentRequest::Prompt {
                             text: prompt.to_string(),
                             images: Vec::new(),
                             sent_at_ms: None,
@@ -2405,7 +2405,7 @@ async fn add_scheduled_job(
             )
             .await;
             // Fire the first run immediately (the scheduler handles the rest).
-            let _ = req_tx.send(AgentRequest::Chat {
+            let _ = req_tx.send(AgentRequest::Prompt {
                 text: prompt.to_string(),
                 images: Vec::new(),
                 sent_at_ms: None,

@@ -217,6 +217,10 @@ impl Agent {
             // `include_usage`, Anthropic `message_delta`). Captured here and
             // preferred over the local estimate when booking the turn.
             let mut streamed_usage: Option<TokenUsage> = None;
+            let mut text_loop_detector = crate::stream_loop_detector::StreamLoopDetector::new(1024);
+            let mut reasoning_loop_detector =
+                crate::stream_loop_detector::StreamLoopDetector::new(1024);
+            let mut loop_aborted: Option<crate::stream_loop_detector::DegeneratePattern> = None;
             // Finish-drain deadline (FINISH_DRAIN_GRACE). Once this turn's
             // stream has produced at least one delta, a cancellation no
             // longer wins the biased select outright: the stream gets one
@@ -298,19 +302,35 @@ impl Agent {
                                 request_accounting.observe_output(&delta);
                                 content.push_str(&delta);
                                 on_event(AgentEvent::AssistantDelta {
-                                    delta,
+                                    delta: delta.clone(),
                                     start: !emitted_text,
                                 });
                                 emitted_text = true;
+                                if let Some(pat) = text_loop_detector.push_and_check(&delta) {
+                                    tracing::warn!(
+                                        pattern = %pat.description(),
+                                        "in-flight text stream loop detected; aborting stream early"
+                                    );
+                                    loop_aborted = Some(pat);
+                                    break;
+                                }
                             }
                             ProviderStreamEvent::ReasoningDelta(delta) => {
                                 request_accounting.observe_output(&delta);
                                 reasoning_content.push_str(&delta);
                                 on_event(AgentEvent::ReasoningDelta {
-                                    delta,
+                                    delta: delta.clone(),
                                     start: !emitted_reasoning,
                                 });
                                 emitted_reasoning = true;
+                                if let Some(pat) = reasoning_loop_detector.push_and_check(&delta) {
+                                    tracing::warn!(
+                                        pattern = %pat.description(),
+                                        "in-flight reasoning stream loop detected; aborting stream early"
+                                    );
+                                    loop_aborted = Some(pat);
+                                    break;
+                                }
                             }
                             ProviderStreamEvent::ToolCallDelta {
                                 index,
@@ -368,6 +388,21 @@ impl Agent {
                     });
                 }
             }
+
+            if let Some(ref pat) = loop_aborted {
+                content = crate::stream_loop_detector::StreamLoopDetector::trim_suffix(&content, pat);
+                let steer_msg = format!(
+                    "[System Directive: Output generation was truncated because it entered a {}. \
+                     Please synthesize your current conclusions directly, proceed to your next tool action, \
+                     or complete the task without repeating prior text.]",
+                    pat.description()
+                );
+                messages.push(crate::conversation_context::hidden_user(
+                    InjectionKind::LoopReviewNudge,
+                    steer_msg,
+                ));
+            }
+
             if emitted_text {
                 on_event(AgentEvent::AssistantEnd(content.clone()));
             }

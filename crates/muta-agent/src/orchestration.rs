@@ -1667,8 +1667,8 @@ pub fn relay_agent_event(
         AgentEvent::UserQuestionRequest(request) => {
             round_response(session_id, RoundEvent::UserQuestionRequest(request))
         }
-        AgentEvent::InputRequest(request) => {
-            round_response(session_id, RoundEvent::InputRequest(request))
+        AgentEvent::StdinRequest(request) => {
+            round_response(session_id, RoundEvent::StdinRequest(request))
         }
         AgentEvent::Runner {
             parent_call_id,
@@ -1821,7 +1821,7 @@ pub async fn run_schedule_tick(
                 // consuming its fire. A dropped send used to advance
                 // `next_fire` — and a dropped once-job is unrecoverable.
                 if tx
-                    .send(AgentRequest::Chat {
+                    .send(AgentRequest::Prompt {
                         text: job.prompt.clone(),
                         images: Vec::new(),
                         sent_at_ms: None,
@@ -1846,7 +1846,7 @@ pub async fn run_schedule_tick(
                 // stays armed for the next harness (a re-attached session
                 // or a rehosting daemon) instead of vanishing.
                 if tx
-                    .send(AgentRequest::Chat {
+                    .send(AgentRequest::Prompt {
                         text: job.prompt.clone(),
                         images: Vec::new(),
                         sent_at_ms: None,
@@ -2047,10 +2047,10 @@ mod schedule_tests {
         let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
         assert_eq!(dispatched, 1);
 
-        // The prompt was enqueued as a chat round.
+        // The prompt was enqueued as a prompt round.
         match rx.recv().await {
-            Some(AgentRequest::Chat { text, .. }) => assert_eq!(text, "run tests"),
-            other => panic!("expected Chat, got {other:?}"),
+            Some(AgentRequest::Prompt { text, .. }) => assert_eq!(text, "run tests"),
+            other => panic!("expected Prompt, got {other:?}"),
         }
         // The cron job survives and is no longer due at `now`.
         let after = session.scheduled_jobs().await;
@@ -2074,8 +2074,8 @@ mod schedule_tests {
         let dispatched = run_schedule_tick(&session, &tx, now).await.unwrap();
         assert_eq!(dispatched, 1);
         match rx.recv().await {
-            Some(AgentRequest::Chat { text, .. }) => assert_eq!(text, "one-shot reminder"),
-            other => panic!("expected Chat, got {other:?}"),
+            Some(AgentRequest::Prompt { text, .. }) => assert_eq!(text, "one-shot reminder"),
+            other => panic!("expected Prompt, got {other:?}"),
         }
         // The once-job is removed after firing.
         assert!(session.scheduled_jobs().await.is_empty());

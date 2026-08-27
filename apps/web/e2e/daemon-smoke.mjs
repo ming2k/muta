@@ -115,15 +115,16 @@ async function main() {
   session.send(
     JSON.stringify({
       type: "Request",
-      CompleteInput: { request_id: 7, input: "/mod", cursor: 4 },
+      CompleteComposer: { request_id: 7, text: "/mod", cursor: 4 },
     }),
   );
   const completion = await nextFrame(
     session,
-    (f) => f.type === "Response" && f.InputCompletions?.request_id === 7,
+    (f) => f.type === "Response" && (f.ComposerCompletions?.request_id === 7 || f.InputCompletions?.request_id === 7),
     "completion",
   ).catch((e) => fail(step, e.message));
-  const modelItem = completion.InputCompletions.items.find((item) => item.label === "/models");
+  const payload = completion.ComposerCompletions ?? completion.InputCompletions;
+  const modelItem = payload.items.find((item) => item.label === "/models");
   if (!modelItem || modelItem.insert_text !== "/models" || modelItem.replace_start !== 0) {
     fail(step, `unexpected completion ${JSON.stringify(completion)}`);
   }

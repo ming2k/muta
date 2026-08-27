@@ -184,9 +184,9 @@ async fn completion_catalog_and_edits_round_trip_over_websocket() {
             .unwrap();
     }
 
-    let request = AgentRequest::CompleteInput {
+    let request = AgentRequest::CompleteComposer {
         request_id: 41,
-        input: "/mod".into(),
+        text: "/mod".into(),
         cursor: 4,
     };
     ws.send(WsMessage::Text(
@@ -204,25 +204,25 @@ async fn completion_catalog_and_edits_round_trip_over_websocket() {
         .unwrap();
     assert!(matches!(
         received,
-        AgentRequest::CompleteInput {
+        AgentRequest::CompleteComposer {
             request_id: 41,
-            ref input,
+            ref text,
             cursor: 4,
-        } if input == "/mod"
+        } if text == "/mod"
     ));
 
-    let item = muta_contracts::InputCompletion {
+    let item = muta_contracts::ComposerCompletion {
         label: "/models".into(),
         description: "Choose a model".into(),
         insert_text: "/models ".into(),
         replace_start: 0,
         replace_end: 4,
-        kind: muta_contracts::InputCompletionKind::Slash,
+        kind: muta_contracts::ComposerCompletionKind::Slash,
         command: Some(command),
     };
-    let _ = bc_tx.send(AgentResponse::InputCompletions {
+    let _ = bc_tx.send(AgentResponse::ComposerCompletions {
         request_id: 41,
-        input: "/mod".into(),
+        text: "/mod".into(),
         cursor: 4,
         items: vec![item.clone()],
     });
@@ -235,19 +235,19 @@ async fn completion_catalog_and_edits_round_trip_over_websocket() {
     match serde_json::from_str::<Wire>(response.to_text().unwrap_or("")).unwrap() {
         Wire::Response {
             response:
-                AgentResponse::InputCompletions {
+                AgentResponse::ComposerCompletions {
                     request_id,
-                    input,
+                    text,
                     cursor,
                     items,
                 },
         } => {
             assert_eq!(request_id, 41);
-            assert_eq!(input, "/mod");
+            assert_eq!(text, "/mod");
             assert_eq!(cursor, 4);
             assert_eq!(items, vec![item]);
         }
-        other => panic!("expected InputCompletions, got {other:?}"),
+        other => panic!("expected ComposerCompletions, got {other:?}"),
     }
 }
 
@@ -381,7 +381,7 @@ async fn test_select_then_attach_round_trip() {
         .unwrap()
         .unwrap();
     match req {
-        AgentRequest::Chat { text, .. } => assert_eq!(text, "hi"),
+        AgentRequest::Prompt { text, .. } => assert_eq!(text, "hi"),
         other => panic!("{other:?}"),
     }
 

@@ -533,21 +533,6 @@ pub const TRIGGER_WORD_SUGGESTIONS: &[(&str, &str, &str)] = &[
         "/settings",
         "/settings lets you customize UI appearance and layout",
     ),
-    (
-        "yolo",
-        "/delegate",
-        "/yolo is now /delegate (delegated autonomous execution mode)",
-    ),
-    (
-        "auto",
-        "/delegate",
-        "Use /delegate to enable delegated autonomous execution mode",
-    ),
-    (
-        "autopilot",
-        "/delegate",
-        "Use /delegate to enable delegated autonomous execution mode",
-    ),
 ];
 
 /// Resolve a bare word typed after `/` into a "did you mean" suggestion from

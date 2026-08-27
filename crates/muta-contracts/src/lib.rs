@@ -45,8 +45,8 @@ pub use command::{CommandRecord, CommandResult, CommandStatus, SearchHit};
 
 pub mod completion;
 pub use completion::{
-    CommandAlias, CommandCatalog, CommandExample, CommandSpec, CommandSuggestion, InputCompletion,
-    InputCompletionKind,
+    CommandAlias, CommandCatalog, CommandExample, CommandSpec, CommandSuggestion,
+    ComposerCompletion, ComposerCompletionKind, InputCompletion, InputCompletionKind,
 };
 
 pub mod tool_output;
@@ -133,8 +133,8 @@ pub use events::{
     PermissionRequest, PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow,
     ProviderPickerSnapshot, QueueMode, QueuedMessage, RetryPoint, RoundEvent, RoundInterrupt,
     RoundInterruptReason, RoundSummary, RunnerEvent, SessionContextSnapshot, SessionDetail,
-    SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, ToolInfo, UserQuestion,
-    UserQuestionOption, UserQuestionReply, UserQuestionRequest, WebSearchConfigUpdate,
+    SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, StdinReply, StdinRequest, ToolInfo,
+    UserQuestion, UserQuestionOption, UserQuestionReply, UserQuestionRequest, WebSearchConfigUpdate,
     WebSearchConfigView,
 };
 pub use runner::{

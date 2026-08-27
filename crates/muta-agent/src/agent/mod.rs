@@ -1371,9 +1371,9 @@ mod tests {
 
         let got = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
             .await
-            .expect("timed out waiting for InputRequest")
+            .expect("timed out waiting for StdinRequest")
             .expect("channel closed");
-        assert!(matches!(got, AgentEvent::InputRequest(_)));
+        assert!(matches!(got, AgentEvent::StdinRequest(_)));
         // Let the spawned task finish (its agent handle drops, resolving the
         // parked oneshot to None on the next round-end guard in real use; here
         // we just let it go out of scope).

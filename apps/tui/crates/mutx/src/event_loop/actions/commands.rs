@@ -110,7 +110,7 @@ pub(super) async fn handle_send_chat(
                     }
                     let _ = app.tx.send(AgentRequest::Steer {
                         session_id: viewed_session_id.to_string(),
-                        input: muta_contracts::QueuedMessage {
+                        message: muta_contracts::QueuedMessage {
                             id,
                             text: expanded,
                             display_text: Some(text),
@@ -169,7 +169,7 @@ pub(super) async fn handle_send_chat(
             app.clear_history_draft();
             app.follow_bottom = true;
             app.pin_summary_line = None;
-            let _ = app.tx.send(AgentRequest::Chat {
+            let _ = app.tx.send(AgentRequest::Prompt {
                 text: expanded,
                 images,
                 sent_at_ms: Some(sent_at_ms),

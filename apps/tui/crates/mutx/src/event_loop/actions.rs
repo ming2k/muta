@@ -1997,7 +1997,7 @@ pub(super) async fn dispatch_action(
                     runtime.pending_input.lock().await.pop_front();
                     let parent_call_id =
                         runtime.runner_question_parent.lock().await.remove(&req.id);
-                    let _ = app.tx.send(AgentRequest::InputReply {
+                    let _ = app.tx.send(AgentRequest::StdinReply {
                         request_id: req.id.clone(),
                         text,
                         parent_call_id,
@@ -2026,7 +2026,7 @@ pub(super) async fn dispatch_action(
                     queue.front().cloned()
                 };
                 let parent_call_id = runtime.runner_question_parent.lock().await.remove(&req.id);
-                let _ = app.tx.send(AgentRequest::InputReply {
+                let _ = app.tx.send(AgentRequest::StdinReply {
                     request_id: req.id.clone(),
                     text: String::new(),
                     parent_call_id,

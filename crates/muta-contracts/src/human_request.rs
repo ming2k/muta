@@ -26,8 +26,9 @@ pub enum HumanRequestKind {
     Permission,
     /// A structured multiple-choice question (`ask_user`).
     Question,
-    /// A line of stdin for an interactive `bash` command (L3.5 β).
-    Input,
+    /// A line of stdin for an interactive `bash` command.
+    #[serde(alias = "Input")]
+    Stdin,
 }
 
 /// The interactivity posture a client declares in its attach `Select` frame.
@@ -101,7 +102,7 @@ pub enum ReplyProvenance {
 pub enum HumanReply {
     Permission(crate::PermissionDecision),
     Question(Option<crate::UserQuestionReply>),
-    Input(Option<crate::InputReply>),
+    Stdin(Option<crate::StdinReply>),
 }
 
 impl HumanReply {

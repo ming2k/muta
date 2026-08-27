@@ -337,7 +337,7 @@ impl Agent {
         // ADR-0141: settles via the broker; wire replies are provenance-User.
         self.human_broker.reply_user(
             request_id,
-            HumanReply::Input(Some(InputReply {
+            HumanReply::Stdin(Some(StdinReply {
                 request_id: request_id.to_string(),
                 text,
             })),
@@ -350,7 +350,7 @@ impl Agent {
     pub fn reject_pending_inputs(&self) {
         // ADR-0141: routed through the broker for uniform metrics and
         // exactly-once settlement.
-        self.human_broker.cancel_kind(HumanRequestKind::Input);
+        self.human_broker.cancel_kind(HumanRequestKind::Stdin);
     }
 
     pub fn allowed_tools(&self) -> Vec<String> {
