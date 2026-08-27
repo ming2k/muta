@@ -20,7 +20,13 @@
       const { message, detail } = result.Error;
       return detail && detail.trim() ? `Error: ${message}\n${detail}` : `Error: ${message}`;
     }
-    if ("Ack" in result) return result.Ack.title;
+    if ("Ack" in result) {
+      const detail: string[] = result.Ack.detail ?? [];
+      const lines = detail.filter((line: string) => line.trim().length > 0);
+      return lines.length === 0
+        ? result.Ack.title
+        : [result.Ack.title, ...lines].join("\n");
+    }
     if ("PermissionList" in result) {
       const allowed = result.PermissionList.allowed;
       return allowed.length === 0
@@ -82,8 +88,8 @@
       const detail = verdict.detail.trim();
       lines.push(
         detail
-          ? `  • ${verdict.dimension} — ${statusLabel(verdict.status)}: ${detail}`
-          : `  • ${verdict.dimension} — ${statusLabel(verdict.status)}`,
+          ? `- ${verdict.dimension} — ${statusLabel(verdict.status)}: ${detail}`
+          : `- ${verdict.dimension} — ${statusLabel(verdict.status)}`,
       );
     }
     lines.push("Interrupt the turn with Esc if it looks stuck.");
@@ -91,16 +97,23 @@
   }
 
   /**
-   * ADR-0106: interaction follows shape. An Ack, or a short single-line Text
-   * reply (e.g. `/new`'s confirmation), renders as one flat confirmation row —
-   * no disclosure affordance, since expanding would show nothing new.
-   * Multi-line or long replies keep the expandable block.
+   * ADR-0106: interaction follows shape. A title-only Ack, or a short
+   * single-line Text reply (e.g. `/new`'s confirmation), renders as one flat
+   * confirmation row — no disclosure affordance, since expanding would show
+   * nothing new. An Ack *with* detail lines keeps the expandable block: the
+   * headline leads, and the muted explanation lines follow below it.
+   * Multi-line or long replies keep the expandable block too.
    */
   const INLINE_RESULT_MAX_CHARS = 80;
+  let ackDetail = $derived(
+    record.result && "Ack" in record.result
+      ? (record.result.Ack.detail ?? []).filter((line: string) => line.trim().length > 0)
+      : null,
+  );
   let isInline = $derived(
     record.result !== null &&
       record.result !== undefined &&
-      ("Ack" in record.result ||
+      (("Ack" in record.result && (ackDetail?.length ?? 0) === 0) ||
         ("Text" in record.result &&
           !record.result.Text.includes("\n") &&
           record.result.Text.length <= INLINE_RESULT_MAX_CHARS)),
@@ -125,6 +138,26 @@
         {record.result.Text}
       {/if}
     </span>
+  </div>
+{:else if record.result && "Ack" in record.result}
+  <div class="command-block">
+    <button class="command-header" onclick={() => (expanded = !expanded)}>
+      <span class="invocation">{invocation}</span>
+      <span class="badges">
+        {#if record.duration_ms !== null && record.duration_ms !== undefined}
+          <span class="badge">{record.duration_ms}ms</span>
+        {/if}
+        <span class="chevron">{expanded ? "-" : "+"}</span>
+      </span>
+    </button>
+    {#if expanded && record.result.Ack.title}
+      <div class="command-result ack-body">
+        <p class="ack-title">{record.result.Ack.title}</p>
+        {#each ackDetail ?? [] as line}
+          <p class="ack-detail">{line}</p>
+        {/each}
+      </div>
+    {/if}
   </div>
 {:else}
   <div class="command-block" class:failed={record.status === "error"}>
@@ -245,6 +278,19 @@
     max-height: 320px;
     overflow-y: auto;
     word-break: break-word;
+  }
+
+  /* ADR-0106 two-tone ack: headline prominent, explanation lines muted. */
+  .ack-title {
+    margin: 0 0 4px;
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .ack-detail {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12px;
   }
 
   .command-result :global(pre) {

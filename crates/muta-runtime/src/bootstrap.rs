@@ -642,9 +642,19 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         }
         let _ = resp_tx.send(round_response(
             &session.id().await,
-            RoundEvent::Notice(AgentNotice::command_ack(
-                "YOLO mode ON: all tool permissions are auto-approved.",
-            )),
+            RoundEvent::Notice(
+                AgentNotice::new(
+                    muta_contracts::NoticeKind::CommandAck,
+                    muta_contracts::NoticeSeverity::Info,
+                    "YOLO mode ON",
+                    muta_contracts::NoticeSource::Harness,
+                )
+                .with_surface(muta_contracts::NoticeSurface::Inline)
+                .with_body(
+                    "All tool permissions are auto-approved this session.\n\
+                     Use `/yolo off` to return to interactive mode.",
+                ),
+            ),
         ));
     }
 

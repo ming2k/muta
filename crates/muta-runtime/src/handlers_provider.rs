@@ -1021,8 +1021,12 @@ async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str) {
 
 /// Record a provider switch's acknowledgment in the durable command ledger.
 async fn record_provider_ack(session: &SessionStore, provider: &str, model: &str, ack: String) {
-    let record = CommandRecord::new("models", format!("{provider} {model}"))
-        .with_result(CommandResult::Ack { title: ack });
+    let record = CommandRecord::new("models", format!("{provider} {model}")).with_result(
+        CommandResult::Ack {
+            title: ack,
+            detail: None,
+        },
+    );
     if let Err(error) = session.mutate_commands(|c| c.push(record)).await {
         tracing::warn!(?error, "could not persist provider-switch ack");
     }
@@ -1255,7 +1259,7 @@ mod tests {
         assert_eq!(record.args, "111xianyu k3");
         assert_eq!(record.status, muta_contracts::CommandStatus::Success);
         match &record.result {
-            Some(muta_contracts::CommandResult::Ack { title }) => {
+            Some(muta_contracts::CommandResult::Ack { title, .. }) => {
                 assert_eq!(title, "Connection switched to 111xianyu (k3)");
             }
             other => panic!("expected a durable Ack result, got {other:?}"),

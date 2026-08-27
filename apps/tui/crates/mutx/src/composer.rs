@@ -638,8 +638,12 @@ fn push_styled_runs(
         }
         let style = if is_selected(lo) {
             match chip_of(lo) {
-                Some(ChipKind::Paste) => Style::default().fg(styles.chip_paste_fg).bg(styles.selected_bg),
-                Some(ChipKind::Image) => Style::default().fg(styles.chip_image_fg).bg(styles.selected_bg),
+                Some(ChipKind::Paste) => Style::default()
+                    .fg(styles.chip_paste_fg)
+                    .bg(styles.selected_bg),
+                Some(ChipKind::Image) => Style::default()
+                    .fg(styles.chip_image_fg)
+                    .bg(styles.selected_bg),
                 None => styles.base.bg(styles.selected_bg),
             }
         } else if let Some(kind) = chip_of(lo) {

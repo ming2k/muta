@@ -63,10 +63,19 @@ pub enum CommandResult {
         message: String,
         detail: Option<String>,
     },
-    /// A one-line confirmation of a state change (the durable twin of the
-    /// ADR-0088 `CommandAck` toast). The live surface stays a transient toast;
-    /// the ledger keeps the confirmation for audit.
-    Ack { title: String },
+    /// A confirmation of a state change (the durable twin of the ADR-0088
+    /// `CommandAck` toast). `title` is the one-line headline — the only part
+    /// that renders in the prominent tone; `detail` carries zero or more
+    /// explanation lines that render dimmed below it (ADR-0106's "headline
+    /// first, detail muted" scheme). Absent on legacy records: `None` folds
+    /// to the title-only rendering.
+    Ack {
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        // Skipped when `None`: the key is absent on the wire, never `null`.
+        #[ts(optional)]
+        detail: Option<Vec<String>>,
+    },
     /// `/permissions` — the current always-allowed tool rules.
     PermissionList { allowed: Vec<String> },
     /// `/search <query>` — semantic hits over the session-history store.
@@ -122,7 +131,22 @@ impl CommandResult {
                 }
                 out
             }
-            CommandResult::Ack { title } => title.clone(),
+            CommandResult::Ack { title, detail } => {
+                // Headline first, detail lines below — never joined into one
+                // row. Consumers must not reflow these with soft-break
+                // collapsing (the bug ADR-0106's plain-block rendering fixed).
+                match detail.as_deref().filter(|d| !d.is_empty()) {
+                    Some(detail) => {
+                        let mut out = title.clone();
+                        for line in detail {
+                            out.push('\n');
+                            out.push_str(line);
+                        }
+                        out
+                    }
+                    None => title.clone(),
+                }
+            }
             CommandResult::PermissionList { allowed } => {
                 if allowed.is_empty() {
                     "No tools are always allowed for this process.".to_string()
@@ -291,13 +315,13 @@ fn review_to_text(verdicts: &[ReviewVerdict], turns: u64) -> String {
         let detail = verdict.detail.trim();
         if detail.is_empty() {
             lines.push(format!(
-                "  • {} — {}",
+                "- {} — {}",
                 verdict.dimension,
                 verdict.status.label()
             ));
         } else {
             lines.push(format!(
-                "  • {} — {}: {}",
+                "- {} — {}: {}",
                 verdict.dimension,
                 verdict.status.label(),
                 detail
@@ -361,6 +385,10 @@ mod tests {
             },
             CommandResult::Ack {
                 title: "Autopilot ON".to_string(),
+                detail: Some(vec![
+                    "File edits auto-approved".to_string(),
+                    "Commands auto-approved".to_string(),
+                ]),
             },
             CommandResult::PermissionList {
                 allowed: vec!["run_command".to_string(), "edit_file".to_string()],
@@ -443,10 +471,53 @@ mod tests {
         assert!(
             CommandResult::Ack {
                 title: "x".to_string(),
+                detail: None,
             }
             .is_ack()
         );
         assert!(!CommandResult::Text("x".to_string()).is_ack());
+    }
+
+    #[test]
+    fn ack_with_detail_renders_lines_not_one_row() {
+        // The rendering contract the user-facing bug was about: the headline
+        // stays alone on its row and every detail line keeps its own row —
+        // no `•`-joined single-line squeeze, no soft-break collapse.
+        assert_eq!(
+            CommandResult::Ack {
+                title: "YOLO mode ON".to_string(),
+                detail: Some(vec![
+                    "File edits & creations are auto-approved".to_string(),
+                    "Commands are auto-approved (catastrophic hard-denies retained)".to_string(),
+                ]),
+            }
+            .to_text(),
+            "YOLO mode ON\n\
+             File edits & creations are auto-approved\n\
+             Commands are auto-approved (catastrophic hard-denies retained)"
+        );
+        // A legacy title-only ack still renders as its bare title.
+        assert_eq!(
+            CommandResult::Ack {
+                title: "Always-allowed tool rules cleared.".to_string(),
+                detail: None,
+            }
+            .to_text(),
+            "Always-allowed tool rules cleared."
+        );
+    }
+
+    #[test]
+    fn legacy_ack_without_detail_deserializes() {
+        // Records persisted before the `detail` field existed arrive without
+        // the key; `#[serde(default)]` must fold them to the title-only ack.
+        let legacy = r#"{"Ack":{"title":"YOLO mode ON"}}"#;
+        let restored: CommandResult = serde_json::from_str(legacy).unwrap();
+        assert_eq!(
+            restored.to_text(),
+            "YOLO mode ON",
+            "a legacy title-only ack must round-trip"
+        );
     }
 
     #[test]

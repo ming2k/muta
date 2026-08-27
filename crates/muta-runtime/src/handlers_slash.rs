@@ -333,11 +333,12 @@ async fn restore_session_runtime(
             .rev()
             .find_map(|rec| {
                 if (rec.name == "yolo" || rec.name == "autopilot")
-                    && let Some(CommandResult::Ack { title }) = &rec.result
+                    && let Some(CommandResult::Ack { title, .. }) = &rec.result
                 {
-                    if title.to_lowercase().contains("on") {
+                    let title = title.to_lowercase();
+                    if title.contains("on") {
                         return Some(true);
-                    } else if title.to_lowercase().contains("off") {
+                    } else if title.contains("off") {
                         return Some(false);
                     }
                 }
@@ -354,8 +355,16 @@ async fn restore_session_runtime(
     if agent.get_yolo() != restored_yolo {
         agent.set_yolo(restored_yolo);
         if restored_from_ledger {
-            let notice = AgentNotice::command_ack(
-                "YOLO mode restored: this session was previously running in YOLO auto-approve mode. Use `/yolo off` to return to interactive mode.",
+            let notice = AgentNotice::new(
+                muta_contracts::NoticeKind::CommandAck,
+                muta_contracts::NoticeSeverity::Warning,
+                "YOLO mode restored",
+                muta_contracts::NoticeSource::Harness,
+            )
+            .with_surface(muta_contracts::NoticeSurface::Inline)
+            .with_body(
+                "This session was previously running in YOLO auto-approve mode. \
+                 Use `/yolo off` to return to interactive mode.",
             );
             let _ = resp_tx.send(round_response(
                 &session.id().await,
@@ -465,6 +474,7 @@ async fn record_ack_with_duration(
 ) {
     let mut record = CommandRecord::new(name, args).with_result(CommandResult::Ack {
         title: title.into(),
+        detail: None,
     });
     if let Some(ms) = duration_ms {
         record = record.with_duration_ms(ms);
@@ -825,20 +835,56 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     "could not persist yolo posture; it will not survive a restart"
                 );
             }
-            let ack = if enabled {
-                "YOLO mode ON\n• All file edits & creations auto-approved\n• Commands auto-approved (catastrophic hard-denies retained)"
-                    .to_string()
+            // The ack is a headline plus dimmed explanation lines (never a
+            // `•`-joined one-row squeeze). The transcript notice below carries
+            // the same split, so the mode change owns its own durable row —
+            // the boundary between "the command ran" and "the session's
+            // posture changed" stays legible.
+            let (title, detail) = if enabled {
+                (
+                    "YOLO mode ON",
+                    vec![
+                        "File edits & creations are auto-approved".to_string(),
+                        "Commands are auto-approved (catastrophic hard-denies retained)"
+                            .to_string(),
+                    ],
+                )
             } else {
-                "YOLO mode OFF\n• Missing grants can be requested interactively\n• Questions and input prompts are available".to_string()
+                (
+                    "YOLO mode OFF",
+                    vec![
+                        "Missing grants can be requested interactively".to_string(),
+                        "Questions and input prompts are available".to_string(),
+                    ],
+                )
             };
             record_command(
                 session,
                 resp_tx,
                 name,
                 args,
-                CommandResult::Ack { title: ack },
+                CommandResult::Ack {
+                    title: title.to_string(),
+                    detail: Some(detail.clone()),
+                },
             )
             .await;
+            // The durable twin of the live toast: an inline transcript notice
+            // recording the posture change itself, distinct from the command
+            // ledger row that recorded the invocation.
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::Notice(
+                    AgentNotice::new(
+                        muta_contracts::NoticeKind::CommandAck,
+                        muta_contracts::NoticeSeverity::Info,
+                        title,
+                        muta_contracts::NoticeSource::Harness,
+                    )
+                    .with_surface(muta_contracts::NoticeSurface::Inline)
+                    .with_body(detail.join("\n")),
+                ),
+            ));
             let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::YoloChanged(enabled),
@@ -1382,9 +1428,9 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     CommandResult::Text(
                         "Usage: /schedule <when> <prompt>\n\
                          <when> is one of:\n\
-                         • a cron: `*/5 * * * *`, `0 9 * * 1-5`\n\
-                         • a countdown: `10m`, `2h30m`, `in 2 hours 30 minutes`\n\
-                         • an absolute time: `14:00`, `tomorrow 09:00`, `2026-03-15 14:00`\n\
+                         - a cron: `*/5 * * * *`, `0 9 * * 1-5`\n\
+                         - a countdown: `10m`, `2h30m`, `in 2 hours 30 minutes`\n\
+                         - an absolute time: `14:00`, `tomorrow 09:00`, `2026-03-15 14:00`\n\
                          Cron jobs recur; countdown / absolute jobs fire once.\n\
                          Also: /schedule list, /schedule cancel <id>."
                             .to_string(),
@@ -1575,12 +1621,12 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     agent.set_workspace_security(snapshot.clone());
                     let message = format!(
                         "Workspace Asset Trust\n\
-                         • Root: {}\n\
-                         • MCP: {}\n\
-                         • Skills: {}\n\
-                         • Hooks: {}\n\
-                         • Rules: {}\n\
-                         • Aggregate: {}\n\
+                         - Root: {}\n\
+                         - MCP: {}\n\
+                         - Skills: {}\n\
+                         - Hooks: {}\n\
+                         - Rules: {}\n\
+                         - Aggregate: {}\n\
                          Asset trust does not grant filesystem scope or runtime execution permission.",
                         snapshot.root,
                         snapshot.mcp.as_str(),
@@ -1633,13 +1679,13 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     let mcp = if report.connected_mcp.is_empty() {
                         String::new()
                     } else {
-                        format!("\n• MCP connected: {}", report.connected_mcp.join(", "))
+                        format!("\n- MCP connected: {}", report.connected_mcp.join(", "))
                     };
                     let message = format!(
                         "Project asset trust recorded.\n\
-                         • Root: {}\n\
-                         • Granted: {}\n\
-                         • MCP: {}; Skills: {}; Hooks: {}; Rules: {}{}",
+                         - Root: {}\n\
+                         - Granted: {}\n\
+                         - MCP: {}; Skills: {}; Hooks: {}; Rules: {}{}",
                         report.snapshot.root,
                         granted,
                         report.snapshot.mcp.as_str(),

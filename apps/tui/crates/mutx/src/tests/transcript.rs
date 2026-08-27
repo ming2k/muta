@@ -185,6 +185,7 @@ fn command_rows_merge_at_their_turn_seams_on_restore() {
         muta_contracts::CommandRecord::new("compact", "")
             .with_result(muta_contracts::CommandResult::Ack {
                 title: "Compacted".to_string(),
+                detail: None,
             })
             .with_timestamp(2000),
         muta_contracts::CommandRecord::new("new", "")

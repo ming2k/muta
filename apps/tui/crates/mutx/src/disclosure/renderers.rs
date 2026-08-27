@@ -2444,20 +2444,104 @@ pub fn draw_command_result(
     // Result body blocks
     if phase == CommandPhase::Completed && msg.command_result_text().is_some() {
         advance_plain_blank_rows(transcript_area, 1, skip_rows, current_y, content_lines);
-        draw_message_body(
-            frame,
-            transcript_area,
-            msg,
-            mi,
-            selection,
-            cell_selection,
-            theme,
-            layout_map,
-            skip_rows,
-            current_y,
-            content_lines,
-            true,
-        );
+        // An ack with detail renders in its own two-tone scheme (ADR-0106):
+        // the headline in the entry's foreground tone — the part the eye
+        // should land on first — and each explanation line muted below it.
+        // The generic body path stays for every other result shape.
+        if let Some((title, detail)) = msg.command_ack_split() {
+            draw_ack_body(
+                frame,
+                transcript_area,
+                mi,
+                title,
+                detail,
+                family_tone,
+                theme,
+                layout_map,
+                skip_rows,
+                current_y,
+                content_lines,
+            );
+        } else {
+            draw_message_body(
+                frame,
+                transcript_area,
+                msg,
+                mi,
+                selection,
+                cell_selection,
+                theme,
+                layout_map,
+                skip_rows,
+                current_y,
+                content_lines,
+                true,
+            );
+        }
+    }
+}
+
+/// Draw an ack reply body: headline first in the foreground tone, then each
+/// detail line muted — never one `•`-joined row (the layout bug this fixes).
+#[allow(clippy::too_many_arguments)]
+fn draw_ack_body(
+    frame: &mut Frame,
+    transcript_area: Rect,
+    mi: usize,
+    title: &str,
+    detail: &[String],
+    family_tone: Color,
+    theme: &Theme,
+    layout_map: &mut LayoutMap,
+    skip_rows: &mut usize,
+    current_y: &mut u16,
+    content_lines: &mut usize,
+) {
+    let body_indent = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
+    let wrap_width = (transcript_area.width as usize)
+        .saturating_sub(TRANSCRIPT_BODY_LEADING_INDENT as usize)
+        .max(1);
+
+    // Headline: prominent (the command family tone, bold) so "YOLO mode ON"
+    // reads as the outcome, not as detail noise.
+    let title_style = Style::default()
+        .fg(family_tone)
+        .add_modifier(Modifier::BOLD);
+    let mut regions: Vec<(String, Style)> = vec![(title.to_string(), title_style)];
+    // Detail: muted prose, one line each, wrapping preserved.
+    let muted_style = Style::default().fg(theme.muted());
+    for line in detail {
+        regions.push((line.clone(), muted_style));
+    }
+
+    for (text, style) in regions {
+        for wl in wrap_text(&text, wrap_width) {
+            *content_lines += 1;
+            if *skip_rows > 0 {
+                *skip_rows -= 1;
+                continue;
+            }
+            if *current_y >= transcript_area.y + transcript_area.height {
+                return;
+            }
+            let line = Line::from(vec![
+                Span::styled(body_indent.clone(), style),
+                Span::styled(wl.text.clone(), style),
+            ]);
+            let rect = Rect::new(transcript_area.x, *current_y, transcript_area.width, 1);
+            frame.render_widget(Paragraph::new(line), rect);
+            layout_map.push(BlockRegion {
+                message_idx: mi,
+                block_idx: COMMAND_RESULT_BLOCK_IDX,
+                start_byte: 0,
+                end_byte: text.len(),
+                text: wl.text.clone(),
+                prefix_cols: TRANSCRIPT_BODY_LEADING_INDENT,
+                rect,
+                hidden_ranges: Vec::new(),
+            });
+            *current_y += 1;
+        }
     }
 }
 

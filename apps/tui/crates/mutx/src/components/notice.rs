@@ -203,7 +203,7 @@ pub(crate) fn draw_notice_view(
         let line_rect = Rect::new(area.x, *current_y, area.width, 1);
         let spans = vec![Span::styled(
             wl.text.clone(),
-            Style::default().fg(theme.fg()),
+            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
         )];
         frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
 

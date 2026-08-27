@@ -965,10 +965,15 @@ fn command_component_pending_then_completed() {
         "a pending row shows no reply:\n{pending}"
     );
 
-    // The reply settles the same component in place.
+    // The reply settles the same component in place. The ack carries the
+    // headline + dimmed detail split (ADR-0106 two-tone ack).
     assert!(
         message.settle_command_result(muta_contracts::CommandResult::Ack {
             title: "YOLO mode ON".to_string(),
+            detail: Some(vec![
+                "File edits & creations are auto-approved".to_string(),
+                "Commands are auto-approved (catastrophic hard-denies retained)".to_string(),
+            ]),
         }),
         "a pending command settles with its result"
     );
@@ -978,6 +983,27 @@ fn command_component_pending_then_completed() {
             && completed.contains("/yolo on")
             && completed.contains("YOLO mode ON"),
         "the settled entry renders its header, invocation, and result body:\n{completed}"
+    );
+    // The headline and its detail lines never collapse onto one row.
+    let headline_rows = completed
+        .lines()
+        .filter(|line| line.contains("YOLO mode ON"))
+        .count();
+    let detail_rows = completed
+        .lines()
+        .filter(|line| line.contains("auto-approved"))
+        .count();
+    assert_eq!(
+        headline_rows, 1,
+        "the ack headline renders on exactly one row:\n{completed}"
+    );
+    assert_eq!(
+        detail_rows, 2,
+        "each detail line owns its own row:\n{completed}"
+    );
+    assert!(
+        !completed.contains("•"),
+        "the ack rendering drops the old `•` join entirely:\n{completed}"
     );
 
     // Settling is one-shot: a second reply must not mutate the component.
@@ -1348,7 +1374,8 @@ fn command_component_renders_lead_symbols_and_timestamps() {
             "yolo",
             "on",
             Some(muta_contracts::CommandResult::Ack {
-                title: "YOLO mode ON: all tool permissions are auto-approved".to_string(),
+                title: "YOLO mode ON".to_string(),
+                detail: Some(vec!["All tool permissions are auto-approved".to_string()]),
             }),
         )
         .with_sent_at_ms(epoch_ms),
@@ -1361,8 +1388,13 @@ fn command_component_renders_lead_symbols_and_timestamps() {
         "slash command must render with ⌘ command header and invocation in body:\n{grid}"
     );
     assert!(
-        grid.contains("YOLO mode ON: all tool permissions are auto-approved"),
-        "ack title must render in body:\n{grid}"
+        grid.contains("YOLO mode ON"),
+        "ack headline must render in body:\n{grid}"
+    );
+    assert!(
+        grid.lines()
+            .any(|line| line.contains("All tool permissions are auto-approved")),
+        "ack detail line must render below the headline on its own row:\n{grid}"
     );
     assert!(
         grid.contains("❯ command") && grid.contains("!cargo check"),

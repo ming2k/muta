@@ -261,6 +261,19 @@ pub fn command_row_layout(
     }
 }
 
+/// The headline/detail split of an ack reply, when the record carries detail
+/// lines. The title is the part worth the reader's first glance; the detail
+/// is the muted explanation beneath it (ADR-0106's two-tone ack scheme).
+pub fn command_ack_split(
+    result: Option<&muta_contracts::CommandResult>,
+) -> Option<(&str, &[String])> {
+    let muta_contracts::CommandResult::Ack { title, detail } = result? else {
+        return None;
+    };
+    let detail = detail.as_deref().filter(|d| !d.is_empty())?;
+    Some((title, detail))
+}
+
 /// Severity of a [`MessageKind::Notice`]. Drives the color and the leading
 /// icon through the central severity→presentation map in
 /// `render/notice.rs`.
@@ -773,12 +786,21 @@ impl TranscriptMessage {
             .as_ref()
             .map(|result| result.to_text())
             .unwrap_or_default();
+        // An ack's newlines are its chosen structure (headline + muted detail
+        // lines, ADR-0106), so it parses plain — the markdown parser's
+        // soft-break rule would squeeze those lines onto one row. Every other
+        // result keeps the markdown block renderer (lists, tables, code).
+        let is_ack = matches!(result, Some(muta_contracts::CommandResult::Ack { .. }));
         Self {
             id: next_message_id(),
             // A harness artifact, not user or model prose — the renderer gives
             // it its own dimmed command-row treatment.
             role: Role::Tool,
-            blocks: parse_blocks(&result_text),
+            blocks: if is_ack {
+                parse_blocks_plain(&result_text)
+            } else {
+                parse_blocks(&result_text)
+            },
             raw: sanitize_text(&invocation).into_owned(),
             kind: MessageKind::CommandResult {
                 result: result.map(Box::new),
@@ -819,9 +841,15 @@ impl TranscriptMessage {
             return false;
         }
         // Keep the parsed body in sync with the stored typed result, the same
-        // way the constructor derives it.
+        // way the constructor derives it (acks parse plain — their newlines
+        // are structure, not markdown soft breaks).
         let result_text = result.to_text();
-        self.blocks = parse_blocks(&result_text);
+        let is_ack = matches!(result, muta_contracts::CommandResult::Ack { .. });
+        self.blocks = if is_ack {
+            parse_blocks_plain(&result_text)
+        } else {
+            parse_blocks(&result_text)
+        };
         *slot = Some(Box::new(result));
         *phase = CommandPhase::Completed;
         true
@@ -1352,6 +1380,20 @@ impl TranscriptMessage {
             } => Some(result.to_text()),
             _ => None,
         }
+    }
+
+    /// The typed result itself, when this row carries one.
+    pub fn command_result_payload(&self) -> Option<&muta_contracts::CommandResult> {
+        match &self.kind {
+            MessageKind::CommandResult { result, .. } => result.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The headline/detail split for an ack reply (ADR-0106 two-tone ack):
+    /// the title alone when there is no detail, `None` for non-acks.
+    pub fn command_ack_split(&self) -> Option<(&str, &[String])> {
+        command_ack_split(self.command_result_payload())
     }
 
     pub fn tool_step_expanded(&self) -> Option<bool> {

@@ -5,20 +5,23 @@
 # Kill hung tests after 15s
 slow-timeout = { period = "15s", terminate-after = 1 }
 retries = 0
-
-[test-groups]
-ts-bindings = { max-threads = 1 }
+# ts-rs `#[ts(export)]` tests are a *generation* step, not assertions: each
+# test process appends its own type to the shared
+# apps/web/src/lib/generated/wire.gen.ts, and ts-rs tracks the already-written
+# set in per-process memory. Nextest runs every test in its own process, so
+# every export process sees an "empty" journal and rewrites the file with only
+# its own type — silently truncating wire.gen.ts to one type (this actually
+# happened: two commits shipped a 9-line file where 93 types belong). Generate
+# with the documented single-process run instead —
+#   cargo test -p muta-contracts --lib export_bindings
+# — then verify with nextest, which skips the export tests by default here.
+default-filter = 'not test(export_bindings_)'
 
 # Extended timeouts for heavy integration tests
 [[profile.default.overrides]]
 filter = 'test(serve_integration) | test(daemon_spawn) | test(lifecycle_integration)'
 slow-timeout = { period = "45s", terminate-after = 1 }
 threads-required = 2
-
-# Serialize ts-rs binding exports to avoid concurrent writes to wire.gen.ts
-[[profile.default.overrides]]
-filter = 'test(export_bindings_)'
-test-group = 'ts-bindings'
 
 [profile.ci]
 retries = 1
