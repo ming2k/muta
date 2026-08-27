@@ -120,7 +120,7 @@ fn draw_composer_records_region_for_empty_input() {
         draw_composer(
             ComposerView {
                 frame: f,
-                input_rect: input_rect,
+                input_rect,
                 theme: &theme,
                 layout_map: &mut layout_map,
                 input_scroll: &mut 0,
@@ -169,7 +169,7 @@ fn draw_composer_wraps_and_positions_caret() {
                 selection: &SelectionState::None,
             },
             ComposerText {
-                input: input,
+                input,
                 byte_cursor: input.len(),
             },
             true,
@@ -208,7 +208,7 @@ fn draw_composer_caret_flush_against_final_grapheme() {
                     selection: &SelectionState::None,
                 },
                 ComposerText {
-                    input: input,
+                    input,
                     byte_cursor: input.len(),
                 },
                 true,
@@ -254,15 +254,17 @@ fn draw_composer_highlighted_accents_only_the_command_token() {
                 selection: &SelectionState::None,
             },
             ComposerText {
-                input: input,
+                input,
                 byte_cursor: input.len(),
             },
-            true,
-            true,
-            false,
+            ComposerDrawOptions {
+                focused: true,
+                show_caret: true,
+                record: false,
+                image_count: 0,
+                paste_count: 0,
+            },
             "/repeat".len(),
-            0,
-            0,
         );
     });
     let buf = terminal.buffer();
@@ -306,15 +308,17 @@ fn draw_composer_highlight_clamps_at_wrap_boundary() {
                 selection: &SelectionState::None,
             },
             ComposerText {
-                input: input,
+                input,
                 byte_cursor: input.len(),
             },
-            true,
-            true,
-            false,
-            0,
+            ComposerDrawOptions {
+                focused: true,
+                show_caret: true,
+                record: false,
+                image_count: 0,
+                paste_count: 0,
+            },
             "/sessions".len(),
-            0,
         );
     });
     let buf = terminal.buffer();
@@ -716,8 +720,8 @@ fn cursor_screen_pos_matches_drawn_caret() {
                     selection: &SelectionState::None,
                 },
                 ComposerText {
-                    input: input,
-                    byte_cursor: byte_cursor,
+                    input,
+                    byte_cursor,
                 },
                 true,
                 true,
@@ -801,7 +805,7 @@ fn composer_cjk_selection_covers_full_width_glyphs() {
                 selection: &sel,
             },
             ComposerText {
-                input: input,
+                input,
                 byte_cursor: input.len(),
             },
             true,
@@ -866,7 +870,7 @@ fn composer_two_cjk_select_all_has_no_extra_glyph_or_tail_highlight() {
                 selection: &sel,
             },
             ComposerText {
-                input: input,
+                input,
                 byte_cursor: input.len(),
             },
             true,
@@ -942,7 +946,7 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
                 selection: &SelectionState::None,
             },
             ComposerText {
-                input: input,
+                input,
                 byte_cursor: input.len(),
             },
             true,
@@ -968,13 +972,13 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
                 ComposerView {
                     frame: f,
                     input_rect: rect,
-                    theme: theme,
+                    theme,
                     layout_map: &mut LayoutMap::new(),
                     input_scroll: &mut 0,
                     selection: sel,
                 },
                 ComposerText {
-                    input: input,
+                    input,
                     byte_cursor: input.len(),
                 },
                 true,

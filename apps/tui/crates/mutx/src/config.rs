@@ -72,10 +72,10 @@ impl TuiConfig {
     /// If not present, automatically migrates any legacy `[tui]` table from `$XDG_CONFIG_HOME/muta/config.toml`.
     pub fn load() -> Self {
         let path = crate::paths::get().config_file();
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(cfg) = toml::from_str::<TuiConfig>(&content) {
-                return cfg;
-            }
+        if let Ok(content) = fs::read_to_string(&path)
+            && let Ok(cfg) = toml::from_str::<TuiConfig>(&content)
+        {
+            return cfg;
         }
 
         // Migration check: check if muta/config.toml has [tui] or [input_history]
@@ -86,15 +86,15 @@ impl TuiConfig {
                 tui: Option<TuiConfig>,
                 input_history: Option<InputHistoryConfig>,
             }
-            if let Ok(legacy) = toml::from_str::<LegacyContainer>(&content) {
-                if legacy.tui.is_some() || legacy.input_history.is_some() {
-                    let mut cfg = legacy.tui.unwrap_or_default();
-                    if let Some(ih) = legacy.input_history {
-                        cfg.input_history = ih;
-                    }
-                    let _ = cfg.save();
-                    return cfg;
+            if let Ok(legacy) = toml::from_str::<LegacyContainer>(&content)
+                && (legacy.tui.is_some() || legacy.input_history.is_some())
+            {
+                let mut cfg = legacy.tui.unwrap_or_default();
+                if let Some(ih) = legacy.input_history {
+                    cfg.input_history = ih;
                 }
+                let _ = cfg.save();
+                return cfg;
             }
         }
 
@@ -143,21 +143,21 @@ pub fn thinking_default_expanded(config: &TuiConfig) -> bool {
 /// Load prompt input history from `$XDG_STATE_HOME/mutx/history.json`.
 pub fn load_history() -> Vec<muta_contracts::HistoryEntry> {
     let path = crate::paths::get().history_file();
-    if let Ok(content) = fs::read_to_string(&path) {
-        if let Ok(entries) = serde_json::from_str(&content) {
-            return entries;
-        }
+    if let Ok(content) = fs::read_to_string(&path)
+        && let Ok(entries) = serde_json::from_str(&content)
+    {
+        return entries;
     }
     // Migration fallback: check muta's legacy history.json
     let legacy_path = muta_persistence::paths::get().history_file();
-    if let Ok(content) = fs::read_to_string(&legacy_path) {
-        if let Ok(entries) = serde_json::from_str::<Vec<muta_contracts::HistoryEntry>>(&content) {
-            if let Some(parent) = path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            let _ = fs::copy(&legacy_path, &path);
-            return entries;
+    if let Ok(content) = fs::read_to_string(&legacy_path)
+        && let Ok(entries) = serde_json::from_str::<Vec<muta_contracts::HistoryEntry>>(&content)
+    {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
         }
+        let _ = fs::copy(&legacy_path, &path);
+        return entries;
     }
     Vec::new()
 }

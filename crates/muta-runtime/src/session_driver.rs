@@ -420,15 +420,17 @@ impl SessionDriver {
                             resp_tx: &resp_tx,
                             provider_usage: &mut provider_usage,
                         },
-                        name,
-                        protocol,
-                        base_url,
-                        api_key,
-                        user_agent,
-                        models,
-                        auth,
-                        preset_id,
-                        client_identity,
+                        crate::handlers_provider::AddProviderParams {
+                            name,
+                            protocol,
+                            base_url,
+                            api_key,
+                            user_agent,
+                            models,
+                            auth,
+                            preset_id,
+                            client_identity,
+                        },
                     )
                     .await;
                 }

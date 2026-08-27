@@ -21,7 +21,8 @@ use super::design::{
 };
 use super::markdown_table::{TableRowInfo, build_table_render, push_table_segment};
 use super::text_layout::{
-    WrappedLine, block_selection_range, bold_delim_local_ranges, code_gutter_line, line_selection,
+    CodeGutterParams, RichLineParams, RichTextColors, RichTextRanges, WrappedLine,
+    block_selection_range, bold_delim_local_ranges, code_gutter_line, line_selection,
     line_spans_rich, link_delim_local_ranges, markup_hidden_ranges, padded_tail, visible_width,
     wrap_text,
 };
@@ -499,23 +500,21 @@ pub fn draw_message_body(
                         Line::from(spans)
                     } else {
                         let prefix = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
-                        line_spans_rich(
-                            &prefix,
-                            Style::default(),
-                            &wl.text,
-                            wl.start_byte,
-                            line_selection(sel_range, wl),
-                            code_ranges,
-                            bold_ranges,
-                            math_ranges,
-                            link_ranges,
+                        line_spans_rich(RichLineParams {
+                            prefix: &prefix,
+                            prefix_style: Style::default(),
+                            text: &wl.text,
+                            line_start_byte: wl.start_byte,
+                            selected: line_selection(sel_range, wl),
+                            ranges: RichTextRanges {
+                                code: code_ranges,
+                                bold: bold_ranges,
+                                math: math_ranges,
+                                links: link_ranges,
+                            },
                             base,
-                            theme.code_text(),
-                            theme.code_surface(),
-                            theme.info(),
-                            theme.info(),
-                            theme.selected(),
-                        )
+                            colors: RichTextColors::from_theme(theme),
+                        })
                     };
                     let line_rect = Rect::new(area.x, *current_y, area.width, 1);
                     frame.render_widget(Paragraph::new(line), line_rect);
@@ -768,23 +767,24 @@ pub fn draw_message_body(
                                     }
                                 });
 
-                                let content_line = line_spans_rich(
-                                    "",
-                                    Style::default(),
-                                    &line_text[clo..chi],
-                                    offset,
-                                    cell_sel,
-                                    code_ranges,
-                                    bold_ranges,
-                                    math_ranges,
-                                    &[],
+                                let content_line = line_spans_rich(RichLineParams {
+                                    prefix: "",
+                                    prefix_style: Style::default(),
+                                    text: &line_text[clo..chi],
+                                    line_start_byte: offset,
+                                    selected: cell_sel,
+                                    ranges: RichTextRanges {
+                                        code: code_ranges,
+                                        bold: bold_ranges,
+                                        math: math_ranges,
+                                        links: &[],
+                                    },
                                     base,
-                                    theme.code_text(),
-                                    theme.code_surface(),
-                                    theme.info(),
-                                    theme.info(),
-                                    sel_bg,
-                                );
+                                    colors: RichTextColors {
+                                        selected_bg: sel_bg,
+                                        ..RichTextColors::from_theme(theme)
+                                    },
+                                });
                                 // Skip the empty-prefix span (position 0).
                                 for span in content_line.spans.into_iter().skip(1) {
                                     spans.push(span);
@@ -1085,19 +1085,19 @@ pub fn draw_message_body(
                             end_byte: line_start_byte + wl.end_byte,
                         };
 
-                        let line = code_gutter_line(
-                            Color::Reset,
+                        let line = code_gutter_line(CodeGutterParams {
+                            left_bar: Color::Reset,
                             left_indent,
-                            &gutter,
+                            gutter: &gutter,
                             gutter_gap,
                             code_bg,
-                            theme.dim(),
-                            &wl.text,
-                            line_selection(sel_range, &block_wl),
-                            theme.code_text(),
-                            theme.selected(),
+                            gutter_fg: theme.dim(),
+                            text: &wl.text,
+                            selected: line_selection(sel_range, &block_wl),
+                            code_fg: theme.code_text(),
+                            selected_bg: theme.selected(),
                             full_width,
-                        );
+                        });
                         let line_rect = Rect::new(band_x, *current_y, band_w, 1);
                         frame.render_widget(Paragraph::new(line), line_rect);
 
@@ -1155,27 +1155,25 @@ pub fn draw_message_body(
                     if *current_y >= area.y + area.height {
                         break;
                     }
-                    let line = line_spans_rich(
-                        if line_index == 0 {
+                    let line = line_spans_rich(RichLineParams {
+                        prefix: if line_index == 0 {
                             &prefix
                         } else {
                             &continuation
                         },
                         prefix_style,
-                        &wl.text,
-                        wl.start_byte,
-                        line_selection(sel_range, wl),
-                        code_ranges,
-                        bold_ranges,
-                        math_ranges,
-                        link_ranges,
-                        style,
-                        theme.code_text(),
-                        theme.code_surface(),
-                        theme.info(),
-                        theme.info(),
-                        theme.selected(),
-                    );
+                        text: &wl.text,
+                        line_start_byte: wl.start_byte,
+                        selected: line_selection(sel_range, wl),
+                        ranges: RichTextRanges {
+                            code: code_ranges,
+                            bold: bold_ranges,
+                            math: math_ranges,
+                            links: link_ranges,
+                        },
+                        base: style,
+                        colors: RichTextColors::from_theme(theme),
+                    });
                     // For H1 headings the terminal UNDERLINED modifier fills
                     // the entire Paragraph rect, so clamp the render width to
                     // the actual text extent to prevent the underline from
@@ -1253,23 +1251,21 @@ pub fn draw_message_body(
                     }
 
                     let base = Style::default().fg(theme.quote());
-                    let line = line_spans_rich(
-                        "   ▎ ",
-                        Style::default().fg(theme.quote()),
-                        &wl.text,
-                        wl.start_byte,
-                        line_selection(sel_range, wl),
-                        code_ranges,
-                        bold_ranges,
-                        math_ranges,
-                        link_ranges,
+                    let line = line_spans_rich(RichLineParams {
+                        prefix: "   ▎ ",
+                        prefix_style: Style::default().fg(theme.quote()),
+                        text: &wl.text,
+                        line_start_byte: wl.start_byte,
+                        selected: line_selection(sel_range, wl),
+                        ranges: RichTextRanges {
+                            code: code_ranges,
+                            bold: bold_ranges,
+                            math: math_ranges,
+                            links: link_ranges,
+                        },
                         base,
-                        theme.code_text(),
-                        theme.code_surface(),
-                        theme.info(),
-                        theme.info(),
-                        theme.selected(),
-                    );
+                        colors: RichTextColors::from_theme(theme),
+                    });
                     let line_rect = Rect::new(area.x, *current_y, area.width, 1);
                     frame.render_widget(Paragraph::new(line), line_rect);
 
@@ -1372,27 +1368,25 @@ pub fn draw_message_body(
                     }
 
                     let base = Style::default().fg(theme.fg());
-                    let line = line_spans_rich(
-                        if line_index == 0 {
+                    let line = line_spans_rich(RichLineParams {
+                        prefix: if line_index == 0 {
                             &prefix
                         } else {
                             &continuation
                         },
-                        Style::default().fg(theme.brand()),
-                        &wl.text,
-                        wl.start_byte,
-                        line_selection(sel_range, wl),
-                        code_ranges,
-                        bold_ranges,
-                        math_ranges,
-                        link_ranges,
+                        prefix_style: Style::default().fg(theme.brand()),
+                        text: &wl.text,
+                        line_start_byte: wl.start_byte,
+                        selected: line_selection(sel_range, wl),
+                        ranges: RichTextRanges {
+                            code: code_ranges,
+                            bold: bold_ranges,
+                            math: math_ranges,
+                            links: link_ranges,
+                        },
                         base,
-                        theme.code_text(),
-                        theme.code_surface(),
-                        theme.info(),
-                        theme.info(),
-                        theme.selected(),
-                    );
+                        colors: RichTextColors::from_theme(theme),
+                    });
                     let line_rect = Rect::new(area.x, *current_y, area.width, 1);
                     frame.render_widget(Paragraph::new(line), line_rect);
 

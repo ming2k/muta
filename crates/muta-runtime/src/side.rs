@@ -399,22 +399,19 @@ pub(crate) async fn start_active_turn(env: SideEnv<'_>, input: RoundInput) {
     // Resolve which live session this round belongs to, cloning the per-session
     // Arcs out of the registry under a short-lived read lock. The guard drops
     // at the end of this statement, before the round starts.
-    let (agent, session, lifecycle, session_id) = {
-        let guard = side.read().await;
-        match guard.active() {
-            Some(s) => (
-                s.agent.clone(),
-                s.store.clone(),
-                s.lifecycle.clone(),
-                s.id.clone(),
-            ),
-            None => (
-                master.clone(),
-                primary_session.clone(),
-                primary_lifecycle.clone(),
-                primary_session.id().await,
-            ),
-        }
+    let target = match side.read().await.active() {
+        Some(active) => ResolvedTurnTarget {
+            agent: active.agent.clone(),
+            session: active.store.clone(),
+            lifecycle: active.lifecycle.clone(),
+            session_id: active.id.clone(),
+        },
+        None => ResolvedTurnTarget {
+            agent: master.clone(),
+            session: primary_session.clone(),
+            lifecycle: primary_lifecycle.clone(),
+            session_id: primary_session.id().await,
+        },
     };
     // Mark the aside as used before the round starts so a detach racing the
     // first stream event still sees a non-pristine aside.
@@ -433,14 +430,11 @@ pub(crate) async fn start_active_turn(env: SideEnv<'_>, input: RoundInput) {
     // (drives the `OutboxSignal` that removes the session from
     // running_sessions) so the chrome collapses cleanly. Symmetric with
     // `start_session_turn`'s refusal path.
-    if refuse_if_no_provider(tx, &agent, &session_id) {
+    if refuse_if_no_provider(tx, &target.agent, &target.session_id) {
         return;
     }
 
-    start_resolved_turn(
-        master, tx, config, agent, session, lifecycle, session_id, input,
-    )
-    .await;
+    start_resolved_turn(master, tx, config, target, input).await;
 }
 
 /// Resolve a live master or aside agent by its stable session id. Keeping
@@ -479,27 +473,27 @@ pub(crate) async fn start_session_turn(
     let primary_id = primary_session.id().await;
     let is_primary = primary_id == target_session_id;
     let resolved = if is_primary {
-        Some((
-            master.clone(),
-            primary_session.clone(),
-            primary_lifecycle.clone(),
-            primary_id.clone(),
-        ))
+        Some(ResolvedTurnTarget {
+            agent: master.clone(),
+            session: primary_session.clone(),
+            lifecycle: primary_lifecycle.clone(),
+            session_id: primary_id.clone(),
+        })
     } else {
         side.read().await.get(target_session_id).map(|session| {
-            (
-                session.agent.clone(),
-                session.store.clone(),
-                session.lifecycle.clone(),
-                session.id.clone(),
-            )
+            ResolvedTurnTarget {
+                agent: session.agent.clone(),
+                session: session.store.clone(),
+                lifecycle: session.lifecycle.clone(),
+                session_id: session.id.clone(),
+            }
         })
     };
-    let Some((agent, session, lifecycle, session_id)) = resolved else {
+    let Some(target) = resolved else {
         return false;
     };
-    if *session_id != primary_id
-        && let Some(s) = side.write().await.get_mut(&session_id)
+    if target.session_id != primary_id
+        && let Some(s) = side.write().await.get_mut(&target.session_id)
     {
         s.has_round = true;
     }
@@ -512,27 +506,34 @@ pub(crate) async fn start_session_turn(
     // `false` routes the caller through `RoundEvent::UserInputUnavailable`,
     // which promotes the dispatch item back to `Waiting` so the user can
     // recall or replay it once a real provider is configured.
-    if refuse_if_no_provider(tx, &agent, &session_id) {
+    if refuse_if_no_provider(tx, &target.agent, &target.session_id) {
         return false;
     }
 
-    start_resolved_turn(
-        master, tx, config, agent, session, lifecycle, session_id, input,
-    )
-    .await;
+    start_resolved_turn(master, tx, config, target, input).await;
     true
+}
+
+struct ResolvedTurnTarget {
+    agent: Arc<Agent>,
+    session: Arc<SessionStore>,
+    lifecycle: Arc<RoundLifecycle>,
+    session_id: String,
 }
 
 async fn start_resolved_turn(
     master: &Arc<Agent>,
     tx: &mpsc::UnboundedSender<AgentResponse>,
     config: &Config,
-    agent: Arc<Agent>,
-    session: Arc<SessionStore>,
-    lifecycle: Arc<RoundLifecycle>,
-    session_id: String,
+    target: ResolvedTurnTarget,
     mut input: RoundInput,
 ) {
+    let ResolvedTurnTarget {
+        agent,
+        session,
+        lifecycle,
+        session_id,
+    } = target;
     // `/retry` target validation (ADR-0128). The slash handler pre-checks
     // against the *primary* session, but the round may resolve onto the
     // active aside — so the authoritative check happens here, against the
@@ -622,7 +623,6 @@ mod tests {
     use super::*;
 
     /// A minimal `SideSession` for registry-mechanics tests: no fork, no
-
     /// provider — the registry only moves these around.
     fn fixture(id: &str) -> SideSession {
         let agent = Arc::new(

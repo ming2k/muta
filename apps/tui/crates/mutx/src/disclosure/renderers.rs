@@ -22,8 +22,9 @@ use crate::model::selection::{CellDragInfo, SelectionState};
 
 use crate::message_body::draw_message_body;
 use crate::text_layout::{
-    WrappedLine, block_selection_range, code_gutter_line, line_selection, line_spans,
-    line_spans_rich, padded_tail, wrap_text,
+    CodeGutterParams, RichLineParams, RichTextColors, RichTextRanges, WrappedLine,
+    block_selection_range, code_gutter_line, line_selection, line_spans, line_spans_rich,
+    padded_tail, wrap_text,
 };
 use crate::tools::{ArgLayout, DiffCache, DiffHunk, DiffOp, ResultKind, ToolStatus};
 use crate::view::{
@@ -186,7 +187,7 @@ pub fn draw_provider_retry(
     hovered: bool,
     focused: bool,
 ) {
-    let theme = &*ctx.theme;
+    let theme = ctx.theme;
     let _transcript_area = ctx.area;
     let full_width = ctx.full_width;
     let MessageKind::ProviderRetry {
@@ -492,19 +493,19 @@ fn draw_code_content(
                 end_byte: line_start_byte + wl.end_byte,
             };
 
-            let line = code_gutter_line(
-                Color::Reset,
+            let line = code_gutter_line(CodeGutterParams {
+                left_bar: Color::Reset,
                 left_indent,
-                &gutter,
+                gutter: &gutter,
                 gutter_gap,
                 code_bg,
-                ctx.theme.dim(),
-                &wl.text,
-                line_selection(sel_range, &block_wl),
-                ctx.theme.code_text(),
-                ctx.theme.selected(),
-                ctx.full_width,
-            );
+                gutter_fg: ctx.theme.dim(),
+                text: &wl.text,
+                selected: line_selection(sel_range, &block_wl),
+                code_fg: ctx.theme.code_text(),
+                selected_bg: ctx.theme.selected(),
+                full_width: ctx.full_width,
+            });
             ctx.paint_text_row(line, mi, block_idx, &block_wl, gutter_indent as u16, &[]);
         }
     }
@@ -565,6 +566,7 @@ fn draw_listing_content(
 
 /// Render a `write_todos` / checklist result: structured task list with status glyphs
 /// [✓] completed, [•] in_progress, [☐] pending, [✕] cancelled on `code_bg`.
+#[allow(clippy::too_many_arguments)]
 fn draw_checklist_content(
     ctx: &mut RenderCtx<'_, '_>,
     mi: usize,
@@ -599,25 +601,25 @@ fn draw_checklist_content(
         .or_else(|_| serde_json::from_str::<RawList>(arguments).map(|l| l.items))
         .or_else(|_| {
             let v: Result<serde_json::Value, _> = serde_json::from_str(arguments);
-            if let Ok(v) = v {
-                if let Some(arr) = v.get("items").and_then(|v| v.as_array()) {
-                    let items = arr
-                        .iter()
-                        .map(|item| RawItem {
-                            content: item
-                                .get("content")
-                                .and_then(|s| s.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            status: item
-                                .get("status")
-                                .and_then(|s| s.as_str())
-                                .unwrap_or("pending")
-                                .to_string(),
-                        })
-                        .collect();
-                    return Ok(items);
-                }
+            if let Ok(v) = v
+                && let Some(arr) = v.get("items").and_then(|v| v.as_array())
+            {
+                let items = arr
+                    .iter()
+                    .map(|item| RawItem {
+                        content: item
+                            .get("content")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        status: item
+                            .get("status")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("pending")
+                            .to_string(),
+                    })
+                    .collect();
+                return Ok(items);
             }
             Err(())
         })
@@ -1691,7 +1693,7 @@ pub fn draw_runner_inline_step(
     hovered: bool,
     focused: bool,
 ) {
-    let _theme = &*ctx.theme;
+    let _theme = ctx.theme;
     let _transcript_area = ctx.area;
 
     let Some(summary) = msg.tool_step_summary() else {
@@ -1818,7 +1820,7 @@ pub fn draw_runner_inline_step(
 /// a body, and per-line scroll handling so tall steps scroll like
 /// normal messages.
 pub fn draw_tool_step(
-    mut ctx: &mut RenderCtx<'_, '_>,
+    ctx: &mut RenderCtx<'_, '_>,
     msg: &TranscriptMessage,
     mi: usize,
     selection: &SelectionState,
@@ -1828,7 +1830,7 @@ pub fn draw_tool_step(
     hovered: bool,
     focused: bool,
 ) {
-    let _theme = &*ctx.theme;
+    let _theme = ctx.theme;
     let _transcript_area = ctx.area;
 
     let Some(summary) = msg.tool_step_summary() else {
@@ -1886,7 +1888,7 @@ pub fn draw_tool_step(
             ctx.theme,
             &mut *ctx.layout_map,
             &mut *ctx.skip_rows,
-            &mut *ctx.y,
+            ctx.y,
             &mut *ctx.content_lines,
             true,
         );
@@ -1896,7 +1898,7 @@ pub fn draw_tool_step(
     let inner_width = ctx.area.width as usize;
     let summary_line_idx = {
         draw_step_summary(
-            &mut ctx,
+            ctx,
             mi,
             usize::MAX,
             expanded,
@@ -1919,7 +1921,7 @@ pub fn draw_tool_step(
         let inner_w = inner_width.saturating_sub(indent);
 
         {
-            draw_blank_rows(&mut ctx, pad, TOOL_STEP_BODY_TOP_GAP_ROWS);
+            draw_blank_rows(ctx, pad, TOOL_STEP_BODY_TOP_GAP_ROWS);
 
             if let crate::model::document::MessageKind::ToolStep {
                 name,
@@ -1965,7 +1967,7 @@ pub fn draw_tool_step(
                 let has_structured = structured.is_some();
                 if has_output || is_command || has_structured {
                     draw_tool_result(
-                        &mut ctx,
+                        ctx,
                         mi,
                         msg.id,
                         name,
@@ -1984,20 +1986,20 @@ pub fn draw_tool_step(
         // ── Nested runner children ──.
         if let crate::model::document::MessageKind::ToolStep { children, .. } = &msg.kind {
             if !children.is_empty() {
-                draw_blank_rows(&mut ctx, pad, TOOL_STEP_CHILDREN_GAP_ROWS);
+                draw_blank_rows(ctx, pad, TOOL_STEP_CHILDREN_GAP_ROWS);
             }
             for child in children {
                 if child.is_tool_step() {
-                    draw_child_tool_step(&mut ctx, child, status_color);
+                    draw_child_tool_step(ctx, child, status_color);
                 } else {
                     let remaining_height = ctx
                         .area
                         .y
                         .saturating_add(ctx.area.height)
-                        .saturating_sub(*(&mut *ctx.y));
+                        .saturating_sub(*ctx.y);
                     let child_area = Rect::new(
                         ctx.area.x + 6,
-                        *(&mut *ctx.y),
+                        *ctx.y,
                         ctx.area.width.saturating_sub(12),
                         remaining_height,
                     );
@@ -2011,7 +2013,7 @@ pub fn draw_tool_step(
                         ctx.theme,
                         &mut *ctx.layout_map,
                         &mut *ctx.skip_rows,
-                        &mut *ctx.y,
+                        ctx.y,
                         &mut *ctx.content_lines,
                         false,
                     );
@@ -2031,7 +2033,7 @@ pub fn draw_tool_step(
             color: status_color,
             background: Some(ctx.theme.surface()),
             summary_line: summary_line_idx,
-            body_end_line: *(&mut *ctx.content_lines),
+            body_end_line: *ctx.content_lines,
         });
     }
 }
@@ -2196,7 +2198,7 @@ fn draw_reasoning_summary(
 /// message model for stream semantics, but presents it as body-aligned text
 /// instead of a colored step.
 pub fn draw_reasoning_trace(
-    mut ctx: &mut RenderCtx<'_, '_>,
+    ctx: &mut RenderCtx<'_, '_>,
     msg: &TranscriptMessage,
     mi: usize,
     selection: &SelectionState,
@@ -2205,7 +2207,7 @@ pub fn draw_reasoning_trace(
     hovered: bool,
     focused: bool,
 ) {
-    let _theme = &*ctx.theme;
+    let _theme = ctx.theme;
     let _transcript_area = ctx.area;
 
     let Some(summary) = msg.thinking_summary() else {
@@ -2225,7 +2227,7 @@ pub fn draw_reasoning_trace(
             ctx.theme,
             &mut *ctx.layout_map,
             &mut *ctx.skip_rows,
-            &mut *ctx.y,
+            ctx.y,
             &mut *ctx.content_lines,
             true,
         );
@@ -2234,7 +2236,7 @@ pub fn draw_reasoning_trace(
 
     let summary_line_idx = {
         draw_reasoning_summary(
-            &mut ctx,
+            ctx,
             mi,
             expanded,
             // Always use the disclosure marker (`+`/`-`), never a streaming
@@ -2266,7 +2268,7 @@ pub fn draw_reasoning_trace(
             ctx.area,
             REASONING_TRACE_BODY_TOP_GAP_ROWS,
             &mut *ctx.skip_rows,
-            &mut *ctx.y,
+            ctx.y,
             &mut *ctx.content_lines,
         );
         let mut emitted_any_block = false;
@@ -2284,7 +2286,7 @@ pub fn draw_reasoning_trace(
                         ctx.area,
                         REASONING_TRACE_BLOCK_GAP_ROWS,
                         &mut *ctx.skip_rows,
-                        &mut *ctx.y,
+                        ctx.y,
                         &mut *ctx.content_lines,
                     );
                 }
@@ -2297,23 +2299,21 @@ pub fn draw_reasoning_trace(
                         start_byte: wl.start_byte,
                         end_byte: wl.end_byte,
                     };
-                    let line = line_spans_rich(
-                        &body_prefix,
-                        Style::default(),
-                        &wl.text,
-                        wl.start_byte,
-                        line_selection(sel_range, &block_wl),
-                        code_ranges,
-                        bold_ranges,
-                        math_ranges,
-                        link_ranges,
-                        Style::default().fg(ctx.theme.muted()),
-                        ctx.theme.code_text(),
-                        ctx.theme.code_surface(),
-                        ctx.theme.info(),
-                        ctx.theme.info(),
-                        ctx.theme.selected(),
-                    );
+                    let line = line_spans_rich(RichLineParams {
+                        prefix: &body_prefix,
+                        prefix_style: Style::default(),
+                        text: &wl.text,
+                        line_start_byte: wl.start_byte,
+                        selected: line_selection(sel_range, &block_wl),
+                        ranges: RichTextRanges {
+                            code: code_ranges,
+                            bold: bold_ranges,
+                            math: math_ranges,
+                            links: link_ranges,
+                        },
+                        base: Style::default().fg(ctx.theme.muted()),
+                        colors: RichTextColors::from_theme(ctx.theme),
+                    });
                     let used = TRANSCRIPT_BODY_LEADING_INDENT as usize + wl.text.width();
                     let mut line = line;
                     line.spans.push(Span::styled(
@@ -2342,7 +2342,7 @@ pub fn draw_reasoning_trace(
             color: ctx.theme.muted(),
             background: None,
             summary_line: summary_line_idx,
-            body_end_line: *(&mut *ctx.content_lines),
+            body_end_line: *ctx.content_lines,
         });
     }
 }
@@ -2405,7 +2405,7 @@ pub fn draw_command_result(
     _hovered: bool,
     _focused: bool,
 ) {
-    let _theme = &*ctx.theme;
+    let _theme = ctx.theme;
     let _transcript_area = ctx.area;
 
     let Some(invocation) = msg.command_result_summary() else {
@@ -2427,7 +2427,7 @@ pub fn draw_command_result(
             ctx.theme,
             &mut *ctx.layout_map,
             &mut *ctx.skip_rows,
-            &mut *ctx.y,
+            ctx.y,
             &mut *ctx.content_lines,
             true,
         );
@@ -2470,7 +2470,7 @@ pub fn draw_command_result(
         ctx.area,
         TURN_HEADER_BODY_GAP_ROWS,
         &mut *ctx.skip_rows,
-        &mut *ctx.y,
+        ctx.y,
         &mut *ctx.content_lines,
     );
 
@@ -2517,7 +2517,7 @@ pub fn draw_command_result(
                 ctx.theme,
                 &mut *ctx.layout_map,
                 &mut *ctx.skip_rows,
-                &mut *ctx.y,
+                ctx.y,
                 &mut *ctx.content_lines,
                 true,
             );
@@ -2534,7 +2534,7 @@ pub fn draw_ack_body(
     detail: &[String],
     family_tone: Color,
 ) {
-    let _theme = &*ctx.theme;
+    let _theme = ctx.theme;
     let _transcript_area = ctx.area;
 
     let body_indent = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
@@ -2568,7 +2568,7 @@ pub fn draw_ack_body(
                 Span::styled(body_indent.clone(), style),
                 Span::styled(wl.text.clone(), style),
             ]);
-            let rect = Rect::new(ctx.area.x, *(&mut *ctx.y), ctx.area.width, 1);
+            let rect = Rect::new(ctx.area.x, *ctx.y, ctx.area.width, 1);
             (*ctx.frame).render_widget(Paragraph::new(line), rect);
             (*ctx.layout_map).push(BlockRegion {
                 message_idx: mi,

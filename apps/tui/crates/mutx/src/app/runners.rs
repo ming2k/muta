@@ -272,7 +272,7 @@ impl App {
 
     /// Zoom into an runner task's child messages. The zoom frame (call id +
     /// saved scroll) stays on `App` as data; the surface is the router's
-    /// [`View::Runner`](crate::surfaces::View::Runner) (ADR-0141).
+    /// `View::Runner` (ADR-0141).
     pub fn enter_runner(&mut self, call_id: String) {
         let saved_scroll = ScrollSnapshot {
             offset: self.scroll,

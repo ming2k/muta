@@ -445,6 +445,13 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let byte_cursor = app.byte_cursor();
             let image_count = app.pending_images.len();
             let paste_count = app.pending_text_pastes.len();
+            let composer_options = view::ComposerDrawOptions {
+                focused: !step_focused,
+                show_caret,
+                record: true,
+                image_count,
+                paste_count,
+            };
             match slash_len {
                 Some(len) => view::draw_composer_highlighted(
                     ComposerView {
@@ -459,12 +466,8 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                         input: &app.input,
                         byte_cursor,
                     },
-                    !step_focused,
-                    show_caret,
-                    true,
+                    composer_options,
                     len,
-                    app.pending_images.len(),
-                    app.pending_text_pastes.len(),
                 ),
                 None => match prompt_accent {
                     Some(accent) => view::draw_composer_igniting(
@@ -480,11 +483,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                             input: &app.input,
                             byte_cursor,
                         },
-                        !step_focused,
-                        show_caret,
-                        true,
-                        image_count,
-                        paste_count,
+                        composer_options,
                         accent,
                     ),
                     None => view::draw_composer(

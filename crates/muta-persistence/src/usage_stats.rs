@@ -479,8 +479,7 @@ mod tests {
         ledger.set_usage_project("proj-bucket");
 
         // One completed reported attempt.
-        let first =
-            ledger.begin_request_for_actor("s1", "master", "anthropic", "claude", 1, 1, 1_000);
+        let first = ledger.begin_request("s1", "anthropic", "claude", 1, 1, 1_000);
         ledger.settle_request(
             &first,
             RequestUsageStatus::Completed,
@@ -495,8 +494,7 @@ mod tests {
             4_000,
         );
         // One failed attempt (still consumes a request slot upstream).
-        let retry =
-            ledger.begin_request_for_actor("s1", "master", "anthropic", "claude", 1, 2, 900);
+        let retry = ledger.begin_request("s1", "anthropic", "claude", 1, 2, 900);
         ledger.settle_request(&retry, RequestUsageStatus::Failed, None, 20, 0);
 
         let report = store.report(10);

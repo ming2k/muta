@@ -68,6 +68,18 @@ pub const DEFAULT_CARET_FG: Color = Color::Rgb(213, 213, 205);
 pub const DEFAULT_INPUT_PLACEHOLDER_FG: Color = Color::Rgb(119, 125, 117);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SemanticPalette {
+    pub background: Color,
+    pub surface: Color,
+    pub text: Color,
+    pub muted: Color,
+    pub accent: Color,
+    pub success: Color,
+    pub warning: Color,
+    pub error: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CustomColorField {
     pub label: &'static str,
     pub hint: &'static str,
@@ -326,46 +338,46 @@ impl Theme {
     /// Build a complete renderer theme from a preset id, external theme file, or custom semantics.
     pub fn from_color_scheme(name: &str, custom: &ColorSchemeConfig) -> Self {
         match name.trim().to_ascii_lowercase().as_str() {
-            "midnight" => Self::from_semantic(
-                Color::Rgb(6, 10, 18),
-                Color::Rgb(14, 20, 32),
-                Color::Rgb(218, 225, 240),
-                Color::Rgb(112, 124, 148),
-                Color::Rgb(91, 156, 255),
-                Color::Rgb(87, 190, 141),
-                Color::Rgb(226, 174, 91),
-                Color::Rgb(226, 105, 117),
-            ),
-            "nord" => Self::from_semantic(
-                Color::Rgb(46, 52, 64),
-                Color::Rgb(59, 66, 82),
-                Color::Rgb(236, 239, 244),
-                Color::Rgb(136, 148, 166),
-                Color::Rgb(136, 192, 208),
-                Color::Rgb(163, 190, 140),
-                Color::Rgb(235, 203, 139),
-                Color::Rgb(191, 97, 106),
-            ),
-            "catppuccin" => Self::from_semantic(
-                Color::Rgb(30, 30, 46),
-                Color::Rgb(49, 50, 68),
-                Color::Rgb(205, 214, 244),
-                Color::Rgb(147, 153, 178),
-                Color::Rgb(203, 166, 247),
-                Color::Rgb(166, 227, 161),
-                Color::Rgb(249, 226, 175),
-                Color::Rgb(243, 139, 168),
-            ),
-            "paper" => Self::from_semantic(
-                Color::Rgb(247, 246, 242),
-                Color::Rgb(255, 255, 252),
-                Color::Rgb(43, 45, 48),
-                Color::Rgb(106, 110, 114),
-                Color::Rgb(55, 100, 165),
-                Color::Rgb(56, 126, 79),
-                Color::Rgb(157, 105, 31),
-                Color::Rgb(177, 63, 58),
-            ),
+            "midnight" => Self::from_semantic(SemanticPalette {
+                background: Color::Rgb(6, 10, 18),
+                surface: Color::Rgb(14, 20, 32),
+                text: Color::Rgb(218, 225, 240),
+                muted: Color::Rgb(112, 124, 148),
+                accent: Color::Rgb(91, 156, 255),
+                success: Color::Rgb(87, 190, 141),
+                warning: Color::Rgb(226, 174, 91),
+                error: Color::Rgb(226, 105, 117),
+            }),
+            "nord" => Self::from_semantic(SemanticPalette {
+                background: Color::Rgb(46, 52, 64),
+                surface: Color::Rgb(59, 66, 82),
+                text: Color::Rgb(236, 239, 244),
+                muted: Color::Rgb(136, 148, 166),
+                accent: Color::Rgb(136, 192, 208),
+                success: Color::Rgb(163, 190, 140),
+                warning: Color::Rgb(235, 203, 139),
+                error: Color::Rgb(191, 97, 106),
+            }),
+            "catppuccin" => Self::from_semantic(SemanticPalette {
+                background: Color::Rgb(30, 30, 46),
+                surface: Color::Rgb(49, 50, 68),
+                text: Color::Rgb(205, 214, 244),
+                muted: Color::Rgb(147, 153, 178),
+                accent: Color::Rgb(203, 166, 247),
+                success: Color::Rgb(166, 227, 161),
+                warning: Color::Rgb(249, 226, 175),
+                error: Color::Rgb(243, 139, 168),
+            }),
+            "paper" => Self::from_semantic(SemanticPalette {
+                background: Color::Rgb(247, 246, 242),
+                surface: Color::Rgb(255, 255, 252),
+                text: Color::Rgb(43, 45, 48),
+                muted: Color::Rgb(106, 110, 114),
+                accent: Color::Rgb(55, 100, 165),
+                success: Color::Rgb(56, 126, 79),
+                warning: Color::Rgb(157, 105, 31),
+                error: Color::Rgb(177, 63, 58),
+            }),
             "custom" => Self::from_custom(custom),
             "zen" => Self::default(),
             other => {
@@ -510,29 +522,29 @@ impl Theme {
                 .or_else(|| Self::color_from_hex(fallback_value))
                 .unwrap_or(Color::Black)
         };
-        Self::from_semantic(
-            color(&custom.background, &fallback.background),
-            color(&custom.surface, &fallback.surface),
-            color(&custom.text, &fallback.text),
-            color(&custom.muted, &fallback.muted),
-            color(&custom.accent, &fallback.accent),
-            color(&custom.success, &fallback.success),
-            color(&custom.warning, &fallback.warning),
-            color(&custom.error, &fallback.error),
-        )
+        Self::from_semantic(SemanticPalette {
+            background: color(&custom.background, &fallback.background),
+            surface: color(&custom.surface, &fallback.surface),
+            text: color(&custom.text, &fallback.text),
+            muted: color(&custom.muted, &fallback.muted),
+            accent: color(&custom.accent, &fallback.accent),
+            success: color(&custom.success, &fallback.success),
+            warning: color(&custom.warning, &fallback.warning),
+            error: color(&custom.error, &fallback.error),
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn from_semantic(
-        background: Color,
-        surface: Color,
-        text: Color,
-        muted: Color,
-        accent: Color,
-        success: Color,
-        warning: Color,
-        error: Color,
-    ) -> Self {
+    fn from_semantic(palette: SemanticPalette) -> Self {
+        let SemanticPalette {
+            background,
+            surface,
+            text,
+            muted,
+            accent,
+            success,
+            warning,
+            error,
+        } = palette;
         let light = luminance(background) > 150.0;
         let code_bg = mix(background, text, if light { 0.06 } else { 0.05 });
         let user_bg = mix(surface, accent, if light { 0.08 } else { 0.10 });

@@ -2321,15 +2321,17 @@ pub(super) async fn run_app_loop(
 
             match actions::dispatch_action(
                 app,
-                &runtime,
                 terminal,
-                &session,
                 action,
-                &viewed_session_id,
-                &copy_tx,
-                &copy_pending,
-                &paste_tx,
-                &mut sgr_guard,
+                &mut actions::ActionContext {
+                    runtime: &runtime,
+                    session: &session,
+                    viewed_session_id: &viewed_session_id,
+                    copy_tx: &copy_tx,
+                    copy_pending: &copy_pending,
+                    paste_tx: &paste_tx,
+                    sgr_guard: &mut sgr_guard,
+                },
             )
             .await
             {

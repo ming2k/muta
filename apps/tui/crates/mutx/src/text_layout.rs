@@ -291,24 +291,71 @@ pub(crate) fn markup_hidden_ranges(
 /// surface (`code_fg` + `code_bg`); the backtick delimiter bytes are visually
 /// elided (zero-width) — same as bold `**` markers — while copy still yields the
 /// exact `` `read_text` `` source.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn line_spans_rich(
-    prefix: &str,
-    prefix_style: Style,
-    text: &str,
-    line_start_byte: usize,
-    selected: Option<(usize, usize)>,
-    code_ranges: &[(usize, usize)],
-    bold_ranges: &[(usize, usize)],
-    math_ranges: &[(usize, usize)],
-    link_ranges: &[LinkRange],
-    base: Style,
-    code_fg: Color,
-    code_bg: Color,
-    math_fg: Color,
-    link_fg: Color,
-    selected_bg: Color,
-) -> Line<'static> {
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct RichTextRanges<'a> {
+    pub code: &'a [(usize, usize)],
+    pub bold: &'a [(usize, usize)],
+    pub math: &'a [(usize, usize)],
+    pub links: &'a [LinkRange],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RichTextColors {
+    pub code_fg: Color,
+    pub code_bg: Color,
+    pub math_fg: Color,
+    pub link_fg: Color,
+    pub selected_bg: Color,
+}
+
+impl RichTextColors {
+    pub fn from_theme(theme: &crate::theme::Theme) -> Self {
+        Self {
+            code_fg: theme.code_text(),
+            code_bg: theme.code_surface(),
+            math_fg: theme.info(),
+            link_fg: theme.info(),
+            selected_bg: theme.selected(),
+        }
+    }
+}
+
+pub(crate) struct RichLineParams<'a> {
+    pub prefix: &'a str,
+    pub prefix_style: Style,
+    pub text: &'a str,
+    pub line_start_byte: usize,
+    pub selected: Option<(usize, usize)>,
+    pub ranges: RichTextRanges<'a>,
+    pub base: Style,
+    pub colors: RichTextColors,
+}
+
+pub(crate) fn line_spans_rich(params: RichLineParams<'_>) -> Line<'static> {
+    let RichLineParams {
+        prefix,
+        prefix_style,
+        text,
+        line_start_byte,
+        selected,
+        ranges,
+        base,
+        colors,
+    } = params;
+    let RichTextRanges {
+        code: code_ranges,
+        bold: bold_ranges,
+        math: math_ranges,
+        links: link_ranges,
+    } = ranges;
+    let RichTextColors {
+        code_fg,
+        code_bg,
+        math_fg,
+        link_fg,
+        selected_bg,
+    } = colors;
+
     let mut spans = vec![Span::styled(prefix.to_string(), prefix_style)];
     if text.is_empty() {
         return Line::from(spans);
@@ -560,20 +607,34 @@ pub(crate) fn line_spans_rich(
 /// band that fills the full width, and character-level selection highlighting.
 /// The optional left bar is retained for callers that want it; code blocks
 /// themselves render borderless with only the gutter as ornament.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn code_gutter_line(
-    left_bar: Color,
-    left_indent: usize,
-    gutter: &str,
-    gutter_gap: usize,
-    code_bg: Color,
-    gutter_fg: Color,
-    text: &str,
-    selected: Option<(usize, usize)>,
-    code_fg: Color,
-    selected_bg: Color,
-    full_width: usize,
-) -> Line<'static> {
+pub(crate) struct CodeGutterParams<'a> {
+    pub left_bar: Color,
+    pub left_indent: usize,
+    pub gutter: &'a str,
+    pub gutter_gap: usize,
+    pub code_bg: Color,
+    pub gutter_fg: Color,
+    pub text: &'a str,
+    pub selected: Option<(usize, usize)>,
+    pub code_fg: Color,
+    pub selected_bg: Color,
+    pub full_width: usize,
+}
+
+pub(crate) fn code_gutter_line(params: CodeGutterParams<'_>) -> Line<'static> {
+    let CodeGutterParams {
+        left_bar,
+        left_indent,
+        gutter,
+        gutter_gap,
+        code_bg,
+        gutter_fg,
+        text,
+        selected,
+        code_fg,
+        selected_bg,
+        full_width,
+    } = params;
     let mut spans = Vec::new();
     let mut prefix = left_indent;
 
@@ -768,7 +829,7 @@ mod tests {
     //! spaces, only the inner content carries `code_fg` + `code_bg`, and
     //! selection overrides backgrounds uniformly.
 
-    use super::line_spans_rich;
+    use super::{RichLineParams, RichTextColors, RichTextRanges, line_spans_rich};
     use mutx_engine::{Color, Modifier, Style};
 
     #[test]
@@ -841,27 +902,30 @@ mod tests {
         );
     }
 
+    fn test_colors() -> RichTextColors {
+        RichTextColors {
+            code_fg: Color::Green,
+            code_bg: Color::Black,
+            math_fg: Color::Magenta,
+            link_fg: Color::Blue,
+            selected_bg: Color::Red,
+        }
+    }
+
     #[test]
     fn no_code_defers_to_plain_builder() {
         // A line with no code range must produce a single content span (the
         // fast path), identical to the plain `line_spans`.
-        let line = line_spans_rich(
-            "",
-            Style::default(),
-            "plain text",
-            0,
-            None,
-            &[],
-            &[],
-            &[],
-            &[],
-            Style::default().fg(Color::White),
-            Color::Green,
-            Color::Black,
-            Color::Magenta,
-            Color::Blue,
-            Color::Red,
-        );
+        let line = line_spans_rich(RichLineParams {
+            prefix: "",
+            prefix_style: Style::default(),
+            text: "plain text",
+            line_start_byte: 0,
+            selected: None,
+            ranges: RichTextRanges::default(),
+            base: Style::default().fg(Color::White),
+            colors: test_colors(),
+        });
         // prefix (empty) + one content span
         assert_eq!(line.spans.len(), 2);
         assert_eq!(rendered_content(&line), "plain text");
@@ -872,23 +936,19 @@ mod tests {
         // "use `foo` now" with the code range covering `` `foo` ``.
         let text = "use `foo` now";
         let code_range = (4, 9); // "`foo`"
-        let line = line_spans_rich(
-            "",
-            Style::default(),
+        let line = line_spans_rich(RichLineParams {
+            prefix: "",
+            prefix_style: Style::default(),
             text,
-            0,
-            None,
-            &[code_range],
-            &[],
-            &[],
-            &[],
-            Style::default().fg(Color::White),
-            Color::Green,
-            Color::Black,
-            Color::Magenta,
-            Color::Blue,
-            Color::Red,
-        );
+            line_start_byte: 0,
+            selected: None,
+            ranges: RichTextRanges {
+                code: &[code_range],
+                ..Default::default()
+            },
+            base: Style::default().fg(Color::White),
+            colors: test_colors(),
+        });
 
         // Backticks are visually elided (zero-width); only the inner code content
         // carries code_fg on code_bg. Copy still yields the original `` `foo` ``
@@ -915,23 +975,19 @@ mod tests {
         // Selecting the whole line paints every span with `selected_bg`,
         // including the code content and the delimiter padding.
         let text = "a `b` c";
-        let line = line_spans_rich(
-            "",
-            Style::default(),
+        let line = line_spans_rich(RichLineParams {
+            prefix: "",
+            prefix_style: Style::default(),
             text,
-            0,
-            Some((0, text.len())),
-            &[(2, 5)],
-            &[],
-            &[],
-            &[],
-            Style::default().fg(Color::White),
-            Color::Green,
-            Color::Black,
-            Color::Magenta,
-            Color::Blue,
-            Color::Red,
-        );
+            line_start_byte: 0,
+            selected: Some((0, text.len())),
+            ranges: RichTextRanges {
+                code: &[(2, 5)],
+                ..Default::default()
+            },
+            base: Style::default().fg(Color::White),
+            colors: test_colors(),
+        });
         let content: Vec<_> = line.spans.iter().skip(1).collect();
         // Every span carries the selected background, including the code content.
         assert!(content.iter().all(|s| s.style.bg == Color::Red));
@@ -943,23 +999,19 @@ mod tests {
     fn code_range_outside_line_is_ignored() {
         // `line_start_byte` positions this line at byte 100; a code range
         // living in [0,6) is entirely before it and must be ignored.
-        let line = line_spans_rich(
-            "",
-            Style::default(),
-            "no code here",
-            100,
-            None,
-            &[(0, 6)],
-            &[],
-            &[],
-            &[],
-            Style::default().fg(Color::White),
-            Color::Green,
-            Color::Black,
-            Color::Magenta,
-            Color::Blue,
-            Color::Red,
-        );
+        let line = line_spans_rich(RichLineParams {
+            prefix: "",
+            prefix_style: Style::default(),
+            text: "no code here",
+            line_start_byte: 100,
+            selected: None,
+            ranges: RichTextRanges {
+                code: &[(0, 6)],
+                ..Default::default()
+            },
+            base: Style::default().fg(Color::White),
+            colors: test_colors(),
+        });
         assert_eq!(line.spans.len(), 2); // fast path
         assert_eq!(rendered_content(&line), "no code here");
     }
@@ -969,23 +1021,19 @@ mod tests {
         // "**foo** bar" with the bold range covering the full `**foo**`.
         let text = "**foo** bar";
         let bold_range = (0, 7); // "**foo**"
-        let line = line_spans_rich(
-            "",
-            Style::default(),
+        let line = line_spans_rich(RichLineParams {
+            prefix: "",
+            prefix_style: Style::default(),
             text,
-            0,
-            None,
-            &[],
-            &[bold_range],
-            &[],
-            &[],
-            Style::default().fg(Color::White),
-            Color::Green,
-            Color::Black,
-            Color::Magenta,
-            Color::Blue,
-            Color::Red,
-        );
+            line_start_byte: 0,
+            selected: None,
+            ranges: RichTextRanges {
+                bold: &[bold_range],
+                ..Default::default()
+            },
+            base: Style::default().fg(Color::White),
+            colors: test_colors(),
+        });
 
         // The `**` delimiters are visually elided (zero-width); only the
         // inner content carries BOLD and the literal inter-word space remains.
@@ -1008,23 +1056,19 @@ mod tests {
         // and the inner content keeps BOLD. The `**` markers are zero-width
         // so there is no padding to highlight.
         let text = "a **b** c";
-        let line = line_spans_rich(
-            "",
-            Style::default(),
+        let line = line_spans_rich(RichLineParams {
+            prefix: "",
+            prefix_style: Style::default(),
             text,
-            0,
-            Some((0, text.len())),
-            &[],
-            &[(2, 7)], // "**b**"
-            &[],
-            &[],
-            Style::default().fg(Color::White),
-            Color::Green,
-            Color::Black,
-            Color::Magenta,
-            Color::Blue,
-            Color::Red,
-        );
+            line_start_byte: 0,
+            selected: Some((0, text.len())),
+            ranges: RichTextRanges {
+                bold: &[(2, 7)],
+                ..Default::default()
+            },
+            base: Style::default().fg(Color::White),
+            colors: test_colors(),
+        });
         let content: Vec<_> = line.spans.iter().skip(1).collect();
         // Every span carries the selected background.
         assert!(content.iter().all(|s| s.style.bg == Color::Red));
@@ -1042,23 +1086,20 @@ mod tests {
     fn bold_and_code_coexist_without_interference() {
         // "use `foo` and **bar** now" — a code chip and a bold run on one line.
         let text = "use `foo` and **bar** now";
-        let line = line_spans_rich(
-            "",
-            Style::default(),
+        let line = line_spans_rich(RichLineParams {
+            prefix: "",
+            prefix_style: Style::default(),
             text,
-            0,
-            None,
-            &[(4, 9)],   // "`foo`"
-            &[(14, 21)], // "**bar**"
-            &[],
-            &[],
-            Style::default().fg(Color::White),
-            Color::Green,
-            Color::Black,
-            Color::Magenta,
-            Color::Blue,
-            Color::Red,
-        );
+            line_start_byte: 0,
+            selected: None,
+            ranges: RichTextRanges {
+                code: &[(4, 9)],
+                bold: &[(14, 21)],
+                ..Default::default()
+            },
+            base: Style::default().fg(Color::White),
+            colors: test_colors(),
+        });
         // Both backtick and `**` delimiters are zero-width: "use foo and bar now".
         assert_eq!(rendered_content(&line), "use foo and bar now");
         // The code content carries code_fg/code_bg; the bold content carries

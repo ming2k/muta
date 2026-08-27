@@ -244,10 +244,9 @@ impl App {
         for msg in self.messages.iter().chain(self.side_messages.iter()) {
             if msg.delivery == crate::model::document::DeliveryStatus::Queued
                 && msg.origin == crate::model::document::UserMessageOrigin::Steer
+                && let Some(id) = &msg.insert_id
             {
-                if let Some(id) = &msg.insert_id {
-                    ids.push(id.clone());
-                }
+                ids.push(id.clone());
             }
         }
         // 2. Waiting follow-up items in pending_dispatch

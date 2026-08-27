@@ -463,18 +463,15 @@ mod spec_tests {
         for spec in PROVIDER_PRESET_SPECS {
             for m in spec.baselines {
                 let sig = signature(m);
-                match seen.insert(m.id, (spec.id, sig)) {
-                    Some((first_provider, first_sig)) => {
-                        assert_eq!(
-                            first_sig,
-                            seen[&m.id].1,
-                            "{id}: baseline declared by {first_provider} and {} disagree \
-                             (context_window/thinking/tool_call/vision/format/guidance/effort)",
-                            spec.id,
-                            id = m.id
-                        );
-                    }
-                    None => {}
+                if let Some((first_provider, first_sig)) = seen.insert(m.id, (spec.id, sig)) {
+                    assert_eq!(
+                        first_sig,
+                        seen[&m.id].1,
+                        "{id}: baseline declared by {first_provider} and {} disagree \
+                         (context_window/thinking/tool_call/vision/format/guidance/effort)",
+                        spec.id,
+                        id = m.id
+                    );
                 }
             }
         }

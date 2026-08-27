@@ -212,7 +212,14 @@ pub fn draw_question_modal(
     } else {
         None
     };
-    render_body(frame, f.body, body_lines, scroll, follow, 0, false, theme);
+    render_body(
+        frame,
+        f.body,
+        body_lines,
+        scroll,
+        crate::primitives::BodyRenderOptions::follow(follow),
+        theme,
+    );
     record_question_hits(hit_map, f.body, &option_rows, *scroll);
 
     // Place the real terminal cursor in the "Other" free-text field — the only

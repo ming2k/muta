@@ -16,7 +16,7 @@
 //!
 //! [`SlashCommandHandler`] closes that gap: an embedding registers a handler
 //! per command name, the harness holds them in an `extra_commands` map, and
-//! [`crate::handlers_slash::dispatch`] consults that map in its `None` (unknown
+//! `handlers_slash::dispatch` consults that map in its `None` (unknown
 //! built-in) arm *before* falling back to the markdown-template path. The
 //! handler receives the same dispatcher context the built-ins do, minus the
 //! parts that are built-in-specific.
@@ -45,7 +45,7 @@ use crate::startup::SessionStart;
 
 /// The slice of the dispatcher context an extension slash command may touch.
 ///
-/// This mirrors the parameter list of [`crate::handlers_slash::dispatch`] so a
+/// This mirrors the parameter list of `handlers_slash::dispatch` so a
 /// handler has the same reach as a built-in: it can start a turn, mutate the
 /// session, emit responses, read config, etc. It is deliberately the full set
 /// rather than a narrowed "safe" view — a registered handler is trusted

@@ -143,7 +143,6 @@ fn shimmer_spans(text: &str, phase: usize, theme: &Theme) -> Vec<Span<'static>> 
 ///
 /// Returns `Some(rect)` when the bar is drawn so the event loop can hit-test
 /// clicks and open the Activity modal; `None` when the bar is hidden (idle).
-#[allow(clippy::too_many_arguments)]
 pub fn draw_activity_bar(
     frame: &mut Frame,
     rect: Rect,
@@ -957,7 +956,6 @@ pub fn draw_hint_bar(
     let mut show_reasoning = reasoning_width > 0;
     let mut show_instance = instance_width > 0;
     let mut show_context = context_seg_width > 0;
-    #[allow(clippy::too_many_arguments)]
     let right_width_for = |model: bool, reasoning: bool, instance: bool, context: bool| {
         // The model name, its reasoning effort, and the provider instance
         // form one identity group (`Kimi K3 high @111xianyu`) joined by the

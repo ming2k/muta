@@ -98,8 +98,9 @@ pub mod pressure;
 pub mod token_ledger;
 pub mod tokenizer;
 pub use token_ledger::{
-    RequestUsageKey, RequestUsageRecord, RequestUsageSource, RequestUsageStatus, TokenSourceLedger,
-    TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn, UsageStatSink,
+    BeginRequestParams, RequestUsageKey, RequestUsageRecord, RequestUsageSource,
+    RequestUsageStatus, TokenSourceLedger, TokenSourceReport, TokenSourceRow, TokenSourceTotals,
+    TokenTurn, UsageStatSink,
 };
 pub mod usage_stats;
 pub use usage_stats::{
@@ -119,7 +120,9 @@ pub use security::{TrustDomain, WorkspaceSecuritySnapshot, WorkspaceTrustState};
 pub mod session_title;
 
 pub mod session_tree;
-pub use session_tree::{SessionEntry, SessionEntryId, SessionEntryKind, SessionTree};
+pub use session_tree::{
+    CompactionPayload, SessionEntry, SessionEntryId, SessionEntryKind, SessionTree,
+};
 pub mod skills_config;
 pub mod tool_registry;
 pub mod web_config;

@@ -6,12 +6,12 @@
 //! pure compaction pipeline; the `impl SessionStore` surface is split by
 //! concern:
 //!
-//! - [`fields`]: typed read/write accessors over session fields.
-//! - [`history`]: transcript append/replace, rounds, retry bookkeeping,
+//! - `fields`: typed read/write accessors over session fields.
+//! - `history`: transcript append/replace, rounds, retry bookkeeping,
 //!   fork/lineage queries, and the session tree.
-//! - [`store`]: construction, load/persist, snapshots, event-log replay,
+//! - `store`: construction, load/persist, snapshots, event-log replay,
 //!   armed-schedule scan, list/detail/active views, offline scan tools.
-//! - [`tests`]: embedded test suite.
+//! - `tests`: embedded test suite.
 //!
 //! Event-sourced session persistence (ADR-0017 / ADR-0022).
 //!

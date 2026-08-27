@@ -80,9 +80,7 @@ pub fn draw_permissions_manager(
         f.body,
         body,
         scroll,
-        follow,
-        SCROLL_EDGE_MARGIN,
-        false,
+        crate::primitives::BodyRenderOptions::new(follow, SCROLL_EDGE_MARGIN, false),
         theme,
     );
 

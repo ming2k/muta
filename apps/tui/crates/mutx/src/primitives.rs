@@ -801,17 +801,44 @@ pub(crate) fn resolve_scroll(
     (*scroll, max_scroll)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct BodyRenderOptions {
+    pub follow: Option<usize>,
+    pub edge_margin: usize,
+    pub wrap: bool,
+}
+
+impl BodyRenderOptions {
+    pub fn new(follow: Option<usize>, edge_margin: usize, wrap: bool) -> Self {
+        Self {
+            follow,
+            edge_margin,
+            wrap,
+        }
+    }
+
+    pub fn follow(follow: Option<usize>) -> Self {
+        Self {
+            follow,
+            edge_margin: 0,
+            wrap: false,
+        }
+    }
+}
+
 pub(crate) fn render_body(
     frame: &mut Frame,
     body_rect: Rect,
     lines: Vec<Line<'static>>,
     scroll: &mut usize,
-    follow: Option<usize>,
-    edge_margin: usize,
-    wrap: bool,
+    options: BodyRenderOptions,
     theme: &Theme,
 ) {
+    let BodyRenderOptions {
+        follow,
+        edge_margin,
+        wrap,
+    } = options;
     let visible = body_rect.height as usize;
     let (_, max_scroll) = resolve_scroll(scroll, visible, lines.len(), follow, edge_margin);
 

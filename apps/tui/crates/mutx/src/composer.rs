@@ -204,33 +204,28 @@ pub fn draw_composer(
     image_count: usize,
     paste_count: usize,
 ) {
-    let ComposerView {
-        frame,
-        input_rect,
-        theme,
-        layout_map,
-        input_scroll,
-        selection,
-    } = view;
-    let ComposerText { input, byte_cursor } = text;
     draw_composer_impl(
-        ComposerView {
-            frame,
-            input_rect,
-            theme,
-            layout_map,
-            input_scroll,
-            selection,
+        view,
+        text,
+        ComposerDrawOptions {
+            focused,
+            show_caret,
+            record,
+            image_count,
+            paste_count,
         },
-        ComposerText { input, byte_cursor },
-        focused,
-        show_caret,
-        record,
         None,
-        image_count,
-        paste_count,
         None,
     )
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ComposerDrawOptions {
+    pub focused: bool,
+    pub show_caret: bool,
+    pub record: bool,
+    pub image_count: usize,
+    pub paste_count: usize,
 }
 
 /// The effort-ignition variant of [`draw_composer`]: `prompt_accent` carries
@@ -241,40 +236,10 @@ pub fn draw_composer(
 pub fn draw_composer_igniting(
     view: ComposerView<'_, '_>,
     text: ComposerText<'_>,
-    focused: bool,
-    show_caret: bool,
-    record: bool,
-    image_count: usize,
-    paste_count: usize,
+    options: ComposerDrawOptions,
     prompt_accent: (bool, Option<u128>),
 ) {
-    let ComposerView {
-        frame,
-        input_rect,
-        theme,
-        layout_map,
-        input_scroll,
-        selection,
-    } = view;
-    let ComposerText { input, byte_cursor } = text;
-    draw_composer_impl(
-        ComposerView {
-            frame,
-            input_rect,
-            theme,
-            layout_map,
-            input_scroll,
-            selection,
-        },
-        ComposerText { input, byte_cursor },
-        focused,
-        show_caret,
-        record,
-        None,
-        image_count,
-        paste_count,
-        Some(prompt_accent),
-    )
+    draw_composer_impl(view, text, options, None, Some(prompt_accent));
 }
 
 /// Like [`draw_composer`], but paints the `highlight_len`-byte run at the
@@ -286,53 +251,26 @@ pub fn draw_composer_igniting(
 pub fn draw_composer_highlighted(
     view: ComposerView<'_, '_>,
     text: ComposerText<'_>,
-    focused: bool,
-    show_caret: bool,
-    record: bool,
+    options: ComposerDrawOptions,
     highlight_len: usize,
-    image_count: usize,
-    paste_count: usize,
 ) {
-    let ComposerView {
-        frame,
-        input_rect,
-        theme,
-        layout_map,
-        input_scroll,
-        selection,
-    } = view;
-    let ComposerText { input, byte_cursor } = text;
-    draw_composer_impl(
-        ComposerView {
-            frame,
-            input_rect,
-            theme,
-            layout_map,
-            input_scroll,
-            selection,
-        },
-        ComposerText { input, byte_cursor },
-        focused,
-        show_caret,
-        record,
-        Some(highlight_len),
-        image_count,
-        paste_count,
-        None,
-    )
+    draw_composer_impl(view, text, options, Some(highlight_len), None);
 }
 
 fn draw_composer_impl(
     view: ComposerView<'_, '_>,
     text: ComposerText<'_>,
-    focused: bool,
-    show_caret: bool,
-    record: bool,
+    options: ComposerDrawOptions,
     highlight_len: Option<usize>,
-    image_count: usize,
-    paste_count: usize,
     prompt_accent: Option<(bool, Option<u128>)>,
 ) {
+    let ComposerDrawOptions {
+        focused,
+        show_caret,
+        record,
+        image_count,
+        paste_count,
+    } = options;
     let ComposerView {
         frame,
         input_rect,
@@ -577,8 +515,8 @@ fn draw_composer_impl(
 ///    `chip_image`), so paste chips and image chips read as distinct blocks.
 /// 3. The **command accent** (bold + brand color).
 /// 4. Plain base text.
-/// Style set for `push_styled_runs`: the base/accent text styles, the two
-/// chip styles, and the selection/chip foreground colors.
+///    Style set for `push_styled_runs`: the base/accent text styles, the two
+///    chip styles, and the selection/chip foreground colors.
 struct RunStyles {
     base: Style,
     accent: Style,

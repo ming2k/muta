@@ -94,17 +94,17 @@ impl Tool for SearchTextTool {
         let exclude = args.exclude.unwrap_or_default();
         let literal = args.literal.unwrap_or(false);
         tokio::task::spawn_blocking(move || {
-            native_search(
-                &workspace,
-                &search_root,
-                &query,
-                &include,
-                &exclude,
+            native_search(NativeSearchParams {
+                workspace: &workspace,
+                search_root: &search_root,
+                query: &query,
+                include: &include,
+                exclude: &exclude,
                 literal,
                 context,
                 limit,
-                Instant::now() + SEARCH_TIMEOUT,
-            )
+                deadline: Instant::now() + SEARCH_TIMEOUT,
+            })
         })
         .await
         .map_err(|error| format!("Text search task failed: {error}"))?
@@ -127,18 +127,30 @@ muta_contracts::register_tool!(SearchTextFactory => |ctx| SearchTextTool {
     env: execution_environment(ctx),
 });
 
-#[allow(clippy::too_many_arguments)]
-fn native_search(
-    workspace: &std::path::Path,
-    search_root: &std::path::Path,
-    query: &str,
-    include: &[String],
-    exclude: &[String],
+struct NativeSearchParams<'a> {
+    workspace: &'a std::path::Path,
+    search_root: &'a std::path::Path,
+    query: &'a str,
+    include: &'a [String],
+    exclude: &'a [String],
     literal: bool,
     context: usize,
     limit: usize,
     deadline: Instant,
-) -> Result<String, String> {
+}
+
+fn native_search(params: NativeSearchParams<'_>) -> Result<String, String> {
+    let NativeSearchParams {
+        workspace,
+        search_root,
+        query,
+        include,
+        exclude,
+        literal,
+        context,
+        limit,
+        deadline,
+    } = params;
     let expression = if literal {
         regex::escape(query)
     } else {
@@ -248,17 +260,17 @@ mod tests {
     fn native_search_applies_the_global_line_limit() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("many.txt"), "hit\n".repeat(10)).unwrap();
-        let output = native_search(
-            tmp.path(),
-            tmp.path(),
-            "hit",
-            &[],
-            &[],
-            false,
-            0,
-            3,
-            Instant::now() + SEARCH_TIMEOUT,
-        )
+        let output = native_search(NativeSearchParams {
+            workspace: tmp.path(),
+            search_root: tmp.path(),
+            query: "hit",
+            include: &[],
+            exclude: &[],
+            literal: false,
+            context: 0,
+            limit: 3,
+            deadline: Instant::now() + SEARCH_TIMEOUT,
+        })
         .unwrap();
         assert_eq!(
             output.lines().filter(|line| line.contains(":hit")).count(),
@@ -274,17 +286,17 @@ mod tests {
         std::fs::write(tmp.path().join("src/main.rs"), "fn hello.world() {}\n").unwrap();
         std::fs::write(tmp.path().join("src/main.py"), "hello.world\n").unwrap();
 
-        let output = native_search(
-            tmp.path(),
-            tmp.path(),
-            "hello.world",
-            &["*.rs".into()],
-            &[],
-            true,
-            0,
-            20,
-            Instant::now() + SEARCH_TIMEOUT,
-        )
+        let output = native_search(NativeSearchParams {
+            workspace: tmp.path(),
+            search_root: tmp.path(),
+            query: "hello.world",
+            include: &["*.rs".to_string()],
+            exclude: &[],
+            literal: true,
+            context: 0,
+            limit: 20,
+            deadline: Instant::now() + SEARCH_TIMEOUT,
+        })
         .unwrap();
         assert!(output.contains("src/main.rs:1:"));
         assert!(!output.contains("main.py"));

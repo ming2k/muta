@@ -518,14 +518,16 @@ impl Agent {
                 for (&idx, recovered) in prepared.exec_indices.iter().zip(recovered) {
                     if let Some((result, duration_ms)) = recovered {
                         self.record_tool_result(
-                            &tool_calls[idx],
-                            &prepared.call_ids[idx],
-                            &result,
-                            duration_ms,
+                            crate::agent::ToolResultRecord {
+                                call: &tool_calls[idx],
+                                call_id: &prepared.call_ids[idx],
+                                result: &result,
+                                duration_ms,
+                                checkpoint_replay: false,
+                                emit_event: false,
+                            },
                             messages,
                             state,
-                            false,
-                            false,
                             on_event,
                         );
                     }
@@ -553,14 +555,16 @@ impl Agent {
             .enumerate()
         {
             self.record_tool_result(
-                call,
-                id,
-                &result,
-                duration_ms,
+                crate::agent::ToolResultRecord {
+                    call,
+                    call_id: id,
+                    result: &result,
+                    duration_ms,
+                    checkpoint_replay: prepared.checkpoint_replays[idx],
+                    emit_event: false,
+                },
                 messages,
                 state,
-                prepared.checkpoint_replays[idx],
-                false,
                 on_event,
             );
             if !prepared.checkpoint_replays[idx] {

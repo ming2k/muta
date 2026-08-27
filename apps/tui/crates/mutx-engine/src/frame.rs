@@ -336,7 +336,7 @@ impl<W: io::Write> Terminal<W> {
     /// back to the retained grid's size if the query fails).
     ///
     /// Distinct from the grids' size on purpose: a `Resize` event reaches the
-    /// retained grids at the next [`Self::render_frame`], while callers that
+    /// retained grids at the next `render_frame`, while callers that
     /// report or validate the physical terminal need the live dimensions.
     pub fn size(&self) -> (u16, u16) {
         crossterm::terminal::size().unwrap_or_else(|_| self.back.size())

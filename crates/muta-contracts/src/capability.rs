@@ -25,7 +25,7 @@ use std::sync::Arc;
 /// Configured per model id under `[tool_variants."<model-id>"]` in
 /// `config.toml`; the agent selects the map matching `Provider::model()`.
 /// Runner profiles carry their own static selection (see
-/// [`RunnerPreset::variant_pins`]).
+/// [`crate::RunnerPreset::variant_pins`]).
 pub type VariantSelection = HashMap<String, String>;
 
 /// Narrow prompt hints exposed by a concrete provider implementation.

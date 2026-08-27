@@ -15,11 +15,11 @@ use super::common::{caret_column, field_viewport, truncate_ellipsis};
 use crate::components::options::{ChoiceTone, choice_style, push_wrapped_styled};
 use crate::components::row::{GROUP_GAP, GUTTER, ListRow, RowGroup, RowStyledAtom};
 use crate::primitives::{
-    ContentModalSpec, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
-    breadcrumb_parts, content_modal_area, content_modal_probe, hierarchical_breadcrumb,
-    keymap_body_lines, keymap_page_footer_hints, keyvocab, modal_area, modal_chrome_rows,
-    modal_frame, modal_header, modal_header_parts, render_body, render_centered_body,
-    render_modal_footer, render_modal_footer_with_more,
+    BodyRenderOptions, ContentModalSpec, FixedModalSpec, FooterHint, FooterHintWithBand,
+    SCROLL_EDGE_MARGIN, breadcrumb_parts, content_modal_area, content_modal_probe,
+    hierarchical_breadcrumb, keymap_body_lines, keymap_page_footer_hints, keyvocab, modal_area,
+    modal_chrome_rows, modal_frame, modal_header, modal_header_parts, render_body,
+    render_centered_body, render_modal_footer, render_modal_footer_with_more,
 };
 use crate::providers::{
     CustomField, ModelBodyLine, PROVIDER_PRESETS, ProviderPreset, RankedModel, RankedProvider,
@@ -171,9 +171,7 @@ pub fn draw_connections_modal(
         body_rect,
         body,
         scroll,
-        follow,
-        SCROLL_EDGE_MARGIN,
-        false,
+        BodyRenderOptions::new(follow, SCROLL_EDGE_MARGIN, false),
         theme,
     );
 
@@ -334,9 +332,7 @@ pub fn draw_models_modal(
         body_rect,
         body,
         scroll,
-        follow,
-        SCROLL_EDGE_MARGIN,
-        false,
+        BodyRenderOptions::new(follow, SCROLL_EDGE_MARGIN, false),
         theme,
     );
 
@@ -1139,7 +1135,14 @@ pub fn draw_model_editor(
     }
 
     let body_rect = f.body;
-    render_body(frame, body_rect, body, &mut 0, None, 0, false, theme);
+    render_body(
+        frame,
+        body_rect,
+        body,
+        &mut 0,
+        BodyRenderOptions::default(),
+        theme,
+    );
 
     if let Some(fo) = f.footer {
         let mut hints: Vec<FooterHint> = Vec::with_capacity(6);
@@ -1482,9 +1485,7 @@ pub fn draw_preset_chooser(
         f.body,
         body,
         scroll,
-        follow,
-        SCROLL_EDGE_MARGIN,
-        false,
+        BodyRenderOptions::new(follow, SCROLL_EDGE_MARGIN, false),
         theme,
     );
 
@@ -1693,9 +1694,7 @@ pub fn draw_custom_provider_editor(
         body_rect,
         body,
         scroll,
-        follow,
-        SCROLL_EDGE_MARGIN,
-        false,
+        BodyRenderOptions::new(follow, SCROLL_EDGE_MARGIN, false),
         theme,
     );
     if let Some(fo) = f.footer {

@@ -559,31 +559,31 @@ mod tests {
         }
     }
 
-    /// Build a [`PolicyContext`] for one policy evaluation. The argument count
-    /// mirrors the struct's fields one-to-one so each call site reads as a
-    /// literal context; grouping them would only obscure that mapping.
-    #[allow(clippy::too_many_arguments)]
-    fn pctx<'a>(
+    #[derive(Clone)]
+    struct TestPolicyParams<'a> {
         tool: &'a Arc<dyn Tool>,
         name: &'a str,
         args: &'a str,
         target: ScopeTarget,
         yolo: bool,
         op: muta_contracts::OperationScope,
-        disabled: std::collections::HashSet<String>,
+        disabled: HashSet<String>,
         scoped: ScopedToolDisable,
-        ctxr: &'a dyn PermissionContext,
-    ) -> PolicyContext<'a> {
+        ctx: &'a dyn PermissionContext,
+    }
+
+    /// Build a [`PolicyContext`] for one policy evaluation in unit tests.
+    fn pctx<'a>(params: TestPolicyParams<'a>) -> PolicyContext<'a> {
         PolicyContext {
-            tool,
-            call_name: name,
-            arguments: args,
-            scope_target: target,
-            operation_scope: op,
-            disabled,
-            scoped_disabled: scoped,
-            yolo,
-            ctx: ctxr,
+            tool: params.tool,
+            call_name: params.name,
+            arguments: params.args,
+            scope_target: params.target,
+            operation_scope: params.op,
+            disabled: params.disabled,
+            scoped_disabled: params.scoped,
+            yolo: params.yolo,
+            ctx: params.ctx,
         }
     }
 
@@ -612,17 +612,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "execute_command",
-            "{}",
-            ScopeTarget::Unspecified,
-            false,
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "execute_command",
+            args: "{}",
+            target: ScopeTarget::Unspecified,
+            yolo: false,
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         assert!(matches!(
             DisabledPolicy.evaluate(&c).await,
             PolicyDecision::Deny { .. }
@@ -645,17 +645,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(outside),
-            true, // yolo
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(outside),
+            yolo: true, // yolo
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         assert!(matches!(
             ScopeGatePolicy.evaluate(&c).await,
             PolicyDecision::Pass
@@ -678,17 +678,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(outside),
-            false, // attended
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(outside),
+            yolo: false, // attended
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         assert!(matches!(
             ScopeGatePolicy.evaluate(&c).await,
             PolicyDecision::MissingAuthority { .. }
@@ -712,17 +712,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(inside),
-            true,
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(inside),
+            yolo: true,
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         assert!(matches!(
             ScopeGatePolicy.evaluate(&c).await,
             PolicyDecision::Pass
@@ -748,17 +748,17 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx { perms };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(outside),
-            false,
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(outside),
+            yolo: false,
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         assert!(matches!(
             ScopeGatePolicy.evaluate(&c).await,
             PolicyDecision::Pass
@@ -784,17 +784,17 @@ mod tests {
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx { perms };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(outside),
-            false,
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(outside),
+            yolo: false,
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
         assert!(matches!(chain.evaluate(&c).await, PolicyDecision::Approve));
     }
@@ -811,17 +811,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(PathBuf::from("/anywhere")),
-            true, // yolo
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(PathBuf::from("/anywhere")),
+            yolo: true, // yolo
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         assert!(matches!(
             BrokerPolicy.evaluate(&c).await,
             PolicyDecision::Approve
@@ -840,17 +840,17 @@ mod tests {
             scope: "/workspace/file".into(),
         });
         let ctxr = StubCtx { perms };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(PathBuf::from("/workspace/file")),
-            true,
-            muta_contracts::OperationScope::unrestricted(),
-            HashSet::new(),
-            ScopedToolDisable::default(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(PathBuf::from("/workspace/file")),
+            yolo: true,
+            op: muta_contracts::OperationScope::unrestricted(),
+            disabled: HashSet::new(),
+            scoped: ScopedToolDisable::default(),
+            ctx: &ctxr,
+        });
         assert!(matches!(
             BrokerPolicy.evaluate(&c).await,
             PolicyDecision::Approve
@@ -869,17 +869,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(PathBuf::from("/tmp/x")),
-            false,
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
+            yolo: false,
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         assert!(matches!(
             BrokerPolicy.evaluate(&c).await,
             PolicyDecision::MissingAuthority { .. }
@@ -905,17 +905,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(outside),
-            false,
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(outside),
+            yolo: false,
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         match BrokerPolicy.evaluate(&c).await {
             PolicyDecision::MissingAuthority { request, .. } => assert!(request.elevation),
             other => panic!("expected MissingAuthority, got {other:?}"),
@@ -939,17 +939,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(inside),
-            false,
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(inside),
+            yolo: false,
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         match BrokerPolicy.evaluate(&c).await {
             PolicyDecision::MissingAuthority { request, .. } => assert!(!request.elevation),
             other => panic!("expected MissingAuthority, got {other:?}"),
@@ -968,17 +968,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(PathBuf::from("/tmp/x")),
-            false,
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
+            yolo: false,
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         let chain = PermissionChain::new(vec![Box::new(DisabledPolicy), Box::new(BrokerPolicy)]);
         assert!(matches!(
             chain.evaluate(&c).await,
@@ -998,17 +998,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "read_text",
-            "{}",
-            ScopeTarget::Unspecified,
-            false,
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "read_text",
+            args: "{}",
+            target: ScopeTarget::Unspecified,
+            yolo: false,
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         let chain = PermissionChain::new(vec![Box::new(DisabledPolicy), Box::new(ScopeGatePolicy)]);
         assert!(matches!(chain.evaluate(&c).await, PolicyDecision::Approve));
     }
@@ -1032,17 +1032,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(PathBuf::from("/etc/passwd")),
-            false, // attended
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            yolo: false, // attended
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
         assert!(matches!(
             chain.evaluate(&c).await,
@@ -1065,17 +1065,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "write_file",
-            "{}",
-            ScopeTarget::Path(PathBuf::from("/etc/passwd")),
-            true, // yolo
-            op.clone(),
-            disabled.clone(),
-            scoped.clone(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "write_file",
+            args: "{}",
+            target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
+            yolo: true, // yolo
+            op: op.clone(),
+            disabled: disabled.clone(),
+            scoped: scoped.clone(),
+            ctx: &ctxr,
+        });
         let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
         assert!(matches!(chain.evaluate(&c).await, PolicyDecision::Approve));
     }
@@ -1150,17 +1150,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "view_file",
-            "{}",
-            ScopeTarget::Unspecified,
-            false,
-            muta_contracts::OperationScope::unrestricted(),
-            HashSet::new(),
-            ScopedToolDisable::default(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "view_file",
+            args: "{}",
+            target: ScopeTarget::Unspecified,
+            yolo: false,
+            op: muta_contracts::OperationScope::unrestricted(),
+            disabled: HashSet::new(),
+            scoped: ScopedToolDisable::default(),
+            ctx: &ctxr,
+        });
         assert!(matches!(
             BrokerPolicy.evaluate(&c).await,
             PolicyDecision::Pass
@@ -1173,17 +1173,17 @@ mod tests {
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
-        let c = pctx(
-            &tool,
-            "execute_command",
-            "cargo test",
-            ScopeTarget::Command("cargo test".to_string()),
-            false,
-            muta_contracts::OperationScope::unrestricted(),
-            HashSet::new(),
-            ScopedToolDisable::default(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "execute_command",
+            args: "cargo test",
+            target: ScopeTarget::Command("cargo test".to_string()),
+            yolo: false,
+            op: muta_contracts::OperationScope::unrestricted(),
+            disabled: HashSet::new(),
+            scoped: ScopedToolDisable::default(),
+            ctx: &ctxr,
+        });
 
         let decision = BrokerPolicy.evaluate(&c).await;
 
@@ -1213,17 +1213,17 @@ mod tests {
         let perms = PermissionStore::new();
         let ctxr = StubCtx { perms };
 
-        let c = pctx(
-            &tool,
-            "execute_command",
-            "cargo build",
-            ScopeTarget::Command("cargo build".to_string()),
-            false,
-            muta_contracts::OperationScope::unrestricted(),
-            HashSet::new(),
-            ScopedToolDisable::default(),
-            &ctxr,
-        );
+        let c = pctx(TestPolicyParams {
+            tool: &tool,
+            name: "execute_command",
+            args: "cargo build",
+            target: ScopeTarget::Command("cargo build".to_string()),
+            yolo: false,
+            op: muta_contracts::OperationScope::unrestricted(),
+            disabled: HashSet::new(),
+            scoped: ScopedToolDisable::default(),
+            ctx: &ctxr,
+        });
 
         // Initially requires permission
         assert!(matches!(

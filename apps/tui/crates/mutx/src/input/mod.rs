@@ -2101,7 +2101,7 @@ pub fn process_event(
                         InputAction::PermissionsClearAll
                     } else if c == ' '
                         && context.active_modal == super::Modal::ModelEditor
-                        && matches!(context.editor_field, Some(2 | 3 | 4))
+                        && matches!(context.editor_field, Some(2..=4))
                     {
                         // Space on the key editor's non-text fields instead
                         // of inserting a space. Field 2 (thinking) is a binary
@@ -2137,7 +2137,7 @@ pub fn process_event(
                         InputAction::None
                     } else if edits_input_field(&context)
                         && !(context.active_modal == super::Modal::ModelEditor
-                            && matches!(context.editor_field, Some(2 | 3 | 4)))
+                            && matches!(context.editor_field, Some(2..=4)))
                     {
                         // The key editor's thinking field (2) is a toggle, not
                         // a text field — don't let printable chars mutate the

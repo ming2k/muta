@@ -49,6 +49,40 @@ pub(crate) struct ProviderEnv<'a> {
     pub provider_usage: &'a mut ConnectionUsage,
 }
 
+pub(crate) struct AddProviderParams {
+    pub name: String,
+    pub protocol: String,
+    pub base_url: String,
+    pub api_key: SecretString,
+    pub user_agent: Option<String>,
+    pub models: Vec<String>,
+    pub auth: muta_contracts::ChannelAuth,
+    pub preset_id: Option<String>,
+    pub client_identity: Option<ClientIdentity>,
+}
+
+pub(crate) struct ActivateEnv<'a> {
+    pub config: &'a Config,
+    pub agent: &'a Agent,
+    pub provider_for_task: &'a Arc<RwLock<Arc<dyn Provider>>>,
+    pub session: Option<&'a SessionStore>,
+    pub resp_tx: &'a mpsc::UnboundedSender<AgentResponse>,
+    pub provider_usage: &'a mut ConnectionUsage,
+}
+
+impl<'a> From<ProviderEnv<'a>> for ActivateEnv<'a> {
+    fn from(env: ProviderEnv<'a>) -> Self {
+        Self {
+            config: env.config,
+            agent: env.agent,
+            provider_for_task: env.provider_for_task,
+            session: Some(env.session),
+            resp_tx: env.resp_tx,
+            provider_usage: env.provider_usage,
+        }
+    }
+}
+
 pub(crate) async fn switch(
     ProviderEnv {
         config,
@@ -109,12 +143,14 @@ pub(crate) async fn switch(
     // Pass the session through so `activate` can surface the acknowledgment
     // toast + record the ledger entry for this genuine user-initiated switch.
     activate(
-        config,
-        agent,
-        provider_for_task,
-        Some(session),
-        resp_tx,
-        provider_usage,
+        ActivateEnv {
+            config,
+            agent,
+            provider_for_task,
+            session: Some(session),
+            resp_tx,
+            provider_usage,
+        },
         provider_type,
         model,
     )
@@ -134,16 +170,19 @@ pub(crate) async fn add(
         resp_tx,
         provider_usage,
     }: ProviderEnv<'_>,
-    name: String,
-    protocol: String,
-    base_url: String,
-    api_key: SecretString,
-    user_agent: Option<String>,
-    models: Vec<String>,
-    auth: muta_contracts::ChannelAuth,
-    preset_id: Option<String>,
-    client_identity: Option<ClientIdentity>,
+    params: AddProviderParams,
 ) {
+    let AddProviderParams {
+        name,
+        protocol,
+        base_url,
+        api_key,
+        user_agent,
+        models,
+        auth,
+        preset_id,
+        client_identity,
+    } = params;
     let mut connections = Connections::load();
     let id = connections.unique_id(&name);
     let transport = transport_for_protocol(&protocol);
@@ -255,12 +294,14 @@ pub(crate) async fn add(
         }
     }
     activate(
-        config,
-        agent,
-        provider_for_task,
-        None,
-        resp_tx,
-        provider_usage,
+        ActivateEnv {
+            config,
+            agent,
+            provider_for_task,
+            session: None,
+            resp_tx,
+            provider_usage,
+        },
         id,
         active_model,
     )
@@ -329,12 +370,14 @@ pub(crate) async fn edit(
         let model = catalog::resolved_model_name_with_usage(config, &id, provider_usage)
             .unwrap_or_default();
         activate(
-            config,
-            agent,
-            provider_for_task,
-            None,
-            resp_tx,
-            provider_usage,
+            ActivateEnv {
+                config,
+                agent,
+                provider_for_task,
+                session: None,
+                resp_tx,
+                provider_usage,
+            },
             id,
             model,
         )
@@ -449,12 +492,14 @@ pub(crate) async fn edit_model(
             .unwrap_or_default();
     if config.default_connection == provider_id && active_model == model {
         activate(
-            config,
-            agent,
-            provider_for_task,
-            None,
-            resp_tx,
-            provider_usage,
+            ActivateEnv {
+                config,
+                agent,
+                provider_for_task,
+                session: None,
+                resp_tx,
+                provider_usage,
+            },
             provider_id,
             model,
         )
@@ -515,12 +560,14 @@ pub(crate) async fn edit_model_reasoning(
             .unwrap_or_default();
     if active_model == model {
         activate(
-            config,
-            agent,
-            provider_for_task,
-            None,
-            resp_tx,
-            provider_usage,
+            ActivateEnv {
+                config,
+                agent,
+                provider_for_task,
+                session: None,
+                resp_tx,
+                provider_usage,
+            },
             provider_id,
             model,
         )
@@ -595,12 +642,14 @@ pub(crate) async fn delete(
         let model = catalog::resolved_model_name_with_usage(config, &fallback, provider_usage)
             .unwrap_or_default();
         activate(
-            config,
-            agent,
-            provider_for_task,
-            None,
-            resp_tx,
-            provider_usage,
+            ActivateEnv {
+                config,
+                agent,
+                provider_for_task,
+                session: None,
+                resp_tx,
+                provider_usage,
+            },
             fallback,
             model,
         )
@@ -653,12 +702,14 @@ pub async fn reapply_session_selection(
             .unwrap_or_default()
     });
     activate(
-        &effective,
-        agent,
-        provider_for_task,
-        None,
-        resp_tx,
-        provider_usage,
+        ActivateEnv {
+            config: &effective,
+            agent,
+            provider_for_task,
+            session: None,
+            resp_tx,
+            provider_usage,
+        },
         provider_id,
         model,
     )
@@ -760,12 +811,14 @@ pub async fn connect(
         .map(|r| r.model)
         .unwrap_or_default();
     activate(
-        config,
-        agent,
-        provider_for_task,
-        None,
-        resp_tx,
-        provider_usage,
+        ActivateEnv {
+            config,
+            agent,
+            provider_for_task,
+            session: None,
+            resp_tx,
+            provider_usage,
+        },
         provider_id,
         model,
     )
@@ -1036,12 +1089,14 @@ async fn record_provider_ack(session: &SessionStore, provider: &str, model: &str
 /// catalog, swap it into the shared holder, re-seed mid-turn relief, and push
 /// the key + picker snapshots.
 async fn activate(
-    config: &Config,
-    agent: &Agent,
-    provider_for_task: &Arc<RwLock<Arc<dyn Provider>>>,
-    session: Option<&SessionStore>,
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    provider_usage: &mut ConnectionUsage,
+    ActivateEnv {
+        config,
+        agent,
+        provider_for_task,
+        session,
+        resp_tx,
+        provider_usage,
+    }: ActivateEnv<'_>,
     provider_type: String,
     model: String,
 ) {
@@ -1162,12 +1217,14 @@ pub async fn set_default_model(
     }
 
     activate(
-        config,
-        agent,
-        provider_for_task,
-        None,
-        resp_tx,
-        provider_usage,
+        ActivateEnv {
+            config,
+            agent,
+            provider_for_task,
+            session: None,
+            resp_tx,
+            provider_usage,
+        },
         provider_id,
         id,
     )

@@ -650,15 +650,17 @@ impl RequestAccountingGuard {
     ) -> Self {
         let ledger = agent.token_ledger();
         let key = ledger.as_ref().map(|ledger| {
-            ledger.begin_request_for_actor(
-                &agent.thread_id().unwrap_or_default(),
-                &agent.accounting_actor_id(),
+            let thread_id = agent.thread_id().unwrap_or_default();
+            let actor_id = agent.accounting_actor_id();
+            ledger.begin_request_for_actor(muta_contracts::BeginRequestParams {
+                session_id: &thread_id,
+                actor_id: &actor_id,
                 provider,
                 model,
-                agent.round_count(),
-                turn_index.saturating_add(1) as u32,
-                projected_prompt_tokens as i64,
-            )
+                round: agent.round_count(),
+                turn: turn_index.saturating_add(1) as u32,
+                projected_prompt_tokens: projected_prompt_tokens as i64,
+            })
         });
         Self {
             ledger,
@@ -908,6 +910,8 @@ mod rounds;
 mod state;
 mod steering;
 mod tools_admin;
+
+pub(crate) use rounds::ToolResultRecord;
 
 /// Render a [`muta_contracts::ScopeTarget`] as the stable string used to key and
 /// display a permission rule. A path becomes the path string; a command becomes

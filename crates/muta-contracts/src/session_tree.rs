@@ -53,6 +53,18 @@ pub struct SessionEntry {
     pub kind: SessionEntryKind,
 }
 
+/// Content payload of a compaction entry node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactionPayload {
+    pub summary: String,
+    pub first_kept_entry_id: String,
+    pub tokens_before: usize,
+    #[serde(default)]
+    pub read_files: Vec<String>,
+    #[serde(default)]
+    pub modified_files: Vec<String>,
+}
+
 impl SessionEntry {
     pub fn new_message(
         id: impl Into<String>,
@@ -68,27 +80,22 @@ impl SessionEntry {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn new_compaction(
         id: impl Into<String>,
         parent_id: Option<String>,
         timestamp: u64,
-        summary: String,
-        first_kept_entry_id: String,
-        tokens_before: usize,
-        read_files: Vec<String>,
-        modified_files: Vec<String>,
+        payload: CompactionPayload,
     ) -> Self {
         Self {
             id: id.into(),
             parent_id,
             timestamp,
             kind: SessionEntryKind::Compaction {
-                summary,
-                first_kept_entry_id,
-                tokens_before,
-                read_files,
-                modified_files,
+                summary: payload.summary,
+                first_kept_entry_id: payload.first_kept_entry_id,
+                tokens_before: payload.tokens_before,
+                read_files: payload.read_files,
+                modified_files: payload.modified_files,
             },
         }
     }

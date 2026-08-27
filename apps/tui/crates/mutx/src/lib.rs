@@ -191,24 +191,42 @@ fn is_coalescible_stream_update(response: &AgentResponse) -> bool {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct TuiLaunchConfig {
+    pub initial_provider: String,
+    pub initial_model: String,
+    pub input_history: Vec<muta_contracts::HistoryEntry>,
+    pub initial_messages: Vec<Message>,
+    pub initial_commands: Vec<muta_contracts::CommandRecord>,
+    pub initial_round_count: u64,
+    pub command_catalog: muta_contracts::CommandCatalog,
+    pub initial_round_interrupts: Vec<muta_contracts::RoundInterrupt>,
+    pub tui_config: config::TuiConfig,
+    pub input_history_config: config::InputHistoryConfig,
+    pub session: SessionSource,
+    pub token_ledger: Option<Arc<muta_contracts::TokenSourceLedger>>,
+    pub startup_overlay: StartupOverlay,
+}
+
 pub async fn run_tui(
     tx: mpsc::UnboundedSender<AgentRequest>,
     mut rx: mpsc::UnboundedReceiver<AgentResponse>,
-    initial_provider: String,
-    initial_model: String,
-    input_history: Vec<muta_contracts::HistoryEntry>,
-    initial_messages: Vec<Message>,
-    initial_commands: Vec<muta_contracts::CommandRecord>,
-    initial_round_count: u64,
-    command_catalog: muta_contracts::CommandCatalog,
-    initial_round_interrupts: Vec<muta_contracts::RoundInterrupt>,
-    tui_config: config::TuiConfig,
-    input_history_config: config::InputHistoryConfig,
-    session: SessionSource,
-    token_ledger: Option<Arc<muta_contracts::TokenSourceLedger>>,
-    startup_overlay: StartupOverlay,
+    config: TuiLaunchConfig,
 ) -> Result<TuiOutcome, Box<dyn Error>> {
+    let TuiLaunchConfig {
+        initial_provider,
+        initial_model,
+        input_history,
+        initial_messages,
+        initial_commands,
+        initial_round_count,
+        command_catalog,
+        initial_round_interrupts,
+        tui_config,
+        input_history_config,
+        session,
+        token_ledger,
+        startup_overlay,
+    } = config;
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -2304,42 +2322,12 @@ pub struct TuiOutcome {
     pub switch_to: Option<String>,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn start_tui(
     tx: mpsc::UnboundedSender<AgentRequest>,
     rx: mpsc::UnboundedReceiver<AgentResponse>,
-    initial_provider: String,
-    initial_model: String,
-    input_history: Vec<muta_contracts::HistoryEntry>,
-    initial_messages: Vec<Message>,
-    initial_commands: Vec<muta_contracts::CommandRecord>,
-    initial_round_count: u64,
-    command_catalog: muta_contracts::CommandCatalog,
-    initial_round_interrupts: Vec<muta_contracts::RoundInterrupt>,
-    tui_config: config::TuiConfig,
-    input_history_config: config::InputHistoryConfig,
-    session: SessionSource,
-    token_ledger: Option<Arc<muta_contracts::TokenSourceLedger>>,
-    startup_overlay: StartupOverlay,
+    config: TuiLaunchConfig,
 ) -> Result<TuiOutcome, Box<dyn Error>> {
-    run_tui(
-        tx,
-        rx,
-        initial_provider,
-        initial_model,
-        input_history,
-        initial_messages,
-        initial_commands,
-        initial_round_count,
-        command_catalog,
-        initial_round_interrupts,
-        tui_config,
-        input_history_config,
-        session,
-        token_ledger,
-        startup_overlay,
-    )
-    .await
+    run_tui(tx, rx, config).await
 }
 
 fn push_core_notice(messages: &mut Vec<TranscriptMessage>, notice: &muta_contracts::AgentNotice) {

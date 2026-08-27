@@ -2029,14 +2029,13 @@ async fn unconfigured_workspace_pushes_security_snapshot_on_attach() {
                     saw_quarantined_snapshot = true;
                 }
             }
-            RoundEvent::Notice(n) => {
+            RoundEvent::Notice(n)
                 if n.body
                     .as_deref()
                     .is_some_and(|b| b.contains("contributions") || b.contains("trust"))
-                {
+                => {
                     saw_banner = true;
                 }
-            }
             _ => {}
         }
         if saw_quarantined_snapshot {
@@ -2091,8 +2090,8 @@ async fn changed_workspace_keeps_banner_escalation_on_attach() {
         let AgentResponse::Round { event, .. } = response else {
             continue;
         };
-        if let RoundEvent::Notice(n) = event {
-            if n.body
+        if let RoundEvent::Notice(n) = event
+            && n.body
                 .as_deref()
                 .is_some_and(|b| b.contains("changed") || b.contains("trust"))
                 && n.kind == muta_contracts::NoticeKind::ReviewAlert
@@ -2100,7 +2099,6 @@ async fn changed_workspace_keeps_banner_escalation_on_attach() {
                 saw_banner = true;
                 break;
             }
-        }
     }
     assert!(saw_banner, "changed-workspace banner never pushed");
 }

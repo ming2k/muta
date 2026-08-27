@@ -305,6 +305,18 @@ impl std::fmt::Debug for TokenSourceLedger {
     }
 }
 
+/// Parameters for recording the start of a network request attempt in [`TokenSourceLedger`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BeginRequestParams<'a> {
+    pub session_id: &'a str,
+    pub actor_id: &'a str,
+    pub provider: &'a str,
+    pub model: &'a str,
+    pub round: u64,
+    pub turn: u32,
+    pub projected_prompt_tokens: i64,
+}
+
 impl TokenSourceLedger {
     pub fn new() -> Self {
         Self::default()
@@ -362,28 +374,27 @@ impl TokenSourceLedger {
         turn: u32,
         projected_prompt_tokens: i64,
     ) -> RequestUsageKey {
-        self.begin_request_for_actor(
+        self.begin_request_for_actor(BeginRequestParams {
             session_id,
-            "master",
+            actor_id: "master",
             provider,
             model,
             round,
             turn,
             projected_prompt_tokens,
-        )
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn begin_request_for_actor(
-        &self,
-        session_id: &str,
-        actor_id: &str,
-        provider: &str,
-        model: &str,
-        round: u64,
-        turn: u32,
-        projected_prompt_tokens: i64,
-    ) -> RequestUsageKey {
+    pub fn begin_request_for_actor(&self, params: BeginRequestParams<'_>) -> RequestUsageKey {
+        let BeginRequestParams {
+            session_id,
+            actor_id,
+            provider,
+            model,
+            round,
+            turn,
+            projected_prompt_tokens,
+        } = params;
         let mut requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
         let attempt = requests
             .keys()
@@ -812,8 +823,15 @@ mod tests {
         let first = ledger.begin_request("s1", "openai", "gpt", 3, 1, 1_000);
         let retry = ledger.begin_request("s1", "openai", "gpt", 3, 1, 1_000);
         let other = ledger.begin_request("s2", "anthropic", "claude", 1, 1, 500);
-        let envoy =
-            ledger.begin_request_for_actor("s1", "envoy:call-1", "openai", "gpt", 3, 1, 300);
+        let envoy = ledger.begin_request_for_actor(BeginRequestParams {
+            session_id: "s1",
+            actor_id: "envoy:call-1",
+            provider: "openai",
+            model: "gpt",
+            round: 3,
+            turn: 1,
+            projected_prompt_tokens: 300,
+        });
         assert_eq!(first.attempt, 1);
         assert_eq!(retry.attempt, 2);
         assert_eq!(other.attempt, 1);

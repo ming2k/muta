@@ -1,7 +1,13 @@
-//! The streaming ReAct round loop of [`Agent`] plus the dispatch pipeline
-//! that fans tool calls out and collects their outputs.
-
 use super::*;
+
+pub(crate) struct ToolResultRecord<'a> {
+    pub call: &'a ToolCall,
+    pub call_id: &'a str,
+    pub result: &'a ToolOutput,
+    pub duration_ms: u64,
+    pub checkpoint_replay: bool,
+    pub emit_event: bool,
+}
 
 impl Agent {
     #[tracing::instrument(skip_all, name = "round", fields(streaming = true))]
@@ -766,14 +772,16 @@ impl Agent {
                     if let Some(result) = outcome.result {
                         let duration_ms = std::time::Instant::now().elapsed().as_millis() as u64;
                         self.record_tool_result(
-                            &call,
-                            &call_id,
-                            &result,
-                            duration_ms,
+                            ToolResultRecord {
+                                call: &call,
+                                call_id: &call_id,
+                                result: &result,
+                                duration_ms,
+                                checkpoint_replay,
+                                emit_event: true,
+                            },
                             messages,
                             state,
-                            checkpoint_replay,
-                            true,
                             on_event,
                         );
                     }
@@ -798,14 +806,16 @@ impl Agent {
             let denied = matches!(result, ToolOutput::PermissionDenied { .. });
             let duration_ms = std::time::Instant::now().elapsed().as_millis() as u64;
             self.record_tool_result(
-                &call,
-                &call_id,
-                &result,
-                duration_ms,
+                ToolResultRecord {
+                    call: &call,
+                    call_id: &call_id,
+                    result: &result,
+                    duration_ms,
+                    checkpoint_replay,
+                    emit_event: true,
+                },
                 messages,
                 state,
-                checkpoint_replay,
-                true,
                 on_event,
             );
             if !checkpoint_replay {
@@ -824,24 +834,24 @@ impl Agent {
         Ok(false)
     }
 
-    /// Account for, surface, and persist a single tool result. The argument
-    /// count reflects the per-result state it must thread; grouping it further
-    /// would only move the noise to the call sites.
-    #[allow(clippy::too_many_arguments)]
+    /// Account for, surface, and persist a single tool result.
     pub(crate) fn record_tool_result<F>(
         &self,
-        call: &ToolCall,
-        call_id: &str,
-        result: &ToolOutput,
-        duration_ms: u64,
+        record: ToolResultRecord<'_>,
         messages: &mut Vec<Message>,
         state: &mut RoundState,
-        checkpoint_replay: bool,
-        emit_event: bool,
         on_event: &mut F,
     ) where
         F: FnMut(AgentEvent) + Send,
     {
+        let ToolResultRecord {
+            call,
+            call_id,
+            result,
+            duration_ms,
+            checkpoint_replay,
+            emit_event,
+        } = record;
         let text = result.to_text();
         // Cost attribution: an runner's true token consumption can be 100x
         // the byte-estimate of its final summary, so accumulate the real

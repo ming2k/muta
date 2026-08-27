@@ -53,7 +53,6 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn enter_with_completion(
     input: &mut String,
     kind: crate::CompletionKind,

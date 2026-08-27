@@ -515,26 +515,23 @@ async fn run_attached(
         let outcome = start_tui(
             tx,
             rx,
-            // Seed the hint bar from the provider/model the daemon reported on
-            // the welcome (the session's own pin when set, else the global
-            // default) so the model name, reasoning effort, `@instance`, and
-            // context meter render from the first frame instead of after the
-            // next provider mutation.
-            provider,
-            model,
-            input_history,
-            transcript,
-            Vec::new(),
-            round_counter,
-            command_catalog,
-            round_interrupts,
-            tui_config,
-            input_history_config,
-            mutx::SessionSource::Remote {
-                session_id: hosted_session_id,
+            mutx::TuiLaunchConfig {
+                initial_provider: provider,
+                initial_model: model,
+                input_history,
+                initial_messages: transcript,
+                initial_commands: Vec::new(),
+                initial_round_count: round_counter,
+                command_catalog,
+                initial_round_interrupts: round_interrupts,
+                tui_config,
+                input_history_config,
+                session: mutx::SessionSource::Remote {
+                    session_id: hosted_session_id,
+                },
+                token_ledger: None,
+                startup_overlay,
             },
-            None,
-            startup_overlay,
         )
         .await?;
         save_history_bounded(outcome.history, mutx_config.input_history.dedup).await;

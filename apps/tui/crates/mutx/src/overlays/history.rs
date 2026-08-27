@@ -193,9 +193,7 @@ pub fn draw_history_panel(
             body_rect,
             body,
             scroll,
-            follow,
-            SCROLL_EDGE_MARGIN,
-            false,
+            crate::primitives::BodyRenderOptions::new(follow, SCROLL_EDGE_MARGIN, false),
             theme,
         );
     }

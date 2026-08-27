@@ -172,18 +172,17 @@ pub fn draw_token_report_modal(
             frame, modal.body, &rows, scroll, follow, theme, selection, layout_map,
         );
     } else {
+        let edge_margin = if follow.is_some() {
+            SCROLL_EDGE_MARGIN
+        } else {
+            0
+        };
         render_body(
             frame,
             modal.body,
             body,
             scroll,
-            follow,
-            if follow.is_some() {
-                SCROLL_EDGE_MARGIN
-            } else {
-                0
-            },
-            false,
+            crate::primitives::BodyRenderOptions::new(follow, edge_margin, false),
             theme,
         );
     }
@@ -1925,15 +1924,15 @@ mod tests {
         ledger.settle_request(&p2, RequestUsageStatus::Completed, None, 60, 0);
         // An runner sub-turn (turn 1 of the runner actor) in the same round,
         // with its own token spend that must NOT count toward the round.
-        let e1 = ledger.begin_request_for_actor(
-            "session",
-            "runner:call_xyz",
-            "relay",
-            "model-a",
-            2,
-            1,
-            0,
-        );
+        let e1 = ledger.begin_request_for_actor(muta_contracts::BeginRequestParams {
+            session_id: "session",
+            actor_id: "runner:call_xyz",
+            provider: "relay",
+            model: "model-a",
+            round: 2,
+            turn: 1,
+            projected_prompt_tokens: 0,
+        });
         ledger.settle_request(&e1, RequestUsageStatus::Completed, None, 120, 0);
         let report = ledger.snapshot_for_session("session");
 

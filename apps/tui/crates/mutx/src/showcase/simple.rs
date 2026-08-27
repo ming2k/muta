@@ -847,11 +847,13 @@ pub fn effort_ignition() -> io::Result<()> {
                     input: &s.draft,
                     byte_cursor: s.draft.len(),
                 },
-                true,
-                false,
-                false,
-                0,
-                0,
+                crate::view::ComposerDrawOptions {
+                    focused: true,
+                    show_caret: false,
+                    record: false,
+                    image_count: 0,
+                    paste_count: 0,
+                },
                 (true, elapsed_ms),
             );
             draw_hint_bar(

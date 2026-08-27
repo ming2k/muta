@@ -80,7 +80,7 @@ pub enum AutonomousFallbackPolicy {
 
 /// Who actually settled a parked human request. The anti-fabrication
 /// invariant: only a reply that crossed a client connection resolves as
-/// [`User`]. Policy settlements are generated agent-side and are labeled
+/// [`ReplyProvenance::User`]. Policy settlements are generated agent-side and are labeled
 /// so the model can never mistake them for human intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]

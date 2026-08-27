@@ -3,7 +3,7 @@
 use mutx_engine::{Frame, Line, Rect};
 
 use super::super::Theme;
-use super::super::primitives::render_body;
+use super::super::primitives::{BodyRenderOptions, render_body};
 
 pub(crate) struct ScrollBody<'a> {
     pub lines: Vec<Line<'static>>,
@@ -20,9 +20,11 @@ impl<'a> ScrollBody<'a> {
             rect,
             self.lines,
             self.scroll,
-            self.follow,
-            self.edge_margin,
-            self.wrap,
+            BodyRenderOptions {
+                follow: self.follow,
+                edge_margin: self.edge_margin,
+                wrap: self.wrap,
+            },
             theme,
         );
     }

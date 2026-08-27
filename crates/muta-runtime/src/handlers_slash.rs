@@ -630,27 +630,27 @@ pub(crate) struct SlashEnv<'a> {
 /// built-in handler, or fall through to the user-defined project-command path.
 pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
     let SlashEnv {
-        ref config,
-        ref agent,
-        ref mcp_runtime,
-        ref workspace_security,
-        ref resp_tx,
-        ref session,
-        ref lifecycle,
-        ref side,
-        ref base_tools_for_side,
-        ref provider_for_task,
+        config,
+        agent,
+        mcp_runtime,
+        workspace_security,
+        resp_tx,
+        session,
+        lifecycle,
+        side,
+        base_tools_for_side,
+        provider_for_task,
         ref mut provider_usage,
         ref skills_registry,
-        ref skills_registry_for_commands,
-        ref _commands_for_task,
-        ref embedding_store_for_commands,
-        ref req_tx_for_commands,
-        ref project_root_for_side,
-        ref startup,
-        ref ui,
-        ref extra_commands,
-        ref websearch_shared,
+        skills_registry_for_commands,
+        _commands_for_task,
+        embedding_store_for_commands,
+        req_tx_for_commands,
+        project_root_for_side,
+        startup,
+        ui,
+        extra_commands,
+        websearch_shared,
     } = env;
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if parts.is_empty() {
@@ -1031,7 +1031,34 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             };
             match route {
                 SessionRoute::New => {
-                    start_fresh_session(&mut env, name, args).await;
+                    // Rebuild a SlashEnv whose mutable usage cell points at
+                    // the same place, without partially moving `env` while
+                    // fields are still read for the rest of the match.
+                    let provider_usage = &mut *env.provider_usage;
+                    let mut fresh_env = SlashEnv {
+                        side: env.side,
+                        session: env.session,
+                        config: env.config,
+                        agent: env.agent,
+                        lifecycle: env.lifecycle,
+                        resp_tx: env.resp_tx,
+                        provider_for_task: env.provider_for_task,
+                        provider_usage,
+                        mcp_runtime: env.mcp_runtime,
+                        workspace_security: env.workspace_security,
+                        base_tools_for_side: env.base_tools_for_side,
+                        skills_registry: env.skills_registry.clone(),
+                        skills_registry_for_commands: env.skills_registry_for_commands,
+                        _commands_for_task: env._commands_for_task,
+                        embedding_store_for_commands: env.embedding_store_for_commands,
+                        req_tx_for_commands: env.req_tx_for_commands,
+                        project_root_for_side: env.project_root_for_side,
+                        startup: env.startup,
+                        ui: env.ui,
+                        extra_commands: env.extra_commands,
+                        websearch_shared: env.websearch_shared,
+                    };
+                    start_fresh_session(&mut fresh_env, name, args).await;
                 }
                 SessionRoute::Fork => {
                     fork_current_session(lifecycle, agent, session, side, resp_tx, name, args)
@@ -1228,7 +1255,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 session,
                 base_tools_for_side,
                 provider_for_task,
-                (**skills_registry).clone(),
+                Arc::unwrap_or_clone(skills_registry.clone()),
                 project_root_for_side,
                 agent.identity().clone(),
                 agent.workspace_security_handle(),
@@ -2228,7 +2255,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     req_tx: req_tx_for_commands,
                     project_root: project_root_for_side,
                     startup,
-                    ui: *ui,
+                    ui,
                 };
                 if handler.handle(ctx).await {
                     return;

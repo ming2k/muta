@@ -119,9 +119,7 @@ pub fn draw_skills_modal(
         f.body,
         body,
         scroll,
-        follow,
-        SCROLL_EDGE_MARGIN,
-        false,
+        crate::primitives::BodyRenderOptions::new(follow, SCROLL_EDGE_MARGIN, false),
         theme,
     );
 

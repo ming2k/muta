@@ -57,23 +57,42 @@ pub(crate) enum ActionFlow {
     Exit,
 }
 
+pub(super) struct ActionContext<'a> {
+    pub runtime: &'a UiRuntime,
+    pub session: &'a crate::SessionSource,
+    pub viewed_session_id: &'a str,
+    pub copy_tx: &'a mpsc::UnboundedSender<Result<clipboard::CopyOutcome, String>>,
+    pub copy_pending: &'a Arc<AtomicUsize>,
+    pub paste_tx: &'a mpsc::UnboundedSender<clipboard::ClipboardRead>,
+    pub sgr_guard: &'a mut input::SgrLeakGuard,
+}
+
 /// Loop stage: dispatch one drained [`input::InputAction`]. The match body is
 /// verbatim from `run_app_loop`; only `continue` / `return Ok(())` inside arms
 /// became [`ActionFlow`] values, and the clipboard senders / viewed session id
 /// are passed explicitly instead of captured.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn dispatch_action(
     app: &mut App,
-    runtime: &UiRuntime,
     terminal: &mut Terminal<std::io::Stdout>,
-    session: &crate::SessionSource,
     action: input::InputAction,
-    viewed_session_id: &str,
-    copy_tx: &mpsc::UnboundedSender<Result<clipboard::CopyOutcome, String>>,
-    copy_pending: &Arc<AtomicUsize>,
-    paste_tx: &mpsc::UnboundedSender<clipboard::ClipboardRead>,
-    sgr_guard: &mut input::SgrLeakGuard,
+    ctx: &mut ActionContext<'_>,
 ) -> ActionFlow {
+    let ActionContext {
+        runtime,
+        session,
+        viewed_session_id,
+        copy_tx,
+        copy_pending,
+        paste_tx,
+        sgr_guard,
+    } = ctx;
+    let runtime = *runtime;
+    let session = *session;
+    let viewed_session_id = *viewed_session_id;
+    let copy_tx = *copy_tx;
+    let copy_pending = *copy_pending;
+    let paste_tx = *paste_tx;
+    let sgr_guard = &mut **sgr_guard;
     // While the dashboard's kill confirm is armed, only the confirming `k`
     // (or the confirm-cancelling paths inside the dashboard arms) keeps it
     // alive: any other action — navigation, prompt, focus toggle, Esc —
