@@ -255,11 +255,13 @@ impl App {
         self.completion_response_input = None;
         self.completion_response_cursor = 0;
         self.completion_request_id = self.completion_request_id.wrapping_add(1);
-        let _ = self.tx.send(muta_contracts::AgentRequest::CompleteComposer {
-            request_id: self.completion_request_id,
-            text: state.0,
-            cursor,
-        });
+        let _ = self
+            .tx
+            .send(muta_contracts::AgentRequest::CompleteComposer {
+                request_id: self.completion_request_id,
+                text: state.0,
+                cursor,
+            });
     }
 
     pub fn apply_backend_completions(

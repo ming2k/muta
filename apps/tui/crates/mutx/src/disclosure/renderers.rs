@@ -563,6 +563,154 @@ fn draw_listing_content(
     }
 }
 
+/// Render a `write_todos` / checklist result: structured task list with status glyphs
+/// [✓] completed, [•] in_progress, [☐] pending, [✕] cancelled on `code_bg`.
+fn draw_checklist_content(
+    ctx: &mut RenderCtx<'_, '_>,
+    mi: usize,
+    block_idx: usize,
+    output: &str,
+    arguments: &str,
+    selection: &SelectionState,
+    indent: usize,
+    inner_w: usize,
+) {
+    let code_bg = ctx.theme.code_surface();
+    let pad = Style::default().bg(code_bg);
+    let sel_range = block_selection_range(selection, mi, block_idx);
+    let wrap_w = inner_w.max(1);
+
+    #[derive(serde::Deserialize)]
+    struct RawItem {
+        #[serde(default)]
+        content: String,
+        #[serde(default)]
+        status: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct RawList {
+        #[serde(default)]
+        items: Vec<RawItem>,
+    }
+
+    let parsed_items: Vec<RawItem> = serde_json::from_str::<Vec<RawItem>>(output)
+        .or_else(|_| serde_json::from_str::<RawList>(output).map(|l| l.items))
+        .or_else(|_| serde_json::from_str::<RawList>(arguments).map(|l| l.items))
+        .or_else(|_| {
+            let v: Result<serde_json::Value, _> = serde_json::from_str(arguments);
+            if let Ok(v) = v {
+                if let Some(arr) = v.get("items").and_then(|v| v.as_array()) {
+                    let items = arr
+                        .iter()
+                        .map(|item| RawItem {
+                            content: item
+                                .get("content")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            status: item
+                                .get("status")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("pending")
+                                .to_string(),
+                        })
+                        .collect();
+                    return Ok(items);
+                }
+            }
+            Err(())
+        })
+        .unwrap_or_default();
+
+    if parsed_items.is_empty() {
+        draw_listing_content(ctx, mi, block_idx, output, selection, indent, inner_w);
+        return;
+    }
+
+    let mut offset = 0usize;
+    for item in &parsed_items {
+        let (glyph, glyph_style, text_style) = match item.status.as_str() {
+            "completed" | "done" => (
+                "✓ ",
+                Style::default()
+                    .bg(code_bg)
+                    .fg(ctx.theme.ok())
+                    .add_modifier(Modifier::BOLD),
+                Style::default().bg(code_bg).fg(ctx.theme.muted()),
+            ),
+            "in_progress" => (
+                "• ",
+                Style::default()
+                    .bg(code_bg)
+                    .fg(ctx.theme.info())
+                    .add_modifier(Modifier::BOLD),
+                Style::default()
+                    .bg(code_bg)
+                    .fg(ctx.theme.code_text())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            "cancelled" => (
+                "✕ ",
+                Style::default().bg(code_bg).fg(ctx.theme.err()),
+                Style::default()
+                    .bg(code_bg)
+                    .fg(ctx.theme.dim())
+                    .add_modifier(Modifier::STRIKETHROUGH),
+            ),
+            _ => (
+                "☐ ",
+                Style::default().bg(code_bg).fg(ctx.theme.dim()),
+                Style::default().bg(code_bg).fg(ctx.theme.code_text()),
+            ),
+        };
+
+        let logical_line = format!("{}{}", glyph, item.content);
+        let wrapped = nonempty_wrapped(wrap_text(&logical_line, wrap_w));
+
+        for (idx, wl) in wrapped.iter().enumerate() {
+            let block_wl = WrappedLine {
+                text: wl.text.clone(),
+                start_byte: offset + wl.start_byte,
+                end_byte: offset + wl.end_byte,
+            };
+
+            let mut line = if idx == 0 && wl.text.starts_with(glyph) {
+                let rest_text = &wl.text[glyph.len()..];
+                let mut spans = vec![
+                    Span::styled(" ".repeat(indent), pad),
+                    Span::styled(glyph, glyph_style),
+                ];
+                let rest_spans = line_spans(
+                    "",
+                    pad,
+                    rest_text,
+                    line_selection(sel_range, &block_wl),
+                    text_style,
+                    ctx.theme.selected(),
+                );
+                spans.extend(rest_spans.spans);
+                Line::from(spans)
+            } else {
+                line_spans(
+                    &" ".repeat(indent + 2),
+                    pad,
+                    &wl.text,
+                    line_selection(sel_range, &block_wl),
+                    text_style,
+                    ctx.theme.selected(),
+                )
+            };
+
+            let used = indent + wl.text.width();
+            line.spans
+                .push(Span::styled(padded_tail(ctx.full_width, used), pad));
+            ctx.paint_text_row(line, mi, block_idx, &block_wl, indent as u16, &[]);
+        }
+        offset += logical_line.len() + 1;
+    }
+}
+
 /// A single logical line parsed out of `search_text`'s `path:linenum:content` format.
 struct MatchLine<'a> {
     path: &'a str,
@@ -1319,6 +1467,11 @@ fn draw_tool_result(
             };
             draw_diff_content(ctx, hunks.as_ref(), indent, inner_w);
         }
+        ResultKind::Checklist => {
+            draw_checklist_content(
+                ctx, mi, block_idx, output, arguments, selection, indent, inner_w,
+            );
+        }
     }
 }
 
@@ -1582,7 +1735,7 @@ pub fn draw_runner_inline_step(
     let badge = msg
         .runner_profile()
         .map(|role| format!("[{}]", role.to_uppercase()))
-        .unwrap_or_else(|| "[ENVOY]".to_string());
+        .unwrap_or_else(|| "[RUNNER]".to_string());
     let summary_row = {
         let base = Style::default().bg(bg);
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);

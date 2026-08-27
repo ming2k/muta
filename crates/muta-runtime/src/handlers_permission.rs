@@ -114,7 +114,7 @@ pub(crate) struct ReplyEnv<'a> {
 /// `AgentRequest::UserQuestionReply` — mirror the permission arm: a
 /// `parent_call_id` targets the runner; otherwise try the primary, then a
 /// `/btw` side agent (ADR-0017).
-pub async fn reply_question(
+pub(crate) async fn reply_question(
     ReplyEnv {
         agent,
         runner_registry,
@@ -151,7 +151,7 @@ pub async fn reply_question(
 /// `AgentRequest::InputReply` (L3.5 β) — mirrors [`reply_question`]: a
 /// `parent_call_id` targets the runner; otherwise try the primary, then a
 /// `/btw` side agent.
-pub async fn reply_input(
+pub(crate) async fn reply_input(
     ReplyEnv {
         agent,
         runner_registry,

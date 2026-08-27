@@ -51,6 +51,7 @@ fn quarantined_domains(snapshot: &WorkspaceSecuritySnapshot) -> Vec<TrustDomain>
         (TrustDomain::Skills, snapshot.skills),
         (TrustDomain::Hooks, snapshot.hooks),
         (TrustDomain::Rules, snapshot.rules),
+        (TrustDomain::Roots, snapshot.roots),
     ]
     .into_iter()
     .filter(|(_, state)| *state != WorkspaceTrustState::Absent)
@@ -153,6 +154,7 @@ fn domain_label(domain: TrustDomain) -> &'static str {
         TrustDomain::Skills => "Skills (.agents/skills)",
         TrustDomain::Hooks => "Hooks (project hook config)",
         TrustDomain::Rules => "Rules (AGENTS.md / project rules)",
+        TrustDomain::Roots => "Linked workspace roots (.muta/config.toml [workspace])",
     }
 }
 
@@ -172,6 +174,7 @@ mod tests {
             skills,
             hooks,
             rules,
+            roots: WorkspaceTrustState::Absent,
         }
     }
 

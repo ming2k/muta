@@ -39,12 +39,11 @@ impl HeuristicCompactionEvaluator {
         }
 
         // 1. Check if all tasks in TodoList have completed
-        if let Some(list) = todos {
-            if !list.items.is_empty()
-                && list.items.iter().all(|t| t.status == TodoStatus::Completed)
-            {
-                return HeuristicDecision::Recommended(TaskMilestone::TodosSettled);
-            }
+        if let Some(list) = todos
+            && !list.items.is_empty()
+            && list.items.iter().all(|t| t.status == TodoStatus::Completed)
+        {
+            return HeuristicDecision::Recommended(TaskMilestone::TodosSettled);
         }
 
         // 2. Check for explicit topic shift phrases in user prompt

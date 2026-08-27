@@ -177,7 +177,9 @@ mod tests {
         let additional = vec![PathBuf::from("/sibling")];
         assert!(resolve_search_root(Path::new("/workspace"), &additional, "src").is_ok());
         assert!(resolve_search_root(Path::new("/workspace"), &additional, "/sibling/src").is_ok());
-        assert!(resolve_search_root(Path::new("/workspace"), &additional, "../sibling/src").is_ok());
+        assert!(
+            resolve_search_root(Path::new("/workspace"), &additional, "../sibling/src").is_ok()
+        );
         assert!(resolve_search_root(Path::new("/workspace"), &additional, "../secret").is_err());
         assert!(resolve_search_root(Path::new("/workspace"), &additional, "/secret").is_err());
         assert_eq!(search_path_argument(r#"{"path":"src"}"#), "src");

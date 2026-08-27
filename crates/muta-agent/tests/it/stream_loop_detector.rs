@@ -22,10 +22,7 @@ fn detects_arbitrary_periodic_repetitions() {
     let pat2 = detector2.push_and_check("hello world\nhello world\nhello world\n");
     assert!(matches!(
         pat2,
-        Some(DegeneratePattern::Periodic {
-            repetitions: 3,
-            ..
-        })
+        Some(DegeneratePattern::Periodic { repetitions: 3, .. })
     ));
 }
 

@@ -85,18 +85,10 @@ impl HookSideEffects {
 /// The set of hooks installed on an [`crate::Agent`]. Built once at startup
 /// (from the `[hooks]` config, by the CLI) and read at every lifecycle point,
 /// so it is shared cheaply as `Arc<HookRegistry>`.
+#[derive(Default)]
 pub struct HookRegistry {
     hooks: Vec<Arc<dyn Hook>>,
     authorizer: Option<HookAuthorizer>,
-}
-
-impl Default for HookRegistry {
-    fn default() -> Self {
-        Self {
-            hooks: Vec::new(),
-            authorizer: None,
-        }
-    }
 }
 
 impl HookRegistry {

@@ -510,13 +510,15 @@ fn antigravity_models_derivation_and_hidden_filter() {
     };
     connections.save().unwrap();
 
-    let mut config = Config::default();
-    config.default_connection = "g11".to_string();
-    config.default_model = Some("gemini-3.7-flash".to_string());
-    config.hidden_models = vec![
-        "gemini-3.6-flash*".to_string(),
-        "gemini-3-flash*".to_string(),
-    ];
+    let config = Config {
+        default_connection: "g11".to_string(),
+        default_model: Some("gemini-3.7-flash".to_string()),
+        hidden_models: vec![
+            "gemini-3.6-flash*".to_string(),
+            "gemini-3-flash*".to_string(),
+        ],
+        ..Config::default()
+    };
 
     let usage = muta_persistence::connection_usage::ConnectionUsage::default();
     let picker = build_picker_state(&config, &usage);

@@ -115,6 +115,8 @@ pub enum ResultKind {
     /// A red/green line diff derived from a structured patch result. Legacy
     /// restored sessions may fall back to the original tool arguments.
     Diff,
+    /// An interactive checklist (todo / task list) with [✓], [•], [☐], [✕] status glyphs.
+    Checklist,
 }
 
 /// How a tool's arguments are rendered in the expanded step body.

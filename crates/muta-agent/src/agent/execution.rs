@@ -349,7 +349,7 @@ impl Agent {
     /// Park an interactive-input request for a `bash` command (L3.5 β) and
     /// await the operator's reply. Called from `execute_tool` when the
     /// interactive classifier matches and no model-supplied stdin is
-    /// authorized. Emits [`AgentEvent::InputRequest`]; the TUI shows an inline
+    /// authorized. Emits [`AgentEvent::StdinRequest`]; the TUI shows an inline
     /// input panel and the reply travels back via [`Self::reply_input`].
     ///
     /// Returns `Some(StdinPolicy::Prefilled)` with the operator's input, or
@@ -525,7 +525,7 @@ impl Agent {
                     let one_off = request.one_off;
                     let request = muta_contracts::PermissionRequest {
                         id: format!("permission_{}", uuid::Uuid::new_v4()),
-                        ..request
+                        ..*request
                     };
                     // ADR-0141 posture gate: permissions fail closed when no
                     // human channel exists — a missing human cannot grant

@@ -387,7 +387,7 @@ pub(crate) struct SideEnv<'a> {
     pub config: &'a Config,
 }
 
-pub async fn start_active_turn(env: SideEnv<'_>, input: RoundInput) {
+pub(crate) async fn start_active_turn(env: SideEnv<'_>, input: RoundInput) {
     let SideEnv {
         side,
         master,
@@ -463,7 +463,7 @@ pub async fn target_agent(
 
 /// Start a fresh round in one exact live session. Returns `false` when the
 /// target aside was closed after the message entered the frontend outbox.
-pub async fn start_session_turn(
+pub(crate) async fn start_session_turn(
     target_session_id: &str,
     env: SideEnv<'_>,
     input: RoundInput,

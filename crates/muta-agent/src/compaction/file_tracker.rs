@@ -16,29 +16,30 @@ impl FileOperations {
 
     /// Extract file operations from tool calls in a message.
     pub fn extract_from_message(&mut self, message: &Message) {
-        if message.role == Role::Assistant {
-            if let Some(ref calls) = message.tool_calls {
-                for call in calls {
-                    let args: Value = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
-                    let path = args.get("path").and_then(|v| v.as_str());
+        if message.role == Role::Assistant
+            && let Some(ref calls) = message.tool_calls
+        {
+            for call in calls {
+                let args: Value = serde_json::from_str(&call.arguments).unwrap_or(Value::Null);
+                let path = args.get("path").and_then(|v| v.as_str());
 
-                    match call.name.as_str() {
-                        "read_text" | "read_file" | "find_files" | "list_dir" | "search_text" => {
-                            if let Some(p) = path {
-                                if !p.is_empty() && p != "." {
-                                    self.read.insert(p.to_string());
-                                }
-                            }
+                match call.name.as_str() {
+                    "read_text" | "read_file" | "find_files" | "list_dir" | "search_text" => {
+                        if let Some(p) = path
+                            && !p.is_empty()
+                            && p != "."
+                        {
+                            self.read.insert(p.to_string());
                         }
-                        "write_file" | "edit_file" => {
-                            if let Some(p) = path {
-                                if !p.is_empty() {
-                                    self.modified.insert(p.to_string());
-                                }
-                            }
-                        }
-                        _ => {}
                     }
+                    "write_file" | "edit_file" => {
+                        if let Some(p) = path
+                            && !p.is_empty()
+                        {
+                            self.modified.insert(p.to_string());
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

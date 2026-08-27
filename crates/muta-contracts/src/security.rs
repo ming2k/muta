@@ -58,10 +58,18 @@ pub enum TrustDomain {
     Hooks,
     /// Trust project-authored instructions and slash-command templates.
     Rules,
+    /// Trust project-level linked workspace roots (`[workspace].additional_roots`).
+    Roots,
 }
 
 impl TrustDomain {
-    pub const ALL: [Self; 4] = [Self::Mcp, Self::Skills, Self::Hooks, Self::Rules];
+    pub const ALL: [Self; 5] = [
+        Self::Mcp,
+        Self::Skills,
+        Self::Hooks,
+        Self::Rules,
+        Self::Roots,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -69,6 +77,7 @@ impl TrustDomain {
             Self::Skills => "skills",
             Self::Hooks => "hooks",
             Self::Rules => "rules",
+            Self::Roots => "roots",
         }
     }
 }
@@ -91,6 +100,9 @@ pub struct WorkspaceSecuritySnapshot {
     /// Trust status for project instructions and slash commands.
     #[serde(default)]
     pub rules: WorkspaceTrustState,
+    /// Trust status for project-declared linked workspace roots.
+    #[serde(default)]
+    pub roots: WorkspaceTrustState,
 }
 
 impl WorkspaceSecuritySnapshot {
@@ -101,6 +113,7 @@ impl WorkspaceSecuritySnapshot {
             skills: WorkspaceTrustState::Absent,
             hooks: WorkspaceTrustState::Absent,
             rules: WorkspaceTrustState::Absent,
+            roots: WorkspaceTrustState::Absent,
         }
     }
 
@@ -110,6 +123,7 @@ impl WorkspaceSecuritySnapshot {
             TrustDomain::Skills => self.skills,
             TrustDomain::Hooks => self.hooks,
             TrustDomain::Rules => self.rules,
+            TrustDomain::Roots => self.roots,
         }
     }
 
@@ -119,7 +133,7 @@ impl WorkspaceSecuritySnapshot {
 
     /// Aggregate state for display only. It never participates in admission.
     pub fn aggregate(&self) -> WorkspaceTrustState {
-        let states = [self.mcp, self.skills, self.hooks, self.rules];
+        let states = [self.mcp, self.skills, self.hooks, self.rules, self.roots];
         let present = states
             .into_iter()
             .filter(|state| *state != WorkspaceTrustState::Absent)

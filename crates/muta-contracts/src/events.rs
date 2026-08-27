@@ -1544,6 +1544,10 @@ pub struct SessionSnapshot {
 /// These are forwarded from the child agent back to the parent harness so that
 /// the TUI can render nested tool steps and streaming output inside the parent
 /// tool step.
+// Events are moved through a channel one at a time and never stored in bulk;
+// keeping `PermissionRequest` inline preserves the flat wire shape (ts_rs
+// codegen + serde), so the size difference between variants is accepted.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum RunnerEvent {
@@ -1778,7 +1782,7 @@ pub struct PermissionRequest {
     /// "Always" is honoured) for ordinary broker prompts.
     #[serde(default)]
     pub one_off: bool,
-    /// Origin label identifying which subagent/runner produced this request (ADR-0138).
+    /// Origin label identifying which runner produced this request (ADR-0138).
     /// `None` for top-level principal calls; e.g. `Some("runner #a1b2 · mcp_specialist")`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
@@ -1823,7 +1827,7 @@ pub struct UserQuestion {
 pub struct UserQuestionRequest {
     pub id: String,
     pub questions: Vec<UserQuestion>,
-    /// Origin label identifying which subagent/runner produced this request (ADR-0138).
+    /// Origin label identifying which runner produced this request (ADR-0138).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
 }

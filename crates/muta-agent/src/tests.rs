@@ -3046,7 +3046,16 @@ async fn in_flight_streaming_loop_detector_aborts_and_steers() {
     let (_events, outcome) = run_golden_round(&agent, "test", PermissionDecision::Once).await;
     let round_outcome = outcome.expect("round completes");
 
-    assert!(round_outcome.message.content.contains("[... stream truncated"));
-    assert!(!round_outcome.message.content.contains("never reached extra text"));
+    assert!(
+        round_outcome
+            .message
+            .content
+            .contains("[... stream truncated")
+    );
+    assert!(
+        !round_outcome
+            .message
+            .content
+            .contains("never reached extra text")
+    );
 }
-

@@ -20,7 +20,7 @@
 //!   cancel from a teardown cancel;
 //! - **metrics** — per-kind counts of parked / user-replied / cancelled /
 //!   policy-settled, and cumulative parked→reply latency, read by
-//! `/metrics` and the daemon monitor.
+//!   `/metrics` and the daemon monitor.
 //!
 //! # Provenance
 //!
@@ -80,11 +80,11 @@ impl KindMetrics {
             cancelled: self.cancelled.load(Ordering::Relaxed),
             policy_settled: self.policy_settled.load(Ordering::Relaxed),
             refused: self.refused.load(Ordering::Relaxed),
-            avg_wait_ms: if waited == 0 {
-                0
-            } else {
-                self.wait_ms_total.load(Ordering::Relaxed) / waited
-            },
+            avg_wait_ms: self
+                .wait_ms_total
+                .load(Ordering::Relaxed)
+                .checked_div(waited)
+                .unwrap_or(0),
         }
     }
 }

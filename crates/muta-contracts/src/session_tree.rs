@@ -6,6 +6,10 @@ use std::collections::{HashMap, HashSet};
 pub type SessionEntryId = String;
 
 /// The content and semantics of a single node in the session DAG.
+// `Message` is by far the dominant payload of the tree and both variants are
+// short-lived around serialization; keeping it inline avoids a heap hop on
+// every append and keeps the on-disk serde shape flat.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionEntryKind {
@@ -64,6 +68,7 @@ impl SessionEntry {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_compaction(
         id: impl Into<String>,
         parent_id: Option<String>,

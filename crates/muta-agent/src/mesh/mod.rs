@@ -41,8 +41,8 @@ pub enum MeshError {
     /// [`MeshMessage::lawful_for`]).
     Unlawful {
         message_kind: &'static str,
-        sender: MeshAddress,
-        recipient: MeshAddress,
+        sender: Box<MeshAddress>,
+        recipient: Box<MeshAddress>,
     },
 }
 
@@ -102,6 +102,10 @@ pub struct MeshTracker {
     entries: Arc<Mutex<HashMap<MeshAddress, MeshEntry>>>,
 }
 
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl MeshTracker {
     pub fn new() -> Self {
         Self::default()
@@ -123,11 +127,11 @@ impl MeshTracker {
             // master whose token is not yet registered simply links nothing
             // (registration order is supervisor → masters → runners, so in
             // practice the parent exists first).
-            if let Some(pe) = self.entries.lock().unwrap().get(&parent) {
+            if let Some(pe) = lock(&self.entries).get(&parent) {
                 pe.token.child_token();
             }
         }
-        self.entries.lock().unwrap().insert(
+        lock(&self.entries).insert(
             address,
             MeshEntry {
                 sender,
@@ -139,14 +143,14 @@ impl MeshTracker {
 
     /// Deregister an address (graceful shutdown). Idempotent.
     pub fn deregister(&self, address: &MeshAddress) {
-        self.entries.lock().unwrap().remove(address);
+        lock(&self.entries).remove(address);
     }
 
     /// Cancel + deregister an address **and every address it owns**
     /// (its runners). Returns the number of addresses reaped. This is the
     /// reclamation half of atomic master replacement (ADR-0144 §3).
     pub fn reap_children(&self, master: &MeshAddress) -> usize {
-        let mut map = self.entries.lock().unwrap();
+        let mut map = lock(&self.entries);
         let victims: Vec<MeshAddress> = map
             .iter()
             .filter(|(addr, e)| addr.tier == AgentTier::Runner && e.master.as_ref() == Some(master))
@@ -172,12 +176,12 @@ impl MeshTracker {
                 .unwrap_or_else(|| MeshAddress::new(AgentTier::Supervisor, "daemon", "daemon"));
             return Err(MeshError::Unlawful {
                 message_kind: MeshError::kind_of(&envelope.message),
-                sender,
-                recipient: envelope.recipient,
+                sender: Box::new(sender),
+                recipient: Box::new(envelope.recipient),
             });
         }
         let entry = {
-            let mut map = self.entries.lock().unwrap();
+            let mut map = lock(&self.entries);
             if let Some(e) = map.get(&envelope.recipient) {
                 if e.token.is_cancelled() {
                     map.remove(&envelope.recipient);
@@ -199,20 +203,13 @@ impl MeshTracker {
     /// surface exposed to the supervisor.
     pub fn live_addresses(&self) -> Vec<MeshAddress> {
         self.reap_cancelled();
-        self.entries
-            .lock()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>()
+        lock(&self.entries).keys().cloned().collect::<Vec<_>>()
     }
 
     /// Addresses at one tier, in one session (peer discovery).
     pub fn peers(&self, tier: AgentTier, session: &str) -> Vec<MeshAddress> {
         self.reap_cancelled();
-        self.entries
-            .lock()
-            .unwrap()
+        lock(&self.entries)
             .keys()
             .filter(|a| a.tier == tier && a.session == session)
             .cloned()
@@ -222,9 +219,7 @@ impl MeshTracker {
     /// Addresses at one tier across all sessions (cross-session peer discovery).
     pub fn peers_by_tier(&self, tier: AgentTier) -> Vec<MeshAddress> {
         self.reap_cancelled();
-        self.entries
-            .lock()
-            .unwrap()
+        lock(&self.entries)
             .keys()
             .filter(|a| a.tier == tier)
             .cloned()
@@ -233,7 +228,7 @@ impl MeshTracker {
 
     /// Sweep entries whose token has fired.
     fn reap_cancelled(&self) {
-        let mut map = self.entries.lock().unwrap();
+        let mut map = lock(&self.entries);
         let dead: Vec<MeshAddress> = map
             .iter()
             .filter(|(_, e)| e.token.is_cancelled())

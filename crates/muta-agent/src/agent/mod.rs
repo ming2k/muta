@@ -3,9 +3,9 @@
 //! The type definition, builder, runner handle, queue plumbing, the free
 //! helper functions shared across the split, and the embedded tests. The
 //! `impl Agent` blocks are split by concern into sibling modules:
-//! [`state`] (configuration/identity), [`steering`] (rounds/queues/interrupts),
-//! [`tools_admin`] (permissions/catalog), [`rounds`] (streaming loop), and
-//! [`execution`] (tool tail + hooks).
+//! `state` (configuration/identity), `steering` (rounds/queues/interrupts),
+//! `tools_admin` (permissions/catalog), `rounds` (streaming loop), and
+//! `execution` (tool tail + hooks).
 
 use super::*;
 use muta_contracts::human_request::{
@@ -406,7 +406,7 @@ impl RunnerHandle {
 
     /// Resolve an interactive-input request the runner's `bash` is parked on
     /// (L3.5 β). Down-direction counterpart to an up-going
-    /// [`AgentEvent::InputRequest`] / [`RunnerEvent::InputRequest`].
+    /// [`AgentEvent::StdinRequest`] / [`RunnerEvent::StdinRequest`].
     pub fn reply_input(&self, request_id: &str, text: String) -> bool {
         if let Some(agent) = self.weak.upgrade() {
             agent.reply_input(request_id, text)

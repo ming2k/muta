@@ -31,46 +31,137 @@ impl ToolPresenter for ExecuteCommandPresenter {
     }
 }
 
+/// Canonical executable base name (`comm` in Linux `/proc/[pid]/comm` / `pkill <comm>`).
+///
+/// Strips directory paths (`/usr/bin/`, `C:\tools\`), Windows file extensions (`.exe`, `.cmd`),
+/// and wrapper utilities (`sudo`, `env`, `nohup`).
+#[allow(dead_code)]
+pub fn extract_comm(command: &str) -> Option<String> {
+    for words in shell_segments(command) {
+        let mut words_iter = words.into_iter().skip_while(|word| is_assignment(word));
+        while let Some(candidate) = words_iter.next() {
+            if matches!(
+                candidate.as_str(),
+                "cd" | "export" | "unset" | "set" | "source" | "." | "umask" | "ulimit"
+            ) {
+                break;
+            }
+
+            let mut comm = normalize_comm(&candidate);
+            if comm.is_empty() {
+                continue;
+            }
+
+            if is_wrapper(&comm) {
+                let mut next_target = None;
+                while let Some(arg) = words_iter.next() {
+                    if arg.starts_with('-') {
+                        if arg == "-u" || arg == "-g" || arg == "-C" {
+                            let _ = words_iter.next();
+                        }
+                        continue;
+                    }
+                    if is_assignment(&arg) {
+                        continue;
+                    }
+                    next_target = Some(arg);
+                    break;
+                }
+                if let Some(target) = next_target {
+                    comm = normalize_comm(&target);
+                } else {
+                    continue;
+                }
+            }
+
+            if !comm.is_empty() {
+                return Some(comm);
+            }
+        }
+    }
+    None
+}
+
+/// Normalizes a path or command string into its bare `comm` name.
+/// - Linux/macOS: `/usr/bin/cargo` -> `cargo`, `./scripts/test.sh` -> `test.sh`
+/// - Windows: `C:\tools\cargo.exe` -> `cargo`, `npm.cmd` -> `npm`
+pub fn normalize_comm(candidate: &str) -> String {
+    let name = candidate
+        .rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(candidate);
+
+    let lower = name.to_ascii_lowercase();
+    for ext in [".exe", ".cmd", ".bat", ".ps1", ".com"] {
+        if lower.ends_with(ext) {
+            return name[..name.len() - ext.len()].to_string();
+        }
+    }
+    name.to_string()
+}
+
+fn is_wrapper(comm: &str) -> bool {
+    matches!(
+        comm,
+        "sudo" | "env" | "nohup" | "time" | "nice" | "xargs" | "exec" | "doas" | "chroot"
+    )
+}
+
 /// Human-readable command summary for the header.
 ///
-/// Surfaces the executable and key arguments (e.g. `Run python3 test.py`,
+/// Surfaces the executable (`comm`) and key arguments (e.g. `Run python3 test.py`,
 /// `Run cargo test`) while skipping shell setup boilerplate (`cd ... &&`,
-/// variable assignments). Multi-line scripts use their first executable segment.
+/// variable assignments, wrapper utilities). Multi-line scripts use their first executable segment.
 fn command_summary(command: &str) -> Option<String> {
     for words in shell_segments(command) {
-        let mut words = words.into_iter().skip_while(|word| is_assignment(word));
-        let Some(candidate) = words.next() else {
-            continue;
-        };
+        let mut words_iter = words.into_iter().skip_while(|word| is_assignment(word));
+        while let Some(candidate) = words_iter.next() {
+            // These mutate the shell rather than starting the workload. Look in
+            // the following `&&`, `;`, or newline-delimited segment instead.
+            if matches!(
+                candidate.as_str(),
+                "cd" | "export" | "unset" | "set" | "source" | "." | "umask" | "ulimit"
+            ) {
+                break;
+            }
 
-        // These mutate the shell rather than starting the workload. Look in
-        // the following `&&`, `;`, or newline-delimited segment instead.
-        if matches!(
-            candidate.as_str(),
-            "cd" | "export" | "unset" | "set" | "source" | "." | "umask" | "ulimit"
-        ) {
-            continue;
-        }
+            let mut comm = normalize_comm(&candidate);
+            if comm.is_empty() {
+                continue;
+            }
 
-        let exec_name = candidate
-            .rsplit(['/', '\\'])
-            .find(|part| !part.is_empty())
-            .unwrap_or(&candidate)
-            .to_string();
+            // Peel away wrapper tools (sudo, env, nohup, etc.) to reveal the real command
+            if is_wrapper(&comm) {
+                let mut next_target = None;
+                while let Some(arg) = words_iter.next() {
+                    if arg.starts_with('-') {
+                        if arg == "-u" || arg == "-g" || arg == "-C" {
+                            let _ = words_iter.next();
+                        }
+                        continue;
+                    }
+                    if is_assignment(&arg) {
+                        continue;
+                    }
+                    next_target = Some(arg);
+                    break;
+                }
+                if let Some(target) = next_target {
+                    comm = normalize_comm(&target);
+                } else {
+                    continue;
+                }
+            }
 
-        if exec_name.is_empty() {
-            continue;
-        }
-
-        let rest: Vec<String> = words
-            .into_iter()
-            .map(|w| super::sanitize_single_line(&w))
-            .filter(|w| !w.is_empty())
-            .collect();
-        if rest.is_empty() {
-            return Some(exec_name);
-        } else {
-            return Some(format!("{} {}", exec_name, rest.join(" ")));
+            let rest: Vec<String> = words_iter
+                .map(|w| super::sanitize_single_line(&w))
+                .filter(|w| !w.is_empty())
+                .collect();
+            if rest.is_empty() {
+                return Some(comm);
+            } else {
+                return Some(format!("{} {}", comm, rest.join(" ")));
+            }
         }
     }
     None
@@ -109,15 +200,9 @@ fn shell_segments(command: &str) -> Vec<Vec<String>> {
     let mut segment = Vec::new();
     let mut word = String::new();
     let mut quote = None;
-    let mut escaped = false;
+    let mut chars = command.chars().peekable();
 
-    for ch in command.chars() {
-        if escaped {
-            word.push(ch);
-            escaped = false;
-            continue;
-        }
-
+    while let Some(ch) = chars.next() {
         match quote {
             Some(Quote::Single) => {
                 if ch == '\'' {
@@ -126,15 +211,45 @@ fn shell_segments(command: &str) -> Vec<Vec<String>> {
                     word.push(ch);
                 }
             }
-            Some(Quote::Double) => match ch {
-                '"' => quote = None,
-                '\\' => escaped = true,
-                _ => word.push(ch),
-            },
+            Some(Quote::Double) => {
+                if ch == '"' {
+                    quote = None;
+                } else if ch == '\\' {
+                    if let Some(&next_ch) = chars.peek() {
+                        if matches!(next_ch, '"' | '\\' | '$' | '`' | '\n') {
+                            chars.next();
+                            if next_ch != '\n' {
+                                word.push(next_ch);
+                            }
+                        } else {
+                            word.push('\\');
+                        }
+                    } else {
+                        word.push('\\');
+                    }
+                } else {
+                    word.push(ch);
+                }
+            }
             None => match ch {
                 '\'' => quote = Some(Quote::Single),
                 '"' => quote = Some(Quote::Double),
-                '\\' => escaped = true,
+                '\\' => {
+                    if let Some(&next_ch) = chars.peek() {
+                        if next_ch.is_whitespace()
+                            || matches!(next_ch, '\'' | '"' | ';' | '|' | '&' | '\n' | '\\')
+                        {
+                            chars.next();
+                            if next_ch != '\n' {
+                                word.push(next_ch);
+                            }
+                        } else {
+                            word.push('\\');
+                        }
+                    } else {
+                        word.push('\\');
+                    }
+                }
                 '\n' | ';' | '|' | '&' => finish_segment(&mut word, &mut segment, &mut segments),
                 ch if ch.is_whitespace() => finish_word(&mut word, &mut segment),
                 _ => word.push(ch),
@@ -142,9 +257,6 @@ fn shell_segments(command: &str) -> Vec<Vec<String>> {
         }
     }
 
-    if escaped {
-        word.push('\\');
-    }
     finish_segment(&mut word, &mut segment, &mut segments);
     segments
 }
@@ -160,7 +272,7 @@ fn is_assignment(word: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::command_summary;
+    use super::{command_summary, extract_comm, normalize_comm};
 
     #[test]
     fn command_summary_includes_executable_and_args() {
@@ -193,5 +305,41 @@ mod tests {
             command_summary("python3 -c 's=open(\"foo\").read()\nprint(s)'"),
             Some("python3 -c s=open(\"foo\").read() print(s)".into())
         );
+    }
+
+    #[test]
+    fn command_comm_extracts_canonical_name() {
+        assert_eq!(extract_comm("cargo test"), Some("cargo".into()));
+        assert_eq!(
+            extract_comm("sudo -E /usr/bin/git status"),
+            Some("git".into())
+        );
+        assert_eq!(
+            extract_comm("env RUST_LOG=info ./target/debug/muta-server"),
+            Some("muta-server".into())
+        );
+        assert_eq!(
+            extract_comm(r#""C:\Program Files\Git\bin\git.exe" commit -m "fix""#),
+            Some("git".into())
+        );
+        assert_eq!(
+            extract_comm(r#"C:\Tools\Git\bin\git.exe status"#),
+            Some("git".into())
+        );
+        assert_eq!(
+            extract_comm(r#"C:\Program\ Files\Git\bin\git.exe commit"#),
+            Some("git".into())
+        );
+        assert_eq!(extract_comm("npm.cmd run build"), Some("npm".into()));
+    }
+
+    #[test]
+    fn normalize_comm_handles_cross_platform_binaries() {
+        assert_eq!(normalize_comm("/usr/local/bin/ripgrep"), "ripgrep");
+        assert_eq!(normalize_comm(r#"C:\Tools\cargo.exe"#), "cargo");
+        assert_eq!(normalize_comm("pkill"), "pkill");
+        assert_eq!(normalize_comm("build.ps1"), "build");
+        assert_eq!(normalize_comm("script.cmd"), "script");
+        assert_eq!(normalize_comm("./test.sh"), "test.sh");
     }
 }

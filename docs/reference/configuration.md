@@ -183,17 +183,17 @@ variant a model receives for a capability with several implementations.
 
 ## Additional workspace roots
 
-The optional `[workspace]` table lives in the user-owned global `config.toml`
-and widens native file tools' admitted boundary for cross-project work. A
-repository's `.muta/config.toml` is deliberately ignored for this setting:
-project-authored content cannot widen its own containment boundary.
+The optional `[workspace]` table widens native file tools' admitted boundary for cross-project work.
+It can be configured in two places:
+1. **Global Configuration** (`$XDG_CONFIG_HOME/muta/config.toml`): User-owned baseline, active across all projects.
+2. **Project Configuration** (`.muta/config.toml`): Declared by the project repository and active when the workspace's `roots` domain is trusted via `/trust` or `/trust roots`. Untrusted project declarations remain quarantined and do not widen boundaries until reviewed and approved.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `workspace.additional_roots` | `[]` | Extra directories admitted alongside the project root. Relative paths resolve against the **project root** (never the process cwd); `~` expands to the user's home |
 
 ```toml
-# $XDG_CONFIG_HOME/muta/config.toml
+# .muta/config.toml (Project-local, trust-gated) or $XDG_CONFIG_HOME/muta/config.toml (Global)
 [workspace]
 additional_roots = ["../backend", "~/projects/design-kit"]
 ```

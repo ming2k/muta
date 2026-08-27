@@ -49,7 +49,7 @@ pub(crate) struct ProviderEnv<'a> {
     pub provider_usage: &'a mut ConnectionUsage,
 }
 
-pub async fn switch(
+pub(crate) async fn switch(
     ProviderEnv {
         config,
         agent,
@@ -125,7 +125,7 @@ pub async fn switch(
 /// or as a pure-custom declaration), persist it to the state store, set its
 /// credential, then activate it. For OAuth presets the TUI runs
 /// [`authorize`] first, then calls this with `auth` set.
-pub async fn add(
+pub(crate) async fn add(
     ProviderEnv {
         config,
         agent,
@@ -269,7 +269,7 @@ pub async fn add(
 
 /// `AgentRequest::EditProvider` — update a connection's display name, endpoint
 /// override, credential, and client identity in place.
-pub async fn edit(
+pub(crate) async fn edit(
     ProviderEnv {
         config,
         agent,
@@ -381,7 +381,7 @@ pub async fn remove_model(
 /// `AgentRequest::EditProviderModel` — update the per-(connection, model)
 /// reasoning overrides in the discovery cache. Connection metadata (name /
 /// endpoint / credential) is untouched.
-pub async fn edit_model(
+pub(crate) async fn edit_model(
     ProviderEnv {
         config,
         agent,
@@ -473,7 +473,7 @@ pub async fn edit_model(
 /// actually serves it (a model id can be served by more than one connection).
 /// If the edited model is the active one, the live provider is re-activated
 /// so the new settings take effect at once.
-pub async fn edit_model_reasoning(
+pub(crate) async fn edit_model_reasoning(
     ProviderEnv {
         config,
         agent,
@@ -538,7 +538,7 @@ pub async fn edit_model_reasoning(
 /// and its OAuth tokens, and prune its model ids from favorites. When the
 /// deleted connection was the active one, fall back to the effective default and
 /// re-activate so the live provider never points at a removed entry.
-pub async fn delete(
+pub(crate) async fn delete(
     ProviderEnv {
         config,
         agent,

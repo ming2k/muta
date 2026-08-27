@@ -132,7 +132,7 @@ impl Agent {
     /// Apply a declarative master profile (ADR-0053) — set every knob a
     /// [`muta_contracts::MasterPreset`] declares in one call. The
     /// master-side mirror of how `RunnerTool` binds an
-    /// [`muta_contracts::RunnerProfile`].
+    /// [`muta_contracts::RunnerPreset`].
     ///
     /// Sets: the capability scope ([`Self::set_agent_selection`]), the
     /// write/command boundary ([`Self::set_operation_scope`]), and the runtime

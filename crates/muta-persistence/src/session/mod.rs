@@ -12,6 +12,7 @@
 //! - [`store`]: construction, load/persist, snapshots, event-log replay,
 //!   armed-schedule scan, list/detail/active views, offline scan tools.
 //! - [`tests`]: embedded test suite.
+//!
 //! Event-sourced session persistence (ADR-0017 / ADR-0022).
 //!
 //! Each session is an append-only JSONL event log (`sessions/<id>.jsonl`)
@@ -87,7 +88,7 @@ pub struct ContextProjectionCheckpoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-struct SessionData {
+pub(crate) struct SessionData {
     id: String,
     parent_id: Option<String>,
     /// How this session came to exist relative to its lineage: a root trunk,
@@ -784,7 +785,7 @@ pub struct SessionSummary {
 /// [`tokio::sync::Mutex`] so repointing the store (reset / fork / open) — which
 /// swaps both the path and the event log — is atomic with respect to every
 /// reader and writer. There is no second lock to deadlock against.
-struct SessionState {
+pub(crate) struct SessionState {
     /// Absolute path of this session's snapshot: `<sessions_dir>/<id>.json`.
     path: PathBuf,
     /// This session's append-only event log at `<sessions_dir>/<id>.jsonl`.

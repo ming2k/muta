@@ -102,7 +102,7 @@ pub enum PolicyDecision {
     /// `Always` reply (the bash dangerous-command confirm is one-off); its
     /// `elevation` flag tells the TUI the call is out-of-scope (ADR-0028).
     MissingAuthority {
-        request: muta_contracts::PermissionRequest,
+        request: Box<muta_contracts::PermissionRequest>,
         rule: PermissionRule,
     },
 }
@@ -322,7 +322,7 @@ impl PermissionPolicy for ScopeGatePolicy {
             return PolicyDecision::Pass;
         }
         PolicyDecision::MissingAuthority {
-            request: muta_contracts::PermissionRequest {
+            request: Box::new(muta_contracts::PermissionRequest {
                 id: String::new(),
                 tool: ctx.call_name.to_string(),
                 label: format!("Elevate {}", ctx.tool.permission_label()),
@@ -337,7 +337,7 @@ impl PermissionPolicy for ScopeGatePolicy {
                 origin: None,
                 hazard: None,
                 submission: None,
-            },
+            }),
             rule,
         }
     }
@@ -383,7 +383,7 @@ impl PermissionPolicy for BashPolicy {
                 } else {
                     // Build the one-off dangerous-command prompt.
                     PolicyDecision::MissingAuthority {
-                        request: muta_contracts::PermissionRequest {
+                        request: Box::new(muta_contracts::PermissionRequest {
                             id: String::new(),
                             tool: "execute_command".to_string(),
                             label: "Dangerous command".to_string(),
@@ -402,7 +402,7 @@ impl PermissionPolicy for BashPolicy {
                             origin: None,
                             hazard: Some(muta_contracts::hazard::HazardLevel::CommandExecution),
                             submission: None,
-                        },
+                        }),
                         rule: PermissionRule {
                             tool: "execute_command".to_string(),
                             scope: command,
@@ -457,7 +457,7 @@ impl PermissionPolicy for BrokerPolicy {
         let hazard = submission.as_ref().map(|s| s.hazard_level);
 
         PolicyDecision::MissingAuthority {
-            request: muta_contracts::PermissionRequest {
+            request: Box::new(muta_contracts::PermissionRequest {
                 id: String::new(), // caller fills the generated id
                 tool: ctx.call_name.to_string(),
                 label,
@@ -469,7 +469,7 @@ impl PermissionPolicy for BrokerPolicy {
                 origin: None,
                 hazard,
                 submission,
-            },
+            }),
             rule,
         }
     }

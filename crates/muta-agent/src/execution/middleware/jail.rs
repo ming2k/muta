@@ -24,15 +24,14 @@ impl ToolMiddleware for WorkspaceJailMiddleware {
             _ => None,
         };
 
-        if let Some(raw_path) = path_str {
-            if let Err(err) = env.resolve_path(raw_path) {
-                return Err(format!(
-                    "Security Denial: access to '{raw_path}' is outside the admitted workspace roots ({err})."
-                ));
-            }
+        if let Some(raw_path) = path_str
+            && let Err(err) = env.resolve_path(raw_path)
+        {
+            return Err(format!(
+                "Security Denial: access to '{raw_path}' is outside the admitted workspace roots ({err})."
+            ));
         }
 
         Ok(())
     }
 }
-

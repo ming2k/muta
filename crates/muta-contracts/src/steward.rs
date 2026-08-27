@@ -17,24 +17,19 @@
 //! extraction, and fail-open resilience.
 
 use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 /// Supported model tiers for Steward tasks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StewardModelPreference {
     /// Use the lightest, fastest, cost-efficient model (default for sentinels/titlers).
+    #[default]
     FlashLite,
     /// Use standard fast model.
     Flash,
     /// Inherit the session's active primary model.
     InheritPrimary,
-}
-
-impl Default for StewardModelPreference {
-    fn default() -> Self {
-        Self::FlashLite
-    }
 }
 
 /// Core trait for typed cognitive infrastructure tasks executed by the Harness Steward.

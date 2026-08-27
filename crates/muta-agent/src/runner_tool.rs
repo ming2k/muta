@@ -33,7 +33,7 @@ tool integrations.";
 /// the model understands this is the delegation path for *implementation*
 /// work, not exploration, and that every write/command the runner makes is
 /// user-approved. Paired with the code-profile system prompt, it frames the
-/// coder-subagent role (the analogue of kimi-code's `coder` subagent).
+/// coder-runner role.
 pub const RUNNER_CODE_TOOL_DESCRIPTION: &str = "\
 Delegate a well-scoped software-engineering task to a coding runner that \
 implements the change end to end — it reads the relevant code, edits files, \
@@ -52,7 +52,7 @@ Delegate a specialized integration task (e.g. database operations, external API 
 or third-party MCP tool interactions) to a dedicated runner. The runner runs in an isolated \
 sandbox with access to dynamic/MCP tools and returns a high-signal summary of the results.";
 
-/// Retry settings for an runner subagent, inherited from the session's provider retry configuration.
+/// Retry settings for a runner, inherited from the session's provider retry configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunnerRetryConfig {
     pub max_attempts: usize,
@@ -382,7 +382,7 @@ impl RunnerTool {
     }
 
     /// ADR-0141: bind the session's channel accountant; spawned runners
-    /// inherit it (see [`Self::spawn`] wiring of
+    /// inherit it (see the `run_runner` wiring of
     /// `Agent::set_human_channel_accountant`).
     pub fn bind_human_channel(
         &self,
@@ -836,7 +836,7 @@ impl RunnerTool {
                 let clean = id.trim_start_matches("call_");
                 &clean[..clean.len().min(6)]
             })
-            .unwrap_or("subagent");
+            .unwrap_or("runner");
         let origin_label = format!("runner #{} · {}", short_id, profile.name);
 
         let mut round = runner.begin_streaming_round();

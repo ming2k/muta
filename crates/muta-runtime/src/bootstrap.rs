@@ -363,10 +363,16 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // It controls only project-authored assets (MCP, skills, hooks, rules).
     let workspace_security = Arc::new(WorkspaceSecurityStore::load());
     let security_snapshot = workspace_security.snapshot(&project_root);
-    // Spatial admission is user-owned global policy. A repository's own
-    // config is never allowed to widen the directory set it can access.
+    let mut effective_config = config.clone();
+    if security_snapshot.roots.is_trusted() {
+        let project_roots = Config::load_project_additional_roots(&project_root);
+        if !project_roots.is_empty() {
+            effective_config.merge_project_additional_roots(project_roots);
+        }
+    }
+    // Spatial admission resolves both global user-owned and trusted project roots.
     let additional_roots: Vec<std::path::PathBuf> =
-        match config.resolve_workspace_additional_roots(&project_root) {
+        match effective_config.resolve_workspace_additional_roots(&project_root) {
             Ok(roots) => roots,
             Err(reason) => {
                 // Fail closed to the primary workspace when any configured

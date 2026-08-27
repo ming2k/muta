@@ -321,8 +321,6 @@ pub type CodeRange = (usize, usize);
 /// copy/selection; renderers may elide them visually.
 pub type MathRange = (usize, usize);
 
-type ParsedLink = ((usize, usize), (usize, usize), String);
-
 /// A byte range for a recognized hyperlink inside prose.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkRange {
@@ -575,6 +573,8 @@ pub struct TranscriptMessage {
     /// Restored messages use the persisted millisecond value when available and
     /// fall back to the durable core-message timestamp for legacy sessions.
     pub sent_at_ms: Option<u64>,
+    /// Durable provenance / injection origin stamped by the harness (ADR-0050).
+    pub injection_origin: Option<muta_contracts::InjectionOrigin>,
 }
 
 impl TranscriptMessage {
@@ -605,6 +605,7 @@ impl TranscriptMessage {
             round: None,
             turn: None,
             sent_at_ms: None,
+            injection_origin: None,
         }
     }
 
@@ -740,6 +741,7 @@ impl TranscriptMessage {
             round: None,
             turn: None,
             sent_at_ms: None,
+            injection_origin: None,
         };
         message.refresh_tool_step();
         message
@@ -817,6 +819,7 @@ impl TranscriptMessage {
             round: None,
             turn: None,
             sent_at_ms: None,
+            injection_origin: None,
         }
     }
 
@@ -1445,14 +1448,18 @@ impl TranscriptMessage {
     pub fn is_runner_task(&self) -> bool {
         matches!(
             &self.kind,
-            MessageKind::ToolStep { name, .. } if name == "runner" || name == "runner_code"
+            MessageKind::ToolStep { name, .. }
+                if matches!(
+                    name.as_str(),
+                    "spawn_runner" | "runner" | "runner_code" | "runner_mcp"
+                )
         )
     }
 
     /// The bound runner profile name (`explore` / `plan` / `verify` / …), used
     /// by the inline step's role badge. `None` until the `Started` event lands
     /// (or for non-runner steps); the renderer falls back to a generic
-    /// `[ENVOY]` badge then.
+    /// `[RUNNER]` badge then.
     pub fn runner_profile(&self) -> Option<&str> {
         match &self.kind {
             MessageKind::ToolStep { profile, .. } => profile.as_deref(),
@@ -1649,6 +1656,7 @@ impl TranscriptMessage {
             round: None,
             turn: None,
             sent_at_ms: None,
+            injection_origin: None,
         };
         message.raw = content;
         message.blocks = parse_blocks(&message.raw);
@@ -1696,6 +1704,7 @@ impl TranscriptMessage {
             round: None,
             turn: None,
             sent_at_ms: None,
+            injection_origin: None,
         }
     }
 
@@ -1815,6 +1824,7 @@ impl TranscriptMessage {
             round: None,
             turn: None,
             sent_at_ms: None,
+            injection_origin: None,
         }
     }
 
@@ -1849,6 +1859,7 @@ impl TranscriptMessage {
             round: None,
             turn: None,
             sent_at_ms: None,
+            injection_origin: None,
         }
     }
 

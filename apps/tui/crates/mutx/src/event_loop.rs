@@ -2361,7 +2361,7 @@ pub(super) fn tool_activity_status(name: &str) -> &'static str {
         "write_file" | "edit_file" => "making edits",
         "run_command" | "execute_command" | "bash" => "running command",
         "write_todos" | "update_todo" | "todo" | "todo_update" => "updating tasks",
-        "spawn_runner" | "runner" | "runner_code" | "runner_mcp" => "running subagent",
+        "spawn_runner" | "runner" | "runner_code" | "runner_mcp" => "running runner",
         name if name.starts_with("mcp__") => "using MCP",
         _ => "using tool",
     }

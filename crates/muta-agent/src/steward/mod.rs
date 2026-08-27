@@ -34,7 +34,10 @@ impl std::fmt::Display for StewardError {
             Self::Timeout(d) => write!(f, "Steward task timed out after {d:?}"),
             Self::ProviderError(e) => write!(f, "Provider failed: {e}"),
             Self::DeserializationError { error, raw } => {
-                write!(f, "Failed to deserialize structured output: {error}, raw: {raw}")
+                write!(
+                    f,
+                    "Failed to deserialize structured output: {error}, raw: {raw}"
+                )
             }
             Self::EmptyResponse => write!(f, "Model returned an empty response"),
         }
@@ -180,15 +183,15 @@ fn parse_structured_json<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T,
 /// Strip wrapping ```json ... ``` code fences from model outputs.
 fn strip_markdown_code_fence(s: &str) -> &str {
     let trimmed = s.trim();
-    if let Some(rest) = trimmed.strip_prefix("```json") {
-        if let Some(inner) = rest.strip_suffix("```") {
-            return inner.trim();
-        }
+    if let Some(rest) = trimmed.strip_prefix("```json")
+        && let Some(inner) = rest.strip_suffix("```")
+    {
+        return inner.trim();
     }
-    if let Some(rest) = trimmed.strip_prefix("```") {
-        if let Some(inner) = rest.strip_suffix("```") {
-            return inner.trim();
-        }
+    if let Some(rest) = trimmed.strip_prefix("```")
+        && let Some(inner) = rest.strip_suffix("```")
+    {
+        return inner.trim();
     }
     trimmed
 }
@@ -233,10 +236,7 @@ mod tests {
             .await;
         assert!(verdict.is_loop);
         assert_eq!(verdict.pattern.as_deref(), Some("oscillating edit"));
-        assert_eq!(
-            verdict.remedy_nudge.as_deref(),
-            Some("Read the file first")
-        );
+        assert_eq!(verdict.remedy_nudge.as_deref(), Some("Read the file first"));
     }
 
     #[tokio::test]

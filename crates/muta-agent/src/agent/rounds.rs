@@ -390,7 +390,8 @@ impl Agent {
             }
 
             if let Some(ref pat) = loop_aborted {
-                content = crate::stream_loop_detector::StreamLoopDetector::trim_suffix(&content, pat);
+                content =
+                    crate::stream_loop_detector::StreamLoopDetector::trim_suffix(&content, pat);
                 let steer_msg = format!(
                     "[System Directive: Output generation was truncated because it entered a {}. \
                      Please synthesize your current conclusions directly, proceed to your next tool action, \

@@ -50,6 +50,23 @@ fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
     if is_queued {
         return String::new();
     }
+    if let Some(ref origin) = msg.injection_origin {
+        match origin.kind {
+            muta_contracts::InjectionKind::Hook(event) => {
+                return format!("hook:{}", format!("{event:?}").to_lowercase());
+            }
+            muta_contracts::InjectionKind::InterAgent => return "inter-agent".to_string(),
+            muta_contracts::InjectionKind::RunnerSteer => return "↳ runner steer".to_string(),
+            muta_contracts::InjectionKind::RunnerTask => return "runner task".to_string(),
+            muta_contracts::InjectionKind::UserSteer => return "↳ steer".to_string(),
+            muta_contracts::InjectionKind::LoopReviewNudge => return "guard:loop".to_string(),
+            muta_contracts::InjectionKind::SystemReminder => return "system:reminder".to_string(),
+            muta_contracts::InjectionKind::CompactionCheckpoint => return "checkpoint".to_string(),
+            muta_contracts::InjectionKind::ImplicitSkill => return "skill:inject".to_string(),
+            muta_contracts::InjectionKind::ImplicitFile => return "file:inject".to_string(),
+            _ => {}
+        }
+    }
     if msg.origin == crate::model::document::UserMessageOrigin::Steer {
         return "↳ steer".to_string();
     }
@@ -74,6 +91,12 @@ fn sent_header_context(msg: &TranscriptMessage, is_queued: bool) -> String {
     // their `Queued` marker instead.
     if is_queued {
         return String::new();
+    }
+    if let Some(ref origin) = msg.injection_origin
+        && let Some(reason) = &origin.reason
+        && !reason.is_empty()
+    {
+        return reason.clone();
     }
     if msg.origin == crate::model::document::UserMessageOrigin::Steer
         || msg.origin == crate::model::document::UserMessageOrigin::FollowUp

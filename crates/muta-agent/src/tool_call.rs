@@ -3,7 +3,7 @@
 //! Providers without native function calling (or ones that mirror a native
 //! call as text) emit a JSON object such as `{"tool":"execute_command","arguments":{...}}`,
 //! optionally wrapped in ChatML/Hermes sentinel tokens.
-//! [`parse_text_tool_call`] recovers a [`ToolCall`] from such prose-embedded
+//! `parse_text_tool_call` recovers a [`ToolCall`] from such prose-embedded
 //! JSON. Provider-native framing remains in the protocol SDKs.
 
 use crate::{Message, Role, ToolCall};
@@ -68,6 +68,49 @@ pub(crate) fn attach_fallback_tool_call(messages: &mut [Message], call: &ToolCal
     {
         last.tool_calls = Some(vec![call.clone()]);
     }
+}
+
+/// Extract a partial string field value from an in-flight streaming JSON arguments string.
+///
+/// For example, given an in-flight stream `{"path": "crates/muta-agent/src/`
+/// this extracts `"crates/muta-agent/src/"` without waiting for the closing quote or brace.
+/// This enables speculative pre-warming (e.g. disk page-cache read, path validation, permission check)
+/// while the LLM is still streaming the rest of the arguments.
+pub fn extract_partial_string_field(partial_json: &str, field_name: &str) -> Option<String> {
+    let key_pattern = format!("\"{}\"", field_name);
+    let key_pos = partial_json.find(&key_pattern)?;
+    let after_key = &partial_json[key_pos + key_pattern.len()..];
+    let colon_pos = after_key.find(':')?;
+    let after_colon = after_key[colon_pos + 1..].trim_start();
+    if !after_colon.starts_with('"') {
+        return None;
+    }
+    let value_str = &after_colon[1..];
+    let mut out = String::new();
+    let mut escaped = false;
+    for ch in value_str.chars() {
+        if escaped {
+            match ch {
+                'n' => out.push('\n'),
+                'r' => out.push('\r'),
+                't' => out.push('\t'),
+                '\\' => out.push('\\'),
+                '"' => out.push('"'),
+                other => {
+                    out.push('\\');
+                    out.push(other);
+                }
+            }
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            break;
+        } else {
+            out.push(ch);
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 #[cfg(test)]
@@ -158,47 +201,4 @@ mod tests {
         let empty = r#"{"other": 123}"#;
         assert_eq!(extract_partial_string_field(empty, "path"), None);
     }
-}
-
-/// Extract a partial string field value from an in-flight streaming JSON arguments string.
-///
-/// For example, given an in-flight stream `{"path": "crates/muta-agent/src/`
-/// this extracts `"crates/muta-agent/src/"` without waiting for the closing quote or brace.
-/// This enables speculative pre-warming (e.g. disk page-cache read, path validation, permission check)
-/// while the LLM is still streaming the rest of the arguments.
-pub fn extract_partial_string_field(partial_json: &str, field_name: &str) -> Option<String> {
-    let key_pattern = format!("\"{}\"", field_name);
-    let key_pos = partial_json.find(&key_pattern)?;
-    let after_key = &partial_json[key_pos + key_pattern.len()..];
-    let colon_pos = after_key.find(':')?;
-    let after_colon = after_key[colon_pos + 1..].trim_start();
-    if !after_colon.starts_with('"') {
-        return None;
-    }
-    let value_str = &after_colon[1..];
-    let mut out = String::new();
-    let mut escaped = false;
-    for ch in value_str.chars() {
-        if escaped {
-            match ch {
-                'n' => out.push('\n'),
-                'r' => out.push('\r'),
-                't' => out.push('\t'),
-                '\\' => out.push('\\'),
-                '"' => out.push('"'),
-                other => {
-                    out.push('\\');
-                    out.push(other);
-                }
-            }
-            escaped = false;
-        } else if ch == '\\' {
-            escaped = true;
-        } else if ch == '"' {
-            break;
-        } else {
-            out.push(ch);
-        }
-    }
-    (!out.is_empty()).then_some(out)
 }

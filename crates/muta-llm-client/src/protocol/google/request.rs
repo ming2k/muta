@@ -280,7 +280,7 @@ fn assistant_parts(message: Message, call_names: &mut HashMap<String, String>) -
             let sig = thought_signatures
                 .get(&call.id)
                 .or_else(|| thought_signatures.get(&call.name))
-                .or_else(|| fallback_signature.as_ref());
+                .or(fallback_signature.as_ref());
             if let Some(signature) = sig {
                 part["thoughtSignature"] = json!(signature);
             }

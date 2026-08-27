@@ -102,6 +102,7 @@ impl WorkspaceSecurityStore {
             skills: state_for(TrustDomain::Skills),
             hooks: state_for(TrustDomain::Hooks),
             rules: state_for(TrustDomain::Rules),
+            roots: state_for(TrustDomain::Roots),
         }
     }
 
@@ -254,6 +255,7 @@ fn domain_paths(domain: TrustDomain) -> &'static [&'static str] {
         TrustDomain::Skills => SKILLS_PATHS,
         TrustDomain::Hooks => HOOK_PATHS,
         TrustDomain::Rules => RULE_PATHS,
+        TrustDomain::Roots => &[],
     }
 }
 
@@ -267,6 +269,7 @@ fn domain_digest(workspace: &Path, domain: TrustDomain) -> Result<Option<String>
     let config_projection = match domain {
         TrustDomain::Mcp => project_config_projection(workspace, "mcp")?,
         TrustDomain::Hooks => project_config_projection(workspace, "hooks")?,
+        TrustDomain::Roots => project_config_projection(workspace, "workspace")?,
         TrustDomain::Skills | TrustDomain::Rules => None,
     };
 
@@ -546,5 +549,29 @@ mod tests {
         let snap = store.snapshot(root);
         assert_eq!(snap.mcp, WorkspaceTrustState::Trusted);
         assert_eq!(snap.hooks, WorkspaceTrustState::Changed);
+    }
+
+    #[test]
+    fn roots_domain_projection_tracks_workspace_table() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(".muta")).unwrap();
+        let config = root.join(".muta/config.toml");
+        std::fs::write(&config, "[workspace]\nadditional_roots = [\"../optics\"]\n").unwrap();
+        let store = WorkspaceSecurityStore::load_from(root.join("state/workspace_security.json"));
+        let snap = store.snapshot(root);
+        assert_eq!(snap.roots, WorkspaceTrustState::Quarantined);
+
+        store.trust_domain(root, TrustDomain::Roots).unwrap();
+        let snap = store.snapshot(root);
+        assert_eq!(snap.roots, WorkspaceTrustState::Trusted);
+
+        std::fs::write(
+            &config,
+            "[workspace]\nadditional_roots = [\"../optics\", \"../backend\"]\n",
+        )
+        .unwrap();
+        let snap = store.snapshot(root);
+        assert_eq!(snap.roots, WorkspaceTrustState::Changed);
     }
 }

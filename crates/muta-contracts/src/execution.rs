@@ -224,9 +224,10 @@ pub trait ExecutionEnvironment: Send + Sync {
         let normalized = lexical_normalize(&target);
         let root_norm = lexical_normalize(self.workspace_root());
         let admitted = normalized.starts_with(&root_norm)
-            || self.additional_roots().iter().any(|extra| {
-                normalized.starts_with(lexical_normalize(extra))
-            });
+            || self
+                .additional_roots()
+                .iter()
+                .any(|extra| normalized.starts_with(lexical_normalize(extra)));
 
         if admitted {
             Ok(target)
@@ -299,32 +300,72 @@ mod tests {
     struct MockFs;
     #[async_trait]
     impl FsProvider for MockFs {
-        async fn read(&self, _path: &Path) -> Result<Vec<u8>, FsError> { Ok(Vec::new()) }
-        async fn write(&self, _path: &Path, _content: &[u8]) -> Result<(), FsError> { Ok(()) }
-        async fn exists(&self, _path: &Path) -> bool { true }
-        async fn is_dir(&self, _path: &Path) -> bool { true }
-        async fn is_file(&self, _path: &Path) -> bool { false }
-        async fn list_dir(&self, _path: &Path) -> Result<Vec<DirEntry>, FsError> { Ok(Vec::new()) }
-        async fn create_dir_all(&self, _path: &Path) -> Result<(), FsError> { Ok(()) }
-        async fn remove_file(&self, _path: &Path) -> Result<(), FsError> { Ok(()) }
+        async fn read(&self, _path: &Path) -> Result<Vec<u8>, FsError> {
+            Ok(Vec::new())
+        }
+        async fn write(&self, _path: &Path, _content: &[u8]) -> Result<(), FsError> {
+            Ok(())
+        }
+        async fn exists(&self, _path: &Path) -> bool {
+            true
+        }
+        async fn is_dir(&self, _path: &Path) -> bool {
+            true
+        }
+        async fn is_file(&self, _path: &Path) -> bool {
+            false
+        }
+        async fn list_dir(&self, _path: &Path) -> Result<Vec<DirEntry>, FsError> {
+            Ok(Vec::new())
+        }
+        async fn create_dir_all(&self, _path: &Path) -> Result<(), FsError> {
+            Ok(())
+        }
+        async fn remove_file(&self, _path: &Path) -> Result<(), FsError> {
+            Ok(())
+        }
         async fn metadata(&self, _path: &Path) -> Result<FsMetadata, FsError> {
-            Ok(FsMetadata { is_dir: true, is_file: false, is_symlink: false, len: 0 })
+            Ok(FsMetadata {
+                is_dir: true,
+                is_file: false,
+                is_symlink: false,
+                len: 0,
+            })
         }
     }
 
     struct MockProcess;
     #[async_trait]
     impl ProcessRunner for MockProcess {
-        async fn exec(&self, _command: &str, _cwd: &Path, _env: Option<&HashMap<String, String>>, _timeout: Duration) -> Result<ProcessOutput, String> {
-            Ok(ProcessOutput { exit_code: Some(0), stdout: Vec::new(), stderr: Vec::new(), timed_out: false })
+        async fn exec(
+            &self,
+            _command: &str,
+            _cwd: &Path,
+            _env: Option<&HashMap<String, String>>,
+            _timeout: Duration,
+        ) -> Result<ProcessOutput, String> {
+            Ok(ProcessOutput {
+                exit_code: Some(0),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                timed_out: false,
+            })
         }
     }
 
     impl ExecutionEnvironment for MockEnv {
-        fn fs(&self) -> &dyn FsProvider { &MockFs }
-        fn process(&self) -> &dyn ProcessRunner { &MockProcess }
-        fn workspace_root(&self) -> &Path { &self.root }
-        fn additional_roots(&self) -> &[PathBuf] { &self.additional }
+        fn fs(&self) -> &dyn FsProvider {
+            &MockFs
+        }
+        fn process(&self) -> &dyn ProcessRunner {
+            &MockProcess
+        }
+        fn workspace_root(&self) -> &Path {
+            &self.root
+        }
+        fn additional_roots(&self) -> &[PathBuf] {
+            &self.additional
+        }
     }
 
     #[test]

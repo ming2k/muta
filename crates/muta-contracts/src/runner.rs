@@ -692,7 +692,11 @@ mod tests {
     #[test]
     fn mcp_specialist_profile_admits_dynamic_tools_and_excludes_recursion() {
         use crate::RUNNER_MCP_SPECIALIST;
-        assert!(RUNNER_MCP_SPECIALIST.yolo);
+        // Pins the compiled-in profile value (delegation via `runner_mcp` is
+        // the authorization, mirroring RUNNER_CODE above); constant by design.
+        #[allow(clippy::assertions_on_constants)]
+        let yolo = RUNNER_MCP_SPECIALIST.yolo;
+        assert!(yolo);
         // Dynamic / external tools admitted
         assert!(
             RUNNER_MCP_SPECIALIST

@@ -291,7 +291,7 @@ async fn read_file_paths() -> Vec<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Some(output) = read_command_stdout(
+        if let Some(bytes) = read_command_output(
             "powershell",
             &[
                 "-NoProfile",
@@ -302,7 +302,7 @@ async fn read_file_paths() -> Vec<PathBuf> {
         )
         .await
         {
-            return output
+            return String::from_utf8_lossy(&bytes)
                 .lines()
                 .map(str::trim)
                 .filter(|line| !line.is_empty())

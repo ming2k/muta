@@ -21,7 +21,7 @@ use crate::side::{
 
 /// `AgentRequest::Chat` — start an interactive round against whichever session
 /// the user is currently composing into (primary or `/btw` side).
-pub async fn chat(
+pub(crate) async fn chat(
     env: SideEnv<'_>,
     text: String,
     images: Vec<muta_contracts::ImagePart>,
@@ -116,7 +116,7 @@ pub async fn cancel_steer(
 /// Dispatch a paused outbox item into a fresh round without consulting the
 /// frontend's current view. If its side session vanished, hand ownership back
 /// to the outbox through `SteerUnavailable`.
-pub async fn follow_up(env: SideEnv<'_>, session_id: String, input: QueuedMessage) {
+pub(crate) async fn follow_up(env: SideEnv<'_>, session_id: String, input: QueuedMessage) {
     let SideEnv {
         side,
         master: agent,

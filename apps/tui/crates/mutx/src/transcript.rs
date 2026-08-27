@@ -63,6 +63,7 @@ pub(super) fn transcript_message_from_core(message: Message) -> Option<Transcrip
             .clone()
             .filter(|effort| !effort.is_empty() && !effort.eq_ignore_ascii_case("none"));
         msg.sent_at_ms = sent_at_ms;
+        msg.injection_origin = message.origin;
         // Infer the turn origin for restored user messages so a resumed
         // session's Activity modal still skips slash/shell turns. The durable
         // `origin` field is consulted first (ADR-0050): a `CommandEcho`

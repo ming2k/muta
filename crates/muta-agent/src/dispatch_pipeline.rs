@@ -310,7 +310,6 @@ impl Agent {
     /// [`RUNNER_DRAIN_GRACE`]; whatever still has not settled is then aborted.
     /// The outcome reports `interrupted: true` with every drained result
     /// preserved in its slot, and every call that produced nothing is paired
-
     /// with a terminal [`AgentEvent::ToolCancelled`]. The caller
     /// ([`Agent::dispatch_finalize`]) decides how to end the round.
     pub(crate) async fn schedule_tool_calls<F>(

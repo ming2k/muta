@@ -96,6 +96,10 @@ pub struct HookContext {
 /// input/output — commands read JSON on stdin, not live Rust values, so the
 /// full [`crate::ToolOutput`] (which may embed an envoy transcript) is not
 /// forwarded wholesale; its `to_text()` summary is.
+// Hook payloads are constructed once per fire and immediately serialized to
+// the hook process's stdin; boxing `PermissionRequest` would not reduce peak
+// memory in any real workload, so the variant size spread is accepted.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum HookEvent {
     SessionStart {

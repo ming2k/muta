@@ -15,7 +15,7 @@ The `Tool` trait is defined in
 
 Most tools self-register through `inventory` and are collected into a
 `ToolSet` by the application. Agent construction automatically adds `todo` and
-`todo_update`, bound to that instance's live task-list context. `EnvoyTool` is
+`todo_update`, bound to that instance's live task-list context. `RunnerTool` is
 assembled explicitly because it captures a snapshot of the other tools.
 
 | Tool | Access | Permission scope | Reference page |
@@ -33,8 +33,9 @@ assembled explicitly because it captures a snapshot of the other tools.
 | `todo_update` | `Read` | `*` | [interaction](interaction.md) |
 | `webfetch` | `Read` | `*` | [web](web.md) |
 | `websearch` | `Read` | `*` | [web](web.md) |
-| `envoy` | `Read` (spawns envoy) | `*` | [envoy](envoy.md) |
-| `envoy_code` | `Read` (spawns envoy) | `*` | [envoy](envoy.md) |
+| `spawn_runner` / `runner` | `Read` (spawns runner) | `*` | [runner](envoy.md) |
+| `runner_code` | `Read` (spawns runner) | `*` | [runner](envoy.md) |
+| `runner_mcp` | `Read` (spawns runner) | `*` | [runner](envoy.md) |
 | `use_skill` | `Read` | `*` | [skills](skills.md) |
 | `list_skills` | `Read` | `*` | [skills](skills.md) |
 | `mcp__<server>__<tool>` | `Read` if server `read_only = true`, else `Write` | `*` | [mcp](mcp.md) |

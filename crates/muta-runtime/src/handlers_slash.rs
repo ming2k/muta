@@ -85,6 +85,10 @@ async fn reload_trusted_assets(
     if snapshot.hooks.is_trusted() {
         effective.merge_project_hooks(Config::load_project_hooks(project_root));
     }
+    if snapshot.roots.is_trusted() {
+        effective
+            .merge_project_additional_roots(Config::load_project_additional_roots(project_root));
+    }
 
     let mcp_report = mcp_runtime.reconfigure(effective.mcp.clone()).await;
     agent.set_hooks(crate::hooks::build_hook_registry(&effective.hooks, agent));
@@ -584,11 +588,12 @@ fn trust_route(name: &str, parts: &[&str]) -> Result<TrustRoute, String> {
         Some("skills") => Ok(TrustRoute::Grant(TrustDomain::Skills)),
         Some("hooks") => Ok(TrustRoute::Grant(TrustDomain::Hooks)),
         Some("rules") => Ok(TrustRoute::Grant(TrustDomain::Rules)),
+        Some("roots") => Ok(TrustRoute::Grant(TrustDomain::Roots)),
         Some("status") => Ok(TrustRoute::Status),
         Some("revoke") => Ok(TrustRoute::Revoke),
         Some(other) => Err(format!(
             "Unknown /trust subcommand '{other}'. Use `/trust`, `/trust all`, `/trust mcp`, \
-             `/trust skills`, `/trust hooks`, `/trust rules`, `/trust status`, or `/trust revoke`."
+             `/trust skills`, `/trust hooks`, `/trust rules`, `/trust roots`, `/trust status`, or `/trust revoke`."
         )),
     }
 }
@@ -623,7 +628,7 @@ pub(crate) struct SlashEnv<'a> {
 
 /// `AgentRequest::SlashCommand` — parse the command, dispatch to the matching
 /// built-in handler, or fall through to the user-defined project-command path.
-pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
+pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
     let SlashEnv {
         ref config,
         ref agent,
@@ -701,6 +706,12 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             let project_hooks = Config::load_project_hooks(project_root_for_side);
             if security_snapshot.hooks.is_trusted() && !project_hooks.is_empty() {
                 reloaded.merge_project_hooks(project_hooks);
+            }
+            if security_snapshot.roots.is_trusted() {
+                let project_roots = Config::load_project_additional_roots(project_root_for_side);
+                if !project_roots.is_empty() {
+                    reloaded.merge_project_additional_roots(project_roots);
+                }
             }
             // MCP: diff + (re)connect/disconnect. The next request picks up the
             // new tool set automatically (visible_tools recomputes each turn).
@@ -1615,13 +1626,15 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                          - Skills: {}\n\
                          - Hooks: {}\n\
                          - Rules: {}\n\
+                         - Roots: {}\n\
                          - Aggregate: {}\n\
-                         Asset trust does not grant filesystem scope or runtime execution permission.",
+                         Asset trust does not grant filesystem scope or runtime execution permission beyond declared workspace roots.",
                         snapshot.root,
                         snapshot.mcp.as_str(),
                         snapshot.skills.as_str(),
                         snapshot.hooks.as_str(),
                         snapshot.rules.as_str(),
+                        snapshot.roots.as_str(),
                         snapshot.aggregate().as_str(),
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))
@@ -1674,13 +1687,14 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         "Project asset trust recorded.\n\
                          - Root: {}\n\
                          - Granted: {}\n\
-                         - MCP: {}; Skills: {}; Hooks: {}; Rules: {}{}",
+                         - MCP: {}; Skills: {}; Hooks: {}; Rules: {}; Roots: {}{}",
                         report.snapshot.root,
                         granted,
                         report.snapshot.mcp.as_str(),
                         report.snapshot.skills.as_str(),
                         report.snapshot.hooks.as_str(),
                         report.snapshot.rules.as_str(),
+                        report.snapshot.roots.as_str(),
                         mcp,
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))

@@ -17,12 +17,13 @@ content trustworthy.
 ## Project asset trust
 
 Project asset trust protects input that travels with a repository. It is split
-into four concrete domains:
+into five concrete domains:
 
 - **MCP** — project MCP server definitions;
 - **Skills** — project-local Skills;
 - **Hooks** — project lifecycle hook definitions and scripts;
-- **Rules** — project instructions and slash-command templates.
+- **Rules** — project instructions and slash-command templates;
+- **Roots** — project-declared linked workspace roots (`[workspace].additional_roots`).
 
 Each domain has its own SHA-256 attestation. The digest covers names, bytes,
 and relevant permission modes. A change to Hooks therefore quarantines Hooks
@@ -34,10 +35,10 @@ The states are `absent`, `quarantined`, `trusted`, and `changed`. Grants are
 durable for the canonical workspace root, so reopening the same unchanged
 repository restores only the domains that were explicitly trusted.
 
-`/trust` and `/trust all` trust every present domain. `/trust mcp` and
-`/trust skills` are deliberately narrow. `/trust status` reports every domain;
-`/trust revoke` and `/untrust` revoke all of them. There is no aggregate grant
-and no `/trust workspace` or `/extensions` compatibility surface.
+`/trust` and `/trust all` trust every present domain. Narrow commands such as
+`/trust mcp`, `/trust skills`, and `/trust roots` approve single domains.
+`/trust status` reports every domain; `/trust revoke` and `/untrust` revoke all of them.
+There is no aggregate grant and no `/trust workspace` or `/extensions` compatibility surface.
 
 A mutation reloads all asset consumers from one new snapshot. Consumers that
 can act later, such as project Skills, MCP tools, and Hooks, re-attest before

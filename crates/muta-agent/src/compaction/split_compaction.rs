@@ -98,11 +98,11 @@ pub fn find_cut_point(
     // Adjust cut_index so we never cut in the middle of a ToolResult
     // If the entry at cut_index is a ToolResult, walk backward to find the Assistant call that triggered it
     while cut_index > 0 {
-        if let SessionEntryKind::Message { ref message } = entries[cut_index].kind {
-            if message.role == Role::Tool {
-                cut_index -= 1;
-                continue;
-            }
+        if let SessionEntryKind::Message { ref message } = entries[cut_index].kind
+            && message.role == Role::Tool
+        {
+            cut_index -= 1;
+            continue;
         }
         break;
     }

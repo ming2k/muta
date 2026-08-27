@@ -21,14 +21,9 @@ pub enum DegeneratePattern {
         pattern: String,
     },
     /// Monotonic sequence repetition (e.g. `Step 1, Step 2, Step 3, Step 4, Step 5`).
-    MonotonicSequence {
-        template: String,
-        count: usize,
-    },
+    MonotonicSequence { template: String, count: usize },
     /// Unbounded digit or raw data generation (e.g. endless $\pi$ digits).
-    UnboundedDigitStream {
-        length: usize,
-    },
+    UnboundedDigitStream { length: usize },
 }
 
 impl DegeneratePattern {
@@ -121,7 +116,7 @@ impl StreamLoopDetector {
 
     /// KMP String Periodicity Theorem:
     ///
-    /// For a substring $S$ of length $L$, compute its prefix function $\pi[L]$.
+    /// For a substring $S$ of length $L$, compute its prefix function $\pi\[L\]$.
     /// If $p = L - \pi[L-1]$ divides $L$, then $p$ is the smallest repeating period of $S$.
     fn detect_periodic(text: &str) -> Option<DegeneratePattern> {
         let chars: Vec<char> = text.chars().collect();
@@ -155,16 +150,16 @@ impl StreamLoopDetector {
             }
 
             let p = n - matched; // candidate period
-            if p == 0 || n % p != 0 {
+            if p == 0 || !n.is_multiple_of(p) {
                 continue;
             }
 
             let repetitions = n / p;
             let min_reps = match p {
-                1..=2 => 8,  // Single/double char (e.g. `..`, `==`): need 8+ reps to avoid false positives
-                3..=5 => 4,  // Short word/code (e.g. `abc`): need 4+ reps
+                1..=2 => 8, // Single/double char (e.g. `..`, `==`): need 8+ reps to avoid false positives
+                3..=5 => 4, // Short word/code (e.g. `abc`): need 4+ reps
                 6..=16 => 3, // Phrase: need 3+ reps
-                _ => 2,      // Long multi-line pattern: 2+ full repetitions
+                _ => 2,     // Long multi-line pattern: 2+ full repetitions
             };
 
             // Avoid triggering on pure whitespace indentation repetitions
@@ -293,7 +288,8 @@ impl StreamLoopDetector {
                 trimmed.push_str("\n\n[... stream truncated: repetitive pattern aborted ...]");
                 trimmed
             }
-            DegeneratePattern::MonotonicSequence { .. } | DegeneratePattern::UnboundedDigitStream { .. } => {
+            DegeneratePattern::MonotonicSequence { .. }
+            | DegeneratePattern::UnboundedDigitStream { .. } => {
                 format!(
                     "{}\n\n[... stream truncated: unbounded loop aborted ...]",
                     full_text.trim_end()
@@ -330,10 +326,7 @@ mod tests {
         let pat = detector.push_and_check(chunk);
         assert!(matches!(
             pat,
-            Some(DegeneratePattern::Periodic {
-                repetitions: 3,
-                ..
-            })
+            Some(DegeneratePattern::Periodic { repetitions: 3, .. })
         ));
     }
 

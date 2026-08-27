@@ -1161,9 +1161,51 @@ impl Config {
         }
     }
 
-    /// Resolve the user-owned `[workspace].additional_roots` policy for an
-    /// active project. Repository-local configuration is deliberately not
-    /// consulted, so asset trust can neither widen nor narrow this boundary.
+    /// Load only the `[workspace].additional_roots` array from a project-local
+    /// `.muta/config.toml`. Returns an empty vec when the file or table is
+    /// absent. Like [`Self::load_project_mcp`] and [`Self::load_project_hooks`],
+    /// this is a narrow projection (just the workspace table). Project-scope
+    /// additional roots remain quarantined until the `roots` domain is trusted.
+    pub fn load_project_additional_roots(project_root: &std::path::Path) -> Vec<String> {
+        let path = project_root.join(".muta/config.toml");
+        let Some(content) = fs::read_to_string(&path).ok() else {
+            return Vec::new();
+        };
+        #[derive(Deserialize)]
+        struct ProjectWorkspaceProjection {
+            #[serde(default)]
+            workspace: ProjectWorkspaceConfig,
+        }
+        #[derive(Deserialize, Default)]
+        struct ProjectWorkspaceConfig {
+            #[serde(default)]
+            additional_roots: Vec<String>,
+        }
+        match toml::from_str::<ProjectWorkspaceProjection>(&content) {
+            Ok(parsed) => parsed.workspace.additional_roots,
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "project .muta/config.toml has invalid [workspace]; ignoring project additional_roots"
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    /// Append project-local `[workspace].additional_roots` to this config's additional roots.
+    pub fn merge_project_additional_roots(&mut self, project_roots: Vec<String>) {
+        for root in project_roots {
+            if !self.workspace.additional_roots.contains(&root) {
+                self.workspace.additional_roots.push(root);
+            }
+        }
+    }
+
+    /// Resolve the `[workspace].additional_roots` policy for an active project.
+    /// Global and trusted project-local additional roots are resolved and canonicalized
+    /// against `project_root`.
     pub fn resolve_workspace_additional_roots(
         &self,
         project_root: &std::path::Path,
@@ -1962,5 +2004,41 @@ name = "DeepSeek"
         // Global hook ordering preserved; project hooks come after.
         assert_eq!(global.hooks[0].command, "global-notify.sh");
         assert_eq!(global.hooks[1].command, ".muta/hooks/lint.sh");
+    }
+
+    #[test]
+    fn load_project_additional_roots_reads_workspace_table() {
+        let root = scratch_project_root();
+        std::fs::write(
+            root.join(".muta/config.toml"),
+            r#"
+                [workspace]
+                additional_roots = ["../optics", "~/shared/design"]
+            "#,
+        )
+        .unwrap();
+
+        let roots = Config::load_project_additional_roots(&root);
+        assert_eq!(roots, vec!["../optics", "~/shared/design"]);
+    }
+
+    #[test]
+    fn load_project_additional_roots_empty_when_absent() {
+        let root = scratch_project_root();
+        assert!(Config::load_project_additional_roots(&root).is_empty());
+    }
+
+    #[test]
+    fn merge_project_additional_roots_deduplicates_and_appends() {
+        let mut global = Config::default();
+        global.workspace.additional_roots = vec!["../optics".to_string()];
+        global.merge_project_additional_roots(vec![
+            "../optics".to_string(),
+            "../backend".to_string(),
+        ]);
+        assert_eq!(
+            global.workspace.additional_roots,
+            vec!["../optics", "../backend"]
+        );
     }
 }

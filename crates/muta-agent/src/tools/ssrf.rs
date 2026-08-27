@@ -10,7 +10,7 @@
 //! globally routable *before* the request is issued. Per-hop coverage is
 //! provided by disabling reqwest's automatic redirects (the shared client is
 //! built with `Policy::none()`) and following them explicitly via
-//! [`crate::tools::web::guarded_get`], which re-runs this guard on every hop —
+//! [`crate::tools::web::client::guarded_get`], which re-runs this guard on every hop —
 //! so a public URL bouncing to an internal address mid-flight is refused.
 //! Remaining exotic variants (DNS rebinding between the check and the connect)
 //! would require resolve-and-pin; this module closes the direct and redirect

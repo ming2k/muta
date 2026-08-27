@@ -349,7 +349,11 @@ mod tests {
         std::fs::create_dir_all(sibling_root.join("src")).unwrap();
         std::fs::create_dir_all(&unadmitted_root).unwrap();
 
-        std::fs::write(primary_root.join("src/main.rs"), "fn main() { println!(\"workspace\"); }").unwrap();
+        std::fs::write(
+            primary_root.join("src/main.rs"),
+            "fn main() { println!(\"workspace\"); }",
+        )
+        .unwrap();
         std::fs::write(sibling_root.join("src/lib.rs"), "pub fn optics() {}").unwrap();
         std::fs::write(unadmitted_root.join("secret.txt"), "secret").unwrap();
 
@@ -362,37 +366,62 @@ mod tests {
 
         // 1. list_dir
         let list_tool = ListDirTool::with_env(env.clone());
-        let list_sibling = list_tool.call(&serde_json::json!({ "path": "../optics" }).to_string()).await.unwrap();
+        let list_sibling = list_tool
+            .call(&serde_json::json!({ "path": "../optics" }).to_string())
+            .await
+            .unwrap();
         assert!(list_sibling.contains("src/"));
-        let list_unadmitted = list_tool.call(&serde_json::json!({ "path": "../unadmitted" }).to_string()).await;
+        let list_unadmitted = list_tool
+            .call(&serde_json::json!({ "path": "../unadmitted" }).to_string())
+            .await;
         assert!(list_unadmitted.is_err());
 
         // 2. find_files
         let find_tool = FindFilesTool::with_env(env.clone());
-        let find_sibling = find_tool.call(&serde_json::json!({ "path": "../optics", "patterns": ["*.rs"] }).to_string()).await.unwrap();
+        let find_sibling = find_tool
+            .call(&serde_json::json!({ "path": "../optics", "patterns": ["*.rs"] }).to_string())
+            .await
+            .unwrap();
         assert!(find_sibling.contains("lib.rs"));
-        let find_unadmitted = find_tool.call(&serde_json::json!({ "path": "../unadmitted", "patterns": ["*"] }).to_string()).await;
+        let find_unadmitted = find_tool
+            .call(&serde_json::json!({ "path": "../unadmitted", "patterns": ["*"] }).to_string())
+            .await;
         assert!(find_unadmitted.is_err());
 
         // 3. search_text
         let search_tool = SearchTextTool::with_env(env.clone());
-        let search_sibling = search_tool.call(&serde_json::json!({ "path": "../optics", "query": "optics" }).to_string()).await.unwrap();
+        let search_sibling = search_tool
+            .call(&serde_json::json!({ "path": "../optics", "query": "optics" }).to_string())
+            .await
+            .unwrap();
         assert!(search_sibling.contains("pub fn optics"));
-        let search_unadmitted = search_tool.call(&serde_json::json!({ "path": "../unadmitted", "query": "secret" }).to_string()).await;
+        let search_unadmitted = search_tool
+            .call(&serde_json::json!({ "path": "../unadmitted", "query": "secret" }).to_string())
+            .await;
         assert!(search_unadmitted.is_err());
 
         // 4. read_text
         let read_tool = ReadTextTool::with_env(env.clone());
-        let read_sibling = read_tool.call(&serde_json::json!({ "path": "../optics/src/lib.rs" }).to_string()).await.unwrap();
+        let read_sibling = read_tool
+            .call(&serde_json::json!({ "path": "../optics/src/lib.rs" }).to_string())
+            .await
+            .unwrap();
         assert!(read_sibling.contains("pub fn optics"));
-        let read_unadmitted = read_tool.call(&serde_json::json!({ "path": "../unadmitted/secret.txt" }).to_string()).await;
+        let read_unadmitted = read_tool
+            .call(&serde_json::json!({ "path": "../unadmitted/secret.txt" }).to_string())
+            .await;
         assert!(read_unadmitted.is_err());
 
         // 5. write_file
         let write_tool = WriteFileTool::with_env(env.clone());
         let write_sibling = write_tool.call(&serde_json::json!({ "path": "../optics/src/new.rs", "content": "// new optics file" }).to_string()).await.unwrap();
         assert!(write_sibling.contains("new.rs"));
-        let write_unadmitted = write_tool.call(&serde_json::json!({ "path": "../unadmitted/new.rs", "content": "bad" }).to_string()).await;
+        let write_unadmitted = write_tool
+            .call(
+                &serde_json::json!({ "path": "../unadmitted/new.rs", "content": "bad" })
+                    .to_string(),
+            )
+            .await;
         assert!(write_unadmitted.is_err());
 
         // 6. edit_file

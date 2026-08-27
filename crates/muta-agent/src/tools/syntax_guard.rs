@@ -140,20 +140,14 @@ fn verify_rust_delimiter_balance(source: &str) -> Result<(), String> {
         // Delimiters
         match ch {
             '{' | '(' | '[' => stack.push(ch),
-            '}' => {
-                if stack.pop() != Some('{') {
-                    return Err("Unmatched closing brace '}'".to_string());
-                }
+            '}' if stack.pop() != Some('{') => {
+                return Err("Unmatched closing brace '}'".to_string());
             }
-            ')' => {
-                if stack.pop() != Some('(') {
-                    return Err("Unmatched closing parenthesis ')'".to_string());
-                }
+            ')' if stack.pop() != Some('(') => {
+                return Err("Unmatched closing parenthesis ')'".to_string());
             }
-            ']' => {
-                if stack.pop() != Some('[') {
-                    return Err("Unmatched closing bracket ']'".to_string());
-                }
+            ']' if stack.pop() != Some('[') => {
+                return Err("Unmatched closing bracket ']'".to_string());
             }
             _ => {}
         }
@@ -195,20 +189,14 @@ fn verify_generic_delimiter_balance(source: &str) -> Result<(), String> {
 
         match ch {
             '{' | '(' | '[' => stack.push(ch),
-            '}' => {
-                if stack.pop() != Some('{') {
-                    return Err("Unmatched '}'".to_string());
-                }
+            '}' if stack.pop() != Some('{') => {
+                return Err("Unmatched '}'".to_string());
             }
-            ')' => {
-                if stack.pop() != Some('(') {
-                    return Err("Unmatched ')'".to_string());
-                }
+            ')' if stack.pop() != Some('(') => {
+                return Err("Unmatched ')'".to_string());
             }
-            ']' => {
-                if stack.pop() != Some('[') {
-                    return Err("Unmatched ']'".to_string());
-                }
+            ']' if stack.pop() != Some('[') => {
+                return Err("Unmatched ']'".to_string());
             }
             _ => {}
         }

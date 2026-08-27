@@ -31,7 +31,7 @@ Project and user-defined commands are covered under
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/init [path]` | Initialize a `.muta/` config tree |
-| `/trust [all\|mcp\|skills\|status\|revoke]` | Trust content-attested project asset domains; bare `/trust` means all |
+| `/trust [all\|mcp\|skills\|hooks\|rules\|roots\|status\|revoke]` | Trust content-attested project asset domains; bare `/trust` means all |
 | `/untrust` | Revoke all project asset-domain grants and unload their contributions |
 
 
@@ -257,28 +257,32 @@ recalling earlier decisions inside one long session; cross-session recall is
 
 | Form | Effect |
 |------|--------|
-| `/trust` or `/trust all` | Trust and load every present project asset domain |
+| `/trust` or `/trust all` | Trust and load every present project asset domain (MCP, skills, hooks, rules, roots) |
 | `/trust mcp` | Trust only project MCP definitions |
 | `/trust skills` | Trust only project skills |
-| `/trust status` | Show `mcp`, `skills`, `hooks`, and `rules` states plus a display-only aggregate |
-| `/trust revoke` or `/untrust` | Revoke all domain grants; disconnect project MCP and unload project hooks, skills, rules, and commands |
+| `/trust hooks` | Trust only project lifecycle hooks |
+| `/trust rules` | Trust only project rules and instructions |
+| `/trust roots` | Trust project-declared linked workspace roots (`[workspace].additional_roots`) |
+| `/trust status` | Show `mcp`, `skills`, `hooks`, `rules`, and `roots` states plus a display-only aggregate |
+| `/trust revoke` or `/untrust` | Revoke all domain grants; disconnect project MCP and unload project hooks, skills, rules, and linked workspace roots |
 
-The four domains are attested independently. MCP covers `.muta/mcp.json` and
+The five domains are attested independently. MCP covers `.muta/mcp.json` and
 the `[mcp]` projection of `.muta/config.toml`; Skills covers `.muta/skills`,
 `.agents/skills`, `.claude/skills`, and `skills`; Hooks covers `.muta/hooks`
 and project `[[hooks]]`; Rules covers project instructions and
-`.muta/commands`. Changing one domain moves only that domain to `changed`.
+`.muta/commands`; Roots covers project `[workspace].additional_roots`.
+Changing one domain moves only that domain to `changed`.
 
 Trust is keyed to the canonical workspace root. Each domain digest includes
 paths, file bytes, and relevant permission modes; symlinks and unreadable or
 unsupported entries fail closed. A trust or revoke command applies live to
-every consumer. Project skills and MCP/hooks re-attest before use so changed
-content cannot execute under a stale catalog entry.
+every consumer. Project skills, MCP/hooks, and linked roots re-attest before use so changed
+content cannot execute or widen boundaries under a stale grant.
 
-Asset trust does not grant file access or runtime execution permission.
-Likewise, linked workspace roots and runtime permission rules do not load
-project assets. `/trust workspace`, `/trust extensions`, and `/extensions`
-have been removed rather than retained as ambiguous aliases.
+Asset trust gates project-authored contributions. Untrusted project roots
+remain quarantined and do not widen the filesystem boundary until explicitly
+trusted via `/trust` or `/trust roots`. `/trust workspace`, `/trust extensions`,
+and `/extensions` have been removed rather than retained as ambiguous aliases.
 
 ### `/export`
 

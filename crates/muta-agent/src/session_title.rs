@@ -38,9 +38,9 @@ const TRANSCRIPT_BUDGET_CHARS: usize = 2_000;
 impl Agent {
     /// Generate a session title from `transcript`, or `None` on failure.
     ///
-    /// Delegated to the Harness [`Steward`]. The transcript is condensed to a
+    /// Delegated to the Harness [`crate::steward::Steward`]. The transcript is condensed to a
     /// compact excerpt (`serialize_for_title`); the model's answer is normalized
-    /// by [`clean_title`].
+    /// by [`muta_contracts::clean_title`].
     pub async fn generate_title(&self, transcript: &[Message]) -> Option<String> {
         let excerpt = serialize_for_title(transcript, TRANSCRIPT_BUDGET_CHARS);
         if excerpt.trim().is_empty() {
@@ -210,7 +210,10 @@ mod tests {
             .iter()
             .find(|m| m.role == Role::System)
             .expect("system message present");
-        assert_eq!(system.content, muta_contracts::SessionTitlerTask.system_prompt());
+        assert_eq!(
+            system.content,
+            muta_contracts::SessionTitlerTask.system_prompt()
+        );
         assert!(
             provider.last_tool_specs.lock().unwrap().is_empty(),
             "title requests must not inherit the agent's tool catalog"

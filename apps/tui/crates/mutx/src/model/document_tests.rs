@@ -2,8 +2,6 @@
 
 use super::*;
 
-use super::*;
-
 #[test]
 fn test_parse_simple_text() {
     let blocks = parse_blocks("Hello world");

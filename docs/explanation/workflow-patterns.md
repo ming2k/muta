@@ -8,7 +8,7 @@ different operational modes.
 muta is organized around a single unified binary that supports multiple
 interaction models. Rather than enforcing a rigid pairing loop, the system
 adapts to five distinct workflow patterns depending on whether the task
-requires direct human guidance, background execution, subagent delegation,
+requires direct human guidance, background execution, runner delegation,
 external tool expansion, or automated scheduling.
 
 ```text
@@ -17,7 +17,7 @@ external tool expansion, or automated scheduling.
 ├──────────────────────────────┬──────────────────────────────┤
 │ 1. Interactive Pairing Loop  │ Direct conversational coding │
 │ 2. Multi-Session Daemon      │ Detached background tasks    │
-│ 3. Subagent & WIP Consensus  │ Delegated multi-agent work   │
+│ 3. Runner & WIP Consensus    │ Delegated multi-agent work   │
 │ 4. Ecosystem & Skills        │ MCP and domain extensions    │
 │ 5. Headless Automation       │ Cron scheduling & CI monitor │
 └──────────────────────────────┴──────────────────────────────┘
@@ -62,19 +62,19 @@ one runtime. The developer can:
   session in the dashboard reconnects the interactive TUI directly to the
   persisted event stream.
 
-## Delegated subagent execution and work coordination
+## Delegated runner execution and work coordination
 
 Complex engineering tasks often benefit from dividing responsibilities
-between a primary orchestrator and specialized subagents.
+between a primary orchestrator and specialized runners.
 
 muta supports two complementary delegation patterns:
 
-- **Research Delegation (`envoy`)**: The principal agent delegates broad
+- **Research Delegation (`runner` / `spawn_runner`)**: The principal agent delegates broad
   exploration, documentation indexing, or log analysis to a read-only child
-  envoy. The child operates in a separate context window and returns a
+  runner. The child operates in a separate context window and returns a
   synthesized summary without bloating the primary turn context.
-- **Implementation Delegation (`envoy_code`)**: The principal delegates
-  concrete coding and testing tasks to an autonomous subagent.
+- **Implementation Delegation (`runner_code`)**: The principal delegates
+  concrete coding and testing tasks to an autonomous coding runner.
 
 Note: the WIP-coordination tools (`declare_wip`/`check_wip`/`wip_done`) that
 once lived here as session-facing tools were removed; workspace-exclusivity is
