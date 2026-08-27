@@ -373,11 +373,13 @@ define_builtin_commands! {
     Trust = "/trust" : {
         summary: "Trust project-authored asset domains",
         description: "Trust the exact current content of project MCP, skills, hooks, and rules independently from filesystem boundaries and runtime permissions.",
-        usage: ["/trust", "/trust [all|mcp|skills|status|revoke]"],
+        usage: ["/trust", "/trust [all|mcp|skills|hooks|rules|status|revoke]"],
         examples: [
             ("/trust", "Trust every present project asset domain"),
             ("/trust mcp", "Trust project MCP definitions only"),
             ("/trust skills", "Trust project skills only"),
+            ("/trust hooks", "Trust project hooks only"),
+            ("/trust rules", "Trust project rules only"),
             ("/trust status", "Show trust state for every asset domain"),
             ("/trust revoke", "Revoke every asset-domain grant for this workspace"),
         ],

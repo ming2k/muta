@@ -582,11 +582,13 @@ fn trust_route(name: &str, parts: &[&str]) -> Result<TrustRoute, String> {
         None | Some("all") => Ok(TrustRoute::GrantAll),
         Some("mcp") => Ok(TrustRoute::Grant(TrustDomain::Mcp)),
         Some("skills") => Ok(TrustRoute::Grant(TrustDomain::Skills)),
+        Some("hooks") => Ok(TrustRoute::Grant(TrustDomain::Hooks)),
+        Some("rules") => Ok(TrustRoute::Grant(TrustDomain::Rules)),
         Some("status") => Ok(TrustRoute::Status),
         Some("revoke") => Ok(TrustRoute::Revoke),
         Some(other) => Err(format!(
             "Unknown /trust subcommand '{other}'. Use `/trust`, `/trust all`, `/trust mcp`, \
-             `/trust skills`, `/trust status`, or `/trust revoke`."
+             `/trust skills`, `/trust hooks`, `/trust rules`, `/trust status`, or `/trust revoke`."
         )),
     }
 }
@@ -836,10 +838,10 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 );
             }
             // The ack is a headline plus dimmed explanation lines (never a
-            // `•`-joined one-row squeeze). The transcript notice below carries
-            // the same split, so the mode change owns its own durable row —
-            // the boundary between "the command ran" and "the session's
-            // posture changed" stays legible.
+            // `•`-joined one-row squeeze); the command entry settles in place
+            // with this body, so the mode change owns its own durable row.
+            // The current posture is carried by the `YoloChanged` chip, not a
+            // second transcript entry.
             let (title, detail) = if enabled {
                 (
                     "YOLO mode ON",
@@ -869,22 +871,10 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 },
             )
             .await;
-            // The durable twin of the live toast: an inline transcript notice
-            // recording the posture change itself, distinct from the command
-            // ledger row that recorded the invocation.
-            let _ = resp_tx.send(round_response(
-                &session.id().await,
-                RoundEvent::Notice(
-                    AgentNotice::new(
-                        muta_contracts::NoticeKind::CommandAck,
-                        muta_contracts::NoticeSeverity::Info,
-                        title,
-                        muta_contracts::NoticeSource::Harness,
-                    )
-                    .with_surface(muta_contracts::NoticeSurface::Inline)
-                    .with_body(detail.join("\n")),
-                ),
-            ));
+            // No notice twin: the command entry's Ack body IS the durable,
+            // surfaced record of this posture change (ADR-0091/0111); the
+            // live posture chip is `YoloChanged` below. A second inline
+            // notice would double-render the same title + detail.
             let _ = resp_tx.send(round_response(
                 &session.id().await,
                 RoundEvent::YoloChanged(enabled),
@@ -2699,6 +2689,14 @@ mod trust_route_tests {
         assert_eq!(
             trust_route("trust", &parts("/trust skills")),
             Ok(TrustRoute::Grant(TrustDomain::Skills))
+        );
+        assert_eq!(
+            trust_route("trust", &parts("/trust hooks")),
+            Ok(TrustRoute::Grant(TrustDomain::Hooks))
+        );
+        assert_eq!(
+            trust_route("trust", &parts("/trust rules")),
+            Ok(TrustRoute::Grant(TrustDomain::Rules))
         );
         assert_eq!(
             trust_route("trust", &parts("/trust status")),

@@ -55,30 +55,54 @@ const WS_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30)
 const WS_PEER_SILENCE_LIMIT: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// Inform a newly attached client that previously trusted project-authored
-/// contributions have changed on disk and are quarantined pending review.
+/// configurations have changed on disk and are quarantined pending review.
 /// Trust mutation is intentionally available only through the canonical
 /// `/trust` command path, which also reloads every affected consumer
 /// atomically. The never-trusted case is handled pre-view by the trust
 /// dialog fed from the attach-sync `HarnessState`.
-fn workspace_trust_notice(session_id: &str, project_root: &std::path::Path) -> AgentResponse {
+fn workspace_trust_notice(
+    session_id: &str,
+    project_root: &std::path::Path,
+    snapshot: &muta_contracts::WorkspaceSecuritySnapshot,
+) -> AgentResponse {
     let round = |event: muta_contracts::RoundEvent| AgentResponse::Round {
         session_id: session_id.to_string(),
         event,
     };
+    let changed = [
+        ("rules (AGENTS.md / rules)", snapshot.rules),
+        ("skills (custom skills)", snapshot.skills),
+        ("mcp (MCP servers)", snapshot.mcp),
+        ("hooks (lifecycle hooks)", snapshot.hooks),
+    ]
+    .into_iter()
+    .filter_map(|(name, state)| {
+        (state == muta_contracts::WorkspaceTrustState::Changed).then_some(name)
+    })
+    .collect::<Vec<_>>();
+
+    let changed_desc = if changed.is_empty() {
+        "configurations".to_string()
+    } else {
+        changed.join(", ")
+    };
+
     round(muta_contracts::RoundEvent::Notice(
-            muta_contracts::AgentNotice::new(
-                muta_contracts::NoticeKind::ReviewAlert,
-                muta_contracts::NoticeSeverity::Warning,
-                "Workspace contributions changed",
-                muta_contracts::NoticeSource::Harness,
-            )
-            .with_surface(muta_contracts::NoticeSurface::Banner)
-            .with_body(format!(
-                "Previously trusted contributions in this workspace ({}) changed on disk and are quarantined until re-reviewed. \
-                 Run `/trust` to re-trust all domains, or `/trust mcp` / `/trust skills` for a narrow grant.",
-                project_root.display()
-            )),
-        ))
+        muta_contracts::AgentNotice::new(
+            muta_contracts::NoticeKind::ReviewAlert,
+            muta_contracts::NoticeSeverity::Warning,
+            "Workspace configurations changed",
+            muta_contracts::NoticeSource::Harness,
+        )
+        .with_surface(muta_contracts::NoticeSurface::Banner)
+        .with_body(format!(
+            "Previously trusted workspace configurations in this workspace ({}) changed on disk ({}). \
+             They are quarantined until re-reviewed. \
+             Run `/trust` to re-trust all, or `/trust <domain>` (e.g. `/trust rules`) for a narrow grant.",
+            project_root.display(),
+            changed_desc
+        )),
+    ))
 }
 
 /// Whether `response` is an attach-time state-sync event: one of the
@@ -1025,7 +1049,7 @@ where
         muta_contracts::WorkspaceTrustState::Changed
     ) {
         let session_id = bound.session.id().await;
-        let response = workspace_trust_notice(&session_id, bound.project_root());
+        let response = workspace_trust_notice(&session_id, bound.project_root(), &snap);
         let text = serde_json::to_string(&Wire::Response { response })
             .map_err(|e| format!("serialize trust notice: {e}"))?;
         ws_sink

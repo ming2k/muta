@@ -304,11 +304,11 @@ impl<'a> Paragraph<'a> {
         for line in &self.lines {
             // Combine line.style with paragraph style (line wins on conflict).
             let base = merge_style(self.style, line.style);
-            // Wrap this line into display rows.
+            // Wrap this line into display rows (or split on embedded newlines).
             let wrapped = if self.wrap.is_some() {
                 wrap_line(line, max_width)
             } else {
-                vec![line.clone()]
+                split_line_newlines(line)
             };
             for wl in &wrapped {
                 if emitted < row_offset {
@@ -400,13 +400,19 @@ fn line_display_width(l: &Line<'_>) -> usize {
 }
 
 /// The longest whole-grapheme prefix of `s` that fits within `max_cols`
-/// display columns. Returns a borrowed slice (the full string when it already
+/// display columns on a single row. Returns a borrowed slice (the full string when it already
 /// fits), so the common in-bounds case allocates nothing. A wide glyph that
 /// would straddle the boundary is dropped rather than half-drawn.
+///
+/// Stops immediately if a newline (`\n` or `\r`) is encountered, ensuring
+/// that row-level span rendering never leaks into subsequent lines.
 fn clip_to_cols(s: &str, max_cols: usize) -> &str {
     let mut used = 0usize;
     let mut bytes = 0usize;
     for piece in crate::text::graphemes(s) {
+        if piece.text == "\n" || piece.text == "\r\n" || piece.text == "\r" {
+            break;
+        }
         let w = piece.width as usize;
         if used + w > max_cols {
             break;
@@ -415,6 +421,41 @@ fn clip_to_cols(s: &str, max_cols: usize) -> &str {
         bytes += piece.text.len();
     }
     &s[..bytes]
+}
+
+/// Split a `Line` containing embedded newlines into multiple independent `Line`s,
+/// preserving each span's style and the parent line's alignment/style.
+fn split_line_newlines<'a>(line: &Line<'a>) -> Vec<Line<'a>> {
+    let has_newline = line.spans.iter().any(|s| s.content.contains('\n'));
+    if !has_newline {
+        return vec![line.clone()];
+    }
+
+    let mut out = Vec::new();
+    let mut current_spans = Vec::new();
+
+    for span in &line.spans {
+        let parts: Vec<&str> = span.content.split('\n').collect();
+        for (i, part) in parts.iter().enumerate() {
+            if i > 0 {
+                out.push(Line {
+                    spans: std::mem::take(&mut current_spans),
+                    style: line.style,
+                    alignment: line.alignment,
+                });
+            }
+            if !part.is_empty() {
+                let clean = part.strip_suffix('\r').unwrap_or(part);
+                current_spans.push(Span::styled(clean.to_string(), span.style));
+            }
+        }
+    }
+    out.push(Line {
+        spans: current_spans,
+        style: line.style,
+        alignment: line.alignment,
+    });
+    out
 }
 
 fn wrap_line<'a>(line: &Line<'a>, max_width: usize) -> Vec<Line<'a>> {
@@ -499,5 +540,56 @@ mod tests {
             "#",
             "the cell just past the rect must not be overwritten"
         );
+    }
+
+    #[test]
+    fn clip_to_cols_stops_at_newline() {
+        assert_eq!(clip_to_cols("hello\nworld", 10), "hello");
+        assert_eq!(clip_to_cols("hello\r\nworld", 10), "hello");
+        assert_eq!(clip_to_cols("hello\rworld", 10), "hello");
+    }
+
+    #[test]
+    fn split_line_newlines_preserves_styles() {
+        let style = Style::default().fg(Color::Rgb(10, 20, 30));
+        let line = Line::from(vec![
+            Span::styled("first\nsecond ", style),
+            Span::styled("part\nthird", Style::default()),
+        ]);
+        let lines = split_line_newlines(&line);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].spans.len(), 1);
+        assert_eq!(lines[0].spans[0].content, "first");
+        assert_eq!(lines[0].spans[0].style.fg, Color::Rgb(10, 20, 30));
+
+        assert_eq!(lines[1].spans.len(), 2);
+        assert_eq!(lines[1].spans[0].content, "second ");
+        assert_eq!(lines[1].spans[1].content, "part");
+
+        assert_eq!(lines[2].spans.len(), 1);
+        assert_eq!(lines[2].spans[0].content, "third");
+    }
+
+    #[test]
+    fn paragraph_with_embedded_newlines_respects_rect_bounds() {
+        let mut grid = Grid::new(20, 3);
+        let line = Line::raw("line1\nline2\nline3\nline4");
+        let para = Paragraph::new(line);
+        // Render into a 20-wide, 2-high rect starting at y=1.
+        para.render(Rect::new(2, 1, 10, 2), &mut grid);
+
+        // Row 0 is untouched.
+        assert_eq!(grid.get(2, 0).unwrap().symbol(), " ");
+        // Row 1 has "line1" starting at col 2.
+        assert_eq!(grid.get(2, 1).unwrap().symbol(), "l");
+        assert_eq!(grid.get(6, 1).unwrap().symbol(), "1");
+        assert_eq!(grid.get(0, 1).unwrap().symbol(), " ");
+        assert_eq!(grid.get(1, 1).unwrap().symbol(), " ");
+        // Row 2 has "line2" starting at col 2.
+        assert_eq!(grid.get(2, 2).unwrap().symbol(), "l");
+        assert_eq!(grid.get(6, 2).unwrap().symbol(), "2");
+        assert_eq!(grid.get(0, 2).unwrap().symbol(), " ");
+        assert_eq!(grid.get(1, 2).unwrap().symbol(), " ");
+        // line3 and line4 are clipped because rect height is 2!
     }
 }

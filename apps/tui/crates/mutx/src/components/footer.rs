@@ -505,7 +505,7 @@ fn append_more(base: &[FooterSeg], chip: &str) -> Vec<FooterSeg> {
 }
 
 fn truncate_to_width(s: &str, max: usize) -> String {
-    if s.width() <= max {
+    if s.width() <= max && !s.contains(['\n', '\r']) {
         return s.to_string();
     }
     if max == 0 {
@@ -517,6 +517,9 @@ fn truncate_to_width(s: &str, max: usize) -> String {
     let mut out = String::new();
     let mut width = 0usize;
     for c in s.chars() {
+        if c == '\n' || c == '\r' {
+            break;
+        }
         let cw = UnicodeWidthChar::width(c).unwrap_or(0).max(1);
         if width + cw > max - 1 {
             break;

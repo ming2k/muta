@@ -540,7 +540,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 )
                 .with_surface(NoticeSurface::Banner)
                 .with_body(format!(
-                    "Quarantined domains: {}. Inspect them, then run `/trust`, `/trust mcp`, or `/trust skills`.",
+                    "Quarantined domains: {}. Inspect them, then run `/trust` or `/trust <domain>` (e.g. `/trust rules`).",
                     gated.join(", ")
                 )),
             ),

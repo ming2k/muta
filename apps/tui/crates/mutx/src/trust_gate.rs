@@ -78,7 +78,7 @@ pub fn gate_request(snapshot: &WorkspaceSecuritySnapshot) -> Option<UserQuestion
         .map(|d| format!("• {}", domain_label(*d)))
         .collect();
     let question = format!(
-        "This workspace contains project-authored contributions that are not loaded until you trust them:\n{}\n\
+        "This workspace contains project-authored configurations that are not loaded until you trust them:\n{}\n\
          Trust them for this workspace? Trust is content-bound: if the files change (git pull, checkout), \
          trust drops back to quarantined until reviewed again.",
         domain_rows.join("\n")
@@ -99,7 +99,7 @@ pub fn gate_request(snapshot: &WorkspaceSecuritySnapshot) -> Option<UserQuestion
                 UserQuestionOption {
                     label: "Choose domains".to_string(),
                     description: Some(
-                        "Pick specific domains to trust (e.g. skills only) via `/trust <domain>`."
+                        "Pick specific domains to trust (e.g. `/trust rules`, `/trust skills`) via `/trust <domain>`."
                             .to_string(),
                     ),
                 },

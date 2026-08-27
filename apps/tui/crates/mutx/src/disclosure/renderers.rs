@@ -297,7 +297,7 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
     use unicode_segmentation::UnicodeSegmentation;
     use unicode_width::UnicodeWidthStr;
 
-    if text.width() <= max_width {
+    if text.width() <= max_width && !text.contains(['\n', '\r']) {
         return text.to_string();
     }
     // Reserve one column for the ellipsis; if there is no room even for it,
@@ -305,6 +305,9 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
     let budget = max_width.saturating_sub(1);
     let mut out = String::new();
     for g in text.graphemes(true) {
+        if g == "\n" || g == "\r" || g == "\r\n" {
+            break;
+        }
         let w = g.width();
         if out.width() + w > budget {
             break;
@@ -1956,8 +1959,10 @@ fn reasoning_summary_line(
     // No marker prefix: the horizontal gutter is applied once at the stream
     // entry point, so the marker starts at the area's left edge.
     let marker_text = format!("{} ", marker);
-    let summary_text = summary.to_string();
-    let used = marker_text.width() + summary_text.width();
+    let mut used = marker_text.width();
+    let budget = full_width.saturating_sub(used);
+    let summary_text = truncate_to_width(summary, budget);
+    used += summary_text.width();
     Line::from(vec![
         Span::styled(
             marker_text,
@@ -2495,3 +2500,33 @@ pub fn draw_sticky_summary_if_needed(
         summary_line: step.summary_line,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mutx_engine::Color;
+
+    #[test]
+    fn truncate_to_width_stops_at_newline() {
+        assert_eq!(truncate_to_width("Run python3 -c\ns=open(...)", 50), "Run python3 -c…");
+        assert_eq!(truncate_to_width("abc\r\ndef", 50), "abc…");
+        assert_eq!(truncate_to_width("single line", 50), "single line");
+        assert_eq!(truncate_to_width("very long single line that exceeds width", 10), "very long…");
+    }
+
+    #[test]
+    fn tool_summary_line_produces_single_row_span_without_newline() {
+        let line = tool_summary_line(
+            "+",
+            "Run python3 -c\ns=open(...)",
+            Color::White,
+            Color::Black,
+            40,
+        );
+        for span in &line.spans {
+            assert!(!span.content.contains('\n'), "span must never contain newline");
+            assert!(!span.content.contains('\r'), "span must never contain carriage return");
+        }
+    }
+}
+

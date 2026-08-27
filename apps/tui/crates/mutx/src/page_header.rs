@@ -584,7 +584,7 @@ fn parent_status_label(status: muta_contracts::ParentStatus) -> &'static str {
 }
 
 fn truncate_to_width(text: &str, max_width: usize) -> String {
-    if text.width() <= max_width {
+    if text.width() <= max_width && !text.contains(['\n', '\r']) {
         return text.to_string();
     }
     if max_width == 0 {
@@ -598,6 +598,9 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
     let mut out = String::new();
     let mut used = 0;
     for ch in text.chars() {
+        if ch == '\n' || ch == '\r' {
+            break;
+        }
         let width = UnicodeWidthChar::width(ch).unwrap_or(0);
         if used + width > content_width {
             break;

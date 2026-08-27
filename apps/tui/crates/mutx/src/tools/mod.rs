@@ -207,6 +207,29 @@ pub fn presenter_for(name: &str) -> &'static dyn ToolPresenter {
     }
 }
 
+/// Sanitize a string to guarantee single-line presentation:
+/// collapses newlines, carriage returns, and consecutive whitespace into single spaces,
+/// and strips non-printable control characters.
+pub fn sanitize_single_line(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_whitespace = false;
+    for ch in s.chars() {
+        if ch == '\n' || ch == '\r' || ch.is_whitespace() {
+            if !in_whitespace && !out.is_empty() {
+                out.push(' ');
+                in_whitespace = true;
+            }
+        } else if !ch.is_control() {
+            out.push(ch);
+            in_whitespace = false;
+        }
+    }
+    if out.ends_with(' ') {
+        out.pop();
+    }
+    out
+}
+
 /// Header budget for collapsed summaries (chars). Matches the previous
 /// `argument_summary` cap so the migration is visually identical.
 const SUMMARY_BUDGET: usize = 72;
@@ -219,15 +242,18 @@ const SUMMARY_BUDGET: usize = 72;
 /// `document.rs` in place of `argument_summary`.
 pub fn summary_for(name: &str, arguments: &str, profile: Option<&str>) -> String {
     let parsed: Option<Value> = serde_json::from_str(arguments).ok();
-    let Some(obj) = parsed.as_ref().and_then(Value::as_object) else {
-        return truncate(arguments, SUMMARY_BUDGET);
+    let raw = match parsed.as_ref().and_then(Value::as_object) {
+        Some(obj) => {
+            let view = ToolView {
+                name,
+                args: obj,
+                profile,
+            };
+            presenter_for(name).summary(&view)
+        }
+        None => arguments.to_string(),
     };
-    let view = ToolView {
-        name,
-        args: obj,
-        profile,
-    };
-    truncate(&presenter_for(name).summary(&view), SUMMARY_BUDGET)
+    truncate(&sanitize_single_line(&raw), SUMMARY_BUDGET)
 }
 
 /// Build explicit renderable hunks from legacy tool arguments. Current
@@ -335,6 +361,18 @@ mod tests {
         assert_eq!(
             ToolStatus::from_status(ToolStepStatus::Cancelled),
             ToolStatus::Cancelled
+        );
+    }
+
+    #[test]
+    fn sanitize_single_line_collapses_newlines_and_whitespace() {
+        assert_eq!(
+            sanitize_single_line("python3 -c\n'import os\nprint(1)'"),
+            "python3 -c 'import os print(1)'"
+        );
+        assert_eq!(
+            sanitize_single_line("  hello \r\n  world\t\t!  "),
+            "hello world !"
         );
     }
 }

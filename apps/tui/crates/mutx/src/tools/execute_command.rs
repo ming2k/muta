@@ -62,7 +62,11 @@ fn command_summary(command: &str) -> Option<String> {
             continue;
         }
 
-        let rest: Vec<String> = words.collect();
+        let rest: Vec<String> = words
+            .into_iter()
+            .map(|w| super::sanitize_single_line(&w))
+            .filter(|w| !w.is_empty())
+            .collect();
         if rest.is_empty() {
             return Some(exec_name);
         } else {
@@ -180,6 +184,14 @@ mod tests {
         assert_eq!(
             command_summary("export MODE=test; ./target/debug/worker | tee worker.log"),
             Some("worker".into())
+        );
+    }
+
+    #[test]
+    fn command_summary_sanitizes_multiline_script_arguments() {
+        assert_eq!(
+            command_summary("python3 -c 's=open(\"foo\").read()\nprint(s)'"),
+            Some("python3 -c s=open(\"foo\").read() print(s)".into())
         );
     }
 }

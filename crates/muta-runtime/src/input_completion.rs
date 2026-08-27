@@ -604,6 +604,8 @@ mod tests {
                 "/trust all",
                 "/trust mcp",
                 "/trust skills",
+                "/trust hooks",
+                "/trust rules",
                 "/trust status",
                 "/trust revoke"
             ]

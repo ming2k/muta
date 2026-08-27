@@ -202,8 +202,8 @@ impl Grid {
     /// wide-continuation cell. Returns the position after the last drawn
     /// column. Honors [`Fit`] for overflow.
     ///
-    /// Embedded newlines move to column 0 of the next row (regardless of
-    /// `Fit`), mirroring how text is laid out line by line.
+    /// Embedded newlines move to column `x` (the starting origin) of the next row
+    /// (regardless of `Fit`), mirroring how text blocks are laid out line by line.
     pub fn put(&mut self, x: u16, y: u16, fit: Fit, style: crate::Style, text: &str) -> Pos {
         let mut cx = x;
         let mut cy = y;
@@ -218,7 +218,7 @@ impl Grid {
                     Some(next) if next < self.height => next,
                     _ => break,
                 };
-                cx = 0;
+                cx = x;
                 continue;
             }
             // The backend must never print payload-owned terminal controls.
@@ -239,7 +239,7 @@ impl Grid {
                             Some(next) if next < self.height => next,
                             _ => break,
                         };
-                        cx = 0;
+                        cx = x;
                     }
                     Fit::Clip => {
                         // Drop the rest if it can't fit even on a fresh line,
@@ -623,10 +623,10 @@ mod tests {
     fn put_wraps_on_overflow() {
         let mut g = Grid::new(3, 2);
         let end = g.put(2, 0, Fit::Wrap, Style::default(), "ab");
-        // 'a' fits at col 2, 'b' wraps to row 1 col 0.
+        // 'a' fits at col 2, 'b' wraps to row 1 at the same origin col 2.
         assert_eq!(g.get(2, 0).unwrap().symbol, "a");
-        assert_eq!(g.get(0, 1).unwrap().symbol, "b");
-        assert_eq!(end, Pos { x: 1, y: 1 });
+        assert_eq!(g.get(2, 1).unwrap().symbol, "b");
+        assert_eq!(end, Pos { x: 3, y: 1 });
     }
 
     #[test]
@@ -637,6 +637,18 @@ mod tests {
         assert_eq!(g.get(1, 0).unwrap().symbol, "b");
         assert_eq!(g.get(0, 1).unwrap().symbol, "c");
         assert_eq!(g.get(1, 1).unwrap().symbol, "d");
+    }
+
+    #[test]
+    fn put_newline_preserves_column_origin_x() {
+        let mut g = Grid::new(6, 2);
+        g.put(2, 0, Fit::Clip, Style::default(), "ab\ncd");
+        assert_eq!(g.get(2, 0).unwrap().symbol, "a");
+        assert_eq!(g.get(3, 0).unwrap().symbol, "b");
+        assert_eq!(g.get(2, 1).unwrap().symbol, "c");
+        assert_eq!(g.get(3, 1).unwrap().symbol, "d");
+        assert_eq!(g.get(0, 1).unwrap().symbol, " ");
+        assert_eq!(g.get(1, 1).unwrap().symbol, " ");
     }
 
     #[test]
