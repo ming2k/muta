@@ -90,7 +90,7 @@ pub async fn run_headless(
     };
 
     if yolo {
-        let _ = tx.send(AgentRequest::SlashCommand("/yolo on".to_string()));
+        let _ = tx.send(AgentRequest::SlashCommand("/delegate on".to_string()));
     }
 
     if json {

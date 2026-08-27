@@ -242,12 +242,12 @@ define_builtin_commands! {
         intent_keywords: ["settings", "config", "preferences", "theme", "themes", "appearance", "options", "color", "layout", "reload", "conf", "setting", "setup"],
         category: Config,
     },
-    Yolo = "/yolo" : {
-        summary: "Toggle YOLO auto-approve execution mode",
-        description: "Toggles YOLO mode: automatically approves all tool permissions (file edits, creations, command execution) while retaining catastrophic hard denies.",
-        usage: ["/yolo", "/yolo on", "/yolo off"],
-        examples: [("/yolo on", "Enable YOLO auto-approve mode"), ("/yolo off", "Return to interactive confirmation mode")],
-        intent_keywords: ["yolo", "autopilot", "auto", "autonomous", "unattended", "headless", "skip-confirm", "auto-approve", "bypass"],
+    Delegate = "/delegate" : {
+        summary: "Toggle delegated autonomous execution mode",
+        description: "Toggles delegated mode: empowers AI to make autonomous decisions, auto-approves tool permissions, and resolves ambiguities self-reliantly.",
+        usage: ["/delegate", "/delegate on", "/delegate off"],
+        examples: [("/delegate on", "Enable delegated autonomous mode"), ("/delegate off", "Return to interactive confirmation mode")],
+        intent_keywords: ["delegate", "delegation", "auto", "autopilot", "yolo", "autonomous", "unattended", "headless", "skip-confirm", "auto-approve", "bypass"],
         category: Automation,
     },
     Master = "/master" : {
@@ -464,6 +464,8 @@ impl BuiltinCmd {
             // config-scoped, so it now lives under `/settings reload`; the bare
             // old spelling keeps working.
             "/reload" => Some(BuiltinCmd::Settings),
+            // `/yolo`, `/auto`, `/autopilot` are aliases for `/delegate` (delegated autonomous execution).
+            "/yolo" | "/auto" | "/autopilot" => Some(BuiltinCmd::Delegate),
             _ => None,
         }
     }
@@ -530,6 +532,21 @@ pub const TRIGGER_WORD_SUGGESTIONS: &[(&str, &str, &str)] = &[
         "appearance",
         "/settings",
         "/settings lets you customize UI appearance and layout",
+    ),
+    (
+        "yolo",
+        "/delegate",
+        "/yolo is now /delegate (delegated autonomous execution mode)",
+    ),
+    (
+        "auto",
+        "/delegate",
+        "Use /delegate to enable delegated autonomous execution mode",
+    ),
+    (
+        "autopilot",
+        "/delegate",
+        "Use /delegate to enable delegated autonomous execution mode",
     ),
 ];
 

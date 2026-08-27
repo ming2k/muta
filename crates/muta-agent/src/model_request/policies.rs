@@ -192,19 +192,16 @@ impl SystemPromptSection for PersistenceGuidance {
     }
 }
 
-/// The YOLO mode guidance section. Active only when the agent is running
-/// in YOLO mode this round. The harness reclaims `ask_user`; all tool actions are auto-approved.
+/// The Delegated mode guidance section. Active only when the agent is running
+/// in delegated autonomous mode this round. The harness reclaims `ask_user`; all tool actions are auto-approved.
 /// Leading `\n` separates it from the paragraphs above.
-struct YoloGuidance;
+struct DelegatedModeGuidance;
 
-const YOLO_GUIDANCE: &str = "\nYou are running in YOLO mode: all tool permissions (file edits, creations, command execution) are auto-approved. The \
-                              question tool has been reclaimed. When faced with ambiguity, pick the most reasonable safe default \
-                              and proceed directly rather than asking. Surface any key choices or verification results in your \
-                              final summary.";
+const DELEGATED_GUIDANCE: &str = "\nYou are running in Delegated Autonomous mode: You are fully empowered to make design and implementation decisions, tool permissions are auto-approved, and you are expected to resolve ambiguities self-reliantly without asking. Surface any key choices or verification results in your final summary.";
 
-impl SystemPromptSection for YoloGuidance {
+impl SystemPromptSection for DelegatedModeGuidance {
     fn id(&self) -> &'static str {
-        "system.yolo"
+        "system.delegated_mode"
     }
     fn rank(&self) -> u32 {
         36
@@ -213,7 +210,7 @@ impl SystemPromptSection for YoloGuidance {
         ctx.yolo
     }
     fn render(&self, _ctx: &SystemPromptContext) -> Option<String> {
-        Some(String::from(YOLO_GUIDANCE))
+        Some(String::from(DELEGATED_GUIDANCE))
     }
 }
 
@@ -420,7 +417,7 @@ pub(crate) fn default_system_prompt_registry() -> SystemPromptRegistry {
     registry.register(ProviderGuidance);
     registry.register(ProjectRulesGuidance);
     registry.register(PersistenceGuidance);
-    registry.register(YoloGuidance);
+    registry.register(DelegatedModeGuidance);
     registry.register(DelegationGuidance);
     registry.register(FileEditingGuidance);
     registry.register(WorkspaceRootsGuidance);

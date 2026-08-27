@@ -206,15 +206,15 @@ fn completions_classifies_slash_input_as_slash_kind() {
 }
 
 #[test]
-fn completions_yolo_subcommand_offers_on_off() {
+fn completions_delegate_subcommand_offers_on_off() {
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
-    app.input = "/yolo ".to_string();
+    app.input = "/delegate ".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     assert_eq!(app.completion_kind(), CompletionKind::Slash);
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     assert!(
-        labels.contains(&"/yolo on") && labels.contains(&"/yolo off"),
+        labels.contains(&"/delegate on") && labels.contains(&"/delegate off"),
         "expected both on/off subcommands, got {labels:?}"
     );
     // Candidates replace the whole input.
@@ -224,14 +224,14 @@ fn completions_yolo_subcommand_offers_on_off() {
     }
 
     // Typing a prefix narrows the pair.
-    app.input = "/yolo of".to_string();
+    app.input = "/delegate of".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    assert_eq!(labels, vec!["/yolo off"]);
+    assert_eq!(labels, vec!["/delegate off"]);
 
     // An unknown suffix dead-ends (no candidates, like any non-prefix).
-    app.input = "/yolo x".to_string();
+    app.input = "/delegate x".to_string();
     app.cursor_position = app.input.chars().count();
     assert!(app.completions().is_empty());
 }

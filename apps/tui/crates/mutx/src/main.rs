@@ -491,7 +491,7 @@ async fn run_attached(
         };
         if yolo_pending {
             let _ = tx.send(muta_contracts::AgentRequest::SlashCommand(
-                "/yolo on".to_string(),
+                "/delegate on".to_string(),
             ));
             yolo_pending = false;
         }

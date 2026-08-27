@@ -199,7 +199,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
             "--cache-dir" => {
                 cache_dir = Some(PathBuf::from(flag_value("--cache-dir", inline, &mut iter)?));
             }
-            "--yolo" | "-y" | "--autopilot" => yolo = true,
+            "--delegate" | "--auto" | "--yolo" | "-y" | "--autopilot" => yolo = true,
             "--interactive" | "-i" => interactive = true,
             "--json" | "-j" => json = true,
             "--print" | "--prompt" | "-p" => {
@@ -415,7 +415,7 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
             out.push_str("  -p, --prompt <prompt>  run the prompt non-interactively (headless)\n");
             out.push_str("  -i, --interactive      force interactive TUI mode\n");
             out.push_str("  -j, --json             emit structured JSON where supported\n");
-            out.push_str("  --autopilot, -y, --yolo  run without confirmations or questions\n");
+            out.push_str("  --delegate, --auto, -y run in delegated autonomous mode (auto-approving permissions)\n");
             out.push_str("      --project <path>   operate on the project at <path>\n");
             out.push_str("      --home <dir>       use an instance rooted at <dir>/muta\n");
             out.push_str("      --remote <addr>    connect to a remote Muta daemon\n");
@@ -464,7 +464,7 @@ pub fn completion_script(shell: Shell) -> String {
              \x20   local cur\n\
              \x20   cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n\
              \x20   if [[ $COMP_CWORD -eq 1 ]]; then\n\
-             \x20       COMPREPLY=($(compgen -W \"{commands} --project --home --remote --token --prompt -p --interactive -i --json -j --yolo -y --autopilot --help --version\" -- \"$cur\"))\n\
+             \x20       COMPREPLY=($(compgen -W \"{commands} --project --home --remote --token --prompt -p --interactive -i --json -j --delegate --auto --yolo -y --autopilot --help --version\" -- \"$cur\"))\n\
              \x20   fi\n\
              }}\n\
              complete -F _mutx mutx\n"

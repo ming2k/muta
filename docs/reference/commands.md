@@ -17,7 +17,7 @@ Project and user-defined commands are covered under
 | `/compact` | Compact older complete rounds now |
 | `/new` | Start a new session, keeping the current one in history. Typing the retired `/clear` (or `/reset`) suggests `/new` instead — it never wipes anything in place |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
-| `/yolo [on\|off]` | Toggle YOLO mode (auto-approves all tool permissions) |
+| `/delegate [on\|off]` | Toggle delegated autonomous execution mode (aliases: `/auto`, `/yolo`) |
 | `/master <code\|architect\|reviewer\|security>` | Switch the master preset — changes persona and capability scope |
 | `/search <query>` | Lexical search over the current session's transcript and command ledger |
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
@@ -172,15 +172,15 @@ accent, success, warning, and error colors. Valid custom colors preview live;
 `Enter` saves and applies the palette, while `Esc` cancels the draft. Changes
 apply immediately and persist in the `[tui]` table of `config.toml`.
 
-### `/yolo`
+### `/delegate`
 
 | Form | Effect |
 |------|--------|
-| `/yolo` | Toggle YOLO mode on/off |
-| `/yolo on` | Auto-approve all tool permission requests without confirmation prompts |
-| `/yolo off` | Restore interactive confirmation prompts |
+| `/delegate` | Toggle delegated autonomous mode on/off (aliases: `/auto`, `/yolo`) |
+| `/delegate on` | Empower AI to make autonomous decisions and auto-approve tool permissions without prompts |
+| `/delegate off` | Restore interactive confirmation and question prompts |
 
-When on, all tool executions and file modifications are automatically approved without prompting. Dangerous command hard denies (such as root-level destructive commands) remain blocked. The posture is persisted on the session: a daemon crash, kill, upgrade, or reboot reopens the session in the same posture.
+When on, the agent is granted full delegation: tool executions and file modifications are automatically approved without prompting, and ambiguity questions (`ask_user`) are resolved self-reliantly by the model. Dangerous command hard denies (such as root-level destructive commands) remain blocked. The posture is persisted on the session: a daemon crash, kill, upgrade, or reboot reopens the session in the same posture.
 
 ### `/master`
 

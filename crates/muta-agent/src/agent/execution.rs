@@ -595,7 +595,7 @@ impl Agent {
         if call.name == "ask_user" {
             if self.get_yolo() {
                 return ToolOutput::Text(
-                    "ask_user is unavailable: this session is running in YOLO mode and no human \
+                    "ask_user is unavailable: this session is running in Delegated mode and no human \
                      is reachable to answer. Resolve the ambiguity yourself — pick the most \
                      reasonable default and proceed."
                         .to_string(),

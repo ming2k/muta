@@ -62,7 +62,7 @@ component playground is
 | `--token <token>` | `mutx` | Supply the bearer token required by `--remote` |
 | `-p`, `--prompt`, `--print <text>` | `mutx` | Run `<text>` as a headless one-shot |
 | `-i`, `--interactive` | `mutx` | Force the TUI even when a `-p` prompt is given |
-| `-y`, `--yolo`, `--autopilot` | `mutx` | Run without confirmations or questions for this session |
+| `--delegate`, `--auto`, `-y`, `--yolo`, `--autopilot` | `mutx` | Run in delegated autonomous mode (without confirmations or questions) |
 | `-j`, `--json` | Both | Emit machine-readable output where supported |
 | `-h`, `--help` | Both | Print help |
 | `-V`, `--version` | Both | Print that binary's version and exit |

@@ -162,7 +162,7 @@ pub(crate) fn draw_page_header(
             primary: head.workspace.to_string(),
             meta: String::new(),
             action: if head.yolo {
-                "YOLO ".to_string()
+                "DELEGATED ".to_string()
             } else {
                 String::new()
             },
@@ -911,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn session_header_shows_id_tail_workspace_and_yolo() {
+    fn session_header_shows_id_tail_workspace_and_delegated() {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
@@ -919,7 +919,7 @@ mod tests {
         };
         let row = rendered_row(80, PageHeader::Session(&head));
         assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
-        assert!(row.trim_end().ends_with("YOLO"));
+        assert!(row.trim_end().ends_with("DELEGATED"));
     }
 
     #[test]
@@ -931,7 +931,7 @@ mod tests {
         };
         let row = rendered_row(40, PageHeader::Session(&head));
         assert!(row.starts_with("   SESSION ab ~/work"));
-        assert!(!row.contains("YOLO"));
+        assert!(!row.contains("DELEGATED"));
     }
 
     /// The head band is top-level chrome: its `body` background owns every

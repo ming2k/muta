@@ -819,22 +819,22 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 .await;
             }
         }
-        Some(BuiltinCmd::Yolo) => {
+        Some(BuiltinCmd::Delegate) => {
             let arg = parts.get(1).map(|s| s.to_lowercase()).unwrap_or_default();
-            let next = match parse_yolo_arg(&arg) {
+            let next = match parse_delegate_arg(&arg) {
                 Ok(next) => next,
                 Err(msg) => {
                     record_error(session, resp_tx, name, args, msg).await;
                     return;
                 }
             };
-            // A bare `/yolo` (`None`) toggles the current state.
+            // A bare `/delegate` (`None`) toggles the current state.
             let enabled = next.unwrap_or_else(|| !agent.get_yolo());
             agent.set_yolo(enabled);
             if let Err(error) = session.set_yolo(enabled).await {
                 tracing::warn!(
                     error = %error,
-                    "could not persist yolo posture; it will not survive a restart"
+                    "could not persist delegated posture; it will not survive a restart"
                 );
             }
             // The ack is a headline plus dimmed explanation lines (never a
@@ -844,19 +844,18 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             // second transcript entry.
             let (title, detail) = if enabled {
                 (
-                    "YOLO mode ON",
+                    "Delegated mode ON",
                     vec![
-                        "File edits & creations are auto-approved".to_string(),
-                        "Commands are auto-approved (catastrophic hard-denies retained)"
-                            .to_string(),
+                        "Autonomous decision-making & tool execution enabled".to_string(),
+                        "Ambiguities resolved self-reliantly without interruptions".to_string(),
                     ],
                 )
             } else {
                 (
-                    "YOLO mode OFF",
+                    "Delegated mode OFF",
                     vec![
-                        "Missing grants can be requested interactively".to_string(),
-                        "Questions and input prompts are available".to_string(),
+                        "Interactive confirmation prompts restored".to_string(),
+                        "Questions and approval prompts are available".to_string(),
                     ],
                 )
             };
@@ -2418,22 +2417,27 @@ async fn add_scheduled_job(
     }
 }
 
-/// Parse the argument of `/yolo` (already lowercased by the caller).
+/// Parse the argument of `/delegate` (already lowercased by the caller).
 ///
-/// - `""` (bare `/yolo`, no argument) → `Ok(None)`: the dispatch flips
+/// - `""` (bare `/delegate`, no argument) → `Ok(None)`: the dispatch flips
 ///   the current state, so the command doubles as a toggle.
-/// - `on` / `true` / `1` / `yolo` → `Ok(Some(true))`
+/// - `on` / `true` / `1` / `delegate` / `auto` / `yolo` → `Ok(Some(true))`
 /// - `off` / `false` / `0` → `Ok(Some(false))`
 /// - anything else → `Err` with a usage hint.
-fn parse_yolo_arg(arg: &str) -> Result<Option<bool>, String> {
+fn parse_delegate_arg(arg: &str) -> Result<Option<bool>, String> {
     match arg {
         "" => Ok(None),
-        "on" | "true" | "1" | "yolo" => Ok(Some(true)),
+        "on" | "true" | "1" | "delegate" | "auto" | "yolo" => Ok(Some(true)),
         "off" | "false" | "0" => Ok(Some(false)),
         other => Err(format!(
-            "Unknown value '{other}'. Use `/yolo` to toggle, or `/yolo on|off`."
+            "Unknown value '{other}'. Use `/delegate` to toggle, or `/delegate on|off`."
         )),
     }
+}
+
+#[allow(dead_code)]
+fn parse_yolo_arg(arg: &str) -> Result<Option<bool>, String> {
+    parse_delegate_arg(arg)
 }
 
 /// Split a `/schedule <when> <prompt>` argument string into `(time_spec,
@@ -2732,34 +2736,36 @@ mod trust_route_tests {
 }
 
 #[cfg(test)]
-mod yolo_arg_tests {
-    use super::parse_yolo_arg;
+mod delegate_arg_tests {
+    use super::parse_delegate_arg;
 
     #[test]
     fn bare_argument_means_toggle() {
-        assert_eq!(parse_yolo_arg(""), Ok(None));
+        assert_eq!(parse_delegate_arg(""), Ok(None));
     }
 
     #[test]
     fn on_forms_enable() {
-        assert_eq!(parse_yolo_arg("on"), Ok(Some(true)));
-        assert_eq!(parse_yolo_arg("true"), Ok(Some(true)));
-        assert_eq!(parse_yolo_arg("1"), Ok(Some(true)));
-        assert_eq!(parse_yolo_arg("yolo"), Ok(Some(true)));
+        assert_eq!(parse_delegate_arg("on"), Ok(Some(true)));
+        assert_eq!(parse_delegate_arg("true"), Ok(Some(true)));
+        assert_eq!(parse_delegate_arg("1"), Ok(Some(true)));
+        assert_eq!(parse_delegate_arg("delegate"), Ok(Some(true)));
+        assert_eq!(parse_delegate_arg("auto"), Ok(Some(true)));
+        assert_eq!(parse_delegate_arg("yolo"), Ok(Some(true)));
     }
 
     #[test]
     fn off_forms_disable() {
-        assert_eq!(parse_yolo_arg("off"), Ok(Some(false)));
-        assert_eq!(parse_yolo_arg("false"), Ok(Some(false)));
-        assert_eq!(parse_yolo_arg("0"), Ok(Some(false)));
+        assert_eq!(parse_delegate_arg("off"), Ok(Some(false)));
+        assert_eq!(parse_delegate_arg("false"), Ok(Some(false)));
+        assert_eq!(parse_delegate_arg("0"), Ok(Some(false)));
     }
 
     #[test]
     fn unknown_value_is_an_error_with_a_usage_hint() {
-        let err = parse_yolo_arg("maybe").unwrap_err();
+        let err = parse_delegate_arg("maybe").unwrap_err();
         assert!(
-            err.contains("`/yolo` to toggle") && err.contains("`/yolo on|off`"),
+            err.contains("`/delegate` to toggle") && err.contains("`/delegate on|off`"),
             "usage hint missing the toggle form: {err}"
         );
     }
