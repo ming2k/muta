@@ -5,6 +5,29 @@ All notable changes to **Muta** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.37.3] - 2026-08-28
+
+### Added
+
+- **Composer overflow indicators.** When the draft's wrapped rows are
+  clipped off-screen, the composer's chrome rows right-align a muted,
+  quantified label (`↑ N lines` / `↓ N lines`, degrading to `↑ N` on
+  narrow panels). Reusing the existing breathing/gap rows keeps the box
+  height identical whether or not anything is hidden, so the panel never
+  jitters as the draft crosses the overflow threshold.
+- **ADR-0156: Ctrl+S claim for the performance report.** Records the
+  bounded XON/XOFF risk analysis behind keeping `Ctrl+S` bound to the
+  latest-turn performance report despite ADR-0126's earlier rejection.
+
+### Changed
+
+- `composer_wrapped` is now `pub(crate)`: edge-autoscroll during a
+  selection drag resolves its viewport-edge bytes from the same wrapped
+  rows the renderer paints, so selection can never disagree with what is
+  on screen.
+- Ctrl+C double-press arm window unified under a single
+  `App::CTRL_C_ARM_WINDOW` constant.
+
 ## [0.37.2] - 2026-08-28
 
 ### Added
