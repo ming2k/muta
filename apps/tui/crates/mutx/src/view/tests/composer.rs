@@ -91,16 +91,16 @@ fn input_box_grows_with_wrapped_content() {
         rect
     }
 
-    // Short input: one content line + two padding rows = 3.
+    // Short input: one content line + three chrome rows = 4.
     let short = render_with(&theme, &messages, "hi");
-    assert_eq!(short.height, 3);
+    assert_eq!(short.height, 4);
 
     // Long input wraps across many lines on a 40-wide terminal; the box
     // must grow beyond the single-line baseline.
     let long_input = "word ".repeat(40);
     let tall = render_with(&theme, &messages, &long_input);
     assert!(
-        tall.height > 3,
+        tall.height > 4,
         "wrapped input should grow the box, got height {}",
         tall.height
     );
@@ -380,7 +380,7 @@ fn draw_composer_paints_paste_and_image_chips_distinctly() {
     let buf = terminal.buffer();
     let text_y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
     let text_x = COMPOSER_PROMPT_PREFIX_COLS as u16;
-    let interior_bg = theme.surface();
+    let interior_bg = theme.input_surface();
     // Chip labels use ASCII metadata; display columns
     // come from `str_len`, never from the raw byte length.
     let paste_width = mutx_engine::text::str_len(&paste_chip);
@@ -477,7 +477,7 @@ fn draw_composer_leaves_orphan_chip_labels_as_plain_text() {
     let buf = terminal.buffer();
     let text_y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
     let text_x = COMPOSER_PROMPT_PREFIX_COLS as u16;
-    let interior_bg = theme.surface();
+    let interior_bg = theme.input_surface();
 
     // Every glyph of both orphan labels keeps the plain text color on the
     // plain interior background — no pill band, no kind color, no bold.
@@ -541,7 +541,7 @@ fn draw_composer_colors_only_backed_chips_when_mixed() {
     let buf = terminal.buffer();
     let text_y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
     let text_x = COMPOSER_PROMPT_PREFIX_COLS as u16;
-    let interior_bg = theme.surface();
+    let interior_bg = theme.input_surface();
 
     // The backed paste chip gets the blue pill.
     let paste_width = mutx_engine::text::str_len(&real_paste);
@@ -670,7 +670,7 @@ fn draw_composer_chip_pill_continues_across_wrap() {
                     );
     });
     let buf = terminal.buffer();
-    let interior_bg = theme.surface();
+    let interior_bg = theme.input_surface();
     // Scan every rendered row: every glyph that belongs to the chip label
     // (ignoring spaces, which also appear in the prompt indent and the
     // frame padding) must carry the chip band, proving the pill survives
@@ -798,7 +798,7 @@ fn cursor_screen_pos_clamps_scroll_like_draw() {
 fn composer_cjk_selection_covers_full_width_glyphs() {
     use crate::model::layout::SemanticCursor;
     let theme = Theme::default();
-    let interior_bg = theme.surface();
+    let interior_bg = theme.input_surface();
     let sel_bg = theme.selected();
     let input = "中文测"; // 3 wide glyphs = 6 cols (cols 4..10)
     // Select all three. Head points AT 测 (byte 6); the inclusive-head model
@@ -832,16 +832,16 @@ fn composer_cjk_selection_covers_full_width_glyphs() {
     });
     let g = terminal.buffer();
     let y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
-    // Cols: 0='│', 1=gap, 2='›', 3=gap, 4-9='中文测'(sel), 10+=interior tail.
+    // Cols: 0='›', 1=gap, 2-7='中文测'(sel), 8+=panel tail.
     for (col, label, expect_sel) in [
-        (4usize, "中 head", true),
-        (5, "中 cont", true),
-        (6, "文 head", true),
-        (7, "文 cont", true),
-        (8, "测 head", true),
-        (9, "测 cont", true),
-        (10, "tail 0", false),
-        (11, "tail 1", false),
+        (2usize, "中 head", true),
+        (3, "中 cont", true),
+        (4, "文 head", true),
+        (5, "文 cont", true),
+        (6, "测 head", true),
+        (7, "测 cont", true),
+        (8, "tail 0", false),
+        (9, "tail 1", false),
     ] {
         let cell = g.get(col as u16, y).unwrap();
         let want = if expect_sel { sel_bg } else { interior_bg };
@@ -898,23 +898,23 @@ fn composer_two_cjk_select_all_has_no_extra_glyph_or_tail_highlight() {
 
     let y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
     let buffer = terminal.buffer();
-    let interior_bg = theme.surface();
+    let interior_bg = theme.input_surface();
 
-    assert_eq!(buffer.get(4, y).unwrap().symbol(), "你");
+    assert_eq!(buffer.get(2, y).unwrap().symbol(), "你");
+    assert_eq!(buffer.get(2, y).unwrap().width, 2);
+    assert_eq!(buffer.get(3, y).unwrap().symbol(), " ");
+    assert_eq!(buffer.get(3, y).unwrap().width, 0);
+    assert_eq!(buffer.get(4, y).unwrap().symbol(), "好");
     assert_eq!(buffer.get(4, y).unwrap().width, 2);
     assert_eq!(buffer.get(5, y).unwrap().symbol(), " ");
     assert_eq!(buffer.get(5, y).unwrap().width, 0);
-    assert_eq!(buffer.get(6, y).unwrap().symbol(), "好");
-    assert_eq!(buffer.get(6, y).unwrap().width, 2);
-    assert_eq!(buffer.get(7, y).unwrap().symbol(), " ");
-    assert_eq!(buffer.get(7, y).unwrap().width, 0);
     assert_eq!(
-        buffer.get(8, y).unwrap().symbol(),
+        buffer.get(6, y).unwrap().symbol(),
         " ",
         "tail cell must not contain a duplicate glyph"
     );
 
-    for col in 4..=7 {
+    for col in 2..=5 {
         assert_eq!(
             buffer.get(col, y).unwrap().bg,
             sel_bg,
@@ -922,9 +922,9 @@ fn composer_two_cjk_select_all_has_no_extra_glyph_or_tail_highlight() {
         );
     }
     assert_eq!(
-        buffer.get(8, y).unwrap().bg,
+        buffer.get(6, y).unwrap().bg,
         interior_bg,
-        "tail cell must remain on the frame's interior background"
+        "tail cell must remain on the panel's background"
     );
     assert!(
         matches!(terminal.cursor(), mutx_engine::CursorState::Hidden),
@@ -942,7 +942,7 @@ fn composer_two_cjk_select_all_has_no_extra_glyph_or_tail_highlight() {
 #[test]
 fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
     let theme = Theme::default();
-    let panel_bg = theme.surface();
+    let panel_bg = theme.input_surface();
     let sel_bg = theme.selected();
     let input = "中文测";
     let rect = Rect::new(0, 0, 20, 4);
@@ -973,7 +973,8 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
             crate::components::composer_hints::ComposerHints::default(),
                     );
     });
-    let anchor = layout_map.cursor_at(rect.x + 4, rect.y + text_row).unwrap();
+    let prefix = crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16;
+    let anchor = layout_map.cursor_at(rect.x + prefix, rect.y + text_row).unwrap();
     assert_eq!(anchor.byte_offset, 0);
 
     fn row_bgs(
@@ -1026,27 +1027,27 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
 
     // 2) Drag onto 测's first column (byte 6): inclusive head selects all
     //    three glyphs.
-    let head = layout_map.cursor_at(rect.x + 8, rect.y + text_row).unwrap();
+    let head = layout_map.cursor_at(rect.x + 6, rect.y + text_row).unwrap();
     assert_eq!(head.byte_offset, 6);
     let drag = SelectionState::Range { anchor, head };
     let bgs = row_bgs(input, rect, text_row, &theme, &drag);
-    // cols 0-3 = frame rail + prompt prefix; 4..10 = "中文测" (selected).
-    for (col, &bg) in bgs[4..10].iter().enumerate() {
-        assert_eq!(bg, sel_bg, "col {} should be selected", col + 4);
+    // cols 0-1 = prompt prefix; 2..8 = "中文测" (selected).
+    for (col, &bg) in bgs[2..8].iter().enumerate() {
+        assert_eq!(bg, sel_bg, "col {} should be selected", col + 2);
     }
 
     // 3) Drag to the second visual column of 中. The hit-test cursor maps
     // both columns of a wide glyph to that glyph's byte start; with an
     // inclusive head this selects 中 only, not the next glyph.
-    let head = layout_map.cursor_at(rect.x + 5, rect.y + text_row).unwrap();
+    let head = layout_map.cursor_at(rect.x + 3, rect.y + text_row).unwrap();
     assert_eq!(head.byte_offset, 1);
     let drag = SelectionState::Range { anchor, head };
     let bgs = row_bgs(input, rect, text_row, &theme, &drag);
-    for (col, &bg) in bgs[4..6].iter().enumerate() {
-        assert_eq!(bg, sel_bg, "col {} should select 中", col + 4);
+    for (col, &bg) in bgs[2..4].iter().enumerate() {
+        assert_eq!(bg, sel_bg, "col {} should select 中", col + 2);
     }
-    for (col, &bg) in bgs[6..10].iter().enumerate() {
-        assert_eq!(bg, panel_bg, "col {} should remain unselected", col + 6);
+    for (col, &bg) in bgs[4..10].iter().enumerate() {
+        assert_eq!(bg, panel_bg, "col {} should remain unselected", col + 4);
     }
 }
 
@@ -1055,6 +1056,7 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
     let theme = Theme::default();
     let user_bg = theme.user_surface();
     let app_bg = theme.surface();
+    let input_bg = theme.input_surface();
     let width = 60u16;
     let mut terminal = mutx_engine::TestTerminal::new(width, 24);
 
@@ -1173,44 +1175,37 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
     assert_eq!(buffer[(58, user_row)].bg, app_bg, "right outer gutter");
     assert_eq!(buffer[(59, user_row)].bg, app_bg, "right outer gutter");
 
-    // Composer: the line frame starts at x = FOOTER_H_INSET (2). Rail `│`
-    // at x=2, `›` at x=4, text from x=6 — sharing the user panel's text
-    // column so sent messages and the live input read as one left margin —
-    // and the frame's right rail closes the box before the app_bg gutter.
+    // Composer: the panel starts at x = FOOTER_H_INSET (2) and carries its
+    // own tinted bg. `›` at x=2, text from x=4 — the same text column the
+    // user panel uses (cols 2,3 are the prompt prefix; text lands at 4) —
+    // so sent messages and the live input read as one left margin.
     let composer_row = (0..buffer.area().height)
         .find(|&y| {
-            let c6 = &buffer[(6, y)];
-            c6.symbol() == "y" && c6.bg == app_bg
+            let c4 = &buffer[(4, y)];
+            c4.symbol() == "y" && c4.bg == input_bg
         })
         .expect("composer row exists");
     assert_eq!(
         buffer[(2, composer_row)].symbol(),
-        "│",
-        "composer frame rail sits at the footer inset"
+        "›",
+        "composer prompt opens the panel at the footer inset"
     );
-    assert_eq!(buffer[(4, composer_row)].symbol(), "›", "composer prompt");
     assert_eq!(
-        buffer[(6, composer_row)].symbol(),
+        buffer[(2, composer_row)].bg,
+        input_bg,
+        "composer panel begins at the footer inset"
+    );
+    assert_eq!(
+        buffer[(4, composer_row)].symbol(),
         "y",
         "composer text starts at the same column as user text"
     );
-    // full_w (composer frame) = 60 - 2*FOOTER_H_INSET = 56, frame spans
-    // x=2..58 with the right rail at x=57+2=57? No: the frame occupies
-    // x=2..58 exclusive, i.e. columns 2..=57 are frame cells; the right
-    // rail is the last frame column at x=57+... verify by scanning back.
-    let mut rail_x = 57u16;
-    while rail_x > 6 && buffer[(rail_x, composer_row)].symbol() != "│" {
-        rail_x -= 1;
-    }
+    // full_w (composer panel) = 60 - 2*FOOTER_H_INSET = 56, spanning
+    // x=2..58; the last panel column stays panel-tinted air.
     assert_eq!(
-        buffer[(rail_x, composer_row)].symbol(),
-        "│",
-        "composer right rail closes the frame"
-    );
-    assert_eq!(
-        buffer[(rail_x + 1, composer_row)].bg,
-        app_bg,
-        "composer right outer gutter"
+        buffer[(57, composer_row)].bg,
+        input_bg,
+        "composer panel air extends to its last column"
     );
     assert_eq!(
         buffer[(58, composer_row)].bg,
@@ -1224,27 +1219,27 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
     );
 }
 
-/// The input box's rounded line frame owns two stroke tokens — active (the
-/// box owns the keyboard) and inactive (a transcript step owns it). Both
-/// render on the plain surface (no filled panel), and the two strokes must
-/// be visibly different colors, so "where does typing land" is legible from
-/// the line alone. Regression guard for the activated/deactivated input
+/// The input box's tinted panel owns two surface tokens — active (the box
+/// owns the keyboard) and inactive (a transcript step owns it). The two
+/// backgrounds must be visibly different colors, so "where does typing
+/// land" is legible from the panel alone, and neither may melt into the
+/// app background. Regression guard for the activated/deactivated input
 /// being indistinguishable.
 #[test]
 fn composer_focused_and_unfocused_panels_render_distinct_backgrounds() {
     let theme = Theme::default();
-    let active_stroke = theme.composer_frame();
-    let inactive_stroke = theme.composer_frame_inactive();
+    let active_bg = theme.input_surface();
+    let inactive_bg = theme.input_surface_inactive();
     let app_bg = theme.surface();
-    assert_ne!(active_stroke, inactive_stroke, "pair must be distinct colors");
+    assert_ne!(active_bg, inactive_bg, "pair must be distinct colors");
 
-    let stroke_at = |focused: bool| -> mutx_engine::Color {
-        let mut terminal = mutx_engine::TestTerminal::new(30, 5);
+    let panel_at = |focused: bool| -> mutx_engine::Color {
+        let mut terminal = mutx_engine::TestTerminal::new(30, 6);
         terminal.draw(|f| {
             draw_composer(
                 ComposerView {
                     frame: f,
-                    input_rect: Rect::new(0, 0, 30, 3),
+                    input_rect: Rect::new(0, 0, 30, 4),
                     theme: &theme,
                     layout_map: &mut LayoutMap::new(),
                     input_scroll: &mut 0,
@@ -1263,39 +1258,39 @@ fn composer_focused_and_unfocused_panels_render_distinct_backgrounds() {
                     );
         });
         let buffer = terminal.buffer();
-        // The top-left corner glyph of the frame: painted unconditionally,
-        // so its foreground carries the stroke color either way.
+        // The top breathing row: painted unconditionally in panel bg, so its
+        // background carries the surface color either way.
         let cell = &buffer[(0, 0)];
-        assert_eq!(cell.symbol(), "╭", "top-left corner of the frame");
-        cell.fg
+        assert_eq!(cell.symbol(), " ", "top breathing row is blank");
+        cell.bg
     };
 
-    let rendered_active = stroke_at(true);
-    let rendered_inactive = stroke_at(false);
+    let rendered_active = panel_at(true);
+    let rendered_inactive = panel_at(false);
     assert_eq!(
-        rendered_active, active_stroke,
-        "focused box must stroke with the composer-frame color"
+        rendered_active, active_bg,
+        "focused box must paint the input-surface color"
     );
     assert_eq!(
-        rendered_inactive, inactive_stroke,
-        "unfocused box must stroke with the composer-frame-inactive color"
+        rendered_inactive, inactive_bg,
+        "unfocused box must paint the input-surface-inactive color"
     );
     assert_ne!(
         rendered_active, app_bg,
-        "focused stroke must not melt into the app background"
+        "focused panel must not melt into the app background"
     );
     assert_ne!(
         rendered_inactive, app_bg,
-        "unfocused stroke must not melt into the app background"
+        "unfocused panel must not melt into the app background"
     );
-    // The interior stays on the plain surface in both states: the line, not
-    // a filled panel, is what marks the box.
-    let mut terminal = mutx_engine::TestTerminal::new(30, 5);
+    // The whole box carries the tint, not just an edge: every row of the
+    // four-row panel is the same surface.
+    let mut terminal = mutx_engine::TestTerminal::new(30, 6);
     terminal.draw(|f| {
         draw_composer(
             ComposerView {
                 frame: f,
-                input_rect: Rect::new(0, 0, 30, 3),
+                input_rect: Rect::new(0, 0, 30, 4),
                 theme: &theme,
                 layout_map: &mut LayoutMap::new(),
                 input_scroll: &mut 0,
@@ -1313,11 +1308,13 @@ fn composer_focused_and_unfocused_panels_render_distinct_backgrounds() {
             crate::components::composer_hints::ComposerHints::default(),
         );
     });
-    assert_eq!(
-        terminal.buffer()[(5, 1)].bg,
-        app_bg,
-        "frame interior sits on the plain surface"
-    );
+    for y in 0..4u16 {
+        assert_eq!(
+            terminal.buffer()[(15, y)].bg,
+            active_bg,
+            "every composer row carries the input surface"
+        );
+    }
 }
 
 /// A queued user message (one staged in the send queue waiting for the
@@ -1662,7 +1659,7 @@ fn h1_underline_clamps_with_emoji_grapheme() {
 }
 
 // ---------------------------------------------------------------------------
-// Line-frame composer geometry (the rounded `╭─ … ─╮` redesign)
+// Tinted-panel composer geometry (the four-row redesign)
 // ---------------------------------------------------------------------------
 
 fn frame_row_text(terminal: &mut mutx_engine::TestTerminal, y: u16) -> String {
@@ -1676,13 +1673,13 @@ fn draw_frame_composer(
     focused: bool,
     hints: crate::components::composer_hints::ComposerHints,
 ) -> mutx_engine::TestTerminal {
-    let mut terminal = mutx_engine::TestTerminal::new(60, 5);
+    let mut terminal = mutx_engine::TestTerminal::new(60, 6);
     let theme = Theme::default();
     terminal.draw(|f| {
         draw_composer(
             ComposerView {
                 frame: f,
-                input_rect: Rect::new(0, 0, 60, 3),
+                input_rect: Rect::new(0, 0, 60, 4),
                 theme: &theme,
                 layout_map: &mut LayoutMap::new(),
                 input_scroll: &mut 0,
@@ -1703,88 +1700,139 @@ fn draw_frame_composer(
     terminal
 }
 
-/// The composer is a rounded line frame whose borders inlay the meta rows:
-/// top carries the compose target, bottom carries the Enter action and the
-/// right-aligned char counter, and text rows are closed by `│` rails with
-/// the `›` prompt kept inside the frame.
+/// The composer is a tinted panel laid out as four rows for a one-line
+/// draft: blank breathing row, the text row (opened by `›`), a blank gap
+/// row, and the meta row carrying the Enter sentence with the char counter
+/// right-aligned at its end.
 #[test]
-fn composer_line_frame_inlays_meta_into_the_borders() {
+fn composer_panel_carries_the_hint_row() {
     let mut terminal = draw_frame_composer("hello", true, Default::default());
 
-    let top = frame_row_text(&mut terminal, 0);
-    assert!(top.starts_with('╭'), "top-left corner: {top:?}");
-    assert!(top.ends_with('╮'), "top-right corner: {top:?}");
-    // The `as:` clause rides the top stroke, starting one stroke column
-    // past the text column's lead-in (corner + lead_in + 1 separator).
+    let row1 = frame_row_text(&mut terminal, 0);
     assert!(
-        top.contains("as: prompt"),
-        "top border carries the compose target: {top:?}"
+        row1.trim().is_empty(),
+        "row 1 is a blank breathing row: {row1:?}"
     );
-    let as_x = top
+
+    let row2 = frame_row_text(&mut terminal, 1);
+    assert!(row2.starts_with("› hello"), "prompt + text: {row2:?}");
+
+    let row3 = frame_row_text(&mut terminal, 2);
+    assert!(
+        row3.trim().is_empty(),
+        "row 3 is a blank gap row: {row3:?}"
+    );
+
+    let row4 = frame_row_text(&mut terminal, 3);
+    assert!(
+        row4.contains("Enter send prompt"),
+        "hint row carries the Enter sentence: {row4:?}"
+    );
+    assert!(
+        row4.contains("5 chars"),
+        "hint row carries the char counter: {row4:?}"
+    );
+    // The counter closes right-aligned with one column of air before the
+    // panel edge.
+    let counter_x = row4
         .char_indices()
-        .find(|(_, c)| *c == 'a')
-        .map(|(i, _)| top[..i].chars().count())
-        .expect("as: clause");
+        .find(|(_, c)| *c == '5')
+        .map(|(i, _)| row4[..i].chars().count())
+        .expect("counter");
     assert_eq!(
-        as_x,
-        1 + crate::design::COMPOSER_PROMPT_PREFIX_COLS,
-        "the as: inlay begins at the text column's lead-in + separator"
+        counter_x + "5 chars".chars().count() + 1,
+        60,
+        "counter right-aligned before the panel edge: {row4:?}"
     );
-
-    let mid = frame_row_text(&mut terminal, 1);
-    assert!(mid.starts_with("│ ›"), "left rail + prompt: {mid:?}");
-    assert!(mid.ends_with('│'), "right rail: {mid:?}");
-    assert!(mid.contains("hello"), "text inside the frame: {mid:?}");
-
-    let bottom = frame_row_text(&mut terminal, 2);
-    assert!(bottom.starts_with('╰'), "bottom-left corner: {bottom:?}");
-    assert!(bottom.ends_with('╯'), "bottom-right corner: {bottom:?}");
-    assert!(
-        bottom.contains("Enter send"),
-        "bottom border carries the Enter action: {bottom:?}"
+    // The sentence begins at the text column (the `›` prefix width).
+    let enter_x = row4
+        .char_indices()
+        .find(|(_, c)| *c == 'E')
+        .map(|(i, _)| row4[..i].chars().count())
+        .expect("Enter clause");
+    assert_eq!(
+        enter_x,
+        crate::design::COMPOSER_PROMPT_PREFIX_COLS,
+        "hint sentence aligns with the text column"
     );
-    assert!(
-        bottom.contains("5 chars"),
-        "bottom border carries the char counter: {bottom:?}"
-    );
-    // The counter closes right-aligned, one stroke column before the corner.
-    let col_of = |s: &str, needle: char| -> usize {
-        s.char_indices()
-            .find(|(_, c)| *c == needle)
-            .map(|(i, _)| s[..i].chars().count())
-            .expect("needle")
-    };
-    let chars_x = col_of(&bottom, '5');
-    let stroke_x = col_of(&bottom, '╯');
-    assert_eq!(chars_x + "5 chars".len() + 1, stroke_x);
 }
 
-/// While blurred the frame keeps its shape but sheds every inlay — the
+/// The hint sentence names the delivery group the buffer will land in, and
+/// mid-round it also carries the Tab toggle.
+#[test]
+fn composer_hint_sentence_names_the_delivery_group() {
+    use crate::components::composer_hints::{ComposeTarget, ComposerHints};
+
+    let steer = ComposeTarget::Steer;
+    let hints = ComposerHints {
+        compose_target: steer,
+        ..Default::default()
+    };
+    let mut terminal = draw_frame_composer("wait", true, hints);
+    let row4 = frame_row_text(&mut terminal, 3);
+    assert!(
+        row4.contains("Enter send steer"),
+        "steer verb: {row4:?}"
+    );
+    assert!(
+        row4.contains("Tab follow-up"),
+        "Tab toggle names the other mode: {row4:?}"
+    );
+
+    let follow_up_hints = ComposerHints {
+        compose_target: ComposeTarget::FollowUp,
+        ..Default::default()
+    };
+    let mut terminal = draw_frame_composer("next", true, follow_up_hints);
+    let row4 = frame_row_text(&mut terminal, 3);
+    assert!(row4.contains("Enter send follow-up"), "{row4:?}");
+    assert!(row4.contains("Tab steer"), "{row4:?}");
+
+    let edit_hints = ComposerHints {
+        compose_target: ComposeTarget::QueueEdit {
+            kind: crate::components::composer_hints::QueueEditKind::FollowUp,
+            number: 2,
+            dirty: true,
+        },
+        ..Default::default()
+    };
+    let mut terminal = draw_frame_composer("edited", true, edit_hints);
+    let row4 = frame_row_text(&mut terminal, 3);
+    assert!(
+        row4.contains("Enter update follow-ups[2]"),
+        "queue edit names group + position: {row4:?}"
+    );
+}
+
+/// While blurred the panel keeps its tint but sheds the hint sentence — the
 /// meta text never competes with a step-focused transcript.
 #[test]
-fn composer_line_frame_blurred_is_a_plain_frame() {
+fn composer_panel_blurred_sheds_the_hint_row() {
     let mut terminal = draw_frame_composer("hello", false, Default::default());
-    let top = frame_row_text(&mut terminal, 0);
-    let bottom = frame_row_text(&mut terminal, 2);
-    assert!(!top.contains("as:"), "blurred top sheds the as: clause");
-    assert!(!bottom.contains("Enter"), "blurred bottom sheds the keys");
-    assert!(!bottom.contains("chars"), "blurred bottom sheds the counter");
-    assert!(top.ends_with('╮') && bottom.ends_with('╯'), "frame intact");
+    let row4 = frame_row_text(&mut terminal, 3);
+    assert!(!row4.contains("Enter"), "blurred row sheds the keys");
+    assert!(!row4.contains("chars"), "blurred row sheds the counter");
+    let buffer = terminal.buffer();
+    assert_eq!(
+        buffer[(0, 3)].bg,
+        Theme::default().input_surface_inactive(),
+        "blurred panel keeps its recessed tint"
+    );
 }
 
-/// Narrow frames degrade instead of overflowing: the counter goes first,
-/// then the keys clause, and the plain stroke run still closes with the
-/// corners on both ends.
+/// Narrow panels degrade instead of overflowing: the counter goes first,
+/// then the sentence's optional clauses, and every row stays exactly the
+/// panel width.
 #[test]
-fn composer_line_frame_degrades_gracefully_on_narrow_widths() {
+fn composer_panel_degrades_gracefully_on_narrow_widths() {
     let theme = Theme::default();
     for width in [12u16, 9, 7] {
-        let mut terminal = mutx_engine::TestTerminal::new(width, 5);
+        let mut terminal = mutx_engine::TestTerminal::new(width, 6);
         terminal.draw(|f| {
             draw_composer(
                 ComposerView {
                     frame: f,
-                    input_rect: Rect::new(0, 0, width, 3),
+                    input_rect: Rect::new(0, 0, width, 4),
                     theme: &theme,
                     layout_map: &mut LayoutMap::new(),
                     input_scroll: &mut 0,
@@ -1802,12 +1850,22 @@ fn composer_line_frame_degrades_gracefully_on_narrow_widths() {
                 crate::components::composer_hints::ComposerHints::default(),
             );
         });
-        let top = frame_row_text(&mut terminal, 0);
-        let bottom = frame_row_text(&mut terminal, 2);
-        // Corners always present; the row never exceeds the frame width.
-        assert!(top.starts_with('╭') && top.ends_with('╮'), "w={width}: {top:?}");
-        assert!(bottom.starts_with('╰') && bottom.ends_with('╯'), "w={width}: {bottom:?}");
-        assert_eq!(top.chars().count(), width as usize);
-        assert_eq!(bottom.chars().count(), width as usize);
+        for y in 0..4u16 {
+            let row = frame_row_text(&mut terminal, y);
+            assert_eq!(
+                row.chars().count(),
+                width as usize,
+                "w={width} y={y}: rows never exceed the panel width"
+            );
+        }
+        // The recessed/active tint still covers the full box on every row.
+        let buffer = terminal.buffer();
+        for y in 0..4u16 {
+            assert_eq!(
+                buffer[(width - 1, y)].bg,
+                theme.input_surface(),
+                "w={width} y={y}: panel tint reaches the last column"
+            );
+        }
     }
 }

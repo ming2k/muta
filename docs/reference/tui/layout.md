@@ -82,7 +82,7 @@ box and model bar are persistent (when chrome is visible):
 | Activity bar | `ACTIVITY_BAR_ROWS = 1` | Activity is non-empty and not `idle`; not in envoy view; chrome visible. Breathing-dot liveness anchor plus the live status label and the round elapsed timer. Click to open the Activity modal. See [Activity bar](activity-bar.md). |
 | Todo bar | `TODO_BAR_ROWS = 1` | A non-empty task list exists; not in envoy view; chrome visible. `TODOS` tag · done/total progress · current-item preview. Click to open the Activity modal on the Todos tab. See [Todo bar](todo-bar.md). |
 | Queue bar | `QUEUE_BAR_ROWS = 1` | The viewed session's outbox is non-empty; not in envoy view; chrome visible. `QUEUE` identity · count · inline preview of the next item to pop · key legend (`Ctrl+P` block/resume, `Ctrl+Q` expand). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `Ctrl+P`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
-| Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 3` | Not in envoy view; chrome visible |
+| Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 4` | Not in envoy view; chrome visible |
 | Model bar | `MODEL_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Ambient gauges only: model name + reasoning tier + `@instance` · context usage · stream rate. |
 
 ```text
@@ -91,9 +91,10 @@ box and model bar are persistent (when chrome is visible):
 │ TODOS 2/5 · write the documentation           Ctrl+T expand │  ← todo bar
 │ QUEUE 1  {next item preview…}  Ctrl+P block  Ctrl+Q expand  │  ← queue bar
 │ ● making edits (23s · Esc Esc interrupt)                 │  ← activity bar
-│ ╭────as: prompt────────────────────────────────────────╮ │  ← input box
-│ │ › type here…                                           │ │
-│ ╰────Enter send────────────────────────────────2 chars─╯ │
+│                                                          │  ← input box
+│ › type here…                                            │
+│                                                          │
+│ Enter send prompt                             2 chars   │
 │ k3 max @kimi-code  89.2k (8%)   47.8 tok/s                        │  ← model bar
 └─────────────────────────────────────────────────────────────┘
 ```

@@ -4,65 +4,60 @@ The live editable prompt at the bottom of the frame.
 
 ## Appearance
 
-A rounded **line frame** (`╭─ … ─╮` / `│` / `╰─ … ─╯`) drawn with stroke
-glyphs on the plain surface — no filled panel. The borders do double duty:
-their runs of `─` inlay the meta information, so the line itself carries the
-box's state instead of bars of tinted background.
+A flat **tinted panel** (`input_surface` when the box owns the keyboard,
+`input_surface_inactive` while a transcript step has focus) — no stroke, no
+borders. The box is laid out as **four rows** for a one-line draft:
 
 ```text
-  ╭────as: prompt────────────────────────────────────────────╮
-  │ › type here…                                              │
-  ╰────Enter send──────────────────────────────────1.2k chars─╯
+  ┌ row 1 ─ blank breathing row ─────────────────────────────┐
+  │ › type here…                                             │  ← row 2: text
+  ├ row 3 ─ blank gap row ───────────────────────────────────┤
+  │ Enter send prompt                            12 chars   │  ← row 4: hint
+  └──────────────────────────────────────────────────────────┘
 ```
 
 | Attribute | Value |
 |-----------|-------|
-| Background | none — the frame's interior is the plain `app_bg`; the stroke, not a panel, marks the box |
-| Stroke | `composer_frame` (surface mixed 35% toward `primary`) when the box owns the keyboard; `composer_frame_inactive` (16% mix) while a transcript step has focus |
-| Corners | `╭ ╮ ╰ ╯`; rails `│` close every text row |
-| Prompt glyph | `›` inside the frame (brand accent when focused; ignition charges it toward the fire hue during an effort wave) |
+| Background | `input_surface` (focused) / `input_surface_inactive` (blurred) — a raised tint, the box's identity |
+| Prompt glyph | `›` opening the text row (brand accent when focused; ignition charges it toward the fire hue during an effort wave) |
 | Text color | `text` |
-| Text indent | 6 cols from the frame's left rail (rail + gap + `›` + gap) — same column as user-message text so the transcript and the input share one left margin |
-| Inlaid meta | Top border carries the compose target; bottom border carries the Enter action (left) and the char counter (right-aligned, one stroke before the corner) |
-| Blurred | The frame recedes to the inactive stroke and sheds every inlay — plain `╭────╮` / `╰────╯` runs |
+| Text indent | 2 cols from the panel's left edge (`›` + gap) — the text lands at the same column user-message text does, so the transcript and the input share one left margin |
+| Hint row | Row 4 carries the Enter sentence (left, at the text column) and the char counter (right-aligned, one column of air before the panel edge) |
+| Blurred | The panel drops to the recessed inactive tint and the hint row sheds the sentence entirely (blank panel rows only) |
 
-Width degradation: the counter drops first, then the keys clause; the plain
-stroke run always closes the corners at both ends (the frame never overflows
-or wraps).
+Width degradation: the counter drops first, then the sentence's optional
+clauses; every row stays exactly the panel width (never overflows or wraps).
 
-## Meta rows
+## The hint row
 
-The composer's meta rows live **inside the border strokes** (the old
-standalone hint bar became the gauge-only [model bar](model-bar.md)):
+The composer's single meta row (the old standalone hint bar became the
+gauge-only [model bar](model-bar.md); the two former in-box rows — `as:`
+target and keys — merged into one sentence):
 
-**Top border — the `as:` target.** One clause normally; two while a queue
-pointer is armed. The value hue encodes the *consequence class* of pressing
-`Enter`:
+**`Enter` verb — what the next Enter does.** The verb names the delivery
+group the buffer will land in, tinted by its *consequence class*:
 
-| Buffer state | Top row |
-|--------------|---------|
-| Plain draft | `as: prompt` (default fg) |
-| Resolved `/command` | `as: command` (`brand` + BOLD, echoing the in-box command highlight) |
-| Mid-round, steering armed | `as: steer prompt` (`warn` amber — Enter interrupts the running round) |
-| Mid-round, follow-up armed | `as: follow-up prompt` (`info` blue — Enter appends to the queue) |
-| Editing queued item #2 | `compose: follow-ups[#2] · edited · as: follow-up` (group tinted by delivery kind; `· edited` only while the buffer diverges from the stored text) |
-
-**Bottom border — the keys.** Left side (after the lead-in) states what the
-next `Enter` does, mirroring the `as:` verb; right side is a live char count
-of the draft (chars, never tokens — committed-token accounting lives
-exclusively on the model bar):
-
-| Buffer state | Keys row (left) |
-|--------------|-----------------|
-| Idle plain draft | `Enter send` |
-| Mid-round, steering armed | `Enter steer  Tab follow-up mode` (primary verb amber) |
-| Mid-round, follow-up armed | `Enter follow-up  Tab steer mode` (primary verb info blue) |
-| Editing a queued item | `Enter save  Esc cancel` — both survive any width |
+| Buffer state | Hint row |
+|--------------|----------|
+| Plain draft | `Enter send prompt` (default fg) |
+| Resolved `/command` | `Enter send command` (`brand` + BOLD, echoing the in-box command highlight) |
+| Mid-round, steering armed | `Enter send steer  Tab follow-up mode` (verb amber — Enter interrupts the running round) |
+| Mid-round, follow-up armed | `Enter send follow-up  Tab steer mode` (verb info blue — Enter appends to the queue) |
+| Editing queued item #2 | `Enter update follow-ups[2]` — the group noun and the 1-based position, group-tinted; survives any width |
 | Stopped round parked for retry | `Enter send  /retry to retry` |
 
-Under width pressure the frame degrades top-down: the counter drops first,
-then the keys clause compresses labels (`Tab follow-up mode` →
-`Tab follow-up`); the stroke run always closes with both corners.
+**`Tab` — the mode toggle.** While a round is live, `Tab` swaps the armed
+mode between steer and follow-up; the sentence's trailing clause always
+names the mode Enter is *not* in, so the toggle's effect reads from the row
+itself.
+
+**Char count (right).** A live count of the draft (chars, never tokens —
+committed-token accounting lives exclusively on the model bar), right-aligned
+at the end of the row.
+
+Under width pressure the row degrades in order: the counter drops first,
+then the optional clause labels (`Tab follow-up mode` → `Tab follow-up`);
+the `Enter …` verb core always survives.
 
 ## Height growth
 
@@ -248,8 +243,9 @@ The rows `↑`/`↓` walk are **bound to the session, not the client window**:
 
 ## Source
 
-`draw_composer` / `build_frame_border_row` in `render/composer.rs`. Rendered
-manually (not via a `Block` widget) so each border row can splice inlaid meta
-spans into the stroke run cell by cell.
+`draw_composer` in `tui/composer.rs`; the hint sentence is built by
+`hint_row_spans` in `tui/components/composer_hints.rs`. Rendered manually
+(not via a `Block` widget) so the hint row, chips, selection, and the
+command-token accent can splice styled spans into the panel cell by cell.
 `INPUT_MSG_IDX = usize::MAX - 2` is the layout-map
 message index reserved for live input selection.

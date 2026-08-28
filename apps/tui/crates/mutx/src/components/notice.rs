@@ -184,9 +184,12 @@ pub(crate) fn draw_notice_view(
         }
     }
 
-    // 3. Notice body: header text
+    // 3. Notice body: header text. Like every other entry body, the prose is
+    //    indented TRANSCRIPT_BODY_LEADING_INDENT past the entry head so the
+    //    header row reads as the entry's *head* and the body as its content.
+    let body_indent = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
     let body_wrap_width = full_width
-        .saturating_sub(TRANSCRIPT_BODY_LEADING_INDENT as usize)
+        .saturating_sub(body_indent.width())
         .max(1);
     let body_lines = wrap_text(&parsed.header, body_wrap_width);
 
@@ -201,10 +204,13 @@ pub(crate) fn draw_notice_view(
         }
 
         let line_rect = Rect::new(area.x, *current_y, area.width, 1);
-        let spans = vec![Span::styled(
-            wl.text.clone(),
-            Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
-        )];
+        let spans = vec![
+            Span::styled(body_indent.clone(), Style::default()),
+            Span::styled(
+                wl.text.clone(),
+                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
+            ),
+        ];
         frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
 
         layout_map.push(BlockRegion {
@@ -213,17 +219,22 @@ pub(crate) fn draw_notice_view(
             start_byte: 0,
             end_byte: wl.text.len(),
             text: wl.text,
-            prefix_cols: 0,
+            prefix_cols: body_indent.width() as u16,
             rect: line_rect,
             hidden_ranges: Vec::new(),
         });
         *current_y += 1;
     }
 
-    // 4. Detail body: formatted detail (unfolded direct rendering)
+    // 4. Detail body: formatted detail (unfolded direct rendering). Same
+    //    leading indent as the header body; wrap width matches what is
+    //    actually painted (indent cols only — the stream gutter is already
+    //    applied once at the entry point).
     if let Some(detail) = parsed.detail.as_ref() {
-        let detail_indent = "  ";
-        let detail_wrap_width = full_width.saturating_sub(detail_indent.width() + 2).max(1);
+        let detail_indent = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
+        let detail_wrap_width = full_width
+            .saturating_sub(detail_indent.width())
+            .max(1);
 
         for line_str in detail.lines() {
             let wrapped_detail = wrap_text(line_str, detail_wrap_width);
@@ -239,7 +250,7 @@ pub(crate) fn draw_notice_view(
 
                 let line_rect = Rect::new(area.x, *current_y, area.width, 1);
                 let spans = vec![
-                    Span::styled(detail_indent, Style::default()),
+                    Span::styled(detail_indent.clone(), Style::default()),
                     Span::styled(dwl.text.clone(), Style::default().fg(theme.muted())),
                 ];
                 frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
@@ -357,11 +368,21 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         }
         assert!(row0.starts_with("! notification"));
 
-        // Verify row 2 contains "Connection refused"
+        // Verify row 2 contains "Connection refused", indented
+        // TRANSCRIPT_BODY_LEADING_INDENT (2) past the entry head.
         let mut row2 = String::new();
         for x in 0..25 {
             row2.push_str(buf[(x, 2)].symbol());
         }
-        assert!(row2.contains("Connection refused"));
+        assert!(
+            row2.starts_with("  Connection refused"),
+            "body must be indented 2 cols past the entry head, got: {row2:?}"
+        );
+
+        // The body region must record the decorative indent as its prefix so
+        // copy/hit-testing resolve to content, not the indent whitespace.
+        let body = layout_map.region_at(2, 2).expect("body region");
+        assert_eq!(body.text, "Connection refused");
+        assert_eq!(body.prefix_cols, TRANSCRIPT_BODY_LEADING_INDENT);
     }
 }

@@ -1,9 +1,9 @@
-//! The live editable prompt box at the bottom of the screen: a rounded line
-//! frame (`╭─ … ─╮` / `│` / `╰─ … ─╯`) drawn with stroke glyphs on the plain
-//! surface — no filled panel — whose border rows carry the meta information
-//! (compose target, Enter action, char counter) inlaid into the line itself.
-//! Inside the frame, in-box text wrapping with vertical scroll keeps the
-//! caret visible, and per-row layout-map recording drives semantic
+//! The live editable prompt box at the bottom of the screen: a tinted panel
+//! (`input_surface` / `input_surface_inactive`) laid out as four rows for a
+//! one-line draft — a blank breathing row, the text row(s), another blank
+//! gap row, and a meta row carrying the hint sentence (`Enter send prompt ·
+//! 12 chars`). Inside the panel, in-box text wrapping with vertical scroll
+//! keeps the caret visible, and per-row layout-map recording drives semantic
 //! selection / copy.
 
 use mutx_engine::text::{cursor_column, str_len};
@@ -16,94 +16,14 @@ use crate::model::layout::{BlockRegion, LayoutMap};
 use crate::model::selection::SelectionState;
 
 use super::Theme;
-use super::components::composer_hints::compose_target_spans;
+use super::components::composer_hints::hint_row_spans;
 use super::design::{
-    COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS, COMPOSER_RAIL_GAP_COLS,
+    COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS,
     COMPOSER_TEXT_ROW_OFFSET, COMPOSER_VERTICAL_CHROME_ROWS,
 };
 use super::text_layout::{
     WrappedLine, block_selection_range, line_selection, wrap_text,
 };
-
-/// Build one rounded border row of the composer's line frame:
-/// `╭── as: prompt ─────╮` (top) or `╰── Enter send ── 12 chars ─╯` (bottom).
-///
-/// The row is a run of `─` stroke glyphs in `frame_fg` between the two
-/// rounded corners. The `info` spans are inlaid starting exactly at the
-/// text column (`COMPOSER_PROMPT_PREFIX_COLS`, minus the corner glyph) so
-/// the label reads as part of the same left margin as the text it
-/// describes; the optional `tail` label is right-aligned with one stroke
-/// column before the closing corner.
-///
-/// Degradation ladder (the frame never overflows or wraps):
-/// 1. `info + tail` both inlaid;
-/// 2. `tail` dropped (keys are the non-negotiable part on the bottom row);
-/// 3. `info` dropped too — a plain full-width stroke run, with `tail` alone
-///    right-aligned if it fits.
-pub(super) fn build_frame_border_row(
-    full_w: usize,
-    top: bool,
-    info: Option<Vec<Span<'static>>>,
-    tail: Option<String>,
-    frame_fg: Color,
-    interior_bg: Color,
-    muted_fg: Color,
-) -> Line<'static> {
-    if full_w < 2 {
-        return Line::from(Span::styled(
-            " ".repeat(full_w),
-            Style::default().bg(interior_bg),
-        ));
-    }
-    let (corner_l, corner_r) = if top { ("╭", "╮") } else { ("╰", "╯") };
-    let corner_style = Style::default().fg(frame_fg).bg(interior_bg);
-    let stroke = |cols: usize| {
-        Span::styled("─".repeat(cols), Style::default().fg(frame_fg).bg(interior_bg))
-    };
-    let tail_span =
-        |text: String| Span::styled(text, Style::default().fg(muted_fg).bg(interior_bg));
-    // Stroke columns between the two corners.
-    let run = full_w - 2;
-    // Inlay begins where the composer's text begins: the prefix minus the
-    // corner glyph's own column.
-    let lead_in = (COMPOSER_PROMPT_PREFIX_COLS - 1).min(run);
-    let tail_w = tail.as_deref().map(str_len).unwrap_or(0);
-    let info_w = info
-        .as_ref()
-        .map(|spans| spans.iter().map(|span| str_len(&span.content)).sum())
-        .unwrap_or(0);
-    let mut spans = vec![Span::styled(corner_l, corner_style)];
-    match info {
-        Some(info_spans) if run >= lead_in + info_w + 2 => {
-            spans.push(stroke(lead_in));
-            spans.push(stroke(1)); // breathing room between line and label
-            spans.extend(info_spans);
-            let remaining = run - lead_in - 1 - info_w;
-            if tail_w > 0 && remaining >= tail_w + 2 {
-                // [gap stroke] tail [1 stroke] — remaining = gap + tail + 1.
-                let gap = remaining - tail_w - 1;
-                spans.push(stroke(gap));
-                spans.push(tail_span(tail.unwrap_or_default()));
-                spans.push(stroke(1));
-            } else {
-                spans.push(stroke(remaining));
-            }
-        }
-        _ => {
-            // Info (or its room) is gone; the tail alone may still fit,
-            // right-aligned: `[stroke…] tail [stroke] corner`.
-            if tail_w > 0 && run >= tail_w + 2 {
-                spans.push(stroke(run - tail_w - 1));
-                spans.push(tail_span(tail.unwrap_or_default()));
-                spans.push(stroke(1));
-            } else {
-                spans.push(stroke(run));
-            }
-        }
-    }
-    spans.push(Span::styled(corner_r, corner_style));
-    Line::from(spans)
-}
 
 /// Render plumbing for the composer draw family: frame, target rect,
 /// theme, layout map, scroll state, and selection. Bundled so the three
@@ -371,36 +291,28 @@ fn draw_composer_impl(
         selection,
     } = view;
     let ComposerText { input, byte_cursor } = text;
-    // The input box is a rounded line frame drawn with stroke glyphs on the
-    // plain surface — no filled panel. Each text row is preceded by the
-    // frame's left `│` rail, a gap, and (on the first wrapped line) the `›`
-    // prompt; continuations repeat the rail and indent to the same column so
-    // the caret stays aligned. The top and bottom edges are the `╭─ … ─╮` /
-    // `╰─ … ─╯` border rows, whose runs of `─` carry the meta information
-    // (compose target, Enter action, char counter) inlaid into the line
-    // itself — "线条穿插回补" — so the information reads as part of the frame
-    // instead of as bars of tinted background above/below the text.
+    // The input box is a flat tinted panel: each text row carries `panel_bg`
+    // and is prefixed with `› ` on the first wrapped line / a matching indent
+    // on continuations. The box is laid out as four rows for a one-line
+    // draft: a blank breathing row above the text, the text row(s), a blank
+    // gap row, and the meta row (hint sentence + char count) closing the box.
+    // Using a solid background (not `▄`/`▀` half-block glyphs) keeps the edge
+    // identical across terminals, since a cell can only carry one bg color.
     //
-    // `focused` drives only the stroke palette: when `false` the frame drops
-    // to its near-surface inactive stroke and the prompt glyph uses
-    // `text_muted`, so the box visibly recedes — while staying an
-    // input-owned surface (it is deliberately *not* the sent-user-message
-    // panel, so the input's two states remain a related but independent
-    // pair). The live composer passes `true`. The caret is gated separately
-    // by `show_caret`: it is suppressed whenever a modal owns the keyboard
-    // (the full-screen modal backdrop already signals "typing lands
-    // elsewhere"), so the frame never shows a live caret inside a surface
-    // that no longer accepts input.
-    let frame_fg = if focused {
-        theme.composer_frame()
+    // `focused` drives only the palette: when `false` the panel drops to the
+    // recessed input-inactive band and the prompt glyph uses `text_muted`, so
+    // the box visibly recedes — while staying an input-owned surface (it is
+    // deliberately *not* the sent-user-message panel, so the input's two
+    // states remain a related but independent pair). The live composer passes
+    // `true`. The caret is gated separately by `show_caret`: it is suppressed
+    // whenever a modal owns the keyboard (the full-screen modal backdrop
+    // already signals "typing lands elsewhere"), so the panel never shows a
+    // live caret inside a surface that no longer accepts input.
+    let panel_bg = if focused {
+        theme.input_surface()
     } else {
-        theme.composer_frame_inactive()
+        theme.input_surface_inactive()
     };
-    // The frame's interior sits on the plain surface — the stroke carries the
-    // box's identity now, not a raised tint. Spans still pin this bg (rather
-    // than relying on `Color::Reset`) so selection, chips, and the ignition
-    // overlay blend against the app's own surface color.
-    let interior_bg = theme.surface();
     let prompt_fg = if focused {
         theme.brand()
     } else {
@@ -417,9 +329,8 @@ fn draw_composer_impl(
         _ => prompt_fg,
     };
     let full_w = input_rect.width as usize;
-    // Inner text budget: the full width minus the left prefix (rail + gap +
-    // `›` + gap) and the matching right pad, so text never touches either
-    // rail of the frame.
+    // Inner text budget: the full width minus the `› ` prompt prefix and the
+    // matching right pad, so text never touches either edge of the panel.
     let text_width = full_w
         .saturating_sub(COMPOSER_PROMPT_PREFIX_COLS + COMPOSER_RIGHT_PAD_COLS)
         .max(1);
@@ -440,61 +351,38 @@ fn draw_composer_impl(
     let (cursor_x, cursor_y) =
         cursor_screen_pos(input_rect, input, byte_cursor, input_scroll).unwrap_or((0, 0));
 
-    let mut lines: Vec<Line> = Vec::with_capacity(visible_rows + 2);
+    let mut lines: Vec<Line> = Vec::with_capacity(visible_rows + COMPOSER_VERTICAL_CHROME_ROWS as usize);
 
-    // ── Top border: `╭─── as: prompt ───╮` ─────────────────────────────────
-    // The compose-target clause is inlaid into the top border's run of `─`,
-    // positioned after a fixed lead-in so the label always starts at the
-    // same column. While unfocused the clause is dropped entirely (the frame
-    // recedes and the meta text would compete with a step-focused
-    // transcript), leaving a plain `╭────╮` run.
-    lines.push(build_frame_border_row(
-        full_w,
-        true,
-        focused.then(|| {
-            compose_target_spans(hints.compose_target, theme, interior_bg)
-        }),
-        None,
-        frame_fg,
-        interior_bg,
-        theme.muted(),
-    ));
+    // ── Row 1: blank breathing row ──────────────────────────────────────────
+    // A full panel-bg padding row giving the text a line of air above.
+    lines.push(Line::from(Span::styled(
+        " ".repeat(full_w),
+        Style::default().bg(panel_bg),
+    )));
 
-    // Text rows: every row is closed on the left by the frame's `│` rail,
-    // then a gap; the first logical line adds the `›` prompt glyph plus its
-    // own gap, and every wrapped continuation indents to the same column so
-    // the box reads as a shell-style prompt inside a lined frame. Only the
-    // visible slice is rendered so overflowing content can scroll while the
-    // box stays within its terminal-sized bounds.
-    let rail = Span::styled("│", Style::default().bg(interior_bg).fg(frame_fg));
-    let rail_gap = Span::styled(
-        " ".repeat(COMPOSER_RAIL_GAP_COLS),
-        Style::default().bg(interior_bg),
-    );
-    let prompt_glyph = Span::styled("›", Style::default().bg(interior_bg).fg(prompt_fg));
+    // Text rows: the first logical line opens with the `›` prompt glyph plus
+    // a gap, and every wrapped continuation indents to the same column so the
+    // box reads as a shell-style prompt on a tinted panel. Only the visible
+    // slice is rendered so overflowing content can scroll while the box stays
+    // within its terminal-sized bounds.
+    let prompt_glyph = Span::styled("›", Style::default().bg(panel_bg).fg(prompt_fg));
     let prompt_gap = Span::styled(
-        " ".repeat(COMPOSER_PROMPT_PREFIX_COLS - COMPOSER_RAIL_GAP_COLS - 2),
-        Style::default().bg(interior_bg),
+        " ".repeat(COMPOSER_PROMPT_PREFIX_COLS - 1),
+        Style::default().bg(panel_bg),
     );
     let indent = Span::styled(
-        " ".repeat(COMPOSER_PROMPT_PREFIX_COLS - 1),
-        Style::default().bg(interior_bg),
-    );    if wrapped.is_empty() {
+        " ".repeat(COMPOSER_PROMPT_PREFIX_COLS),
+        Style::default().bg(panel_bg),
+    );
+    if wrapped.is_empty() {
         let used = COMPOSER_PROMPT_PREFIX_COLS;
-        // Suffix after the text: interior tail + (RIGHT_PAD-1) air + the
-        // right rail. tail + RIGHT_PAD + used = full_w.
-        let tail_cols = full_w.saturating_sub(used + COMPOSER_RIGHT_PAD_COLS);
+        // Suffix after the (empty) text: the row's remaining panel columns.
+        // used + tail = full_w.
+        let tail_cols = full_w.saturating_sub(used);
         lines.push(Line::from(vec![
-            rail.clone(),
-            rail_gap.clone(),
             prompt_glyph.clone(),
             prompt_gap.clone(),
-            Span::styled(" ".repeat(tail_cols), Style::default().bg(interior_bg)),
-            Span::styled(
-                " ".repeat(COMPOSER_RIGHT_PAD_COLS - 1),
-                Style::default().bg(interior_bg),
-            ),
-            rail.clone(),
+            Span::styled(" ".repeat(tail_cols), Style::default().bg(panel_bg)),
         ]));
     } else {
         let start = *input_scroll;
@@ -506,11 +394,11 @@ fn draw_composer_impl(
         let sel_range = block_selection_range(selection, INPUT_MSG_IDX, 0);
         let selected_bg = theme.selected();
         let text_fg = theme.fg();
-        let base_text = Style::default().bg(interior_bg).fg(text_fg);
+        let base_text = Style::default().bg(panel_bg).fg(text_fg);
         // Resolved `/command` token: bold + accent color, echoing the
         // completion menu's command column so the two surfaces read alike.
         let accent_text = Style::default()
-            .bg(interior_bg)
+            .bg(panel_bg)
             .fg(theme.brand())
             .add_modifier(Modifier::BOLD);
         // Attachment chips (`[Image #N (size)]` / `[Pasted text #N +M lines
@@ -518,29 +406,24 @@ fn draw_composer_impl(
         // distinct object inside the live input instead of ordinary prose.
         // Paste chips take the calm blue, image chips the warm amber; each is
         // a bold colored label on a tinted band derived from the current
-        // interior, so the identifier is both informative and identifiable.
+        // panel, so the identifier is both informative and identifiable.
         let chips = iter_chips(input);
         let chip_paste_fg = theme.chip_paste_fg();
         let chip_image_fg = theme.chip_image_fg();
         let chip_paste_style = Style::default()
-            .bg(theme.chip_paste_bg(interior_bg))
+            .bg(theme.chip_paste_bg(panel_bg))
             .fg(chip_paste_fg)
             .add_modifier(Modifier::BOLD);
         let chip_image_style = Style::default()
-            .bg(theme.chip_image_bg(interior_bg))
+            .bg(theme.chip_image_bg(panel_bg))
             .fg(chip_image_fg)
             .add_modifier(Modifier::BOLD);
         for (i, wl) in wrapped[start..end].iter().enumerate() {
             let used = COMPOSER_PROMPT_PREFIX_COLS + str_len(&wl.text);
             let mut spans = if start + i == 0 {
-                vec![
-                    rail.clone(),
-                    rail_gap.clone(),
-                    prompt_glyph.clone(),
-                    prompt_gap.clone(),
-                ]
+                vec![prompt_glyph.clone(), prompt_gap.clone()]
             } else {
-                vec![rail.clone(), indent.clone()]
+                vec![indent.clone()]
             };
             let selected = line_selection(sel_range, wl);
             // A resolved `/command` token is accented from the input's first
@@ -588,64 +471,81 @@ fn draw_composer_impl(
                     chip_image_fg,
                 },
             );
-            // Close the row: interior tail, right-pad air, then the frame's
-            // right `│` rail as the row's final column.
-            // used + tail + (RIGHT_PAD-1) + 1 (rail) = full_w.
-            let tail_cols = full_w
-                .saturating_sub(used + COMPOSER_RIGHT_PAD_COLS);
+            // Close the row with panel-bg air to the right edge.
+            // used + tail = full_w.
+            let tail_cols = full_w.saturating_sub(used);
             spans.push(Span::styled(
                 " ".repeat(tail_cols),
-                Style::default().bg(interior_bg),
+                Style::default().bg(panel_bg),
             ));
-            spans.push(Span::styled(
-                " ".repeat(COMPOSER_RIGHT_PAD_COLS - 1),
-                Style::default().bg(interior_bg),
-            ));
-            spans.push(rail.clone());
             lines.push(Line::from(spans));
         }
     }
 
-    // ── Bottom border: `╰── Enter send ── 1.2k chars ─╯` ───────────────────
-    // The Enter-action keys lead (left, after the corner) and the char
-    // counter closes (right, before the corner). Both ride the border's `─`
-    // run instead of a tinted bar; the row still degrades by width ladder
-    // before the counter is ever dropped, and the counter is the first thing
-    // the frame sheds when the run gets too short.
+    // ── Row 3: blank gap row ────────────────────────────────────────────────
+    // A second breathing row between the text and the meta row, so the hint
+    // sentence reads as the box's own footnote rather than another text line.
+    lines.push(Line::from(Span::styled(
+        " ".repeat(full_w),
+        Style::default().bg(panel_bg),
+    )));
+
+    // ── Row 4: the hint row ─────────────────────────────────────────────────
+    // `Enter send prompt` leads (left) and the char counter closes (right).
+    // Keycaps and verbs tint with `panel_bg` so they blend into the box; the
+    // row degrades by width ladder before the counter is ever dropped, and
+    // the counter is the first thing the row sheds when the panel gets too
+    // narrow. While unfocused the sentence is dropped entirely — the recessed
+    // panel must not compete with a step-focused transcript.
     {
         use crate::components::composer_hints::{
-            ActionDensity, format_char_count, keys_row_spans,
+            ActionDensity, format_char_count,
         };
         let keys_width = full_w
             .saturating_sub(COMPOSER_PROMPT_PREFIX_COLS + COMPOSER_RIGHT_PAD_COLS)
             .max(8);
         let density = ActionDensity::for_width(keys_width);
-        let keys = if focused {
-            Some(keys_row_spans(
+        let mut spans: Vec<Span<'static>> = vec![indent.clone()];
+        if focused {
+            spans.extend(hint_row_spans(
                 hints.can_retry,
                 density,
                 hints.compose_target,
                 theme,
-                interior_bg,
-            ))
-        } else {
-            None
-        };
-        let count_label = format_char_count(input.chars().count());
-        let tail = if focused && !count_label.is_empty() {
-            Some(count_label)
-        } else {
-            None
-        };
-        lines.push(build_frame_border_row(
-            full_w,
-            false,
-            keys,
-            tail,
-            frame_fg,
-            interior_bg,
-            theme.muted(),
+                panel_bg,
+            ));
+        }
+        // Right-aligned char counter: only when the sentence plus counter fit
+        // with at least one filler column between them.
+        if focused {
+            let count_label = format_char_count(input.chars().count());
+            let used = spans
+                .iter()
+                .map(|span| str_len(&span.content))
+                .sum::<usize>()
+                + str_len(&count_label);
+            if full_w > used + 1 {
+                let gap = full_w - used - 1;
+                spans.push(Span::styled(
+                    " ".repeat(gap),
+                    Style::default().bg(panel_bg).fg(theme.muted()),
+                ));
+                spans.push(Span::styled(
+                    count_label,
+                    Style::default().bg(panel_bg).fg(theme.muted()),
+                ));
+            }
+        }
+        let used = spans
+            .iter()
+            .map(|span| str_len(&span.content))
+            .sum::<usize>();
+        let tail_cols = full_w.saturating_sub(used);
+        spans.push(Span::styled(
+            " ".repeat(tail_cols),
+            Style::default().bg(panel_bg),
         ));
+        lines.push(Line::from(spans));
     }
 
     frame.render_widget(Paragraph::new(lines), input_rect);

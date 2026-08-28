@@ -89,16 +89,16 @@ pub(crate) const TOOL_STEP_CHILDREN_GAP_ROWS: usize = TOOL_STEP_SECTION_GAP_ROWS
 pub(crate) const REASONING_TRACE_BODY_TOP_GAP_ROWS: usize = 0;
 pub(crate) const REASONING_TRACE_BLOCK_GAP_ROWS: usize = 1;
 
-/// Gap rows between the bottom of the composer frame and the bar below it.
-/// The composer's bottom border row (carrying the inlaid keys/counter
-/// information) reads as built-in separation — an extra `surface` gap row on
-/// top of that just burns a transcript row for no visual gain, so the next
-/// bar sits flush against the frame's bottom edge.
+/// Gap rows between the bottom of the composer panel and the bar below it.
+/// The panel's hint row (carrying the Enter/Tab sentence + char count) reads
+/// as built-in separation — an extra `surface` gap row on top of that just
+/// burns a transcript row for no visual gain, so the next bar sits flush
+/// against the panel's bottom edge.
 pub(crate) const COMPOSER_HINT_GAP_ROWS: u16 = 0;
 
-/// Gap rows between the activity bar and the top of the composer frame.
-/// Mirrors [`COMPOSER_HINT_GAP_ROWS`] on the upper edge: the frame's top
-/// border row already separates its text from the live status line, so the
+/// Gap rows between the activity bar and the top of the composer panel.
+/// Mirrors [`COMPOSER_HINT_GAP_ROWS`] on the upper edge: the panel's top
+/// padding row already separates its text from the live status line, so the
 /// activity bar sits flush against the composer with zero extra breathing
 /// room. Test-only since the footer stack made the zero structural
 /// (adjacent rows place flush by construction in `footer_stack::place`); the
@@ -195,20 +195,18 @@ pub(crate) const ENVOY_FOOTER_ROWS: u16 = 3;
 /// Horizontal inset applied to the footer area containing status/composer/hints.
 pub(crate) const FOOTER_H_INSET: u16 = TRANSCRIPT_H_INSET;
 
-/// Composer chrome is the rounded frame itself: one top border row and one
-/// bottom border row (both carry line glyphs / inlaid information), so the
-/// vertical budget is unchanged at two rows.
-pub(crate) const COMPOSER_VERTICAL_CHROME_ROWS: u16 = 2;
-pub(crate) const COMPOSER_MIN_HEIGHT: u16 = 3;
+/// Composer chrome is the panel's own breathing room: one blank padding row
+/// above the text, one blank gap row below it, and one meta row carrying the
+/// hint sentence (`Enter send prompt · 12 chars`) at the bottom — four rows
+/// total for a one-line draft. The box reads as a tinted surface, not a
+/// lined frame.
+pub(crate) const COMPOSER_VERTICAL_CHROME_ROWS: u16 = 3;
+pub(crate) const COMPOSER_MIN_HEIGHT: u16 = 4;
 pub(crate) const COMPOSER_MAX_HEIGHT_DIVISOR: u16 = 2;
-/// Columns reserved before the composer text: the frame's left border `│`
-/// rail, a gap, the `›` prompt glyph, and another gap on the first wrapped
-/// line; continuation lines indent the same amount so the caret stays
-/// aligned. The rail glyph occupies column 0 of the box, the text starts at
-/// column 4.
-pub(crate) const COMPOSER_PROMPT_PREFIX_COLS: usize = 4;
-/// Gap between the frame's left `│` rail and the `›` prompt glyph.
-pub(crate) const COMPOSER_RAIL_GAP_COLS: usize = 1;
+/// Columns reserved before the composer text: the `›` prompt glyph plus one
+/// gap column on the first wrapped line; continuation lines indent the same
+/// amount so the caret stays aligned. Text starts at column 2 of the box.
+pub(crate) const COMPOSER_PROMPT_PREFIX_COLS: usize = 2;
 pub(crate) const COMPOSER_TEXT_ROW_OFFSET: u16 = 1;
 
 /// User message panels used to reserve their own outer gutter matching
@@ -226,9 +224,8 @@ pub(crate) const USER_MESSAGE_TEXT_GAP_COLS: usize = 2;
 pub(crate) const USER_MESSAGE_RIGHT_PAD_COLS: usize = 2;
 
 /// Inner right padding kept clear of wrapped text inside the composer so
-/// typing never runs into the frame's right `│` rail. Two columns: one of
-/// air plus the rail column itself is covered by the box width, so this is
-/// the air between the last glyph and the rail.
+/// typing never runs into the panel's right edge. Two columns of air between
+/// the last glyph and the edge of the tinted box.
 pub(crate) const COMPOSER_RIGHT_PAD_COLS: usize = 2;
 
 // ── Modal overlays ───────────────────────────────────────────────────────

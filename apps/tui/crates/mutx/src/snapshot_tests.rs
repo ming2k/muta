@@ -613,6 +613,13 @@ fn discovery_warning_notice_renders_as_entry() {
         body_indent, first_indent,
         "continuation lines must be flush with the first body line"
     );
+    // The entry body is *content*, so it must sit at least one column deeper
+    // than the entry head (header row) — head at the gutter, body indented.
+    let header_indent = first_line.len() - first_line.trim_start().len();
+    assert!(
+        first_indent > header_indent,
+        "notice body must be indented past the entry head (head={header_indent}, body={first_indent})"
+    );
 }
 
 /// A batch of collapsed tool steps renders with no blank rows between headers.

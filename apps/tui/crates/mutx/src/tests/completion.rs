@@ -14,7 +14,7 @@ fn mention_range_detects_at_start_of_input() {
 fn completion_anchor_aligns_slash_menu_with_composer_text_start() {
     // A `/command` replaces the whole input, so the popup hangs off the
     // start of the composer's text area — the rect's left edge plus the
-    // four-column prefix (frame rail + gap + `›` + gap).
+    // two-column prefix (`›` prompt + gap).
     let rect = mutx_engine::Rect::new(0, 10, 80, 3);
     let x = completion_anchor_x("/pu", 3, rect, CompletionKind::Slash);
     assert_eq!(x, rect.x + crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16);
@@ -35,27 +35,31 @@ fn completion_anchor_aligns_path_menu_with_the_at_trigger() {
 
 #[test]
 fn completion_anchor_follows_the_at_trigger_across_wraps() {
-    // An 8-column text area (rect 14 wide minus the 4+2 composer padding)
-    // wraps `wrap this @sr` after `wrap thi`; the `@` lands 2 columns into
-    // the second text row, so the popup follows it there.
+    // An 10-column text area (rect 14 wide minus the 2+2 composer padding)
+    // wraps `wrap this @sr` after `wrap this `; the `@` starts the second
+    // text row's column 0, so the popup follows it there.
     let rect = mutx_engine::Rect::new(0, 10, 14, 4);
     let input = "wrap this @sr";
     let x = completion_anchor_x(input, input.len(), rect, CompletionKind::Path);
     assert_eq!(
         x,
-        rect.x + crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16 + 2
+        rect.x + crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16
     );
 }
 
 #[test]
 fn completion_anchor_keeps_column_when_token_stays_on_one_row() {
-    // No wrap: the `@` at display column 8 keeps its column even on a
+    // No wrap: the `@` at display column 10 keeps its column even on a
     // narrow-ish box, so the popup tracks the token exactly. Text budget
-    // = 20 - 4 - 2 = 14 cols; `wrap this @sr` is 13 wide, fits one row.
+    // = 20 - 2 - 2 = 16 cols; `wrap this @sr` is 13 wide, fits one row.
     let rect = mutx_engine::Rect::new(0, 10, 20, 3);
     let input = "wrap this @sr";
     let x = completion_anchor_x(input, input.len(), rect, CompletionKind::Path);
-    assert_eq!(x, rect.x + 14); // 4 (prefix) + 10 (token column within text)
+    // 2 (prefix) + 10 (token column within text).
+    assert_eq!(
+        x,
+        rect.x + crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16 + 10
+    );
 }
 
 // ----- resolved `/command` highlight tests -----

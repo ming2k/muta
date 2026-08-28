@@ -8,7 +8,7 @@ so the two halves own the row evenly from their edges.
 
 Everything *actionable* about the composer moved inside the box itself: the
 next-`Enter` action sentence and the `as:` target row are composer-owned meta
-rows (see [Input box](input-box.md#meta-rows)). Long-lived **session** state
+rows (see [Input box](input-box.md#the-hint-row)). Long-lived **session** state
 (the workspace path, the delegated autonomous flag) lives on its own dedicated
 [head row](status-bar.md) below this one.
 

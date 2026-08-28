@@ -52,7 +52,7 @@ open, re-opens one that `Esc` dismissed); it is not a focus toggle.
 | Component | Description |
 |-----------|-------------|
 | [User message](user-message.md) | Sent prompts on a dimmer panel with `┃` bar |
-| [Input box](input-box.md) | Live editable prompt on a brighter panel; its padding rows are the composer-owned meta rows (`as:` target + Enter keys + char count) |
+| [Input box](input-box.md) | Live editable prompt on a tinted panel; its fourth row is the composer-owned hint row (the `Enter …` sentence + char count) |
 | [Assistant text](assistant-text.md) | Regular markdown text, 4-space indent |
 | [Code block](code-block.md) | Borderless code with `┃` bar + line-number gutter |
 | [Expandable step](expandable-step.md) | Shared shape for collapsible transcript entries |

@@ -37,8 +37,8 @@ The theme engine adheres to a **3-tier design token architecture**:
 | `user_panel_bg` | (17, 22, 19) | Sent user-message band (dimmer than input) |
 | `user_panel_bg_queued` | (9, 12, 11) | User message staged in the send queue (dimmer = "pending") |
 | `panel_bg` | (14, 15, 15) | Modals / sheets |
-| `composer_frame` | surface + 35% `primary` | Stroke of the input box's line frame while it owns the keyboard ("typing lands here") |
-| `composer_frame_inactive` | surface + 16% `primary` | Stroke of the input box's line frame while a transcript step owns the keyboard (recessed = inert) |
+| `input_bg_active` | (26, 28, 27) | Live input-box surface while the box owns the keyboard |
+| `input_bg_inactive` | (16, 17, 17) | Live input-box surface while a transcript step owns the keyboard (recessed = inert) |
 | `menu_bg` | (17, 19, 18) | Suggestion / completion menus |
 | `element_bg` | (21, 23, 22) | Footer / option bars |
 | `selected_bg` | (38, 48, 44) | Semantic-selection highlight |

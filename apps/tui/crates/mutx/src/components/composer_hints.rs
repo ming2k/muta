@@ -1,17 +1,16 @@
-//! Composer-native meta rows: the two hint lines painted inside the
-//! composer's top/bottom padding bands.
+//! Composer-native meta row: the single hint line painted inside the
+//! composer panel's bottom band.
 //!
-//! Row 1 ("the `as:` row") states what the buffer *is* right now and what it
-//! will become on commit: a plain prompt, a resolved slash command, a steer /
-//! follow-up mid-round, or an in-place edit of a queued message.
+//! The row reads as one sentence about the same target: what the next
+//! `Enter` does (`Enter send prompt`, `Enter send steer`, `Enter send
+//! follow-up`, `Enter update follow-ups[2]`), the `Tab` toggle that swaps
+//! steer / follow-up while a round is live, and the char count. The verbs
+//! name the delivery group the buffer will land in, so the row and the
+//! transcript's queued-message badges can never drift apart.
 //!
-//! Row 3 ("the keys row") states what the next `Enter` does, plus any escape
-//! hatch (`Esc cancel`, `/retry`). Its verbs intentionally mirror the `as:`
-//! values so the two rows read as one sentence about the same target.
-//!
-//! Both builders take the composer's panel background so the keycaps and the
-//! tinted verbs blend into the box instead of carrying the outer surface color
-//! the old standalone bar below the input used.
+//! The builder takes the composer's panel background so the keycaps and the
+//! tinted verbs blend into the box instead of carrying the outer surface
+//! color the old standalone bar below the input used.
 
 use unicode_width::UnicodeWidthStr;
 
@@ -68,20 +67,12 @@ pub(crate) enum QueueEditKind {
 }
 
 impl QueueEditKind {
-    /// The plural noun naming the group of queued items being pointed at.
+    /// The plural noun naming the group of queued items being pointed at —
+    /// the same word the hint row's `update follow-ups[2]` verb uses.
     pub(crate) fn plural_noun(self) -> &'static str {
         match self {
             QueueEditKind::Steer => "steers",
             QueueEditKind::FollowUp => "follow-ups",
-        }
-    }
-
-    /// Single-word future tense used after `as:` while editing an item that
-    /// would be re-delivered into this group.
-    fn future_word(self) -> &'static str {
-        match self {
-            QueueEditKind::Steer => "steer",
-            QueueEditKind::FollowUp => "follow-up",
         }
     }
 
@@ -164,13 +155,14 @@ pub(crate) fn compose_target(
     }
 }
 
-/// Owned meta-row inputs for both composer rows. Built by the event loop
-/// before the mutable composer borrow begins (`draw_composer` mutates
+/// Owned inputs for the composer's hint row. Built by the event loop before
+/// the mutable composer borrow begins (`draw_composer` mutates
 /// `input_scroll`, so no `&App` borrows may be threaded through), then copied
 /// into `ComposerDrawOptions`.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ComposerHints {
-    /// What the buffer is and what commit will do with it.
+    /// What the buffer is and what commit will do with it — drives the
+    /// sentence's verb (`send prompt` / `send steer` / `update follow-ups[2]`).
     pub compose_target: ComposeTarget,
     /// Stopped round parked for `/retry` — mirrored from `SessionChrome`,
     /// same affordance the gauge bar used to repeat.
@@ -178,87 +170,83 @@ pub(crate) struct ComposerHints {
 }
 
 // ---------------------------------------------------------------------------
-// Row 1 — the `as:` row (what the buffer is / will become)
+// The hint row — one sentence about what Enter does
 // ---------------------------------------------------------------------------
 
-/// Build the `as:` row: one clause normally, two while a queue pointer is
-/// armed (`compose:` states what is being held, `as:` what commit will do).
+/// Build the composer's hint row: what the next `Enter` does, the `Tab`
+/// toggle while mid-round, and any escape hatch. The switch runs over the
+/// compose target so the verb can never drift out of sync with where the
+/// buffer will actually land:
 ///
 /// ```text
-/// as: prompt
-/// as: command                       ← resolved `/command` buffer
-/// as: steer prompt                  ← mid-round, interrupting
-/// as: follow-up prompt              ← mid-round, queueing
-/// compose: follow-ups[#2] · edited · as: follow-up
+/// Enter send prompt                 ← idle plain buffer
+/// Enter send command                ← resolved `/command` buffer
+/// Enter send steer  Tab follow-up   ← mid-round, steering armed
+/// Enter send follow-up  Tab steer   ← mid-round, queueing armed
+/// Enter update follow-ups[2]        ← queue-pointer edit
+/// Enter send  /retry to retry       ← stopped round parked for retry
 /// ```
 ///
-/// Value hues encode the *consequence class* of pressing Enter: default fg
-/// for an ordinary fresh round, amber for interrupting steers, info blue for
-/// queue-appending follow-ups. Labels stay muted so the verb reads first.
-pub(crate) fn compose_target_spans(
+/// The verb names the delivery group; `update follow-ups[2]` names the exact
+/// item an armed pointer will re-deliver. Only the primary verb carries the
+/// consequence hue (amber = interrupts the live round, info blue = queues);
+/// secondary keys (`Tab`, `/retry`) keep the calm keycap treatment.
+pub(crate) fn hint_row_spans(
+    can_retry: bool,
+    density: ActionDensity,
     target: ComposeTarget,
     theme: &Theme,
     bg: Color,
 ) -> Vec<Span<'static>> {
-    let base = Style::default().bg(bg);
-    let muted = base.fg(theme.muted());
+    let key_style = keycap_style(theme).bg(bg);
+    let hint_style = Style::default().fg(theme.muted()).bg(bg);
+    let verb_style = Style::default().bg(bg);
+    let compact = density.compact();
+    let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
 
-    let push_clause = |spans: &mut Vec<Span<'static>>, label: &'static str, value: String, value_style: Style| {
-        spans.push(Span::styled(format!("{label}: "), muted));
-        spans.push(Span::styled(value, value_style));
-    };
+    if let ComposeTarget::QueueEdit { kind, number, .. } = target {
+        // In-place update of the pointed-at item: the verb names both the
+        // delivery group and the exact position, so the sentence stays true
+        // even when the edit is dirty. Survives any width — this clause is
+        // the reason the row exists.
+        spans.push(Span::styled(" update ", hint_style));
+        spans.push(Span::styled(
+            format!("{}[{number}]", kind.plural_noun()),
+            verb_style.fg(kind.consequence_color(theme)),
+        ));
+        return spans;
+    }
 
-    let mut spans = Vec::new();
+    spans.push(Span::styled(" send", hint_style));
+
     match target {
-        ComposeTarget::Prompt | ComposeTarget::Command => {
-            if target == ComposeTarget::Command {
-                // Echo the in-box resolved-command treatment: brand + bold.
-                push_clause(
-                    &mut spans,
-                    "as",
-                    "command".to_string(),
-                    base.fg(theme.brand()).add_modifier(Modifier::BOLD),
-                );
+        ComposeTarget::Command => {
+            // Echo the in-box resolved-command treatment: brand + bold.
+            spans.push(Span::styled(" command", verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD)));
+        }
+        ComposeTarget::Steer | ComposeTarget::FollowUp => {
+            let primary = verb_style.fg(target.submit_color(theme));
+            let (verb, other, other_label) = match target {
+                ComposeTarget::Steer => (" steer", "follow-up", if compact { " follow-up" } else { " follow-up mode" }),
+                _ => (" follow-up", "steer", if compact { " steer" } else { " steer mode" }),
+            };
+            spans.push(Span::styled(verb, primary));
+            spans.push(Span::styled("  ", hint_style));
+            spans.push(Span::styled(Key::TAB.display(), key_style));
+            spans.push(Span::styled(other_label, hint_style));
+            // `other` kept for symmetry with the compact ladder above.
+            let _ = other;
+        }
+        ComposeTarget::Prompt | ComposeTarget::QueueEdit { .. } => {
+            if can_retry {
+                spans.push(Span::styled("  ", hint_style));
+                spans.push(Span::styled("/retry", key_style));
+                if !compact {
+                    spans.push(Span::styled(" to retry", hint_style));
+                }
             } else {
-                push_clause(&mut spans, "as", "prompt".to_string(), base);
+                spans.push(Span::styled(" prompt", hint_style));
             }
-        }
-        ComposeTarget::Steer => {
-            push_clause(
-                &mut spans,
-                "as",
-                "steer prompt".to_string(),
-                base.fg(theme.warn()),
-            );
-        }
-        ComposeTarget::FollowUp => {
-            push_clause(
-                &mut spans,
-                "as",
-                "follow-up prompt".to_string(),
-                base.fg(theme.info()),
-            );
-        }
-        ComposeTarget::QueueEdit {
-            kind,
-            number,
-            dirty,
-        } => {
-            // First clause: what is being held, tinted by its delivery group.
-            spans.push(Span::styled("compose: ", muted));
-            let mut group = format!("{}[#{number}]", kind.plural_noun());
-            if dirty {
-                group.push_str(" · edited");
-            }
-            spans.push(Span::styled(group, base.fg(kind.consequence_color(theme))));
-            // Second clause: what saving will re-deliver it as.
-            spans.push(Span::styled(" · ", muted));
-            push_clause(
-                &mut spans,
-                "as",
-                kind.future_word().to_string(),
-                base.fg(kind.consequence_color(theme)),
-            );
         }
     }
     spans
@@ -287,77 +275,6 @@ pub(crate) fn spans_width(spans: &[Span<'static>]) -> usize {
     spans.iter().map(|span| span.content.width()).sum()
 }
 
-// ---------------------------------------------------------------------------
-// Row 3 — the keys row (what Enter does, escape hatches)
-// ---------------------------------------------------------------------------
-
-/// Build the left side of the keys row. The switch runs over the compose
-/// target so the verbs can never drift out of sync with the `as:` row above:
-///
-/// ```text
-/// Enter send                 ← idle plain / command buffer
-/// Enter steer  Tab follow-up   ← mid-round, steering armed
-/// Enter follow-up  Tab steer   ← mid-round, queueing armed
-/// Enter save  Esc cancel       ← queue-pointer edit
-/// Enter send  /retry           ← stopped round parked for retry
-/// ```
-///
-/// Only the primary verb carries the consequence hue; secondary keys (Tab,
-/// Esc, `/retry`) keep the calm keycap treatment.
-pub(crate) fn keys_row_spans(
-    can_retry: bool,
-    density: ActionDensity,
-    target: ComposeTarget,
-    theme: &Theme,
-    bg: Color,
-) -> Vec<Span<'static>> {
-    let key_style = keycap_style(theme).bg(bg);
-    let hint_style = Style::default().fg(theme.muted()).bg(bg);
-    let compact = density.compact();
-    let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
-
-    if let ComposeTarget::QueueEdit { kind, .. } = target {
-        // In-place save of the pointed-at item. The badge itself moved to the
-        // `as:` row; here only the actions remain. Both survive any width.
-        spans.push(Span::styled(" save", hint_style.fg(kind.consequence_color(theme))));
-        spans.push(Span::styled("  ", hint_style));
-        spans.push(Span::styled(Key::ESC.display(), key_style));
-        spans.push(Span::styled(" cancel", hint_style));
-    } else if matches!(target, ComposeTarget::Steer | ComposeTarget::FollowUp) {
-        let primary = Style::default()
-            .fg(target.submit_color(theme))
-            .bg(bg);
-        match target {
-            ComposeTarget::Steer => {
-                spans.push(Span::styled(" steer", primary));
-                spans.push(Span::styled("  ", hint_style));
-                spans.push(Span::styled(Key::TAB.display(), key_style));
-                spans.push(Span::styled(
-                    if compact { " follow-up" } else { " follow-up mode" },
-                    hint_style,
-                ));
-            }
-            _ => {
-                spans.push(Span::styled(" follow-up", primary));
-                spans.push(Span::styled("  ", hint_style));
-                spans.push(Span::styled(Key::TAB.display(), key_style));
-                spans.push(Span::styled(if compact { " steer" } else { " steer mode" }, hint_style));
-            }
-        }
-    } else if can_retry {
-        spans.push(Span::styled(" send", hint_style));
-        spans.push(Span::styled("  ", hint_style));
-        spans.push(Span::styled("/retry", key_style));
-        if !compact {
-            spans.push(Span::styled(" to retry", hint_style));
-        }
-    } else {
-        spans.push(Span::styled(" send", hint_style));
-    }
-
-    spans
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,43 +284,53 @@ mod tests {
     }
 
     #[test]
-    fn keys_row_follows_the_compose_target() {
+    fn hint_row_follows_the_compose_target() {
         let theme = Theme::default();
-        let idle = text(&keys_row_spans(
+        let idle = text(&hint_row_spans(
             false,
             ActionDensity::Full,
             ComposeTarget::Prompt,
             &theme,
             Color::default(),
         ));
-        assert!(idle.contains("Enter send"));
+        assert_eq!(idle, "Enter send prompt");
 
-        let steer = text(&keys_row_spans(
+        let steer = text(&hint_row_spans(
             false,
             ActionDensity::Full,
             ComposeTarget::Steer,
             &theme,
             Color::default(),
         ));
-        assert!(steer.contains("Enter steer"));
-        assert!(steer.contains("Tab follow-up mode"));
+        assert_eq!(steer, "Enter send steer  Tab follow-up mode");
 
-        let follow_up = text(&keys_row_spans(
+        let follow_up = text(&hint_row_spans(
             false,
             ActionDensity::Compact,
             ComposeTarget::FollowUp,
             &theme,
             Color::default(),
         ));
-        assert!(follow_up.contains("Enter follow-up"));
-        assert!(follow_up.contains("Tab steer"));
-        assert!(!follow_up.contains("mode"));
+        assert_eq!(follow_up, "Enter send follow-up  Tab steer");
     }
 
     #[test]
-    fn queue_edit_keys_save_and_cancel() {
+    fn hint_row_command_buffer_names_the_command_verb() {
         let theme = Theme::default();
-        let row = text(&keys_row_spans(
+        let row = text(&hint_row_spans(
+            false,
+            ActionDensity::Full,
+            ComposeTarget::Command,
+            &theme,
+            Color::default(),
+        ));
+        assert_eq!(row, "Enter send command");
+    }
+
+    #[test]
+    fn queue_edit_verb_names_the_group_and_position() {
+        let theme = Theme::default();
+        let row = text(&hint_row_spans(
             false,
             ActionDensity::Full,
             ComposeTarget::QueueEdit {
@@ -414,72 +341,11 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert!(row.contains("Enter save"));
-        assert!(row.contains("Esc cancel"));
-        // The pointer badge lives on the `as:` row now.
-        assert!(!row.contains("#2"));
-    }
+        assert_eq!(row, "Enter update follow-ups[2]");
 
-    #[test]
-    fn retry_hatch_survives_compact() {
-        let theme = Theme::default();
-        let full = text(&keys_row_spans(
-            true,
+        let steer_edit = text(&hint_row_spans(
+            false,
             ActionDensity::Full,
-            ComposeTarget::Prompt,
-            &theme,
-            Color::default(),
-        ));
-        assert!(full.contains("/retry to retry"));
-        let compact = text(&keys_row_spans(
-            true,
-            ActionDensity::Tiny,
-            ComposeTarget::Prompt,
-            &theme,
-            Color::default(),
-        ));
-        assert!(compact.contains("/retry"));
-        assert!(!compact.contains("to retry"));
-    }
-
-    #[test]
-    fn as_row_states_target_with_consequence_colors() {
-        let theme = Theme::default();
-        let bg = Color::default();
-
-        let plain = compose_target_spans(ComposeTarget::Prompt, &theme, bg);
-        assert_eq!(text(&plain), "as: prompt");
-
-        let command = compose_target_spans(ComposeTarget::Command, &theme, bg);
-        assert_eq!(text(&command), "as: command");
-
-        let steer = compose_target_spans(ComposeTarget::Steer, &theme, bg);
-        assert_eq!(text(&steer), "as: steer prompt");
-        assert_eq!(steer.last().unwrap().style.fg, theme.warn());
-
-        let follow_up = compose_target_spans(ComposeTarget::FollowUp, &theme, bg);
-        assert_eq!(text(&follow_up), "as: follow-up prompt");
-        assert_eq!(follow_up.last().unwrap().style.fg, theme.info());
-    }
-
-    #[test]
-    fn as_row_names_the_pointed_at_queue_group() {
-        let theme = Theme::default();
-        let dirty = compose_target_spans(
-            ComposeTarget::QueueEdit {
-                kind: QueueEditKind::FollowUp,
-                number: 2,
-                dirty: true,
-            },
-            &theme,
-            Color::default(),
-        );
-        assert_eq!(
-            text(&dirty),
-            "compose: follow-ups[#2] · edited · as: follow-up"
-        );
-
-        let clean = compose_target_spans(
             ComposeTarget::QueueEdit {
                 kind: QueueEditKind::Steer,
                 number: 1,
@@ -487,8 +353,69 @@ mod tests {
             },
             &theme,
             Color::default(),
+        ));
+        assert_eq!(steer_edit, "Enter update steers[1]");
+    }
+
+    #[test]
+    fn retry_hatch_survives_compact() {
+        let theme = Theme::default();
+        let full = text(&hint_row_spans(
+            true,
+            ActionDensity::Full,
+            ComposeTarget::Prompt,
+            &theme,
+            Color::default(),
+        ));
+        assert_eq!(full, "Enter send  /retry to retry");
+        let compact = text(&hint_row_spans(
+            true,
+            ActionDensity::Tiny,
+            ComposeTarget::Prompt,
+            &theme,
+            Color::default(),
+        ));
+        assert_eq!(compact, "Enter send  /retry");
+    }
+
+    #[test]
+    fn hint_row_consequence_colors() {
+        let theme = Theme::default();
+        let bg = Color::default();
+
+        // Steer interrupts the live round: amber verb.
+        let steer = hint_row_spans(false, ActionDensity::Full, ComposeTarget::Steer, &theme, bg);
+        assert!(
+            steer.iter().any(|span| span.style.fg == theme.warn()),
+            "steer verb must carry the warn hue"
         );
-        assert_eq!(text(&clean), "compose: steers[#1] · as: steer");
+
+        // Follow-up queues: info blue verb.
+        let follow_up =
+            hint_row_spans(false, ActionDensity::Full, ComposeTarget::FollowUp, &theme, bg);
+        assert!(
+            follow_up
+                .iter()
+                .any(|span| span.style.fg == theme.info()),
+            "follow-up verb must carry the info hue"
+        );
+
+        // Queue-edit verb inherits the delivery group's consequence color.
+        let edit = hint_row_spans(
+            false,
+            ActionDensity::Full,
+            ComposeTarget::QueueEdit {
+                kind: QueueEditKind::FollowUp,
+                number: 2,
+                dirty: false,
+            },
+            &theme,
+            bg,
+        );
+        assert!(
+            edit.iter().any(|span| span.style.fg == theme.info()),
+            "queue-edit verb must carry the group's consequence hue"
+        );
     }
 
     #[test]

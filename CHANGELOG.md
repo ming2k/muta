@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **TUI: composer returns to a tinted panel, four rows for a one-line
+  draft.** The rounded line frame is retired: the input box is a flat panel
+  again (`input_bg_active` / `input_bg_inactive` carry focus — the
+  `composer_frame` stroke tokens are removed), laid out as four rows — a
+  blank breathing row, the text row(s) opened by `›`, a blank gap row, and a
+  hint row. The two former meta rows (`as:` target + keys row) are merged
+  into that single hint sentence: `Enter send prompt`,
+  `Enter send steer  Tab follow-up mode`, `Enter send follow-up  Tab steer
+  mode`, `Enter send command`, `Enter update follow-ups[2]` for an armed
+  queue-pointer edit (the group noun + 1-based position), and
+  `Enter send  /retry to retry` for a stopped round. The verb's hue keeps
+  the consequence class (amber interrupts, info blue queues); `Tab` stays
+  the steer/follow-up toggle and the sentence's trailing clause always
+  names the other mode. The char counter moves to the hint row's right end.
+  Text starts 2 columns in (`›` + gap) at the same column user-message
+  text lands, so the transcript and input share one left margin; blurred,
+  the panel keeps its recessed tint but sheds the sentence.
+
 ## [0.36.7] - 2026-08-28
 
 ### Added
