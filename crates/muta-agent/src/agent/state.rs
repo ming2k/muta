@@ -156,7 +156,7 @@ impl Agent {
             )),
             agent_selection: std::sync::Mutex::new(agent_selection),
             token_ledger: std::sync::Mutex::new(None),
-            token_weights: muta_contracts::MessageTokenWeights::new(),
+            token_weights: std::sync::Arc::new(muta_contracts::MessageTokenWeights::new()),
         }
     }
 
@@ -487,6 +487,14 @@ impl Agent {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Shared handle to the agent's content-addressed token-weights cache.
+    /// Handed to off-executor estimate tasks and context-projection gates so
+    /// every estimate path — wire projection, prune, mid-turn pressure —
+    /// pays each message's BPE cost exactly once per session.
+    pub fn token_weights_handle(&self) -> Arc<muta_contracts::MessageTokenWeights> {
+        std::sync::Arc::clone(&self.token_weights)
     }
 
     /// Book one turn's token usage into [`RoundState::token_usage`] and, when a

@@ -993,9 +993,9 @@ where
             .send(WsMessage::Text(frame.into()))
             .await
             .map_err(|e| format!("send retry-pending restore: {e}"))?;
-        if let Some(performance) = muta_contracts::latest_turn_performance(
-            &bound.session.request_usage_records().await,
-        ) {
+        if let Some(performance) =
+            muta_contracts::latest_turn_performance(&bound.session.request_usage_records().await)
+        {
             let frame = serde_json::to_string(&Wire::Response {
                 response: AgentResponse::Round {
                     session_id: bound.session.id().await,

@@ -34,7 +34,7 @@ use crate::{Agent, RequestTokenEstimate, RoundBegin, RoundLifecycle};
 use muta_contracts::{
     AgentEvent, AgentRequest, AgentResponse, CronExpr, HarnessError, HarnessSnapshot, ImagePart,
     InjectionKind, LoopStatus, Message, ModelRequest, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, Provider, ProviderStreamEvent, Role, RoundEvent, Schedule, estimate_tokens,
+    NoticeSurface, Provider, ProviderStreamEvent, Role, RoundEvent, Schedule,
     repeat::DEFAULT_MAX_AGE_DAYS,
 };
 use muta_persistence::{
@@ -496,6 +496,11 @@ mod projection_settings_tests {
 pub struct MidTurnPruneProjectionGate {
     pub session: Arc<SessionStore>,
     pub prune_protect_tokens: usize,
+    /// Shared content-addressed weights cache (from the agent): the post-prune
+    /// session-weight estimate walks it instead of re-tokenizing the whole
+    /// window, and runs on the blocking pool — same discipline as
+    /// [`estimate_off_executor`].
+    pub weights: Arc<muta_contracts::MessageTokenWeights>,
 }
 
 #[async_trait]
@@ -507,7 +512,8 @@ impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
             self.prune_protect_tokens,
             ContextProjectionSettings::PRUNE_MIN_RECLAIM_TOKENS,
         )?;
-        let window_tokens_after = estimate_tokens(&messages);
+        let window_tokens_after =
+            estimate_session_weight_off_executor(Arc::clone(&self.weights), &messages).await;
         let checkpoint = ContextProjectionCheckpoint {
             operation: muta_persistence::session::ContextProjectionKind::Prune,
             archived_messages: outcome.originals.len(),
@@ -1141,7 +1147,13 @@ pub async fn execute_round(
     let mut request_estimate = estimate_off_executor(&agent, &round_history).await;
     if projection.prune && request_estimate.total_tokens > projection.budget.prune_threshold_tokens
     {
-        prune_and_commit(&mut round_history, &session, &projection).await?;
+        prune_and_commit(
+            &mut round_history,
+            &session,
+            &projection,
+            agent.token_weights_handle(),
+        )
+        .await?;
         request_estimate = estimate_off_executor(&agent, &round_history).await;
     }
     if request_estimate.total_tokens > projection.budget.compaction_threshold_tokens {
@@ -1592,6 +1604,28 @@ async fn estimate_off_executor(agent: &Arc<Agent>, messages: &[Message]) -> Requ
         })
 }
 
+/// Session-weight estimate (nested runner children included — the
+/// pressure/prune number, **not** the wire estimate) on the blocking pool,
+/// through the shared content-addressed weights cache. Companion to
+/// [`estimate_off_executor`]: BPE tokenization never runs on the async
+/// executor, and repeated passes pay O(new bytes), not O(session). A
+/// panicked/aborted task reads as `0` (no pressure), matching
+/// `estimate_off_executor`'s fallback.
+async fn estimate_session_weight_off_executor(
+    weights: Arc<muta_contracts::MessageTokenWeights>,
+    messages: &[Message],
+) -> usize {
+    let snapshot = messages.to_vec();
+    tokio::task::spawn_blocking(move || {
+        muta_contracts::estimate_tokens_weighted(&snapshot, &weights)
+    })
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(%error, "session-weight estimate task aborted; treating as zero");
+        0
+    })
+}
+
 pub fn retry_delay_ms(
     attempt: usize,
     retry_after_ms: Option<u64>,
@@ -1802,12 +1836,18 @@ pub async fn compact_round_history(
 /// `tool_call_id` chain intact (only stale tool *bodies* are cleared), so unlike
 /// a summarizing compaction it does **not** surface a transcript notice — it
 /// only records a durable checkpoint and a `debug` trace for observability.
+///
+/// The before/after session-weight estimates (children included — the pressure
+/// number, not the wire estimate) run through the shared weights cache on the
+/// blocking pool, per the same executor discipline as [`estimate_off_executor`].
 pub async fn prune_and_commit(
     history: &mut [Message],
     session: &SessionStore,
     settings: &ContextProjectionSettings,
+    weights: Arc<muta_contracts::MessageTokenWeights>,
 ) -> Result<(), String> {
-    let window_tokens_before = estimate_tokens(history);
+    let window_tokens_before =
+        estimate_session_weight_off_executor(Arc::clone(&weights), history).await;
     let Some(outcome) = muta_contracts::prune_tool_results(
         history,
         settings.prune_protect_tokens,
@@ -1815,7 +1855,8 @@ pub async fn prune_and_commit(
     ) else {
         return Ok(());
     };
-    let window_tokens_after = estimate_tokens(history);
+    let window_tokens_after =
+        estimate_session_weight_off_executor(Arc::clone(&weights), history).await;
     let checkpoint = ContextProjectionCheckpoint {
         operation: muta_persistence::session::ContextProjectionKind::Prune,
         archived_messages: outcome.originals.len(),

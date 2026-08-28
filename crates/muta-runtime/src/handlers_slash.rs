@@ -188,7 +188,11 @@ fn resolve_roots_from_strings(raws: &[String], project_root: &std::path::Path) -
                     home.as_ref().map(|h| h.join(rest))
                 } else {
                     let p = std::path::PathBuf::from(r);
-                    Some(if p.is_absolute() { p } else { canonical_root.join(p) })
+                    Some(if p.is_absolute() {
+                        p
+                    } else {
+                        canonical_root.join(p)
+                    })
                 }
             }
         };
@@ -288,7 +292,10 @@ async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args: &str) {
             let fresh_posture = session.delegated().await;
             if agent.delegated() != fresh_posture {
                 agent.set_delegated(fresh_posture);
-                let _ = resp_tx.send(round_response(&id, RoundEvent::DelegatedChanged(fresh_posture)));
+                let _ = resp_tx.send(round_response(
+                    &id,
+                    RoundEvent::DelegatedChanged(fresh_posture),
+                ));
             }
             agent.restore_round_count(session.round_counter().await);
             // C6: a fresh session has no provider pin, so the live provider

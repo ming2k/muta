@@ -139,7 +139,11 @@ fn resolve_single_additional_root(
                 home.as_ref().map(|h| h.join(rest))
             } else {
                 let p = std::path::PathBuf::from(r);
-                Some(if p.is_absolute() { p } else { canonical_root.join(p) })
+                Some(if p.is_absolute() {
+                    p
+                } else {
+                    canonical_root.join(p)
+                })
             }
         }
     };
@@ -734,6 +738,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             // ADR-0120: token-native — the config key was always tokens; the
             // old ×4 char conversion existed only for the byte-space pruner.
             prune_protect_tokens: config.compaction.prune_protect_tokens,
+            // Share the agent's content-addressed weights cache so the gate's
+            // post-prune estimate is a cache walk on the blocking pool, not a
+            // full-window BPE pass on the async executor.
+            weights: agent.token_weights_handle(),
         })));
         crate::agent_setup::reseed_prune_threshold(&agent, &config);
     }

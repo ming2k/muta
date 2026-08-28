@@ -346,8 +346,10 @@ pub struct Agent {
     /// this, so BPE tokenization cost collapses from O(total session bytes)
     /// per pass to O(new bytes since the last pass). Messages are immutable
     /// once written, so the cache never needs invalidation: identical bytes
-    /// always yield identical weights.
-    token_weights: muta_contracts::MessageTokenWeights,
+    /// always yield identical weights. Held behind an `Arc` so off-executor
+    /// estimate tasks (spawn_blocking) and the context-projection gates can
+    /// share the same cache without borrowing the agent.
+    token_weights: std::sync::Arc<muta_contracts::MessageTokenWeights>,
 }
 
 /// Capability handle for steering a running agent from the outside — the

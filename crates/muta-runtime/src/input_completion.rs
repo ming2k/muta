@@ -87,7 +87,13 @@ impl InputCompletionEngine {
         let mut items = Vec::new();
         for spec in &self.catalog.commands {
             if spec.name.to_lowercase().starts_with(&current) {
-                items.push(slash_item(&spec.name, &spec.summary, replace_end, spec, false));
+                items.push(slash_item(
+                    &spec.name,
+                    &spec.summary,
+                    replace_end,
+                    spec,
+                    false,
+                ));
             }
         }
         for alias in &self.catalog.aliases {
@@ -791,9 +797,10 @@ mod tests {
         else {
             panic!("unexpected response")
         };
-        let config_row = items.iter().find(|i| i.label == "/config").expect(
-            "alias /config surfaces for prefix /confi",
-        );
+        let config_row = items
+            .iter()
+            .find(|i| i.label == "/config")
+            .expect("alias /config surfaces for prefix /confi");
         assert_eq!(config_row.insert_text, "/settings");
         assert_eq!(config_row.alias_of.as_deref(), Some("/settings"));
         assert_eq!(
@@ -841,14 +848,20 @@ mod tests {
             panic!("unexpected response")
         };
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(labels, vec!["/schedule list", "/schedule cancel", "/schedule help"]);
+        assert_eq!(
+            labels,
+            vec!["/schedule list", "/schedule cancel", "/schedule help"]
+        );
         for item in &items {
             assert_ne!(
                 item.description, "Schedule a prompt (cron, countdown, or absolute)",
                 "verb rows must not parrot the parent summary"
             );
         }
-        let cancel = items.iter().find(|i| i.label == "/schedule cancel").unwrap();
+        let cancel = items
+            .iter()
+            .find(|i| i.label == "/schedule cancel")
+            .unwrap();
         assert!(cancel.description.contains("by id"));
         // Insert restores the typed parent exactly and appends the verb.
         assert_eq!(cancel.insert_text, "/schedule cancel");

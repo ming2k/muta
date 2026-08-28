@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`NoticeKind::TrustChanged` is a first-class contract value (ADR-0155).**
+  Workspace-trust notices — the attach-time "workspace configurations
+  changed → quarantined" banner, startup asset quarantine, and the project
+  skill/command shadow warnings — stop borrowing `ReviewAlert` and emit
+  `trust_changed` on the wire (ts_rs bindings regenerated;
+  `server.asyncapi.yaml` updated, also catching up its stale missing
+  `command_ack`). `AgentNotice::trust_changed(title)` stamps Warning +
+  Harness uniformly like `command_ack`; `ReviewAlert` returns to its literal
+  meaning for review-subsystem alerts, and the TUI topic head for trust
+  notices is now an exact kind match (`TrustChanged → "trust"`,
+  `ReviewAlert → "review"`) instead of a frontend convention resting on
+  "no real review alert exists yet". (Routing clarification for the 0.37.1
+  notice entry: the structured `notice_from_core` path covers the live
+  append and runner-child notices; the command-ack toast path stays on
+  `render_text()`, which for a body-less ack is identical.)
+
 ## [0.37.1] - 2026-08-28
 
 ### Changed

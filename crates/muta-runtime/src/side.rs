@@ -480,14 +480,15 @@ pub(crate) async fn start_session_turn(
             session_id: primary_id.clone(),
         })
     } else {
-        side.read().await.get(target_session_id).map(|session| {
-            ResolvedTurnTarget {
+        side.read()
+            .await
+            .get(target_session_id)
+            .map(|session| ResolvedTurnTarget {
                 agent: session.agent.clone(),
                 session: session.store.clone(),
                 lifecycle: session.lifecycle.clone(),
                 session_id: session.id.clone(),
-            }
-        })
+            })
     };
     let Some(target) = resolved else {
         return false;

@@ -162,6 +162,27 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
     tokens.max(1) as usize
 }
 
+/// Session-weight estimate with **identical semantics** to
+/// [`estimate_tokens`] (per-message framing included, nested envoy children
+/// counted), routed through the shared [`MessageTokenWeights`] cache: every
+/// message's BPE cost is paid once per session lifetime, and repeated passes
+/// cost O(new bytes) instead of O(total bytes).
+///
+/// This is the variant the pressure/prune gates must use: re-tokenizing the
+/// whole window per pass (`estimate_tokens` directly) is real CPU-bound work,
+/// and running it on the async executor stalls stream forwarding and TUI
+/// rendering for the duration.
+pub fn estimate_tokens_weighted(messages: &[Message], weights: &MessageTokenWeights) -> usize {
+    let mut tokens: i64 = 0;
+    for m in messages {
+        tokens += *weights.weight(m);
+        if let Some(children) = m.children.as_ref() {
+            tokens += estimate_tokens_weighted(children, weights) as i64;
+        }
+    }
+    tokens.max(1) as usize
+}
+
 // NOTE: the provider-reported-usage path (ADR-0019/0023 "layered token
 // accounting", `effective_pressure_tokens` / `USAGE_TRUST_FLOOR`) was removed
 // as dead code: the `Provider` trait never surfaces usage, so the function had
@@ -943,6 +964,39 @@ mod tests {
         let mut message = Message::new(Role::Assistant, "");
         message.tool_calls = Some(vec![call(id, name, args)]);
         message
+    }
+
+    #[test]
+    fn weighted_session_estimate_matches_uncached_semantics() {
+        // The pressure/prune gates must see EXACTLY the number the uncached
+        // `estimate_tokens` produced (per-message framing + nested envoy
+        // children), or their thresholds silently drift between call sites.
+        // Build a session with children, tool calls, and CJK (multi-byte)
+        // content, then compare both paths.
+        let mut parent = Message::new(Role::Assistant, "父消息 some tool narrative");
+        parent.tool_calls = Some(vec![call("c1", "read", "{\"path\":\"a.rs\"}")]);
+        let mut child_user = Message::new(Role::User, "runner prompt");
+        child_user.children = Some(vec![Message::tool_result(
+            &call("c2", "bash", "ls"),
+            "child output 汉字混合 with English words",
+        )]);
+        parent.children = Some(vec![child_user]);
+        let messages = vec![
+            Message::new(Role::User, "hello world question"),
+            parent,
+            Message::new(Role::Assistant, "final answer"),
+        ];
+
+        let uncached = estimate_tokens(&messages);
+        let weights = MessageTokenWeights::new();
+        assert_eq!(estimate_tokens_weighted(&messages, &weights), uncached);
+        // Second pass is a pure cache walk — same number, no re-tokenization.
+        assert_eq!(estimate_tokens_weighted(&messages, &weights), uncached);
+        // Empty window keeps the floor of 1 (parity with `estimate_tokens`).
+        assert_eq!(
+            estimate_tokens_weighted(&[], &weights),
+            estimate_tokens(&[])
+        );
     }
 
     #[test]
