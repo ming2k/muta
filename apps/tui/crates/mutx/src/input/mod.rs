@@ -470,6 +470,17 @@ pub enum InputAction {
     ScrollUp,
     /// Scroll down.
     ScrollDown,
+    /// Mouse wheel tick at a screen position. Semantically the same intent as
+    /// [`InputAction::ScrollUp`]/[`InputAction::ScrollDown`], but carrying the
+    /// pointer cell so the handler can route spatially: a tick landing inside
+    /// the composer panel scrolls the input's own viewport instead of the
+    /// transcript (the panel is a scroll region when the draft outgrows the
+    /// box). Keyboard-driven scroll keeps the bare variants.
+    Wheel {
+        up: bool,
+        x: u16,
+        y: u16,
+    },
     /// Scroll up by one viewport page.
     ScrollPageUp,
     /// Scroll down by one viewport page.
@@ -1141,14 +1152,24 @@ pub fn process_event(
             let x = mouse.column;
             let y = mouse.row;
             match mouse.kind {
-                // The wheel always scrolls the body of whatever modal owns the
-                // surface (or the transcript when none does). The event loop's
-                // ScrollUp/ScrollDown handlers translate it per-modal — including
-                // the question modal, whose body scroll is decoupled from the ↑/↓
-                // highlight so wheeling browses a long option list without moving
-                // the selection cursor.
-                MouseEventKind::ScrollUp => InputAction::ScrollUp,
-                MouseEventKind::ScrollDown => InputAction::ScrollDown,
+                // The wheel is spatially routed by the event loop's Wheel
+                // handler: modal bodies still take it while a modal owns the
+                // surface, and otherwise a tick inside the composer panel
+                // scrolls the input's own viewport, falling back to the
+                // transcript everywhere else. The question modal's body
+                // scroll stays decoupled from the ↑/↓ highlight so wheeling
+                // browses a long option list without moving the selection
+                // cursor.
+                MouseEventKind::ScrollUp => InputAction::Wheel {
+                    up: true,
+                    x,
+                    y,
+                },
+                MouseEventKind::ScrollDown => InputAction::Wheel {
+                    up: false,
+                    x,
+                    y,
+                },
                 MouseEventKind::Down(MouseButton::Left) => {
                     // The permission sheet replaces the composer but leaves the
                     // transcript above fully interactive, so a click there can

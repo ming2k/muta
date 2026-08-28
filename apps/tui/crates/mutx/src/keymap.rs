@@ -129,7 +129,7 @@ pub mod keyvocab {
     /// `Tab` — the display form of [`super::Key::TAB`].
     pub const TAB: &str = "Tab";
     /// `F2` — legacy display token. The F-key queue family moved to the Ctrl
-    /// row (ADR-0124); kept so historical copy stays spellable until every
+    /// row (ADR-0126); kept so historical copy stays spellable until every
     /// surface is migrated.
     #[allow(dead_code)]
     pub const F2: &str = "F2";
@@ -194,6 +194,7 @@ fn chord_token(code: KeyCode) -> &'static str {
         KeyCode::F(2) => "f2",
         KeyCode::F(3) => "f3",
         KeyCode::F(4) => "f4",
+        KeyCode::F(5) => "f5",
         _ => "·",
     }
 }
@@ -250,6 +251,7 @@ fn display_token(code: KeyCode) -> &'static str {
         KeyCode::F(2) => "F2",
         KeyCode::F(3) => "F3",
         KeyCode::F(4) => "F4",
+        KeyCode::F(5) => "F5",
         _ => "·",
     }
 }
@@ -480,7 +482,7 @@ impl Key {
     };
     /// Ctrl+Q (open the queue modal) — the queue family lives on the Ctrl row:
     /// `Ctrl+P` pause, `Ctrl+Q` expand. Mnemonic and Fn-layer-free,
-    /// unlike the F-keys it replaces (ADR-0124).
+    /// unlike the F-keys it replaces (ADR-0126).
     pub const CTRL_Q: Key = Key {
         modifiers: KeyModifiers::CONTROL,
         code: KeyCode::Char('q'),
@@ -586,7 +588,7 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             action: Action::OpenTodos,
             description: "open todos",
         },
-        // Queue management lives on the Ctrl row (ADR-0124), replacing the
+        // Queue management lives on the Ctrl row (ADR-0126), replacing the
         // old F2/F3 bindings. Fn-dispatch is OS/terminal policy, not app
         // policy: terminals, window managers, and browser embedders may
         // reserve or remap those keys without the application seeing them.
@@ -606,7 +608,7 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
         // F5 opens the `/btw` asides list (ADR-0103). A function key rather
         // than a Ctrl combo: Ctrl+G is byte-collided with readline's
         // abort-to-start-of-line in terminals without the Kitty protocol.
-        // (The queue family moved off the F-row to Ctrl+P/Q — ADR-0124 —
+        // (The queue family moved off the F-row to Ctrl+P/Q — ADR-0126 —
         // but this list surface keeps F5, a rarer, less time-sensitive
         // affordance with no clean free Ctrl slot.)
         Binding {
@@ -627,6 +629,12 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             action: Action::ToggleQueueBlock,
             description: "block/resume queue",
         },
+        // Ctrl+M opens the model picker. Portability caveat, mirrored in the
+        // description below: in a raw terminal Ctrl+M is byte-identical to
+        // Enter (0x0D), so this binding only fires under the Kitty enhanced
+        // keyboard protocol (requested in `run_tui`). `/models` is the
+        // portable path — a slash command always arrives as text — so the
+        // chord is a convenience on modern terminals, not the only door.
         Binding {
             key: Key {
                 modifiers: KeyModifiers::CONTROL,
@@ -634,7 +642,7 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
             },
             gate: Gate::NoModal,
             action: Action::OpenModels,
-            description: "switch model",
+            description: "switch model (kitty-protocol chord; /models always works)",
         },
         Binding {
             key: Key {
@@ -686,6 +694,11 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
         // It is not the conventional "save" anywhere in this TUI (the
         // composer submits with Enter; sessions persist durably on their
         // own), so the chord is safe to claim. NoModal-gated likewise.
+        // ADR-0156 records why the XON/XOFF collision ADR-0126 cited when
+        // rejecting `Ctrl+S` *for the queue family* does not disqualify it
+        // here: raw mode clears IXON, and the residual failure is a silent
+        // no-op on a read-only drill-down with the gauge click as the
+        // portable twin.
         Binding {
             key: Key {
                 modifiers: KeyModifiers::CONTROL,
@@ -847,7 +860,7 @@ mod tests {
     #[test]
     fn ctrl_q_opens_queue_from_top_level() {
         // Ctrl+Q is the global binding for the queue (outbox) overview modal
-        // (ADR-0124 — the queue family moved off the F-row onto the Ctrl row).
+        // (ADR-0126 — the queue family moved off the F-row onto the Ctrl row).
         let registry = Registry::new();
         let action = registry.resolve(key(KeyCode::Char('q'), KeyModifiers::CONTROL), Modal::None);
         assert_eq!(action, Some(InputAction::OpenQueue));
@@ -1120,6 +1133,54 @@ mod tests {
                 code,
             };
             assert_eq!(k.chord(), k.display(), "glyph mismatch for {code:?}");
+        }
+    }
+
+    #[test]
+    fn declared_binding_labels_always_carry_their_modifier_prefix() {
+        // [`chord_str`] / [`display_str`] are hand-maintained match tables
+        // with a bare-core-token fallback (`(_, c) => c`). A binding added
+        // without its table entry would silently render as `n` instead of
+        // `ctrl+n` in Help — and the non-empty-label test above cannot catch
+        // it (`n` is non-empty). Lock the *full* label (prefix + token) for
+        // every declared binding, so the fallback is unreachable for real
+        // bindings and a forgotten table entry fails here instead.
+        for binding in Registry::new().bindings() {
+            if matches!(binding.key.code, KeyCode::BackTab) {
+                // BackTab carries its own full label; both forms are locked
+                // by the dedicated tests above.
+                assert_eq!(binding.key.chord(), "shift+tab");
+                assert_eq!(binding.key.display(), keyvocab::SHIFT_TAB);
+                continue;
+            }
+            assert_ne!(
+                chord_token(binding.key.code),
+                "·",
+                "undeclared key {:?}: add it to chord_token/display_token",
+                binding.key.code
+            );
+            let expected_chord = format!(
+                "{}{}",
+                chord_prefix(binding.key.modifiers),
+                chord_token(binding.key.code)
+            );
+            assert_eq!(
+                binding.key.chord(),
+                expected_chord,
+                "chord_str is missing an entry for {:?}",
+                binding.key
+            );
+            let expected_display = format!(
+                "{}{}",
+                display_prefix(binding.key.modifiers),
+                display_token(binding.key.code)
+            );
+            assert_eq!(
+                binding.key.display(),
+                expected_display,
+                "display_str is missing an entry for {:?}",
+                binding.key
+            );
         }
     }
 

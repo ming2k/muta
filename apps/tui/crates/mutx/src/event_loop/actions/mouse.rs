@@ -20,6 +20,9 @@ pub(super) async fn handle_selection_start(
     x: u16,
     y: u16,
 ) {
+    // A fresh press disarms any edge-autoscroll the previous drag armed —
+    // the arm is re-derived from this drag's own pointer movement.
+    app.input_drag_scroll = None;
     // Provider-delete confirm overlay owns clicks while open: a
     // press outside the panel cancels the staged deletion
     // (mirrors Esc) but leaves the provider picker open, and a
@@ -404,6 +407,18 @@ pub(super) async fn handle_right_click(app: &mut App, runtime: &UiRuntime, x: u1
 
 /// Loop stage (input dispatch): the `SelectionUpdate` arm of the action match.
 pub(super) fn handle_selection_update(app: &mut App, x: u16, y: u16) {
+    // Edge autoscroll (the GUI-standard "drag past the edge" affordance): a
+    // drag anchored in the composer whose pointer has left the input's text
+    // rows drives the input viewport — and the selection head with it —
+    // instead of resolving the pointer through the layout map, which only
+    // knows visible rows. The event loop's heartbeat keeps stepping while the
+    // pointer rests past the edge (`App::step_input_drag_scroll`).
+    if let Some(up) = app.input_drag_scroll_edge(y) {
+        app.input_drag_scroll = Some(up);
+        app.step_input_drag_scroll();
+        return;
+    }
+    app.input_drag_scroll = None;
     app.drag
         .update_from_point(&mut app.selection, &app.layout_map, x, y);
 }
@@ -422,6 +437,9 @@ pub(crate) fn handle_selection_end_for_test(app: &mut App) {
 
 fn handle_selection_end_impl(app: &mut App) {
     app.drag.finish(&mut app.selection);
+    // An edge-autoscroll armed by this drag stops with it: holding the
+    // pointer still after release must not keep scrolling the input.
+    app.input_drag_scroll = None;
     // Caret relay: when the finished drag selected (part of) the live input,
     // the caret is hidden for as long as the selection paints — but its
     // position is defined to be the drag's head, the point where the mouse

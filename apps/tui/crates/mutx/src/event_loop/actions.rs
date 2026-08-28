@@ -67,6 +67,38 @@ pub(super) struct ActionContext<'a> {
     pub sgr_guard: &'a mut input::SgrLeakGuard,
 }
 
+/// Shared scroll step for keyboard scroll keys and out-of-panel wheel
+/// ticks: a modal body (including the permission sheet's details) takes the
+/// tick one line at a time; with no modal the transcript scrolls by four
+/// lines per tick so browsing feels fast instead of crawling line-by-line.
+/// Wheel ticks landing inside the composer panel never reach this — the
+/// `Wheel` arm routes them to the input's own viewport first.
+fn scroll_tick(app: &mut App, down: bool) {
+    if let Some((scroll, follow)) = app.modal_scroll_field() {
+        if let Some(f) = follow {
+            *f = false;
+        }
+        *scroll = if down {
+            scroll.saturating_add(1)
+        } else {
+            scroll.saturating_sub(1)
+        };
+    } else if down {
+        app.pin_summary_line = None;
+        app.scroll = app.scroll.saturating_add(4).min(app.max_scroll);
+        if app.scroll >= app.max_scroll {
+            app.follow_bottom = true;
+        }
+    } else {
+        // While a permission sheet is open the transcript stays scrollable,
+        // so the wheel / page keys drive the conversation behind it, not the
+        // sheet's own body.
+        app.follow_bottom = false;
+        app.pin_summary_line = None;
+        app.scroll = app.scroll.saturating_sub(4);
+    }
+}
+
 fn select_connection_preset(app: &mut App, forced_method: Option<muta_contracts::LoginMethod>) {
     if app.active_modal() != Modal::ProviderPreset {
         return;
@@ -1359,34 +1391,29 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::ScrollUp => {
-            if let Some((scroll, follow)) = app.modal_scroll_field() {
-                if let Some(f) = follow {
-                    *f = false;
-                }
-                *scroll = scroll.saturating_sub(1);
-            } else {
-                // While a permission sheet is open the transcript stays
-                // scrollable, so the wheel / page keys drive the
-                // conversation behind it, not the sheet's own body.
-                app.follow_bottom = false;
-                app.pin_summary_line = None;
-                // Mouse wheel tick = 4 lines, not 1, so scrolling feels fast
-                // and responsive instead of crawling line-by-line.
-                app.scroll = app.scroll.saturating_sub(4);
-            }
+            scroll_tick(app, false);
         }
         input::InputAction::ScrollDown => {
-            if let Some((scroll, follow)) = app.modal_scroll_field() {
-                if let Some(f) = follow {
-                    *f = false;
-                }
-                *scroll = scroll.saturating_add(1);
-            } else {
-                app.pin_summary_line = None;
-                app.scroll = app.scroll.saturating_add(4).min(app.max_scroll);
-                if app.scroll >= app.max_scroll {
-                    app.follow_bottom = true;
-                }
+            scroll_tick(app, true);
+        }
+        input::InputAction::Wheel { up, x, y } => {
+            // Spatial routing for the mouse wheel: a modal body keeps the
+            // tick exactly like the bare keyboard variants; otherwise a tick
+            // landing inside the composer panel scrolls the input's own
+            // viewport (the panel is a scroll region once the draft outgrows
+            // the box — the ↑/↓ indicators and position readout make that
+            // visible), and only ticks elsewhere reach the transcript.
+            let over_composer = app.modal_scroll_field().is_none()
+                && app.active_modal() == Modal::None
+                && app.input_rect.is_some_and(|r| {
+                    r.height > crate::design::COMPOSER_VERTICAL_CHROME_ROWS
+                        && r.x <= x
+                        && x < r.x + r.width
+                        && r.y <= y
+                        && y < r.y + r.height
+                });
+            if !(over_composer && app.step_input_scroll(up, 4).is_some()) {
+                scroll_tick(app, !up);
             }
         }
         input::InputAction::ScrollPageUp => {

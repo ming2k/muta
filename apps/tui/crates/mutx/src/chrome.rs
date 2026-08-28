@@ -1435,7 +1435,7 @@ pub fn draw_queue_bar(
     }
 
     // ── Right-side keycap legend ────────────────────────────────────────────
-    // The keys explain the outbox affordances (the Ctrl row, ADR-0124):
+    // The keys explain the outbox affordances (the Ctrl row, ADR-0126):
     //   Ctrl+P — block / resume the outbox (toggles; label flips with state)
     //   Ctrl+Q — expand the full queue list
     // The keycap units are same-rank peers (R2), so they are separated by

@@ -317,11 +317,9 @@ pub(crate) fn handle_ctrl_c(
                 app,
                 "input cleared — Ctrl+C again to exit",
                 false,
-                std::time::Duration::from_millis(2000),
+                App::CTRL_C_ARM_WINDOW,
             );
-            app.arm_ctrl_c(Some(
-                std::time::Instant::now() + std::time::Duration::from_secs(2),
-            ));
+            app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
         } else if app.ctrl_c_armed() {
             tracing::info!(reason = "dashboard_ctrl_c_double_press", "app exiting");
             if app.startup_overlay == crate::StartupOverlay::Dashboard {
@@ -342,9 +340,7 @@ pub(crate) fn handle_ctrl_c(
         } else {
             // Arm the real 2s window in which a second Ctrl+C
             // quits (the toast renders over the dashboard).
-            app.arm_ctrl_c(Some(
-                std::time::Instant::now() + std::time::Duration::from_secs(2),
-            ));
+            app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
         }
     } else if app.active_modal() != Modal::None && app.active_modal() != Modal::Permission {
         // Ctrl+C over a surface is the same dismiss as Esc (ADR-0139):
@@ -383,11 +379,9 @@ pub(crate) fn handle_ctrl_c(
             app,
             "input cleared — Ctrl+C again to exit",
             false,
-            std::time::Duration::from_millis(2000),
+            App::CTRL_C_ARM_WINDOW,
         );
-        app.arm_ctrl_c(Some(
-            std::time::Instant::now() + std::time::Duration::from_secs(2),
-        ));
+        app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
     } else if app.ctrl_c_armed() {
         // Double Ctrl+C inside the conversation is a quit intent — same
         // client-declared session end as `/exit` (ADR-0112), unlike the
@@ -398,9 +392,7 @@ pub(crate) fn handle_ctrl_c(
     } else {
         // Arm a real 2s window (wall-clock) in which a second
         // Ctrl+C quits.
-        app.arm_ctrl_c(Some(
-            std::time::Instant::now() + std::time::Duration::from_secs(2),
-        ));
+        app.arm_ctrl_c(Some(std::time::Instant::now() + App::CTRL_C_ARM_WINDOW));
     }
     ActionFlow::Handled
 }

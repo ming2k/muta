@@ -593,6 +593,11 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     app.activity_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Activity);
     app.todos_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Todos);
     app.queue_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Queue);
+    // The composer panel's own rect, for the spatial mouse router (wheel
+    // ticks and selection edge-autoscroll inside the box drive the input's
+    // viewport, not the transcript). Zero-height / absent rows resolve to
+    // `None` — a collapsed or hidden composer owns no pointer cell.
+    app.input_rect = view::footer_rect(&transcript_render.footer, view::FooterRowId::Composer);
     match sticky {
         Some(info) => {
             app.sticky_step = Some(info.message_idx);

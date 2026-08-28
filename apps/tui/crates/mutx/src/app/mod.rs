@@ -468,6 +468,19 @@ pub struct App {
     pub completion_request_id: u64,
     pub cursor_position: usize,
     pub input_scroll: usize,
+    /// Screen rect of the composer panel in the last drawn frame (the whole
+    /// tinted box, chrome rows included), or `None` while no composer is
+    /// shown (overlay modal open, runner view). The spatial mouse router
+    /// uses it to route wheel ticks and selection edge-autoscroll to the
+    /// input's own viewport instead of the transcript. Zero-height rows
+    /// (a collapsed composer) never contain a pointer cell.
+    pub input_rect: Option<mutx_engine::Rect>,
+    /// Edge-autoscroll direction armed while a mouse selection drag that
+    /// started inside the composer leaves the input's text rows: `Some(true)`
+    /// scrolls up (pointer above), `Some(false)` down. Stepped by the event
+    /// loop's heartbeat tick so holding the pointer still at the edge keeps
+    /// scrolling, and cleared when the pointer re-enters or the drag ends.
+    pub input_drag_scroll: Option<bool>,
     /// Authoritative foreground surface: the full-screen view plus whatever
     /// panel/transient floats over it (ADR-0141). Callers consume
     /// [`Self::active_modal`] as the rendering projection; panel identity is

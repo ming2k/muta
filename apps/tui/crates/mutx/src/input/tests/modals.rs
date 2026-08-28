@@ -260,11 +260,11 @@ fn mouse_wheel_scrolls_question_modal_body() {
 
     assert_eq!(
         mk(crossterm::event::MouseEventKind::ScrollUp),
-        InputAction::ScrollUp
+        InputAction::Wheel { up: true, x: 5, y: 5 }
     );
     assert_eq!(
         mk(crossterm::event::MouseEventKind::ScrollDown),
-        InputAction::ScrollDown
+        InputAction::Wheel { up: false, x: 5, y: 5 }
     );
 }
 
@@ -502,6 +502,12 @@ fn mouse_wheel_still_scrolls_when_no_modal_open() {
         )
     };
 
-    assert_eq!(mk(MouseEventKind::ScrollUp), InputAction::ScrollUp);
-    assert_eq!(mk(MouseEventKind::ScrollDown), InputAction::ScrollDown);
+    assert_eq!(
+        mk(MouseEventKind::ScrollUp),
+        InputAction::Wheel { up: true, x: 5, y: 5 }
+    );
+    assert_eq!(
+        mk(MouseEventKind::ScrollDown),
+        InputAction::Wheel { up: false, x: 5, y: 5 }
+    );
 }

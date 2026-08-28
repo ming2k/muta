@@ -1703,8 +1703,10 @@ fn draw_frame_composer(
 
 /// The composer is a tinted panel laid out as four rows for a one-line
 /// draft: blank breathing row, the text row (opened by `›`), a blank gap
-/// row, and the meta row carrying the Enter sentence with the char counter
-/// right-aligned at its end.
+/// row, and the meta row carrying the Enter sentence. The right side of
+/// the meta row carries nothing while every wrapped row is visible — the
+/// position readout only exists once the box clips rows (see
+/// `composer_overflow_indicates_hidden_lines_and_position`).
 #[test]
 fn composer_panel_carries_the_hint_row() {
     let mut terminal = draw_frame_composer("hello", true, Default::default());
@@ -1727,20 +1729,8 @@ fn composer_panel_carries_the_hint_row() {
         "hint row carries the Enter sentence: {row4:?}"
     );
     assert!(
-        row4.contains("5 chars"),
-        "hint row carries the char counter: {row4:?}"
-    );
-    // The counter closes right-aligned with one column of air before the
-    // panel edge.
-    let counter_x = row4
-        .char_indices()
-        .find(|(_, c)| *c == '5')
-        .map(|(i, _)| row4[..i].chars().count())
-        .expect("counter");
-    assert_eq!(
-        counter_x + "5 chars".chars().count() + 1,
-        60,
-        "counter right-aligned before the panel edge: {row4:?}"
+        !row4.contains("lines") && !row4.contains("chars"),
+        "a fully visible draft carries no right-side readout: {row4:?}"
     );
     // The sentence begins at the text column (the `›` prefix width).
     let enter_x = row4
@@ -1799,6 +1789,81 @@ fn composer_hint_sentence_names_the_delivery_group() {
     );
 }
 
+/// Once the draft outgrows the box, the three-part overflow affordance
+/// lights up: the breathing row above the text carries `↑ N lines`, the gap
+/// row below carries `↓ N lines`, and the meta row's right side swaps in a
+/// `first–last/total lines` position readout. The box height never changes
+/// crossing the threshold — the indicators reuse existing chrome rows.
+#[test]
+fn composer_overflow_indicates_hidden_lines_and_position() {
+    let theme = Theme::default();
+    // 12 words ≈ 65 cols: three wrapped rows on a 60-col panel whose height
+    // leaves room for exactly one visible text row.
+    let input = "one two three four five six seven eight nine ten eleven twelve ";
+    let draw = |byte_cursor: usize, scroll: &mut usize| {
+        let mut terminal = mutx_engine::TestTerminal::new(60, 6);
+        terminal.draw(|f| {
+            draw_composer(
+                ComposerView {
+                    frame: f,
+                    input_rect: Rect::new(0, 0, 60, 4),
+                    theme: &theme,
+                    layout_map: &mut LayoutMap::new(),
+                    input_scroll: scroll,
+                    selection: &SelectionState::None,
+                },
+                ComposerText { input, byte_cursor },
+                true,
+                false,
+                false,
+                0,
+                0,
+                crate::components::composer_hints::ComposerHints::default(),
+            );
+        });
+        terminal
+    };
+
+    // Caret at the end: the caret-follow clamp scrolls the last row into
+    // view, hiding the rows above → the ↑ indicator + position readout.
+    let mut scroll = 0usize;
+    let mut terminal = draw(input.len(), &mut scroll);
+    assert!(scroll > 0, "caret-follow scroll hides rows above: {scroll}");
+    let top = frame_row_text(&mut terminal, 0);
+    assert!(
+        top.contains('↑') && top.trim_end().ends_with("lines"),
+        "breathing row carries the ↑ indicator: {top:?}"
+    );
+    let gap = frame_row_text(&mut terminal, 2);
+    assert!(
+        gap.trim().is_empty(),
+        "nothing hides below when the caret rests on the last row: {gap:?}"
+    );
+    let meta = frame_row_text(&mut terminal, 3);
+    assert!(
+        meta.contains(&format!("–{}/{} lines", scroll + 1, scroll + 1)),
+        "position readout names the visible span: {meta:?}"
+    );
+
+    // Caret at the start instead: the viewport stays at the top, hiding
+    // rows below → the ↓ indicator, and the readout names the first row.
+    let mut scroll_top = 0usize;
+    let mut terminal = draw(0, &mut scroll_top);
+    assert_eq!(scroll_top, 0, "viewport rests at the top with the caret there");
+    let top = frame_row_text(&mut terminal, 0);
+    assert!(top.trim().is_empty(), "no ↑ while nothing hides above: {top:?}");
+    let gap = frame_row_text(&mut terminal, 2);
+    assert!(
+        gap.contains('↓') && gap.trim_end().ends_with("lines"),
+        "gap row carries the ↓ indicator: {gap:?}"
+    );
+    let meta = frame_row_text(&mut terminal, 3);
+    assert!(
+        meta.contains("1–1/"),
+        "readout names the first visible row: {meta:?}"
+    );
+}
+
 /// While blurred the panel keeps its tint but sheds the hint sentence — the
 /// meta text never competes with a step-focused transcript.
 #[test]
@@ -1806,7 +1871,10 @@ fn composer_panel_blurred_sheds_the_hint_row() {
     let mut terminal = draw_frame_composer("hello", false, Default::default());
     let row4 = frame_row_text(&mut terminal, 3);
     assert!(!row4.contains("Enter"), "blurred row sheds the keys");
-    assert!(!row4.contains("chars"), "blurred row sheds the counter");
+    assert!(
+        !row4.contains("lines"),
+        "blurred row sheds the position readout"
+    );
     let buffer = terminal.buffer();
     assert_eq!(
         buffer[(0, 3)].bg,

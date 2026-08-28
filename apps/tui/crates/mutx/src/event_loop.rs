@@ -1900,6 +1900,14 @@ pub(super) async fn run_app_loop(
 
         tick_toast_timers(app, &runtime).await;
 
+        // Composer edge-autoscroll: while a selection drag holds the pointer
+        // past the input's text rows, keep the viewport (and the selection
+        // head) marching one row per heartbeat — a still pointer must keep
+        // scrolling, which pointer-driven events alone can't deliver.
+        if app.step_input_drag_scroll() {
+            frame_dirty = true;
+        }
+
         let (displayed_transcript_changed, viewed_session_id) =
             sync_transcripts_and_session(app, &runtime).await;
 
@@ -1960,6 +1968,7 @@ pub(super) async fn run_app_loop(
             || !app.pending_images.is_empty()
             || app.effort_ignition_epoch.is_some()
             || empty_state_showing
+            || app.input_drag_scroll.is_some()
             || copy_pending.load(Ordering::SeqCst) > 0;
         // While user is actively typing or composing, quiesce background
         // micro-animations (100ms spinner/breathing ticks) to eliminate

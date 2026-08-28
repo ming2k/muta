@@ -267,21 +267,6 @@ pub(crate) fn hint_row_spans(
     spans
 }
 
-// ---------------------------------------------------------------------------
-// Char counter (right side of the keys row)
-// ---------------------------------------------------------------------------
-
-/// Human-sized char count for the keys row: exact below 1k, one-decimal `k`
-/// above (`990 chars`, `14.2k chars`). Chars, never tokens — committed-token
-/// accounting lives exclusively on the model bar to avoid double reading.
-pub(crate) fn format_char_count(chars: usize) -> String {
-    if chars < 1_000 {
-        format!("{chars} chars")
-    } else {
-        format!("{:.1}k chars", chars as f64 / 1_000.0)
-    }
-}
-
 /// Width of a span run in display columns.
 /// Abbreviated display width of a span run (unused today; kept beside the
 /// span builders so width math never gets re-implemented ad hoc).
@@ -467,13 +452,6 @@ mod tests {
             compose_target(false, None, None, false),
             ComposeTarget::Prompt
         );
-    }
-
-    #[test]
-    fn char_count_formats_like_the_model_bar_cluster() {
-        assert_eq!(format_char_count(0), "0 chars");
-        assert_eq!(format_char_count(990), "990 chars");
-        assert_eq!(format_char_count(14_236), "14.2k chars");
     }
 
     #[test]

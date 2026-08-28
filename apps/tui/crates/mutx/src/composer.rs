@@ -23,6 +23,43 @@ use super::design::{
 };
 use super::text_layout::{WrappedLine, block_selection_range, line_selection, wrap_text};
 
+/// Right-aligned overflow label for a chrome row (the breathing row above
+/// the text / the gap row below it): direction glyph + hidden-row count.
+/// `↑ 12 lines` on comfortable widths, `↑ 12` once the long form would crowd
+/// a narrow panel — the same degrade-then-simplify ladder the keys row
+/// performs via `ActionDensity`.
+fn overflow_label(dir: char, hidden: usize, full_w: usize) -> String {
+    if full_w >= 24 {
+        format!("{dir} {hidden} lines")
+    } else {
+        format!("{dir} {hidden}")
+    }
+}
+
+/// Build a chrome row: a full-width panel-bg blank that gives the text its
+/// breathing room, except when `hidden > 0` wrapped rows are clipped
+/// off-screen on that side — then it right-aligns the muted, quantified
+/// overflow indicator with one column of air before the panel edge, the
+/// same discipline the meta row's right-aligned readouts follow. Reusing
+/// the existing chrome rows as indicators (instead of adding rows) keeps
+/// the box height identical whether or not anything is hidden, so the
+/// panel never jitters as the draft crosses the overflow threshold.
+fn chrome_row(full_w: usize, bg: Color, theme: &Theme, dir: char, hidden: usize) -> Line<'static> {
+    if hidden == 0 {
+        return Line::from(Span::styled(
+            " ".repeat(full_w),
+            Style::default().bg(bg),
+        ));
+    }
+    let label = overflow_label(dir, hidden, full_w);
+    let gap_cols = full_w.saturating_sub(label.chars().count() + 1);
+    Line::from(vec![
+        Span::styled(" ".repeat(gap_cols), Style::default().bg(bg)),
+        Span::styled(label, Style::default().bg(bg).fg(theme.muted())),
+        Span::styled(" ".to_string(), Style::default().bg(bg)),
+    ])
+}
+
 /// Render plumbing for the composer draw family: frame, target rect,
 /// theme, layout map, scroll state, and selection. Bundled so the three
 /// composer entry points and the shared impl take (view, text, flags)
@@ -52,7 +89,12 @@ pub const INPUT_MSG_IDX: usize = usize::MAX - 2;
 /// [`super::draw_transcript`] and the actual rendering in [`draw_composer`] go
 /// through this so the box never scrolls its own prompt glyph out of view on
 /// the first newline.
-fn composer_wrapped(input: &str, text_width: usize, byte_cursor: usize) -> Vec<WrappedLine> {
+///
+/// Also the scroll-model source for the interaction layer: edge-autoscroll
+/// during a selection drag resolves its viewport-edge bytes from the same
+/// wrapped rows the renderer paints, so the selection can never disagree
+/// with what is on screen.
+pub(crate) fn composer_wrapped(input: &str, text_width: usize, byte_cursor: usize) -> Vec<WrappedLine> {
     let mut wrapped = wrap_text(input, text_width);
     let last_end = wrapped.last().map_or(0, |w| w.end_byte);
     if byte_cursor > last_end {
@@ -349,15 +391,21 @@ fn draw_composer_impl(
     let (cursor_x, cursor_y) =
         cursor_screen_pos(input_rect, input, byte_cursor, input_scroll).unwrap_or((0, 0));
 
+    // Overflow bookkeeping for the chrome-row indicators and the meta row's
+    // position readout: how many wrapped rows sit above / below the visible
+    // window once the caret-follow clamp in [`cursor_screen_pos`] has
+    // settled the scroll offset for this frame.
+    let hidden_above = *input_scroll;
+    let hidden_below = wrapped.len().saturating_sub(*input_scroll + visible_rows);
+
     let mut lines: Vec<Line> =
         Vec::with_capacity(visible_rows + COMPOSER_VERTICAL_CHROME_ROWS as usize);
 
     // ── Row 1: blank breathing row ──────────────────────────────────────────
-    // A full panel-bg padding row giving the text a line of air above.
-    lines.push(Line::from(Span::styled(
-        " ".repeat(full_w),
-        Style::default().bg(panel_bg),
-    )));
+    // A full panel-bg padding row giving the text a line of air above. When
+    // rows hide above the viewport it moonlights as the `↑ N lines`
+    // indicator (see [`chrome_row`]).
+    lines.push(chrome_row(full_w, panel_bg, theme, '↑', hidden_above));
 
     // Text rows: the first logical line opens with the `›` prompt glyph plus
     // a gap, and every wrapped continuation indents to the same column so the
@@ -484,20 +532,20 @@ fn draw_composer_impl(
     // ── Row 3: blank gap row ────────────────────────────────────────────────
     // A second breathing row between the text and the meta row, so the hint
     // sentence reads as the box's own footnote rather than another text line.
-    lines.push(Line::from(Span::styled(
-        " ".repeat(full_w),
-        Style::default().bg(panel_bg),
-    )));
+    // When rows hide below the viewport it carries the `↓ N lines`
+    // indicator (see [`chrome_row`]).
+    lines.push(chrome_row(full_w, panel_bg, theme, '↓', hidden_below));
 
     // ── Row 4: the hint row ─────────────────────────────────────────────────
-    // `Enter send prompt` leads (left) and the char counter closes (right).
-    // Keycaps and verbs tint with `panel_bg` so they blend into the box; the
-    // row degrades by width ladder before the counter is ever dropped, and
-    // the counter is the first thing the row sheds when the panel gets too
-    // narrow. While unfocused the sentence is dropped entirely — the recessed
-    // panel must not compete with a step-focused transcript.
+    // `Enter send prompt` leads (left) and, only while the box clips rows,
+    // a right-aligned position readout closes the row. Keycaps and verbs
+    // tint with `panel_bg` so they blend into the box; the row degrades by
+    // width ladder before the readout is ever dropped, and the readout is
+    // the first thing the row sheds when the panel gets too narrow. While
+    // unfocused the sentence is dropped entirely — the recessed panel must
+    // not compete with a step-focused transcript.
     {
-        use crate::components::composer_hints::{ActionDensity, format_char_count};
+        use crate::components::composer_hints::ActionDensity;
         let keys_width = full_w
             .saturating_sub(COMPOSER_PROMPT_PREFIX_COLS + COMPOSER_RIGHT_PAD_COLS)
             .max(8);
@@ -512,15 +560,25 @@ fn draw_composer_impl(
                 panel_bg,
             ));
         }
-        // Right-aligned char counter: only when the sentence plus counter fit
-        // with at least one filler column between them.
-        if focused {
-            let count_label = format_char_count(input.chars().count());
+        // Right-aligned position readout, shown only while the box actually
+        // clips rows: `12–24/87 lines` names the visible span inside the
+        // whole wrapped draft, answering "where am I" the moment the ↑/↓
+        // indicators answer "what am I not seeing". A fully visible draft
+        // carries no right-side readout at all — a position inside a box
+        // that shows everything is noise, and the char counter this slot
+        // used to carry never earned its place (a draft is judged in lines,
+        // not chars). Same fit discipline as the old counter: drop the
+        // readout unless the sentence plus label fit with at least one
+        // filler column between them.
+        if focused && wrapped.len() > visible_rows {
+            let first = *input_scroll + 1;
+            let last = (*input_scroll + visible_rows).min(wrapped.len());
+            let position_label = format!("{first}–{last}/{} lines", wrapped.len());
             let used = spans
                 .iter()
                 .map(|span| str_len(&span.content))
                 .sum::<usize>()
-                + str_len(&count_label);
+                + str_len(&position_label);
             if full_w > used + 1 {
                 let gap = full_w - used - 1;
                 spans.push(Span::styled(
@@ -528,7 +586,7 @@ fn draw_composer_impl(
                     Style::default().bg(panel_bg).fg(theme.muted()),
                 ));
                 spans.push(Span::styled(
-                    count_label,
+                    position_label,
                     Style::default().bg(panel_bg).fg(theme.muted()),
                 ));
             }

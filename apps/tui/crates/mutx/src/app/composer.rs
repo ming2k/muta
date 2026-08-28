@@ -3,6 +3,19 @@
 use super::*;
 
 impl App {
+    /// The double-press confirmation policy for *time-windowed* gestures:
+    /// the first press arms a wall-clock window, and a second press inside
+    /// it fires (a later press starts a fresh window instead). Two gestures
+    /// use this shape — Ctrl+C ×2 quit ([`Self::CTRL_C_ARM_WINDOW`]) and
+    /// Esc ×2 interrupt ([`Self::ESC_ARM_WINDOW`]) — both frequent, reversible
+    /// intents where a lapsed window must silently re-arm rather than trap.
+    /// The rarer, destructive confirms (Ctrl+X → `y` history wipe, the
+    /// dashboard's `k` kill) use the complementary *keystroke-armed* policy
+    /// instead: the armed state lives exactly one keystroke, no timeout —
+    /// a stray `y` an hour later must never wipe history.
+    pub const CTRL_C_ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+    /// The Esc interrupt double-press window — see
+    /// [`Self::CTRL_C_ARM_WINDOW`] for the shared confirmation policy.
     pub const ESC_ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
     /// Record an input-history entry with the on-disk cap mirrored in memory:
     /// `HISTORY_CAP` bounds the persisted union, so an unbounded in-memory
@@ -103,6 +116,129 @@ impl App {
             .map(|(i, _)| i)
             .nth(self.cursor_position)
             .unwrap_or(self.input.len())
+    }
+
+    /// Highest scroll offset the input viewport supports at the last drawn
+    /// size: wrapped rows minus visible rows. `None` when no composer rect
+    /// is known (nothing drawn yet, or an overlay owns the surface).
+    pub fn input_scroll_max(&self) -> Option<usize> {
+        let rect = self.input_rect?;
+        let text_width = crate::composer::composer_text_width(rect.width as usize);
+        let rows = crate::composer::input_row_count(&self.input, text_width, self.input.len());
+        let visible = (rect.height as usize)
+            .saturating_sub(crate::design::COMPOSER_VERTICAL_CHROME_ROWS as usize)
+            .max(1);
+        Some(rows.saturating_sub(visible))
+    }
+
+    /// Step the input viewport by `lines` wrapped rows (wheel ticks pass 4,
+    /// matching the transcript's wheel cadence). Returns the new offset, or
+    /// `None` when the box isn't scrollable. Manual scrolling is a *reading
+    /// excursion*: the caret-follow clamp in `cursor_screen_pos` does not
+    /// chase the caret until the next caret-moving key, so browsing the draft
+    /// never yanks the view back.
+    pub fn step_input_scroll(&mut self, up: bool, lines: usize) -> Option<usize> {
+        let max = self.input_scroll_max()?;
+        self.input_scroll = if up {
+            self.input_scroll.saturating_sub(lines)
+        } else {
+            (self.input_scroll + lines).min(max)
+        };
+        Some(self.input_scroll)
+    }
+
+    /// Whether a selection-drag pointer at row `y` should arm composer
+    /// edge-autoscroll: the drag must be active with its anchor in the input
+    /// box, the box must be on screen with hidden rows on the side being
+    /// crossed, and the pointer must sit beyond the input's text rows — above
+    /// the first text row, or at/below the last one (the panel's own chrome
+    /// rows and the area clean outside the box both count as "past the edge",
+    /// exactly like every GUI text surface). Returns the direction (`true` =
+    /// up) or `None` when the pointer is back inside the text rows and the
+    /// drag should follow it normally.
+    pub fn input_drag_scroll_edge(&self, y: u16) -> Option<bool> {
+        let anchored_in_input = self
+            .drag
+            .anchor
+            .as_ref()
+            .is_some_and(|a| a.message_idx == crate::view::INPUT_MSG_IDX);
+        if !(self.drag.active && anchored_in_input) {
+            return None;
+        }
+        let rect = self.input_rect?;
+        let max = self.input_scroll_max()?;
+        if max == 0 {
+            return None; // every wrapped row is visible; nothing to scroll to
+        }
+        let text_top = rect.y + crate::design::COMPOSER_TEXT_ROW_OFFSET;
+        let text_bottom_exclusive =
+            rect.y + rect.height.saturating_sub(crate::design::COMPOSER_VERTICAL_CHROME_ROWS);
+        if y < text_top && self.input_scroll > 0 {
+            Some(true)
+        } else if y >= text_bottom_exclusive && self.input_scroll < max {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// Advance an armed edge-autoscroll by one wrapped row, extending the
+    /// selection head to the viewport edge the scroll just exposed. Returns
+    /// whether anything moved (the caller redraws only then). Called from
+    /// both the pointer's move events (immediate feedback) and the event
+    /// loop's heartbeat tick (so holding the pointer still at the edge keeps
+    /// scrolling); lazily disarms itself if the drag is no longer active.
+    pub fn step_input_drag_scroll(&mut self) -> bool {
+        let Some(up) = self.input_drag_scroll else {
+            return false;
+        };
+        if !self.drag.active {
+            self.input_drag_scroll = None;
+            return false;
+        }
+        let Some(max) = self.input_scroll_max() else {
+            return false;
+        };
+        let target = if up {
+            self.input_scroll.saturating_sub(1)
+        } else {
+            (self.input_scroll + 1).min(max)
+        };
+        if target == self.input_scroll {
+            return false;
+        }
+        self.input_scroll = target;
+
+        // Resolve the newly-exposed viewport edge through the same wrap the
+        // renderer uses, and pin the selection head to its byte — hidden rows
+        // are not in the layout map, so the head cannot be resolved from the
+        // pointer; the edge *is* the pointer as far as the selection cares.
+        let Some(rect) = self.input_rect else {
+            return false;
+        };
+        let text_width = crate::composer::composer_text_width(rect.width as usize);
+        let visible = (rect.height as usize)
+            .saturating_sub(crate::design::COMPOSER_VERTICAL_CHROME_ROWS as usize)
+            .max(1);
+        let wrapped = crate::composer::composer_wrapped(&self.input, text_width, self.input.len());
+        if wrapped.is_empty() {
+            return false;
+        }
+        let edge_row = if up {
+            target.min(wrapped.len() - 1)
+        } else {
+            (target + visible - 1).min(wrapped.len() - 1)
+        };
+        let byte = if up {
+            wrapped[edge_row].start_byte
+        } else {
+            wrapped[edge_row].end_byte.min(self.input.len())
+        };
+        self.drag.update_to_cursor(
+            &mut self.selection,
+            crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, byte),
+        );
+        true
     }
 
     /// Set the logical input caret position. Physical cursor placement has one

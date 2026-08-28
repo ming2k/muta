@@ -2117,6 +2117,8 @@ pub async fn run_tui(
         completion_request_id: 0,
         cursor_position: 0,
         input_scroll: 0,
+        input_rect: None,
+        input_drag_scroll: None,
         modal_index: 0,
         last_key_press: std::time::Instant::now(),
         session_scroll: 0,

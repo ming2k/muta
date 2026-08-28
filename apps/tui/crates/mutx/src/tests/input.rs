@@ -267,3 +267,115 @@ fn input_selection_relays_arrows_only_when_composer_owns_caret() {
         "arrows belong to step navigation while a step holds focus"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Input viewport: wheel scrolling and selection edge-autoscroll
+// ---------------------------------------------------------------------------
+
+/// A composer panel fixture: a 60-col box at the screen bottom whose height
+/// leaves `visible` text rows, and a draft of one-char-per-line rows so the
+/// wrapped-row count is exact. The trailing newline is absent, so `n` rows of
+/// text map to `n` wrapped rows.
+fn app_with_input_viewport(rows: usize, visible: usize) -> (App, tempfile::TempDir) {
+    let (mut app, tmp) = app_in_tempdir(&[], &[]);
+    let height = visible as u16 + crate::design::COMPOSER_VERTICAL_CHROME_ROWS;
+    app.input_rect = Some(mutx_engine::Rect::new(0, 40, 60, height));
+    app.input = (0..rows)
+        .map(|i| char::from(b'a' + (i % 26) as u8).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (app, tmp)
+}
+
+#[test]
+fn input_viewport_wheel_steps_clamp_to_hidden_rows() {
+    // 8 wrapped rows, 3 visible → 5 rows of scroll range.
+    let (mut app, _tmp) = app_with_input_viewport(8, 3);
+    assert_eq!(app.input_scroll_max(), Some(5), "8 rows − 3 visible");
+
+    assert_eq!(app.step_input_scroll(false, 4), Some(4));
+    assert_eq!(
+        app.step_input_scroll(false, 4),
+        Some(5),
+        "scroll clamps at the last hidden row"
+    );
+    assert_eq!(app.step_input_scroll(true, 2), Some(3));
+    assert_eq!(
+        app.step_input_scroll(true, 99),
+        Some(0),
+        "scrolling up clamps at the top"
+    );
+
+    // No composer on screen (overlay modal, first frame): not scrollable.
+    app.input_rect = None;
+    assert_eq!(app.input_scroll_max(), None);
+    assert_eq!(app.step_input_scroll(false, 1), None);
+}
+
+#[test]
+fn input_edge_autoscroll_arms_beyond_text_rows_and_extends_selection() {
+    // 8 rows, 2 visible; viewport scrolled to the end (rows 6–7 visible,
+    // text rows at screen y 41–42, chrome at 43–44 on a height-5 panel).
+    let (mut app, _tmp) = app_with_input_viewport(8, 2);
+    app.input_scroll = 6;
+
+    // A selection drag anchored in the composer's second row.
+    app.drag.begin_range(
+        &mut app.selection,
+        crate::model::layout::SemanticCursor::new(crate::view::INPUT_MSG_IDX, 0, 2),
+    );
+
+    // Pointer above the text rows (the panel's own breathing row counts as
+    // past the edge): arms upward, and the first step both scrolls and pins
+    // the selection head to the newly exposed row's start byte. (The event
+    // loop's SelectionUpdate arm stores the direction before stepping; the
+    // test mirrors that hand-off.)
+    assert_eq!(app.input_drag_scroll_edge(40), Some(true));
+    app.input_drag_scroll = Some(true);
+    assert!(app.step_input_drag_scroll());
+    assert_eq!(app.input_scroll, 5);
+    let SelectionState::Range { head, .. } = &app.selection else {
+        panic!("selection survives the edge step");
+    };
+    let wrapped = crate::composer::composer_wrapped(
+        &app.input,
+        crate::composer::composer_text_width(60),
+        app.input.len(),
+    );
+    assert_eq!(
+        head.byte_offset, wrapped[5].start_byte,
+        "head pins to the exposed viewport edge"
+    );
+
+    // Pointer inside the text rows: no arm — the drag follows the pointer
+    // normally again.
+    assert_eq!(app.input_drag_scroll_edge(41), None);
+
+    // Pointer at/below the last text row (the gap/hint chrome): arms
+    // downward while rows hide below, stepping to the bottom clamp.
+    assert_eq!(app.input_drag_scroll_edge(43), Some(false));
+    app.input_drag_scroll = Some(false);
+    while app.step_input_drag_scroll() {}
+    assert_eq!(app.input_scroll, 6, "down-arm marches to the max scroll");
+    assert_eq!(app.input_drag_scroll_edge(43), None, "clamped: no more rows");
+
+    // Ending the drag disarms the autoscroll; the heartbeat step no-ops.
+    app.drag.finish(&mut app.selection);
+    app.input_drag_scroll = None;
+    assert!(!app.step_input_drag_scroll());
+}
+
+#[test]
+fn input_edge_autoscroll_ignores_transcript_anchored_drags() {
+    let (mut app, _tmp) = app_with_input_viewport(8, 2);
+    app.input_scroll = 0;
+    // A drag anchored in transcript content never drives the input viewport,
+    // however far above the input the pointer climbs.
+    app.drag.begin_range(
+        &mut app.selection,
+        crate::model::layout::SemanticCursor::new(0, 0, 5),
+    );
+    assert_eq!(app.input_drag_scroll_edge(0), None);
+    assert!(!app.step_input_drag_scroll());
+    assert_eq!(app.input_scroll, 0);
+}

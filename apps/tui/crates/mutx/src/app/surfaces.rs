@@ -274,6 +274,7 @@ impl App {
         self.pending_text_pastes.clear();
         self.cursor_position = 0;
         self.input_scroll = 0;
+        self.input_drag_scroll = None;
         self.suggestion_index = None;
         self.completion_dismissed = true;
         // The backfill belongs to the conversation being left; the next
@@ -364,6 +365,7 @@ impl App {
             self.input = state.query;
             self.set_cursor_end();
             self.input_scroll = 0;
+            self.input_drag_scroll = None;
             self.suggestion_index = None;
             match id {
                 crate::surfaces::PanelId::Models | crate::surfaces::PanelId::Connections => {
