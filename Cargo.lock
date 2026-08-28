@@ -1441,7 +1441,7 @@ dependencies = [
 
 [[package]]
 name = "muta"
-version = "0.37.1"
+version = "0.37.2"
 dependencies = [
  "async-trait",
  "libc",
