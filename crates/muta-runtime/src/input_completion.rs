@@ -80,11 +80,10 @@ impl InputCompletionEngine {
 
         // ---- First stage: `/pre<cursor>` completes command names ----
         //
-        // Aliases are first-class candidates here (not silently rewritten):
-        // typing `/set` offers an alias row that *stays* the alias when
-        // selected — dispatch resolves it. The row leads with `(alias)` and
-        // carries both spellings in its description so the flyout explains
-        // exactly what will be submitted and what it will run.
+        // Aliases are first-class candidates: typing `/yolo` surfaces a row
+        // labelled with the alias spelling, visually marked as one (see
+        // `alias_of`), that commits the canonical `/delegate` when accepted.
+        // Dispatch still resolves any alias submitted verbatim.
         let mut items = Vec::new();
         for spec in &self.catalog.commands {
             if spec.name.to_lowercase().starts_with(&current) {
@@ -96,27 +95,24 @@ impl InputCompletionEngine {
             if !name.starts_with(&current) {
                 continue;
             }
-            let target_summary = self
-                .catalog
-                .find(&alias.target)
-                .map(|spec| spec.summary.as_str())
-                .unwrap_or_default();
+            let target_spec = self.catalog.find(&alias.target);
+            // The row keeps the alias as its label (the user typed that
+            // spelling), but the committed edit is the canonical target —
+            // accepting `/yolo` puts `/delegate` in the composer, so the
+            // transcript records the command that actually runs. `alias_of`
+            // lets frontends render the row distinctly without sniffing the
+            // description.
             items.push(InputCompletion {
                 label: alias.name.clone(),
-                description: format!(
-                    "(alias of {}) {}",
-                    alias.target,
-                    if target_summary.is_empty() {
-                        alias.target.clone()
-                    } else {
-                        format!("{target_summary}")
-                    }
-                ),
-                insert_text: alias.name.clone(),
+                description: target_spec
+                    .map(|spec| spec.summary.clone())
+                    .unwrap_or_else(|| alias.target.clone()),
+                insert_text: alias.target.clone(),
                 replace_start: 0,
                 replace_end,
                 kind: InputCompletionKind::Slash,
-                command: self.catalog.find(&alias.target).cloned(),
+                alias_of: Some(alias.target.clone()),
+                command: target_spec.cloned(),
             });
         }
 
@@ -136,6 +132,7 @@ impl InputCompletionEngine {
                     replace_start: 0,
                     replace_end,
                     kind: InputCompletionKind::Intent,
+                    alias_of: None,
                     command,
                 }
             });
@@ -229,6 +226,7 @@ impl InputCompletionEngine {
                     replace_start: 0,
                     replace_end,
                     kind: InputCompletionKind::Slash,
+                    alias_of: None,
                     command: Some(spec.clone()),
                 })
                 .collect();
@@ -403,6 +401,7 @@ fn slash_item(
         } else {
             InputCompletionKind::Slash
         },
+        alias_of: None,
         command: Some(command.clone()),
     }
 }
@@ -447,6 +446,7 @@ fn path_item(
         replace_start: input[..replace_start_byte].chars().count(),
         replace_end: input[..replace_end_byte].chars().count(),
         kind,
+        alias_of: None,
         command: None,
     }
 }
@@ -782,10 +782,10 @@ mod tests {
     async fn slash_aliases_are_first_class_candidates() {
         let engine = InputCompletionEngine::new(catalog(), PathBuf::from("."));
 
-        // Typing `/set` offers the /settings alias `/setup`… wait — no: the
-        // alias table has no `/setup`; it offers `/session`, `/config` and
-        // friends by prefix. The important property: an alias row keeps its
-        // OWN name as insert text (never rewritten to the target mid-typing).
+        // Typing `/confi` surfaces the alias `/config` under its own label
+        // (the user's spelling is preserved in the menu), but accepting it
+        // commits the canonical `/settings`: `insert_text` is the target and
+        // `alias_of` marks the row so frontends render it distinctly.
         let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(20, "/confi".into(), 6).await
         else {
@@ -794,11 +794,11 @@ mod tests {
         let config_row = items.iter().find(|i| i.label == "/config").expect(
             "alias /config surfaces for prefix /confi",
         );
-        assert_eq!(config_row.insert_text, "/config");
-        assert!(
-            config_row.description.starts_with("(alias of /settings)"),
-            "row explains both spellings: {}",
-            config_row.description
+        assert_eq!(config_row.insert_text, "/settings");
+        assert_eq!(config_row.alias_of.as_deref(), Some("/settings"));
+        assert_eq!(
+            config_row.description, "Open Settings overlay (theme, appearance)",
+            "description is the target's plain summary — no inline (alias …) prose"
         );
         // The flyout doc is the target's spec.
         assert_eq!(
@@ -806,15 +806,17 @@ mod tests {
             Some("/settings")
         );
 
-        // The canonical command row exists alongside, with plain summary.
+        // The canonical command row exists alongside, with plain summary and
+        // no alias marker.
         let settings_row = items
             .iter()
             .find(|i| i.label == "/settings")
             .expect("canonical /settings also offered");
-        assert!(!settings_row.description.starts_with("(alias"));
+        assert_eq!(settings_row.alias_of, None);
+        assert_eq!(settings_row.insert_text, "/settings");
 
-        // Exact alias input does NOT get silently swapped: inserting stays
-        // the alias spelling; resolution is dispatch's job.
+        // Exact alias input behaves identically: the row stays the alias
+        // label, the committed edit is the canonical target.
         let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(21, "/config".into(), 7).await
         else {
@@ -824,7 +826,8 @@ mod tests {
             .iter()
             .find(|i| i.label == "/config")
             .expect("alias row persists at exact match");
-        assert_eq!(row.insert_text, "/config");
+        assert_eq!(row.insert_text, "/settings");
+        assert_eq!(row.alias_of.as_deref(), Some("/settings"));
     }
 
     #[tokio::test]

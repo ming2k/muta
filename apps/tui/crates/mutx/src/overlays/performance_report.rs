@@ -8,7 +8,8 @@
 use std::collections::BTreeMap;
 
 use muta_contracts::{
-    RequestUsageRecord, RequestUsageSource, RequestUsageStatus, TokenSourceReport,
+    RequestPerformance, RequestUsageRecord, RequestUsageSource, RequestUsageStatus,
+    TokenSourceReport,
 };
 use mutx_engine::{
     Frame, Modifier, Style, {Line, Span},
@@ -20,8 +21,8 @@ use crate::components::selectable_body::{SelectableRow, render_selectable_body};
 use crate::design::MODAL_INNER_H_PADDING;
 use crate::primitives::{
     BodyRenderOptions, ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN,
-    breadcrumb_parts, content_modal_area, content_modal_probe, keyvocab, modal_chrome_rows,
-    modal_frame, modal_header_parts, render_body, render_modal_footer,
+    breadcrumb_parts, content_modal_area, content_modal_probe, hierarchical_breadcrumb, keyvocab,
+    modal_chrome_rows, modal_frame, modal_header_parts, render_body, render_modal_footer,
 };
 use crate::view::Theme;
 
@@ -35,12 +36,36 @@ pub fn performance_report_round_count(report: &TokenSourceReport) -> usize {
     performance_rounds(report).len()
 }
 
+/// Number of attempt rows in the selected round's drill-down table. Rows are
+/// listed newest-turn-first, matching [`detail_body`]'s display order.
+pub fn performance_report_attempt_count(report: &TokenSourceReport, round_index: usize) -> usize {
+    performance_rounds(report)
+        .get(round_index)
+        .map(|round| round.attempts.len())
+        .unwrap_or(0)
+}
+
+/// The `(turn, attempt)` key of the attempt row at `row_index` in the
+/// selected round's drill-down table (display order, newest first).
+pub fn performance_report_attempt_key(
+    report: &TokenSourceReport,
+    round_index: usize,
+    row_index: usize,
+) -> Option<(u32, u32)> {
+    let rounds = performance_rounds(report);
+    let round = rounds.get(round_index)?;
+    let record = round.attempts.iter().rev().nth(row_index)?;
+    Some((record.key.turn, record.key.attempt))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn draw_performance_report_modal(
     frame: &mut Frame,
     report: &TokenSourceReport,
     selected: usize,
     detail: bool,
+    turn: Option<(u32, u32)>,
+    turn_cursor: usize,
     loading: bool,
     scroll: &mut usize,
     theme: &Theme,
@@ -59,7 +84,17 @@ pub fn draw_performance_report_modal(
     let child = drill
         .then(|| round_label(rounds[selected].number))
         .unwrap_or_default();
-
+    let turn_focus = drill.then_some(turn).flatten();
+    let turn_record = turn_focus.and_then(|(turn, attempt)| {
+        rounds[selected]
+            .attempts
+            .iter()
+            .copied()
+            .find(|record| record.key.turn == turn && record.key.attempt == attempt)
+    });
+    let turn_child = turn_record
+        .map(attempt_page_label)
+        .unwrap_or_default();
     let (header, body, footer, follow) = if loading && !drill {
         (
             vec![HeaderPart::title("Performance")],
@@ -71,15 +106,30 @@ pub fn draw_performance_report_modal(
             vec![FooterHint::always(keyvocab::ESC, "close")],
             None,
         )
-    } else if drill {
+    } else if let Some(record) = turn_record {
         (
-            breadcrumb_parts("Performance", &child).to_vec(),
-            detail_body(&rounds[selected], body_width, theme),
+            hierarchical_breadcrumb(
+                &["Performance", &child, &turn_child],
+                probe.width as usize,
+            ),
+            turn_detail_body(record, theme),
             vec![
                 FooterHint::always(keyvocab::ARROWS_UD, "scroll"),
-                FooterHint::always(keyvocab::ESC, "rounds"),
+                FooterHint::always(keyvocab::ESC, "round"),
             ],
             None,
+        )
+    } else if drill {
+        let (body, follow) = detail_body(&rounds[selected], turn_cursor, body_width, theme);
+        (
+            breadcrumb_parts("Performance", &child).to_vec(),
+            body,
+            vec![
+                FooterHint::always(keyvocab::ARROWS_UD, "select"),
+                FooterHint::always(keyvocab::ENTER, "turn"),
+                FooterHint::always(keyvocab::ESC, "rounds"),
+            ],
+            follow,
         )
     } else {
         let (body, follow) = list_body(&rounds, selected, body_width, theme);
@@ -99,7 +149,7 @@ pub fn draw_performance_report_modal(
     let area = content_modal_area(frame, geometry, desired);
     let modal = modal_frame(frame, area, theme.panel(), true, true);
     modal_header_parts(frame, modal.header, &header, theme);
-    if drill {
+    if turn_record.is_some() || drill {
         let rows = body
             .into_iter()
             .map(SelectableRow::from_line)
@@ -243,9 +293,10 @@ fn list_body(
 
 fn detail_body(
     round: &PerformanceRound<'_>,
+    turn_cursor: usize,
     body_width: usize,
     theme: &Theme,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Option<usize>) {
     let mut body = Vec::new();
     let completed = round
         .attempts
@@ -328,8 +379,18 @@ fn detail_body(
         [theme.muted(); 6],
         theme.panel(),
     ));
+    let mut selected_line = None;
     for (index, record) in attempts.iter().enumerate() {
         let (_, state_color) = attempt_state(record, theme);
+        let selected_row = index == turn_cursor;
+        let bg = if selected_row {
+            theme.selected()
+        } else {
+            theme.panel()
+        };
+        if selected_row {
+            selected_line = Some(body.len());
+        }
         body.push(table_line(
             [
                 labels[index].as_str(),
@@ -348,7 +409,7 @@ fn detail_body(
                 theme.muted(),
                 theme.info(),
             ],
-            theme.panel(),
+            bg,
         ));
         if let Some(error) = record.error.as_deref().filter(|error| !error.is_empty()) {
             body.push(Line::from(vec![
@@ -369,7 +430,172 @@ fn detail_body(
         "TTFT/Stream/E2E are client-observed and include network behavior.",
         Style::default().fg(theme.muted()),
     )));
+    (body, selected_line)
+}
+
+/// Breadcrumb leaf for one attempt's stage page: "3rd turn" or, for a
+/// retry, "3rd turn · 2nd attempt".
+fn attempt_page_label(record: &RequestUsageRecord) -> String {
+    if record.key.attempt > 1 {
+        format!(
+            "{} turn · {} attempt",
+            ordinal(record.key.turn as u64),
+            ordinal(record.key.attempt as u64)
+        )
+    } else {
+        format!("{} turn", ordinal(record.key.turn as u64))
+    }
+}
+
+/// Per-attempt stage breakdown: the third drill-down level
+/// (`Performance › x round › x turn`). Every row is a client-observed
+/// monotonic offset from request dispatch unless marked provider-native;
+/// absent anchors render as `–`, never a fabricated zero.
+fn turn_detail_body(record: &RequestUsageRecord, theme: &Theme) -> Vec<Line<'static>> {
+    let performance = record.performance;
+    let mut body = Vec::new();
+    body.push(kv(
+        "State",
+        attempt_state(record, theme).0,
+        theme,
+    ));
+    body.push(kv(
+        "Provider / model",
+        &format!("{} · {}", record.provider, record.model),
+        theme,
+    ));
+    body.push(kv("Quality", quality_label(record), theme));
+
+    body.push(Line::from(""));
+    body.push(section_heading("First token", theme));
+    body.push(kv(
+        "TTFT (first output)",
+        &fmt_optional_duration(performance.and_then(|p| p.ttft_us)),
+        theme,
+    ));
+    body.push(kv(
+        "First visible text",
+        &fmt_optional_duration(performance.and_then(|p| p.visible_ttft_us)),
+        theme,
+    ));
+    body.push(kv(
+        "Stream ready (headers)",
+        &fmt_optional_duration(performance.and_then(|p| p.stream_ready_us)),
+        theme,
+    ));
+    body.push(kv(
+        "Headers → first output",
+        &fmt_optional_duration(first_event_after_headers_us(performance)),
+        theme,
+    ));
+
+    body.push(Line::from(""));
+    body.push(section_heading("Request stages", theme));
+    body.push(kv(
+        "Dispatch → headers",
+        &fmt_optional_duration(performance.and_then(|p| p.stream_ready_us)),
+        theme,
+    ));
+    body.push(kv(
+        "Headers → first output",
+        &fmt_optional_duration(first_event_after_headers_us(performance)),
+        theme,
+    ));
+    body.push(kv(
+        "Streaming (first → last)",
+        &fmt_optional_duration(performance.and_then(|p| p.stream_us)),
+        theme,
+    ));
+    body.push(kv(
+        "Tail (last → stream end)",
+        &fmt_optional_duration(performance.and_then(|p| p.tail_us)),
+        theme,
+    ));
+    body.push(kv(
+        "E2E (dispatch → validated)",
+        &fmt_optional_duration(performance.and_then(|p| p.e2e_us)),
+        theme,
+    ));
+
+    if let Some(p) = performance
+        && (p.provider_queue_us.is_some()
+            || p.provider_prefill_us.is_some()
+            || p.provider_decode_us.is_some())
+    {
+        body.push(Line::from(""));
+        body.push(section_heading("Provider-native", theme));
+        body.push(kv(
+            "Queue (reported)",
+            &fmt_optional_duration(p.provider_queue_us),
+            theme,
+        ));
+        body.push(kv(
+            "Prefill (reported)",
+            &fmt_optional_duration(p.provider_prefill_us),
+            theme,
+        ));
+        body.push(kv(
+            "Decode (reported)",
+            &fmt_optional_duration(p.provider_decode_us),
+            theme,
+        ));
+    }
+
+    body.push(Line::from(""));
+    body.push(section_heading("Output", theme));
+    body.push(kv(
+        "Stream rate",
+        &fmt_rate(performance.and_then(|p| p.observed_stream_tps())),
+        theme,
+    ));
+    body.push(kv(
+        "E2E output rate",
+        &fmt_rate(
+            performance.and_then(|p| p.e2e_output_tps(record.completion_tokens)),
+        ),
+        theme,
+    ));
+    body.push(kv(
+        "Output events",
+        &performance
+            .map(|p| p.output_events.to_string())
+            .unwrap_or_else(|| "–".to_string()),
+        theme,
+    ));
+    body.push(kv(
+        "Streamed tokens",
+        &performance
+            .map(|p| p.streamed_output_tokens.to_string())
+            .unwrap_or_else(|| "–".to_string()),
+        theme,
+    ));
+
+    if let Some(error) = record.error.as_deref().filter(|error| !error.is_empty()) {
+        body.push(Line::from(""));
+        body.push(section_heading("Error", theme));
+        body.push(Line::from(Span::styled(
+            error.to_string(),
+            Style::default().fg(theme.err()),
+        )));
+    }
+
+    body.push(Line::from(""));
+    body.push(Line::from(Span::styled(
+        "Client-observed monotonic timing from request dispatch; local request assembly is excluded.",
+        Style::default().fg(theme.muted()),
+    )));
     body
+}
+
+/// Headers-to-first-output-event latency: the post-response-headers segment
+/// of TTFT (server decode lead + transport). `None` when either anchor is
+/// absent — absence is never a fabricated zero.
+fn first_event_after_headers_us(performance: Option<RequestPerformance>) -> Option<u64> {
+    let p = performance?;
+    match (p.ttft_us, p.stream_ready_us) {
+        (Some(ttft), Some(ready)) => Some(ttft.saturating_sub(ready)),
+        _ => None,
+    }
 }
 
 fn performance_rounds(report: &TokenSourceReport) -> Vec<PerformanceRound<'_>> {
@@ -759,5 +985,76 @@ mod tests {
         assert_eq!(median(&[3, 9]), Some(6));
         assert_eq!(median(&[1, 2, 100]), Some(2));
         assert_eq!(median(&[1, 2, 4, 101]), Some(3));
+    }
+
+    #[test]
+    fn first_event_after_headers_splits_ttft_at_the_header_anchor() {
+        // Both anchors present: the post-headers segment is the difference.
+        let performance = RequestPerformance {
+            stream_ready_us: Some(300_000),
+            ttft_us: Some(1_800_000),
+            ..Default::default()
+        };
+        assert_eq!(
+            first_event_after_headers_us(Some(performance)),
+            Some(1_500_000)
+        );
+        // Either anchor absent: no fabricated split.
+        assert_eq!(
+            first_event_after_headers_us(Some(RequestPerformance {
+                ttft_us: Some(1_800_000),
+                ..Default::default()
+            })),
+            None
+        );
+        assert_eq!(first_event_after_headers_us(None), None);
+    }
+
+    #[test]
+    fn attempt_helpers_index_display_order_newest_first() {
+        let mut first = record(1, 1, 500_000, 1_000_000);
+        first.key.attempt = 1;
+        let mut retry = first.clone();
+        retry.key.attempt = 2;
+        let second = record(1, 2, 900_000, 1_000_000);
+        let report = TokenSourceReport {
+            rows: vec![muta_contracts::TokenSourceRow {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet".to_string(),
+                totals: muta_contracts::TokenSourceTotals::default(),
+                turns: Vec::new(),
+                requests: vec![first, retry, second],
+            }],
+            ..Default::default()
+        };
+        assert_eq!(performance_report_attempt_count(&report, 0), 3);
+        // Display order is newest first: row 0 is turn 2, row 1 is the retry.
+        assert_eq!(performance_report_attempt_key(&report, 0, 0), Some((2, 1)));
+        assert_eq!(performance_report_attempt_key(&report, 0, 1), Some((1, 2)));
+        assert_eq!(performance_report_attempt_key(&report, 0, 2), Some((1, 1)));
+        assert_eq!(performance_report_attempt_key(&report, 0, 3), None);
+        assert_eq!(performance_report_attempt_key(&report, 1, 0), None);
+    }
+
+    #[test]
+    fn turn_detail_body_renders_stage_breakdown() {
+        let mut sample = record(1, 2, 1_800_000, 1_000_000);
+        sample.provider = "anthropic".to_string();
+        sample.model = "claude-sonnet".to_string();
+        sample.key.attempt = 1;
+        if let Some(performance) = sample.performance.as_mut() {
+            performance.stream_ready_us = Some(300_000);
+        }
+        let body = turn_detail_body(&sample, &crate::view::Theme::default());
+        let text = body
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect::<Vec<&str>>()
+            .join(" ");
+        assert!(text.contains("Headers → first output"));
+        assert!(text.contains("Dispatch → headers"));
+        // Provider-native section only renders when the upstream reports it.
+        assert!(!text.contains("Provider-native"));
+        assert!(text.contains("anthropic · claude-sonnet"));
     }
 }

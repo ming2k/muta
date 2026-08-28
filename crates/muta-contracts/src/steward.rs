@@ -53,13 +53,6 @@ pub enum StewardOffice {
     /// exactly once per candidate under a strict bare-token contract.
     #[default]
     StreamSentinel,
-    /// Reviews recent round transcripts for self-reinforcing trajectories
-    /// (same read, same failing test) that per-call guards cannot see, and
-    /// prescribes an escape nudge.
-    RoundSentinel,
-    /// Audits critical payloads (destructive commands, large rewrites)
-    /// before dispatch. Fail-open unless a concrete hazard is named.
-    SanityWarden,
     /// Distills session metadata — titles, summaries, compaction digests.
     /// Pure transformation: describes what happened, never judges how to
     /// proceed.
@@ -71,8 +64,6 @@ impl StewardOffice {
     pub fn title(self) -> &'static str {
         match self {
             Self::StreamSentinel => "Stream Sentinel",
-            Self::RoundSentinel => "Round Sentinel",
-            Self::SanityWarden => "Sanity Warden",
             Self::Chronicler => "Chronicler",
         }
     }
@@ -82,8 +73,6 @@ impl StewardOffice {
     pub fn id(self) -> &'static str {
         match self {
             Self::StreamSentinel => "stream_sentinel",
-            Self::RoundSentinel => "round_sentinel",
-            Self::SanityWarden => "sanity_warden",
             Self::Chronicler => "chronicler",
         }
     }
@@ -96,16 +85,6 @@ impl StewardOffice {
                 "You are the Stream Sentinel — you watch a live model stream \
                  and decide whether a flagged repetition is degenerate output \
                  or legitimate content such as tables, rules, or data."
-            }
-            Self::RoundSentinel => {
-                "You are the Round Sentinel — you review recent rounds and \
-                 judge whether the agent's tool-use trajectory is stuck in a \
-                 non-progressing loop, then prescribe one escape nudge."
-            }
-            Self::SanityWarden => {
-                "You are the Sanity Warden — you audit one critical payload \
-                 and decide whether it contains a concrete hazard worth \
-                 blocking; uncertainty always resolves to pass."
             }
             Self::Chronicler => {
                 "You are the Chronicler — you transform transcript material \
@@ -130,12 +109,11 @@ impl StewardOffice {
     /// new tasks inherit sensible economics.
     pub fn default_model_preference(self) -> StewardModelPreference {
         match self {
-            // Sentinels arbitrate live streams / active rounds: latency is
-            // part of correctness, but misjudgment is costlier than a slow
-            // title, so they get the standard fast tier.
-            Self::StreamSentinel | Self::RoundSentinel => StewardModelPreference::Flash,
-            Self::SanityWarden => StewardModelPreference::Flash,
-            // Titling and compaction tolerate latency entirely.
+            // The Stream Sentinel arbitrates live streams: latency is part
+            // of correctness, but misjudgment is costlier than a slow
+            // digest, so it gets the standard fast tier.
+            Self::StreamSentinel => StewardModelPreference::Flash,
+            // Digesting and compaction tolerate latency entirely.
             Self::Chronicler => StewardModelPreference::FlashLite,
         }
     }
@@ -306,168 +284,47 @@ impl StewardTask for StreamLoopReviewerTask {
     }
 }
 
-// ── 1. Semantic Loop Detection ──────────────────────────────────────────────
+// ── 1. Session Digest ──────────────────────────────────────────────────────
 
-/// Input for semantic loop and doom-loop analysis.
+/// The resume-time "working memory" projection of a session: a headline, the
+/// user's intent, and a running checklist of what has happened. Written by
+/// the Chronicler, read by the session picker's detail view so a resumed (or
+/// merely revisited) session can be understood at a glance.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionDigest {
+    /// Cleaned, concise title (3-7 words) — the picker row's headline.
+    pub title: String,
+    /// One or two sentences stating what the user wants out of this session.
+    pub intent: String,
+    /// Running checklist of what has been done and decided, oldest first.
+    /// Each entry is one terse factual line; the Chronicler merges older
+    /// entries instead of dropping them when the list grows past its cap.
+    pub history: Vec<String>,
+}
+
+/// Input for session digest generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SemanticLoopInput {
-    /// Recent tool call signatures and actions issued in this round.
-    pub recent_signatures: Vec<String>,
-    /// Summary of recent assistant thoughts and observations.
-    pub recent_context: String,
-}
-
-/// Structured verdict returned by the Semantic Loop Sentinel.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SemanticLoopVerdict {
-    /// Whether the agent is confirmed to be in an unprogressing doom loop.
-    pub is_loop: bool,
-    /// Detected loop pattern (e.g. "repeated test failure with oscillating edits").
-    pub pattern: Option<String>,
-    /// Prescriptive, high-signal nudge to inject into the master's context to guide escape.
-    pub remedy_nudge: Option<String>,
-}
-
-/// Task definition for semantic loop detection.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SemanticLoopSentinelTask;
-
-impl StewardTask for SemanticLoopSentinelTask {
-    type Input = SemanticLoopInput;
-    type Output = SemanticLoopVerdict;
-
-    fn name(&self) -> &'static str {
-        "semantic_loop_sentinel"
-    }
-
-    fn office(&self) -> Option<StewardOffice> {
-        Some(StewardOffice::RoundSentinel)
-    }
-
-    fn system_prompt(&self) -> &'static str {
-        "You are the Harness Loop Sentinel. Your job is to analyze recent tool calls and context to determine if an AI agent is stuck in an unprogressing doom loop (repeating failing actions, oscillating edits, or thrashing without new information).\n\
-         Respond in strict JSON with schema:\n\
-         {\n\
-           \"is_loop\": boolean,\n\
-           \"pattern\": string | null,\n\
-           \"remedy_nudge\": string | null\n\
-         }\n\
-         If `is_loop` is true, `remedy_nudge` MUST provide a precise, constructive recommendation (1-2 sentences) explaining how the agent should pivot."
-    }
-
-    fn render_prompt(&self, input: &Self::Input) -> String {
-        let signatures = input.recent_signatures.join("\n- ");
-        format!(
-            "Analyze the following recent tool execution signatures and context for doom loops:\n\n\
-             Recent signatures:\n- {signatures}\n\n\
-             Recent context excerpt:\n{}\n\n\
-             Output your JSON verdict:",
-            input.recent_context
-        )
-    }
-
-    fn timeout_ms(&self) -> u64 {
-        1500
-    }
-}
-
-// ── 2. Sanity and Safety Check ──────────────────────────────────────────────
-
-/// Input for sanity verification of critical payloads or actions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SanityCheckInput {
-    /// Action or payload description to evaluate.
-    pub action_type: String,
-    /// Raw payload or command to verify.
-    pub payload: String,
-    /// Contextual justification or goal.
-    pub justification: String,
-}
-
-/// Risk classification for sanity checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RiskLevel {
-    Safe,
-    Suspicious,
-    Dangerous,
-}
-
-/// Structured verdict returned by the Sanity Verifier.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SanityCheckVerdict {
-    /// Whether the action is judged sane and safe to proceed.
-    pub is_sane: bool,
-    /// Risk level.
-    pub risk_level: RiskLevel,
-    /// Explanation or critique.
-    pub critique: String,
-}
-
-/// Task definition for payload sanity checks.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SanityVerifierTask;
-
-impl StewardTask for SanityVerifierTask {
-    type Input = SanityCheckInput;
-    type Output = SanityCheckVerdict;
-
-    fn name(&self) -> &'static str {
-        "sanity_verifier"
-    }
-
-    fn office(&self) -> Option<StewardOffice> {
-        Some(StewardOffice::SanityWarden)
-    }
-
-    fn system_prompt(&self) -> &'static str {
-        "You are the Harness Sanity Verifier. Your job is to verify whether an action or string proposed by the agent is rational, safe, and aligned with its stated justification.\n\
-         Respond in strict JSON with schema:\n\
-         {\n\
-           \"is_sane\": boolean,\n\
-           \"risk_level\": \"safe\" | \"suspicious\" | \"dangerous\",\n\
-           \"critique\": string\n\
-         }"
-    }
-
-    fn render_prompt(&self, input: &Self::Input) -> String {
-        format!(
-            "Evaluate action: {}\nJustification: {}\nPayload:\n```\n{}\n```\n\nOutput JSON verdict:",
-            input.action_type, input.justification, input.payload
-        )
-    }
-
-    fn timeout_ms(&self) -> u64 {
-        1500
-    }
-}
-
-// ── 3. Session Titling ──────────────────────────────────────────────────────
-
-/// Input for session titling.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionTitlerInput {
+pub struct SessionDigestInput {
     /// Condensed excerpt of the conversation.
     pub excerpt: String,
+    /// The previous digest serialized as JSON, for incremental revision;
+    /// `None` on first generation. The Chronicler revises title/intent and
+    /// extends the history checklist rather than starting from scratch.
+    pub previous: Option<String>,
 }
 
-/// Structured output for session titling.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionTitleOutput {
-    /// Cleaned, concise title (3 to 7 words).
-    pub title: String,
-}
-
-/// Task definition for session titling.
+/// Task definition: distill a conversation excerpt into a
+/// [`SessionDigest`].
 #[derive(Debug, Clone, Copy, Default)]
-pub struct SessionTitlerTask;
+pub struct SessionDigestTask;
 
-impl StewardTask for SessionTitlerTask {
-    type Input = SessionTitlerInput;
-    type Output = SessionTitleOutput;
+impl StewardTask for SessionDigestTask {
+    type Input = SessionDigestInput;
+    type Output = SessionDigest;
 
     fn name(&self) -> &'static str {
-        "session_titler"
+        "session_digest"
     }
 
     fn office(&self) -> Option<StewardOffice> {
@@ -475,20 +332,31 @@ impl StewardTask for SessionTitlerTask {
     }
 
     fn system_prompt(&self) -> &'static str {
-        "You are a session-titling steward. You are shown an excerpt of a conversation and asked for a short title that captures what the session is about.\n\
-         Respond in strict JSON with schema: {\"title\": \"<3-7 words title>\"}.\n\
-         Name the concrete subject (a feature, file, bug, or task). Write in the same language as the conversation."
+        "You are a session-digest steward. You maintain a session's working-memory digest so a returning user can reorient at a glance.\n\
+         Respond in strict JSON with schema:\n\
+         {\n\
+           \"title\": \"<3-7 word title naming the concrete subject>\",\n\
+           \"intent\": \"<1-2 sentences: what the user wants from this session>\",\n\
+           \"history\": [\"<one terse factual line per completed step or decision>\"]\n\
+         }\n\
+         Rules: write in the same language as the conversation. Keep `history` at most 12 entries, oldest first; when it would exceed 12, merge the oldest related entries into one line — never silently drop work. Each history line states what was done or decided (e.g. \"Fixed login redirect loop in auth.rs\"), never a next action. If a previous digest is supplied, revise it: keep its structure, update title/intent only if the session's focus actually shifted, and append or merge new history."
     }
 
     fn render_prompt(&self, input: &Self::Input) -> String {
-        format!(
-            "Generate a title for this conversation:\n\n{}\n\nOutput JSON:",
-            input.excerpt
-        )
+        match &input.previous {
+            Some(previous) => format!(
+                "Previous digest (revise it):\n{previous}\n\nConversation excerpt:\n\n{}\n\nOutput JSON:",
+                input.excerpt
+            ),
+            None => format!(
+                "Generate a digest for this conversation:\n\n{}\n\nOutput JSON:",
+                input.excerpt
+            ),
+        }
     }
 
     fn timeout_ms(&self) -> u64 {
-        2500
+        2_500
     }
 }
 
@@ -501,15 +369,9 @@ mod tests {
         let stream_reviewer = StreamLoopReviewerTask;
         assert_eq!(stream_reviewer.name(), "stream_loop_reviewer");
 
-        let sentinel = SemanticLoopSentinelTask;
-        assert_eq!(sentinel.name(), "semantic_loop_sentinel");
-        assert!(sentinel.timeout_ms() > 0);
-
-        let verifier = SanityVerifierTask;
-        assert_eq!(verifier.name(), "sanity_verifier");
-
-        let titler = SessionTitlerTask;
-        assert_eq!(titler.name(), "session_titler");
+        let digester = SessionDigestTask;
+        assert_eq!(digester.name(), "session_digest");
+        assert!(digester.timeout_ms() > 0);
     }
 
     #[test]
@@ -518,15 +380,7 @@ mod tests {
             StreamLoopReviewerTask.office(),
             Some(StewardOffice::StreamSentinel)
         );
-        assert_eq!(
-            SemanticLoopSentinelTask.office(),
-            Some(StewardOffice::RoundSentinel)
-        );
-        assert_eq!(
-            SanityVerifierTask.office(),
-            Some(StewardOffice::SanityWarden)
-        );
-        assert_eq!(SessionTitlerTask.office(), Some(StewardOffice::Chronicler));
+        assert_eq!(SessionDigestTask.office(), Some(StewardOffice::Chronicler));
         // Custom tasks default to unassigned.
         #[derive(Default)]
         struct Custom;
@@ -548,12 +402,7 @@ mod tests {
 
     #[test]
     fn office_identities_embed_charter_and_collective() {
-        for office in [
-            StewardOffice::StreamSentinel,
-            StewardOffice::RoundSentinel,
-            StewardOffice::SanityWarden,
-            StewardOffice::Chronicler,
-        ] {
+        for office in [StewardOffice::StreamSentinel, StewardOffice::Chronicler] {
             let identity = office.identity();
             assert!(identity.name.contains(office.title()));
             assert!(
@@ -570,15 +419,15 @@ mod tests {
     }
 
     #[test]
-    fn verdicts_round_trip_json() {
-        let verdict = SemanticLoopVerdict {
-            is_loop: true,
-            pattern: Some("oscillating edits in test.rs".to_string()),
-            remedy_nudge: Some("Read the error message carefully before editing".to_string()),
+    fn digests_round_trip_json() {
+        let digest = SessionDigest {
+            title: "Fix auth redirect loop".to_string(),
+            intent: "User wants login to stop bouncing back to /login.".to_string(),
+            history: vec!["Reproduced loop on mobile Safari".to_string()],
         };
-        let s = serde_json::to_string(&verdict).unwrap();
-        let back: SemanticLoopVerdict = serde_json::from_str(&s).unwrap();
-        assert_eq!(verdict, back);
+        let s = serde_json::to_string(&digest).unwrap();
+        let back: SessionDigest = serde_json::from_str(&s).unwrap();
+        assert_eq!(digest, back);
     }
 
     #[test]

@@ -117,6 +117,81 @@ fn composer_image_paste_accepted_when_model_has_vision() {
     assert!(app.copy_toast_until.is_some());
 }
 
+#[test]
+fn composer_text_paste_of_image_file_path_stages_attachment() {
+    // Ctrl+Shift+V (terminal bracketed paste) can only deliver text, so a
+    // copied image file arrives as its path. The composer upgrades an
+    // all-file-references payload containing an image to the same
+    // attachment pipeline Ctrl+V uses — in both the bare-path and
+    // `file://` URI forms a terminal's text flavor produces.
+    let (mut app, tmp) = app_in_tempdir(&[], &[]);
+    app.set_active_modal_for_test(Modal::None);
+    app.current_model = "gpt-4o".to_string(); // vision: true
+    app.input = String::new();
+    app.cursor_position = 0;
+    let png = tmp.path().join("shot.png");
+    std::fs::write(&png, [0x89, 0x50, 0x4e, 0x47]).expect("write png");
+
+    clipboard_ops::apply_clipboard_paste(
+        &mut app,
+        crate::clipboard::ClipboardRead::Text(png.to_str().unwrap().to_string()),
+    );
+
+    assert_eq!(
+        app.pending_images.len(),
+        1,
+        "bare image path paste should stage an attachment"
+    );
+    assert!(
+        app.input.contains("Image #1"),
+        "image chip should be inserted, got: {}",
+        app.input
+    );
+
+    // `file://` URI form, with the trailing newline uri-lists carry.
+    app.input.clear();
+    app.cursor_position = 0;
+    clipboard_ops::apply_clipboard_paste(
+        &mut app,
+        crate::clipboard::ClipboardRead::Text(format!("file://{}\n", png.display())),
+    );
+    assert_eq!(
+        app.pending_images.len(),
+        2,
+        "file:// URI paste should stage another attachment"
+    );
+    assert!(app.input.contains("Image #2"), "got: {}", app.input);
+}
+
+#[test]
+fn composer_text_paste_of_non_image_or_prose_stays_verbatim() {
+    // A path to an existing non-image file is a legitimate text reference,
+    // and prose around a path is just text: neither may be hijacked into
+    // the attachment pipeline.
+    let (mut app, tmp) = app_in_tempdir(&[], &[]);
+    app.set_active_modal_for_test(Modal::None);
+    app.input = String::new();
+    app.cursor_position = 0;
+    let source = tmp.path().join("main.rs");
+    std::fs::write(&source, b"fn main() {}").expect("write file");
+
+    clipboard_ops::apply_clipboard_paste(
+        &mut app,
+        crate::clipboard::ClipboardRead::Text(source.to_str().unwrap().to_string()),
+    );
+
+    assert!(app.pending_images.is_empty(), "no image, no attachment");
+    assert_eq!(app.input, source.to_str().unwrap());
+
+    let prose = format!("look at {} please", source.display());
+    clipboard_ops::apply_clipboard_paste(
+        &mut app,
+        crate::clipboard::ClipboardRead::Text(prose.clone()),
+    );
+    assert!(app.pending_images.is_empty(), "prose stays prose");
+    assert!(app.input.contains(&prose), "got: {}", app.input);
+}
+
 /// The view reset that follows a focus change (runner zoom enter/exit) must
 /// drop a pending settle: the staged frame it was computed for belongs to a
 /// transcript slice that is no longer displayed.

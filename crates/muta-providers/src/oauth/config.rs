@@ -11,6 +11,16 @@
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
+use muta_contracts::LoginMethod;
+
+const fn enabled() -> bool {
+    true
+}
+
+const fn browser_login_method() -> LoginMethod {
+    LoginMethod::Browser
+}
+
 /// Which device-authorization flow a provider speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DeviceFlow {
@@ -102,6 +112,16 @@ pub struct OAuthConfig {
     pub extra_headers: Vec<(Cow<'static, str>, Cow<'static, str>)>,
     /// Custom User-Agent header (e.g. "antigravity/1.23.2 windows/amd64").
     pub user_agent: Option<Cow<'static, str>>,
+    /// Whether this client registration accepts a localhost browser callback.
+    /// Some OAuth applications expose an authorize endpoint but only register
+    /// a device flow (GitHub Copilot is the built-in example), so this must be
+    /// explicit rather than inferred from `authorize_url`.
+    #[serde(default = "enabled")]
+    pub browser_login: bool,
+    /// The login method frontends should select on ordinary activation.
+    /// Alternate supported methods remain available for headless/local use.
+    #[serde(default = "browser_login_method")]
+    pub default_login_method: LoginMethod,
     /// Loopback callback host to bind (e.g. "127.0.0.1" or "0.0.0.0").
     pub oauth_host: Cow<'static, str>,
     /// Preferred / default loopback port.
@@ -144,6 +164,25 @@ impl OAuthConfig {
         format!("http://{}:{}{}", self.redirect_host, port, self.oauth_path)
     }
 
+    /// Whether this client registration supports `method`.
+    pub fn supports_login_method(&self, method: LoginMethod) -> bool {
+        match method {
+            LoginMethod::Browser => self.browser_login,
+            LoginMethod::Device => self.device_flow != DeviceFlow::Disabled,
+        }
+    }
+
+    /// The configured default when supported, otherwise the first available
+    /// method. A malformed configuration with neither flow returns `None`.
+    pub fn effective_default_login_method(&self) -> Option<LoginMethod> {
+        if self.supports_login_method(self.default_login_method) {
+            return Some(self.default_login_method);
+        }
+        [LoginMethod::Browser, LoginMethod::Device]
+            .into_iter()
+            .find(|method| self.supports_login_method(*method))
+    }
+
     /// Whether this OAuth config speaks the Google Antigravity protocol.
     pub fn is_antigravity(&self) -> bool {
         self.provider_id == "google-antigravity"
@@ -152,9 +191,14 @@ impl OAuthConfig {
             || self.token_url.contains("oauth2.googleapis.com")
     }
 
-    /// Whether this OAuth config speaks the ChatGPT protocol.
+    /// Whether this OAuth config speaks the ChatGPT protocol. The token-URL
+    /// check is what actually identifies the issuer: reconnect flows rewrite
+    /// `provider_id` to the connection id, so the id check alone would silently
+    /// disable ChatGPT-specific behavior (account-id extraction) on those paths.
     pub fn is_chatgpt(&self) -> bool {
-        self.provider_id == "chatgpt" || self.token_url.contains("auth0.openai.com")
+        self.provider_id == "chatgpt"
+            || self.token_url.contains("auth.openai.com")
+            || self.token_url.contains("auth0.openai.com")
     }
 
     /// Whether this OAuth config speaks the GitHub Copilot protocol.
@@ -236,6 +280,8 @@ impl OAuthConfigBuilder {
                 extra_refresh_params: Vec::new(),
                 extra_headers: Vec::new(),
                 user_agent: None,
+                browser_login: true,
+                default_login_method: LoginMethod::Browser,
                 oauth_host: Cow::Borrowed("127.0.0.1"),
                 oauth_port: 0,
                 port_mode: PortMode::Dynamic,
@@ -330,6 +376,16 @@ impl OAuthConfigBuilder {
 
     pub fn user_agent(mut self, ua: impl Into<Cow<'static, str>>) -> Self {
         self.cfg.user_agent = Some(ua.into());
+        self
+    }
+
+    pub fn browser_login(mut self, enabled: bool) -> Self {
+        self.cfg.browser_login = enabled;
+        self
+    }
+
+    pub fn default_login_method(mut self, method: LoginMethod) -> Self {
+        self.cfg.default_login_method = method;
         self
     }
 
@@ -444,6 +500,8 @@ pub fn google_antigravity_preset() -> OAuthConfig {
         user_agent: Some(Cow::Borrowed(
             muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT,
         )),
+        browser_login: true,
+        default_login_method: LoginMethod::Browser,
         oauth_host: Cow::Borrowed("127.0.0.1"),
         oauth_port: 51121,
         port_mode: PortMode::PreferredOrDynamic(51121),
@@ -479,6 +537,8 @@ pub fn xai_preset() -> OAuthConfig {
         extra_refresh_params: Vec::new(),
         extra_headers: Vec::new(),
         user_agent: None,
+        browser_login: true,
+        default_login_method: LoginMethod::Device,
         oauth_host: Cow::Borrowed("127.0.0.1"),
         oauth_port: 56121,
         port_mode: PortMode::Fixed(56121),
@@ -523,6 +583,8 @@ pub fn chatgpt_preset() -> OAuthConfig {
         extra_refresh_params: Vec::new(),
         extra_headers: Vec::new(),
         user_agent: None,
+        browser_login: true,
+        default_login_method: LoginMethod::Browser,
         oauth_host: Cow::Borrowed("127.0.0.1"),
         oauth_port: 1455,
         port_mode: PortMode::Fixed(1455),
@@ -555,6 +617,8 @@ pub fn copilot_preset() -> OAuthConfig {
         extra_refresh_params: Vec::new(),
         extra_headers: Vec::new(),
         user_agent: None,
+        browser_login: false,
+        default_login_method: LoginMethod::Device,
         oauth_host: Cow::Borrowed("127.0.0.1"),
         oauth_port: 42195,
         port_mode: PortMode::Fixed(42195),
@@ -619,6 +683,25 @@ mod tests {
                 .any(|(k, v)| k == "codex_cli_simplified_flow" && v == "true"),
             "codex_cli_simplified_flow=true must be present"
         );
+    }
+
+    #[test]
+    fn built_in_login_methods_match_registered_flows() {
+        let chatgpt = chatgpt_preset();
+        assert_eq!(
+            chatgpt.effective_default_login_method(),
+            Some(LoginMethod::Browser)
+        );
+        assert!(chatgpt.supports_login_method(LoginMethod::Browser));
+        assert!(chatgpt.supports_login_method(LoginMethod::Device));
+
+        let copilot = copilot_preset();
+        assert_eq!(
+            copilot.effective_default_login_method(),
+            Some(LoginMethod::Device)
+        );
+        assert!(!copilot.supports_login_method(LoginMethod::Browser));
+        assert!(copilot.supports_login_method(LoginMethod::Device));
     }
 
     #[test]

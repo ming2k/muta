@@ -656,7 +656,10 @@ async fn fable5_always_on_thinking_ignores_off_override() {
 // path per protocol, asserting the exact headers/auth a chat request would send
 // and that the returned ids are sorted + de-duplicated.
 
-use muta_providers::{DiscoveryProtocol, ModelDiscoveryRequest, ModelListError, list_models};
+use muta_providers::{
+    DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest, ModelDiscoveryUpdate,
+    ModelListError, discover_models, list_models,
+};
 
 #[tokio::test]
 async fn openai_list_models_sends_bearer_and_returns_sorted_unique_ids() {
@@ -719,6 +722,100 @@ async fn openai_list_models_keyless_relay_sends_no_bearer_header() {
     let models = list_models(req).await.expect("keyless discovery succeeds");
     let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
     assert_eq!(ids, vec!["relay-only"]);
+}
+
+#[tokio::test]
+async fn codex_list_models_sends_subscription_headers_and_preserves_priority() {
+    let mut server = Server::new_async().await;
+    let extra_headers = [("originator", "muta"), ("ChatGPT-Account-Id", "acct-test")];
+    let _mock = server
+        .mock("GET", "/backend-api/codex/models")
+        .match_query(Matcher::UrlEncoded(
+            "client_version".to_string(),
+            "0.7.0".to_string(),
+        ))
+        .match_header("authorization", "Bearer chatgpt-access")
+        .match_header("originator", "muta")
+        .match_header("chatgpt-account-id", "acct-test")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_header("etag", "\"catalog-v2\"")
+        .with_body(
+            r#"{"models":[
+                {"slug":"second","priority":2,"visibility":"list","supported_in_api":true,"supported_reasoning_levels":[]},
+                {"slug":"first","priority":1,"visibility":"list","supported_in_api":true,"supported_reasoning_levels":[{"effort":"high"}]}
+            ]}"#,
+        )
+        .create_async()
+        .await;
+
+    let key = SecretString::from("chatgpt-access");
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::Codex,
+        base_url: &format!("{}/backend-api/codex/responses", server.url()),
+        api_key: &key,
+        user_agent: None,
+        extra_headers: &extra_headers,
+    };
+    let update = discover_models(
+        req,
+        ModelDiscoveryOptions {
+            etag: None,
+            client_version: Some("0.7.0"),
+        },
+    )
+    .await
+    .expect("Codex discovery succeeds");
+    let ModelDiscoveryUpdate::Modified { models, etag } = update else {
+        panic!("expected a modified catalog");
+    };
+    assert_eq!(etag.as_deref(), Some("\"catalog-v2\""));
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "second"]
+    );
+}
+
+#[tokio::test]
+async fn codex_list_models_supports_etag_revalidation() {
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/backend-api/codex/models")
+        .match_query(Matcher::UrlEncoded(
+            "client_version".to_string(),
+            "0.7.0".to_string(),
+        ))
+        .match_header("if-none-match", "\"catalog-v2\"")
+        .with_status(304)
+        .create_async()
+        .await;
+
+    let key = SecretString::from("chatgpt-access");
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::Codex,
+        base_url: &format!("{}/backend-api/codex/responses", server.url()),
+        api_key: &key,
+        user_agent: None,
+        extra_headers: &[],
+    };
+    let update = discover_models(
+        req,
+        ModelDiscoveryOptions {
+            etag: Some("\"catalog-v2\""),
+            client_version: Some("0.7.0"),
+        },
+    )
+    .await
+    .expect("Codex catalog revalidation succeeds");
+    assert_eq!(
+        update,
+        ModelDiscoveryUpdate::NotModified {
+            etag: Some("\"catalog-v2\"".to_string())
+        }
+    );
 }
 
 #[tokio::test]

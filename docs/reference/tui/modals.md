@@ -231,23 +231,25 @@ Provider-instance management surface. Rows are the configured provider
 instances, ranked last-used → name; each row shows the instance name and its
 provider *type* (`· OpenAI Platform`). This surface only *manages* instances — it has
 no activate concept, so switching the active provider is done from the Models
-picker. When no instance exists, an empty-state hint prompts the user to press
-`a`.
+picker. Adding a curated preset and adding a custom endpoint are separate,
+same-level actions.
 
 | Key | Effect |
 |-----|--------|
 | printable | Append to the filter (composer is the input source) |
 | `↑` / `↓` | Move selection |
 | `/` | Enter the search sub-layer (`Esc` clears it) |
-| `a` | Add a connection — open the preset chooser |
-| `e` | Edit — API key for built-ins, full meta editor for custom providers |
-| `D` | Delete a custom provider (confirm overlay) |
+| `a` | Add a preset connection |
+| `c` | Add a custom connection |
+| `e` | Edit — API key for presets, full editor for custom connections |
+| `D` | Delete a custom connection (confirm overlay) |
 | `Esc` | Close |
 
-### Add connection (preset chooser)
+### Add preset connection
 
 The secondary page `a` opens, rendered inside the same panel with a
-`Connections › Add connection` breadcrumb. One row per connection preset,
+`Connections › Add preset connection` breadcrumb. One row per curated
+connection preset,
 **sorted alphabetically by title**. An unfocused row shows its title alone; the
 focused row additionally reveals the preset's one-sentence description,
 wrapped under the title in the panel background, and is marked by a full-width
@@ -261,13 +263,12 @@ by the preset.
 
 ```text
 ╭──────────────────────────────────────────────────────────────────╮
-│ Connections › Add connection                                      │
+│ Connections › Add preset connection                               │
 │                                                                   │
 │  Anthropic                                                        │
 │    Anthropic's official API for flagship Claude models with       │
 │    advanced reasoning; sign in with an Anthropic API key.         │
-│  ChatGPT                                                          │
-│  Custom Provider                                                  │
+│  ChatGPT subscription                                             │
 │  Antigravity OAuth                                                │
 │  …                                                                │
 │                                                                   │
@@ -278,8 +279,27 @@ by the preset.
 | Key | Effect |
 |-----|--------|
 | `↑` / `↓` | Move selection (wraps) |
-| `Enter` | Select — OAuth presets start the browser flow, token presets open the editor |
+| `Enter` | Select — OAuth presets start their default login flow, token presets open the editor |
+| `b` | Start browser PKCE login explicitly (OAuth presets only) |
+| `d` | Start device-code login explicitly (OAuth presets only) |
 | `Esc` | Back to the Connections list |
+
+OAuth presets pick their default method from the client registration:
+ChatGPT subscription and Google Antigravity open the browser PKCE flow on
+`Enter` (the full `auth.openai.com/oauth/authorize` URL with loopback
+callback, opened automatically), while xAI and GitHub Copilot default to the
+device-code flow. `b` / `d` override the choice for the highlighted preset —
+`d` is the headless/SSH path for ChatGPT; a registration without a browser
+callback (Copilot) reports that browser login is unavailable instead of
+starting a flow that cannot complete.
+
+### Add custom connection
+
+The `c` branch opens the connection editor directly with a
+`Connections › Add custom connection` breadcrumb. It accepts Name, Base URL,
+Token, and Model. The resulting connection has no `preset_id`; its endpoint
+and model remain user-owned rather than being reconciled against a curated
+preset.
 
 ## Model editor
 

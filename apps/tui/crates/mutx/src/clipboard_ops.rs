@@ -117,6 +117,21 @@ fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
             apply_composer_files_paste(app, paths);
         }
         ClipboardRead::Text(text) => {
+            // A terminal paste (Ctrl+Shift+V — the terminal's own paste,
+            // delivered as bracketed paste) is a text-only channel: an
+            // image copied in a file manager arrives as the clipboard's
+            // text flavor (the `file://` URI or bare path) while the
+            // Ctrl+V clipboard read stages the image itself. Upgrade
+            // payloads that are entirely references to existing local
+            // files — at least one a supported image — to the same
+            // attachment pipeline so both paste keys agree. Prose and
+            // non-image paths stay verbatim below.
+            if let Some(paths) = clipboard::paste_text_as_file_paths(&text)
+                && paths.iter().any(|path| image_mime_for_path(path).is_some())
+            {
+                apply_composer_files_paste(app, paths);
+                return;
+            }
             // Large pastes (multi-line or long enough to balloon the input
             // box) are staged behind a `[Pasted text #N +M lines (size)]`
             // chip instead of being inlined verbatim. Short snippets keep
@@ -222,19 +237,25 @@ fn apply_composer_files_paste(app: &mut App, paths: Vec<std::path::PathBuf>) {
     app.copy_toast_until = Some(std::time::Instant::now() + Duration::from_millis(2000));
 }
 
-/// Read a pasted file's bytes if it is a supported image, keyed by extension
-/// (`ImagePart.mime` drives the provider payload; clipboard pastes are always
-/// PNG but file copies can be any raster format the workspace enables).
+/// Extension→MIME map for paste-attachable raster images. Shared by the
+/// file-reference paste and the text-payload sniff so both accept the same
+/// format set (`ImagePart.mime` drives the provider payload; clipboard
+/// pastes are always PNG but file copies can be any raster format).
+fn image_mime_for_path(path: &std::path::Path) -> Option<&'static str> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Read a pasted file's bytes if it is a supported image, keyed by extension.
 fn read_image_file(path: &std::path::Path) -> Option<(Vec<u8>, String)> {
-    let mime = match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        _ => return None,
-    };
+    let mime = image_mime_for_path(path)?.to_string();
     let data = std::fs::read(path).ok()?;
-    (!data.is_empty()).then(|| (data, mime.to_string()))
+    (!data.is_empty()).then_some((data, mime))
 }
 
 /// Question-modal "Other" field paste. Unlike the readline modals, this field

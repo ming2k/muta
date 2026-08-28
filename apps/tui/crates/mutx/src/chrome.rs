@@ -533,9 +533,12 @@ fn truncate_for_bar(s: &str, max: usize) -> String {
 /// Each row is `command  description` laid out in two columns separated by
 /// plain padding — no `·` ornament; the primary/secondary relationship is
 /// carried by weight and brightness alone (command bright + bold,
-/// description dim). The selected row is highlighted as one solid band
-/// across the **full popup width**, label column, padding, and trailing fill
-/// included, so the highlight never fragments into per-segment blocks.
+/// description dim). Alias rows render as `alias ↝ /canonical` with the
+/// mapping in the dim tier: the difference is visible in the candidate
+/// list, and accepting commits the canonical spelling. The selected row is
+/// highlighted as one solid band across the **full popup width**, label
+/// column, padding, and trailing fill included, so the highlight never
+/// fragments into per-segment blocks.
 pub fn draw_completion_menu(
     frame: &mut Frame,
     _layout_map: &mut LayoutMap,
@@ -575,6 +578,10 @@ pub fn draw_completion_menu(
             crate::completion::CompletionItemKind::IntentSuggestion { .. } => {
                 c.label.width() + 2 // "➜ " prefix
             }
+            // Alias rows append " ↝ /target" in the muted tier.
+            _ if c.alias_of.is_some() => {
+                c.label.width() + 3 + c.alias_of.as_deref().map_or(0, str::width)
+            }
             _ => c.label.width(),
         })
         .max()
@@ -610,6 +617,12 @@ pub fn draw_completion_menu(
             let is_selected = Some(global_idx) == selected_idx;
             let body_bg = theme.body();
             let row_bg = if is_selected { theme.brand() } else { body_bg };
+            let is_alias = c.alias_of.is_some();
+            // Alias rows are a visibly secondary tier: the alias keeps the
+            // row's primary weight only while selected; at rest it drops to
+            // normal weight and carries its canonical target after `↝`, so
+            // the difference from canonical rows (and what accepting will
+            // submit) is readable straight from the candidate list.
             let cmd_style = if is_selected {
                 Style::default()
                     .bg(row_bg)
@@ -623,6 +636,8 @@ pub fn draw_completion_menu(
                     .bg(row_bg)
                     .fg(theme.info())
                     .add_modifier(Modifier::BOLD)
+            } else if is_alias {
+                Style::default().bg(row_bg).fg(theme.fg())
             } else {
                 Style::default()
                     .bg(row_bg)
@@ -630,20 +645,36 @@ pub fn draw_completion_menu(
                     .add_modifier(Modifier::BOLD)
             };
 
-            let label_text = match &c.kind {
+            let (primary, secondary) = match &c.kind {
                 crate::completion::CompletionItemKind::IntentSuggestion { .. } => {
-                    format!("➜ {}", c.label)
+                    (format!("➜ {}", c.label), String::new())
                 }
-                // Alias candidates keep their own name — they are submitted
-                // verbatim; the right-hand description explains the target.
-                _ if c.description.starts_with("(alias of ") => format!("{} ↝", c.label),
-                _ => c.label.clone(),
+                _ if is_alias => (
+                    c.label.clone(),
+                    format!(" ↝ {}", c.alias_of.as_deref().unwrap_or_default()),
+                ),
+                _ => (c.label.clone(), String::new()),
+            };
+            let secondary_style = if is_selected {
+                Style::default().bg(row_bg).fg(contrast_fg(theme.brand()))
+            } else {
+                Style::default().bg(row_bg).fg(theme.muted())
             };
 
-            let spans = vec![Span::styled(
-                format!("{:<width$}", label_text, width = menu_w),
-                cmd_style,
-            )];
+            // Pad to the full popup width so the selected-row highlight
+            // stays one solid band across label, mapping, and trailing fill.
+            let used = primary.width() + secondary.width();
+            let pad = menu_w.saturating_sub(used);
+            let mut spans = vec![Span::styled(primary, cmd_style)];
+            if !secondary.is_empty() {
+                spans.push(Span::styled(secondary, secondary_style));
+            }
+            if pad > 0 {
+                spans.push(Span::styled(
+                    " ".repeat(pad),
+                    Style::default().bg(row_bg),
+                ));
+            }
             Line::from(spans)
         })
         .collect();
@@ -690,17 +721,16 @@ pub fn draw_completion_menu(
                         .add_modifier(Modifier::DIM),
                 ),
             ];
-            // The active completion's row description doubles as the alias
-            // annotation: `(alias of /settings) <target summary>`. Detect it
-            // once so the alias tier adds exactly one extra line over the
-            // target's own doc (which the body below already renders).
-            let row_note = selected_idx
-                .and_then(|idx| completions.get(idx))
-                .map(|c| c.description.as_str());
-            let alias_of = row_note.and_then(|note| note.strip_prefix("(alias of "))
-                .and_then(|rest| rest.split_once(')'))
-                .map(|(target, _)| target.trim().to_string());
-            if let Some(target) = alias_of {
+            // The alias tier reads the structured `alias_of` field (never
+            // description-sniffing): it adds exactly one extra line over the
+            // target's own doc, which the body below already renders.
+            let alias_row = selected_idx.and_then(|idx| completions.get(idx));
+            let alias_target = alias_row.and_then(|c| c.alias_of.clone());
+            if let Some(target) = alias_target {
+                let alias_label = alias_row
+                    .map(|c| c.label.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 header_spans.push(Span::styled(
                     "  (alias)",
                     Style::default()
@@ -712,7 +742,7 @@ pub fn draw_completion_menu(
                 insp_lines.push(Line::from(vec![
                     Span::styled(" ", Style::default().bg(doc_bg)),
                     Span::styled(
-                        format!("Submit `{}` → runs `{target}`", doc.name),
+                        format!("Accept `{alias_label}` → submits `{target}`"),
                         Style::default().bg(doc_bg).fg(theme.warn()),
                     ),
                 ]));
@@ -2384,6 +2414,7 @@ mod tests {
                 replace_start: 0,
                 replace_end: 2,
                 kind: crate::completion::CompletionItemKind::Slash,
+                alias_of: None,
                 doc: None,
             },
             crate::completion::Completion {
@@ -2393,6 +2424,7 @@ mod tests {
                 replace_start: 0,
                 replace_end: 2,
                 kind: crate::completion::CompletionItemKind::Slash,
+                alias_of: None,
                 doc: None,
             },
         ];
@@ -2496,6 +2528,7 @@ mod tests {
             replace_start: 0,
             replace_end: 1,
             kind: crate::completion::CompletionItemKind::Slash,
+            alias_of: None,
             doc: None,
         })
         .collect::<Vec<_>>();
@@ -2552,6 +2585,73 @@ mod tests {
     }
 
     #[test]
+    fn completion_menu_marks_alias_rows_with_canonical_target() {
+        // An alias candidate must be distinguishable straight from the list:
+        // the alias keeps the primary slot, the canonical command follows in
+        // the dim tier after `↝` — matching what accepting will submit.
+        let theme = Theme::default();
+        let completions = vec![
+            crate::completion::Completion {
+                label: "/delegate".to_string(),
+                description: "Toggle delegated mode".to_string(),
+                insert_text: "/delegate".to_string(),
+                replace_start: 0,
+                replace_end: 2,
+                kind: crate::completion::CompletionItemKind::Slash,
+                alias_of: None,
+                doc: None,
+            },
+            crate::completion::Completion {
+                label: "/yolo".to_string(),
+                description: "Toggle delegated mode".to_string(),
+                insert_text: "/delegate".to_string(),
+                replace_start: 0,
+                replace_end: 2,
+                kind: crate::completion::CompletionItemKind::Slash,
+                alias_of: Some("/delegate".to_string()),
+                doc: None,
+            },
+        ];
+        let mut terminal = mutx_engine::TestTerminal::new(80, 12);
+        terminal.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            draw_completion_menu(
+                f,
+                &mut layout_map,
+                &completions,
+                None,
+                Rect::new(0, 10, 80, 2),
+                2,
+                &theme,
+            );
+        });
+        let buf = terminal.buffer();
+        let row_text = |y: u16| -> String {
+            (0..buf.area().width)
+                .filter_map(|x| buf.get(x, y).map(|c| c.symbol().to_string()))
+                .collect()
+        };
+        let alias_row = row_text(9); // popup bottom row = second candidate
+        assert!(
+            alias_row.trim_start().starts_with("/yolo"),
+            "alias keeps the primary slot: {alias_row:?}"
+        );
+        assert!(
+            alias_row.contains("↝ /delegate"),
+            "alias row shows its canonical target: {alias_row:?}"
+        );
+        let canonical_row = row_text(8);
+        assert!(
+            canonical_row.trim_start().starts_with("/delegate"),
+            "canonical row is plain: {canonical_row:?}"
+        );
+        assert!(
+            !canonical_row.contains('↝'),
+            "canonical rows carry no alias mapping: {canonical_row:?}"
+        );
+    }
+
+    #[test]
     fn completion_menu_hover_doc_flyout_only_appears_when_entry_is_selected() {
         let theme = Theme::default();
         let doc = crate::completion::CommandDoc {
@@ -2576,6 +2676,7 @@ mod tests {
             replace_start: 0,
             replace_end: 2,
             kind: crate::completion::CompletionItemKind::Slash,
+            alias_of: None,
             doc: Some(doc),
         }];
 

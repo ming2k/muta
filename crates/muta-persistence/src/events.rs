@@ -76,6 +76,15 @@ pub enum SessionEvent {
     /// marks a user-set title (`/title <text>`) that AI generation must not
     /// overwrite; automatic and on-demand generation always set `manual = false`.
     TitleSet { title: Option<String>, manual: bool },
+    /// The Chronicler's session digest changed — the resume-time
+    /// working-memory projection (title/intent/history) plus the transcript
+    /// anchor (char count) it was generated at, which the refresh throttle
+    /// measures growth against. Snapshot semantics. `digest = None` clears
+    /// it.
+    DigestSet {
+        digest: Option<muta_contracts::SessionDigest>,
+        anchor: u64,
+    },
     /// The session-level disabled-tool mask changed (ADR-0048 Phase 2).
     /// Snapshot semantics: the full set is stored on every change. Mirrors
     /// `Agent::disabled_tools` so a user toggle survives restart.

@@ -1075,6 +1075,16 @@ pub async fn execute_round(
     // the transcript from round N while leaving the session counter at N-1.
     session.set_round_counter(admitted_round).await?;
 
+    // Session digest (ADR-0022 evolution): the first admitted user round
+    // starts Chronicler work immediately — the opening request alone names
+    // the session's title and intent — and later rounds refresh the digest
+    // once the transcript has grown past its stored anchor, so the picker's
+    // detail view stays a faithful working-memory projection. Hidden
+    // control rounds and `/retry` resumes never trigger it.
+    if !input.hidden && resumed_point.is_none() {
+        maybe_refresh_session_digest(agent.clone(), session.clone());
+    }
+
     // Install the mid-round save point (ADR-0048) so every ReAct-turn boundary
     // durably appends its new messages to the session log. This is the fix for
     // the resume-after-crash gap: without it, a round that ran side-effecting
@@ -1467,14 +1477,6 @@ pub async fn execute_round(
                 generation_ms: outcome.generation_ms,
             }),
         ));
-        // First-turn AI title (ADR-0022): after a successful round, a session
-        // with no title (and no manual lock) gets one generated from the
-        // transcript. Fire-and-forget — `generate_title` carries its own
-        // 45s timeout, never touches the round path, and a failure simply
-        // leaves the picker on the first-user-message fallback. This wiring
-        // existed in the ADR but had been lost: the picker never showed AI
-        // titles because nothing called the generator.
-        maybe_generate_title(agent.clone(), session.clone());
     }
     Ok(RoundCompletion::Completed)
 }
@@ -1483,18 +1485,66 @@ pub async fn execute_round(
 /// §Decision 1: only once, only when unlocked). Best-effort in every
 /// direction: no title slot, provider failure, or a persist error all just
 /// leave things as they were.
-fn maybe_generate_title(agent: Arc<Agent>, session: Arc<SessionStore>) {
-    tokio::spawn(async move {
-        let (existing, manual) = session.title().await;
-        if existing.is_some() || manual {
-            return; // already titled (or manually cleared+locked): ADR-0022
+/// Transcript growth (in chars) that must accumulate since the last digest
+/// before a later user round refreshes it. Small enough that a long
+/// session's digest stays representative between resume points; large
+/// enough that the Chronicler is not consulted on every message.
+const DIGEST_REFRESH_DELTA_CHARS: usize = 8_000;
+
+/// Pure refresh decision, split out so the throttle is unit-testable.
+/// A session with no digest always needs one; a digest with a missing
+/// anchor (legacy data) refreshes once to establish the watermark; an
+/// anchored digest refreshes only after [`DIGEST_REFRESH_DELTA_CHARS`] of
+/// new transcript.
+fn digest_refresh_needed(
+    digest: Option<&muta_contracts::SessionDigest>,
+    anchor: Option<u64>,
+    transcript_chars: usize,
+) -> bool {
+    match (digest, anchor) {
+        (None, _) => true,
+        (Some(_), None) => true,
+        (Some(_), Some(anchor)) => {
+            transcript_chars >= anchor.saturating_add(DIGEST_REFRESH_DELTA_CHARS as u64) as usize
         }
+    }
+}
+
+/// Fire-and-forget digest maintenance, spawned off the round path (the
+/// Chronicler carries its own 2.5s timeout and never blocks a round). Reads
+/// the session's digest + anchor, consults [`digest_refresh_needed`], and
+/// persists the revision plus the new anchor. A manual title lock only pins
+/// the *title*: the digest's intent/history still refresh. Any failure keeps
+/// the previous digest.
+fn maybe_refresh_session_digest(agent: Arc<Agent>, session: Arc<SessionStore>) {
+    tokio::spawn(async move {
+        let (digest, anchor) = session.digest().await;
         let transcript = session.full_transcript().await;
-        let Some(title) = agent.generate_title(&transcript).await else {
-            return; // provider unavailable/timeout: keep the fallback title
+        let transcript_chars = transcript
+            .iter()
+            .map(|message| message.content.chars().count())
+            .sum::<usize>();
+        if !digest_refresh_needed(digest.as_ref(), anchor, transcript_chars) {
+            return;
+        }
+        let Some(next) = agent.generate_digest(&transcript, digest.as_ref()).await else {
+            return; // provider unavailable/timeout: keep the previous digest
         };
-        if let Err(err) = session.set_title(Some(title), false).await {
-            tracing::warn!(error = %err, "could not persist generated session title");
+        if let Err(error) = session
+            .set_digest(Some(next.clone()), transcript_chars as u64)
+            .await
+        {
+            tracing::warn!(%error, "could not persist session digest");
+            return;
+        }
+        // The picker's title row mirrors the digest unless the user locked a
+        // manual title (ADR-0022's lock rule, applied to the title field
+        // only — the digest itself was already stored above).
+        let (_, manual) = session.title().await;
+        if !manual {
+            if let Err(error) = session.set_title(Some(next.title), false).await {
+                tracing::warn!(%error, "could not persist digest-derived session title");
+            }
         }
     });
 }
@@ -2220,20 +2270,28 @@ mod schedule_tests {
 }
 
 #[cfg(test)]
-mod title_tests {
+mod digest_tests {
     use super::*;
     use crate::AgentIdentity;
     use async_trait::async_trait;
-    use muta_contracts::{Message, ModelRequest, ProviderStreamEvent, Role};
+    use muta_contracts::{Message, ModelRequest, ProviderStreamEvent, Role, SessionDigest};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A provider that answers only the non-streaming `chat` (the title
-    /// runner's path) with a fixed title.
-    struct TitleProvider;
+    /// A provider that answers only the non-streaming `chat` (the Chronicler's
+    /// path) with a fixed digest JSON, counting consults so tests can assert
+    /// the refresh throttle.
+    struct DigestProvider {
+        consults: AtomicUsize,
+    }
 
     #[async_trait]
-    impl muta_contracts::Provider for TitleProvider {
+    impl muta_contracts::Provider for DigestProvider {
         async fn chat(&self, _request: ModelRequest) -> Result<Message, String> {
-            Ok(Message::new(Role::Assistant, "Fixing the build"))
+            self.consults.fetch_add(1, Ordering::SeqCst);
+            Ok(Message::new(
+                Role::Assistant,
+                "{\"title\":\"Fixing the build\",\"intent\":\"User wants CI green.\",\"history\":[\"Reproduced the failing test\"]}",
+            ))
         }
         async fn stream_chat(
             &self,
@@ -2250,57 +2308,66 @@ mod title_tests {
         }
     }
 
-    async fn fresh_titled_session() -> Arc<SessionStore> {
+    async fn fresh_digest_session() -> Arc<SessionStore> {
         let dir = std::env::temp_dir().join(format!(
-            "muta-title-session-{}",
+            "muta-digest-session-{}",
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         Arc::new(SessionStore::for_path(dir.join("session.json")))
     }
 
-    /// The first-turn auto title (ADR-0022): a session with no title gets
-    /// one after `maybe_generate_title` runs; a manually locked title is
-    /// never overwritten.
+    /// The digest trigger is fire-and-forget (spawned); poll until it lands.
+    async fn await_digest(session: &SessionStore) -> SessionDigest {
+        for _ in 0..200 {
+            let (digest, _) = session.digest().await;
+            if let Some(digest) = digest {
+                return digest;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("digest never landed");
+    }
+
+    /// The first-request trigger: a session with no digest gets one
+    /// immediately, and the picker title mirrors it (not manual).
     #[tokio::test]
-    async fn title_generated_once_and_manual_lock_wins() {
-        let session = fresh_titled_session().await;
+    async fn digest_generated_on_first_request_and_title_mirrors() {
+        let session = fresh_digest_session().await;
         session
             .replace_messages(vec![Message::new(Role::User, "hello there")])
             .await
             .unwrap();
+        let provider = Arc::new(DigestProvider {
+            consults: AtomicUsize::new(0),
+        });
         let agent = Arc::new(Agent::new(
-            Arc::new(TitleProvider),
+            provider.clone(),
             Vec::new(),
             AgentIdentity::default(),
         ));
 
-        // First run: untitled → generated + persisted. The trigger is
-        // fire-and-forget (spawned); poll until the title lands.
-        maybe_generate_title(agent.clone(), session.clone());
-        for _ in 0..100 {
-            if session.title().await.0.is_some() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        maybe_refresh_session_digest(agent.clone(), session.clone());
+        let digest = await_digest(&session).await;
+        assert_eq!(digest.title, "Fixing the build");
+        assert_eq!(digest.intent, "User wants CI green.");
+        assert_eq!(digest.history.len(), 1);
         let (title, manual) = session.title().await;
         assert_eq!(title.as_deref(), Some("Fixing the build"));
         assert!(!manual);
 
-        // Second run: already titled → untouched (manual lock path shares
-        // the same guard).
-        maybe_generate_title(agent.clone(), session.clone());
+        // No transcript growth since the anchor → the throttle skips the
+        // Chronicler entirely.
+        maybe_refresh_session_digest(agent, session.clone());
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let (again, _) = session.title().await;
-        assert_eq!(again.as_deref(), Some("Fixing the build"));
+        assert_eq!(provider.consults.load(Ordering::SeqCst), 1);
     }
 
-    /// A manually set title is locked: the auto generator must not replace
-    /// it even though the generator runs.
+    /// A manually locked title is never overwritten (ADR-0022 lock rule),
+    /// but the digest's intent/history still refresh.
     #[tokio::test]
-    async fn manual_title_is_never_overwritten() {
-        let session = fresh_titled_session().await;
+    async fn manual_title_lock_pins_only_the_title() {
+        let session = fresh_digest_session().await;
         session
             .replace_messages(vec![Message::new(Role::User, "hello")])
             .await
@@ -2310,18 +2377,102 @@ mod title_tests {
             .await
             .unwrap();
         let agent = Arc::new(Agent::new(
-            Arc::new(TitleProvider),
+            Arc::new(DigestProvider {
+                consults: AtomicUsize::new(0),
+            }),
             Vec::new(),
             AgentIdentity::default(),
         ));
-        maybe_generate_title(agent, session.clone());
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        maybe_refresh_session_digest(agent, session.clone());
+        let digest = await_digest(&session).await;
+        assert_eq!(
+            digest.title, "Fixing the build",
+            "the digest itself stores its own title"
+        );
         let (title, manual) = session.title().await;
-        assert_eq!(title.as_deref(), Some("My own title"));
+        assert_eq!(title.as_deref(), Some("My own title"), "manual title wins");
         assert!(manual, "manual flag survives");
     }
-}
 
+    /// Growth past the stored anchor refreshes the digest (and only then).
+    #[tokio::test]
+    async fn digest_refreshes_after_growth_threshold() {
+        let session = fresh_digest_session().await;
+        session
+            .replace_messages(vec![Message::new(Role::User, "start")])
+            .await
+            .unwrap();
+        let provider = Arc::new(DigestProvider {
+            consults: AtomicUsize::new(0),
+        });
+        let agent = Arc::new(Agent::new(
+            provider.clone(),
+            Vec::new(),
+            AgentIdentity::default(),
+        ));
+
+        maybe_refresh_session_digest(agent.clone(), session.clone());
+        await_digest(&session).await;
+        assert_eq!(provider.consults.load(Ordering::SeqCst), 1);
+
+        // Below-threshold growth: no refresh.
+        session
+            .replace_messages(vec![
+                Message::new(Role::User, "start"),
+                Message::new(Role::Assistant, "small step"),
+            ])
+            .await
+            .unwrap();
+        maybe_refresh_session_digest(agent.clone(), session.clone());
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(provider.consults.load(Ordering::SeqCst), 1);
+
+        // Past-threshold growth: exactly one refresh.
+        let big = "x".repeat(DIGEST_REFRESH_DELTA_CHARS + 100);
+        session
+            .replace_messages(vec![
+                Message::new(Role::User, "start"),
+                Message::new(Role::Assistant, big),
+            ])
+            .await
+            .unwrap();
+        maybe_refresh_session_digest(agent, session.clone());
+        // The digest from round one is already stored; wait for the second
+        // consult itself.
+        for _ in 0..200 {
+            if provider.consults.load(Ordering::SeqCst) == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(provider.consults.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn refresh_decision_is_pure_and_predictable() {
+        let digest = SessionDigest {
+            title: "T".to_string(),
+            intent: "I".to_string(),
+            history: Vec::new(),
+        };
+        // No digest yet → always.
+        assert!(digest_refresh_needed(None, None, 0));
+        // Anchored digest → growth-gated.
+        assert!(!digest_refresh_needed(Some(&digest), Some(1_000), 1_000));
+        assert!(!digest_refresh_needed(
+            Some(&digest),
+            Some(1_000),
+            DIGEST_REFRESH_DELTA_CHARS
+        ));
+        assert!(digest_refresh_needed(
+            Some(&digest),
+            Some(1_000),
+            DIGEST_REFRESH_DELTA_CHARS + 1_000
+        ));
+        // Missing anchor (legacy data) → refresh once to establish it.
+        assert!(digest_refresh_needed(Some(&digest), None, 0));
+    }
+}
 #[cfg(test)]
 mod phase1_guard_tests {
     use super::is_phase1_unsend;

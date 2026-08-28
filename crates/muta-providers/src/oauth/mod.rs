@@ -42,6 +42,7 @@ pub use token::{
     fetch_google_userinfo, jwt_exp_ms, refresh_access_token, resolve_antigravity_project,
 };
 
+pub use muta_contracts::LoginMethod;
 use muta_contracts::SecretString;
 use std::sync::{Arc, Mutex};
 
@@ -73,13 +74,56 @@ impl std::fmt::Display for AuthError {
 
 impl std::error::Error for AuthError {}
 
-/// Which login flow to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoginMethod {
-    /// Browser loopback OAuth (desktop / local).
-    Browser,
-    /// Device-code (headless / VPS / SSH / Docker).
-    Device,
+/// User-facing authorization material produced before an OAuth flow waits for
+/// completion. Frontends render this one shape for both PKCE and device-code
+/// sessions; a browser flow has no `user_code`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthLoginPrompt {
+    pub method: LoginMethod,
+    pub url: String,
+    pub user_code: Option<String>,
+    pub message: String,
+}
+
+/// An initiated OAuth flow. Starting and completing are deliberately separate:
+/// the caller must be able to show/open the authorization URL before the flow
+/// blocks on a localhost callback or device-token poll.
+pub struct OAuthLoginSession {
+    prompt: OAuthLoginPrompt,
+    client: reqwest::Client,
+    flow: OAuthLoginFlow,
+}
+
+enum OAuthLoginFlow {
+    Browser(BrowserLogin),
+    RfcDevice {
+        config: OAuthConfig,
+        device: DeviceCodeResponse,
+    },
+    ChatGptDevice {
+        config: OAuthConfig,
+        device: ChatGptDeviceCode,
+    },
+}
+
+impl OAuthLoginSession {
+    pub fn prompt(&self) -> &OAuthLoginPrompt {
+        &self.prompt
+    }
+
+    /// Wait for authorization and exchange the resulting grant for tokens.
+    pub async fn complete(self) -> Result<TokenResponse, AuthError> {
+        match self.flow {
+            OAuthLoginFlow::Browser(login) => login.complete(&self.client).await,
+            OAuthLoginFlow::RfcDevice { config, device } => {
+                poll_device_code(&self.client, &config, &device).await
+            }
+            OAuthLoginFlow::ChatGptDevice { config, device } => {
+                let token = poll_chatgpt_device_code(&self.client, &config, &device).await?;
+                exchange_chatgpt_device_code(&self.client, &config, &token).await
+            }
+        }
+    }
 }
 
 /// The high-level OAuth orchestrator.
@@ -138,30 +182,82 @@ impl OAuth {
 
     /// Run an OAuth login flow and return the resulting token response.
     pub async fn login(&self, method: LoginMethod) -> Result<TokenResponse, AuthError> {
-        match method {
-            LoginMethod::Browser => self.login_browser().await,
-            LoginMethod::Device => self.login_device().await,
-        }
+        self.begin_login(method).await?.complete().await
     }
 
-    async fn login_device(&self) -> Result<TokenResponse, AuthError> {
-        match self.config.device_flow {
-            config::DeviceFlow::Rfc8628 => {
-                let device = request_device_code(&self.client, &self.config).await?;
-                poll_device_code(&self.client, &self.config, &device).await
-            }
-            config::DeviceFlow::ChatGpt => {
-                let device = request_chatgpt_device_code(&self.client, &self.config).await?;
-                let token = poll_chatgpt_device_code(&self.client, &self.config, &device).await?;
-                exchange_chatgpt_device_code(&self.client, &self.config, &token).await
-            }
-            config::DeviceFlow::Disabled => Err(AuthError::DeviceCode(
-                "device authorization flow is disabled for this provider".to_string(),
-            )),
+    /// Initiate either generic PKCE/browser login or the configured device
+    /// grant and return a common pending-session handle.
+    pub async fn begin_login(&self, method: LoginMethod) -> Result<OAuthLoginSession, AuthError> {
+        if !self.config.supports_login_method(method) {
+            return Err(AuthError::Transport(format!(
+                "{} login is not supported for {}",
+                match method {
+                    LoginMethod::Browser => "browser PKCE",
+                    LoginMethod::Device => "device-code",
+                },
+                self.config.provider_id
+            )));
         }
+        let (prompt, flow) = match method {
+            LoginMethod::Browser => {
+                let login = self.begin_browser_login().await?;
+                let prompt = OAuthLoginPrompt {
+                    method,
+                    url: login.url.clone(),
+                    user_code: None,
+                    message: "Complete authorization in your browser (or open the link below)."
+                        .to_string(),
+                };
+                (prompt, OAuthLoginFlow::Browser(login))
+            }
+            LoginMethod::Device => match self.config.device_flow {
+                config::DeviceFlow::Rfc8628 => {
+                    let device = request_device_code(&self.client, &self.config).await?;
+                    let prompt = OAuthLoginPrompt {
+                        method,
+                        url: device.user_url().to_string(),
+                        user_code: Some(device.user_code.clone()),
+                        message: "Open the URL on any device and enter the code to authorize."
+                            .to_string(),
+                    };
+                    (
+                        prompt,
+                        OAuthLoginFlow::RfcDevice {
+                            config: self.config.clone(),
+                            device,
+                        },
+                    )
+                }
+                config::DeviceFlow::ChatGpt => {
+                    let device = request_chatgpt_device_code(&self.client, &self.config).await?;
+                    let prompt = OAuthLoginPrompt {
+                        method,
+                        url: device.user_url(&self.config),
+                        user_code: Some(device.user_code.clone()),
+                        message: "Open the URL on any device and enter the code to authorize."
+                            .to_string(),
+                    };
+                    (
+                        prompt,
+                        OAuthLoginFlow::ChatGptDevice {
+                            config: self.config.clone(),
+                            device,
+                        },
+                    )
+                }
+                config::DeviceFlow::Disabled => unreachable!("support checked above"),
+            },
+        };
+        Ok(OAuthLoginSession {
+            prompt,
+            client: self.client.clone(),
+            flow,
+        })
     }
 
-    /// Start the browser loopback flow and return the authorize URL.
+    /// Start the browser PKCE flow and return the authorize URL plus callback
+    /// state. Prefer [`Self::begin_login`] in application code so both login
+    /// families share the same orchestration path.
     pub async fn begin_browser_login(&self) -> Result<BrowserLogin, AuthError> {
         let server = CallbackServer::start_for(&self.config)
             .await
@@ -188,11 +284,6 @@ impl OAuth {
             rx,
             _server: server,
         })
-    }
-
-    async fn login_browser(&self) -> Result<TokenResponse, AuthError> {
-        let login = self.begin_browser_login().await?;
-        login.complete(&self.client).await
     }
 
     /// Exchange an authorization code obtained manually (e.g. pasted into CLI in headless mode).

@@ -295,9 +295,15 @@ pub enum InputAction {
     },
     /// Open the provider editor seeded from the highlighted preset (`Enter`).
     SelectPreset,
+    /// Select the highlighted OAuth preset with an explicit login method.
+    /// The preset chooser exposes `b` for browser PKCE and `d` for device
+    /// authorization when the client registration supports them.
+    SelectPresetWithOauthMethod {
+        method: muta_contracts::LoginMethod,
+    },
     /// Cancel the preset chooser and return to the Connections list.
     CancelPresetChooser,
-    /// Cancel the "+ Add provider → OAuth" browser flow (`Esc` while
+    /// Cancel the "Add preset connection → OAuth" browser flow (`Esc` while
     /// `Modal::OauthPending` is active).
     CancelOauthPending,
     /// Cycle focus between copyable targets (URL and device code) in OAuth pending sheet (`Tab`/`Left`/`Right`).
@@ -330,9 +336,10 @@ pub enum InputAction {
     OpenConnections,
     /// Refresh / rediscover available models for discovery-enabled providers from upstream.
     RefreshProviderModels,
-    /// Open the add-connection preset chooser (`a` in the Connections modal) —
-    /// the first step of adding a new provider connection.
+    /// Open the curated preset chooser (`a` in the Connections modal).
     OpenPresetChooser,
+    /// Open the standalone custom-connection editor (`c` in Connections).
+    OpenCustomConnection,
     /// Open the input-history modal (Ctrl+R). Opens in browse mode — a plain
     /// newest-first list; `/` then enters the search sub-layer.
     OpenHistory,
@@ -1941,6 +1948,16 @@ pub fn process_event(
                             target: OauthCopyTarget::Selected,
                         };
                     }
+                    if context.active_modal == super::Modal::ProviderPreset && c == 'b' {
+                        return InputAction::SelectPresetWithOauthMethod {
+                            method: muta_contracts::LoginMethod::Browser,
+                        };
+                    }
+                    if context.active_modal == super::Modal::ProviderPreset && c == 'd' {
+                        return InputAction::SelectPresetWithOauthMethod {
+                            method: muta_contracts::LoginMethod::Device,
+                        };
+                    }
                     // `r` in the skills modal reloads the skill registry.
                     if context.active_modal == super::Modal::Skills && c == 'r' {
                         return InputAction::SkillsReload;
@@ -1985,17 +2002,21 @@ pub fn process_event(
                         // search sub-layer `*` is a query char; the Connections
                         // list has no favorite concept.
                         InputAction::ProviderPickerToggleFavorite
-                    } else if matches!(
-                        context.active_modal,
-                        super::Modal::Connections | super::Modal::Models
-                    ) && !context.model_searching
+                    } else if context.active_modal == super::Modal::Connections
+                        && !context.model_searching
                         && c == 'a'
                     {
-                        // Connections / Models browse mode: `a` opens the add-provider
-                        // preset chooser (the first step of adding a
-                        // connection). In the search sub-layer `a` is a query
-                        // char.
+                        // Connections browse mode: `a` opens the curated
+                        // preset branch. In the search sub-layer `a` is a
+                        // query character.
                         InputAction::OpenPresetChooser
+                    } else if context.active_modal == super::Modal::Connections
+                        && !context.model_searching
+                        && c == 'c'
+                    {
+                        // Custom connections are a sibling of the preset
+                        // branch, not an item inside the preset chooser.
+                        InputAction::OpenCustomConnection
                     } else if matches!(
                         context.active_modal,
                         super::Modal::Models | super::Modal::Connections

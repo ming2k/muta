@@ -18,18 +18,18 @@ dispatch `match` to edit for presets or user entries.
 
 | Provider speaks... | Path | Effort |
 |--------------------|------|--------|
-| OpenAI Chat Completions, or any endpoint reachable with a URL + key | **Custom OpenAI preset** in the TUI (`/connections` → `＋ Add connection`), or a user-defined entry in `providers.toml` | None (no code) |
+| OpenAI Chat Completions, or any endpoint reachable with a URL + key | **Custom connection** in the TUI (`/connections`, then `c`), or a user-defined entry in `providers.toml` | None (no code) |
 | OpenAI Chat Completions, and you want it shipped as a built-in | Per-provider file in `registry/` | Small |
 | A genuinely incompatible contract (different roles, no `tools` field) | Standalone adapter | Medium |
 
 Prefer the config path for private or self-hosted endpoints, and the registry
 path for a vendor preset every muta user would want.
 
-## Path 0: The Custom OpenAI preset (no code, no config editing)
+## Path 0: Custom connection (no code, no config editing)
 
 For any OpenAI-compatible endpoint — a third-party relay, a self-hosted
-gateway, a subscription bundle exposing `/v1/chat/completions` — pick
-**Custom OpenAI** in `/connections` → `＋ Add connection`. The form asks for
+gateway, a subscription bundle exposing `/v1/chat/completions` — open
+`/connections` and press `c` for **Add custom connection**. The form asks for
 Name, Base URL (the full chat-completions URL), Token, and **Model**: the
 model field offers the registry-known OpenAI ids as fuzzy suggestions plus
 the raw typed id as a custom value, so the exact id the endpoint expects

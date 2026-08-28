@@ -88,10 +88,8 @@ impl ChannelAuth {
     /// Returns `None` for API-key channels (no OAuth login to run).
     pub fn default_login_method(self) -> Option<LoginMethod> {
         match self {
-            ChannelAuth::XaiOAuth | ChannelAuth::ChatGptOAuth | ChannelAuth::CopilotOAuth => {
-                Some(LoginMethod::Device)
-            }
-            ChannelAuth::AntigravityOAuth => Some(LoginMethod::Browser),
+            ChannelAuth::ChatGptOAuth | ChannelAuth::AntigravityOAuth => Some(LoginMethod::Browser),
+            ChannelAuth::XaiOAuth | ChannelAuth::CopilotOAuth => Some(LoginMethod::Device),
             ChannelAuth::ApiKey => None,
         }
     }
@@ -117,19 +115,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn oauth_providers_default_to_device_flow() {
-        // The device flow is the universal default for every subscription
-        // provider: it works headless and needs no registered callback URL, so
-        // it cannot hit "redirect_uri is not associated with this application".
-        // This guards against the TUI regressing back to a hardcoded browser
-        // flow that breaks Copilot (whose callback is not a loopback URL).
+    fn oauth_providers_choose_a_registration_supported_default() {
+        // ChatGPT and Antigravity register localhost callbacks and prefer the
+        // desktop PKCE flow. Copilot's public application is device-only; xAI
+        // keeps device authorization as its portable default.
         assert_eq!(
             ChannelAuth::CopilotOAuth.default_login_method(),
             Some(LoginMethod::Device)
         );
         assert_eq!(
             ChannelAuth::ChatGptOAuth.default_login_method(),
-            Some(LoginMethod::Device)
+            Some(LoginMethod::Browser)
         );
         assert_eq!(
             ChannelAuth::XaiOAuth.default_login_method(),

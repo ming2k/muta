@@ -66,6 +66,11 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
             if name.is_empty() || !usable {
                 app.load_custom_field();
             } else {
+                // `custom-openai` is an editor definition, not a curated
+                // preset. New custom connections persist as pure-custom
+                // declarations with no preset id; the catalog still accepts
+                // the old id when loading existing configurations.
+                let preset_id = created_connection_preset_id(app.custom_preset_id.take());
                 let _ = app.tx.send(AgentRequest::AddProvider {
                     name,
                     protocol,
@@ -74,13 +79,37 @@ pub(super) fn handle_submit_custom_provider(app: &mut App) {
                     user_agent: app.custom_user_agent.clone(),
                     models,
                     auth: app.custom_auth,
-                    preset_id: app.custom_preset_id.take(),
+                    preset_id,
                     client_identity: None,
                 });
                 app.restore_chat_after_editor_chain();
                 app.custom_field = 0;
             }
         }
+    }
+}
+
+/// Convert the editor definition id into the persisted connection shape.
+/// `custom-openai` remains load-compatible, but new custom connections are
+/// pure-custom records rather than preset-derived records.
+fn created_connection_preset_id(preset_id: Option<String>) -> Option<String> {
+    preset_id.filter(|id| id != "custom-openai")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::created_connection_preset_id;
+
+    #[test]
+    fn custom_connection_does_not_persist_a_preset_id() {
+        assert_eq!(
+            created_connection_preset_id(Some("custom-openai".to_string())),
+            None
+        );
+        assert_eq!(
+            created_connection_preset_id(Some("openai".to_string())).as_deref(),
+            Some("openai")
+        );
     }
 }
 
@@ -176,7 +205,7 @@ pub(super) fn handle_open_model_editor(app: &mut App) {
                             r.protocol,
                             r.base_url,
                             r.auth,
-                            !r.preset_id.is_empty(),
+                            !r.preset_id.is_empty() && r.preset_id != "custom-openai",
                         )
                     })
                     .unwrap_or((
@@ -507,8 +536,27 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
             }
         },
         Modal::TokenReport => {
-            if app.token_report_detail {
+            if app.token_report_turn.is_some() {
+                // Attempt usage page: a documentary body, arrows scroll.
                 app.token_report_scroll = app.token_report_scroll.saturating_sub(1);
+            } else if app.token_report_detail {
+                // Round detail: arrows move the attempt-row cursor.
+                let report = app.token_source_report(viewed_session_id);
+                let round_index = app.modal_index.min(
+                    report
+                        .as_ref()
+                        .map(|report| {
+                            view::token_report_round_count(report).saturating_sub(1)
+                        })
+                        .unwrap_or(0),
+                );
+                let count = report
+                    .as_ref()
+                    .map(|report| view::token_report_attempt_count(report, round_index))
+                    .unwrap_or(0)
+                    .max(1);
+                app.token_report_turn_cursor =
+                    (app.token_report_turn_cursor + count - 1) % count;
             } else {
                 let count = app
                     .token_source_report(viewed_session_id)
@@ -519,8 +567,27 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
             }
         }
         Modal::PerformanceReport => {
-            if app.performance_report_detail {
+            if app.performance_report_turn.is_some() {
+                // Attempt stage page: a documentary body, arrows scroll.
                 app.performance_report_scroll = app.performance_report_scroll.saturating_sub(1);
+            } else if app.performance_report_detail {
+                // Round detail: arrows move the attempt-row cursor.
+                let report = app.token_source_report(viewed_session_id);
+                let round_index = app.modal_index.min(
+                    report
+                        .as_ref()
+                        .map(|report| {
+                            view::performance_report_round_count(report).saturating_sub(1)
+                        })
+                        .unwrap_or(0),
+                );
+                let count = report
+                    .as_ref()
+                    .map(|report| view::performance_report_attempt_count(report, round_index))
+                    .unwrap_or(0)
+                    .max(1);
+                app.performance_report_turn_cursor =
+                    (app.performance_report_turn_cursor + count - 1) % count;
             } else {
                 let count = app
                     .token_source_report(viewed_session_id)
@@ -658,8 +725,27 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
             }
         },
         Modal::TokenReport => {
-            if app.token_report_detail {
+            if app.token_report_turn.is_some() {
+                // Attempt usage page: a documentary body, arrows scroll.
                 app.token_report_scroll = app.token_report_scroll.saturating_add(1);
+            } else if app.token_report_detail {
+                // Round detail: arrows move the attempt-row cursor.
+                let report = app.token_source_report(viewed_session_id);
+                let round_index = app.modal_index.min(
+                    report
+                        .as_ref()
+                        .map(|report| {
+                            view::token_report_round_count(report).saturating_sub(1)
+                        })
+                        .unwrap_or(0),
+                );
+                let count = report
+                    .as_ref()
+                    .map(|report| view::token_report_attempt_count(report, round_index))
+                    .unwrap_or(0)
+                    .max(1);
+                app.token_report_turn_cursor =
+                    (app.token_report_turn_cursor + 1) % count;
             } else {
                 let count = app
                     .token_source_report(viewed_session_id)
@@ -670,8 +756,27 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
             }
         }
         Modal::PerformanceReport => {
-            if app.performance_report_detail {
+            if app.performance_report_turn.is_some() {
+                // Attempt stage page: a documentary body, arrows scroll.
                 app.performance_report_scroll = app.performance_report_scroll.saturating_add(1);
+            } else if app.performance_report_detail {
+                // Round detail: arrows move the attempt-row cursor.
+                let report = app.token_source_report(viewed_session_id);
+                let round_index = app.modal_index.min(
+                    report
+                        .as_ref()
+                        .map(|report| {
+                            view::performance_report_round_count(report).saturating_sub(1)
+                        })
+                        .unwrap_or(0),
+                );
+                let count = report
+                    .as_ref()
+                    .map(|report| view::performance_report_attempt_count(report, round_index))
+                    .unwrap_or(0)
+                    .max(1);
+                app.performance_report_turn_cursor =
+                    (app.performance_report_turn_cursor + 1) % count;
             } else {
                 let count = app
                     .token_source_report(viewed_session_id)

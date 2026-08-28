@@ -283,7 +283,7 @@ const PRE_MIGRATION: &[Model] = &[
     Model {
         id: "gpt-5.3-codex-spark",
         family: "gpt",
-        context_window: 0,
+        context_window: 128_000,
         thinking: ThinkingSupport::ReasoningSummary,
         tool_call: true,
         vision: false,

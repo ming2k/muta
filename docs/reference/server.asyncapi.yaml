@@ -704,6 +704,9 @@ components:
       description: >
         Backend-produced composer edit. Replacement offsets are Unicode-scalar
         indices; the client splices insert_text verbatim over the range.
+        Alias rows keep the alias spelling in `label` but carry the canonical
+        command in `insert_text` and `alias_of`, so accepting commits the
+        command that actually runs.
       type: object
       required: [label, description, insert_text, replace_start, replace_end, kind]
       properties:
@@ -714,6 +717,9 @@ components:
         replace_end: { type: integer, minimum: 0 }
         kind:
           enum: [slash, intent, path_file, path_dir, path_explicit]
+        alias_of:
+          description: Canonical command when this row is a compatibility alias.
+          type: string
         command: { $ref: '#/components/schemas/CommandSpec' }
       additionalProperties: false
 

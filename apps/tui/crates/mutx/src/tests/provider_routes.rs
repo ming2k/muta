@@ -289,6 +289,23 @@ fn add_connection_row_opens_the_preset_chooser() {
 }
 
 #[test]
+fn custom_connection_opens_as_a_sibling_of_the_preset_chooser() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_custom_connection_editor();
+    assert!(app.active_modal() == Modal::CustomProvider);
+    assert_eq!(app.custom_preset_id.as_deref(), Some("custom-openai"));
+    assert_eq!(
+        app.custom_fields,
+        vec![
+            crate::CustomField::Name,
+            crate::CustomField::BaseUrl,
+            crate::CustomField::Token,
+            crate::CustomField::Model,
+        ]
+    );
+}
+
+#[test]
 fn custom_provider_editor_opens_empty_on_name_field() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.custom_name = "stale".to_string();
@@ -338,10 +355,7 @@ fn antigravity_preset_prefills_url_and_seeds_relay_models() {
 #[test]
 fn custom_provider_field_cycle_wraps_and_swaps_buffers() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    let custom_preset = crate::PROVIDER_PRESETS
-        .iter()
-        .find(|t| t.id == "custom-openai")
-        .expect("custom-openai preset");
+    let custom_preset = &crate::providers::CUSTOM_CONNECTION;
     app.open_custom_provider_editor(custom_preset);
     // Fields: Name(0) / Base URL(1) / Token(2) / Model(3).
     let n = app.custom_fields.len() as u8;
@@ -365,10 +379,7 @@ fn custom_provider_model_filter_commits_and_offers_custom_id() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     // The real generic preset: it exposes the Model field and seeds no
     // models, so the flow under test is exactly what ships.
-    let free_model_preset = crate::providers::PROVIDER_PRESETS
-        .iter()
-        .find(|t| t.id == "custom-openai")
-        .expect("custom-openai preset");
+    let free_model_preset = &crate::providers::CUSTOM_CONNECTION;
     app.open_custom_provider_editor(free_model_preset);
     // The default model is the first candidate of the preset's (OpenAI) protocol.
     assert!(
@@ -393,15 +404,12 @@ fn custom_provider_model_filter_commits_and_offers_custom_id() {
 }
 
 #[test]
-fn custom_openai_preset_submits_with_the_typed_model_and_url() {
-    // End-to-end create flow for the generic preset: fields Name/Base
+fn custom_connection_submits_with_the_typed_model_and_url() {
+    // Create-flow projection for a custom connection: fields Name/Base
     // URL/Token/Model, and the submitted `AddProvider` carries the typed
     // model id (not a seeded list) plus the relay endpoint.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    let preset = crate::providers::PROVIDER_PRESETS
-        .iter()
-        .find(|t| t.id == "custom-openai")
-        .expect("custom-openai preset");
+    let preset = &crate::providers::CUSTOM_CONNECTION;
     // The editor's visible fields include the Model filter field.
     assert_eq!(
         preset.fields(),
@@ -424,8 +432,8 @@ fn custom_openai_preset_submits_with_the_typed_model_and_url() {
     app.on_custom_filter_changed();
     assert_eq!(app.custom_model, "GLM-5.2");
 
-    // Submit: the request must carry the single typed model as the seeded
-    // list, the preset id, and the endpoint — a case-sensitive id travels
+    // Submit: the request carries the single typed model, no preset id, and
+    // the endpoint — a case-sensitive id travels
     // verbatim (the WeChat endpoint 400s on the lowercase spelling).
     app.stash_custom_field();
     let payload = serde_json::json!({
@@ -433,10 +441,10 @@ fn custom_openai_preset_submits_with_the_typed_model_and_url() {
         "protocol": app.custom_protocol_wire,
         "base_url": app.custom_base_url,
         "models": [app.custom_model],
-        "preset_id": preset.id,
+        "preset_id": serde_json::Value::Null,
     });
     assert_eq!(payload["models"][0], "GLM-5.2");
-    assert_eq!(payload["preset_id"], "custom-openai");
+    assert!(payload["preset_id"].is_null());
     assert_eq!(payload["protocol"], "openai");
     assert_eq!(
         payload["base_url"],

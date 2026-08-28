@@ -137,6 +137,49 @@ impl SessionStore {
         self.state.lock().await.data.archived_transcript.len()
     }
 
+    /// The Chronicler's digest and the transcript anchor (char count) it
+    /// was generated at. `(None, None)` for a session without a digest yet.
+    pub async fn digest(
+        &self,
+    ) -> (Option<muta_contracts::SessionDigest>, Option<u64>) {
+        let state = self.state.lock().await;
+        (state.data.digest.clone(), state.data.digest_anchor)
+    }
+
+    /// Replace the session digest together with the transcript anchor it
+    /// was generated at (the refresh throttle's watermark). `digest = None`
+    /// clears both. Persists the snapshot and event log so resume restores
+    /// the same digest.
+    pub async fn set_digest(
+        &self,
+        digest: Option<muta_contracts::SessionDigest>,
+        anchor: u64,
+    ) -> Result<(), String> {
+        let (path, data, should_persist) = {
+            let mut state = self.state.lock().await;
+            state.data.digest = digest.clone();
+            state.data.digest_anchor = digest.as_ref().map(|_| anchor);
+            state.data.updated_at = unix_timestamp();
+            // Like `set_title`: an empty, never-persisted session stays
+            // unpersisted — a digest with no messages is empty-content
+            // litter. The first-request trigger runs after the round's
+            // messages are admitted, so in practice content already exists.
+            let empty_unpersisted = Self::should_skip_persist(&state);
+            if !empty_unpersisted {
+                ensure_event_log_started(&state.event_log, &state.data)?;
+                state
+                    .event_log
+                    .append(SessionEvent::DigestSet { digest, anchor })?;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
+        };
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn parent_id(&self) -> Option<String> {
         self.state.lock().await.data.parent_id.clone()
     }

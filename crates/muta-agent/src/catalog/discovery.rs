@@ -10,14 +10,17 @@
 
 use super::Stores;
 use super::derive::{resolve_credential, route_models};
-use muta_contracts::{ChannelAuth, WireFormat};
-use muta_persistence::config::{DiscoveryCache, FittedModelInfo};
-use muta_persistence::connections::Connections;
+use muta_contracts::{ChannelAuth, SecretString, WireFormat};
+use muta_persistence::config::{DiscoveryCache, FittedModelInfo, ModelListCacheState};
+use muta_persistence::connections::{Connection, Connections};
 use muta_providers::{
-    DiscoveryProtocol, ModelDiscoveryRequest, ProviderPresetSpec, provider_preset_spec,
-    route_for_model,
+    DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest, ModelDiscoveryUpdate,
+    ProviderPresetSpec, provider_preset_spec, route_for_model,
 };
 use std::collections::HashSet;
+
+const MODEL_LIST_CACHE_TTL_MS: i64 = 5 * 60 * 1000;
+const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The result of a live model-discovery pass ([`discover_provider_models`]).
 #[derive(Debug, Default)]
@@ -30,10 +33,12 @@ pub struct DiscoveryOutcome {
 
 /// Fetch every discovery-capable connection's live model list and update the
 /// discovery cache.
-pub async fn discover_provider_models() -> DiscoveryOutcome {
+pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
     let mut stores = Stores::load();
     let mut changed = false;
+    let mut cache_dirty = false;
     let mut failures: Vec<(String, String)> = Vec::new();
+    let now_ms = chrono::Utc::now().timestamp_millis();
 
     for connection in &stores.connections.connections {
         let Some(pid) = connection.preset_id.as_deref() else {
@@ -48,6 +53,23 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
                 .base_url
                 .as_deref()
                 .is_some_and(|u| u.contains("cloudcode-pa.googleapis.com"))
+        {
+            continue;
+        }
+        if !force
+            && stores
+                .cache
+                .model_lists
+                .get(&connection.id)
+                .is_some_and(|state| {
+                    state.client_version == CLIENT_VERSION
+                        && now_ms.saturating_sub(state.refreshed_at_ms) < MODEL_LIST_CACHE_TTL_MS
+                })
+            && stores
+                .cache
+                .connection_models
+                .get(&connection.id)
+                .is_some_and(|models| !models.is_empty())
         {
             continue;
         }
@@ -72,19 +94,60 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
             }
         });
 
+        let protocol = if connection.auth == ChannelAuth::ChatGptOAuth {
+            DiscoveryProtocol::Codex
+        } else {
+            DiscoveryProtocol::from_preset_protocol(protocol)
+        };
+        let (credential, account_id) = if connection.auth == ChannelAuth::ChatGptOAuth {
+            match chatgpt_discovery_auth(connection).await {
+                Ok(auth) => auth,
+                Err(error) => {
+                    tracing::warn!(
+                        connection_id = %connection.id,
+                        error = %error,
+                        "could not resolve ChatGPT model-catalog authentication"
+                    );
+                    failures.push((connection.id.clone(), error));
+                    continue;
+                }
+            }
+        } else {
+            (resolve_credential(connection, &stores.creds), None)
+        };
+        let mut extra_headers = Vec::new();
+        if protocol == DiscoveryProtocol::Codex {
+            extra_headers.push(("originator", "muta"));
+            if let Some(account_id) = account_id.as_deref() {
+                extra_headers.push(("ChatGPT-Account-Id", account_id));
+            }
+        }
+        let cached_etag = stores
+            .cache
+            .model_lists
+            .get(&connection.id)
+            .and_then(|state| state.etag.as_deref());
         let discovery_req = ModelDiscoveryRequest {
-            protocol: DiscoveryProtocol::from_preset_protocol(protocol),
+            protocol,
             base_url: &base_url,
-            api_key: &resolve_credential(connection, &stores.creds),
+            api_key: &credential,
             user_agent: user_agent.as_deref(),
-            extra_headers: &[],
+            extra_headers: &extra_headers,
+        };
+        let options = ModelDiscoveryOptions {
+            etag: (protocol == DiscoveryProtocol::Codex)
+                .then_some(cached_etag)
+                .flatten(),
+            client_version: (protocol == DiscoveryProtocol::Codex).then_some(CLIENT_VERSION),
         };
 
-        match muta_providers::list_models(discovery_req).await {
-            Ok(models) => {
+        match muta_providers::discover_models(discovery_req, options).await {
+            Ok(ModelDiscoveryUpdate::Modified { models, etag }) => {
+                let mut connection_changed = false;
                 let supported: Vec<String> = if spec.fitting {
                     let fitted: std::collections::BTreeMap<String, FittedModelInfo> = models
                         .iter()
+                        .filter(|model| model.picker_enabled != Some(false))
                         .filter(|model| muta_contracts::model::model_by_id(&model.id).is_none())
                         .map(|model| (model.id.clone(), fitted_model_info(model)))
                         .collect();
@@ -93,7 +156,7 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
                             .cache
                             .fitted_models
                             .insert(connection.id.clone(), fitted);
-                        changed = true;
+                        connection_changed = true;
                     }
                     models
                         .iter()
@@ -131,22 +194,51 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
                         .cache
                         .remote_metadata
                         .insert(connection.id.clone(), remote_metadata);
-                    changed = true;
+                    connection_changed = true;
                 }
                 if stores.cache.connection_models.get(&connection.id) != Some(&supported) {
                     stores
                         .cache
                         .connection_models
                         .insert(connection.id.clone(), supported);
-                    changed = true;
+                    connection_changed = true;
                 }
-                if changed {
+                let state = ModelListCacheState {
+                    etag,
+                    client_version: CLIENT_VERSION.to_string(),
+                    refreshed_at_ms: now_ms,
+                };
+                if stores.cache.model_lists.get(&connection.id) != Some(&state) {
+                    stores
+                        .cache
+                        .model_lists
+                        .insert(connection.id.clone(), state);
+                    cache_dirty = true;
+                }
+                if connection_changed {
+                    changed = true;
+                    cache_dirty = true;
                     tracing::info!(
                         connection_id = %connection.id,
                         discovered_count = models.len(),
                         "live model discovery updated connection"
                     );
                 }
+            }
+            Ok(ModelDiscoveryUpdate::NotModified { etag }) => {
+                stores.cache.model_lists.insert(
+                    connection.id.clone(),
+                    ModelListCacheState {
+                        etag,
+                        client_version: CLIENT_VERSION.to_string(),
+                        refreshed_at_ms: now_ms,
+                    },
+                );
+                cache_dirty = true;
+                tracing::debug!(
+                    connection_id = %connection.id,
+                    "live model catalog revalidated without changes"
+                );
             }
             Err(error) => {
                 tracing::warn!(
@@ -159,11 +251,47 @@ pub async fn discover_provider_models() -> DiscoveryOutcome {
         }
     }
 
-    if changed {
+    if cache_dirty {
         let _ = stores.cache.save();
     }
 
     DiscoveryOutcome { changed, failures }
+}
+
+/// Resolve and, when necessary, refresh the ChatGPT bearer used by the Codex
+/// models endpoint. Refreshed credentials are persisted under the concrete
+/// connection id so multiple ChatGPT accounts remain isolated.
+async fn chatgpt_discovery_auth(
+    connection: &Connection,
+) -> Result<(SecretString, Option<String>), String> {
+    use muta_providers::oauth::{AuthStore, OAuth, config_by_provider_id};
+
+    let mut store = AuthStore::load();
+    let stored = store
+        .get_for_provider(
+            &connection.id,
+            connection.preset_id.as_deref(),
+            connection.auth,
+        )
+        .cloned()
+        .ok_or_else(|| "ChatGPT authorization is missing; reconnect this connection".to_string())?;
+    let config = config_by_provider_id("chatgpt")
+        .ok_or_else(|| "ChatGPT OAuth configuration is unavailable".to_string())?;
+    // Keep the preset's provider_id ("chatgpt") so refresh-side ChatGPT
+    // behavior (account-id extraction) stays enabled; the refreshed tokens are
+    // persisted under the *connection* id below, preserving per-account
+    // isolation.
+    let oauth = OAuth::new(config);
+    let (access, tokens) = oauth
+        .resolve_access_token(stored)
+        .await
+        .map_err(|error| format!("could not refresh ChatGPT authorization: {error}"))?;
+    let account_id = tokens.account_id.clone();
+    store.set(&connection.id, tokens);
+    store
+        .save()
+        .map_err(|error| format!("could not persist refreshed ChatGPT authorization: {error}"))?;
+    Ok((access, account_id))
 }
 
 /// Rebuild the fitted-model overlay (`muta_contracts::model`) from the

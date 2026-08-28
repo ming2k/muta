@@ -262,6 +262,22 @@ fn detail_body(detail: &muta_contracts::SessionDetail, theme: &Theme) -> Vec<Lin
     if let Some(title) = &detail.title {
         lines.push(kv("Title", title.clone()));
     }
+    // The Chronicler's digest (ADR-0022 evolution): the resume-time
+    // working-memory projection. Intent in one line; the history checklist
+    // as terse bullets — enough to reorient without opening the transcript.
+    if let Some(digest) = &detail.digest {
+        lines.push(kv("Intent", one_line(&digest.intent)));
+        if !digest.history.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("History", label)));
+            for entry in &digest.history {
+                lines.push(Line::from(vec![
+                    Span::styled("  • ", label),
+                    Span::styled(one_line(entry), value),
+                ]));
+            }
+        }
+    }
     lines.push(kv("Created", absolute_time(detail.created_at)));
     lines.push(kv(
         "Last active",

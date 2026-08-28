@@ -57,6 +57,10 @@ pub async fn request_device_code(
         .post(cfg.device_authorization_url.as_ref())
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
+        .header(
+            reqwest::header::USER_AGENT,
+            cfg.user_agent.as_deref().unwrap_or(crate::MUTA_USER_AGENT),
+        )
         .json(&serde_json::json!({ "client_id": cfg.client_id }))
         .send()
         .await
@@ -118,6 +122,10 @@ where
             .post(cfg.device_token_url.as_ref())
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
+            .header(
+                reqwest::header::USER_AGENT,
+                cfg.user_agent.as_deref().unwrap_or(crate::MUTA_USER_AGENT),
+            )
             .json(&serde_json::json!({
                 "device_auth_id": device.device_auth_id.expose_secret(),
                 "user_code": device.user_code,
@@ -160,7 +168,7 @@ pub async fn exchange_device_code(
     crate::oauth::token::post_form(client, cfg.token_url.as_ref(), &body).await
 }
 
-const OAUTH_POLLING_SAFETY_MARGIN_MS: u64 = 1_000;
+const OAUTH_POLLING_SAFETY_MARGIN_MS: u64 = 3_000;
 
 async fn sleep_ms(ms: u64) {
     tokio::time::sleep(std::time::Duration::from_millis(ms)).await;

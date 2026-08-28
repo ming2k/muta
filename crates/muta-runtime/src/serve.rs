@@ -62,7 +62,6 @@ const WS_PEER_SILENCE_LIMIT: std::time::Duration = std::time::Duration::from_sec
 /// dialog fed from the attach-sync `HarnessState`.
 fn workspace_trust_notice(
     session_id: &str,
-    project_root: &std::path::Path,
     snapshot: &muta_contracts::WorkspaceSecuritySnapshot,
 ) -> AgentResponse {
     let round = |event: muta_contracts::RoundEvent| AgentResponse::Round {
@@ -96,11 +95,8 @@ fn workspace_trust_notice(
         )
         .with_surface(muta_contracts::NoticeSurface::Banner)
         .with_body(format!(
-            "Previously trusted workspace configurations in this workspace ({}) changed on disk ({}). \
-             They are quarantined until re-reviewed. \
-             Run `/trust` to re-trust all, or `/trust <domain>` (e.g. `/trust rules`) for a narrow grant.",
-            project_root.display(),
-            changed_desc
+            "Changed on disk: {changed_desc} — quarantined pending review.\n\n\
+             /trust re-trusts all; /trust <domain> (e.g. /trust rules) re-trusts one.",
         )),
     ))
 }
@@ -1064,7 +1060,7 @@ where
         muta_contracts::WorkspaceTrustState::Changed
     ) {
         let session_id = bound.session.id().await;
-        let response = workspace_trust_notice(&session_id, bound.project_root(), &snap);
+        let response = workspace_trust_notice(&session_id, &snap);
         let text = serde_json::to_string(&Wire::Response { response })
             .map_err(|e| format!("serialize trust notice: {e}"))?;
         ws_sink

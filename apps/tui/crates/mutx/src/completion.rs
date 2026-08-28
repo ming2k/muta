@@ -73,6 +73,10 @@ pub struct Completion {
     pub replace_start: usize,
     pub replace_end: usize,
     pub kind: CompletionItemKind,
+    /// Canonical command when this row is an alias (`/yolo` → `/delegate`).
+    /// Drives the distinct row rendering; the accepted edit already commits
+    /// the canonical spelling via `insert_text`.
+    pub alias_of: Option<String>,
     pub doc: Option<CommandDoc>,
 }
 
@@ -85,6 +89,7 @@ impl Completion {
             replace_start: 0,
             replace_end: input_len,
             kind: CompletionItemKind::Slash,
+            alias_of: None,
             doc: None,
         }
     }
@@ -112,6 +117,7 @@ impl Completion {
             replace_start,
             replace_end,
             kind,
+            alias_of: item.alias_of.clone(),
             doc: item.command.as_ref().map(CommandDoc::from_spec),
         })
     }

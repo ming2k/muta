@@ -237,6 +237,17 @@ pub(crate) fn draw_notice_view(
             .max(1);
 
         for line_str in detail.lines() {
+            // Paragraph separator: an empty source line renders as one blank
+            // row (wrap_text would otherwise return zero rows and swallow it).
+            if line_str.trim().is_empty() {
+                *content_lines += 1;
+                if *skip_rows > 0 {
+                    *skip_rows -= 1;
+                } else if *current_y < area.y + area.height {
+                    *current_y += 1;
+                }
+                continue;
+            }
             let wrapped_detail = wrap_text(line_str, detail_wrap_width);
             for dwl in wrapped_detail {
                 *content_lines += 1;
@@ -384,5 +395,57 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         let body = layout_map.region_at(2, 2).expect("body region");
         assert_eq!(body.text, "Connection refused");
         assert_eq!(body.prefix_cols, TRANSCRIPT_BODY_LEADING_INDENT);
+    }
+
+    #[test]
+    fn draw_notice_view_renders_paragraph_separator_between_detail_parts() {
+        let theme = Theme::default();
+        let mut grid = mutx_engine::Grid::new(60, 10);
+        let mut frame = Frame::new(&mut grid);
+        let area = Rect::new(0, 0, 60, 10);
+        // Mirrors AgentNotice::render_text(): title, then body whose own
+        // paragraphs are separated by a blank line.
+        let raw = "Trust changed\nQuarantined pending review.\n\n/trust re-trusts all.";
+        let msg = TranscriptMessage::notice(NoticeSeverity::Warning, raw);
+        let notice = NoticeView { message: &msg };
+        let mut layout_map = LayoutMap::default();
+        let mut skip_rows = 0;
+        let mut current_y = 0;
+        let mut content_lines = 0;
+
+        draw_notice_view(
+            &mut frame,
+            area,
+            notice,
+            0,
+            &mut layout_map,
+            &mut skip_rows,
+            &mut current_y,
+            &mut content_lines,
+            &theme,
+            false,
+            false,
+        );
+
+        // head + gap + detail p1 + detail p2 + separator + detail p3 = 6 rows.
+        assert_eq!(content_lines, 6);
+        assert_eq!(current_y, 6);
+
+        let buf = frame.buffer_mut();
+        let row = |y: u16| -> String {
+            let mut s = String::new();
+            for x in 0..40 {
+                s.push_str(buf[(x, y)].symbol());
+            }
+            s
+        };
+        assert!(row(2).starts_with("  Trust changed"));
+        assert!(row(3).starts_with("  Quarantined pending review."));
+        assert!(
+            row(4).trim().is_empty(),
+            "paragraph separator must render as a blank row, got: {:?}",
+            row(4)
+        );
+        assert!(row(5).starts_with("  /trust re-trusts all."));
     }
 }

@@ -525,6 +525,22 @@ pub struct DiscoveryCache {
     /// connection's live `GET /models` (endpoint, thinking, effort tiers …).
     #[serde(default)]
     pub remote_metadata: BTreeMap<String, BTreeMap<String, RemoteModelMetadata>>,
+    /// Revalidation metadata for live catalogs, keyed by connection id. The
+    /// actual model/capability payload remains in the maps above so older cache
+    /// files continue to deserialize without migration.
+    #[serde(default)]
+    pub model_lists: BTreeMap<String, ModelListCacheState>,
+}
+
+/// Freshness and validator state for one connection's remote model catalog.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelListCacheState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    #[serde(default)]
+    pub client_version: String,
+    #[serde(default)]
+    pub refreshed_at_ms: i64,
 }
 
 impl DiscoveryCache {
@@ -553,6 +569,7 @@ impl DiscoveryCache {
         self.connection_models.remove(connection_id);
         self.fitted_models.remove(connection_id);
         self.remote_metadata.remove(connection_id);
+        self.model_lists.remove(connection_id);
     }
 
     /// The trusted per-(connection, model) metadata, if set.
@@ -1625,6 +1642,14 @@ deepseek = "new-key"
             );
             m
         });
+        cache.model_lists.insert(
+            "deepseek".to_string(),
+            ModelListCacheState {
+                etag: Some("\"models-v1\"".to_string()),
+                client_version: "0.1.0".to_string(),
+                refreshed_at_ms: 1234,
+            },
+        );
         cache.save().unwrap();
 
         let mut reloaded = DiscoveryCache::load();
@@ -1633,9 +1658,14 @@ deepseek = "new-key"
             262_144
         );
         assert!(reloaded.remote_metadata_for("deepseek", "nope").is_none());
+        assert_eq!(
+            reloaded.model_lists["deepseek"].etag.as_deref(),
+            Some("\"models-v1\"")
+        );
 
         reloaded.remove_connection("deepseek");
         assert!(reloaded.connection_models.is_empty());
+        assert!(reloaded.model_lists.is_empty());
         reloaded.save().unwrap();
         assert!(DiscoveryCache::load().connection_models.is_empty());
 

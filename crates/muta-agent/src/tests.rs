@@ -1514,6 +1514,13 @@ struct ScriptedProvider {
     turns: std::sync::Mutex<std::collections::VecDeque<Vec<ProviderStreamEvent>>>,
     steward_replies: std::sync::Mutex<std::collections::VecDeque<String>>,
     steward_requests: std::sync::Mutex<Vec<muta_contracts::ModelRequest>>,
+    /// Pace every stream event with a small gap so the runtime interleaves
+    /// spawned Stream Sentinel consults with stream consumption — the
+    /// network cadence an instantly-ready scripted stream omits. Without
+    /// it, a current-thread test runtime consumes the whole script before
+    /// the detached consult ever runs, so mid-stream verdict cuts can never
+    /// be exercised.
+    paced: bool,
 }
 
 impl ScriptedProvider {
@@ -1522,6 +1529,7 @@ impl ScriptedProvider {
             turns: std::sync::Mutex::new(turns.into_iter().collect()),
             steward_replies: std::sync::Mutex::new(std::collections::VecDeque::new()),
             steward_requests: std::sync::Mutex::new(Vec::new()),
+            paced: false,
         }
     }
 
@@ -1531,6 +1539,11 @@ impl ScriptedProvider {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) =
             replies.iter().map(|reply| (*reply).to_string()).collect();
+        self
+    }
+
+    fn paced(mut self) -> Self {
+        self.paced = true;
         self
     }
 }
@@ -1570,6 +1583,14 @@ impl Provider for ScriptedProvider {
             .unwrap_or_else(|e| e.into_inner())
             .pop_front()
             .unwrap_or_else(|| text_turn("done"));
+        if self.paced {
+            use futures::StreamExt as _;
+            let paced = stream::iter(turn.into_iter().map(Ok)).then(|event| async move {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                event
+            });
+            return Ok(Box::pin(paced));
+        }
         Ok(Box::pin(stream::iter(turn.into_iter().map(Ok))))
     }
 }
@@ -3048,8 +3069,12 @@ async fn scheduler_serializes_conflicting_writes() {
 }
 
 #[tokio::test]
-async fn in_flight_streaming_loop_detector_aborts_and_steers() {
+async fn stream_loop_verdict_after_natural_end_still_recovers() {
     // Dwell-scaled runaway: ~138 x 23-char lines clears the 3K dwell bar.
+    // The Stream Sentinel consult is async now: an instantly-ready scripted
+    // stream finishes before the spawned verdict can run, so this exercises
+    // the natural-end settle path — the stream keeps rendering to the very
+    // end, and the late `yes` still trims, discloses, and recovers.
     let degenerative_stream = (0..140).fold(
         vec![
             ProviderStreamEvent::TextDelta("Initial reasoning.\n".to_string()),
@@ -3062,7 +3087,10 @@ async fn in_flight_streaming_loop_detector_aborts_and_steers() {
             acc
         },
     );
-    // The cut keeps partial output; the final delta must never be emitted.
+    // Deltas streamed after the consult spawned keep rendering until the
+    // verdict lands — that is the async contract — so the tail sentinel is
+    // retained in the partial response. (The paced variant below pins the
+    // opposite: a verdict landing mid-stream beats the remaining deltas.)
     let mut degenerative_stream = degenerative_stream;
     degenerative_stream.push(ProviderStreamEvent::TextDelta(
         "never reached extra text".to_string(),
@@ -3097,10 +3125,60 @@ async fn in_flight_streaming_loop_detector_aborts_and_steers() {
         )),
         "the soft intervention must be visible"
     );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::AssistantEnd(content) if content.contains("never reached extra text")
+    )));
+}
+
+#[tokio::test]
+async fn in_flight_streaming_loop_cuts_mid_stream_when_verdict_lands() {
+    // With a paced stream (1ms gaps — the realistic network cadence) the
+    // runtime interleaves the detached Stream Sentinel consult with stream
+    // consumption: the `yes` verdict lands while the degenerate stream is
+    // still flowing, and the cut beats the remaining deltas.
+    let degenerative_stream = || {
+        (0..160)
+            .map(|_| ProviderStreamEvent::TextDelta("repeating line of code\n".to_string()))
+            .chain(std::iter::once(ProviderStreamEvent::TextDelta(
+                "never reached extra text".to_string(),
+            )))
+            .collect::<Vec<_>>()
+    };
+    let provider = Arc::new(
+        ScriptedProvider::new(vec![degenerative_stream(), text_turn("Recovered summary.")])
+            .with_steward_replies(&["yes"])
+            .paced(),
+    );
+    let agent = Arc::new(Agent::new(
+        provider.clone(),
+        Vec::new(),
+        crate::AgentIdentity::default(),
+    ));
+
+    let (events, outcome) = run_golden_round(&agent, "test", PermissionDecision::Once).await;
+    let round_outcome = outcome.expect("mid-stream cut recovers");
+
+    assert_eq!(round_outcome.message.content, "Recovered summary.");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::AssistantEnd(content) if content.contains("[... stream truncated")
+    )));
+    // The cut beat the tail: deltas scheduled after the verdict were never
+    // consumed.
     assert!(events.iter().all(|event| !matches!(
         event,
         AgentEvent::AssistantEnd(content) if content.contains("never reached extra text")
     )));
+    // Exactly one Stream Sentinel consult ran for the confirmed candidate.
+    assert_eq!(
+        provider
+            .steward_requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

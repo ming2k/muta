@@ -312,7 +312,7 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
 
 #[test]
 fn a_in_connections_modal_opens_preset_chooser() {
-    // `a` in the Connections modal opens the add-connection preset chooser.
+    // `a` in Connections opens the Add preset connection branch.
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -351,6 +351,55 @@ fn a_in_connections_modal_opens_preset_chooser() {
         &mut drag,
     );
     assert_eq!(action, InputAction::OpenPresetChooser);
+}
+
+#[test]
+fn c_in_connections_modal_opens_custom_connection() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            active_modal: crate::Modal::Connections,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::OpenCustomConnection);
+}
+
+#[test]
+fn b_and_d_in_preset_chooser_pick_the_login_method() {
+    // The preset chooser exposes explicit OAuth login-method selection:
+    // `b` = browser PKCE, `d` = device code. Whether the highlighted preset
+    // actually supports the method is validated by the dispatcher (which can
+    // see the OAuth registration); the input layer only maps the keys.
+    for (key, method) in [
+        ('b', muta_contracts::LoginMethod::Browser),
+        ('d', muta_contracts::LoginMethod::Device),
+    ] {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        let action = process_event(
+            Event::Key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            InputContext {
+                active_modal: crate::Modal::ProviderPreset,
+                ..Default::default()
+            },
+            &mut drag,
+        );
+        assert_eq!(
+            action,
+            InputAction::SelectPresetWithOauthMethod { method },
+            "key {key} must select its login method"
+        );
+    }
 }
 
 #[test]

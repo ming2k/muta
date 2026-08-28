@@ -841,7 +841,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         )),
         Modal::OauthPending => {
             let title: &'static str = match app.custom_auth {
-                muta_contracts::ChannelAuth::ChatGptOAuth => "ChatGPT",
+                muta_contracts::ChannelAuth::ChatGptOAuth => "ChatGPT subscription",
                 muta_contracts::ChannelAuth::CopilotOAuth => "Copilot",
                 muta_contracts::ChannelAuth::XaiOAuth => "xAI",
                 muta_contracts::ChannelAuth::AntigravityOAuth => "Google Antigravity",
@@ -886,6 +886,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     fields: &app.custom_fields,
                     field: app.custom_field,
                     editing,
+                    custom: app.custom_preset_id.as_deref() == Some("custom-openai"),
                     title: &title,
                     name_buf: &app.custom_name,
                     base_url_buf: &app.custom_base_url,
@@ -1000,6 +1001,8 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 app.modal_index
                     .min(view::token_report_round_count(&report).saturating_sub(1)),
                 app.token_report_detail,
+                app.token_report_turn,
+                app.token_report_turn_cursor,
                 loading,
                 &mut app.token_report_scroll,
                 &app.theme,
@@ -1017,6 +1020,8 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 app.modal_index
                     .min(view::performance_report_round_count(&report).saturating_sub(1)),
                 app.performance_report_detail,
+                app.performance_report_turn,
+                app.performance_report_turn_cursor,
                 loading,
                 &mut app.performance_report_scroll,
                 &app.theme,

@@ -398,7 +398,7 @@ async fn live_discovery_writes_the_per_instance_cache() {
     creds.set_api_key("deepseek", Some("sk-test".into()));
     creds.save().unwrap();
 
-    let outcome = discover_provider_models().await;
+    let outcome = discover_provider_models(true).await;
     assert!(outcome.changed, "discovery must record a change");
     assert!(outcome.failures.is_empty());
 
@@ -432,7 +432,7 @@ async fn discovery_failure_keeps_the_previous_subset_and_reports() {
     };
     instances.save().unwrap();
 
-    let outcome = discover_provider_models().await;
+    let outcome = discover_provider_models(true).await;
     assert!(!outcome.changed);
     assert_eq!(outcome.failures.len(), 1);
     assert_eq!(outcome.failures[0].0, "deepseek");

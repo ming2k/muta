@@ -193,9 +193,19 @@
     {#if completionMatches.length > 0}
       <div class="command-completions" aria-label="Command completions">
         {#each completionMatches as item (`${item.kind}:${item.label}`)}
-          <button type="button" onclick={() => acceptCompletion(item)}>
+          <button
+            type="button"
+            class:alias-row={item.alias_of !== undefined && item.alias_of !== null}
+            onclick={() => acceptCompletion(item)}
+          >
             <code>{item.label}</code>
-            <span>{item.description}</span>
+            {#if item.alias_of}
+              <span class="alias-target" title={`Accepting submits ${item.alias_of}`}
+                >↝ {item.alias_of}</span
+              >
+            {:else}
+              <span>{item.description}</span>
+            {/if}
           </button>
         {/each}
       </div>
@@ -317,6 +327,21 @@
 
   .command-completions code {
     color: var(--accent-primary);
+  }
+
+  /* Alias candidates are a secondary tier: the alias keeps the primary slot
+     but is visually quieter, and the secondary column shows the canonical
+     command accepting will submit instead of the target's summary. */
+  .command-completions button.alias-row code {
+    color: var(--text-secondary);
+    font-weight: normal;
+  }
+
+  .command-completions .alias-target {
+    color: var(--accent-primary);
+    opacity: 0.75;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.92em;
   }
 
   .image-chips {

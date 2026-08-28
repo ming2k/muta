@@ -22,8 +22,8 @@ use crate::components::selectable_body::{SelectableRow, render_selectable_body};
 use crate::design::MODAL_INNER_H_PADDING;
 use crate::primitives::{
     ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, breadcrumb_parts,
-    content_modal_area, content_modal_probe, keyvocab, modal_chrome_rows, modal_frame,
-    modal_header_parts, render_body, render_modal_footer,
+    content_modal_area, content_modal_probe, hierarchical_breadcrumb, keyvocab,
+    modal_chrome_rows, modal_frame, modal_header_parts, render_body, render_modal_footer,
 };
 use crate::view::Theme;
 
@@ -46,6 +46,30 @@ pub fn token_report_round_count(report: &TokenSourceReport) -> usize {
     usage_rounds(report).len()
 }
 
+/// Number of attempt rows in the selected round's turn table (display
+/// order, newest first). Zero for legacy rows that carry no lifecycle
+/// request records — those cannot drill to the third level.
+pub fn token_report_attempt_count(report: &TokenSourceReport, round_index: usize) -> usize {
+    let rounds = usage_rounds(report);
+    let Some(round) = rounds.get(round_index) else {
+        return 0;
+    };
+    flat_attempts(report, round.number).len()
+}
+
+/// The `(turn, attempt)` key of the attempt row at `row_index` in the
+/// selected round's turn table (display order, newest first).
+pub fn token_report_attempt_key(
+    report: &TokenSourceReport,
+    round_index: usize,
+    row_index: usize,
+) -> Option<(u32, u32)> {
+    let rounds = usage_rounds(report);
+    let round = rounds.get(round_index)?;
+    let attempt = flat_attempts(report, round.number).into_iter().nth(row_index)?;
+    Some((attempt.turn, attempt.attempt))
+}
+
 /// Draw the round list or, when `detail` is set, the turn breakdown for the
 /// selected round. `scroll` drives the visible body and is clamped by the shared
 /// modal renderer. Returns the painted panel rectangle.
@@ -61,6 +85,8 @@ pub fn draw_token_report_modal(
     context: ContextUsageView,
     selected: usize,
     detail: bool,
+    turn: Option<(u32, u32)>,
+    turn_cursor: usize,
     loading: bool,
     scroll: &mut usize,
     theme: &Theme,
@@ -86,6 +112,22 @@ pub fn draw_token_report_modal(
     } else {
         String::new()
     };
+    // Third level: the selected attempt's per-attempt usage page.
+    // Third level: the selected attempt's per-attempt usage page.
+    let turn_record = if drill {
+        turn.and_then(|(turn, attempt)| {
+            let round_number = usage_rounds(report).get(selected).map(|round| round.number)?;
+            flat_attempts(report, round_number)
+                .into_iter()
+                .find(|a| a.turn == turn && a.attempt == attempt)
+        })
+    } else {
+        None
+    };
+    let turn_child = turn_record
+        .as_ref()
+        .map(|a| attempt_page_label(a.turn, a.attempt))
+        .unwrap_or_default();
 
     let (header, body, footer, follow): (
         Vec<HeaderPart<'_>>,
@@ -103,19 +145,34 @@ pub fn draw_token_report_modal(
             vec![FooterHint::always(keyvocab::ESC, "close")],
             None,
         )
+    } else if let Some(attempt) = turn_record.as_ref() {
+        (
+            hierarchical_breadcrumb(
+                &["Context Usage", &drill_child, &turn_child],
+                probe.width as usize,
+            ),
+            turn_detail_body(attempt.record, theme),
+            vec![
+                FooterHint::always(keyvocab::ARROWS_UD, "scroll"),
+                FooterHint::always(keyvocab::ESC, "round"),
+            ],
+            None,
+        )
     } else if drill {
         // The drill-in sub-page keeps the same modal but switches its header
         // to a breadcrumb ("Context Usage › 1st round") so the user sees
         // where they are in the hierarchy.
         let header = breadcrumb_parts("Context Usage", &drill_child).to_vec();
+        let (body, follow) = detail_body(report, selected, turn_cursor, body_width, theme);
         (
             header,
-            detail_body(report, selected, body_width, theme),
+            body,
             vec![
-                FooterHint::always(keyvocab::ARROWS_UD, "scroll"),
+                FooterHint::always(keyvocab::ARROWS_UD, "select"),
+                FooterHint::always(keyvocab::ENTER, "turn"),
                 FooterHint::always(keyvocab::ESC, "rounds"),
             ],
-            None,
+            follow,
         )
     } else if round_count == 0 {
         let (body, follow) = list_body(
@@ -166,7 +223,7 @@ pub fn draw_token_report_modal(
     let modal = modal_frame(frame, area, theme.panel(), true, true);
 
     modal_header_parts(frame, modal.header, &header, theme);
-    if drill {
+    if turn_record.is_some() || drill {
         let rows: Vec<SelectableRow> = body.into_iter().map(SelectableRow::from_line).collect();
         render_selectable_body(
             frame, modal.body, &rows, scroll, follow, theme, selection, layout_map,
@@ -403,9 +460,10 @@ fn list_body(
 fn detail_body(
     report: &TokenSourceReport,
     selected: usize,
+    turn_cursor: usize,
     body_width: usize,
     theme: &Theme,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Option<usize>) {
     let rounds = usage_rounds(report);
     let round = &rounds[selected];
     let mut body = Vec::new();
@@ -492,8 +550,12 @@ fn detail_body(
     //   narrow state alone
     let columns = AttemptColumns::for_width(body_width);
     columns.push_header(&mut body, body_width, theme);
-    for a in &attempts {
-        columns.push_row(&mut body, a, body_width, theme);
+    let mut selected_line = None;
+    for (index, a) in attempts.iter().enumerate() {
+        if index == turn_cursor {
+            selected_line = Some(body.len());
+        }
+        columns.push_row(&mut body, a, index == turn_cursor, body_width, theme);
     }
 
     body.push(Line::from(""));
@@ -505,6 +567,134 @@ fn detail_body(
         body.push(Line::from(spans));
     }
 
+    (body, selected_line)
+}
+
+/// Breadcrumb leaf for one attempt's usage page: "3rd turn" or, for a
+/// retry, "3rd turn · 2nd attempt". Mirrors the Performance report's
+/// `attempt_page_label`.
+fn attempt_page_label(turn: u32, attempt: u32) -> String {
+    if attempt > 1 {
+        format!(
+            "{} turn · {} attempt",
+            ordinal(turn as u64),
+            ordinal(attempt as u64)
+        )
+    } else {
+        format!("{} turn", ordinal(turn as u64))
+    }
+}
+
+/// Per-attempt usage page: the third drill-down level
+/// (`Context Usage › x round › x turn`). Token accounting only — the
+/// latency/stage breakdown lives in the sibling Performance report, and the
+/// footer note points there.
+fn turn_detail_body(record: &RequestUsageRecord, theme: &Theme) -> Vec<Line<'static>> {
+    let source_label = match record.source {
+        RequestUsageSource::Reported => "provider-reported",
+        RequestUsageSource::Estimated => "local estimate",
+        RequestUsageSource::Unknown => "pending",
+    };
+    let value = Style::default().fg(theme.fg());
+    let muted = Style::default().fg(theme.muted());
+    let mut body = Vec::new();
+    let (state, state_style) = attempt_state(record, theme);
+    body.push(kv_styled("State", state, state_style, theme));
+    body.push(kv_styled(
+        "Provider / model",
+        &format!("{} · {}", record.provider, record.model),
+        value,
+        theme,
+    ));
+    body.push(kv_styled("Usage source", source_label, value, theme));
+    if record.started_at_ms > 0 {
+        body.push(kv_styled(
+            "Dispatched",
+            &crate::time::sent_time_label(record.started_at_ms),
+            muted,
+            theme,
+        ));
+    }
+
+    body.push(Line::from(""));
+    body.push(section_heading("Tokens", theme));
+    body.push(kv_styled(
+        "Input (prompt)",
+        &fmt_tokens(record.prompt_tokens),
+        attempt_source_style(record, theme),
+        theme,
+    ));
+    body.push(kv_styled(
+        "Output (completion)",
+        &fmt_tokens(record.completion_tokens),
+        attempt_source_style(record, theme),
+        theme,
+    ));
+    body.push(kv_styled(
+        "Total",
+        &fmt_tokens(record.total_tokens),
+        attempt_source_style(record, theme),
+        theme,
+    ));
+    if record.projected_prompt_tokens > 0 && record.prompt_tokens > 0 {
+        let drift = record.prompt_tokens - record.projected_prompt_tokens;
+        let drift_label = if drift == 0 {
+            "matches projection".to_string()
+        } else {
+            format!("{} vs projection ({})", fmt_tokens(record.prompt_tokens), fmt_tokens(record.projected_prompt_tokens))
+        };
+        body.push(kv_styled(
+            "Input drift",
+            &drift_label,
+            if drift.abs() * 20 > record.prompt_tokens {
+                // More than 5% off the projection: worth an honest tint.
+                Style::default().fg(theme.warn())
+            } else {
+                muted
+            },
+            theme,
+        ));
+    }
+
+    if record.cache_read_tokens > 0 || record.cache_write_tokens > 0 {
+        let uncached =
+            (record.prompt_tokens - record.cache_read_tokens - record.cache_write_tokens).max(0);
+        let denominator = (record.cache_read_tokens + uncached).max(1) as f64;
+        let hit_rate = (record.cache_read_tokens as f64 / denominator * 100.0).round() as i64;
+        body.push(Line::from(""));
+        body.push(section_heading("Cache", theme));
+        body.push(kv_styled(
+            "Cache read (hit)",
+            &format!(
+                "{} ({hit_rate}%)",
+                fmt_tokens(record.cache_read_tokens)
+            ),
+            value,
+            theme,
+        ));
+        body.push(kv_styled(
+            "Cache write (populate)",
+            &fmt_tokens(record.cache_write_tokens),
+            value,
+            theme,
+        ));
+        body.push(kv_styled("Uncached input", &fmt_tokens(uncached), muted, theme));
+    }
+
+    if let Some(error) = record.error.as_deref().filter(|error| !error.is_empty()) {
+        body.push(Line::from(""));
+        body.push(section_heading("Error", theme));
+        body.push(Line::from(Span::styled(
+            error.to_string(),
+            Style::default().fg(theme.err()),
+        )));
+    }
+
+    body.push(Line::from(""));
+    body.push(Line::from(Span::styled(
+        "Latency stages for this attempt live in the Performance report.",
+        muted,
+    )));
     body
 }
 
@@ -645,6 +835,7 @@ impl AttemptColumns {
         &self,
         body: &mut Vec<Line<'static>>,
         a: &FlatAttempt<'_>,
+        selected: bool,
         body_width: usize,
         theme: &Theme,
     ) {
@@ -680,15 +871,32 @@ impl AttemptColumns {
             Self::State => vec![],
         };
 
+        let bg = if selected {
+            Some(theme.selected())
+        } else {
+            None
+        };
+        let tint = |mut style: Style| {
+            if let Some(bg) = bg {
+                style = style.bg(bg);
+            }
+            style
+        };
         let mut spans = vec![
             Span::styled(
                 format_padded_left(&label, label_w),
-                Style::default().fg(theme.fg()),
+                tint(Style::default().fg(theme.fg())),
             ),
-            Span::styled(format_padded_left(state, ATTEMPT_STATE_W), state_style),
+            Span::styled(
+                format_padded_left(state, ATTEMPT_STATE_W),
+                tint(state_style),
+            ),
         ];
         for (text, style) in cells {
-            spans.push(Span::styled(format!("{text:>ATTEMPT_COLUMN_W$}"), style));
+            spans.push(Span::styled(
+                format!("{text:>ATTEMPT_COLUMN_W$}"),
+                tint(style),
+            ));
         }
         body.push(Line::from(spans));
         if let Some(err) = rec.error.as_deref().filter(|e| !e.is_empty()) {
@@ -1305,7 +1513,7 @@ mod tests {
 
         // Drill into round 2 — index 1 now that rounds are newest-first
         // (3rd at index 0).
-        let detail = detail_body(&report, 1, 80, &theme);
+        let detail = detail_body(&report, 1, 0, 80, &theme).0;
         let detail_text = body_text(&detail);
         // The table is flattened: one row per attempt, master-only. Turn 1
         // was retried (attempt 1 interrupted, attempt 2 completed). A turn's
@@ -1525,7 +1733,7 @@ mod tests {
         ledger.settle_request(&t2, RequestUsageStatus::Completed, None, 60, 0);
         let report = ledger.snapshot_for_session("session");
 
-        let detail = detail_body(&report, 0, 80, &theme);
+        let detail = detail_body(&report, 0, 0, 80, &theme).0;
         let detail_text = body_text(&detail);
 
         // Newest-first: turn 2 appears before turn 1. Both have a single
@@ -1592,7 +1800,7 @@ mod tests {
 
         // The table header is the line whose first span trims to "Turn".
         let header_at = |width: usize| -> String {
-            detail_body(&report, 0, width, &theme)
+            detail_body(&report, 0, 0, width, &theme).0
                 .into_iter()
                 .find(|line| {
                     line.spans
@@ -1623,7 +1831,7 @@ mod tests {
             "label must be at its floor at 52"
         );
         // Header and every row fill the body width exactly.
-        let wide_rows = detail_body(&report, 0, 52, &theme);
+        let wide_rows = detail_body(&report, 0, 0, 52, &theme).0;
         for line in wide_rows.iter().filter(|l| {
             l.spans
                 .iter()
@@ -1722,7 +1930,7 @@ mod tests {
         ledger.settle_request(&e1, RequestUsageStatus::Completed, None, 120, 0);
         let report = ledger.snapshot_for_session("session");
 
-        let detail = detail_body(&report, 0, 80, &theme);
+        let detail = detail_body(&report, 0, 0, 80, &theme).0;
         let detail_text = body_text(&detail);
 
         // No runner section, no runner attempts, no arrow glyph.
@@ -1794,5 +2002,98 @@ mod tests {
             200,
             "lifecycle round must not double-count its legacy turn copy"
         );
+    }
+    #[test]
+    fn token_report_attempt_helpers_index_display_order_newest_first() {
+        let theme = Theme::default();
+        let _ = theme;
+        let ledger = muta_contracts::TokenSourceLedger::new();
+        let first = ledger.begin_request("session", "relay", "model-a", 2, 1, 800);
+        ledger.settle_request(
+            &first,
+            RequestUsageStatus::Completed,
+            Some(muta_contracts::TokenUsage {
+                prompt_tokens: 790,
+                completion_tokens: 40,
+                total_tokens: 830,
+                ..Default::default()
+            }),
+            0,
+            2_000,
+        );
+        let retry = ledger.begin_request("session", "relay", "model-a", 2, 1, 900);
+        ledger.settle_request(
+            &retry,
+            RequestUsageStatus::Completed,
+            Some(muta_contracts::TokenUsage {
+                prompt_tokens: 790,
+                completion_tokens: 40,
+                total_tokens: 830,
+                ..Default::default()
+            }),
+            0,
+            2_000,
+        );
+        let report = ledger.snapshot_for_session("session");
+        // Rounds are newest-first; round 2 has two attempts for turn 1.
+        assert_eq!(token_report_attempt_count(&report, 0), 2);
+        // Display order: retry (attempt 2) first, then the first attempt.
+        assert_eq!(token_report_attempt_key(&report, 0, 0), Some((1, 2)));
+        assert_eq!(token_report_attempt_key(&report, 0, 1), Some((1, 1)));
+        assert_eq!(token_report_attempt_key(&report, 0, 2), None);
+    }
+
+    #[test]
+    fn turn_detail_body_renders_token_usage_breakdown() {
+        let theme = Theme::default();
+        let record = RequestUsageRecord {
+            key: muta_contracts::RequestUsageKey {
+                session_id: "session".to_string(),
+                actor_id: "master".to_string(),
+                round: 2,
+                turn: 1,
+                attempt: 1,
+            },
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet".to_string(),
+            status: RequestUsageStatus::Completed,
+            source: RequestUsageSource::Reported,
+            projected_prompt_tokens: 900,
+            prompt_tokens: 1_000,
+            completion_tokens: 120,
+            total_tokens: 1_120,
+            cache_write_tokens: 100,
+            cache_read_tokens: 700,
+            started_at_ms: 1_700_000_000_123,
+            ..Default::default()
+        };
+        let body = turn_detail_body(&record, &theme);
+        let text = body_text(&body);
+        assert!(text.contains("anthropic · claude-sonnet"));
+        assert!(text.contains("provider-reported"));
+        assert!(text.contains("Dispatched"));
+        assert!(text.contains("Input (prompt)"));
+        assert!(text.contains("vs projection"));
+        assert!(text.contains("Cache read (hit)"));
+        assert!(text.contains("Cache write (populate)"));
+        assert!(text.contains("Uncached input"));
+        // Cross-report pointer: latency lives in the Performance report.
+        assert!(text.contains("Performance report"));
+    }
+
+    #[test]
+    fn turn_detail_body_hides_cache_and_drift_when_absent() {
+        let theme = Theme::default();
+        let record = RequestUsageRecord {
+            status: RequestUsageStatus::Completed,
+            source: RequestUsageSource::Estimated,
+            ..Default::default()
+        };
+        let body = turn_detail_body(&record, &theme);
+        let text = body_text(&body);
+        assert!(!text.contains("Cache"));
+        assert!(!text.contains("drift"));
+        assert!(!text.contains("Dispatched"));
+        assert!(text.contains("local estimate"));
     }
 }

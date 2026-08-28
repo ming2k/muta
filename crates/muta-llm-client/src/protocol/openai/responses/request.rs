@@ -247,8 +247,9 @@ fn flatten_tools(tool_specs: Option<&[muta_contracts::ToolSpec]>) -> Option<Valu
 
 /// The per-request auth + provider headers for the Responses surface. Beyond
 /// the always-present `Authorization: Bearer`:
-/// - **ChatGPT mode** (`copilot == false`): the ChatGPT account id is attached
-///   as `ChatGPT-Account-Id` when known.
+/// - **ChatGPT/Codex mode** (`chatgpt == true`): `originator: muta` identifies
+///   the client and the ChatGPT account id is attached as
+///   `ChatGPT-Account-Id` when known.
 /// - **Copilot mode** (`copilot == true`): GitHub Copilot's required headers
 ///   are attached instead — the client-identity headers
 ///   (`Copilot-Integration-Id`, `Editor-Version`, `Editor-Plugin-Version`)
@@ -265,6 +266,7 @@ pub fn headers(
     access_token: &str,
     account_id: Option<&str>,
     copilot: bool,
+    chatgpt: bool,
 ) -> Vec<(&'static str, String)> {
     let mut h = vec![("Authorization", format!("Bearer {access_token}"))];
     if copilot {
@@ -276,6 +278,10 @@ pub fn headers(
         h.push(("X-GitHub-Api-Version", "2026-06-01".to_string()));
         return h;
     }
+    if !chatgpt {
+        return h;
+    }
+    h.push(("originator", "muta".to_string()));
     if let Some(id) = account_id.filter(|id| !id.trim().is_empty()) {
         h.push(("ChatGPT-Account-Id", id.to_string()));
     }
@@ -413,19 +419,22 @@ mod tests {
 
     #[test]
     fn headers_include_account_id_when_present() {
-        let h = headers("tok", Some("acct-1"), false);
+        let h = headers("tok", Some("acct-1"), false, true);
         assert_eq!(h[0].0, "Authorization");
-        assert_eq!(h[1].0, "ChatGPT-Account-Id");
-        assert_eq!(h[1].1, "acct-1");
+        assert_eq!(h[1], ("originator", "muta".to_string()));
+        assert_eq!(h[2].0, "ChatGPT-Account-Id");
+        assert_eq!(h[2].1, "acct-1");
         // No account id → no header.
-        assert_eq!(headers("tok", None, false).len(), 1);
+        assert_eq!(headers("tok", None, false, true).len(), 2);
+        // A third-party Responses endpoint gets neither Codex header.
+        assert_eq!(headers("tok", Some("acct-1"), false, false).len(), 1);
     }
 
     #[test]
     fn headers_inject_copilot_set_and_drop_account_id() {
         // Copilot mode: the account id is ignored and Copilot's required
         // headers replace the ChatGPT account-id header.
-        let h = headers("tok", Some("acct-1"), true);
+        let h = headers("tok", Some("acct-1"), true, false);
         assert_eq!(h[0].0, "Authorization");
         assert_eq!(h[0].1, "Bearer tok");
         let names: Vec<&str> = h.iter().map(|(n, _)| *n).collect();

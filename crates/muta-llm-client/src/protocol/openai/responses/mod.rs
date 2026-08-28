@@ -116,6 +116,10 @@ impl OpenAiResponsesProvider {
     /// carries an image, detected here by scanning the Responses `input` array
     /// for an `input_image` part.
     fn build_request(&self, body: &serde_json::Value) -> reqwest::RequestBuilder {
+        let chatgpt = self
+            .endpoint
+            .base_url()
+            .contains("chatgpt.com/backend-api/codex/");
         let mut req = self
             .client
             .http()
@@ -127,6 +131,7 @@ impl OpenAiResponsesProvider {
             self.endpoint.api_key(),
             self.account_id.as_deref(),
             self.copilot,
+            chatgpt,
         ) {
             req = req.header(name, value);
         }

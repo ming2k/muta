@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Stream Sentinel reviews no longer pause the stream.** The L2 steward
+  consult for a mechanical stream-loop candidate now runs as a detached
+  task instead of an inline `await` inside the delta loop: the stream keeps
+  rendering while the Steward deliberates, and a `yes` verdict cuts at the
+  next event boundary (biased ahead of the stream arm). The detector is
+  level-triggered, so a still-looping stream is still caught — at the cost
+  of a few extra degenerate tokens instead of a frozen UI. A verdict that
+  lands after the stream ends naturally still trims, discloses, and
+  recovers via a bounded settle, and the detached task guarantees the
+  provider side-channel drain inside `Steward::consult` always completes.
+  Memoization semantics (acquitted candidates never re-consult; at most one
+  consult in flight) mirror the retired blocking consult exactly.
+- **Alias completion is now visually distinct and commits the canonical
+  command.** Harness-command aliases (`/yolo`, `/config`, `/resume`, …)
+  remain first-class completion candidates — the row keeps the spelling the
+  user typed — but they are now marked as a separate tier instead of hiding
+  in the description prose. `ComposerCompletion` gains an additive
+  `alias_of` field (the canonical command; wire-compatible, no protocol
+  bump), `insert_text` for an alias row is the canonical target, so
+  accepting `/yolo` puts `/delegate` into the composer and the transcript
+  records the command that actually runs. TUI renders the row as
+  `/yolo ↝ /delegate` with the mapping in the dim tier (width-aware, so the
+  highlight band stays solid) and the flyout explains "Accept `/yolo` →
+  submits `/delegate`"; the web composer shows the target via a muted
+  `↝ /delegate` chip in place of the summary. Descriptions no longer carry
+  the `(alias of …)` prefix — the TUI reads the structured field instead of
+  sniffing prose. Typed aliases are still resolved verbatim at dispatch.
+- **Connections now separates preset and custom add flows.** The Connections
+  panel exposes `a` for **Add preset connection** and `c` for **Add custom
+  connection**; custom endpoints no longer appear as a preset row. The former
+  `Add Provider` breadcrumb is consistently connection-oriented. The ChatGPT
+  OAuth preset is labeled **ChatGPT subscription** and now includes
+  `gpt-5.3-codex-spark` over the Codex Responses backend.
+- **OAuth logins share one two-phase session foundation, and ChatGPT
+  subscription defaults to browser PKCE.** `OAuth::begin_login` starts either
+  login family — browser PKCE/loopback or device code (RFC 8628 and the
+  ChatGPT JSON variant) — and returns a common pending session
+  (`OAuthLoginSession`) whose prompt carries the URL, optional user code, and
+  message; `complete()` waits and exchanges the grant. Per-provider
+  registrations now declare which methods they support (`browser_login`,
+  `default_login_method` on `OAuthConfig`): ChatGPT subscription and Google
+  Antigravity open the full `auth.openai.com/oauth/authorize`/Google consent
+  URL automatically (the earlier ChatGPT default showed only the fixed
+  `auth.openai.com/codex/device` page), xAI and Copilot stay device-first, and
+  Copilot rejects browser login explicitly instead of hanging on an
+  unregistered callback. The preset chooser adds `b`/`d` to pick the login
+  method explicitly for OAuth presets.
+- **ChatGPT subscription now tracks the live Codex model catalog.** Model
+  discovery learns the Codex protocol (`GET
+  `chatgpt.com/backend-api/codex/models?client_version=…`): bearer + account
+  id + `originator` headers, `{models:[…]}` parsing with per-model priority,
+  visibility, reasoning tiers, context window, and vision; results are trusted
+  (fitting enabled) so plan-unlocked ids materialize with their advertised
+  capabilities. The catalog is cached per connection with ETag revalidation
+  (`If-None-Match`/304) and a 5-minute TTL — automatic startup refresh skips
+  fresh caches, `r`/reconnect forces a refetch — and the compiled snapshot
+  remains the offline fallback.
+
+### Fixed
+
+- **TUI: Ctrl+Shift+V now pastes a copied image file like Ctrl+V.** The
+  terminal's own paste (bracketed paste) is a text-only channel, so an image
+  copied in a file manager arrived as the clipboard's text flavor — the
+  `file://` URI or bare path — and landed verbatim in the composer while
+  `Ctrl+V` staged the image attachment. A main-prompt paste whose payload is
+  *entirely* references to existing local files, at least one a supported
+  image (png/jpg/jpeg/gif/webp), now routes through the same `[Image #N]`
+  attachment pipeline as the Ctrl+V file-copy paste, with the same
+  vision-model gating and toasts. Prose that mentions a path, non-image
+  paths, and mixed payloads still paste as text; single-line modal fields
+  are unchanged (a path there is a value, not an attachment).
+
 ## [0.36.8] - 2026-08-28
 
 ### Changed

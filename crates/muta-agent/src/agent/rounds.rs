@@ -13,6 +13,25 @@ struct StreamLoopIncident {
     channel: muta_contracts::StreamLoopChannel,
 }
 
+/// An in-flight Stream Sentinel review spawned off the hot stream loop.
+/// Carrying the candidate's identity lets the verdict be applied — or
+/// memo-cleared — whenever it lands: mid-stream at the next event boundary,
+/// or after the stream ends naturally.
+struct PendingStreamLoopReview {
+    candidate_key: String,
+    channel: muta_contracts::StreamLoopChannel,
+    pattern: crate::stream_loop_detector::DegeneratePattern,
+    verdict_rx: tokio::sync::oneshot::Receiver<muta_contracts::StreamLoopVerdict>,
+}
+
+/// Memo key identifying an L1 candidate: its channel and pattern identity.
+fn stream_loop_candidate_key(
+    channel: muta_contracts::StreamLoopChannel,
+    pattern: &crate::stream_loop_detector::DegeneratePattern,
+) -> String {
+    format!("{channel:?}:{pattern:?}")
+}
+
 /// Keep the beginning and live tail of a large field. Most turns fit in full;
 /// the bound prevents one diagnostic call from exceeding the Steward model's
 /// context on an already-pathological stream. The explicit omission marker is
@@ -79,52 +98,84 @@ pub(crate) struct ToolResultRecord<'a> {
 }
 
 impl Agent {
-    /// Ask L2 Steward whether an L1 mechanical candidate really warrants a
-    /// stream cutoff. A cleared candidate key is remembered for the remainder
-    /// of this provider response so intentional repeated data does not pause
-    /// for the same semantic review over and over. Any malformed/failed
-    /// Steward consultation returns `no` inside [`crate::steward::Steward`].
-    async fn steward_confirms_stream_loop(
+    /// Gate an L1 mechanical candidate through the Stream Sentinel
+    /// *without pausing the stream*. UX-first: harness cognition must never
+    /// freeze delta rendering, so the consult is spawned detached and its
+    /// verdict is applied at the next event boundary. The detector is
+    /// level-triggered — it keeps firing while the pattern continues — so a
+    /// still-looping stream pays only a few extra degenerate tokens instead
+    /// of a frozen UI.
+    ///
+    /// Decisions mirror the retired blocking consult exactly: a candidate
+    /// key acquitted earlier in this provider response never re-consults
+    /// (its detector re-arms from zero instead), at most one consult is in
+    /// flight at a time, and any malformed/failed consultation fail-opens
+    /// to `no` inside [`crate::steward::Steward`].
+    fn dispatch_stream_loop_candidate(
+        &self,
+        detector: &mut crate::stream_loop_detector::StreamLoopDetector,
+        messages: &[Message],
+        assistant_text: &str,
+        reasoning_text: &str,
+        channel: muta_contracts::StreamLoopChannel,
+        pattern: crate::stream_loop_detector::DegeneratePattern,
+        cleared_candidates: &std::collections::HashSet<String>,
+        pending: &mut Option<PendingStreamLoopReview>,
+    ) {
+        let candidate_key = stream_loop_candidate_key(channel, &pattern);
+        if cleared_candidates.contains(&candidate_key) {
+            // Acquitted earlier in this response: intentional repeated data
+            // re-earns dwell from zero rather than re-arming suspicion.
+            detector.reset();
+            return;
+        }
+        if pending.is_some() {
+            // One Stream Sentinel consult in flight; the level-triggered
+            // detector re-fires on the next push once this one resolves.
+            return;
+        }
+        *pending = Some(self.spawn_stream_loop_review(
+            messages,
+            assistant_text,
+            reasoning_text,
+            channel,
+            pattern,
+        ));
+    }
+
+    /// Snapshot the evidence and spawn the Stream Sentinel consult as a
+    /// detached task. The task always resolves (the Steward fail-opens on
+    /// its own timeout, provider failures, and malformed answers) and sends
+    /// exactly one verdict; a failed send merely means the round moved on
+    /// without it. Running detached also guarantees the provider
+    /// side-channel drain inside `Steward::consult` completes even when the
+    /// round exits before the verdict lands.
+    fn spawn_stream_loop_review(
         &self,
         messages: &[Message],
         assistant_text: &str,
         reasoning_text: &str,
         channel: muta_contracts::StreamLoopChannel,
-        pattern: &crate::stream_loop_detector::DegeneratePattern,
-        cleared_candidates: &mut std::collections::HashSet<String>,
-    ) -> bool {
-        let candidate_key = format!("{channel:?}:{pattern:?}");
-        if cleared_candidates.contains(&candidate_key) {
-            return false;
-        }
-        let verdict = self
-            .steward()
-            .review_stream_loop(muta_contracts::StreamLoopReviewInput {
-                heuristic_candidate: pattern.description(),
-                channel,
-                preceding_context: stream_loop_preceding_context(messages),
-                assistant_text: project_stream_loop_field(
-                    assistant_text,
-                    STREAM_LOOP_TURN_FIELD_CHARS,
-                ),
-                reasoning_text: project_stream_loop_field(
-                    reasoning_text,
-                    STREAM_LOOP_TURN_FIELD_CHARS,
-                ),
-            })
-            .await;
-        tracing::debug!(
-            ?channel,
-            pattern = %pattern.description(),
-            verdict = ?verdict,
-            office = StewardOffice::StreamSentinel.id(),
-            "stream-loop candidate reviewed by Stream Sentinel"
-        );
-        if verdict.is_loop() {
-            true
-        } else {
-            cleared_candidates.insert(candidate_key);
-            false
+        pattern: crate::stream_loop_detector::DegeneratePattern,
+    ) -> PendingStreamLoopReview {
+        let input = muta_contracts::StreamLoopReviewInput {
+            heuristic_candidate: pattern.description(),
+            channel,
+            preceding_context: stream_loop_preceding_context(messages),
+            assistant_text: project_stream_loop_field(assistant_text, STREAM_LOOP_TURN_FIELD_CHARS),
+            reasoning_text: project_stream_loop_field(reasoning_text, STREAM_LOOP_TURN_FIELD_CHARS),
+        };
+        let (verdict_tx, verdict_rx) = tokio::sync::oneshot::channel();
+        let steward = self.steward();
+        tokio::spawn(async move {
+            let verdict = steward.review_stream_loop(input).await;
+            let _ = verdict_tx.send(verdict);
+        });
+        PendingStreamLoopReview {
+            candidate_key: stream_loop_candidate_key(channel, &pattern),
+            channel,
+            pattern,
+            verdict_rx,
         }
     }
 
@@ -377,6 +428,12 @@ impl Agent {
                 crate::stream_loop_detector::StreamLoopDetector::new(1024);
             let mut stream_loop_incident: Option<StreamLoopIncident> = None;
             let mut steward_cleared_candidates = std::collections::HashSet::new();
+            // Stream Sentinel consults run detached from this loop: the stream
+            // keeps rendering while the Steward deliberates, and the verdict is
+            // applied at the next event boundary. At most one consult is in
+            // flight at a time; the level-triggered detector re-fires after an
+            // acquittal, so a still-looping stream is never left unreviewed.
+            let mut pending_stream_loop_review: Option<PendingStreamLoopReview> = None;
             // Finish-drain deadline (FINISH_DRAIN_GRACE). Once this turn's
             // stream has produced at least one delta, a cancellation no
             // longer wins the biased select outright: the stream gets one
@@ -405,6 +462,62 @@ impl Agent {
                         finish_drain = Some(std::time::Instant::now()
                             + crate::FINISH_DRAIN_GRACE);
                         continue;
+                    }
+                    // Stream Sentinel verdicts land off the hot path — the
+                    // stream kept rendering while the consult ran. A
+                    // confirmation cuts here at the next event boundary; an
+                    // acquittal clears the candidate for the rest of this
+                    // provider response and re-arms its channel's detector.
+                    // The branch outranks the stream arm so a pending cut
+                    // beats rendering one more chunk.
+                    verdict = async {
+                        let review = pending_stream_loop_review
+                            .as_mut()
+                            .expect("verdict branch is guarded by an in-flight review");
+                        (&mut review.verdict_rx)
+                            .await
+                            .unwrap_or(muta_contracts::StreamLoopVerdict::No)
+                    }, if pending_stream_loop_review.is_some() => {
+                        let review = pending_stream_loop_review
+                            .take()
+                            .expect("verdict branch is guarded by an in-flight review");
+                        tracing::debug!(
+                            channel = ?review.channel,
+                            pattern = %review.pattern.description(),
+                            verdict = ?verdict,
+                            office = StewardOffice::StreamSentinel.id(),
+                            "stream-loop candidate reviewed by Stream Sentinel"
+                        );
+                        if verdict.is_loop() {
+                            match review.channel {
+                                muta_contracts::StreamLoopChannel::AssistantText => {
+                                    tracing::warn!(
+                                        pattern = %review.pattern.description(),
+                                        "Steward confirmed in-flight text stream loop; aborting stream early"
+                                    );
+                                }
+                                muta_contracts::StreamLoopChannel::Reasoning => {
+                                    tracing::warn!(
+                                        pattern = %review.pattern.description(),
+                                        "Steward confirmed in-flight reasoning stream loop; aborting stream early"
+                                    );
+                                }
+                            }
+                            stream_loop_incident = Some(StreamLoopIncident {
+                                pattern: review.pattern,
+                                channel: review.channel,
+                            });
+                            break;
+                        }
+                        steward_cleared_candidates.insert(review.candidate_key);
+                        match review.channel {
+                            muta_contracts::StreamLoopChannel::AssistantText => {
+                                text_loop_detector.reset();
+                            }
+                            muta_contracts::StreamLoopChannel::Reasoning => {
+                                reasoning_loop_detector.reset();
+                            }
+                        }
                     }
                     // Guard against a stalled SSE stream: providers share a
                     // pooled client whose connect timeout covers the handshake
@@ -476,30 +589,18 @@ impl Agent {
                                 });
                                 emitted_text = true;
                                 if let Some(pat) = text_loop_detector.push_and_check(&delta) {
-                                    let channel =
-                                        muta_contracts::StreamLoopChannel::AssistantText;
-                                    if self
-                                        .steward_confirms_stream_loop(
-                                            messages,
-                                            &content,
-                                            &reasoning_content,
-                                            channel,
-                                            &pat,
-                                            &mut steward_cleared_candidates,
-                                        )
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            pattern = %pat.description(),
-                                            "Steward confirmed in-flight text stream loop; aborting stream early"
-                                        );
-                                        stream_loop_incident = Some(StreamLoopIncident {
-                                            pattern: pat,
-                                            channel,
-                                        });
-                                        break;
-                                    }
-                                    text_loop_detector.reset();
+                                    // Async consult: keep consuming deltas
+                                    // while the Stream Sentinel deliberates.
+                                    self.dispatch_stream_loop_candidate(
+                                        &mut text_loop_detector,
+                                        messages,
+                                        &content,
+                                        &reasoning_content,
+                                        muta_contracts::StreamLoopChannel::AssistantText,
+                                        pat,
+                                        &steward_cleared_candidates,
+                                        &mut pending_stream_loop_review,
+                                    );
                                 }
                             }
                             ProviderStreamEvent::ReasoningDelta(delta) => {
@@ -510,29 +611,18 @@ impl Agent {
                                 });
                                 emitted_reasoning = true;
                                 if let Some(pat) = reasoning_loop_detector.push_and_check(&delta) {
-                                    let channel = muta_contracts::StreamLoopChannel::Reasoning;
-                                    if self
-                                        .steward_confirms_stream_loop(
-                                            messages,
-                                            &content,
-                                            &reasoning_content,
-                                            channel,
-                                            &pat,
-                                            &mut steward_cleared_candidates,
-                                        )
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            pattern = %pat.description(),
-                                            "Steward confirmed in-flight reasoning stream loop; aborting stream early"
-                                        );
-                                        stream_loop_incident = Some(StreamLoopIncident {
-                                            pattern: pat,
-                                            channel,
-                                        });
-                                        break;
-                                    }
-                                    reasoning_loop_detector.reset();
+                                    // Async consult: keep consuming deltas
+                                    // while the Stream Sentinel deliberates.
+                                    self.dispatch_stream_loop_candidate(
+                                        &mut reasoning_loop_detector,
+                                        messages,
+                                        &content,
+                                        &reasoning_content,
+                                        muta_contracts::StreamLoopChannel::Reasoning,
+                                        pat,
+                                        &steward_cleared_candidates,
+                                        &mut pending_stream_loop_review,
+                                    );
                                 }
                             }
                             ProviderStreamEvent::ToolCallDelta {
@@ -568,6 +658,39 @@ impl Agent {
                 }
             }
             request_accounting.mark_stream_end();
+            // A Stream Sentinel consult still in flight when the stream ended
+            // naturally still owes a verdict: settling it here (bounded by the
+            // consult's own 2s timeout) preserves the blocking consult's
+            // guarantee — a confirmed loop is trimmed, disclosed, and
+            // recovered instead of silently committing the degenerate tail.
+            // A verdict after an incident cut has nothing left to decide.
+            if stream_loop_incident.is_none()
+                && let Some(review) = pending_stream_loop_review.take()
+            {
+                let verdict = review
+                    .verdict_rx
+                    .await
+                    .unwrap_or(muta_contracts::StreamLoopVerdict::No);
+                tracing::debug!(
+                    channel = ?review.channel,
+                    pattern = %review.pattern.description(),
+                    verdict = ?verdict,
+                    office = StewardOffice::StreamSentinel.id(),
+                    "stream-loop candidate reviewed by Stream Sentinel after natural stream end"
+                );
+                if verdict.is_loop() {
+                    tracing::warn!(
+                        pattern = %review.pattern.description(),
+                        "Steward confirmed a stream loop that ended naturally; trimming the degenerate tail"
+                    );
+                    stream_loop_incident = Some(StreamLoopIncident {
+                        pattern: review.pattern,
+                        channel: review.channel,
+                    });
+                } else {
+                    steward_cleared_candidates.insert(review.candidate_key);
+                }
+            }
             // Strict stream finalization (the same discipline praxion's
             // accumulator enforces at `finish()`): the stream must not end
             // mid-tool-call. A slot that accumulated id/argument bytes but

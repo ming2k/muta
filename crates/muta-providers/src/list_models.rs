@@ -43,6 +43,7 @@
 //! bare `/v1beta` root) and re-appends the models path. A caller that already
 //! has a bare API root can pass it directly.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use muta_contracts::{RemoteModelEndpoint, RemoteModelMetadata, SecretString, ThinkingSupport};
@@ -59,6 +60,8 @@ pub enum DiscoveryProtocol {
     Anthropic,
     /// Google native → `GET /v1beta/models?key=`.
     Google,
+    /// ChatGPT subscription Codex backend → `GET /backend-api/codex/models`.
+    Codex,
 }
 
 impl DiscoveryProtocol {
@@ -95,6 +98,28 @@ pub struct ModelDiscoveryRequest<'a> {
     /// Applied to every protocol; a provider that needs per-header logic can
     /// still set them here since discovery is read-only (GET).
     pub extra_headers: &'a [(&'a str, &'a str)],
+}
+
+/// Conditional/catalog-version inputs for model discovery. Stock provider
+/// calls can use [`Default`]; the ChatGPT Codex catalog sends both fields.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ModelDiscoveryOptions<'a> {
+    /// Previously observed response ETag, used for conditional revalidation.
+    pub etag: Option<&'a str>,
+    /// Client version required by the Codex models endpoint.
+    pub client_version: Option<&'a str>,
+}
+
+/// Result of a cache-aware model discovery request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelDiscoveryUpdate {
+    /// The endpoint returned a new catalog payload.
+    Modified {
+        models: Vec<DiscoveredModel>,
+        etag: Option<String>,
+    },
+    /// The endpoint confirmed that the cached payload is still current.
+    NotModified { etag: Option<String> },
 }
 
 /// Why a live model list could not be obtained. The catalog layer treats every
@@ -259,7 +284,7 @@ pub fn models_endpoint_for(
     // method-specific suffix. We look for the known suffixes from the right so
     // a path like `/v1/chat/completions` keeps its `/v1` root.
     let root = match protocol {
-        DiscoveryProtocol::OpenAi => {
+        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => {
             // Accept a `…/chat/completions` or `…/responses` endpoint and a
             // bare `…/v1` root alike.
             trimmed
@@ -285,7 +310,7 @@ pub fn models_endpoint_for(
     let root = root.strip_suffix('/').unwrap_or(root);
 
     Ok(match protocol {
-        DiscoveryProtocol::OpenAi => format!("{root}/models"),
+        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => format!("{root}/models"),
         DiscoveryProtocol::Anthropic => format!("{root}/models"),
         DiscoveryProtocol::Google => format!("{root}/models"),
     })
@@ -300,6 +325,21 @@ pub fn models_endpoint_for(
 pub async fn list_models(
     req: ModelDiscoveryRequest<'_>,
 ) -> Result<Vec<DiscoveredModel>, ModelListError> {
+    match discover_models(req, ModelDiscoveryOptions::default()).await? {
+        ModelDiscoveryUpdate::Modified { models, .. } => Ok(models),
+        ModelDiscoveryUpdate::NotModified { .. } => Err(ModelListError::Parse(
+            "endpoint returned 304 without a conditional request".to_string(),
+        )),
+    }
+}
+
+/// Fetch or conditionally revalidate a live model catalog. Unlike
+/// [`list_models`], this retains the response ETag and represents HTTP 304
+/// without forcing callers to discard their cached catalog.
+pub async fn discover_models(
+    req: ModelDiscoveryRequest<'_>,
+    options: ModelDiscoveryOptions<'_>,
+) -> Result<ModelDiscoveryUpdate, ModelListError> {
     let endpoint = models_endpoint_for(req.protocol, req.base_url)?;
     let user_agent = req.user_agent.unwrap_or(crate::MUTA_USER_AGENT);
 
@@ -310,12 +350,20 @@ pub async fn list_models(
         .map_err(ModelListError::Http)?;
 
     let response = match req.protocol {
-        DiscoveryProtocol::OpenAi => {
+        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => {
             // OpenAI auth: a bearer when a key is set, NO header when keyless
             // (some relays reject a malformed bearer). Mirrors the chat path.
             let mut builder = client.get(&endpoint);
             if !req.api_key.expose_secret().trim().is_empty() {
                 builder = builder.bearer_auth(req.api_key.expose_secret());
+            }
+            if req.protocol == DiscoveryProtocol::Codex
+                && let Some(client_version) = options.client_version
+            {
+                builder = builder.query(&[("client_version", client_version)]);
+            }
+            if let Some(etag) = options.etag {
+                builder = builder.header(reqwest::header::IF_NONE_MATCH, etag);
             }
             for (name, value) in req.extra_headers {
                 builder = builder.header(*name, *value);
@@ -371,6 +419,16 @@ pub async fn list_models(
     };
 
     let status = response.status();
+    let response_etag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    if status == reqwest::StatusCode::NOT_MODIFIED {
+        return Ok(ModelDiscoveryUpdate::NotModified {
+            etag: response_etag.or_else(|| options.etag.map(str::to_string)),
+        });
+    }
     if !status.is_success() {
         let code = status.as_u16();
         let body = response.text().await.unwrap_or_default();
@@ -385,12 +443,20 @@ pub async fn list_models(
     if models.is_empty() {
         return Err(ModelListError::Empty);
     }
-    // Stable order regardless of API ordering: sort by id then de-dup. This
-    // makes the reseed idempotent across runs (a re-fetch that returns the
-    // same set in a different order does not register as a change).
-    models.sort_by(|a, b| a.id.cmp(&b.id));
-    models.dedup_by(|a, b| a.id == b.id);
-    Ok(models)
+    if req.protocol == DiscoveryProtocol::Codex {
+        // Codex's order is semantic (the endpoint's `priority` order), so
+        // preserve it while discarding duplicate slugs.
+        let mut seen = HashSet::new();
+        models.retain(|model| seen.insert(model.id.clone()));
+    } else {
+        // Stable order regardless of API ordering: sort by id then de-dup.
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        models.dedup_by(|a, b| a.id == b.id);
+    }
+    Ok(ModelDiscoveryUpdate::Modified {
+        models,
+        etag: response_etag,
+    })
 }
 
 /// The pinned Anthropic API version sent on every request. Mirrors the chat
@@ -407,7 +473,77 @@ fn parse_models(protocol: DiscoveryProtocol, json: &Value) -> Vec<DiscoveredMode
         DiscoveryProtocol::OpenAi => parse_data_models(json),
         DiscoveryProtocol::Anthropic => parse_data_models(json),
         DiscoveryProtocol::Google => parse_google_models(json),
+        DiscoveryProtocol::Codex => parse_codex_models(json),
     }
+}
+
+/// Extract the ChatGPT Codex `{models:[...]}` catalog. The endpoint assigns a
+/// numeric priority (lower first), uses `slug` as the request model id, and
+/// explicitly marks picker visibility and reasoning tiers.
+fn parse_codex_models(json: &Value) -> Vec<DiscoveredModel> {
+    let Some(entries) = json.get("models").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut models: Vec<(i64, usize, DiscoveredModel)> = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let id = entry.get("slug").and_then(Value::as_str)?.to_string();
+            let effort_levels: Vec<String> = entry
+                .get("supported_reasoning_levels")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|level| level.get("effort").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect();
+            let reasoning = !effort_levels.is_empty();
+            let listed = entry.get("visibility").and_then(Value::as_str) == Some("list")
+                && entry
+                    .get("supported_in_api")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+            let vision = entry
+                .get("input_modalities")
+                .and_then(Value::as_array)
+                // Codex treats an omitted legacy field as text + image.
+                .map_or(true, |modalities| {
+                    modalities
+                        .iter()
+                        .any(|modality| modality.as_str() == Some("image"))
+                });
+            let context_window = entry
+                .get("context_window")
+                .and_then(Value::as_i64)
+                .and_then(|window| usize::try_from(window).ok());
+            Some((
+                entry
+                    .get("priority")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(i64::MAX),
+                index,
+                DiscoveredModel {
+                    id,
+                    picker_enabled: Some(listed),
+                    endpoint: Some(RemoteModelEndpoint::Responses),
+                    family: None,
+                    context_window,
+                    max_output_tokens: None,
+                    reasoning: Some(reasoning),
+                    thinking: Some(if reasoning {
+                        ThinkingSupport::ReasoningSummary
+                    } else {
+                        ThinkingSupport::None
+                    }),
+                    tool_call: Some(true),
+                    vision: Some(vision),
+                    effort_levels: Some(effort_levels),
+                },
+            ))
+        })
+        .collect();
+    models.sort_by_key(|(priority, index, _)| (*priority, *index));
+    models.into_iter().map(|(_, _, model)| model).collect()
 }
 
 /// Extract `data[]` entries. Used by both OpenAI-compat and Anthropic, which
@@ -728,6 +864,18 @@ mod tests {
     }
 
     #[test]
+    fn derives_codex_models_endpoint_from_responses_url() {
+        assert_eq!(
+            models_endpoint_for(
+                DiscoveryProtocol::Codex,
+                "https://chatgpt.com/backend-api/codex/responses"
+            )
+            .unwrap(),
+            "https://chatgpt.com/backend-api/codex/models"
+        );
+    }
+
+    #[test]
     fn derives_anthropic_models_endpoint_from_messages_url() {
         assert_eq!(
             models_endpoint_for(
@@ -852,6 +1000,47 @@ mod tests {
             .collect();
         got.sort();
         assert_eq!(got, vec!["gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol"]);
+    }
+
+    #[test]
+    fn parses_codex_catalog_in_priority_order_with_capabilities() {
+        let json = serde_json::json!({
+            "models": [
+                {
+                    "slug": "hidden-helper",
+                    "priority": 0,
+                    "visibility": "hide",
+                    "supported_in_api": true,
+                    "supported_reasoning_levels": [],
+                    "context_window": 64_000,
+                    "input_modalities": ["text"]
+                },
+                {
+                    "slug": "gpt-codex",
+                    "priority": 1,
+                    "visibility": "list",
+                    "supported_in_api": true,
+                    "supported_reasoning_levels": [
+                        {"effort": "low"}, {"effort": "high"}
+                    ],
+                    "context_window": 272_000,
+                    "input_modalities": ["text", "image"]
+                }
+            ]
+        });
+        let models = parse_models(DiscoveryProtocol::Codex, &json);
+        assert_eq!(models[0].id, "hidden-helper");
+        assert_eq!(models[0].picker_enabled, Some(false));
+        assert_eq!(models[1].id, "gpt-codex");
+        assert_eq!(models[1].picker_enabled, Some(true));
+        assert_eq!(models[1].endpoint, Some(RemoteModelEndpoint::Responses));
+        assert_eq!(models[1].context_window, Some(272_000));
+        assert_eq!(models[1].thinking, Some(ThinkingSupport::ReasoningSummary));
+        assert_eq!(models[1].vision, Some(true));
+        assert_eq!(
+            models[1].effort_levels,
+            Some(vec!["low".to_string(), "high".to_string()])
+        );
     }
 
     #[test]

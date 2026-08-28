@@ -393,6 +393,7 @@ impl SessionStore {
             Ok(SessionDetail {
                 id: header.id.clone(),
                 title: header.title.clone(),
+                digest: header.digest.clone(),
                 created_at: header.created_at,
                 updated_at: header.updated_at,
                 message_count: header.model_window.len() + header.archived_transcript.len(),

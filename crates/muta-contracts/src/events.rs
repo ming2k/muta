@@ -1401,6 +1401,10 @@ pub struct SessionDetail {
     pub id: String,
     /// Stored title (AI or manual), if any.
     pub title: Option<String>,
+    /// The Chronicler's structured digest (intent + history checklist), if
+    /// the session has generated one — the resume-time working-memory view.
+    #[serde(default)]
+    pub digest: Option<crate::steward::SessionDigest>,
     pub created_at: u64,
     pub updated_at: u64,
     pub message_count: usize,

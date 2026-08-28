@@ -357,11 +357,29 @@ pub struct App {
     /// `true` when the TokenReport modal is drilled into one round's ReAct-turn
     /// usage; `false` when it shows the session's round list.
     pub token_report_detail: bool,
+    /// Attempt-row cursor inside the drilled round's turn table (display
+    /// order, newest first). Drives row highlighting and the Enter target
+    /// for the third drill level — mirrors `performance_report_turn_cursor`.
+    pub token_report_turn_cursor: usize,
+    /// The open per-attempt usage page (`Context Usage › x round › x turn`),
+    /// keyed by the attempt's `(turn, attempt)` so it survives ledger
+    /// snapshots that grow between frames. `None` while the round detail or
+    /// the round list is shown.
+    pub token_report_turn: Option<(u32, u32)>,
     /// Scroll offset and hierarchy state for the independent performance
     /// report. It shares the request-ledger snapshot as a data source but no
     /// navigation or rendering state with Context Usage.
     pub performance_report_scroll: usize,
     pub performance_report_detail: bool,
+    /// Attempt-row cursor inside the drilled round's "Turns / attempts"
+    /// table (display order, newest first). Drives row highlighting and
+    /// the Enter target for the third drill level.
+    pub performance_report_turn_cursor: usize,
+    /// The open attempt stage page (`Performance › x round › x turn`),
+    /// keyed by the attempt's `(turn, attempt)` so it survives ledger
+    /// snapshots that grow between frames. `None` while the round detail
+    /// or the round list is shown.
+    pub performance_report_turn: Option<(u32, u32)>,
     /// Cross-session usage-statistics report fetched on demand from the
     /// harness (`QueryUsageStats`, ADR-0122). Session-independent: it
     /// aggregates the durable store under `data/usage/`, which survives
@@ -1033,7 +1051,7 @@ pub struct App {
     /// models on later startups. `None` yields a pure-custom instance that is
     /// never re-seeded.
     pub custom_preset_id: Option<String>,
-    /// True while "+ Add provider → xAI OAuth" browser flow is in flight.
+    /// True while an "Add preset connection → OAuth" flow is in flight.
     pub awaiting_oauth_add: bool,
     pub oauth_pending_message: String,
     pub oauth_pending_url: String,

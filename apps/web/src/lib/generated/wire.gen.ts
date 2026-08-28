@@ -106,9 +106,11 @@ export type ColorSchemeConfig = { background: string, surface: string, text: str
 /**
  * An accepted compatibility spelling (`/setup`) and its canonical command
  * (`/init`). Aliases are first-class completion candidates: they surface
- * under their own name — never rewritten into the target mid-completion —
- * so the user's mental model ("I typed `set`, I pick `setup`") is preserved.
- * The composer submits the alias text verbatim; dispatch resolves it.
+ * under their own name so the user's mental model ("I typed `set`, I pick
+ * `setup`") is preserved in the menu. Selecting the row, however, commits
+ * the canonical target into the composer via `insert_text` — the edit is
+ * what runs, so the transcript never accumulates legacy spellings. Dispatch
+ * still resolves any alias that arrives verbatim (typed, not picked).
  */
 export type CommandAlias = { name: string, target: string, };
 
@@ -252,7 +254,17 @@ label: string, description: string,
  * example consuming an `@` trigger or appending a trailing space) does
  * not leak back into frontend code.
  */
-insert_text: string, replace_start: number, replace_end: number, kind: ComposerCompletionKind, command?: CommandSpec, };
+insert_text: string, replace_start: number, replace_end: number, kind: ComposerCompletionKind, 
+/**
+ * Set when this row is a compatibility alias: the **canonical** command
+ * the alias resolves to (e.g. `/yolo` → `/delegate`). The label stays
+ * the alias spelling the user typed, but `insert_text` is the canonical
+ * target — accepting the row rewrites the composer to the real command,
+ * so what lands in the transcript is what actually runs. Frontends also
+ * use this field (never description-text sniffing) to render the row
+ * distinctly from canonical commands.
+ */
+alias_of?: string, command?: CommandSpec, };
 
 /**
  * Semantic kind of one backend-produced composer completion.

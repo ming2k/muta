@@ -737,8 +737,9 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
     //
     // Alias normalization happens exactly once, HERE, and only in the ledger
     // identity — `cmd` keeps whatever spelling the user submitted. Completion
-    // never rewrites an alias mid-typing (aliases are first-class candidates),
-    // so dispatch is the single point where `/config` becomes `/settings`.
+    // already rewrites a *picked* alias into its canonical target
+    // (`insert_text`), but a *typed* alias arrives verbatim, so dispatch is
+    // still the single point where `/config` becomes `/settings`.
     let name = parts[0].trim_start_matches('/');
     let args = cmd.strip_prefix(parts[0]).unwrap_or("").trim();
     match BuiltinCmd::from_slash(parts[0]) {

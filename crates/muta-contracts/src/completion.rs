@@ -62,9 +62,11 @@ pub struct CommandSuggestion {
 
 /// An accepted compatibility spelling (`/setup`) and its canonical command
 /// (`/init`). Aliases are first-class completion candidates: they surface
-/// under their own name — never rewritten into the target mid-completion —
-/// so the user's mental model ("I typed `set`, I pick `setup`") is preserved.
-/// The composer submits the alias text verbatim; dispatch resolves it.
+/// under their own name so the user's mental model ("I typed `set`, I pick
+/// `setup`") is preserved in the menu. Selecting the row, however, commits
+/// the canonical target into the composer via `insert_text` — the edit is
+/// what runs, so the transcript never accumulates legacy spellings. Dispatch
+/// still resolves any alias that arrives verbatim (typed, not picked).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct CommandAlias {
@@ -143,6 +145,16 @@ pub struct ComposerCompletion {
     pub replace_start: usize,
     pub replace_end: usize,
     pub kind: ComposerCompletionKind,
+    /// Set when this row is a compatibility alias: the **canonical** command
+    /// the alias resolves to (e.g. `/yolo` → `/delegate`). The label stays
+    /// the alias spelling the user typed, but `insert_text` is the canonical
+    /// target — accepting the row rewrites the composer to the real command,
+    /// so what lands in the transcript is what actually runs. Frontends also
+    /// use this field (never description-text sniffing) to render the row
+    /// distinctly from canonical commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub alias_of: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub command: Option<CommandSpec>,

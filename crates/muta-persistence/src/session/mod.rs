@@ -142,6 +142,17 @@ pub(crate) struct SessionData {
     /// `false` for legacy snapshots and AI-generated titles.
     #[serde(default)]
     title_manual: bool,
+    /// AI-generated session digest (title + intent + history checklist) —
+    /// the resume-time working-memory projection shown by the session
+    /// picker's detail view. `None` for legacy snapshots and sessions that
+    /// have not yet generated one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    digest: Option<muta_contracts::SessionDigest>,
+    /// Transcript char count when `digest` was generated — the watermark the
+    /// refresh throttle measures growth against. `None` while `digest` is
+    /// `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    digest_anchor: Option<u64>,
     /// High-water mark: the `seq` of the last event already folded into this
     /// snapshot. On load, the snapshot is read as a fast path and only log
     /// events with `seq > applied_seq` are replayed (the tail), so resuming a
@@ -237,6 +248,8 @@ impl Default for SessionData {
             checksum: None,
             title: None,
             title_manual: false,
+            digest: None,
+            digest_anchor: None,
             applied_seq: None,
             provider_selection: None,
             disabled_tools: std::collections::HashSet::new(),
@@ -570,6 +583,10 @@ fn apply_events(data: &mut SessionData, envelopes: &[crate::events::EventEnvelop
                 data.title = title.clone();
                 data.title_manual = *manual;
             }
+            SessionEvent::DigestSet { digest, anchor } => {
+                data.digest = digest.clone();
+                data.digest_anchor = digest.as_ref().map(|_| *anchor);
+            }
             SessionEvent::DisabledToolsSet { tools } => {
                 data.disabled_tools = tools.clone();
             }
@@ -698,6 +715,16 @@ fn snapshot_to_events(data: &SessionData) -> Vec<crate::events::EventEnvelope> {
             event: SessionEvent::TitleSet {
                 title: data.title.clone(),
                 manual: data.title_manual,
+            },
+        });
+    }
+    if let Some(digest) = &data.digest {
+        events.push(crate::events::EventEnvelope {
+            seq: events.len() as u64,
+            timestamp: data.updated_at,
+            event: SessionEvent::DigestSet {
+                digest: Some(digest.clone()),
+                anchor: data.digest_anchor.unwrap_or(0),
             },
         });
     }
@@ -1095,6 +1122,8 @@ struct SessionHeader {
     updated_at: u64,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default)]
+    digest: Option<muta_contracts::SessionDigest>,
     #[serde(default)]
     model_window: Vec<Box<RawValue>>,
     #[serde(default)]

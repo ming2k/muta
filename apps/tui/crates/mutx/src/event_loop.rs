@@ -591,7 +591,7 @@ pub(super) enum SideViewSignal {
     Closed,
 }
 
-/// Progress of the "+ Add provider → OAuth" browser flow.
+/// Progress of the "Add preset connection → OAuth" browser flow.
 pub(super) enum OauthAddSignal {
     Pending {
         url: String,
@@ -885,12 +885,13 @@ fn activate_picked_model(app: &mut App, id: String, model: String, key_ready: bo
         app.dismiss_surface();
     } else if app.provider_row_auth(&id).is_oauth() {
         let auth = app.provider_row_auth(&id);
-        let _ = app.tx.send(AgentRequest::ConnectProvider {
-            id,
-            method: auth
-                .default_login_method()
-                .unwrap_or(muta_contracts::LoginMethod::Device),
-        });
+        let method = auth
+            .oauth_provider_id()
+            .and_then(muta_providers::oauth::config_by_provider_id)
+            .and_then(|config| config.effective_default_login_method())
+            .or_else(|| auth.default_login_method())
+            .unwrap_or(muta_contracts::LoginMethod::Device);
+        let _ = app.tx.send(AgentRequest::ConnectProvider { id, method });
         app.dismiss_surface();
     } else {
         // No key configured: open the key editor prefilled with this model so

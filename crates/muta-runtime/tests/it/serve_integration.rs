@@ -218,6 +218,7 @@ async fn completion_catalog_and_edits_round_trip_over_websocket() {
         replace_start: 0,
         replace_end: 4,
         kind: muta_contracts::ComposerCompletionKind::Slash,
+        alias_of: None,
         command: Some(command),
     };
     let _ = bc_tx.send(AgentResponse::ComposerCompletions {

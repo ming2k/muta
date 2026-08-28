@@ -60,7 +60,7 @@ pub fn draw_provider_delete_confirm(
     if let Some(h) = f.header {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "Delete provider?",
+                "Delete connection?",
                 Style::default()
                     .fg(theme.warn())
                     .add_modifier(Modifier::BOLD),

@@ -51,7 +51,9 @@ pub use crate::overlays::{
     draw_permissions_manager, draw_preset_chooser, draw_provider_delete_confirm,
     draw_question_modal, draw_queue_modal, draw_session_preview, draw_sessions_modal,
     draw_skills_modal, draw_token_report_modal, draw_tools_modal, draw_tree_modal,
-    draw_usage_stats_modal, performance_report_round_count, token_report_round_count,
+    draw_usage_stats_modal, performance_report_attempt_count, performance_report_attempt_key,
+    performance_report_round_count, token_report_attempt_count, token_report_attempt_key,
+    token_report_round_count,
 };
 use crate::page_header;
 pub(crate) use crate::page_header::{

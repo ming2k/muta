@@ -15,6 +15,7 @@ pub const CHATGPT_BUILTIN_MODELS: &[&str] = &[
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-5.5",
+    "gpt-5.3-codex-spark",
     "gpt-5.4",
     "gpt-5.4-mini",
 ];
@@ -73,6 +74,17 @@ pub const MODELS: &[Model] = &[
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
     Model {
+        id: "gpt-5.3-codex-spark",
+        family: "gpt",
+        context_window: 128_000,
+        thinking: ThinkingSupport::ReasoningSummary,
+        tool_call: true,
+        vision: false,
+        format: WireFormat::OpenAi,
+        model_guidance: "",
+        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
+    },
+    Model {
         id: "gpt-5.4",
         family: "gpt",
         context_window: 1_000_000,
@@ -103,11 +115,12 @@ pub(crate) const PRESET_SPEC: ProviderPresetSpec = ProviderPresetSpec {
     baselines: MODELS,
     base_url: "https://chatgpt.com/backend-api/codex/responses",
     user_agent: None,
-    // The Responses transport is the OpenAI wire family; discovery is
-    // disabled because the ChatGPT subscription backend does not expose a
-    // standard `GET /models` list, and the plan-unlocked set is fixed.
+    // The Responses transport is the OpenAI wire family. Discovery uses the
+    // subscription-only `/backend-api/codex/models` catalog rather than the
+    // public OpenAI `{data:[...]}` shape; the remote catalog is authoritative
+    // for each account and its capability metadata is trusted.
     protocol: "openai",
     models: CHATGPT_BUILTIN_MODELS,
-    discovery: false,
-    fitting: false,
+    discovery: true,
+    fitting: true,
 };

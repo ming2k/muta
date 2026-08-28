@@ -92,9 +92,9 @@ impl App {
             && !(active_panel == Some(crate::surfaces::PanelId::Sessions)
                 && self.session_info_detail)
             && !(active_panel == Some(crate::surfaces::PanelId::TokenReport)
-                && self.token_report_detail)
+                && (self.token_report_detail || self.token_report_turn.is_some()))
             && !(active_panel == Some(crate::surfaces::PanelId::PerformanceReport)
-                && self.performance_report_detail)
+                && (self.performance_report_detail || self.performance_report_turn.is_some()))
             && !(view == View::Settings
                 && (self.config_custom_editing
                     || self.websearch_editing.is_some()
@@ -431,6 +431,8 @@ impl App {
         }
         if id == crate::surfaces::PanelId::PerformanceReport {
             self.performance_report_detail = false;
+            self.performance_report_turn = None;
+            self.performance_report_turn_cursor = 0;
         }
         if id == crate::surfaces::PanelId::Queue
             && let Some(sid) = self.queue_exit_session.take()
@@ -514,11 +516,15 @@ impl App {
                 self.token_report = None;
                 self.token_report_scroll = 0;
                 self.token_report_detail = false;
+                self.token_report_turn = None;
+                self.token_report_turn_cursor = 0;
             }
             PanelId::PerformanceReport => {
                 self.token_report = None;
                 self.performance_report_scroll = 0;
                 self.performance_report_detail = false;
+                self.performance_report_turn = None;
+                self.performance_report_turn_cursor = 0;
             }
             PanelId::Btw => {
                 self.btw_list.clear();
@@ -595,13 +601,29 @@ impl App {
                 self.set_cursor(0);
                 true
             }
+            Modal::TokenReport if self.token_report_turn.is_some() => {
+                // Deepest-first: pop the attempt page back to the round
+                // detail before leaving the round itself.
+                self.token_report_turn = None;
+                self.token_report_scroll = 0;
+                true
+            }
             Modal::TokenReport if self.token_report_detail => {
                 self.token_report_detail = false;
+                self.token_report_turn_cursor = 0;
                 self.token_report_scroll = 0;
+                true
+            }
+            Modal::PerformanceReport if self.performance_report_turn.is_some() => {
+                // Deepest-first: pop the attempt stage page back to the
+                // round detail before leaving the round itself.
+                self.performance_report_turn = None;
+                self.performance_report_scroll = 0;
                 true
             }
             Modal::PerformanceReport if self.performance_report_detail => {
                 self.performance_report_detail = false;
+                self.performance_report_turn_cursor = 0;
                 self.performance_report_scroll = 0;
                 true
             }

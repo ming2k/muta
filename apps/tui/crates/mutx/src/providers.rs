@@ -143,8 +143,8 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
     },
     ProviderPreset {
         id: "chatgpt-oauth",
-        label: "ChatGPT",
-        description: "Uses your ChatGPT Plus or Pro subscription for flagship GPT and deep-reasoning models; authorizes in the browser, no API key.",
+        label: "ChatGPT subscription",
+        description: "Uses your ChatGPT Plus or Pro subscription for Codex and flagship GPT models; authorizes in the browser, no API key.",
         protocol: "openai",
         models: muta_providers::CHATGPT_BUILTIN_MODELS,
         needs_url: false,
@@ -153,19 +153,6 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         default_url: Some("https://chatgpt.com/backend-api/codex/responses"),
         user_agent: None,
         auth: muta_contracts::ChannelAuth::ChatGptOAuth,
-    },
-    ProviderPreset {
-        id: "custom-openai",
-        label: "Custom Provider",
-        description: "Any OpenAI-compatible endpoint you bring — a custom gateway, local runtime, or relay; you set the base URL and key.",
-        protocol: "openai",
-        models: &[],
-        needs_url: true,
-        url_hint: "https://relay.example.com/v1/chat/completions",
-        needs_model: true,
-        default_url: None,
-        user_agent: None,
-        auth: muta_contracts::ChannelAuth::ApiKey,
     },
     ProviderPreset {
         id: "deepseek",
@@ -286,15 +273,44 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
     },
 ];
 
+/// The generic OpenAI-compatible connection definition. It is intentionally
+/// separate from [`PROVIDER_PRESETS`]: the Connections surface exposes
+/// "Add preset connection" and "Add custom connection" as sibling actions,
+/// so a custom endpoint is never presented as though it were a preset.
+///
+/// The stable `custom-openai` id is retained to recognize existing
+/// connections. New custom connections persist without a preset id.
+pub const CUSTOM_CONNECTION: ProviderPreset = ProviderPreset {
+    id: "custom-openai",
+    label: "Custom connection",
+    description: "Any OpenAI-compatible endpoint you bring — a custom gateway, local runtime, or relay; you set the base URL and key.",
+    protocol: "openai",
+    models: &[],
+    needs_url: true,
+    url_hint: "https://relay.example.com/v1/chat/completions",
+    needs_model: true,
+    default_url: None,
+    user_agent: None,
+    auth: muta_contracts::ChannelAuth::ApiKey,
+};
+
+/// Resolve either a curated preset or the standalone custom-connection
+/// definition by its stable persisted id.
+pub fn connection_definition(id: &str) -> Option<&'static ProviderPreset> {
+    if id == CUSTOM_CONNECTION.id {
+        return Some(&CUSTOM_CONNECTION);
+    }
+    PROVIDER_PRESETS.iter().find(|preset| preset.id == id)
+}
+
 /// The editor header title for a create-mode connection — the label of the
 /// preset the flow was seeded from, falling back to a generic header. The
 /// lookup is by **preset id**, not wire protocol: several presets share the
 /// `openai` protocol, and a first-match-by-protocol lookup would mislabel
-/// the editor (e.g. "ChatGPT" for the OpenAI Platform preset).
+/// the editor (e.g. "ChatGPT subscription" for the ChatGPT OAuth preset).
 pub fn preset_label_for(preset_id: Option<&str>) -> String {
-    PROVIDER_PRESETS
-        .iter()
-        .find(|t| Some(t.id) == preset_id)
+    preset_id
+        .and_then(connection_definition)
         .map(|t| t.label.to_string())
         .unwrap_or_else(|| "＋ Add connection".to_string())
 }
@@ -308,10 +324,7 @@ pub fn provider_type_label(preset_id: &str) -> Option<&'static str> {
     if preset_id.is_empty() {
         return None;
     }
-    PROVIDER_PRESETS
-        .iter()
-        .find(|t| t.id == preset_id)
-        .map(|t| t.label)
+    connection_definition(preset_id).map(|t| t.label)
 }
 
 /// The ordered editor fields shown when **editing** an existing user provider.
@@ -1139,7 +1152,7 @@ mod tests {
             "Google AI Studio",
             "DeepSeek",
             "xAI",
-            "ChatGPT",
+            "ChatGPT subscription",
             "GitHub Copilot",
             "Google Antigravity",
             "Kimi Code",
@@ -1322,7 +1335,10 @@ mod tests {
         // otherwise the catalog's reconciliation could not re-seed a connection
         // from its preset. This test catches a divergence introduced by
         // editing one table but not the other.
-        for t in PROVIDER_PRESETS {
+        for t in PROVIDER_PRESETS
+            .iter()
+            .chain(std::iter::once(&CUSTOM_CONNECTION))
+        {
             let spec = muta_providers::provider_preset_spec(t.id)
                 .unwrap_or_else(|| panic!("preset id {} has no matching spec", t.id));
             assert_eq!(
@@ -1340,7 +1356,11 @@ mod tests {
 
     #[test]
     fn preset_ids_are_unique() {
-        let mut ids: Vec<&str> = PROVIDER_PRESETS.iter().map(|t| t.id).collect();
+        let mut ids: Vec<&str> = PROVIDER_PRESETS
+            .iter()
+            .chain(std::iter::once(&CUSTOM_CONNECTION))
+            .map(|t| t.id)
+            .collect();
         ids.sort_unstable();
         let dups: Vec<&[&str]> = ids.windows(2).filter(|pair| pair[0] == pair[1]).collect();
         assert!(dups.is_empty(), "duplicate preset ids: {dups:?}");
@@ -1358,8 +1378,12 @@ mod tests {
             .iter()
             .find(|t| t.id == "chatgpt-oauth")
             .unwrap();
-        assert_eq!(chatgpt.label, "ChatGPT");
+        assert_eq!(chatgpt.label, "ChatGPT subscription");
         assert_eq!(openai.protocol, chatgpt.protocol);
+        assert!(
+            chatgpt.models.contains(&"gpt-5.3-codex-spark"),
+            "the subscription preset must expose the Codex model allowed by OpenCode"
+        );
     }
 
     #[test]
@@ -1367,16 +1391,33 @@ mod tests {
         // Several presets share the `openai` wire protocol (chatgpt-oauth is
         // declared first). A create-mode editor title must resolve from the
         // seeded preset id, otherwise every openai-protocol flow would be
-        // headed "ChatGPT".
+        // headed "ChatGPT subscription".
         assert_eq!(preset_label_for(Some("openai")), "OpenAI Platform");
-        assert_eq!(preset_label_for(Some("chatgpt-oauth")), "ChatGPT");
-        assert_eq!(preset_label_for(Some("custom-openai")), "Custom Provider");
+        assert_eq!(
+            preset_label_for(Some("chatgpt-oauth")),
+            "ChatGPT subscription"
+        );
+        assert_eq!(preset_label_for(Some("custom-openai")), "Custom connection");
         assert_eq!(preset_label_for(Some("deepseek")), "DeepSeek");
         // Unknown / unseeded ids fall back to the generic header.
         assert_eq!(preset_label_for(None), "＋ Add connection");
         assert_eq!(
             preset_label_for(Some("no-such-preset")),
             "＋ Add connection"
+        );
+    }
+
+    #[test]
+    fn custom_connection_is_not_a_preset_chooser_row() {
+        assert!(
+            PROVIDER_PRESETS
+                .iter()
+                .all(|preset| preset.id != "custom-openai"),
+            "custom connections have their own Connections-level branch"
+        );
+        assert_eq!(
+            connection_definition("custom-openai").map(|definition| definition.id),
+            Some("custom-openai")
         );
     }
 

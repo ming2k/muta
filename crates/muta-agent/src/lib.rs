@@ -160,7 +160,7 @@ mod permission_policy;
 mod permission_store;
 pub mod round_lifecycle;
 pub use round_lifecycle::{ParkedInterrupt, RoundBegin, RoundLifecycle};
-pub mod session_title;
+pub mod session_digest;
 mod shell_input;
 pub mod steward;
 pub use steward::{Steward, StewardError};

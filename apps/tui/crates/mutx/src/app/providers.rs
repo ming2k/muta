@@ -3,7 +3,8 @@
 use super::*;
 
 impl App {
-    /// Open the preset chooser — the "＋ Add connection" entry point.
+    /// Open the curated preset chooser — the "Add preset connection" entry
+    /// point.
     /// The chat draft is already parked in `stashed_input` (the Connections list
     /// stashed it on open); the chooser is a pure list, so the composer line
     /// stays clear.
@@ -15,6 +16,21 @@ impl App {
         }
         self.preset_choice = 0;
         self.preset_scroll = 0;
+        self.input.clear();
+        self.set_cursor(0);
+    }
+
+    /// Open the standalone custom-connection editor directly from
+    /// Connections. Unlike a preset selection, this is a sibling branch of
+    /// the add flow, so the Connections panel stays below it on the transient
+    /// navigation stack.
+    pub fn open_custom_connection_editor(&mut self) {
+        self.seed_custom_provider_from_preset(&crate::providers::CUSTOM_CONNECTION);
+        if self.active_panel() == Some(crate::surfaces::PanelId::Connections) {
+            self.push_transient_surface(Modal::CustomProvider);
+        } else {
+            self.replace_transient_surface(Modal::CustomProvider);
+        }
         self.input.clear();
         self.set_cursor(0);
     }
@@ -64,17 +80,23 @@ impl App {
     }
 
     /// Open the OAuth waiting sheet and seed create buffers from `preset`.
-    pub fn begin_oauth_add(&mut self, preset: &ProviderPreset) {
+    pub fn begin_oauth_add(
+        &mut self,
+        preset: &ProviderPreset,
+        method: muta_contracts::LoginMethod,
+    ) {
         self.seed_custom_provider_from_preset(preset);
         self.awaiting_oauth_add = true;
-        // The default message mirrors the provider's default login method: the
-        // device flow (Copilot/xAI/ChatGPT default) prints a URL + user code,
+        // The default message mirrors the selected login method: the device
+        // flow prints a URL + user code,
         // while the browser flow opens a loopback callback. The auth runner
         // overwrites this with the live URL/code as soon as the device-code
         // request returns.
-        self.oauth_pending_message = match preset.auth.default_login_method() {
-            Some(muta_contracts::LoginMethod::Device) => "Requesting device code…".to_string(),
-            _ => "Complete authorization in your browser (or open the link below).".to_string(),
+        self.oauth_pending_message = match method {
+            muta_contracts::LoginMethod::Device => "Requesting device code…".to_string(),
+            muta_contracts::LoginMethod::Browser => {
+                "Complete authorization in your browser (or open the link below).".to_string()
+            }
         };
         self.oauth_pending_url.clear();
         self.oauth_pending_user_code.clear();
@@ -86,7 +108,8 @@ impl App {
     }
 
     /// After OAuth succeeds: name-only editor (default name derived from the
-    /// in-flight auth — "xAI" for SuperGrok, "ChatGPT" for the ChatGPT plan).
+    /// in-flight auth — "xAI" for SuperGrok, "ChatGPT subscription" for the
+    /// ChatGPT plan).
     pub fn open_oauth_instance_name_editor(&mut self) {
         self.awaiting_oauth_add = false;
         self.oauth_pending_url.clear();
@@ -99,7 +122,7 @@ impl App {
         self.custom_field = 0;
         self.custom_edit_id = None;
         let default_name = match self.custom_auth {
-            muta_contracts::ChannelAuth::ChatGptOAuth => "ChatGPT",
+            muta_contracts::ChannelAuth::ChatGptOAuth => "ChatGPT subscription",
             muta_contracts::ChannelAuth::CopilotOAuth => "Copilot",
             muta_contracts::ChannelAuth::AntigravityOAuth => "Google Antigravity",
             _ => "xAI",

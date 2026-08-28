@@ -120,13 +120,14 @@ Notes:
 
 Provider presets that authenticate with a browser OAuth flow instead of an
 API key (the `oauth` module in `muta-providers`; tokens persist in
-`auth.toml` — see [Paths](paths.md)). Added from the TUI's add-provider flow;
+`auth.toml` — see [Paths](paths.md)). Added from the TUI's preset-connection
+flow;
 the `/models` picker accepts them like any other provider.
 
 | Template id | Backend | Notes |
 |-------------|---------|-------|
 | `xai-oauth` | xAI SuperGrok subscription | OAuth2 (PKCE + device code) against xAI; serves the Grok family ([ADR-0052](../adr/0052-xai-supergrok-provider.md)) |
-| `chatgpt-oauth` | ChatGPT Pro/Plus subscription | ChatGPT JSON device-code grant against the Responses backend at `chatgpt.com/backend-api/codex/responses`; fixed model set (no `/models` discovery) |
+| `chatgpt-oauth` | ChatGPT subscription | Browser PKCE login against `auth.openai.com` (device-code grant available as the headless fallback); inference over the Codex Responses backend at `chatgpt.com/backend-api/codex/responses`. Tracks the account's live `/backend-api/codex/models` catalog (ETag-revalidated, 5-minute cache TTL) with capability fitting; the compiled snapshot (`gpt-5.6-sol`…`gpt-5.3-codex-spark`) is the offline fallback |
 | `copilot-oauth` | GitHub Copilot subscription | Public Copilot OAuth App client id (shared with opencode); tracks the plan-unlocked model list with live discovery + fitting. See [Copilot Provider Pitfalls](../how-to/copilot-provider-pitfalls.md) |
 
 ### sub2api relay presets
@@ -143,15 +144,19 @@ built-ins:
 
 See [How to use sub2api relays](../how-to/use-sub2api.md).
 
-### custom preset
+### Custom connections
 
 The generic escape hatch for any OpenAI-compatible endpoint the curated
 presets do not cover — third-party relays, self-hosted gateways, or
 subscription bundles that expose a `/v1/chat/completions` surface:
 
-| Template id | Protocol | Notes |
-|-------------|----------|-------|
-| `custom-openai` | `openai` | Seeds **no** model list. The editor shows a free-text Model field (registry-known OpenAI ids as suggestions, plus the raw typed id as a custom value); the typed id becomes the instance's declared model. No live discovery — the instance keeps exactly the id the user typed. |
+The TUI exposes this as `Connections › Add custom connection`, separate from
+the preset chooser. The editor shows a free-text Model field (registry-known
+OpenAI ids as suggestions, plus the raw typed id as a custom value); the typed
+id becomes the connection's declared model. New custom connections have no
+`preset_id` and no live discovery, so the connection keeps exactly the id the
+user typed. Existing `preset_id = "custom-openai"` declarations remain
+compatible.
 
 Model ids travel **verbatim**: an endpoint with case-sensitive ids (e.g. the
 WeChat OpenAI-compatible endpoint serves `GLM-5.2` / `Deepseek-v4-flash` and

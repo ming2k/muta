@@ -35,8 +35,8 @@ use crate::view::Theme;
 /// ADR-0046), and no activation concept either — switching the active provider
 /// is the Models picker's job, so this surface only *manages* instances: `a`
 /// adds a new connection (opens the preset chooser from the footer), `e`
-/// edits, `Shift+D` deletes a custom provider. When no instance exists, an
-/// empty-state hint prompts the user to press `a`. Mirrors the input-history
+/// edits, `Shift+D` deletes a custom connection. When no instance exists, an
+/// empty-state hint presents the preset and custom branches. Mirrors the input-history
 /// modal's two-mode (browse/search) design: `/` enters search, the header stays
 /// title-only, a dedicated search row appears beneath it, and rows highlight
 /// matched chars.
@@ -70,10 +70,11 @@ pub fn draw_connections_modal(
     // (rank 80), surviving width collapse longer than `D delete` (rank 70).
     // There is no `Enter activate` here — switching the active provider is the Models
     // picker's job; this surface only manages instances.
-    let browse_hints: [FooterHint; 6] = [
+    let browse_hints: [FooterHint; 7] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
-        FooterHint::primary("a", "add"),
+        FooterHint::primary("a", "preset"),
+        FooterHint::secondary("c", "custom"),
         FooterHint::secondary("e", "edit"),
         FooterHint::secondary("r", "refresh"),
         FooterHint::always(keyvocab::ESC, "close"),
@@ -487,8 +488,8 @@ fn provider_list_body(
 }
 
 /// The Connections empty-state body: shown when no provider instance exists.
-/// A vertically and horizontally centered hint that points the user at the `a`
-/// footer shortcut to add one.
+/// A vertically and horizontally centered hint that points the user at the
+/// two sibling add branches.
 fn connections_empty_body(theme: &Theme) -> Vec<Line<'static>> {
     vec![
         Line::from(Span::styled(
@@ -504,10 +505,14 @@ fn connections_empty_body(theme: &Theme) -> Vec<Line<'static>> {
                     .fg(theme.info())
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::styled(" for a preset or ", Style::default().fg(theme.muted())),
             Span::styled(
-                " to add a provider connection",
-                Style::default().fg(theme.muted()),
+                "c",
+                Style::default()
+                    .fg(theme.info())
+                    .add_modifier(Modifier::BOLD),
             ),
+            Span::styled(" for custom", Style::default().fg(theme.muted())),
         ]),
     ]
 }
@@ -1329,7 +1334,10 @@ pub fn draw_oauth_pending(
     }
 
     if let Some(h) = f.header {
-        let parts = hierarchical_breadcrumb(&["Connections", "Add", title], h.width as usize);
+        let parts = hierarchical_breadcrumb(
+            &["Connections", "Add preset connection", title],
+            h.width as usize,
+        );
         modal_header_parts(frame, Some(h), &parts, theme);
     }
 
@@ -1431,7 +1439,7 @@ impl PresetRow {
     }
 }
 
-/// Draw the preset chooser as the Connections list's Add connection
+/// Draw the preset chooser as the Connections list's Add preset connection
 /// child page. It retains the parent panel geometry and uses a breadcrumb
 /// header so navigation does not look like a separate modal.
 ///
@@ -1461,7 +1469,7 @@ pub fn draw_preset_chooser(
     let f = modal_frame(frame, area, theme.panel(), true, true);
 
     let header = hierarchical_breadcrumb(
-        &["Connections", "Add Provider"],
+        &["Connections", "Add preset connection"],
         f.header.map(|h| h.width as usize).unwrap_or(80),
     );
     modal_header_parts(frame, f.header, &header, theme);
@@ -1489,17 +1497,23 @@ pub fn draw_preset_chooser(
         theme,
     );
 
+    // Footer: OAuth presets additionally expose explicit login-method
+    // selection (`b` browser PKCE, `d` device code) on top of Enter's default;
+    // non-OAuth presets hide both since they have no OAuth flow to choose.
+    let oauth_preset = PROVIDER_PRESETS
+        .get(selected)
+        .is_some_and(|preset| preset.auth.is_oauth());
+    let mut hints: Vec<FooterHint> = vec![
+        FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
+        FooterHint::primary(keyvocab::ENTER, "select"),
+    ];
+    if oauth_preset {
+        hints.push(FooterHint::secondary("b", "browser"));
+        hints.push(FooterHint::secondary("d", "device"));
+    }
+    hints.push(FooterHint::always(keyvocab::ESC, "back"));
     if let Some(fo) = f.footer {
-        render_modal_footer(
-            frame,
-            fo,
-            &[
-                FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
-                FooterHint::primary(keyvocab::ENTER, "select"),
-                FooterHint::always(keyvocab::ESC, "back"),
-            ],
-            theme,
-        );
+        render_modal_footer(frame, fo, &hints, theme);
     }
     area
 }
@@ -1514,6 +1528,9 @@ pub struct CustomEditorView<'a> {
     pub field: u8,
     /// Edit mode hides the Model field and changes the Token hint / header.
     pub editing: bool,
+    /// Whether create mode is the standalone custom-connection branch rather
+    /// than a selected curated preset.
+    pub custom: bool,
     /// Header title — the preset label (create) or `Edit · <name>` (edit).
     pub title: &'a str,
     pub name_buf: &'a str,
@@ -1546,6 +1563,7 @@ pub fn draw_custom_provider_editor(
         fields,
         field,
         editing,
+        custom,
         title,
         name_buf,
         base_url_buf,
@@ -1642,8 +1660,10 @@ pub fn draw_custom_provider_editor(
     let header_width = f.header.map(|h| h.width as usize).unwrap_or(80);
     let levels: Vec<&str> = if editing {
         vec!["Connections", "Edit", title]
+    } else if custom {
+        vec!["Connections", "Add custom connection"]
     } else {
-        vec!["Connections", "Add", title]
+        vec!["Connections", "Add preset connection", title]
     };
     let header = hierarchical_breadcrumb(&levels, header_width);
     modal_header_parts(frame, f.header, &header, theme);
@@ -2140,8 +2160,16 @@ mod tests {
         // newline + indent between its characters.
         let squeezed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
+            squeezed.contains("Connections›Addpresetconnection"),
+            "preset branch breadcrumb: {text:?}"
+        );
+        assert!(
             squeezed.contains("flagshipClaudemodelswithadvancedreasoning"),
             "focused description revealed: {text:?}"
+        );
+        assert!(
+            !text.contains("Custom connection"),
+            "custom connection is a sibling branch, not a preset row: {text:?}"
         );
         // An unfocused row's description is hidden (Antigravity OAuth is
         // further down the sorted list).
@@ -2586,8 +2614,9 @@ mod tests {
         });
         let text = buffer_text(&terminal);
         assert!(text.contains("No connections yet"));
-        assert!(text.contains("Press a to add a provider connection"));
-        assert!(text.contains("add"));
+        assert!(text.contains("Press a for a preset or c for custom"));
+        assert!(text.contains("preset"));
+        assert!(text.contains("custom"));
         assert!(text.contains("close"));
     }
 

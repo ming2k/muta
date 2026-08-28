@@ -14,10 +14,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use muta_contracts::{
-    Message, ModelRequest, Provider, Role, SanityCheckInput, SanityCheckVerdict,
-    SanityVerifierTask, SemanticLoopInput, SemanticLoopSentinelTask, SemanticLoopVerdict,
-    SessionTitleOutput, SessionTitlerInput, SessionTitlerTask, StewardTask, StreamLoopReviewInput,
-    StreamLoopReviewerTask, StreamLoopVerdict, clean_title, steward_identity,
+    Message, ModelRequest, Provider, Role, SessionDigestInput, SessionDigestTask, StewardTask,
+    StreamLoopReviewInput, StreamLoopReviewerTask, StreamLoopVerdict, steward_identity,
 };
 
 /// Errors that can occur during a Steward task consultation.
@@ -147,25 +145,6 @@ impl Steward {
         }
     }
 
-    /// Specialized helper: Evaluate recent history for semantic doom loops.
-    pub async fn check_semantic_loop(
-        &self,
-        recent_signatures: Vec<String>,
-        recent_context: String,
-    ) -> SemanticLoopVerdict {
-        let task = SemanticLoopSentinelTask;
-        let input = SemanticLoopInput {
-            recent_signatures,
-            recent_context,
-        };
-        let fallback = SemanticLoopVerdict {
-            is_loop: false,
-            pattern: None,
-            remedy_nudge: None,
-        };
-        self.consult_with_fallback(task, input, fallback).await
-    }
-
     /// Confirm or clear an L1 in-flight stream-loop candidate.
     ///
     /// The output grammar is the strict bare-token contract owned by
@@ -177,41 +156,24 @@ impl Steward {
             .await
     }
 
-    /// Specialized helper: Verify sanity of a proposed action or string.
-    pub async fn verify_sanity(
+    /// Specialized helper: distill an excerpt (plus an optional previous
+    /// digest for revision) into a structured session digest.
+    ///
+    /// Unlike the fail-open sentinels this returns `None` on any failure —
+    /// timeout, provider error, or malformed JSON — because there is no
+    /// sensible plain-text fallback for a structured digest; the caller
+    /// keeps the previous digest instead.
+    pub async fn generate_digest(
         &self,
-        action_type: impl Into<String>,
-        payload: impl Into<String>,
-        justification: impl Into<String>,
-    ) -> SanityCheckVerdict {
-        let task = SanityVerifierTask;
-        let input = SanityCheckInput {
-            action_type: action_type.into(),
-            payload: payload.into(),
-            justification: justification.into(),
-        };
-        let fallback = SanityCheckVerdict {
-            is_sane: true,
-            risk_level: muta_contracts::RiskLevel::Safe,
-            critique: "Verification skipped or timed out (fail-open)".to_string(),
-        };
-        self.consult_with_fallback(task, input, fallback).await
-    }
-
-    /// Specialized helper: Generate a clean session title from an excerpt.
-    pub async fn generate_title(&self, excerpt: impl Into<String>) -> Option<String> {
-        let task = SessionTitlerTask;
-        let input = SessionTitlerInput {
-            excerpt: excerpt.into(),
-        };
-        match self.consult(task, input).await {
-            Ok(SessionTitleOutput { title }) => clean_title(&title),
-            Err(StewardError::DeserializationError { raw, .. }) => {
-                // If the model returned plain text instead of JSON, clean that directly.
-                clean_title(&raw)
-            }
+        input: SessionDigestInput,
+    ) -> Option<muta_contracts::SessionDigest> {
+        match self.consult(SessionDigestTask, input).await {
+            Ok(digest) => Some(digest),
             Err(err) => {
-                tracing::warn!(error = %err, "Steward title generation failed");
+                tracing::warn!(
+                    error = %err,
+                    "Steward digest generation failed; keeping previous digest"
+                );
                 None
             }
         }
@@ -246,32 +208,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn steward_consults_and_parses_json() {
-        let json = r#"{"is_loop": true, "pattern": "oscillating edit", "remedy_nudge": "Read the file first"}"#;
+    async fn steward_digest_parses_and_fails_open() {
+        let json = r#"{"title": "Fix auth loop", "intent": "User wants login fixed.", "history": ["Reproduced the loop"]}"#;
         let provider = Arc::new(MockProvider {
             response: Ok(format!("```json\n{json}\n```")),
         });
-        let steward = Steward::new(provider);
+        let digest = Steward::new(provider)
+            .generate_digest(SessionDigestInput {
+                excerpt: "user: fix the login loop".to_string(),
+                previous: None,
+            })
+            .await
+            .expect("fenced JSON parses");
+        assert_eq!(digest.title, "Fix auth loop");
+        assert_eq!(digest.history, vec!["Reproduced the loop".to_string()]);
 
-        let verdict = steward
-            .check_semantic_loop(vec!["edit_file a.rs".into()], "test context".into())
-            .await;
-        assert!(verdict.is_loop);
-        assert_eq!(verdict.pattern.as_deref(), Some("oscillating edit"));
-        assert_eq!(verdict.remedy_nudge.as_deref(), Some("Read the file first"));
-    }
-
-    #[tokio::test]
-    async fn steward_fails_open_on_provider_error() {
+        // Provider failure and malformed JSON both fail-open to `None` —
+        // metadata generation must never break a session.
         let provider = Arc::new(MockProvider {
             response: Err("HTTP 500 error".to_string()),
         });
-        let steward = Steward::new(provider);
-
-        let verdict = steward
-            .check_semantic_loop(vec!["read_text".into()], "context".into())
-            .await;
-        assert!(!verdict.is_loop); // fail-open default
+        assert!(
+            Steward::new(provider)
+                .generate_digest(SessionDigestInput {
+                    excerpt: "x".to_string(),
+                    previous: None,
+                })
+                .await
+                .is_none()
+        );
+        let provider = Arc::new(MockProvider {
+            response: Ok("not json at all".to_string()),
+        });
+        assert!(
+            Steward::new(provider)
+                .generate_digest(SessionDigestInput {
+                    excerpt: "x".to_string(),
+                    previous: None,
+                })
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -305,14 +282,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn steward_title_generation() {
-        let json = r#"{"title": "Fix memory leak in network pool"}"#;
-        let provider = Arc::new(MockProvider {
-            response: Ok(json.to_string()),
-        });
-        let steward = Steward::new(provider);
+    async fn digest_prompt_carries_previous_digest_when_revising() {
+        struct CapturingProvider {
+            last_user_prompt: std::sync::Mutex<String>,
+        }
 
-        let title = steward.generate_title("user: memory leak fix").await;
-        assert_eq!(title.as_deref(), Some("Fix memory leak in network pool"));
+        #[async_trait]
+        impl Provider for CapturingProvider {
+            async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
+                if let Some(last) = request.messages.last() {
+                    *self.last_user_prompt.lock().unwrap() = last.content.clone();
+                }
+                Ok(Message::new(
+                    Role::Assistant,
+                    r#"{"title":"T","intent":"I","history":[]}"#,
+                ))
+            }
+            async fn stream_chat(
+                &self,
+                _request: ModelRequest,
+            ) -> Result<futures::stream::BoxStream<'static, Result<String, String>>, String>
+            {
+                Ok(Box::pin(futures::stream::empty()))
+            }
+        }
+
+        let provider = Arc::new(CapturingProvider {
+            last_user_prompt: std::sync::Mutex::new(String::new()),
+        });
+        let steward = Steward::new(provider.clone());
+        steward
+            .generate_digest(SessionDigestInput {
+                excerpt: "user: continue".to_string(),
+                previous: Some(
+                    r#"{"title":"Old","intent":"Old intent","history":[]}"#.to_string(),
+                ),
+            })
+            .await
+            .expect("valid JSON digest");
+        let prompt = provider.last_user_prompt.lock().unwrap().clone();
+        assert!(
+            prompt.contains("Previous digest (revise it)"),
+            "revision prompt must embed the previous digest"
+        );
+        assert!(prompt.contains("Old intent"));
     }
 }

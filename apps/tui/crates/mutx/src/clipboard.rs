@@ -417,6 +417,43 @@ fn parse_gnome_copied_files(payload: &str) -> Option<Vec<PathBuf>> {
     (!paths.is_empty()).then_some(paths)
 }
 
+/// Interpret a paste *text* payload as file references.
+///
+/// Bracketed paste (Ctrl+Shift+V — the terminal emulator's own paste,
+/// delivered as an `Event::Paste`) is a text-only channel: an image copied
+/// in a file manager arrives as the clipboard's text flavor — a `file://`
+/// URI or bare absolute path — instead of as image bytes. Returns the
+/// referenced files only when *every* non-empty line resolves to an
+/// existing local file, so prose or mixed payloads stay ordinary text
+/// pastes. Callers gate on at least one supported image before treating
+/// the result as an attachment list.
+pub(crate) fn paste_text_as_file_paths(payload: &str) -> Option<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for line in payload.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // A line qualifies when it is a `file://` URI or a bare absolute
+        // path; anything else makes the payload prose.
+        let path = match file_uri_to_path(line) {
+            Some(path) => path,
+            None => {
+                let bare = PathBuf::from(line);
+                if !bare.is_absolute() {
+                    return None;
+                }
+                bare
+            }
+        };
+        if !path.is_file() {
+            return None;
+        }
+        paths.push(path);
+    }
+    (!paths.is_empty()).then_some(paths)
+}
+
 #[cfg(target_os = "macos")]
 async fn read_macos_file_urls() -> Option<Vec<PathBuf>> {
     let script = "POSIX path of (the clipboard as «class furl»)";
@@ -612,5 +649,45 @@ mod tests {
         assert_eq!(parsed, vec![PathBuf::from("/etc/hostname")]);
         let cut = parse_gnome_copied_files("cut\nfile:///nonexistent/x.png\n");
         assert_eq!(cut, None, "unresolvable-only payload falls through");
+    }
+
+    #[test]
+    fn paste_text_as_file_paths_requires_every_line_to_be_an_existing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let png = dir.path().join("shot.png");
+        std::fs::write(&png, b"png").expect("write file");
+        let note = dir.path().join("note.txt");
+        std::fs::write(&note, b"x").expect("write file");
+
+        // Bare path and `file://` URI forms both resolve; trailing newline
+        // and multi-line lists are fine.
+        assert_eq!(
+            paste_text_as_file_paths(png.to_str().unwrap()).as_deref(),
+            Some(&[png.clone()][..])
+        );
+        assert_eq!(
+            paste_text_as_file_paths(&format!("file://{}\n", png.display())).as_deref(),
+            Some(&[png.clone()][..])
+        );
+        assert_eq!(
+            paste_text_as_file_paths(&format!("{}\n{}", png.display(), note.display()))
+                .as_deref(),
+            Some(&[png.clone(), note.clone()][..])
+        );
+        // Prose, missing files, directories, relative paths, URLs and
+        // empty payloads all stay text pastes.
+        assert_eq!(
+            paste_text_as_file_paths(&format!("see {} please", png.display())),
+            None
+        );
+        assert_eq!(
+            paste_text_as_file_paths(dir.path().join("missing.png").to_str().unwrap()),
+            None
+        );
+        assert_eq!(paste_text_as_file_paths(dir.path().to_str().unwrap()), None);
+        assert_eq!(paste_text_as_file_paths("relative/shot.png"), None);
+        assert_eq!(paste_text_as_file_paths("https://example.com/shot.png"), None);
+        assert_eq!(paste_text_as_file_paths(""), None);
+        assert_eq!(paste_text_as_file_paths("\n  \n"), None);
     }
 }
