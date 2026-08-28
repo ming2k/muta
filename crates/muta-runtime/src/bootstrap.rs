@@ -23,9 +23,8 @@ use muta_agent::catalog;
 use muta_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round_response};
 use muta_agent::{Agent, AgentIdentity, MasterPreset, RoundLifecycle, RunnerTool};
 use muta_contracts::{
-    AgentNotice, AgentRequest, AgentResponse, Message, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, Provider, RUNNER_EXPLORE, RoundEvent, ToolContextBuilder, ToolSet,
-    WorkspaceTrustState, collect_toolset,
+    AgentNotice, AgentRequest, AgentResponse, Message, NoticeSurface, Provider, RUNNER_EXPLORE,
+    RoundEvent, ToolContextBuilder, ToolSet, WorkspaceTrustState, collect_toolset,
 };
 
 use muta_mcp::{McpCatalog, McpRuntime};
@@ -363,15 +362,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 let _ = resp_tx_for_shadows.send(round_response(
                     &session_id_for_shadows,
                     RoundEvent::Notice(
-                        AgentNotice::new(
-                            NoticeKind::ReviewAlert,
-                            NoticeSeverity::Warning,
-                            format!(
-                                "Project skill '{}' overrides the {}-scope skill of the same name",
-                                shadow.name, shadow.overridden_scope
-                            ),
-                            NoticeSource::Harness,
-                        )
+                        AgentNotice::trust_changed(format!(
+                            "Project skill '{}' overrides the {}-scope skill of the same name",
+                            shadow.name, shadow.overridden_scope
+                        ))
                         .with_body(format!(
                             "Loading {} instead. Project-local skills win by priority; \
                              if this is unexpected, inspect the project's skills directories \
@@ -590,17 +584,12 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         let _ = resp_tx.send(round_response(
             &session.id().await,
             RoundEvent::Notice(
-                AgentNotice::new(
-                    NoticeKind::ReviewAlert,
-                    NoticeSeverity::Warning,
-                    "Project assets are quarantined",
-                    NoticeSource::Harness,
-                )
-                .with_surface(NoticeSurface::Banner)
-                .with_body(format!(
-                    "Quarantined domains: {}. Inspect them, then run `/trust` or `/trust <domain>` (e.g. `/trust rules`).",
-                    gated.join(", ")
-                )),
+                AgentNotice::trust_changed("Project assets are quarantined")
+                    .with_surface(NoticeSurface::Banner)
+                    .with_body(format!(
+                        "Quarantined domains: {}. Inspect them, then run `/trust` or `/trust <domain>` (e.g. `/trust rules`).",
+                        gated.join(", ")
+                    )),
             ),
         ));
     }
@@ -624,15 +613,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         let _ = resp_tx.send(round_response(
             &session.id().await,
             RoundEvent::Notice(
-                AgentNotice::new(
-                    NoticeKind::ReviewAlert,
-                    NoticeSeverity::Warning,
-                    format!(
-                        "Project command '/{}' overrides the user command of the same name",
-                        shadow.name
-                    ),
-                    NoticeSource::Harness,
-                )
+                AgentNotice::trust_changed(format!(
+                    "Project command '/{}' overrides the user command of the same name",
+                    shadow.name
+                ))
                 .with_body(format!(
                     "Running /{} uses {}. Project-local commands win by priority; \
                      if this is unexpected, inspect the project's .muta/commands \

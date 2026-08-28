@@ -139,9 +139,7 @@ impl SessionStore {
 
     /// The Chronicler's digest and the transcript anchor (char count) it
     /// was generated at. `(None, None)` for a session without a digest yet.
-    pub async fn digest(
-        &self,
-    ) -> (Option<muta_contracts::SessionDigest>, Option<u64>) {
+    pub async fn digest(&self) -> (Option<muta_contracts::SessionDigest>, Option<u64>) {
         let state = self.state.lock().await;
         (state.data.digest.clone(), state.data.digest_anchor)
     }

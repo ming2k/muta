@@ -545,9 +545,7 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                 let round_index = app.modal_index.min(
                     report
                         .as_ref()
-                        .map(|report| {
-                            view::token_report_round_count(report).saturating_sub(1)
-                        })
+                        .map(|report| view::token_report_round_count(report).saturating_sub(1))
                         .unwrap_or(0),
                 );
                 let count = report
@@ -555,8 +553,7 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                     .map(|report| view::token_report_attempt_count(report, round_index))
                     .unwrap_or(0)
                     .max(1);
-                app.token_report_turn_cursor =
-                    (app.token_report_turn_cursor + count - 1) % count;
+                app.token_report_turn_cursor = (app.token_report_turn_cursor + count - 1) % count;
             } else {
                 let count = app
                     .token_source_report(viewed_session_id)
@@ -734,9 +731,7 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                 let round_index = app.modal_index.min(
                     report
                         .as_ref()
-                        .map(|report| {
-                            view::token_report_round_count(report).saturating_sub(1)
-                        })
+                        .map(|report| view::token_report_round_count(report).saturating_sub(1))
                         .unwrap_or(0),
                 );
                 let count = report
@@ -744,8 +739,7 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                     .map(|report| view::token_report_attempt_count(report, round_index))
                     .unwrap_or(0)
                     .max(1);
-                app.token_report_turn_cursor =
-                    (app.token_report_turn_cursor + 1) % count;
+                app.token_report_turn_cursor = (app.token_report_turn_cursor + 1) % count;
             } else {
                 let count = app
                     .token_source_report(viewed_session_id)

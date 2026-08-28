@@ -253,11 +253,7 @@ mod tests {
         assert_eq!(digest.history.len(), 2);
 
         // Zero tools — the Chronicler is cognitive infrastructure, not an agent.
-        assert!(provider
-            .last_tool_specs
-            .lock()
-            .unwrap()
-            .is_empty());
+        assert!(provider.last_tool_specs.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -305,10 +301,12 @@ mod tests {
     #[tokio::test]
     async fn generate_digest_none_on_empty_model_output() {
         let (agent, _) = agent_with_reply("").await;
-        assert!(agent
-            .generate_digest(&transcript_of_opening("hi"), None)
-            .await
-            .is_none());
+        assert!(
+            agent
+                .generate_digest(&transcript_of_opening("hi"), None)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]

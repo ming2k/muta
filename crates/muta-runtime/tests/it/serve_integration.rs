@@ -2095,7 +2095,7 @@ async fn changed_workspace_keeps_banner_escalation_on_attach() {
             && n.body
                 .as_deref()
                 .is_some_and(|b| b.contains("changed") || b.contains("trust"))
-                && n.kind == muta_contracts::NoticeKind::ReviewAlert
+                && n.kind == muta_contracts::NoticeKind::TrustChanged
             {
                 saw_banner = true;
                 break;

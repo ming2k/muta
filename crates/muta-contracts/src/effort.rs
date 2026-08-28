@@ -200,6 +200,33 @@ impl Effort {
             })
     }
 
+    /// The channel-level default effort tier for a model that advertises an
+    /// effort ladder: GPT families default to [`Effort::Medium`] (their wire
+    /// middle tier); every other family defaults to [`Effort::High`] clamped
+    /// to the ladder — a ladder topping out below `high` resolves to its
+    /// deepest tier, and a ladder omitting both `high` and `medium` snaps up
+    /// to the nearest supported rung. Never emits a tier the ladder does not
+    /// contain; a model with an empty ladder has no default (`None`), and the
+    /// request must not stamp an effort field at all.
+    ///
+    /// Single source of truth for **both** the picker's display fallback and
+    /// the request-boundary default in the provider factory. Before it was
+    /// shared, the picker showed `high` while the wire sent nothing (the raw
+    /// channel override was `None`), so an always-thinking endpoint gated
+    /// only by `reasoning_effort` (Zhipu GLM-5.x) fell back to its
+    /// server-side default — far deeper than the tier the UI promised.
+    pub fn channel_default(family: &str, effort_levels: &[Effort]) -> Option<Effort> {
+        if effort_levels.is_empty() {
+            return None;
+        }
+        let preferred = if family == "gpt" {
+            Effort::Medium
+        } else {
+            Effort::High
+        };
+        Some(preferred.clamp_to(effort_levels))
+    }
+
     /// Resolve this known requested effort against a channel's **open** effort
     /// ladder ([`EffortLevel`], which may carry provider-advertised tiers the
     /// vocabulary does not name). Returns the wire string to stamp.
@@ -622,6 +649,35 @@ mod tests {
             serde_json::from_str::<EffortLevel>("\"turbo\"").unwrap(),
             EffortLevel::Other("turbo".to_string())
         );
+    }
+
+    #[test]
+    fn channel_default_matches_the_picker_rule() {
+        // GLM-5.x: ladder low/high/xhigh/max → high.
+        assert_eq!(
+            Effort::channel_default(
+                "glm",
+                &[Effort::Low, Effort::High, Effort::Xhigh, Effort::Max]
+            ),
+            Some(Effort::High)
+        );
+        // GPT families default to their wire middle tier.
+        assert_eq!(
+            Effort::channel_default("gpt", &[Effort::Low, Effort::Medium, Effort::High]),
+            Some(Effort::Medium)
+        );
+        // A ladder without high/medium snaps up to its shallowest tier.
+        assert_eq!(
+            Effort::channel_default("kimi", &[Effort::Low, Effort::Max]),
+            Some(Effort::Low)
+        );
+        // A ladder capped below high resolves to its deepest tier.
+        assert_eq!(
+            Effort::channel_default("llama", &[Effort::Minimal, Effort::Low]),
+            Some(Effort::Low)
+        );
+        // No ladder → no default: the request omits the effort field.
+        assert_eq!(Effort::channel_default("glm", &[]), None);
     }
 
     #[test]

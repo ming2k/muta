@@ -18,12 +18,10 @@ use crate::model::selection::SelectionState;
 use super::Theme;
 use super::components::composer_hints::hint_row_spans;
 use super::design::{
-    COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS,
-    COMPOSER_TEXT_ROW_OFFSET, COMPOSER_VERTICAL_CHROME_ROWS,
+    COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS, COMPOSER_TEXT_ROW_OFFSET,
+    COMPOSER_VERTICAL_CHROME_ROWS,
 };
-use super::text_layout::{
-    WrappedLine, block_selection_range, line_selection, wrap_text,
-};
+use super::text_layout::{WrappedLine, block_selection_range, line_selection, wrap_text};
 
 /// Render plumbing for the composer draw family: frame, target rect,
 /// theme, layout map, scroll state, and selection. Bundled so the three
@@ -351,7 +349,8 @@ fn draw_composer_impl(
     let (cursor_x, cursor_y) =
         cursor_screen_pos(input_rect, input, byte_cursor, input_scroll).unwrap_or((0, 0));
 
-    let mut lines: Vec<Line> = Vec::with_capacity(visible_rows + COMPOSER_VERTICAL_CHROME_ROWS as usize);
+    let mut lines: Vec<Line> =
+        Vec::with_capacity(visible_rows + COMPOSER_VERTICAL_CHROME_ROWS as usize);
 
     // ── Row 1: blank breathing row ──────────────────────────────────────────
     // A full panel-bg padding row giving the text a line of air above.
@@ -498,9 +497,7 @@ fn draw_composer_impl(
     // narrow. While unfocused the sentence is dropped entirely — the recessed
     // panel must not compete with a step-focused transcript.
     {
-        use crate::components::composer_hints::{
-            ActionDensity, format_char_count,
-        };
+        use crate::components::composer_hints::{ActionDensity, format_char_count};
         let keys_width = full_w
             .saturating_sub(COMPOSER_PROMPT_PREFIX_COLS + COMPOSER_RIGHT_PAD_COLS)
             .max(8);

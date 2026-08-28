@@ -2401,11 +2401,7 @@ pub async fn start_tui(
 fn push_core_notice(messages: &mut Vec<TranscriptMessage>, notice: &muta_contracts::AgentNotice) {
     let _surface = notice.surface;
     messages.push(
-        TranscriptMessage::notice(
-            notice_severity_from_core(notice.severity),
-            notice.render_text(),
-        )
-        .with_sent_at_ms(event_loop::now_epoch_ms()),
+        TranscriptMessage::notice_from_core(notice).with_sent_at_ms(event_loop::now_epoch_ms()),
     );
 }
 

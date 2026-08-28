@@ -6,7 +6,7 @@ use mutx_engine::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::design::{TRANSCRIPT_BODY_LEADING_INDENT, TURN_HEADER_BODY_GAP_ROWS};
-use crate::model::document::{MessageKind, NoticeSeverity, TranscriptMessage};
+use crate::model::document::{MessageKind, NoticeParts, NoticeSeverity, TranscriptMessage};
 use crate::model::layout::{BlockRegion, LayoutMap, NOTICE_BLOCK_IDX};
 use crate::text_layout::wrap_text;
 
@@ -22,6 +22,14 @@ impl<'a> NoticeView<'a> {
             MessageKind::Notice { severity, .. } => Some(*severity),
             _ => None,
         }
+    }
+
+    /// The architecture-agreed two-part split (topic + title/detail), when
+    /// this notice carries one. Core notices keep their structure across the
+    /// boundary; local/legacy notices return `None` and the fallback parse
+    /// below reconstructs a header/detail split from the raw text.
+    fn parts(&self) -> Option<&'a NoticeParts> {
+        self.message.notice_parts()
     }
 }
 
@@ -81,11 +89,36 @@ pub fn parse_notice_content(raw: &str) -> NoticeContent {
     }
 }
 
-/// Build the one-row header of a notification entry: label left, time right.
-/// The lead glyph (`! `, `▲ `, `ℹ `) and `notification` label are rendered in the
-/// severity indicator tone (BOLD), followed by an optional right-aligned time.
+/// Resolve a notice's content for rendering: the structured title/detail
+/// pair when the message carries one (core notices), otherwise the
+/// heuristic parse of the raw text (local notices, restored sessions).
+/// A structured notice with an empty title degrades to the parse too.
+fn notice_content<'v>(
+    view: &'v NoticeView<'_>,
+    parsed: &'v NoticeContent,
+) -> (&'v str, Option<&'v str>, Option<&'v str>) {
+    match view.parts() {
+        Some(parts) if !parts.title.trim().is_empty() => (
+            parts.topic.as_deref().unwrap_or("notification"),
+            Some(parts.title.as_str()),
+            parts.detail.as_deref(),
+        ),
+        parts => (
+            parts.and_then(|p| p.topic.as_deref()).unwrap_or("notification"),
+            Some(parsed.header.as_str()),
+            parsed.detail.as_deref(),
+        ),
+    }
+}
+
+/// Build the one-row header of a notification entry: topic left, time right.
+/// The lead glyph (`! `, `▲ `, `ℹ `) and the topic label (`▲ trust`,
+/// `▲ provider`, …; generic `notification` when no topic is known) are
+/// rendered in the severity indicator tone (BOLD), followed by an optional
+/// right-aligned time.
 fn notice_header_line(
     lead_symbol: &str,
+    topic: &str,
     severity_tone: Color,
     time_label: Option<&str>,
     muted: Color,
@@ -94,8 +127,8 @@ fn notice_header_line(
     let mut spans = Vec::with_capacity(4);
     let mut used = 0usize;
 
-    // Indicator tag: `! notification`, `▲ notification`, `ℹ notification` in severity_tone + BOLD.
-    let tag = format!("{lead_symbol}notification");
+    // Indicator tag: `! trust`, `▲ provider`, `ℹ command` in severity_tone + BOLD.
+    let tag = format!("{lead_symbol}{topic}");
     used += tag.width();
     spans.push(Span::styled(
         tag,
@@ -142,12 +175,14 @@ pub(crate) fn draw_notice_view(
         NoticeSeverity::Info => ("ℹ ", theme.info()),
     };
     let parsed = parse_notice_content(&notice.message.raw);
+    let (topic, title, detail) = notice_content(&notice, &parsed);
     let full_width = area.width as usize;
     let time_label = notice.message.sent_at_ms.map(crate::time::sent_time_label);
 
     // 1. Notification Entry Header
     let header_line = notice_header_line(
         lead_symbol,
+        topic,
         tag_color,
         time_label.as_deref(),
         theme.muted(),
@@ -187,11 +222,11 @@ pub(crate) fn draw_notice_view(
     // 3. Notice body: header text. Like every other entry body, the prose is
     //    indented TRANSCRIPT_BODY_LEADING_INDENT past the entry head so the
     //    header row reads as the entry's *head* and the body as its content.
+    //    `title` is always `Some` from `notice_content`; unwrap mirrors the
+    //    invariant of the old `parsed.header` path.
     let body_indent = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
-    let body_wrap_width = full_width
-        .saturating_sub(body_indent.width())
-        .max(1);
-    let body_lines = wrap_text(&parsed.header, body_wrap_width);
+    let body_wrap_width = full_width.saturating_sub(body_indent.width()).max(1);
+    let body_lines = wrap_text(title.unwrap_or(parsed.header.as_str()), body_wrap_width);
 
     for wl in body_lines {
         *content_lines += 1;
@@ -230,11 +265,9 @@ pub(crate) fn draw_notice_view(
     //    leading indent as the header body; wrap width matches what is
     //    actually painted (indent cols only — the stream gutter is already
     //    applied once at the entry point).
-    if let Some(detail) = parsed.detail.as_ref() {
+    if let Some(detail) = detail {
         let detail_indent = " ".repeat(TRANSCRIPT_BODY_LEADING_INDENT as usize);
-        let detail_wrap_width = full_width
-            .saturating_sub(detail_indent.width())
-            .max(1);
+        let detail_wrap_width = full_width.saturating_sub(detail_indent.width()).max(1);
 
         for line_str in detail.lines() {
             // Paragraph separator: an empty source line renders as one blank
@@ -447,5 +480,59 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
             row(4)
         );
         assert!(row(5).starts_with("  /trust re-trusts all."));
+    }
+
+    #[test]
+    fn core_notice_renders_topic_head_instead_of_generic_notification() {
+        // End-to-end for the architecture-agreed split: the entry head shows
+        // the predictable topic (`▲ trust`), the bold body lead is the title,
+        // and the muted detail is the structured body — none of it recovered
+        // by the heuristic text parse. Mirrors the runtime's
+        // `workspace_trust_notice`, which emits a first-class `TrustChanged`
+        // kind (ADR-0155).
+        let core = muta_contracts::AgentNotice::trust_changed("Workspace configurations changed")
+            .with_body(
+                "Changed on disk: rules (AGENTS.md / rules) — quarantined pending review.",
+            );
+        let msg = TranscriptMessage::notice_from_core(&core);
+
+        let theme = Theme::default();
+        let mut grid = mutx_engine::Grid::new(60, 10);
+        let mut frame = Frame::new(&mut grid);
+        let area = Rect::new(0, 0, 60, 10);
+        let notice = NoticeView { message: &msg };
+        let mut layout_map = LayoutMap::default();
+        let mut skip_rows = 0;
+        let mut current_y = 0;
+        let mut content_lines = 0;
+
+        draw_notice_view(
+            &mut frame,
+            area,
+            notice,
+            0,
+            &mut layout_map,
+            &mut skip_rows,
+            &mut current_y,
+            &mut content_lines,
+            &theme,
+            false,
+            false,
+        );
+
+        let buf = frame.buffer_mut();
+        let row = |y: u16| -> String {
+            let mut s = String::new();
+            for x in 0..58 {
+                s.push_str(buf[(x, y)].symbol());
+            }
+            s
+        };
+        // Head names the subsystem, not the constant "notification".
+        assert!(row(0).starts_with("▲ trust"));
+        assert!(!row(0).contains("notification"));
+        // Title (bold lead) then structured detail (muted).
+        assert!(row(2).starts_with("  Workspace configurations changed"));
+        assert!(row(3).starts_with("  Changed on disk: rules"));
     }
 }

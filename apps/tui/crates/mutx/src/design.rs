@@ -113,13 +113,16 @@ pub(crate) const ACTIVITY_COMPOSER_GAP_ROWS: u16 = 0;
 /// state — that lives on the head row at the top of the view. Always one row
 /// tall when visible (hidden only while an overlay modal replaces the chrome).
 pub(crate) const MODEL_BAR_ROWS: u16 = 1;
-/// Internal left indent of model-bar content, matching the composer's prompt
-/// prefix feel.
+/// Edge indent of model-bar content: the gauge cluster leads with it on
+/// the left and the identity cluster trails with it on the right, so the
+/// justified halves mirror each other (matching the composer's prompt
+/// prefix feel).
 pub(crate) const MODEL_BAR_INNER_PADDING: usize = 1;
-/// Minimum gap between the model-identity cluster and the right-aligned
-/// context/rate cluster.
+/// Minimum gap between the left-anchored gauge cluster (context usage,
+/// stream rate) and the right-pinned model-identity cluster.
 pub(crate) const MODEL_BAR_GAP_MIN: usize = 2;
-/// Gap between adjacent right-aligned gauge segments.
+/// Gap between adjacent gauge segments (context usage, stream rate) in the
+/// row's left cluster.
 pub(crate) const MODEL_BAR_SEGMENT_GAP: usize = 2;
 /// Gap *inside* the model-identity group (`model effort @instance`) — these
 /// three tokens read as one identity, so they sit tighter than the gap

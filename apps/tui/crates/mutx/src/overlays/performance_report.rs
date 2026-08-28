@@ -92,9 +92,7 @@ pub fn draw_performance_report_modal(
             .copied()
             .find(|record| record.key.turn == turn && record.key.attempt == attempt)
     });
-    let turn_child = turn_record
-        .map(attempt_page_label)
-        .unwrap_or_default();
+    let turn_child = turn_record.map(attempt_page_label).unwrap_or_default();
     let (header, body, footer, follow) = if loading && !drill {
         (
             vec![HeaderPart::title("Performance")],
@@ -108,10 +106,7 @@ pub fn draw_performance_report_modal(
         )
     } else if let Some(record) = turn_record {
         (
-            hierarchical_breadcrumb(
-                &["Performance", &child, &turn_child],
-                probe.width as usize,
-            ),
+            hierarchical_breadcrumb(&["Performance", &child, &turn_child], probe.width as usize),
             turn_detail_body(record, theme),
             vec![
                 FooterHint::always(keyvocab::ARROWS_UD, "scroll"),
@@ -454,11 +449,7 @@ fn attempt_page_label(record: &RequestUsageRecord) -> String {
 fn turn_detail_body(record: &RequestUsageRecord, theme: &Theme) -> Vec<Line<'static>> {
     let performance = record.performance;
     let mut body = Vec::new();
-    body.push(kv(
-        "State",
-        attempt_state(record, theme).0,
-        theme,
-    ));
+    body.push(kv("State", attempt_state(record, theme).0, theme));
     body.push(kv(
         "Provider / model",
         &format!("{} · {}", record.provider, record.model),
@@ -550,9 +541,7 @@ fn turn_detail_body(record: &RequestUsageRecord, theme: &Theme) -> Vec<Line<'sta
     ));
     body.push(kv(
         "E2E output rate",
-        &fmt_rate(
-            performance.and_then(|p| p.e2e_output_tps(record.completion_tokens)),
-        ),
+        &fmt_rate(performance.and_then(|p| p.e2e_output_tps(record.completion_tokens))),
         theme,
     ));
     body.push(kv(

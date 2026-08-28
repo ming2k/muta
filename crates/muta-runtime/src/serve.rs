@@ -87,17 +87,12 @@ fn workspace_trust_notice(
     };
 
     round(muta_contracts::RoundEvent::Notice(
-        muta_contracts::AgentNotice::new(
-            muta_contracts::NoticeKind::ReviewAlert,
-            muta_contracts::NoticeSeverity::Warning,
-            "Workspace configurations changed",
-            muta_contracts::NoticeSource::Harness,
-        )
-        .with_surface(muta_contracts::NoticeSurface::Banner)
-        .with_body(format!(
-            "Changed on disk: {changed_desc} — quarantined pending review.\n\n\
-             /trust re-trusts all; /trust <domain> (e.g. /trust rules) re-trusts one.",
-        )),
+        muta_contracts::AgentNotice::trust_changed("Workspace configurations changed")
+            .with_surface(muta_contracts::NoticeSurface::Banner)
+            .with_body(format!(
+                "Changed on disk: {changed_desc} — quarantined pending review.\n\n\
+                 /trust re-trusts all; /trust <domain> (e.g. /trust rules) re-trusts one.",
+            )),
     ))
 }
 

@@ -810,6 +810,53 @@ fn notice_carries_severity_and_is_classified_as_notice() {
 }
 
 #[test]
+fn notice_from_core_preserves_the_topic_and_detail_split() {
+    // The two-part split agreed at the contract layer (topic vocabulary +
+    // title/body detail) must survive the boundary into the transcript
+    // model instead of being flattened to `raw` and re-parsed at render
+    // time. `raw` still carries the flattened form for copy fidelity.
+    let core = muta_contracts::AgentNotice::new(
+        muta_contracts::NoticeKind::ProviderRetry,
+        muta_contracts::NoticeSeverity::Error,
+        "Retrying provider request (2/3)",
+        muta_contracts::NoticeSource::Harness,
+    )
+    .with_body("Google HTTP 429 Too Many Requests: {\"error\":{\"code\":429}}");
+
+    let msg = TranscriptMessage::notice_from_core(&core);
+
+    let parts = msg.notice_parts().expect("core notices carry parts");
+    assert_eq!(parts.topic.as_deref(), Some("provider"));
+    assert_eq!(parts.title, "Retrying provider request (2/3)");
+    assert_eq!(
+        parts.detail.as_deref(),
+        Some("Google HTTP 429 Too Many Requests: {\"error\":{\"code\":429}}")
+    );
+    // Flattened fallback stays byte-identical to `render_text()`.
+    assert_eq!(msg.raw, core.render_text());
+
+    // Local notices keep the parts-free legacy shape (renderer falls back to
+    // its heuristic parse).
+    let local = TranscriptMessage::notice(NoticeSeverity::Info, "compacted 12 messages");
+    assert!(local.notice_parts().is_none());
+}
+
+#[test]
+fn notice_topic_labels_cover_the_contract_vocabulary() {
+    // Every wire `NoticeKind` maps to a predictable user-facing topic label;
+    // the match must not grow stale as the contract evolves.
+    for (kind, label) in [
+        (muta_contracts::NoticeKind::ProviderRetry, "provider"),
+        (muta_contracts::NoticeKind::NudgeInjected, "turn guard"),
+        (muta_contracts::NoticeKind::ReviewAlert, "review"),
+        (muta_contracts::NoticeKind::TrustChanged, "trust"),
+        (muta_contracts::NoticeKind::CommandAck, "command"),
+    ] {
+        assert_eq!(notice_topic_label(kind), label);
+    }
+}
+
+#[test]
 fn user_message_origin_defaults_to_chat_and_can_be_overridden() {
     // A plain user message is a genuine chat prompt by default.
     let chat = TranscriptMessage::new(Role::User, "fix the bug");

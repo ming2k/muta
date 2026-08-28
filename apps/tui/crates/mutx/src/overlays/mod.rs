@@ -56,8 +56,8 @@ pub use history::draw_history_panel;
 pub use btw::{BtwModalView, draw_btw_modal};
 pub use mcp::draw_mcp_modal;
 pub use performance_report::{
-    draw_performance_report_modal, performance_report_attempt_count, performance_report_attempt_key,
-    performance_report_round_count,
+    draw_performance_report_modal, performance_report_attempt_count,
+    performance_report_attempt_key, performance_report_round_count,
 };
 pub use permission::{draw_input_injection, draw_permission_sheet, draw_question_modal};
 pub use permissions_manager::draw_permissions_manager;

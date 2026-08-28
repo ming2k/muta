@@ -883,7 +883,10 @@ mod tests {
         // A harness kill states the fact and the remedy; the model must be
         // able to distinguish it from a genuine `Exit -1` failure.
         for (term, needle) in [
-            (ShellTermination::IdleBlocked, "[killed by harness: no output"),
+            (
+                ShellTermination::IdleBlocked,
+                "[killed by harness: no output",
+            ),
             (
                 ShellTermination::Timeout,
                 "[killed by harness: wall-clock timeout reached",

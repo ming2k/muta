@@ -151,10 +151,7 @@ mod tests {
         watch.note_token(token_at);
         assert!(watch.saw_token());
         // Quiet measured from the token, not the arm: 8s window restarts.
-        assert_eq!(
-            watch.stalled_secs(token_at + Duration::from_secs(7)),
-            None
-        );
+        assert_eq!(watch.stalled_secs(token_at + Duration::from_secs(7)), None);
         assert_eq!(
             watch.stalled_secs(token_at + STREAM_SILENT_AFTER),
             Some(STREAM_SILENT_AFTER.as_secs())

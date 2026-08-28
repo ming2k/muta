@@ -679,7 +679,7 @@ parent_id: string | null,
  */
 fork_kind: SessionForkKind, };
 
-export type NoticeKind = "provider_retry" | "nudge_injected" | "review_alert" | "command_ack";
+export type NoticeKind = "provider_retry" | "nudge_injected" | "review_alert" | "trust_changed" | "command_ack";
 
 export type NoticeSeverity = "info" | "warning" | "error";
 

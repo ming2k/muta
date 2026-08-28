@@ -670,8 +670,7 @@ mod tests {
             Some(&[png.clone()][..])
         );
         assert_eq!(
-            paste_text_as_file_paths(&format!("{}\n{}", png.display(), note.display()))
-                .as_deref(),
+            paste_text_as_file_paths(&format!("{}\n{}", png.display(), note.display())).as_deref(),
             Some(&[png.clone(), note.clone()][..])
         );
         // Prose, missing files, directories, relative paths, URLs and
@@ -686,7 +685,10 @@ mod tests {
         );
         assert_eq!(paste_text_as_file_paths(dir.path().to_str().unwrap()), None);
         assert_eq!(paste_text_as_file_paths("relative/shot.png"), None);
-        assert_eq!(paste_text_as_file_paths("https://example.com/shot.png"), None);
+        assert_eq!(
+            paste_text_as_file_paths("https://example.com/shot.png"),
+            None
+        );
         assert_eq!(paste_text_as_file_paths(""), None);
         assert_eq!(paste_text_as_file_paths("\n  \n"), None);
     }

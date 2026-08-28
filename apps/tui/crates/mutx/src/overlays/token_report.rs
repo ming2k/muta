@@ -22,8 +22,8 @@ use crate::components::selectable_body::{SelectableRow, render_selectable_body};
 use crate::design::MODAL_INNER_H_PADDING;
 use crate::primitives::{
     ContentModalSpec, FooterHint, HeaderPart, SCROLL_EDGE_MARGIN, breadcrumb_parts,
-    content_modal_area, content_modal_probe, hierarchical_breadcrumb, keyvocab,
-    modal_chrome_rows, modal_frame, modal_header_parts, render_body, render_modal_footer,
+    content_modal_area, content_modal_probe, hierarchical_breadcrumb, keyvocab, modal_chrome_rows,
+    modal_frame, modal_header_parts, render_body, render_modal_footer,
 };
 use crate::view::Theme;
 
@@ -66,7 +66,9 @@ pub fn token_report_attempt_key(
 ) -> Option<(u32, u32)> {
     let rounds = usage_rounds(report);
     let round = rounds.get(round_index)?;
-    let attempt = flat_attempts(report, round.number).into_iter().nth(row_index)?;
+    let attempt = flat_attempts(report, round.number)
+        .into_iter()
+        .nth(row_index)?;
     Some((attempt.turn, attempt.attempt))
 }
 
@@ -116,7 +118,9 @@ pub fn draw_token_report_modal(
     // Third level: the selected attempt's per-attempt usage page.
     let turn_record = if drill {
         turn.and_then(|(turn, attempt)| {
-            let round_number = usage_rounds(report).get(selected).map(|round| round.number)?;
+            let round_number = usage_rounds(report)
+                .get(selected)
+                .map(|round| round.number)?;
             flat_attempts(report, round_number)
                 .into_iter()
                 .find(|a| a.turn == turn && a.attempt == attempt)
@@ -641,7 +645,11 @@ fn turn_detail_body(record: &RequestUsageRecord, theme: &Theme) -> Vec<Line<'sta
         let drift_label = if drift == 0 {
             "matches projection".to_string()
         } else {
-            format!("{} vs projection ({})", fmt_tokens(record.prompt_tokens), fmt_tokens(record.projected_prompt_tokens))
+            format!(
+                "{} vs projection ({})",
+                fmt_tokens(record.prompt_tokens),
+                fmt_tokens(record.projected_prompt_tokens)
+            )
         };
         body.push(kv_styled(
             "Input drift",
@@ -665,10 +673,7 @@ fn turn_detail_body(record: &RequestUsageRecord, theme: &Theme) -> Vec<Line<'sta
         body.push(section_heading("Cache", theme));
         body.push(kv_styled(
             "Cache read (hit)",
-            &format!(
-                "{} ({hit_rate}%)",
-                fmt_tokens(record.cache_read_tokens)
-            ),
+            &format!("{} ({hit_rate}%)", fmt_tokens(record.cache_read_tokens)),
             value,
             theme,
         ));
@@ -678,7 +683,12 @@ fn turn_detail_body(record: &RequestUsageRecord, theme: &Theme) -> Vec<Line<'sta
             value,
             theme,
         ));
-        body.push(kv_styled("Uncached input", &fmt_tokens(uncached), muted, theme));
+        body.push(kv_styled(
+            "Uncached input",
+            &fmt_tokens(uncached),
+            muted,
+            theme,
+        ));
     }
 
     if let Some(error) = record.error.as_deref().filter(|error| !error.is_empty()) {
@@ -1800,7 +1810,8 @@ mod tests {
 
         // The table header is the line whose first span trims to "Turn".
         let header_at = |width: usize| -> String {
-            detail_body(&report, 0, 0, width, &theme).0
+            detail_body(&report, 0, 0, width, &theme)
+                .0
                 .into_iter()
                 .find(|line| {
                     line.spans

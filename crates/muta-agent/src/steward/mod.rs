@@ -314,9 +314,7 @@ mod tests {
         steward
             .generate_digest(SessionDigestInput {
                 excerpt: "user: continue".to_string(),
-                previous: Some(
-                    r#"{"title":"Old","intent":"Old intent","history":[]}"#.to_string(),
-                ),
+                previous: Some(r#"{"title":"Old","intent":"Old intent","history":[]}"#.to_string()),
             })
             .await
             .expect("valid JSON digest");

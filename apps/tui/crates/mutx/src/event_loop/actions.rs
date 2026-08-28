@@ -1304,9 +1304,7 @@ pub(super) async fn dispatch_action(
                     let round_index = app.modal_index.min(
                         report
                             .as_ref()
-                            .map(|report| {
-                                view::token_report_round_count(report).saturating_sub(1)
-                            })
+                            .map(|report| view::token_report_round_count(report).saturating_sub(1))
                             .unwrap_or(0),
                     );
                     if let Some(key) = report.as_ref().and_then(|report| {
@@ -1337,24 +1335,22 @@ pub(super) async fn dispatch_action(
                 } else if app.performance_report_turn.is_none() {
                     // Drill into the selected attempt's stage page
                     // (`Performance › x round › x turn`).
-                    let round_index = app
-                        .modal_index
-                        .min(
-                            app.token_source_report(viewed_session_id)
-                                .map(|report| {
-                                    view::performance_report_round_count(&report).saturating_sub(1)
-                                })
-                                .unwrap_or(0),
-                        );
-                    if let Some(key) = app
-                        .token_source_report(viewed_session_id)
-                        .and_then(|report| {
-                            view::performance_report_attempt_key(
-                                &report,
-                                round_index,
-                                app.performance_report_turn_cursor,
-                            )
-                        })
+                    let round_index = app.modal_index.min(
+                        app.token_source_report(viewed_session_id)
+                            .map(|report| {
+                                view::performance_report_round_count(&report).saturating_sub(1)
+                            })
+                            .unwrap_or(0),
+                    );
+                    if let Some(key) =
+                        app.token_source_report(viewed_session_id)
+                            .and_then(|report| {
+                                view::performance_report_attempt_key(
+                                    &report,
+                                    round_index,
+                                    app.performance_report_turn_cursor,
+                                )
+                            })
                     {
                         app.performance_report_turn = Some(key);
                         app.performance_report_scroll = 0;

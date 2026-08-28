@@ -113,7 +113,8 @@ fn input_box_grows_with_wrapped_content() {
 /// cursor, so the click handler can't clear a focused step to hand typing
 /// back to the prompt. See `draw_composer` / `composer_wrapped`.
 #[test]
-fn draw_composer_records_region_for_empty_input() {    let theme = Theme::default();
+fn draw_composer_records_region_for_empty_input() {
+    let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(30, 5);
     let mut layout_map = LayoutMap::new();
     let input_rect = Rect::new(0, 0, 30, 3);
@@ -137,7 +138,7 @@ fn draw_composer_records_region_for_empty_input() {    let theme = Theme::defaul
             0,
             0,
             crate::components::composer_hints::ComposerHints::default(),
-                    );
+        );
     });
 
     // The empty text row sits one line below the box's top edge.
@@ -180,7 +181,7 @@ fn draw_composer_wraps_and_positions_caret() {
             0,
             0,
             crate::components::composer_hints::ComposerHints::default(),
-                    );
+        );
     });
 }
 
@@ -219,8 +220,8 @@ fn draw_composer_caret_flush_against_final_grapheme() {
                 false,
                 0,
                 0,
-            crate::components::composer_hints::ComposerHints::default(),
-                    );
+                crate::components::composer_hints::ComposerHints::default(),
+            );
         });
         let cursor = match terminal.cursor() {
             mutx_engine::CursorState::Visible(x, y) => (x, y),
@@ -375,7 +376,7 @@ fn draw_composer_paints_paste_and_image_chips_distinctly() {
             1,
             1,
             crate::components::composer_hints::ComposerHints::default(),
-                    );
+        );
     });
     let buf = terminal.buffer();
     let text_y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -433,10 +434,7 @@ fn draw_composer_paints_paste_and_image_chips_distinctly() {
     ] {
         let cell = buf.get(col, text_y).expect("prose cell");
         assert_eq!(cell.fg, theme.fg(), "prose next to a chip must stay plain");
-        assert_eq!(
-            cell.bg, interior_bg,
-            "prose must not pick up a chip band"
-        );
+        assert_eq!(cell.bg, interior_bg, "prose must not pick up a chip band");
     }
 }
 
@@ -472,7 +470,7 @@ fn draw_composer_leaves_orphan_chip_labels_as_plain_text() {
             0,
             0,
             crate::components::composer_hints::ComposerHints::default(),
-                    );
+        );
     });
     let buf = terminal.buffer();
     let text_y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -536,7 +534,8 @@ fn draw_composer_colors_only_backed_chips_when_mixed() {
             false,
             0, // image_count: no image payload staged,
             1, // paste_count: one paste payload staged,
-            crate::components::composer_hints::ComposerHints::default());
+            crate::components::composer_hints::ComposerHints::default(),
+        );
     });
     let buf = terminal.buffer();
     let text_y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -614,7 +613,7 @@ fn draw_composer_chip_keeps_identity_color_under_selection() {
             0,
             1,
             crate::components::composer_hints::ComposerHints::default(),
-                    );
+        );
     });
     let buf = terminal.buffer();
     let text_y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -667,7 +666,7 @@ fn draw_composer_chip_pill_continues_across_wrap() {
             1,
             0,
             crate::components::composer_hints::ComposerHints::default(),
-                    );
+        );
     });
     let buf = terminal.buffer();
     let interior_bg = theme.input_surface();
@@ -741,8 +740,8 @@ fn cursor_screen_pos_matches_drawn_caret() {
                 false,
                 0,
                 0,
-            crate::components::composer_hints::ComposerHints::default(),
-                    );
+                crate::components::composer_hints::ComposerHints::default(),
+            );
         });
         let drawn = match terminal.cursor() {
             mutx_engine::CursorState::Visible(x, y) => (x, y),
@@ -828,7 +827,7 @@ fn composer_cjk_selection_covers_full_width_glyphs() {
             0,
             0,
             crate::components::composer_hints::ComposerHints::default(),
-                    );
+        );
     });
     let g = terminal.buffer();
     let y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -893,7 +892,7 @@ fn composer_two_cjk_select_all_has_no_extra_glyph_or_tail_highlight() {
             0,
             0,
             crate::components::composer_hints::ComposerHints::default(),
-                    );
+        );
     });
 
     let y = crate::design::COMPOSER_TEXT_ROW_OFFSET;
@@ -971,10 +970,12 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
             0,
             0,
             crate::components::composer_hints::ComposerHints::default(),
-                    );
+        );
     });
     let prefix = crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16;
-    let anchor = layout_map.cursor_at(rect.x + prefix, rect.y + text_row).unwrap();
+    let anchor = layout_map
+        .cursor_at(rect.x + prefix, rect.y + text_row)
+        .unwrap();
     assert_eq!(anchor.byte_offset, 0);
 
     fn row_bgs(
@@ -1004,8 +1005,8 @@ fn composer_collapsed_click_highlights_nothing_drag_highlights_cleanly() {
                 false,
                 0,
                 0,
-            crate::components::composer_hints::ComposerHints::default(),
-                    );
+                crate::components::composer_hints::ComposerHints::default(),
+            );
         });
         (0..10u16)
             .map(|c| t.buffer().get(c, text_row).unwrap().bg)
@@ -1130,7 +1131,7 @@ fn user_message_and_composer_keep_symmetric_panel_padding() {
             0,
             0,
             crate::components::composer_hints::ComposerHints::default(),
-                    );
+        );
     });
 
     let buffer = terminal.buffer();
@@ -1254,8 +1255,8 @@ fn composer_focused_and_unfocused_panels_render_distinct_backgrounds() {
                 false,
                 0,
                 0,
-            crate::components::composer_hints::ComposerHints::default(),
-                    );
+                crate::components::composer_hints::ComposerHints::default(),
+            );
         });
         let buffer = terminal.buffer();
         // The top breathing row: painted unconditionally in panel bg, so its
@@ -1718,10 +1719,7 @@ fn composer_panel_carries_the_hint_row() {
     assert!(row2.starts_with("› hello"), "prompt + text: {row2:?}");
 
     let row3 = frame_row_text(&mut terminal, 2);
-    assert!(
-        row3.trim().is_empty(),
-        "row 3 is a blank gap row: {row3:?}"
-    );
+    assert!(row3.trim().is_empty(), "row 3 is a blank gap row: {row3:?}");
 
     let row4 = frame_row_text(&mut terminal, 3);
     assert!(
@@ -1770,10 +1768,7 @@ fn composer_hint_sentence_names_the_delivery_group() {
     };
     let mut terminal = draw_frame_composer("wait", true, hints);
     let row4 = frame_row_text(&mut terminal, 3);
-    assert!(
-        row4.contains("Enter send steer"),
-        "steer verb: {row4:?}"
-    );
+    assert!(row4.contains("Enter send steer"), "steer verb: {row4:?}");
     assert!(
         row4.contains("Tab follow-up"),
         "Tab toggle names the other mode: {row4:?}"

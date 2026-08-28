@@ -135,8 +135,16 @@ pub enum MessageKind {
     /// / `"System: "` text prefixes. Carrying an explicit [`NoticeSeverity`]
     /// lets one renderer (the `paint::notice` module) own the
     /// severity→color/icon mapping and lets callers stop string-sniffing.
+    ///
+    /// [`NoticeParts`] carries the architecture-agreed split — *topic*
+    /// (which subsystem is speaking, from the contract's
+    /// `NoticeKind`/`NoticeSource` vocabulary) + *detail* (`title`/`body`) —
+    /// so core notices render from structure instead of re-parsing `raw`.
+    /// `None` for local/legacy notices; the renderer then falls back to its
+    /// heuristic text parse.
     Notice {
         severity: NoticeSeverity,
+        parts: Option<Box<NoticeParts>>,
         expanded: bool,
         user_pinned: bool,
     },
@@ -293,6 +301,41 @@ pub fn notice_severity_from_core(severity: muta_contracts::NoticeSeverity) -> No
         muta_contracts::NoticeSeverity::Info => NoticeSeverity::Info,
         muta_contracts::NoticeSeverity::Warning => NoticeSeverity::Warning,
         muta_contracts::NoticeSeverity::Error => NoticeSeverity::Error,
+    }
+}
+
+/// The two-part, architecture-agreed content of a notice entry.
+///
+/// A notice is not an opaque string: it is *who is speaking* plus *what
+/// happened*. The topic is a predictable label from the contract vocabulary
+/// (see [`notice_topic_label`]), and the detail is the structured
+/// `title`/`body` pair carried by `AgentNotice` across the wire. Populated by
+/// [`TranscriptMessage::notice_from_core`]; local/legacy notices leave it
+/// absent and the renderer falls back to its heuristic text parse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoticeParts {
+    /// Predictable subsystem label ("trust", "provider", "turn guard",
+    /// "review", "command") identifying the notice's origin. Rendered as the
+    /// entry head in place of the generic "notification" constant.
+    pub topic: Option<String>,
+    /// Summary line (`AgentNotice::title`), rendered as the bold body lead.
+    pub title: String,
+    /// Optional detail prose (`AgentNotice::body`), rendered muted below the
+    /// title with blank-line paragraph separators preserved.
+    pub detail: Option<String>,
+}
+
+/// Map a contract notice kind to its user-facing topic label — the
+/// predictable, architecture-agreed vocabulary for "what is speaking".
+/// Each kind maps 1:1 to its topic; frontends may localize these, the
+/// *kind* stays stable on the wire.
+pub fn notice_topic_label(kind: muta_contracts::NoticeKind) -> &'static str {
+    match kind {
+        muta_contracts::NoticeKind::ProviderRetry => "provider",
+        muta_contracts::NoticeKind::NudgeInjected => "turn guard",
+        muta_contracts::NoticeKind::ReviewAlert => "review",
+        muta_contracts::NoticeKind::TrustChanged => "trust",
+        muta_contracts::NoticeKind::CommandAck => "command",
     }
 }
 
@@ -1269,10 +1312,7 @@ impl TranscriptMessage {
                 }
             }
             RunnerEvent::Notice(notice) => {
-                children.push(TranscriptMessage::notice(
-                    notice_severity_from_core(notice.severity),
-                    notice.render_text(),
-                ));
+                children.push(TranscriptMessage::notice_from_core(notice));
             }
             // The runner reported a free-text activity line (`waiting for
             // model`, `waiting to retry (3s)`). Stored for the peek row so a
@@ -1835,6 +1875,10 @@ impl TranscriptMessage {
     /// Construct a notice message. Replaces the ad-hoc
     /// `TranscriptMessage::new(Role::System, format!("Error: …"))` pattern with
     /// a typed severity so the renderer can pick color/icon from one place.
+    /// Leaves the structured parts unset — the renderer falls back to its
+    /// heuristic parse of `raw`. Core (`AgentNotice`) notices should use
+    /// [`Self::notice_from_core`] instead so the topic/title/detail split
+    /// survives the boundary instead of being re-derived from text.
     pub fn notice(severity: NoticeSeverity, raw: impl Into<String>) -> Self {
         // Notices receive transport and harness errors directly. HTTP proxy
         // bodies commonly use CRLF, and allowing the raw `\r` through to the
@@ -1851,6 +1895,7 @@ impl TranscriptMessage {
             raw,
             kind: MessageKind::Notice {
                 severity,
+                parts: None,
                 expanded: false,
                 user_pinned: false,
             },
@@ -1864,6 +1909,49 @@ impl TranscriptMessage {
             turn: None,
             sent_at_ms: None,
             injection_origin: None,
+        }
+    }
+
+    /// Construct a notice from its contract form, keeping the
+    /// architecture-agreed two-part split intact: the topic label from
+    /// [`notice_topic_label`] and the `title`/`body` detail pair. `raw` still
+    /// carries the flattened `render_text()` form for copy fidelity and as
+    /// the renderer's fallback, but the renderer never has to guess the
+    /// split back out of it.
+    pub fn notice_from_core(notice: &muta_contracts::AgentNotice) -> Self {
+        // Same sanitized boundary as `raw`: provider HTTP bodies commonly
+        // carry CRLF, and a raw `\r` reaching the grid moves the physical
+        // cursor while the retained grid believes it advanced.
+        let parts = NoticeParts {
+            topic: Some(notice_topic_label(notice.kind).to_string()),
+            title: sanitize_text(&notice.title).into_owned(),
+            detail: notice
+                .body
+                .as_deref()
+                .filter(|body| !body.trim().is_empty())
+                .map(|body| sanitize_text(body).into_owned()),
+        };
+        Self::notice(
+            notice_severity_from_core(notice.severity),
+            notice.render_text(),
+        )
+        .with_notice_parts(parts)
+    }
+
+    /// Attach the structured topic/detail split to a notice. No-op on
+    /// non-notice messages.
+    pub fn with_notice_parts(mut self, parts: NoticeParts) -> Self {
+        if let MessageKind::Notice { parts: slot, .. } = &mut self.kind {
+            *slot = Some(Box::new(parts));
+        }
+        self
+    }
+
+    /// The structured topic/detail split, when this notice carries one.
+    pub fn notice_parts(&self) -> Option<&NoticeParts> {
+        match &self.kind {
+            MessageKind::Notice { parts, .. } => parts.as_deref(),
+            _ => None,
         }
     }
 

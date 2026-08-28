@@ -17,7 +17,10 @@ fn completion_anchor_aligns_slash_menu_with_composer_text_start() {
     // two-column prefix (`›` prompt + gap).
     let rect = mutx_engine::Rect::new(0, 10, 80, 3);
     let x = completion_anchor_x("/pu", 3, rect, CompletionKind::Slash);
-    assert_eq!(x, rect.x + crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16);
+    assert_eq!(
+        x,
+        rect.x + crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16
+    );
 }
 
 #[test]

@@ -1541,10 +1541,8 @@ fn maybe_refresh_session_digest(agent: Arc<Agent>, session: Arc<SessionStore>) {
         // manual title (ADR-0022's lock rule, applied to the title field
         // only — the digest itself was already stored above).
         let (_, manual) = session.title().await;
-        if !manual {
-            if let Err(error) = session.set_title(Some(next.title), false).await {
-                tracing::warn!(%error, "could not persist digest-derived session title");
-            }
+        if !manual && let Err(error) = session.set_title(Some(next.title), false).await {
+            tracing::warn!(%error, "could not persist digest-derived session title");
         }
     });
 }

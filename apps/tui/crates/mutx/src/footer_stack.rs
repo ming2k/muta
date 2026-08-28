@@ -62,7 +62,7 @@ pub(crate) enum FooterRowId {
     /// permission sheet's anchor — but kept in the id set so the stack can
     /// place it like any other row.
     Composer,
-    /// The model bar (model identity, context usage, stream rate). Its
+    /// The model bar (context usage, stream rate, model identity). Its
     /// context-meter segment has its own finer hit rect recorded by
     /// `draw_model_bar`. The Enter-action keys and the `as:` target row live
     /// inside the composer row above, not here.

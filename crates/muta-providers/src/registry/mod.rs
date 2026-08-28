@@ -352,13 +352,22 @@ pub fn build_provider_for_channel(
             } else {
                 None
             };
+            // For OpenAI-family transports the effort knob IS the reasoning
+            // control: a model that advertises a ladder (GLM-5.x — always-on
+            // thinking gated only by `reasoning_effort`) must never send an
+            // absent effort, or the endpoint falls back to its server-side
+            // default, which can reason far deeper than the tier the picker
+            // displays. Default the wire to the same `Effort::channel_default`
+            // the picker shows (GPT→medium, others→high clamped to the
+            // ladder); an explicit channel override still wins.
+            let effective_effort = effective_channel_effort(*effort, &capabilities);
             let provider = OpenAiChatCompletionsProvider::with_base_url_and_user_agent(
                 channel.api_key.expose_secret().to_string(),
                 channel.model.clone(),
                 base_url,
                 user_agent,
             )
-            .with_reasoning_effort(*effort)
+            .with_reasoning_effort(effective_effort)
             .with_prompt_cache_key(cache_key)
             .with_model_capabilities(capabilities)
             .with_copilot(*copilot)
@@ -373,6 +382,9 @@ pub fn build_provider_for_channel(
             copilot,
         } => {
             let capabilities = channel.capabilities();
+            // Same wire-level default as the chat-completions arm above —
+            // see the comment there.
+            let effective_effort = effective_channel_effort(*effort, &capabilities);
             let provider = OpenAiResponsesProvider::new(
                 channel.api_key.expose_secret().to_string(),
                 channel.model.clone(),
@@ -380,13 +392,33 @@ pub fn build_provider_for_channel(
                 account_id.clone(),
             )
             .with_user_agent(user_agent)
-            .with_reasoning_effort(*effort)
+            .with_reasoning_effort(effective_effort)
             .with_model_capabilities(capabilities)
             .with_copilot(*copilot)
             .with_id(entry_id.to_string());
             Arc::new(provider)
         }
     }
+}
+
+/// Resolve the effort a channel's request actually carries: the explicit
+/// override when set, otherwise the shared [`muta_contracts::Effort::channel_default`]
+/// for a model that advertises an effort ladder. Used by the OpenAI-family
+/// factory arms so the wire can never omit the reasoning control the picker
+/// already promises (`None` remains `None` for ladder-less models — no
+/// `reasoning_effort` field is stamped for them at request-build time).
+fn effective_channel_effort(
+    override_effort: Option<muta_contracts::Effort>,
+    capabilities: &muta_contracts::ModelCapabilities,
+) -> Option<muta_contracts::Effort> {
+    override_effort.or_else(|| {
+        let known: Vec<muta_contracts::Effort> = capabilities
+            .effort_levels
+            .iter()
+            .filter_map(muta_contracts::EffortLevel::as_known)
+            .collect();
+        muta_contracts::Effort::channel_default(&capabilities.family, &known)
+    })
 }
 
 #[cfg(test)]
@@ -534,6 +566,63 @@ mod build_tests {
         let provider = build_provider_for_channel(&channel, "openai", None);
         assert_eq!(provider.provider_id(), "openai");
         assert_eq!(provider.model(), "gpt-4o");
+    }
+
+    #[test]
+    fn openai_channel_without_override_defaults_effort_on_the_wire() {
+        // GLM-5.3 advertises a ladder (low/high/xhigh/max) and its endpoint
+        // runs always-on thinking gated only by `reasoning_effort`. A channel
+        // with no explicit override must default to `high` — the same tier
+        // the picker displays — instead of omitting the field and eating the
+        // server's (much deeper) default.
+        let channel = Channel {
+            id: "default".to_string(),
+            label: "ZAI Code".to_string(),
+            transport: Transport::OpenAi {
+                base_url: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
+                    .to_string(),
+                user_agent: "agent".to_string(),
+                effort: None,
+                copilot: false,
+            },
+            api_key: "k".into(),
+            model: "glm-5.3".to_string(),
+            remote: None,
+            user_overrides: None,
+        };
+        let provider = build_provider_for_channel(&channel, "zai-code", None);
+        assert_eq!(provider.effort(), Some(muta_contracts::Effort::High));
+
+        // An explicit override still wins verbatim.
+        let mut pinned = channel;
+        if let Transport::OpenAi { effort, .. } = &mut pinned.transport {
+            *effort = Some(muta_contracts::Effort::Low);
+        }
+        let provider = build_provider_for_channel(&pinned, "zai-code", None);
+        assert_eq!(provider.effort(), Some(muta_contracts::Effort::Low));
+    }
+
+    #[test]
+    fn ladderless_model_keeps_absent_effort_on_the_wire() {
+        // A model with NO effort ladder must keep `None`: stamping a
+        // `reasoning_effort` the endpoint never advertised would be noise at
+        // best and a 400 at worst.
+        let channel = Channel {
+            id: "default".to_string(),
+            label: "OpenAI".to_string(),
+            transport: Transport::OpenAi {
+                base_url: "https://api.openai.com/v1/chat/completions".to_string(),
+                user_agent: "agent".to_string(),
+                effort: None,
+                copilot: false,
+            },
+            api_key: "k".into(),
+            model: "gpt-4o".to_string(),
+            remote: None,
+            user_overrides: None,
+        };
+        let provider = build_provider_for_channel(&channel, "openai", None);
+        assert_eq!(provider.effort(), None);
     }
 
     #[test]

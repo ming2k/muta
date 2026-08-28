@@ -18,9 +18,9 @@ use mutx_engine::{Color, Modifier, Span, Style};
 
 use crate::app::ComposerSendMode;
 
-use super::keycap::keycap_style;
 use super::super::Theme;
 use super::super::keymap::Key;
+use super::keycap::keycap_style;
 
 // ---------------------------------------------------------------------------
 // Width ladder
@@ -222,13 +222,28 @@ pub(crate) fn hint_row_spans(
     match target {
         ComposeTarget::Command => {
             // Echo the in-box resolved-command treatment: brand + bold.
-            spans.push(Span::styled(" command", verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                " command",
+                verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
+            ));
         }
         ComposeTarget::Steer | ComposeTarget::FollowUp => {
             let primary = verb_style.fg(target.submit_color(theme));
             let (verb, other, other_label) = match target {
-                ComposeTarget::Steer => (" steer", "follow-up", if compact { " follow-up" } else { " follow-up mode" }),
-                _ => (" follow-up", "steer", if compact { " steer" } else { " steer mode" }),
+                ComposeTarget::Steer => (
+                    " steer",
+                    "follow-up",
+                    if compact {
+                        " follow-up"
+                    } else {
+                        " follow-up mode"
+                    },
+                ),
+                _ => (
+                    " follow-up",
+                    "steer",
+                    if compact { " steer" } else { " steer mode" },
+                ),
             };
             spans.push(Span::styled(verb, primary));
             spans.push(Span::styled("  ", hint_style));
@@ -391,12 +406,15 @@ mod tests {
         );
 
         // Follow-up queues: info blue verb.
-        let follow_up =
-            hint_row_spans(false, ActionDensity::Full, ComposeTarget::FollowUp, &theme, bg);
+        let follow_up = hint_row_spans(
+            false,
+            ActionDensity::Full,
+            ComposeTarget::FollowUp,
+            &theme,
+            bg,
+        );
         assert!(
-            follow_up
-                .iter()
-                .any(|span| span.style.fg == theme.info()),
+            follow_up.iter().any(|span| span.style.fg == theme.info()),
             "follow-up verb must carry the info hue"
         );
 
@@ -423,7 +441,12 @@ mod tests {
         use crate::app::ComposerSendMode;
         // Queue pointer wins over busy-mode classification…
         assert_eq!(
-            compose_target(true, Some(ComposerSendMode::Steer), Some((QueueEditKind::FollowUp, 3)), false),
+            compose_target(
+                true,
+                Some(ComposerSendMode::Steer),
+                Some((QueueEditKind::FollowUp, 3)),
+                false
+            ),
             ComposeTarget::QueueEdit {
                 kind: QueueEditKind::FollowUp,
                 number: 3,
@@ -436,8 +459,14 @@ mod tests {
             ComposeTarget::FollowUp
         );
         // …and slash only classifies an idle buffer.
-        assert_eq!(compose_target(false, None, None, true), ComposeTarget::Command);
-        assert_eq!(compose_target(false, None, None, false), ComposeTarget::Prompt);
+        assert_eq!(
+            compose_target(false, None, None, true),
+            ComposeTarget::Command
+        );
+        assert_eq!(
+            compose_target(false, None, None, false),
+            ComposeTarget::Prompt
+        );
     }
 
     #[test]
@@ -449,10 +478,7 @@ mod tests {
 
     #[test]
     fn density_ladder_degrades_then_floors() {
-        assert!(matches!(
-            ActionDensity::for_width(80),
-            ActionDensity::Full
-        ));
+        assert!(matches!(ActionDensity::for_width(80), ActionDensity::Full));
         assert!(matches!(
             ActionDensity::for_width(30),
             ActionDensity::Compact

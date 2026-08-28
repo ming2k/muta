@@ -249,25 +249,12 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
         }
         Transport::OpenAi { effort, .. } => {
             let model = muta_contracts::model::resolve(&channel.model);
-            let effective = if model.effort_levels.is_empty() {
-                None
-            } else {
-                // Fallback when the channel has no explicit effort override:
-                // GPT defaults to `medium` (its wire middle tier); every other
-                // model defaults to `high` clamped to its ladder — a ladder
-                // that tops out below `high` (e.g. EFFORT_COMMON relays)
-                // resolves to its deepest tier, and a ladder that omits
-                // `high`/`medium` (Kimi K3's `low`/`high`/`max`, or a single
-                // fixed rung) snaps up to the nearest supported tier, since
-                // the platform pins its own default. Never emits a tier the
-                // model does not support.
-                let default = if model.family == "gpt" {
-                    Effort::Medium
-                } else {
-                    Effort::High.clamp_to(model.effort_levels)
-                };
-                Some((*effort).unwrap_or(default).as_str().to_string())
-            };
+            // Fallback when the channel has no explicit effort override is
+            // `Effort::channel_default` — the SAME rule the provider factory
+            // stamps onto the wire, so the picker can never promise a tier
+            // the request does not send.
+            let effective = Effort::channel_default(model.family, model.effort_levels)
+                .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
                 protocol: "openai".to_string(),
@@ -279,19 +266,9 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
         }
         Transport::OpenAiResponses { effort, .. } => {
             let model = muta_contracts::model::resolve(&channel.model);
-            let effective = if model.effort_levels.is_empty() {
-                None
-            } else {
-                // Same default rule as the chat-completions arm: GPT defaults
-                // to `medium`; every other Responses-speaking model (DeepSeek
-                // V4) defaults to `high` clamped to its ladder.
-                let default = if model.family == "gpt" {
-                    Effort::Medium
-                } else {
-                    Effort::High.clamp_to(model.effort_levels)
-                };
-                Some((*effort).unwrap_or(default).as_str().to_string())
-            };
+            // Same shared default rule as the chat-completions arm.
+            let effective = Effort::channel_default(model.family, model.effort_levels)
+                .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
                 protocol: "openai".to_string(),
@@ -305,16 +282,12 @@ pub(super) fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             // Same contract as the OpenAI arms: a model that advertises an
             // effort ladder is configurable; one with an empty ladder (a
             // non-reasoning Gemini, or an id no baseline knows) stays inert.
-            // The channel's explicit override wins; otherwise Gemini 3.x
-            // (`thinkingLevel`) defaults to `high` clamped to its ladder and
-            // Gemini 2.5 (`thinkingBudget`) resolves its own default bucket.
+            // The channel's explicit override wins; otherwise the shared
+            // `Effort::channel_default` rule (`high` clamped to the ladder —
+            // Gemini is never a `gpt` family) applies.
             let model = muta_contracts::model::resolve(&channel.model);
-            let effective = if model.effort_levels.is_empty() {
-                None
-            } else {
-                let default = Effort::High.clamp_to(model.effort_levels);
-                Some((*effort).unwrap_or(default).as_str().to_string())
-            };
+            let effective = Effort::channel_default(model.family, model.effort_levels)
+                .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
                 protocol: "google".to_string(),

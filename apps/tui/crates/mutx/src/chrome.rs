@@ -1,8 +1,8 @@
 //! Transient chrome around the input box: the activity bar with an animated
 //! breathing-dot indicator, the one-row todo bar that surfaces the live task
 //! list, the completion menu anchored above the input, and the persistent
-//! model bar pinned below the input (model identity, context usage, stream
-//! rate). Composer-owned meta rows (`as:` target and Enter keys) live inside
+//! model bar pinned below the input (context usage, stream rate, model
+//! identity). Composer-owned meta rows (`as:` target and Enter keys) live inside
 //! [`crate::composer`] and its `components::composer_hints` helpers; this bar
 //! carries only ambient gauges. The activity bar (transient liveness) and the
 //! todo bar (the agent's live task list) are the click targets that open the
@@ -19,12 +19,11 @@ use crate::model::layout::LayoutMap;
 use super::Theme;
 use super::components::keycap::keycap_span;
 use super::design::{
-    BAR_LEGEND_GAP_MIN, MODEL_BAR_GAP_MIN, MODEL_BAR_INNER_PADDING, MODEL_BAR_MODEL_GAP,
-    MODEL_BAR_SEGMENT_GAP, JOIN_ENUMERATE_COLS,
+    BAR_LEGEND_GAP_MIN, JOIN_ENUMERATE_COLS, MODEL_BAR_GAP_MIN, MODEL_BAR_INNER_PADDING,
+    MODEL_BAR_MODEL_GAP, MODEL_BAR_SEGMENT_GAP,
 };
 use super::keymap::Key;
 use super::primitives::{contrast_fg, viewport_rect};
-
 
 /// Number of distinct luminance steps in one breathing cycle. At the 100ms
 /// spinner tick this is ~1.2s per cycle — calm, not frantic.
@@ -670,10 +669,7 @@ pub fn draw_completion_menu(
                 spans.push(Span::styled(secondary, secondary_style));
             }
             if pad > 0 {
-                spans.push(Span::styled(
-                    " ".repeat(pad),
-                    Style::default().bg(row_bg),
-                ));
+                spans.push(Span::styled(" ".repeat(pad), Style::default().bg(row_bg)));
             }
             Line::from(spans)
         })
@@ -872,9 +868,9 @@ pub fn draw_completion_menu(
     }
 }
 
-/// Inputs for [`draw_model_bar`]. The split row's halves — model identity on
-/// the left, context usage and stream rate on the right. The Enter-action
-/// keys and the `as:` target row moved inside the composer
+/// Inputs for [`draw_model_bar`]. The split row's halves — context usage
+/// and stream rate on the left, model identity on the right. The
+/// Enter-action keys and the `as:` target row moved inside the composer
 /// ([`crate::components::composer_hints`]); session state (workspace path,
 /// `DELEGATED`) lives on the status bar below.
 pub struct ModelBarView<'a> {
@@ -914,12 +910,13 @@ pub struct ModelBarRects {
 }
 
 /// Draw the single-line model bar pinned below the input box. The row splits
-/// in two: the model identity group (`model effort @instance`) anchors the
-/// left half, and the ambient gauges — context usage and the last turn's
-/// stream rate, each trailed by the keycap hint of its drill-down modal
-/// (`Ctrl+O` / `Ctrl+S`) — pin right. The Enter-action keys moved inside the
-/// composer's bottom padding row; the `as:` target row lives in its top
-/// padding row ([`crate::components::composer_hints`]).
+/// in two, justified against opposite edges: the ambient gauges — context
+/// usage and the last turn's stream rate, each trailed by the keycap hint of
+/// its drill-down modal (`Ctrl+O` / `Ctrl+S`) — anchor the left half, and
+/// the model identity group (`model effort @instance`) pins right. The
+/// Enter-action keys moved inside the composer's bottom padding row; the
+/// `as:` target row lives in its top padding row
+/// ([`crate::components::composer_hints`]).
 pub fn draw_model_bar(
     frame: &mut Frame,
     rect: Rect,
@@ -939,20 +936,21 @@ pub fn draw_model_bar(
     let bg = theme.surface();
     let full_w = rect.width as usize;
 
-    // --- Left cluster build inputs: the model identity group anchors the
-    // row's left edge (padded by `inner`); the context + rate gauges pin
-    // right. `MODEL_BAR_GAP_MIN` keeps the two halves from ever colliding.
+    // --- Cluster build inputs: the context + rate gauges anchor the row's
+    // left edge (padded by `inner`); the model identity group pins right,
+    // mirrored with the same indent. `MODEL_BAR_GAP_MIN` keeps the two
+    // halves from ever colliding.
     let inner = MODEL_BAR_INNER_PADDING;
 
-    // --- Right cluster: context, last-turn performance.
+    // --- Gauge cluster: context usage, last-turn performance.
     // Build each segment separately so we can drop optional ones when the
     // terminal is too narrow.
     let context_max = crate::providers::model_context_window(current_model);
 
-    // Build right-side segments independently. Under width pressure the
-    // right cluster's keycap hints drop first, then the instance suffix
-    // (pure provenance), then reasoning, then the stream rate, then context;
-    // the model name is the last item standing.
+    // Build the segments independently. Under width pressure the keycap
+    // hints drop first, then the instance suffix (pure provenance), then
+    // reasoning, then the stream rate, then context; the model name is the
+    // last item standing.
     let (model_label, model_style) = if current_model.is_empty() {
         (
             "(no model)".to_string(),
@@ -999,7 +997,7 @@ pub fn draw_model_bar(
     // Reasoning-effort tag: `{effort}` (e.g. `max`). Optional — only present
     // when the active model is actually reasoning (caller-resolved and
     // protocol-gated). Sits right after the model name so it reads as an
-    // attribute of the model — "Kimi K3 max @kimi-code  12k (1%)".
+    // attribute of the model — "Kimi K3 max @kimi-code".
     let mut reasoning_spans: Vec<Span<'static>> = Vec::new();
     if let Some(effort) = reasoning_effort {
         reasoning_spans.push(Span::styled(
@@ -1059,12 +1057,8 @@ pub fn draw_model_bar(
     // hint — `Ctrl+O` for the context report, `Ctrl+S` for the performance
     // report. The hints are the first thing to go under width pressure
     // (below), which keeps the gauges themselves available longest.
-    let keycap_dim = |text: &str| {
-        Span::styled(
-            text.to_string(),
-            Style::default().fg(theme.muted()).bg(bg),
-        )
-    };
+    let keycap_dim =
+        |text: &str| Span::styled(text.to_string(), Style::default().fg(theme.muted()).bg(bg));
     let context_keycap_width = Key::CTRL_O.display().width() + 1; // + leading space
     let performance_keycap_width = Key::CTRL_S.display().width() + 1; // + leading space
 
@@ -1075,6 +1069,10 @@ pub fn draw_model_bar(
     let mut show_context = context_seg_width > 0;
     let mut show_context_keycap = show_context;
     let mut show_performance_keycap = show_performance;
+    // The model name, its reasoning effort, and the provider instance form
+    // one identity group (`Kimi K3 high @111xianyu`) joined by the tighter
+    // model gap; the context and rate gauges each optionally trail their
+    // keycap hint and join across the wider segment gap.
     let identity_width_for = |model: bool, reasoning: bool, instance: bool| {
         let identity_count = usize::from(model) + usize::from(reasoning) + usize::from(instance);
         usize::from(model) * model_width
@@ -1082,217 +1080,166 @@ pub fn draw_model_bar(
             + usize::from(instance) * instance_width
             + identity_count.saturating_sub(1) * MODEL_BAR_MODEL_GAP
     };
-    let right_width_for = |performance: bool,
-                           performance_keycap: bool,
-                           context_keycap: bool,
-                           model: bool,
-                           reasoning: bool,
-                           instance: bool,
-                           context: bool| {
-        // The model name, its reasoning effort, and the provider instance
-        // form one identity group (`Kimi K3 high @111xianyu`) joined by the
-        // tighter model gap; the context and rate gauges sit across the
-        // wider segment gap, each optionally followed by its keycap hint.
-        let identity_width = identity_width_for(model, reasoning, instance);
-        let performance_width = usize::from(performance)
-            * (performance_width + usize::from(performance_keycap) * performance_keycap_width);
-        let context_width = usize::from(context)
-            * (context_seg_width + usize::from(context_keycap) * context_keycap_width);
-        let group_count = usize::from(performance) + usize::from(model || reasoning || instance) + usize::from(context);
-        performance_width
-            + identity_width
-            + context_width
-            + group_count.saturating_sub(1) * MODEL_BAR_SEGMENT_GAP
+    let gauges_width_for = |performance: bool,
+                            performance_keycap: bool,
+                            context: bool,
+                            context_keycap: bool| {
+        usize::from(performance)
+            * (performance_width + usize::from(performance_keycap) * performance_keycap_width)
+            + usize::from(context)
+                * (context_seg_width + usize::from(context_keycap) * context_keycap_width)
+            + usize::from(performance && context) * MODEL_BAR_SEGMENT_GAP
     };
-    let fits = |right_width: usize| {
-        inner + if right_width > 0 { MODEL_BAR_GAP_MIN } else { 0 } + right_width <= full_w
+    // The row is justified: the gauge cluster leads from the left edge and
+    // the identity cluster pins to the right, each `inner` in from its
+    // edge. `MODEL_BAR_GAP_MIN` keeps the middle fill from ever collapsing
+    // into the two halves.
+    let fits = |gauges_width: usize, identity_width: usize| {
+        let middle = usize::from(gauges_width > 0 && identity_width > 0) * MODEL_BAR_GAP_MIN;
+        inner + gauges_width + middle + identity_width + inner <= full_w
     };
 
-    let mut right_width = right_width_for(
+    let mut gauges_width = gauges_width_for(
         show_performance,
         show_performance_keycap,
-        show_context_keycap,
-        show_model,
-        show_reasoning,
-        show_instance,
         show_context,
+        show_context_keycap,
     );
+    let mut identity_width = identity_width_for(show_model, show_reasoning, show_instance);
     // Drop order under width pressure: the keycap hints first (progressive
     // disclosure dies first — the gauges are the payload), then the instance
     // suffix (pure provenance), then reasoning, then the stream rate, then
     // context, then the model name. (Session-state flags such as
-    // `DELEGATED` are not on this row — they live on the status bar.)
-    if !fits(right_width) && (show_context_keycap || show_performance_keycap) {
+    // `DELEGATED` are not on this row — they live on the status bar.) Each
+    // step recomputes only the half it shrank.
+    if !fits(gauges_width, identity_width) && (show_context_keycap || show_performance_keycap) {
         show_context_keycap = false;
         show_performance_keycap = false;
-        right_width = right_width_for(
+        gauges_width = gauges_width_for(
             show_performance,
             show_performance_keycap,
-            show_context_keycap,
-            show_model,
-            show_reasoning,
-            show_instance,
             show_context,
+            show_context_keycap,
         );
     }
-    if !fits(right_width) && show_instance {
+    if !fits(gauges_width, identity_width) && show_instance {
         show_instance = false;
-        right_width = right_width_for(
-            show_performance,
-            show_performance_keycap,
-            show_context_keycap,
-            show_model,
-            show_reasoning,
-            show_instance,
-            show_context,
-        );
+        identity_width = identity_width_for(show_model, show_reasoning, show_instance);
     }
-    if !fits(right_width) && show_reasoning {
+    if !fits(gauges_width, identity_width) && show_reasoning {
         show_reasoning = false;
-        right_width = right_width_for(
-            show_performance,
-            show_performance_keycap,
-            show_context_keycap,
-            show_model,
-            show_reasoning,
-            show_instance,
-            show_context,
-        );
+        identity_width = identity_width_for(show_model, show_reasoning, show_instance);
     }
-    if !fits(right_width) && show_performance {
+    if !fits(gauges_width, identity_width) && show_performance {
         show_performance = false;
         show_performance_keycap = false;
-        right_width = right_width_for(
+        gauges_width = gauges_width_for(
             show_performance,
             show_performance_keycap,
-            show_context_keycap,
-            show_model,
-            show_reasoning,
-            show_instance,
             show_context,
+            show_context_keycap,
         );
     }
-    if !fits(right_width) && show_context {
+    if !fits(gauges_width, identity_width) && show_context {
         show_context = false;
         show_context_keycap = false;
-        right_width = right_width_for(
+        gauges_width = gauges_width_for(
             show_performance,
             show_performance_keycap,
-            show_context_keycap,
-            show_model,
-            show_reasoning,
-            show_instance,
             show_context,
+            show_context_keycap,
         );
     }
-    if !fits(right_width) && show_model {
+    // The model name is the last item standing — no `fits` check follows,
+    // so its drop needs no width recompute.
+    if !fits(gauges_width, identity_width) && show_model {
         show_model = false;
-        right_width = right_width_for(
-            show_performance,
-            show_performance_keycap,
-            show_context_keycap,
-            show_model,
-            show_reasoning,
-            show_instance,
-            show_context,
-        );
     }
 
     // Ignition label takeover: during the `M A X` label phase the identity
-    // cluster (and the context segment — the label needs the room) renders
-    // as the converging label instead; the caller's band tint paints the
-    // glow over it. The label owns the identity cluster's width budget.
+    // cluster renders as the converging label instead; the caller's band
+    // tint paints the glow over it. The label owns the identity cluster's
+    // width budget on the row's right half.
     let label_budget = identity_width_for(show_model, show_reasoning, show_instance);
     let label_spans = ignition_elapsed_ms
         .and_then(|ms| super::effort_ignition::label_cluster(label_budget, ms, bg, theme));
     let ignition_label_active = label_spans.is_some();
 
-    // Left cluster: the identity group, flush against the row's left edge.
-    // During the ignition label phase the takeover label renders here
-    // instead (it owns the whole identity width).
+    // Left cluster: the gauges, flush against the row's left indent. The
+    // context meter leads — it reads as the bridge between "what is
+    // answering" and "how fast" — and the live speed signal follows. Each
+    // gauge that has a drill-down modal carries its keycap hint right after
+    // its value, as part of the same segment (they open the same modal).
     let mut left_spans: Vec<Span<'static>> = Vec::new();
-    let mut right_spans: Vec<Span<'static>> = Vec::new();
-    if let Some(label) = label_spans {
-        left_spans = label;
-    } else {
-        let identity_separator =
-            || Span::styled(" ".repeat(MODEL_BAR_MODEL_GAP), Style::default().bg(bg));
-        let group_separator =
-            || Span::styled(" ".repeat(MODEL_BAR_SEGMENT_GAP), Style::default().bg(bg));
-        // Split row: the identity group (model / effort / @instance) anchors
-        // the left half; the context meter and the stream rate pin right.
-        // The context meter reads as the bridge between "what is answering"
-        // and "how fast", and the live speed signal lands at the row's tail
-        // where the eye lands last on a right-aligned strip. Each gauge that
-        // has a drill-down modal carries its keycap hint right after its
-        // value.
-        if show_model || show_reasoning || show_instance {
-            let mut identity_started = false;
-            for segment in [
-                show_model.then_some(model_spans),
-                show_reasoning.then_some(reasoning_spans),
-                show_instance.then_some(instance_spans),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if identity_started {
-                    left_spans.push(identity_separator());
-                }
-                identity_started = true;
-                left_spans.extend(segment);
-            }
+    if show_context {
+        left_spans.extend(context_spans);
+        if show_context_keycap {
+            left_spans.push(Span::styled(" ", Style::default().bg(bg)));
+            left_spans.push(keycap_dim(Key::CTRL_O.display()));
         }
-        // Context usage sits across the wider segment gap; its keycap hint
-        // trails it as part of the same segment (they open the same modal).
-        if show_context {
-            if !right_spans.is_empty() {
-                right_spans.push(group_separator());
-            }
-            right_spans.extend(context_spans);
-            if show_context_keycap {
-                right_spans.push(Span::styled(" ", Style::default().bg(bg)));
-                right_spans.push(keycap_dim(Key::CTRL_O.display()));
-            }
+    }
+    // Stream rate follows, across the wider gap; its keycap hint trails it
+    // the same way.
+    if show_performance {
+        if !left_spans.is_empty() {
+            left_spans.push(Span::styled(
+                " ".repeat(MODEL_BAR_SEGMENT_GAP),
+                Style::default().bg(bg),
+            ));
         }
-        // Stream rate closes the row, across the wider gap; its keycap hint
-        // trails it the same way.
-        if show_performance {
-            if !right_spans.is_empty() {
-                right_spans.push(group_separator());
-            }
-            right_spans.extend(performance_spans);
-            if show_performance_keycap {
-                right_spans.push(Span::styled(" ", Style::default().bg(bg)));
-                right_spans.push(keycap_dim(Key::CTRL_S.display()));
-            }
+        left_spans.extend(performance_spans);
+        if show_performance_keycap {
+            left_spans.push(Span::styled(" ", Style::default().bg(bg)));
+            left_spans.push(keycap_dim(Key::CTRL_S.display()));
         }
     }
 
-    // Split layout: the identity cluster (model / effort / @instance) anchors
-    // the row's left edge; the gauges (context, stream rate) pin right. The
-    // middle fill absorbs the remaining width, so the two halves evenly own
-    // the row from their edges — `MODEL_BAR_GAP_MIN` guarantees they never
-    // collide.
+    // Right cluster: the identity group (`model effort @instance`), or the
+    // ignition takeover label while its phase is live.
+    let mut right_spans: Vec<Span<'static>> = Vec::new();
+    if let Some(label) = label_spans {
+        right_spans = label;
+    } else {
+        let identity_separator =
+            || Span::styled(" ".repeat(MODEL_BAR_MODEL_GAP), Style::default().bg(bg));
+        let mut identity_started = false;
+        for segment in [
+            show_model.then_some(model_spans),
+            show_reasoning.then_some(reasoning_spans),
+            show_instance.then_some(instance_spans),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if identity_started {
+                right_spans.push(identity_separator());
+            }
+            identity_started = true;
+            right_spans.extend(segment);
+        }
+    }
+
+    // Split layout: the gauge cluster anchors the row's left edge; the
+    // identity group pins right. The middle fill absorbs the remaining
+    // width, so the two halves evenly own the row from their edges — the
+    // `inner` indent mirrored on both sides, and `MODEL_BAR_GAP_MIN`
+    // guaranteeing they never collide.
     let left_rendered_width: usize = left_spans.iter().map(|s| s.content.width()).sum();
     let right_rendered_width: usize = right_spans.iter().map(|s| s.content.width()).sum();
-    let left_used = inner + left_rendered_width;
-
+    let min_gap =
+        usize::from(left_rendered_width > 0 && right_rendered_width > 0) * MODEL_BAR_GAP_MIN;
     let gap = full_w
-        .saturating_sub(left_used + right_width)
-        .max(if right_width > 0 && left_used > inner {
-            MODEL_BAR_GAP_MIN
-        } else {
-            0
-        });
+        .saturating_sub(inner + left_rendered_width + right_rendered_width + inner)
+        .max(min_gap);
 
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(10 + right_spans.len());
+    let mut spans: Vec<Span<'static>> =
+        Vec::with_capacity(8 + left_spans.len() + right_spans.len());
     spans.push(Span::styled(" ".repeat(inner), Style::default().bg(bg)));
     spans.extend(left_spans);
     spans.push(Span::styled(" ".repeat(gap), Style::default().bg(bg)));
     spans.extend(right_spans);
-    // Trailing fill so the row owns every cell on this line.
-    let used: usize = left_used + gap + right_rendered_width;
+    // Trailing edge indent + fill so the row owns every cell on this line.
+    let used: usize = inner + left_rendered_width + gap + right_rendered_width;
     spans.push(Span::styled(
         " ".repeat(full_w.saturating_sub(used)),
         Style::default().bg(bg),
@@ -1300,20 +1247,15 @@ pub fn draw_model_bar(
 
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 
-    // Compute the stream-rate and context-meter segments' screen rects so
-    // the caller can make them clickable. Under the identity → context →
-    // rate order the segments are located by walking the row in render
-    // order; nothing is assumed about which segment is last.
-    let right_start = (inner + left_rendered_width + gap) as u16;
+    // Compute the context-meter and stream-rate segments' screen rects so
+    // the caller can make them clickable. The gauges anchor the row's left
+    // half; the segments are located by walking the row in render order
+    // from the left indent — nothing is assumed about which segment is
+    // first.
     let mut performance_rect: Option<Rect> = None;
     let mut context_rect: Option<Rect> = None;
     if !ignition_label_active {
-        // The gauges sit right of the fill: context first, then the stream
-        // rate, across the wider segment gaps — mirroring exactly the span
-        // assembly above, including "the first rendered segment gets no
-        // leading separator". The identity group's width is already inside
-        // `right_start` via `left_rendered_width`.
-        let mut x = right_start;
+        let mut x = inner as u16;
         let mut any_rendered = false;
         let mut advance = |width: usize, seg: &mut Option<Rect>, leading: bool| {
             if leading {
@@ -2056,14 +1998,14 @@ mod tests {
         assert_eq!(text, "20.2k (8%)");
     }
 
-    /// Split-row contract: the identity group (`model effort @instance`)
-    /// anchors the left half, and the gauges (`context  Ctrl+O`, `rate
-    /// Ctrl+S`) pin right — reading left → right as **identity → context →
-    /// speed**. Under width pressure the keycap hints drop first, then the
-    /// instance suffix (provenance is nice-to-have) while the model name,
-    /// effort tag, and context meter all still fit.
+    /// Split-row contract: the gauges (`context  Ctrl+O`, `rate Ctrl+S`)
+    /// anchor the left half, and the identity group (`model effort
+    /// @instance`) pins right — reading left → right as **context → speed →
+    /// identity**. Under width pressure the keycap hints drop first, then
+    /// the instance suffix (provenance is nice-to-have) while the model
+    /// name, effort tag, context meter, and stream rate all still fit.
     #[test]
-    fn model_bar_orders_model_then_context_then_speed() {
+    fn model_bar_orders_context_speed_then_model() {
         let row_text = |width: u16, tps: Option<f64>| -> String {
             let mut terminal = mutx_engine::TestTerminal::new(width, 1);
             terminal.draw(|f| {
@@ -2087,15 +2029,15 @@ mod tests {
                 .collect::<String>()
         };
 
-        // Wide enough for everything: `model effort @instance` left,
-        // `ctx Ctrl+O  rate Ctrl+S` right, in that left-to-right order.
+        // Wide enough for everything: `ctx Ctrl+O  rate Ctrl+S` left,
+        // `model effort @instance` right, in that left-to-right order.
         let wide = row_text(80, Some(47.8));
-        let model_pos = wide.find("kimi-k2.7-code").expect("model shown");
         let ctx_pos = wide.find("(0%)").expect("context meter shown");
         let rate_pos = wide.find("47.8 tok/s").expect("stream rate shown");
+        let model_pos = wide.find("kimi-k2.7-code").expect("model shown");
         assert!(
-            model_pos < ctx_pos && ctx_pos < rate_pos,
-            "row must read identity → context → speed: {wide:?}"
+            ctx_pos < rate_pos && rate_pos < model_pos,
+            "row must read context → speed → identity: {wide:?}"
         );
         let inst_pos = wide.find("@kimi-code").expect("instance suffix shown");
         assert!(model_pos < inst_pos, "instance follows the model: {wide:?}");
@@ -2105,6 +2047,12 @@ mod tests {
         assert!(
             ctx_pos < ctx_key && rate_pos < rate_key,
             "keycaps trail their gauges: {wide:?}"
+        );
+        // Justified split: the identity cluster pins flush to the row's
+        // right edge (mirrored `inner` indent).
+        assert!(
+            wide.trim_end().ends_with("kimi-k2.7-code max @kimi-code"),
+            "identity must end at the right edge: {wide:?}"
         );
 
         // No TPS sample yet: the rate gauge (and its keycap) hide entirely —
@@ -2119,25 +2067,29 @@ mod tests {
             "context gauge and its keycap survive: {cold:?}"
         );
 
-        // Narrower row: the keycap hints drop first, then the provenance
-        // suffix, while the model name, effort tag, context meter, and rate
-        // survive in order.
-        let narrow = row_text(46, Some(47.8));
+        // Narrower row: the keycap hints drop first (52 still keeps the
+        // provenance suffix), then the instance suffix (46), while the
+        // gauges, model name, and effort tag survive in order.
+        let narrow = row_text(52, Some(47.8));
         assert!(
             !narrow.contains("Ctrl+O") && !narrow.contains("Ctrl+S"),
             "keycap hints hide first: {narrow:?}"
         );
-        let model_pos = narrow.find("kimi-k2.7-code").expect("model survives");
-        let ctx_pos = narrow.find("(0%)").expect("context survives");
-        let rate_pos = narrow.find("tok/s").expect("rate survives");
         assert!(
-            model_pos < ctx_pos && ctx_pos < rate_pos,
-            "order must hold after dropping the hints: {narrow:?}"
+            narrow.contains("@kimi-code"),
+            "provenance suffix survives at 52: {narrow:?}"
         );
-        let tighter = row_text(40, Some(47.8));
+        let tighter = row_text(46, Some(47.8));
         assert!(
             !tighter.contains('@'),
             "instance should hide next: {tighter:?}"
+        );
+        let ctx_pos = tighter.find("(0%)").expect("context survives");
+        let rate_pos = tighter.find("tok/s").expect("rate survives");
+        let model_pos = tighter.find("kimi-k2.7-code").expect("model survives");
+        assert!(
+            ctx_pos < rate_pos && rate_pos < model_pos,
+            "order must hold after dropping the hints: {tighter:?}"
         );
     }
 
@@ -2188,7 +2140,7 @@ mod tests {
     }
 
     #[test]
-    fn model_bar_click_rects_follow_model_context_speed_order() {
+    fn model_bar_click_rects_follow_context_speed_order() {
         let theme = Theme::default();
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
 
@@ -2212,6 +2164,9 @@ mod tests {
             ctx.x + ctx.width <= perf.x,
             "context meter must sit left of the stream-rate segment"
         );
+        // The gauges anchor the row's left edge: the context rect starts at
+        // the inner indent, one cell in.
+        assert_eq!(ctx.x, 1, "gauges must lead the row from the left indent");
         // Both rects carry exactly their own segment's text — gauge value
         // plus its trailing keycap hint (one click target per drill-down).
         let buf = terminal.buffer();
@@ -2222,6 +2177,21 @@ mod tests {
         };
         assert_eq!(slice(ctx), "0 (0%) Ctrl+O", "context rect mismatch");
         assert_eq!(slice(perf), "47.8 tok/s Ctrl+S", "rate rect mismatch");
+        // The identity cluster sits right of the gauges, pinned to the row's
+        // right edge (one trailing indent cell).
+        let row: String = (0..80)
+            .map(|x| buf[(x, 0)].symbol().to_string())
+            .collect();
+        let model_pos = row.find("kimi-k2.7-code").expect("model on the row");
+        assert!(
+            perf.x + perf.width <= model_pos as u16,
+            "identity must sit right of the gauges: {row:?}"
+        );
+        assert_eq!(
+            &row[80 - 1 - "kimi-k2.7-code".len()..80 - 1],
+            "kimi-k2.7-code",
+            "model must end at the right indent: {row:?}"
+        );
     }
 
     #[test]
@@ -2298,8 +2268,8 @@ mod tests {
             named.contains("@kimi-code"),
             "missing @instance in: {named:?}"
         );
-        // The suffix is the last cluster segment before the context meter:
-        // `Model effort @instance`.
+        // The suffix is the last segment of the identity group:
+        // `model effort @instance`.
         let model_pos = named.find("mock").expect("model name on the row");
         let inst_pos = named.find("@kimi-code").expect("instance suffix");
         assert!(model_pos < inst_pos, "instance must follow the model name");
@@ -2310,10 +2280,10 @@ mod tests {
 
     #[test]
     fn model_bar_full_cluster_orders_model_effort_instance() {
-        // The right cluster reads `Kimi K3 max @kimi-code  89.2k (8%)` —
-        // effort tight after the model name, the @instance provenance last.
-        // The identity group (`model effort @instance`) joins with single
-        // spaces; only the context segment sits across the wider gap.
+        // The right cluster reads `Kimi K3 max @kimi-code` — effort tight
+        // after the model name, the @instance provenance last. The identity
+        // group (`model effort @instance`) joins with single spaces; it sits
+        // across the wider gap from the left-anchored gauges.
         let mut terminal = mutx_engine::TestTerminal::new(120, 1);
         terminal.draw(|f| {
             draw_model_bar(
@@ -2347,8 +2317,8 @@ mod tests {
 
     #[test]
     fn model_bar_ignition_label_takes_over_the_identity_cluster() {
-        // During the ignition's label phase the right cluster swaps the whole
-        // `model effort @instance  ctx` identity for the converging `M A X`
+        // During the ignition's label phase the right cluster swaps the
+        // whole `model effort @instance` identity for the converging `M A X`
         // label; once the phase ends the normal cluster returns.
         fn row_text(elapsed_ms: Option<u128>) -> String {
             let mut terminal = mutx_engine::TestTerminal::new(100, 1);
@@ -2666,7 +2636,10 @@ mod tests {
             category: Some("Automation".to_string()),
             subcommands: vec![
                 ("list".to_string(), "List scheduled prompts".to_string()),
-                ("cancel".to_string(), "Cancel one schedule by id".to_string()),
+                (
+                    "cancel".to_string(),
+                    "Cancel one schedule by id".to_string(),
+                ),
             ],
         };
         let completions = vec![crate::completion::Completion {

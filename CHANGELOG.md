@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Notice entries render a topic head from structured parts, not a
+  re-parsed blob.** A core notice (`AgentNotice`) now crosses the boundary
+  into the transcript model as `NoticeParts` — a predictable *topic* label
+  derived from the contract vocabulary (`NoticeKind`/`NoticeSource`:
+  `trust`, `provider`, `turn guard`, `command`) plus the `title`/`body`
+  detail pair — instead of being flattened to `render_text()` and
+  re-guessed at render time by the notice component's text heuristics
+  (JSON sniffing, "Gave up after" stripping, first-line splitting). The
+  entry head becomes `▲ trust`, `! provider`, `ℹ command` (severity tone +
+  topic) with the title as the bold body lead and the body as muted detail
+  below, so a notice reads as *who is speaking* + *what happened* rather
+  than a generic `▲ notification` line. Local/legacy notices (transport
+  errors, discovery warnings raised TUI-side) keep the generic
+  `notification` head and the heuristic parse as an explicit fallback;
+  `raw` still carries the flattened form so copy fidelity is unchanged.
+  `TranscriptMessage::notice_from_core` is the constructor for the
+  structured path; the live append, the resume/history merge, and the
+  command-ack toast path all route through it.
+
+- **Session titles are now a structured session digest (title + intent +
+  history checklist).** The Chronicler's retired title-only task
+  (`SessionTitlerTask`) is replaced by `SessionDigestTask`, whose strict-JSON
+  output carries a 3-7 word title, a 1-2 sentence statement of the user's
+  intent, and a running checklist of what has been done and decided (capped
+  at 12 model-side / 16 harness-side entries, older entries merged, never
+  silently dropped). Trigger timing moved from "after the first successful
+  round" to "when the first user request is admitted" — the opening request
+  alone names the session's title and intent — and later user rounds refresh
+  the digest once the transcript has grown ≥ 8K chars past its stored anchor,
+  passing the previous digest for revision instead of regenerating blind.
+  The digest persists in the session snapshot (`DigestSet` event, resumable)
+  and the sessions picker's `i` detail view renders Intent + History bullets
+  so resuming or revisiting a session reads as a working-memory summary
+  instead of a raw transcript. The picker's title row mirrors the digest's
+  title unless a manual title is locked (ADR-0022's lock rule now pins only
+  the title; intent/history still refresh). Post-processing guarantees
+  render-safety regardless of model output: titles via `clean_title`, one-line
+  flattened and capped intent/history entries.
+
+### Removed
+
+- **Unwired Steward offices retired: Round Sentinel and Sanity Warden.**
+  `SemanticLoopSentinelTask` / `SanityVerifierTask` (with their helper methods
+  `Steward::check_semantic_loop` / `Steward::verify_sanity` and the
+  `RoundSentinel` / `SanityWarden` office variants) never had a production
+  call site: round-trajectory loop defense is fully covered by the wired
+  deterministic machinery (`DoomLoopGuard`, loop guard, stop gate), and
+  payload safety by the permission broker. An LLM office is staffed only
+  where rules cannot express the judgment — today the in-flight stream
+  review and the digest distillation.
+
 ## [0.37.0] - 2026-08-28
 
 ### Changed

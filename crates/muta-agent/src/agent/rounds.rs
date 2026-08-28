@@ -111,6 +111,7 @@ impl Agent {
     /// (its detector re-arms from zero instead), at most one consult is in
     /// flight at a time, and any malformed/failed consultation fail-opens
     /// to `no` inside [`crate::steward::Steward`].
+    #[allow(clippy::too_many_arguments)] // mirrors the two call sites' evidence set; bundling would obscure the channel symmetry
     fn dispatch_stream_loop_candidate(
         &self,
         detector: &mut crate::stream_loop_detector::StreamLoopDetector,
@@ -471,16 +472,20 @@ impl Agent {
                     // The branch outranks the stream arm so a pending cut
                     // beats rendering one more chunk.
                     verdict = async {
-                        let review = pending_stream_loop_review
-                            .as_mut()
-                            .expect("verdict branch is guarded by an in-flight review");
-                        (&mut review.verdict_rx)
-                            .await
-                            .unwrap_or(muta_contracts::StreamLoopVerdict::No)
+                        match pending_stream_loop_review.as_mut() {
+                            Some(review) => {
+                                (&mut review.verdict_rx)
+                                    .await
+                                    .unwrap_or(muta_contracts::StreamLoopVerdict::No)
+                            }
+                            // Unreachable behind the branch guard; stay
+                            // pending rather than panicking.
+                            None => std::future::pending().await,
+                        }
                     }, if pending_stream_loop_review.is_some() => {
-                        let review = pending_stream_loop_review
-                            .take()
-                            .expect("verdict branch is guarded by an in-flight review");
+                        let Some(review) = pending_stream_loop_review.take() else {
+                            continue;
+                        };
                         tracing::debug!(
                             channel = ?review.channel,
                             pattern = %review.pattern.description(),

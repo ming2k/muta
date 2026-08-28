@@ -783,6 +783,28 @@ impl AgentNotice {
         .with_surface(NoticeSurface::Toast)
     }
 
+    /// Build a workspace-trust notice: previously trusted (or shadowing)
+    /// project-authored content changed on disk, is quarantined, or overrides
+    /// a user-scope entry — and needs a human `/trust` decision or inspection.
+    ///
+    /// Stamps the `TrustChanged` kind, `Warning` severity, and `Harness`
+    /// source uniformly so frontends can branch on `kind == TrustChanged`
+    /// (topic labels, filtering, re-surfacing on reconnect) without
+    /// string-matching titles. Callers add the surface (the attach-time
+    /// quarantine banner vs. inline shadow warnings) and the detail body.
+    ///
+    /// ADR-0155 makes this a first-class kind, revising ADR-0107's stance that
+    /// `ReviewAlert` (the closed enum's generic "needs attention" value) was
+    /// good enough for trust notices.
+    pub fn trust_changed(title: impl Into<String>) -> Self {
+        Self::new(
+            NoticeKind::TrustChanged,
+            NoticeSeverity::Warning,
+            title,
+            NoticeSource::Harness,
+        )
+    }
+
     pub fn render_text(&self) -> String {
         match self.body.as_deref().filter(|body| !body.trim().is_empty()) {
             Some(body) => format!("{}\n{}", self.title, body),
@@ -797,7 +819,15 @@ impl AgentNotice {
 pub enum NoticeKind {
     ProviderRetry,
     NudgeInjected,
+    /// Generic "needs human attention" alert. Historically also carried
+    /// workspace-trust notices (ADR-0107); those moved to the first-class
+    /// [`NoticeKind::TrustChanged`] in ADR-0155, leaving this value free for
+    /// review-subsystem alerts.
     ReviewAlert,
+    /// Workspace trust state changed or needs a decision: project-authored
+    /// content changed on disk after being trusted (quarantined pending
+    /// review), or a project entry shadows a user-scope entry. ADR-0155.
+    TrustChanged,
     /// A harness-level acknowledgment of a slash command / configuration change
     /// (e.g. `/delegate on`, `--delegate`, `/permissions clear`). These are
     /// status confirmations, not model output: they carry no conversational
@@ -2059,6 +2089,23 @@ mod tests {
         let notice = AgentNotice::command_ack("x");
         let json = serde_json::to_string(&notice.kind).expect("serialise");
         assert_eq!(json, "\"command_ack\"");
+    }
+
+    #[test]
+    fn trust_changed_kind_serialises_as_snake_case_and_round_trips() {
+        // ADR-0155: TrustChanged is first-class, stamped uniformly by
+        // `trust_changed()` — Warning severity, Harness source — and must stay
+        // distinct from the generic ReviewAlert on the wire so frontends can
+        // branch on it exactly.
+        let notice = AgentNotice::trust_changed("Workspace configurations changed");
+        assert_eq!(notice.kind, NoticeKind::TrustChanged);
+        assert_eq!(notice.severity, NoticeSeverity::Warning);
+        assert_eq!(notice.source, NoticeSource::Harness);
+        let json = serde_json::to_string(&notice.kind).expect("serialise");
+        assert_eq!(json, "\"trust_changed\"");
+        let back: AgentNotice =
+            serde_json::from_str(&serde_json::to_string(&notice).unwrap()).expect("round-trip");
+        assert_eq!(back.kind, NoticeKind::TrustChanged);
     }
 
     #[test]

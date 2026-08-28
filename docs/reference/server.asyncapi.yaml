@@ -1585,7 +1585,7 @@ components:
       required: [id, kind, severity, surface, title, source]
       properties:
         id: { type: string }
-        kind: { enum: [provider_retry, nudge_injected, review_alert] }
+        kind: { enum: [provider_retry, nudge_injected, review_alert, trust_changed, command_ack] }
         severity: { enum: [info, warning, error] }
         surface: { enum: [inline, toast, banner] }
         title: { type: string }
