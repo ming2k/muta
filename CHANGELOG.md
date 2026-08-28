@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-08-28
+
 ### Changed
 
 - **Stream Sentinel reviews no longer pause the stream.** The L2 steward
@@ -5435,7 +5437,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.36.8...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.0...HEAD
+[0.37.0]: https://github.com/ming2k/muta/compare/v0.36.8...v0.37.0
 [0.36.8]: https://github.com/ming2k/muta/compare/v0.36.7...v0.36.8
 [0.36.1]: https://github.com/ming2k/muta/compare/v0.36.0...v0.36.1
 [0.36.0]: https://github.com/ming2k/muta/compare/v0.35.7...v0.36.0
