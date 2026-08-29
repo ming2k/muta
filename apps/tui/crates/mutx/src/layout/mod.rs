@@ -307,7 +307,7 @@ pub(super) fn default_group_end(messages: &[TranscriptMessage], start: usize) ->
         }
         end += 1;
     }
-    messages[start..end].iter().any(is_tool_like).then_some(end)
+    Some(end)
 }
 
 /// Resolve exactly one blank-row decision for a pair of adjacent transcript

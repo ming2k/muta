@@ -1132,6 +1132,10 @@ fn reasoning_trace_spacing_has_internal_gaps_and_single_trailing_separator() {
         .iter()
         .position(|row| row.contains("second thought"))
         .expect("second reasoning block must render");
+    let turn2_idx = rows
+        .iter()
+        .position(|row| row.contains("> turn 2"))
+        .expect("turn 2 header must render");
     let answer_idx = rows
         .iter()
         .position(|row| row.contains("final answer"))
@@ -1148,9 +1152,14 @@ fn reasoning_trace_spacing_has_internal_gaps_and_single_trailing_separator() {
         "reasoning blocks should be separated by one blank row:\n{grid}"
     );
     assert_eq!(
-        answer_idx - second_idx,
+        turn2_idx - second_idx,
         2,
-        "reasoning trace should have exactly one trailing layout separator before the next message:\n{grid}"
+        "turn 2 header should have layout separation after turn 1:\n{grid}"
+    );
+    assert_eq!(
+        answer_idx - turn2_idx,
+        2,
+        "turn 2 header and its body text should have one gap row:\n{grid}"
     );
 }
 
@@ -1262,6 +1271,25 @@ fn turn_header_with_model_effort_and_timestamp() {
             && rows[turn_idx].contains("(xhigh)")
             && rows[turn_idx].contains(&time_label),
         "turn header renders anchor  model effort  time:\n{grid}"
+    );
+}
+
+/// Pure conversational text (prose without tool steps) also uniformly renders
+/// its turn header.
+#[test]
+fn pure_prose_assistant_turn_renders_turn_header() {
+    let assistant = TranscriptMessage::new(
+        muta_contracts::Role::Assistant,
+        "Hello! How can I help you today with your project?",
+    )
+    .with_turn(1)
+    .with_attribution("anthropic", "claude-sonnet");
+
+    let grid = render_transcript_grid(&[assistant], 72, 14);
+    assert!(
+        grid.contains("> turn 1  claude-sonnet")
+            && grid.contains("Hello! How can I help you today with your project?"),
+        "pure prose turn must render its turn header:\n{grid}"
     );
 }
 
