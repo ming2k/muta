@@ -847,6 +847,23 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
                     reason: parked.reason,
                     at_ms: parked.at_ms,
                     round: result.as_ref().err().map(|_| round_at_admission),
+                    detail: None,
+                })
+                .or_else(|| {
+                    if let Err(error) = &result {
+                        let at_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        Some(muta_contracts::RoundInterrupt {
+                            reason: muta_contracts::RoundInterruptReason::Error,
+                            at_ms,
+                            round: Some(round_at_admission),
+                            detail: Some(error.to_string()),
+                        })
+                    } else {
+                        None
+                    }
                 })
         } else {
             // Success: drop whatever was parked so it cannot leak into a
@@ -888,10 +905,12 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
             {
                 tracing::warn!(?error, "could not persist round interrupt record");
             }
-            let _ = context.tx.send(round_response(
-                &context.session_id,
-                RoundEvent::RoundInterrupted(record),
-            ));
+            if record.reason != muta_contracts::RoundInterruptReason::Error {
+                let _ = context.tx.send(round_response(
+                    &context.session_id,
+                    RoundEvent::RoundInterrupted(record),
+                ));
+            }
         }
         if context.lifecycle.finish(generation).await {
             // Idle snapshot with the session in hand: this is the exact

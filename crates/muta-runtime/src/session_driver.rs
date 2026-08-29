@@ -989,6 +989,7 @@ async fn recover_crashed_round(
         reason: muta_contracts::RoundInterruptReason::Terminated,
         at_ms: now_ms,
         round: Some(round),
+        detail: None,
     });
     // Counter guard: the point may only name the session's *current* round —
     // the handler (and `start_resolved_turn`) reject anything else, and a
@@ -1338,6 +1339,7 @@ mod tests {
                 reason: muta_contracts::RoundInterruptReason::Terminated,
                 at_ms: 1,
                 round: Some(1),
+                detail: None,
             })
             .await
             .unwrap();

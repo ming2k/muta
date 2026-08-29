@@ -590,6 +590,7 @@ impl SessionRegistry {
                 reason: muta_contracts::RoundInterruptReason::Terminated,
                 at_ms: unix_epoch_ms(),
                 round: Some(e.session.round_counter().await),
+                detail: None,
             };
             if let Err(error) = e.session.record_round_interrupt(record).await {
                 tracing::warn!(

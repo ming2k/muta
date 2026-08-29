@@ -430,6 +430,7 @@ mod tests {
                 reason: muta_contracts::RoundInterruptReason::User,
                 at_ms: 1_700_000_000_000,
                 round: Some(1),
+                detail: None,
             },
         )));
         let row = t.row();

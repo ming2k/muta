@@ -650,7 +650,7 @@ impl Agent {
         {
             Ok(output) => output,
             Err(err) => ToolOutput::Error {
-                message: format!("Error executing {}: {}", call.name, err),
+                message: err,
                 detail: None,
             },
         }

@@ -655,11 +655,13 @@ mod tests {
                 reason: RoundInterruptReason::User,
                 at_ms: 3_000,
                 round: Some(1),
+                detail: None,
             },
             RoundInterrupt {
                 reason: RoundInterruptReason::Terminated,
                 at_ms: 9_000,
                 round: Some(2),
+                detail: None,
             },
         ]);
 
@@ -690,6 +692,7 @@ mod tests {
             reason: RoundInterruptReason::User,
             at_ms: 42,
             round: Some(3),
+            detail: None,
         });
         assert_eq!(marker.raw, "Round 3 — cancelled via [Esc Esc]");
 
@@ -697,7 +700,16 @@ mod tests {
             reason: RoundInterruptReason::Terminated,
             at_ms: 42,
             round: None,
+            detail: None,
         });
         assert_eq!(unnumbered.raw, "Process exited");
+
+        let err_marker = TranscriptMessage::round_interrupted(RoundInterrupt {
+            reason: RoundInterruptReason::Error,
+            at_ms: 42,
+            round: Some(4),
+            detail: Some("Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests".to_string()),
+        });
+        assert_eq!(err_marker.raw, "Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests");
     }
 }

@@ -37,12 +37,36 @@ pub enum FsError {
 impl fmt::Display for FsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(p) => write!(f, "File or directory not found: {p}"),
-            Self::PermissionDenied(p) => write!(f, "Permission denied: {p}"),
+            Self::NotFound(p) => {
+                if p.is_empty() {
+                    write!(f, "File or directory not found")
+                } else if p.starts_with("No such file") {
+                    write!(f, "{p}")
+                } else {
+                    write!(f, "File or directory not found: {p}")
+                }
+            }
+            Self::PermissionDenied(p) => {
+                if p.is_empty() {
+                    write!(f, "Permission denied")
+                } else if p.starts_with("Permission denied") {
+                    write!(f, "{p}")
+                } else {
+                    write!(f, "Permission denied: {p}")
+                }
+            }
             Self::IsADirectory(p) => write!(f, "'{p}' is a directory, not a file"),
             Self::NotADirectory(p) => write!(f, "'{p}' is not a directory"),
-            Self::AlreadyExists(p) => write!(f, "File already exists: {p}"),
-            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::AlreadyExists(p) => {
+                if p.is_empty() {
+                    write!(f, "File already exists")
+                } else if p.starts_with("File exists") {
+                    write!(f, "{p}")
+                } else {
+                    write!(f, "File already exists: {p}")
+                }
+            }
+            Self::Io(e) => write!(f, "{e}"),
             Self::Other(e) => write!(f, "{e}"),
         }
     }
@@ -53,9 +77,9 @@ impl std::error::Error for FsError {}
 impl From<std::io::Error> for FsError {
     fn from(err: std::io::Error) -> Self {
         match err.kind() {
-            std::io::ErrorKind::NotFound => Self::NotFound(err.to_string()),
-            std::io::ErrorKind::PermissionDenied => Self::PermissionDenied(err.to_string()),
-            std::io::ErrorKind::AlreadyExists => Self::AlreadyExists(err.to_string()),
+            std::io::ErrorKind::NotFound => Self::NotFound(String::new()),
+            std::io::ErrorKind::PermissionDenied => Self::PermissionDenied(String::new()),
+            std::io::ErrorKind::AlreadyExists => Self::AlreadyExists(String::new()),
             _ => Self::Io(err.to_string()),
         }
     }

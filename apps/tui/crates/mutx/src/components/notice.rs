@@ -236,31 +236,29 @@ pub(crate) fn draw_notice_view(
             *skip_rows -= 1;
             continue;
         }
-        if *current_y >= area.y + area.height {
-            break;
+        if *current_y < area.y + area.height {
+            let line_rect = Rect::new(area.x, *current_y, area.width, 1);
+            let spans = vec![
+                Span::styled(body_indent.clone(), Style::default()),
+                Span::styled(
+                    wl.text.clone(),
+                    Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
+                ),
+            ];
+            frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
+
+            layout_map.push(BlockRegion {
+                message_idx: mi,
+                block_idx: NOTICE_BLOCK_IDX,
+                start_byte: 0,
+                end_byte: wl.text.len(),
+                text: wl.text,
+                prefix_cols: body_indent.width() as u16,
+                rect: line_rect,
+                hidden_ranges: Vec::new(),
+            });
+            *current_y += 1;
         }
-
-        let line_rect = Rect::new(area.x, *current_y, area.width, 1);
-        let spans = vec![
-            Span::styled(body_indent.clone(), Style::default()),
-            Span::styled(
-                wl.text.clone(),
-                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
-            ),
-        ];
-        frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
-
-        layout_map.push(BlockRegion {
-            message_idx: mi,
-            block_idx: NOTICE_BLOCK_IDX,
-            start_byte: 0,
-            end_byte: wl.text.len(),
-            text: wl.text,
-            prefix_cols: body_indent.width() as u16,
-            rect: line_rect,
-            hidden_ranges: Vec::new(),
-        });
-        *current_y += 1;
     }
 
     // 4. Detail body: formatted detail (unfolded direct rendering). Same
@@ -290,28 +288,26 @@ pub(crate) fn draw_notice_view(
                     *skip_rows -= 1;
                     continue;
                 }
-                if *current_y >= area.y + area.height {
-                    break;
+                if *current_y < area.y + area.height {
+                    let line_rect = Rect::new(area.x, *current_y, area.width, 1);
+                    let spans = vec![
+                        Span::styled(detail_indent.clone(), Style::default()),
+                        Span::styled(dwl.text.clone(), Style::default().fg(theme.muted())),
+                    ];
+                    frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
+
+                    layout_map.push(BlockRegion {
+                        message_idx: mi,
+                        block_idx: NOTICE_BLOCK_IDX,
+                        start_byte: 0,
+                        end_byte: dwl.text.len(),
+                        text: dwl.text,
+                        prefix_cols: detail_indent.width() as u16,
+                        rect: line_rect,
+                        hidden_ranges: Vec::new(),
+                    });
+                    *current_y += 1;
                 }
-
-                let line_rect = Rect::new(area.x, *current_y, area.width, 1);
-                let spans = vec![
-                    Span::styled(detail_indent.clone(), Style::default()),
-                    Span::styled(dwl.text.clone(), Style::default().fg(theme.muted())),
-                ];
-                frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
-
-                layout_map.push(BlockRegion {
-                    message_idx: mi,
-                    block_idx: NOTICE_BLOCK_IDX,
-                    start_byte: 0,
-                    end_byte: dwl.text.len(),
-                    text: dwl.text,
-                    prefix_cols: detail_indent.width() as u16,
-                    rect: line_rect,
-                    hidden_ranges: Vec::new(),
-                });
-                *current_y += 1;
             }
         }
     }
@@ -534,5 +530,86 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         // Title (bold lead) then structured detail (muted).
         assert!(row(2).starts_with("  Workspace configurations changed"));
         assert!(row(3).starts_with("  Changed on disk: rules"));
+    }
+
+    #[test]
+    fn draw_notice_view_measures_full_logical_content_lines_when_viewport_clips() {
+        let raw = "Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests: {\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"Individual quota reached.\",\n    \"status\": \"RESOURCE_EXHAUSTED\"\n  }\n}";
+        let msg = TranscriptMessage::notice(NoticeSeverity::Error, raw);
+        let theme = Theme::default();
+
+        // 1. Measure with large viewport (no clipping)
+        let mut grid_large = mutx_engine::Grid::new(80, 50);
+        let mut frame_large = Frame::new(&mut grid_large);
+        let area_large = Rect::new(0, 0, 80, 50);
+        let mut layout_map_large = LayoutMap::default();
+        let mut skip_rows_large = 0;
+        let mut current_y_large = 0;
+        let mut content_lines_large = 0;
+
+        draw_notice_view(
+            &mut frame_large,
+            area_large,
+            NoticeView { message: &msg },
+            0,
+            &mut layout_map_large,
+            &mut skip_rows_large,
+            &mut current_y_large,
+            &mut content_lines_large,
+            &theme,
+            false,
+            false,
+        );
+
+        // 2. Measure with tiny viewport (clipped at 3 rows)
+        let mut grid_small = mutx_engine::Grid::new(80, 3);
+        let mut frame_small = Frame::new(&mut grid_small);
+        let area_small = Rect::new(0, 0, 80, 3);
+        let mut layout_map_small = LayoutMap::default();
+        let mut skip_rows_small = 0;
+        let mut current_y_small = 0;
+        let mut content_lines_small = 0;
+
+        draw_notice_view(
+            &mut frame_small,
+            area_small,
+            NoticeView { message: &msg },
+            0,
+            &mut layout_map_small,
+            &mut skip_rows_small,
+            &mut current_y_small,
+            &mut content_lines_small,
+            &theme,
+            false,
+            false,
+        );
+
+        // 3. Measure with scrolled viewport (skip_rows > 0)
+        let mut grid_scrolled = mutx_engine::Grid::new(80, 3);
+        let mut frame_scrolled = Frame::new(&mut grid_scrolled);
+        let area_scrolled = Rect::new(0, 0, 80, 3);
+        let mut layout_map_scrolled = LayoutMap::default();
+        let mut skip_rows_scrolled = 4;
+        let mut current_y_scrolled = 0;
+        let mut content_lines_scrolled = 0;
+
+        draw_notice_view(
+            &mut frame_scrolled,
+            area_scrolled,
+            NoticeView { message: &msg },
+            0,
+            &mut layout_map_scrolled,
+            &mut skip_rows_scrolled,
+            &mut current_y_scrolled,
+            &mut content_lines_scrolled,
+            &theme,
+            false,
+            false,
+        );
+
+        // Logical content_lines MUST be identical regardless of viewport height or scroll offset!
+        assert!(content_lines_large > 3);
+        assert_eq!(content_lines_large, content_lines_small);
+        assert_eq!(content_lines_large, content_lines_scrolled);
     }
 }

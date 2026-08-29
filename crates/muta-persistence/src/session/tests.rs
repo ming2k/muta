@@ -1194,6 +1194,7 @@ async fn round_interrupts_round_trip_through_persistence() {
             reason: muta_contracts::RoundInterruptReason::User,
             at_ms: 1_700_000_000_000,
             round: Some(1),
+            detail: None,
         })
         .await
         .unwrap();
@@ -1202,6 +1203,7 @@ async fn round_interrupts_round_trip_through_persistence() {
             reason: muta_contracts::RoundInterruptReason::Terminated,
             at_ms: 1_700_000_060_000,
             round: Some(2),
+            detail: None,
         })
         .await
         .unwrap();
@@ -1211,6 +1213,7 @@ async fn round_interrupts_round_trip_through_persistence() {
             reason: muta_contracts::RoundInterruptReason::Terminated,
             at_ms: 1_700_000_060_001,
             round: Some(2),
+            detail: None,
         })
         .await
         .unwrap();

@@ -950,11 +950,15 @@ pub struct RoundInterrupt {
     // Skipped when `None`: absent on the wire, never an explicit `null`.
     #[ts(optional)]
     pub round: Option<u64>,
+    /// Optional error payload or stop detail (e.g. fatal provider error message).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detail: Option<String>,
 }
 
 impl RoundInterrupt {
     /// The user-facing label for this record, e.g. `"Esc Esc"`,
-    /// `"new message"`, `"process exited"`. One vocabulary shared by the
+    /// `"new message"`, `"process exited"`, `"error"`. One vocabulary shared by the
     /// TUI, the Web app, and headless output.
     pub fn label(&self) -> &'static str {
         self.reason.label()
@@ -984,6 +988,9 @@ pub enum RoundInterruptReason {
     /// crash. Inferred on load when a recorded interrupt's round never
     /// completed and no terminal interrupt was recorded for it.
     Terminated,
+    /// The round ended in a fatal / terminal error (e.g. rate limit / network
+    /// failure / provider quota exhaustion).
+    Error,
 }
 
 impl RoundInterruptReason {
@@ -994,6 +1001,7 @@ impl RoundInterruptReason {
             Self::User => "Esc Esc",
             Self::Superseded => "new message",
             Self::Terminated => "process exited",
+            Self::Error => "error",
         }
     }
 }

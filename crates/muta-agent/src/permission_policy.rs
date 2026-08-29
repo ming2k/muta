@@ -290,7 +290,7 @@ impl PermissionPolicy for SchemaPolicy {
             Ok(()) => PolicyDecision::Pass,
             Err(message) => PolicyDecision::Deny {
                 output: ToolOutput::Error {
-                    message: format!("Error executing {}: {}", ctx.call_name, message),
+                    message,
                     detail: None,
                 },
             },

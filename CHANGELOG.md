@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.37.9] - 2026-08-29
+## [0.37.10] - 2026-08-29
+
+### Fixed
+
+- **Notice view logical height & transcript scrolling.** Removed viewport clipping `break` statements from `draw_notice_view` in `notice.rs`, ensuring `content_lines` accurately measures the entire logical height regardless of viewport height or scroll position.
+- **Durable terminal round error records on resume.** Extended `RoundInterruptReason` with `Error` variant and `detail` payload on `RoundInterrupt`. Terminal round failures (e.g. HTTP 429 quota exhaustion or provider errors) are now recorded in `SessionStore` and cleanly restored into the transcript upon session resume.
 
 ### Fixed
 
@@ -5642,7 +5647,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.9...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.10...HEAD
+[0.37.10]: https://github.com/ming2k/muta/compare/v0.37.9...v0.37.10
 [0.37.9]: https://github.com/ming2k/muta/compare/v0.37.8...v0.37.9
 [0.37.8]: https://github.com/ming2k/muta/compare/v0.37.7...v0.37.8
 [0.37.7]: https://github.com/ming2k/muta/compare/v0.37.6...v0.37.7

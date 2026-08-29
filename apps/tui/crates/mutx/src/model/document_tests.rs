@@ -883,6 +883,7 @@ fn round_interrupt_creates_structured_notice() {
         reason: RoundInterruptReason::User,
         round: Some(3),
         at_ms: 1_000,
+        detail: None,
     });
     assert!(marker.is_notice());
     assert!(marker.is_round_interrupt());
@@ -898,6 +899,24 @@ fn round_interrupt_creates_structured_notice() {
             topic: crate::model::document::SystemNoticeTopic::Interrupted
         })
     );
+
+    // Terminal round error with 429 detail
+    let err_marker = TranscriptMessage::round_interrupted(RoundInterrupt {
+        reason: RoundInterruptReason::Error,
+        round: Some(4),
+        at_ms: 2_000,
+        detail: Some("Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests: {\n  \"error\": {\n    \"code\": 429\n  }\n}".to_string()),
+    });
+    assert!(err_marker.is_notice());
+    assert!(err_marker.is_round_interrupt());
+    let MessageKind::Notice { severity, ref parts, .. } = err_marker.kind else {
+        panic!("must be notice");
+    };
+    assert_eq!(severity, NoticeSeverity::Error);
+    let parts = parts.as_ref().expect("must have parts");
+    assert_eq!(parts.topic.as_deref(), Some("error"));
+    assert_eq!(parts.title, "Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests");
+    assert!(parts.detail.is_some());
 }
 
 #[test]

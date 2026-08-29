@@ -1430,7 +1430,12 @@ impl TranscriptMessage {
         match &self.kind {
             MessageKind::Notice {
                 parts: Some(parts), ..
-            } => parts.topic.as_deref() == Some("interrupted"),
+            } => {
+                matches!(
+                    parts.topic.as_deref(),
+                    Some("interrupted") | Some("error")
+                )
+            }
             _ => false,
         }
     }
@@ -1830,35 +1835,67 @@ impl TranscriptMessage {
 
     /// Construct a round-interrupt marker row (C11) unified as a Notice entry.
     pub fn round_interrupted(record: muta_contracts::RoundInterrupt) -> Self {
-        let raw = match record.round {
-            Some(round) => match record.reason {
-                muta_contracts::RoundInterruptReason::User => {
-                    format!("Round {round} — cancelled via [Esc Esc]")
-                }
-                muta_contracts::RoundInterruptReason::Superseded => {
-                    format!("Round {round} — superseded by new message")
-                }
-                muta_contracts::RoundInterruptReason::Terminated => {
-                    format!("Round {round} — process exited")
-                }
-            },
-            None => match record.reason {
-                muta_contracts::RoundInterruptReason::User => "Cancelled via [Esc Esc]".to_string(),
-                muta_contracts::RoundInterruptReason::Superseded => {
-                    "Superseded by new message".to_string()
-                }
-                muta_contracts::RoundInterruptReason::Terminated => "Process exited".to_string(),
+        let severity = match record.reason {
+            muta_contracts::RoundInterruptReason::Error => NoticeSeverity::Error,
+            _ => NoticeSeverity::Warning,
+        };
+        let raw = match record.reason {
+            muta_contracts::RoundInterruptReason::Error => {
+                record.detail.clone().unwrap_or_else(|| match record.round {
+                    Some(round) => format!("Round {round} — failed with error"),
+                    None => "Round failed with error".to_string(),
+                })
+            }
+            _ => match record.round {
+                Some(round) => match record.reason {
+                    muta_contracts::RoundInterruptReason::User => {
+                        format!("Round {round} — cancelled via [Esc Esc]")
+                    }
+                    muta_contracts::RoundInterruptReason::Superseded => {
+                        format!("Round {round} — superseded by new message")
+                    }
+                    muta_contracts::RoundInterruptReason::Terminated => {
+                        format!("Round {round} — process exited")
+                    }
+                    muta_contracts::RoundInterruptReason::Error => unreachable!(),
+                },
+                None => match record.reason {
+                    muta_contracts::RoundInterruptReason::User => {
+                        "Cancelled via [Esc Esc]".to_string()
+                    }
+                    muta_contracts::RoundInterruptReason::Superseded => {
+                        "Superseded by new message".to_string()
+                    }
+                    muta_contracts::RoundInterruptReason::Terminated => {
+                        "Process exited".to_string()
+                    }
+                    muta_contracts::RoundInterruptReason::Error => unreachable!(),
+                },
             },
         };
-        let parts = NoticeParts {
-            origin: Some(NoticeOrigin::System {
-                topic: SystemNoticeTopic::Interrupted,
-            }),
-            topic: Some("interrupted".to_string()),
-            title: raw.clone(),
-            detail: None,
+        let parts = match record.reason {
+            muta_contracts::RoundInterruptReason::Error => {
+                let parsed = crate::components::notice::parse_notice_content(&raw);
+                NoticeParts {
+                    origin: Some(NoticeOrigin::Provider {
+                        provider_name: None,
+                        attempt: None,
+                    }),
+                    topic: Some("error".to_string()),
+                    title: parsed.header,
+                    detail: parsed.detail,
+                }
+            }
+            _ => NoticeParts {
+                origin: Some(NoticeOrigin::System {
+                    topic: SystemNoticeTopic::Interrupted,
+                }),
+                topic: Some("interrupted".to_string()),
+                title: raw.clone(),
+                detail: None,
+            },
         };
-        Self::notice(NoticeSeverity::Warning, raw).with_notice_parts(parts)
+        Self::notice(severity, raw).with_notice_parts(parts)
     }
 
     /// Construct a notice message. Replaces the ad-hoc

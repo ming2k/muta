@@ -1452,7 +1452,6 @@ async fn schema_violating_call_never_reaches_the_tool() {
         "schema violation must produce ToolOutput::Error, got {output:?}"
     );
     let text = output.to_text();
-    assert!(text.contains("Error executing strict_read"), "{text}");
     assert!(text.contains("invalid argument `limit`"), "{text}");
 
     // Missing a required field.
