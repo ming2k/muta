@@ -646,6 +646,7 @@ fn runner_view_omits_row2_entirely() {
         asides: None,
         interruptible: true,
         parent_note: "",
+        breadcrumbs: None,
     };
     assert!(!hints.has_content());
     let terminal = render_full_view(80, 24, &[], Some(hints));

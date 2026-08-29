@@ -204,8 +204,24 @@ pub(super) async fn dispatch_action(
     {
         host::cancel_kill_confirm(app);
     }
+
+    if !matches!(action, input::InputAction::SetLeaderChord(_)) {
+        app.leader_chord = crate::app::LeaderChord::None;
+    }
     match action {
         input::InputAction::None => {}
+        input::InputAction::SetLeaderChord(chord) => {
+            app.leader_chord = chord;
+        }
+        input::InputAction::KeyboardQuit => {
+            app.leader_chord = crate::app::LeaderChord::None;
+            app.selection = crate::model::selection::SelectionState::None;
+            if app.active_modal() != Modal::None {
+                modals::handle_close_modal(app, viewed_session_id);
+            } else {
+                app.focused_target = None;
+            }
+        }
         input::InputAction::TerminalResized => {
             // A resize is the prime trigger for crossterm splitting an
             // in-flight SGR mouse sequence across reads (issue #854).

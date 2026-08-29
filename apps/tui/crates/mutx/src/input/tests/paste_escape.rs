@@ -45,6 +45,7 @@ fn esc_closes_slash_completion_menu() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -95,6 +96,7 @@ fn esc_closes_path_completion_menu() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -144,6 +146,7 @@ fn esc_falls_through_when_no_completion_is_open() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -191,6 +194,7 @@ fn escape_returns_from_always_confirmation() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -235,6 +239,7 @@ fn esc_in_models_browse_closes_the_modal() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -278,6 +283,7 @@ fn esc_in_connections_browse_closes_the_modal() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -371,6 +377,7 @@ fn escape_in_btw_modal_closes_the_modal() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );

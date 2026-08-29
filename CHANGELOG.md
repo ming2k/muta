@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.5] - 2026-08-29
+
+### Added
+
+- **Demand-driven 1-row / 2-row View Header Band.** Single view collapses row 2 (`PAGE_HEADER_ROWS = 1`) with 0 top/bottom gap, while view stack depth > 1 auto-expands row 2 with live breadcrumbs (`Main › Runner[...] › *Diff*`) and navigation hints (`[C-x b: view  C-g: back]`).
+- **Floating Which-Key Leader Chord Overlay (`which_key.rs`).** Decoupled overlay card in the bottom-right corner for two-stroke leader chords (`Ctrl+X`, `Ctrl+C`) with zero layout shift.
+- **Emacs / Readline Keybinding Scheme.** Standard Readline composer navigation (`C-a`, `C-e`, `C-k`, `C-u`, `C-w`, `C-y`, `M-b`, `M-f`), universal quit (`Ctrl+G`), extended command palette (`Alt+X` / `M-x`), and `Ctrl+X` / `Ctrl+C` leader chords.
+- **Modular `TranscriptView` Sub-Props.** Refactored view layer props into `TranscriptStreamProps`, `TranscriptChromeProps`, `TranscriptInputProps`, and `TranscriptInteractionProps`.
+
 ## [0.37.4] - 2026-08-29
 
 ### Added
@@ -5587,7 +5596,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.4...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.5...HEAD
+[0.37.5]: https://github.com/ming2k/muta/compare/v0.37.4...v0.37.5
 [0.37.4]: https://github.com/ming2k/muta/compare/v0.37.3...v0.37.4
 [0.37.3]: https://github.com/ming2k/muta/compare/v0.37.1...v0.37.3
 [0.37.1]: https://github.com/ming2k/muta/compare/v0.37.0...v0.37.1

@@ -2286,6 +2286,7 @@ pub(super) async fn run_app_loop(
                         host_prompting,
                         config_custom_editing,
                         config_websearch_editing,
+                        leader_chord: app.leader_chord,
                     },
                     &mut app.drag,
                 )

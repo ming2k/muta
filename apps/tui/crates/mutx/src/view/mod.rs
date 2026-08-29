@@ -258,6 +258,95 @@ pub struct TranscriptView<'a> {
     pub height_cache: Option<&'a mut HeightCache>,
 }
 
+/// Modular sub-props grouping the transcript stream and header metadata.
+#[allow(dead_code)]
+pub struct TranscriptStreamProps<'a> {
+    pub messages: &'a [TranscriptMessage],
+    pub scroll: u16,
+    pub session_head: Option<SessionHead<'a>>,
+    pub side_banner: Option<page_header::BtwHead>,
+    pub runner_bar: Option<RunnerBarInfo>,
+    pub page_hints: Option<page_header::PageHints<'a>>,
+}
+
+/// Modular sub-props grouping status chrome and footer bars.
+#[allow(dead_code)]
+pub struct TranscriptChromeProps<'a> {
+    pub activity: &'a str,
+    pub backoff_clause: Option<&'a str>,
+    pub silent_clause: Option<&'a str>,
+    pub awaiting_permission: bool,
+    pub spinner_phase: usize,
+    pub queue_bar: QueueBarView<'a>,
+    pub todos: Option<&'a muta_contracts::TodoList>,
+    pub round_started_at: Option<std::time::Instant>,
+    pub chrome_hidden: bool,
+}
+
+/// Modular sub-props grouping composer and prompt drafting state.
+#[allow(dead_code)]
+pub struct TranscriptInputProps<'a> {
+    pub input: &'a str,
+    pub byte_cursor: usize,
+}
+
+/// Modular sub-props grouping hit-testing, focus, and selection interaction.
+#[allow(dead_code)]
+pub struct TranscriptInteractionProps<'a> {
+    pub selection: &'a SelectionState,
+    pub cell_selection: Option<&'a CellDragInfo>,
+    pub hovered_step: Option<usize>,
+    pub focused_target: Option<InteractiveTarget>,
+}
+
+#[allow(dead_code)]
+impl<'a> TranscriptView<'a> {
+    /// Extract the modular stream properties.
+    pub fn stream_props(&self) -> TranscriptStreamProps<'a> {
+        TranscriptStreamProps {
+            messages: self.messages,
+            scroll: self.scroll,
+            session_head: self.session_head,
+            side_banner: self.side_banner,
+            runner_bar: self.runner_bar.clone(),
+            page_hints: self.page_hints,
+        }
+    }
+
+    /// Extract the modular chrome properties.
+    pub fn chrome_props(&self) -> TranscriptChromeProps<'a> {
+        TranscriptChromeProps {
+            activity: self.activity,
+            backoff_clause: self.backoff_clause,
+            silent_clause: self.silent_clause,
+            awaiting_permission: self.awaiting_permission,
+            spinner_phase: self.spinner_phase,
+            queue_bar: self.queue_bar,
+            todos: self.todos,
+            round_started_at: self.round_started_at,
+            chrome_hidden: self.chrome_hidden,
+        }
+    }
+
+    /// Extract the modular input properties.
+    pub fn input_props(&self) -> TranscriptInputProps<'a> {
+        TranscriptInputProps {
+            input: self.input,
+            byte_cursor: self.byte_cursor,
+        }
+    }
+
+    /// Extract the modular interaction properties.
+    pub fn interaction_props(&self) -> TranscriptInteractionProps<'a> {
+        TranscriptInteractionProps {
+            selection: self.selection,
+            cell_selection: self.cell_selection,
+            hovered_step: self.hovered_step,
+            focused_target: self.focused_target,
+        }
+    }
+}
+
 /// Caches each transcript message's fully-laid-out height (in rows), keyed by
 /// the message's stable [`TranscriptMessage::id`](crate::model::document::TranscriptMessage::id).
 ///
@@ -347,6 +436,7 @@ impl HeightCache {
 }
 
 /// Page-header context for an Runner view (shown when zoomed into a task).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunnerBarInfo {
     /// The runner's role (`explore` / `plan` / …), when the `Started` event
     /// has identified it. Rendered as the `[ROLE]` tag between the `ENVOY`

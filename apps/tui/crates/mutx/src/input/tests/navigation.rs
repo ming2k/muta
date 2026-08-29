@@ -423,6 +423,7 @@ fn up_arrow_in_browse_does_not_recall_queued() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );

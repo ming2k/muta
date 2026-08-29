@@ -630,9 +630,13 @@ screen](../../explanation/tui.md#key-collisions-under-tmux--screen).
 ╰──────────────────────────────────────╯
 ```
 
-Sections: **General**, **Line editing**, **Transcript focus**, **Views &
-tools**, **Modes**. Closes with a one-line note: `Drag to select · Ctrl+C or
+Sections: **General**, **Line editing (Readline)**, **Transcript focus**, **Views &
+tools (Emacs leader chords: C-x, C-c, M-x)**, **Modes**. Closes with a one-line note: `Drag to select · Ctrl+C or
 Ctrl+Shift+C to copy.`
+
+Arming a leader chord (`Ctrl+X` or `Ctrl+C`) displays a floating Which-Key overlay card
+in the bottom-right corner without shifting page layout; `Ctrl+G` provides universal
+cancel (`keyboard-quit`).
 
 The body is a selectable document: dragging over the keycap rows and
 descriptions selects them, and `Ctrl+Shift+C` copies — the same interaction

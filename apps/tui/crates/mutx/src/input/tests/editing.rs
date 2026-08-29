@@ -42,6 +42,7 @@ fn typing_in_compose_returns_insert_char() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -88,6 +89,7 @@ fn backspace_in_compose_returns_backspace_action() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -138,6 +140,7 @@ fn backspace_atomically_deletes_an_image_chip() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -188,6 +191,7 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -233,6 +237,7 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -304,6 +309,7 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -347,6 +353,7 @@ fn a_in_connections_modal_opens_preset_chooser() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -444,6 +451,7 @@ fn ctrl_t_opens_todos_modal_when_no_modal_is_open() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -482,6 +490,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
         host_prompting: false,
         config_custom_editing: false,
         config_websearch_editing: false,
+        leader_chord: crate::app::LeaderChord::None,
     };
     let action = process_event(
         Event::Key(crossterm::event::KeyEvent::new(
@@ -531,6 +540,7 @@ fn ctrl_m_opens_models_modal_when_no_modal_is_open() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -1226,6 +1236,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -1267,6 +1278,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -1551,10 +1563,9 @@ fn ctrl_x_in_history_modal_arms_clear() {
 }
 
 #[test]
-fn ctrl_x_outside_history_modal_is_a_noop() {
+fn ctrl_x_outside_history_modal_arms_leader_chord() {
     // Nowhere else does Ctrl+X mean anything: at the top level (no modal) it
-    // must not arm the clear — a stray Ctrl+X while composing can never wipe
-    // history.
+    // must arm the leader chord.
     let mut input = "draft".to_string();
     let mut cursor = 5;
     let mut drag = SelectionDrag::default();
@@ -1588,7 +1599,10 @@ fn ctrl_x_outside_history_modal_is_a_noop() {
         },
         &mut drag,
     );
-    assert_eq!(action, InputAction::None);
+    assert_eq!(
+        action,
+        InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX)
+    );
     assert_eq!(input, "draft");
 }
 
@@ -1867,4 +1881,85 @@ fn host_prompt_delete_key_removes_forward_char() {
     );
     assert_eq!(input, "ac");
     assert_eq!(cursor, 1);
+}
+
+#[test]
+fn emacs_ctrl_x_leader_chord_switches_view_with_b() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+
+    // 1. Initial Ctrl+X arms the leader chord
+    let action1 = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+        &mut input,
+        &mut cursor,
+        InputContext::default(),
+        &mut drag,
+    );
+    assert_eq!(action1, InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX));
+
+    // 2. Following 'b' opens ViewSwitcher
+    let action2 = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            leader_chord: crate::app::LeaderChord::CtrlX,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action2, InputAction::ViewSwitcherToggle);
+}
+
+#[test]
+fn emacs_ctrl_c_leader_chord_opens_permissions_with_p() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        InputContext {
+            leader_chord: crate::app::LeaderChord::CtrlC,
+            ..Default::default()
+        },
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::OpenPermissions);
+}
+
+#[test]
+fn emacs_ctrl_g_triggers_keyboard_quit() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),
+        &mut input,
+        &mut cursor,
+        InputContext::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::KeyboardQuit);
+}
+
+#[test]
+fn emacs_meta_x_opens_view_switcher() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+
+    let action = process_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT)),
+        &mut input,
+        &mut cursor,
+        InputContext::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::ViewSwitcherToggle);
 }

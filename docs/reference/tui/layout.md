@@ -63,13 +63,14 @@ The top of every view carries a **head band** — an identity strip
 (ADR-0103 §3) whose second row is demand-driven (ADR-0104). Row 1 is
 identity and status; on the Main session view it shows `SESSION`, the
 session-id tail, and the workspace path on the left, plus the session mode
-(`DELEGATED`) on the right. Row 2 — the view-affordance legend — renders
-only while the view has something page-specific to announce: the main
-view's live aside chip + `F5 asides` while asides are live, or the aside
-view's `Ctrl-C back` / `F5 asides` / `Esc interrupt aside`. Contextual
-pages (`/btw`, Envoy, Dashboard) replace row 1 with their own contextual
-header; the Envoy page renders no row 2 (its permanent footer owns the
-legend). See [Head band](status-bar.md).
+(`DELEGATED`) on the right. Row 2 — the view stack breadcrumb trail and affordance
+legend — renders only while the view has stack depth or page-specific items to announce:
+view stack breadcrumbs (`Main › Runner[...] › *Diff*` with `[C-x b: view  C-g: back]`),
+the main view's live aside chip + `F5 asides`, or the aside view's `Ctrl-C back` /
+`F5 asides` / `Esc interrupt aside`. When single-view and no asides, row 2 collapses
+to 0 rows (`PAGE_HEADER_ROWS = 1`). Two-stroke leader chords (`Ctrl+X`, `Ctrl+C`) render
+as a floating Which-Key overlay card at the top shell layer without shifting the
+transcript layout. See [Head band](status-bar.md).
 
 ### Footer stack
 

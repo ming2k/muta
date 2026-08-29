@@ -55,6 +55,18 @@ pub enum ComposerSendMode {
     FollowUp,
 }
 
+/// Active Emacs-style two-stroke leader chord state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LeaderChord {
+    /// No leader active.
+    #[default]
+    None,
+    /// `Ctrl+X` leader active (View stack / Buffer / Window management).
+    CtrlX,
+    /// `Ctrl+C` leader active (Agent control / Mode-specific operations).
+    CtrlC,
+}
+
 /// A user message owned by the compact outbox (the **next-round** queue).
 ///
 /// Follow-up content and a busy-Enter steer whose round ended before admission
@@ -468,6 +480,8 @@ pub struct App {
     pub completion_request_id: u64,
     pub cursor_position: usize,
     pub input_scroll: usize,
+    /// Active Emacs-style two-stroke leader chord state.
+    pub leader_chord: LeaderChord,
     /// Screen rect of the composer panel in the last drawn frame (the whole
     /// tinted box, chrome rows included), or `None` while no composer is
     /// shown (overlay modal open, runner view). The spatial mouse router

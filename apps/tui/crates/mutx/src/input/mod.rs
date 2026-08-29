@@ -107,6 +107,8 @@ pub struct InputContext {
     /// Whether a Web Search settings field (SearXNG URL / API key) in
     /// Settings is actively editing. Mirrors `App::websearch_editing`.
     pub config_websearch_editing: bool,
+    /// Active Emacs-style two-stroke leader chord state. Mirrors `App::leader_chord`.
+    pub leader_chord: crate::app::LeaderChord,
 }
 
 impl InputContext {
@@ -741,6 +743,11 @@ pub enum InputAction {
     /// leftover bytes back as spurious `KeyCode::Char` events (issue #854/#668).
     /// Re-arming capture is the cleanest way to get both sides back in step.
     TerminalResized,
+    /// Set the active Emacs leader chord state (`Ctrl+X`, `Ctrl+C`, or `None`).
+    SetLeaderChord(crate::app::LeaderChord),
+    /// Universal Emacs `keyboard-quit` (`Ctrl+G` / `Esc` fallback):
+    /// resets active leader chord, cancels selection, closes modal/panel.
+    KeyboardQuit,
 }
 
 impl InputAction {
@@ -1279,6 +1286,82 @@ pub fn process_event(
                     KeyCode::Enter => InputAction::HistoryClearConfirm,
                     _ => InputAction::HistoryClearCancel,
                 };
+            }
+
+            // ── Emacs Leader Chord Processing ──────────────────────────────────
+            if context.leader_chord == crate::app::LeaderChord::CtrlX {
+                return match (key.code, key.modifiers) {
+                    (KeyCode::Char('b'), _) | (KeyCode::Char('B'), _) => {
+                        InputAction::ViewSwitcherToggle
+                    }
+                    (KeyCode::Char('k'), _) | (KeyCode::Char('K'), _) => {
+                        if context.active_modal != super::Modal::None {
+                            InputAction::CloseModal
+                        } else if context.in_runner_view {
+                            InputAction::ExitRunner
+                        } else if context.in_side_view {
+                            InputAction::ExitSideView
+                        } else {
+                            InputAction::ViewCloseSelected
+                        }
+                    }
+                    (KeyCode::Char('o'), _) | (KeyCode::Char('O'), _) => {
+                        InputAction::FocusNextTarget
+                    }
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => InputAction::Quit,
+                    (KeyCode::Char('g'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => {
+                        InputAction::SetLeaderChord(crate::app::LeaderChord::None)
+                    }
+                    _ => InputAction::SetLeaderChord(crate::app::LeaderChord::None),
+                };
+            }
+
+            if context.leader_chord == crate::app::LeaderChord::CtrlC {
+                return match (key.code, key.modifiers) {
+                    (KeyCode::Char('c'), _) | (KeyCode::Char('C'), _) => {
+                        if context.in_side_view {
+                            InputAction::InterruptSide
+                        } else {
+                            InputAction::Interrupt
+                        }
+                    }
+                    (KeyCode::Char('p'), _) | (KeyCode::Char('P'), _) => {
+                        InputAction::OpenPermissions
+                    }
+                    (KeyCode::Char('t'), _) | (KeyCode::Char('T'), _) => {
+                        InputAction::OpenTodos
+                    }
+                    (KeyCode::Char('m'), _) | (KeyCode::Char('M'), _) => {
+                        InputAction::OpenModels
+                    }
+                    (KeyCode::Char('d'), _) | (KeyCode::Char('D'), _) => {
+                        InputAction::OpenPerformanceReport
+                    }
+                    (KeyCode::Char('g'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => {
+                        InputAction::SetLeaderChord(crate::app::LeaderChord::None)
+                    }
+                    _ => InputAction::SetLeaderChord(crate::app::LeaderChord::None),
+                };
+            }
+
+            // Universal keyboard-quit (Ctrl+G)
+            if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return InputAction::KeyboardQuit;
+            }
+
+            // Extended command palette (M-x / Alt+x)
+            if (key.code == KeyCode::Char('x') || key.code == KeyCode::Char('X'))
+                && key.modifiers.contains(KeyModifiers::ALT)
+            {
+                return InputAction::ViewSwitcherToggle;
+            }
+
+            // Initiate Ctrl+X leader chord (unless inside HistorySearch clear-confirm)
+            if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                if context.active_modal == super::Modal::HistorySearch {
+                    return InputAction::HistoryClearAll;
+                }
+                return InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX);
             }
 
             // Global shortcuts are resolved through the unified keybinding

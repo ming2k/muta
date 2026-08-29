@@ -48,6 +48,7 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )
@@ -98,6 +99,7 @@ fn enter_with_completion(
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )
@@ -142,6 +144,7 @@ fn enter_shell(input: &mut String) -> InputAction {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )
@@ -190,6 +193,7 @@ fn key_in_side_view_with(
         host_prompting: false,
         config_custom_editing: false,
         config_websearch_editing: false,
+        leader_chord: crate::app::LeaderChord::None,
     };
     tune(&mut context);
     process_event(
@@ -240,6 +244,7 @@ fn key_with_focus(code: KeyCode) -> InputAction {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )
@@ -296,6 +301,7 @@ fn run_key(
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )
@@ -348,6 +354,7 @@ fn run_history_key(
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )
@@ -392,6 +399,7 @@ fn up_with_queued(has_queued: bool) -> InputAction {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )
@@ -479,6 +487,7 @@ fn queue_modal_char(c: char) -> InputAction {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )
@@ -527,6 +536,7 @@ fn queue_modal_key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> Inp
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )
@@ -575,6 +585,7 @@ fn run_paste(
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )
@@ -618,6 +629,7 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -701,6 +713,7 @@ fn oauth_key(c: char) -> InputAction {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )
@@ -746,6 +759,7 @@ fn oauth_keycode(code: KeyCode) -> InputAction {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     )

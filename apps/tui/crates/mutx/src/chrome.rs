@@ -1273,7 +1273,7 @@ pub(crate) fn tilde_home(path: &std::path::Path) -> String {
 /// A snapshot of one staged dispatch, lent to the render layer so drawing
 /// the queue bar/modal never entangles the view layer with the app's
 /// mutable state.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueueItemView {
     /// When the item was queued (epoch ms); rendered as a local `HH:MM` in
     /// the queue modal (the bar itself no longer shows a time).
@@ -1290,6 +1290,7 @@ pub struct QueueItemView {
 
 /// Inputs for [`draw_queue_bar`]: the persistent one-row outbox summary pinned
 /// below the transcript gap. This is the permanent home for queue affordances.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QueueBarView<'a> {
     /// Outbox items for the viewed session, in dispatch order (front pops
     /// first). The layout hides the bar while this is empty, so an empty

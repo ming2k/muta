@@ -41,6 +41,7 @@ fn star_in_models_modal_toggles_model_favorite() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -86,6 +87,7 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -131,6 +133,7 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -172,6 +175,7 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
         host_prompting: false,
         config_custom_editing: false,
         config_websearch_editing: false,
+        leader_chord: crate::app::LeaderChord::None,
     };
     let letter = process_event(
         Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)),
@@ -253,6 +257,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 host_prompting: false,
                 config_custom_editing: false,
                 config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
             },
             &mut drag,
         )

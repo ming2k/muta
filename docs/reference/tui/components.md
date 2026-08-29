@@ -35,6 +35,7 @@ stays focused on geometry, panels, color helpers, and raw body rendering.
 | `components/notice.rs` | `NoticeView`, `draw_notice_view` | Transcript notice renderer | Transcript notice card (header with expand/collapse micro-affordance, severity palette, wrapping, and expandable formatted detail payloads) |
 | `components/meta_strip.rs` | `MetaStrip`, `MetaChip`, `MetaTone` | Turn header (`turn_band`), sent/queued user-message header (`message_body`) | One-row two-tone metadata strip (accent anchor · muted details, R1 attribute joins per the [join ladder](visual-language.md)), with optional left padding and background tail fill |
 | `components/options.rs` | `QuestionOptionRow` | Permission/question overlay | Wrapped option rows for single- and multi-select question surfaces |
+| `components/which_key.rs` | `draw_which_key_overlay` | App shell overlay layer | Floating Which-Key leader chord guide card overlay (`Ctrl+X`, `Ctrl+C`) with zero layout shift |
 
 The symbols are crate-internal. They are intentionally exposed only inside the
 view layer so the app shell cannot depend on component internals.

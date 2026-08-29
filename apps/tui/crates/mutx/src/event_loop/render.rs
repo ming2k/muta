@@ -166,21 +166,6 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         .iter()
         .filter(|row| app.running_sessions.contains(row.id.as_str()))
         .count();
-    let page_hints = view::PageHints {
-        kind: if side_banner.is_some() {
-            view::PageKind::Btw
-        } else if app.in_runner_view() {
-            view::PageKind::Runner
-        } else {
-            view::PageKind::Main
-        },
-        asides: (!app.in_side_view && !app.btw_list.is_empty()).then_some(view::AsidesChip {
-            total: app.btw_list.len(),
-            running: aside_running,
-        }),
-        interruptible: viewed_running,
-        parent_note: "",
-    };
     let runner_bar = app.focus_stack.last().and_then(|current| {
         let tasks: Vec<&TranscriptMessage> = app
             .messages
@@ -197,6 +182,30 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             total: tasks.len(),
         })
     });
+    let breadcrumbs_string: Option<String> = if app.in_side_view {
+        Some("Main › Aside".to_string())
+    } else if let Some(ref bar) = runner_bar {
+        let role = bar.role.as_deref().unwrap_or("runner");
+        Some(format!("Main › Runner[{role}]"))
+    } else {
+        None
+    };
+    let page_hints = view::PageHints {
+        kind: if side_banner.is_some() {
+            view::PageKind::Btw
+        } else if app.in_runner_view() {
+            view::PageKind::Runner
+        } else {
+            view::PageKind::Main
+        },
+        asides: (!app.in_side_view && !app.btw_list.is_empty()).then_some(view::AsidesChip {
+            total: app.btw_list.len(),
+            running: aside_running,
+        }),
+        interruptible: viewed_running,
+        parent_note: "",
+        breadcrumbs: breadcrumbs_string.as_deref(),
+    };
 
     // Empty-state guidance policy (ADR-0057/0104): the app shell picks the
     // variant, the view paints it. A setup blocker beats the tour — nothing
@@ -1266,6 +1275,9 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
     if app.esc_armed() {
         view::draw_armed_toast(f, "Esc again interrupts", &app.theme);
     }
+
+    // Floating Which-Key / Leader Chord card overlay (Helix style)
+    crate::components::which_key::draw_which_key_overlay(f, &app.theme, app.leader_chord, f.area());
 
     app.layout_map = layout_map;
 

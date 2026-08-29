@@ -204,6 +204,7 @@ fn enter_in_connections_modal_is_inert_no_activate_concept() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -272,6 +273,7 @@ fn tab_is_a_noop_while_busy_and_does_not_edit_the_draft() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );
@@ -333,6 +335,7 @@ fn enter_in_btw_modal_focuses_the_selected_aside() {
             host_prompting: false,
             config_custom_editing: false,
             config_websearch_editing: false,
+            leader_chord: crate::app::LeaderChord::None,
         },
         &mut drag,
     );

@@ -28,7 +28,7 @@ pub(crate) enum PageHeader<'a> {
 }
 
 /// Row-1 content for the `/btw` aside view's head.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BtwHead {
     /// Coarse primary-session status, rendered as the left context's meta
     /// segment ("main running", …).
@@ -48,6 +48,7 @@ pub(crate) struct BtwHead {
 /// main view's interrupt lives on the activity bar (which spells the real
 /// double-Esc arming, `Esc Esc interrupt`), and the Runner page's legend
 /// lives on its permanent footer ([`draw_runner_footer`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PageHints<'a> {
     /// Which page the legend belongs to — decides the keycap set.
     pub kind: PageKind,
@@ -60,6 +61,8 @@ pub(crate) struct PageHints<'a> {
     /// Marker text for the aside view's legend (its parent's coarse state),
     /// already formatted; empty renders none.
     pub parent_note: &'a str,
+    /// Optional view stack breadcrumbs.
+    pub breadcrumbs: Option<&'a str>,
 }
 
 impl PageHints<'_> {
@@ -67,6 +70,7 @@ impl PageHints<'_> {
     /// means the caller must not reserve the row at all — the head collapses
     /// to a single row and the transcript reclaims the line.
     ///
+    /// - **Breadcrumbs active**: always expands row 2.
     /// - **Main**: only while at least one aside is live (the aside chip +
     ///   `F5 asides` are exactly the affordances this row exists for).
     /// - **Btw**: always — `Ctrl-C back` is the view's single exit, and
@@ -75,6 +79,9 @@ impl PageHints<'_> {
     ///   legend (`draw_runner_footer`), so a row-2 copy would duplicate the
     ///   exact keycaps one screen apart.
     pub(crate) fn has_content(&self) -> bool {
+        if self.breadcrumbs.is_some() {
+            return true;
+        }
         match self.kind {
             PageKind::Main => self.asides.is_some(),
             PageKind::Btw => true,
@@ -84,13 +91,14 @@ impl PageHints<'_> {
 }
 
 /// The main view's live-asides chip: count + running count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AsidesChip {
     pub total: usize,
     pub running: usize,
 }
 
 /// Which page the header band is describing.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PageKind {
     Main,
     Btw,
@@ -108,6 +116,7 @@ impl From<&PageHeader<'_>> for PageKind {
 }
 
 /// Left/right content for the Main session view's head row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SessionHead<'a> {
     /// The session's persistent id (full string). Only its last four
     /// characters are shown, dimmed, as a disambiguating tag.
@@ -324,6 +333,30 @@ pub(crate) fn draw_page_header_hints(
     let key_style = crate::components::keycap::keycap_style(theme).bg(bg);
     let hint_style = fill.fg(theme.muted());
     let note_style = fill.fg(theme.dim());
+
+    if let Some(crumbs) = hints.breadcrumbs {
+        let left = Span::styled(format!("   {crumbs}"), Style::default().fg(theme.fg()));
+        let right_key = crate::components::keycap::keycap_span(theme, "C-x b");
+        let right_desc = Span::styled(" view  ", Style::default().fg(theme.muted()));
+        let back_key = crate::components::keycap::keycap_span(theme, "C-g");
+        let back_desc = Span::styled(" back", Style::default().fg(theme.muted()));
+
+        let left_len = crumbs.width() + 3;
+        let right_len = 20;
+        let pad_len = (rect.width as usize).saturating_sub(left_len + right_len);
+        let pad = " ".repeat(pad_len);
+
+        let line = Line::from(vec![
+            left,
+            Span::raw(pad),
+            right_key,
+            right_desc,
+            back_key,
+            back_desc,
+        ]);
+        frame.render_widget(Paragraph::new(line).style(fill), rect);
+        return;
+    }
 
     // Leading descriptive segment (before the keycaps): the main view's live
     // aside chip, the aside view's parent note.
@@ -652,6 +685,7 @@ mod tests {
             asides: None,
             interruptible: true,
             parent_note: "main running",
+            breadcrumbs: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
@@ -693,6 +727,7 @@ mod tests {
             asides: None,
             interruptible: true,
             parent_note: "",
+            breadcrumbs: None,
         };
         assert!(!hints.has_content(), "no asides → no row at all");
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
@@ -719,6 +754,7 @@ mod tests {
             }),
             interruptible: false,
             parent_note: "",
+            breadcrumbs: None,
         };
         // Main: only while asides are live.
         assert!(!mk(PageKind::Main, false).has_content());
@@ -728,6 +764,16 @@ mod tests {
         // Runner: never (the permanent footer owns the legend).
         assert!(!mk(PageKind::Runner, false).has_content());
         assert!(!mk(PageKind::Runner, true).has_content());
+
+        // With breadcrumbs: always true for all pages.
+        let with_crumbs = PageHints {
+            kind: PageKind::Main,
+            asides: None,
+            interruptible: false,
+            parent_note: "",
+            breadcrumbs: Some("Main › Runner"),
+        };
+        assert!(with_crumbs.has_content());
     }
 
     #[test]
@@ -741,6 +787,7 @@ mod tests {
             }),
             interruptible: false,
             parent_note: "",
+            breadcrumbs: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
@@ -765,6 +812,7 @@ mod tests {
             asides: None,
             interruptible: false,
             parent_note: "",
+            breadcrumbs: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
@@ -778,6 +826,31 @@ mod tests {
             .collect();
         assert!(!row.contains("btw"), "no chip without asides: {row}");
         assert!(!row.contains("asides"), "no F5 pair without asides: {row}");
+    }
+
+    #[test]
+    fn breadcrumbs_render_in_row_two() {
+        let theme = Theme::default();
+        let hints = PageHints {
+            kind: PageKind::Main,
+            asides: None,
+            interruptible: false,
+            parent_note: "",
+            breadcrumbs: Some("Main › Runner[explore]"),
+        };
+        let mut terminal = mutx_engine::TestTerminal::new(80, 1);
+        terminal.draw(|frame| {
+            draw_page_header_hints(frame, frame.area(), &hints, &theme);
+        });
+        let row: String = terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(row.contains("Main › Runner[explore]"));
+        assert!(row.contains("C-x b"));
+        assert!(row.contains("C-g"));
     }
 
     #[test]

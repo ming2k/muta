@@ -739,6 +739,7 @@ fn main_view_without_asides_renders_a_single_row_head_band() {
             asides: None,
             interruptible: true,
             parent_note: "",
+            breadcrumbs: None,
         }),
     );
     assert!(grid_row(&terminal, 0).contains("SESSION"));
@@ -766,6 +767,7 @@ fn main_view_with_asides_shows_the_legend_row() {
             }),
             interruptible: true,
             parent_note: "",
+            breadcrumbs: None,
         }),
     );
     let row1 = grid_row(&terminal, 1);
