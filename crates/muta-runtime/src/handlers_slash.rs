@@ -705,6 +705,7 @@ pub(crate) struct SlashEnv<'a> {
     pub ui: &'a dyn crate::UiBridge,
     pub extra_commands: &'a SlashCommandRegistry,
     pub websearch_shared: &'a Arc<muta_contracts::SharedWebSearchConfig>,
+    pub background_jobs: &'a crate::background_jobs::BackgroundJobManager,
 }
 
 /// `AgentRequest::SlashCommand` — parse the command, dispatch to the matching
@@ -733,6 +734,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
         ui,
         extra_commands,
         websearch_shared,
+        background_jobs,
     } = env;
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if parts.is_empty() {
@@ -1156,6 +1158,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         ui: env.ui,
                         extra_commands: env.extra_commands,
                         websearch_shared: env.websearch_shared,
+                        background_jobs: env.background_jobs,
                     };
                     start_fresh_session(&mut fresh_env, name, args).await;
                 }
@@ -1691,6 +1694,131 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 }
                 Err(error) => {
                     record_error(session, resp_tx, name, args, error).await;
+                }
+            }
+        }
+        Some(BuiltinCmd::Jobs) => {
+            let sub = parts.get(1).copied().unwrap_or("list");
+            match sub {
+                "kill" => {
+                    if let Some(target_id) = parts.get(2) {
+                        let jid = muta_contracts::JobId(target_id.to_string());
+                        match background_jobs.kill_job(&jid) {
+                            Ok(()) => {
+                                record_ack(
+                                    session,
+                                    name,
+                                    args,
+                                    format!("Terminated background job {}.", target_id),
+                                )
+                                .await;
+                            }
+                            Err(err) => {
+                                record_error(
+                                    session,
+                                    resp_tx,
+                                    name,
+                                    args,
+                                    &format!("Failed to kill job {}: {}", target_id, err),
+                                )
+                                .await;
+                            }
+                        }
+                    } else {
+                        record_error(session, resp_tx, name, args, "Usage: /jobs kill <job_id>").await;
+                    }
+                }
+                "logs" => {
+                    if let Some(target_id) = parts.get(2) {
+                        let jid = muta_contracts::JobId(target_id.to_string());
+                        match background_jobs.get_logs(&jid, 50) {
+                            Some(lines) => {
+                                let output = if lines.is_empty() {
+                                    "(no logs recorded yet)".to_string()
+                                } else {
+                                    lines.join("\n")
+                                };
+                                record_command(
+                                    session,
+                                    resp_tx,
+                                    name,
+                                    args,
+                                    CommandResult::Text(format!("Logs for {}:\n```\n{}\n```", target_id, output)),
+                                )
+                                .await;
+                            }
+                            None => {
+                                record_error(
+                                    session,
+                                    resp_tx,
+                                    name,
+                                    args,
+                                    &format!("Job not found: {}", target_id),
+                                )
+                                .await;
+                            }
+                        }
+                    } else {
+                        record_error(session, resp_tx, name, args, "Usage: /jobs logs <job_id>").await;
+                    }
+                }
+                _ => {
+                    let jobs = background_jobs.list_jobs();
+                    if jobs.is_empty() {
+                        record_command(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            CommandResult::Text("No active or recent background jobs.".to_string()),
+                        )
+                        .await;
+                    } else {
+                        let mut table = String::from("### Background Jobs\n\n| ID | Type | State | Latest Output |\n|---|---|---|---|\n");
+                        for j in jobs {
+                            let (kind_str, detail) = match &j.spec {
+                                muta_contracts::JobSpec::Process { command, label, .. } => {
+                                    (label.clone().unwrap_or_else(|| "process".to_string()), command.clone())
+                                }
+                                muta_contracts::JobSpec::Runner { role, description, .. } => {
+                                    (format!("runner ({role})"), description.clone())
+                                }
+                            };
+                            let status_str = match &j.state {
+                                muta_contracts::JobState::Queued => "Queued".to_string(),
+                                muta_contracts::JobState::Running { pid, .. } => {
+                                    if let Some(p) = pid {
+                                        format!("Running (PID {p})")
+                                    } else {
+                                        "Running".to_string()
+                                    }
+                                }
+                                muta_contracts::JobState::Succeeded { duration_ms, .. } => {
+                                    format!("✓ Passed ({}s)", duration_ms / 1000)
+                                }
+                                muta_contracts::JobState::Failed { duration_ms, exit_code, .. } => {
+                                    format!("✗ Failed (Exit {exit_code}, {}s)", duration_ms / 1000)
+                                }
+                                muta_contracts::JobState::Killed { duration_ms } => {
+                                    format!("Killed ({}s)", duration_ms / 1000)
+                                }
+                                muta_contracts::JobState::TimedOut { duration_ms } => {
+                                    format!("Timed Out ({}s)", duration_ms / 1000)
+                                }
+                            };
+                            let latest = j.latest_output.as_deref().unwrap_or(detail.as_str());
+                            let truncated_latest = if latest.len() > 60 {
+                                format!("{}...", &latest[..57])
+                            } else {
+                                latest.to_string()
+                            };
+                            table.push_str(&format!(
+                                "| `{}` | {} | {} | `{}` |\n",
+                                j.id.0, kind_str, status_str, truncated_latest
+                            ));
+                        }
+                        record_command(session, resp_tx, name, args, CommandResult::Text(table)).await;
+                    }
                 }
             }
         }

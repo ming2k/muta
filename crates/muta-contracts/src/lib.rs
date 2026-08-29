@@ -82,6 +82,7 @@ pub use hazard::*;
 pub mod master;
 pub mod mesh;
 pub mod runner;
+pub mod job;
 pub mod steward;
 pub mod tier;
 pub use mesh::{MeshAddress, MeshEnvelope, MeshMessage, MeshRoute, mesh_ids};
@@ -169,6 +170,7 @@ pub use model::{
     RemoteModelEndpoint, RemoteModelMetadata, WireFormat, baseline_models, model_by_id,
     register_fitted_models, resolve as resolve_model, sanitize_model_id,
 };
+pub use job::{BackgroundJobInfo, BackgroundJobOutcome, BackgroundJobService, JobId, JobSpec, JobState};
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,
 };

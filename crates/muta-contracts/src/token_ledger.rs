@@ -157,18 +157,32 @@ pub struct RequestPerformance {
     pub provider_output_tokens: Option<u64>,
 }
 
+/// Minimum duration of an observed streaming span required for the streaming
+/// rate sample to be statistically and physically defensible (20ms).
+pub const MIN_DEFENSIBLE_STREAM_SPAN_US: u64 = 20_000;
+
+/// Physically plausible ceiling for single-stream model output (tokens/sec).
+/// Any client-observed stream TPS exceeding this indicates burst/buffered
+/// transport packet arrival rather than steady-state token decode.
+pub const MAX_PLAUSIBLE_STREAM_TPS: f64 = 2_000.0;
+
 impl RequestPerformance {
     /// Client-observed stream rate, excluding the first output event from the
-    /// numerator. A single event or a zero-length span has no defensible rate.
+    /// numerator. A single event, a zero-length/sub-20ms span, or an implausible
+    /// burst rate has no defensible rate.
     pub fn observed_stream_tps(self) -> Option<f64> {
         let stream_us = self.stream_us?;
         let tokens = self
             .streamed_output_tokens
             .checked_sub(self.first_output_tokens)?;
-        if stream_us == 0 || tokens == 0 || self.output_events < 2 {
+        if stream_us < MIN_DEFENSIBLE_STREAM_SPAN_US || tokens == 0 || self.output_events < 2 {
             return None;
         }
-        Some(tokens as f64 * 1_000_000.0 / stream_us as f64)
+        let tps = tokens as f64 * 1_000_000.0 / stream_us as f64;
+        if !tps.is_finite() || tps <= 0.0 || tps > MAX_PLAUSIBLE_STREAM_TPS {
+            return None;
+        }
+        Some(tps)
     }
 
     /// Provider-native model decode rate when the upstream supplied both the
@@ -179,7 +193,11 @@ impl RequestPerformance {
         if decode_us == 0 || tokens == 0 {
             return None;
         }
-        Some(tokens as f64 * 1_000_000.0 / decode_us as f64)
+        let tps = tokens as f64 * 1_000_000.0 / decode_us as f64;
+        if !tps.is_finite() || tps <= 0.0 || tps > MAX_PLAUSIBLE_STREAM_TPS {
+            return None;
+        }
+        Some(tps)
     }
 
     /// End-to-end output rate using the provider/ledger completion count and
@@ -189,7 +207,11 @@ impl RequestPerformance {
         if e2e_us == 0 || completion_tokens <= 0 {
             return None;
         }
-        Some(completion_tokens as f64 * 1_000_000.0 / e2e_us as f64)
+        let tps = completion_tokens as f64 * 1_000_000.0 / e2e_us as f64;
+        if !tps.is_finite() || tps <= 0.0 || tps > MAX_PLAUSIBLE_STREAM_TPS {
+            return None;
+        }
+        Some(tps)
     }
 }
 
@@ -285,6 +307,13 @@ impl TurnPerformanceSnapshot {
     pub fn e2e_output_tps(self) -> Option<f64> {
         self.performance
             .e2e_output_tps(self.completion_tokens as i64)
+    }
+
+    /// Preferred display rate: returns the client-observed stream TPS if defensible,
+    /// falling back to the end-to-end output rate (e.g. for single-chunk streams,
+    /// tool-call turns, or burst streams).
+    pub fn preferred_tps(self) -> Option<f64> {
+        self.observed_stream_tps().or_else(|| self.e2e_output_tps())
     }
 }
 
@@ -1553,6 +1582,79 @@ mod tests {
         assert_eq!(snapshot.round, 1);
         assert_eq!(snapshot.completion_tokens, 101);
         assert_eq!(snapshot.observed_stream_tps(), Some(stream));
+    }
+
+    #[test]
+    fn defensible_rate_filtering_and_preferred_tps_fallback() {
+        // 1. Defensible stream: 100 tokens over 1s (100 tok/s) -> valid stream TPS
+        let normal = RequestPerformance {
+            ttft_us: Some(100_000),
+            stream_us: Some(1_000_000),
+            e2e_us: Some(1_100_000),
+            streamed_output_tokens: 101,
+            first_output_tokens: 1,
+            output_events: 101,
+            ..Default::default()
+        };
+        assert_eq!(normal.observed_stream_tps(), Some(100.0));
+
+        let snap_normal = TurnPerformanceSnapshot {
+            round: 1,
+            turn: 1,
+            attempt: 1,
+            completion_tokens: 101,
+            usage_source: RequestUsageSource::Reported,
+            performance: normal,
+        };
+        assert_eq!(snap_normal.preferred_tps(), Some(100.0));
+
+        // 2. Single-event / 0-span (e.g. Gemini single chunk / tool call):
+        // stream TPS is None, but preferred_tps falls back to e2e rate (100 tokens / 1.0s = 100 tok/s).
+        let single_chunk = RequestPerformance {
+            ttft_us: Some(1_000_000),
+            stream_us: Some(0),
+            e2e_us: Some(1_000_000),
+            streamed_output_tokens: 100,
+            first_output_tokens: 100,
+            output_events: 1,
+            ..Default::default()
+        };
+        assert_eq!(single_chunk.observed_stream_tps(), None);
+        assert_eq!(single_chunk.e2e_output_tps(100), Some(100.0));
+
+        let snap_single = TurnPerformanceSnapshot {
+            round: 1,
+            turn: 1,
+            attempt: 1,
+            completion_tokens: 100,
+            usage_source: RequestUsageSource::Reported,
+            performance: single_chunk,
+        };
+        assert_eq!(snap_single.preferred_tps(), Some(100.0));
+
+        // 3. Burst packet arrival (e.g. 500 tokens in 5ms = 100,000 tok/s):
+        // Filtered out as implausible (>2000 tok/s and <20ms span). Preferred falls back to e2e.
+        let burst = RequestPerformance {
+            ttft_us: Some(500_000),
+            stream_us: Some(5_000), // 5ms
+            e2e_us: Some(1_000_000), // 1.0s e2e
+            streamed_output_tokens: 505,
+            first_output_tokens: 5,
+            output_events: 2,
+            ..Default::default()
+        };
+        assert_eq!(burst.observed_stream_tps(), None);
+        assert_eq!(burst.e2e_output_tps(505), Some(505.0));
+
+        let snap_burst = TurnPerformanceSnapshot {
+            round: 1,
+            turn: 1,
+            attempt: 1,
+            completion_tokens: 505,
+            usage_source: RequestUsageSource::Reported,
+            performance: burst,
+        };
+        assert_eq!(snap_burst.preferred_tps(), Some(505.0));
     }
 
     #[test]

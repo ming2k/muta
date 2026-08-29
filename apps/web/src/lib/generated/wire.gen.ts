@@ -85,6 +85,24 @@ export type AttachAction = "new" | { "attach": string | null } | "picker" | { "m
 export type AutonomousFallbackPolicy = "fail_closed" | "recommended_labeled";
 
 /**
+ * Snapshot description of a background job for status polling and UI rendering.
+ */
+export type BackgroundJobInfo = { id: JobId, spec: JobSpec, state: JobState, created_at_ms: number, completed_at_ms?: number | null, latest_output?: string | null, };
+
+/**
+ * Outcome delivered when a background job completes.
+ */
+export type BackgroundJobOutcome = { job_id: JobId, spec: JobSpec, state: JobState, 
+/**
+ * High signal-to-noise summary or tail output.
+ */
+summary: string, 
+/**
+ * Path to complete logs on disk (if captured).
+ */
+log_path?: string | null, };
+
+/**
  * How a user-defined channel authenticates.
  */
 export type ChannelAuth = "ApiKey" | "XaiOAuth" | "ChatGptOAuth" | "CopilotOAuth" | "AntigravityOAuth";
@@ -423,6 +441,21 @@ reason?: string, };
 export type InputThemeConfig = { bg_active: string | null, bg_inactive: string | null, caret: string | null, selection: string | null, placeholder: string | null, };
 
 /**
+ * Unique identifier for a background job.
+ */
+export type JobId = string;
+
+/**
+ * The specification for a background job.
+ */
+export type JobSpec = { "kind": "process", command: string, label?: string | null, cwd?: string | null, detached: boolean, } | { "kind": "runner", description: string, role: string, prompt: string, };
+
+/**
+ * Lifecycle state of a background job.
+ */
+export type JobState = { "status": "queued" } | { "status": "running", started_at_ms: number, pid?: number | null, } | { "status": "succeeded", duration_ms: number, exit_code: number, } | { "status": "failed", duration_ms: number, exit_code: number, error: string, } | { "status": "killed", duration_ms: number, } | { "status": "timed_out", duration_ms: number, };
+
+/**
  * Which OAuth login flow to run. Carried by [`crate::events::AgentRequest::
  * ConnectProvider`] so the TUI picks the method, not the harness.
  */
@@ -658,7 +691,12 @@ parent_id: string | null,
  * `/btw` aside. Defaults to `Trunk` for producers that predate the
  * field.
  */
-fork_kind: SessionForkKind, };
+fork_kind: SessionForkKind, 
+/**
+ * The Chronicler's structured digest (intent + history checklist), if
+ * the session has generated one.
+ */
+digest: SessionDigest | null, };
 
 export type NoticeKind = "provider_retry" | "nudge_injected" | "review_alert" | "trust_changed" | "command_ack";
 
@@ -1045,7 +1083,7 @@ round: number,
 /**
  * 0-indexed model-request position within `round`.
  */
-turn: number, } } | { "TurnPerformance": TurnPerformanceSnapshot } | "StreamStart" | { "StreamDelta": string } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "StreamEnd": string } | "StreamDiscard" | { "UnsentInput": { prompt: string, images: Array<ImagePart>, } } | { "EnvoyCompat": { parent_call_id: string, event: RunnerEvent, } };
+turn: number, } } | { "TurnPerformance": TurnPerformanceSnapshot } | "StreamStart" | { "StreamDelta": string } | { "StreamReasoningDelta": string } | { "StreamReasoningEnd": string } | { "StreamEnd": string } | "StreamDiscard" | { "UnsentInput": { prompt: string, images: Array<ImagePart>, } } | { "EnvoyCompat": { parent_call_id: string, event: RunnerEvent, } } | { "BackgroundJobStarted": BackgroundJobInfo } | { "BackgroundJobProgress": { job_id: JobId, line: string, } } | { "BackgroundJobCompleted": BackgroundJobOutcome };
 
 /**
  * A durable record of one round being stopped before its natural terminal
@@ -1210,6 +1248,28 @@ score: number, };
 export type SecretString = string;
 
 /**
+ * The resume-time "working memory" projection of a session: a headline, the
+ * user's intent, and a running checklist of what has happened. Written by
+ * the Chronicler, read by the session picker's detail view so a resumed (or
+ * merely revisited) session can be understood at a glance.
+ */
+export type SessionDigest = { 
+/**
+ * Cleaned, concise title (3-7 words) — the picker row's headline.
+ */
+title: string, 
+/**
+ * One or two sentences stating what the user wants out of this session.
+ */
+intent: string, 
+/**
+ * Running checklist of what has been done and decided, oldest first.
+ * Each entry is one terse factual line; the Chronicler merges older
+ * entries instead of dropping them when the list grows past its cap.
+ */
+history: Array<string>, };
+
+/**
  * How the session behind a [`MonitoredSession`] row is hosted. Under
  * ADR-0096's unified ownership every session is daemon-held, so this is
  * always [`Hosted`](Self::Hosted); the field is kept on the wire (with its
@@ -1238,7 +1298,12 @@ parent_id: string | null,
  * *replaced* the active pointer), `aside` (a `/btw` background
  * conversation forked off the trunk), or `trunk` (no parent).
  */
-fork_kind: SessionForkKind, };
+fork_kind: SessionForkKind, 
+/**
+ * The Chronicler's structured digest (intent + history checklist), if
+ * the session has generated one.
+ */
+digest: SessionDigest | null, };
 
 /**
  * Display-level lifecycle status of a hosted session, derived from its

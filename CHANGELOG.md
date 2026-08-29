@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.8] - 2026-08-29
+
+### Added
+
+- **Dual-Track Asynchronous Background Job Engine.** Introduced first-class background process and subagent execution:
+  - **Process Jobs (Deterministic)**: Run shell commands (`cargo test`, builds, dev servers) asynchronously with 0 LLM token overhead, in-memory 500-line ring buffers, and disk log spills.
+  - **Sub-Runner Jobs (Autonomous)**: Asynchronously dispatch read-only `explore` runners with isolated contexts to perform multi-angle codebase and specification research in parallel.
+  - **Process Lifecycle Management Tools**: Added `process_poll`, `process_logs`, `process_kill`, and `process_wait` built-in tools for fine-grained runtime control.
+  - **Interactive `/jobs` Slash Command**: Inspect active and completed background tasks, view tail logs, and terminate running tasks.
+- **State-Driven Two-Speed Reactive Rendering Pipeline.**
+  - **Revision-Tracked Component Model**: `TranscriptMessage` now tracks state mutations via atomic `rev` revision counters.
+  - **Memoized Cascade Flow Layout**: `HeightCache` uses `(id, rev) -> height` to measure heights in $O(1)$ and cascades vertical offsets down to guarantee mathematical non-overlapping of concurrently expanding entries.
+  - **Two-Speed Event Scheduler**: Urgent user keystrokes and modal operations are handled with zero-latency immediate flushes, while high-frequency streaming deltas and background logs are coalesced at smooth 60 FPS.
+
 ## [0.37.7] - 2026-08-29
 
 ### Added
@@ -5617,7 +5631,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.7...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.8...HEAD
+[0.37.8]: https://github.com/ming2k/muta/compare/v0.37.7...v0.37.8
 [0.37.7]: https://github.com/ming2k/muta/compare/v0.37.6...v0.37.7
 [0.37.6]: https://github.com/ming2k/muta/compare/v0.37.5...v0.37.6
 [0.37.5]: https://github.com/ming2k/muta/compare/v0.37.4...v0.37.5

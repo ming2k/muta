@@ -666,6 +666,9 @@ pub struct TranscriptMessage {
     pub sent_at_ms: Option<u64>,
     /// Durable provenance / injection origin stamped by the harness (ADR-0050).
     pub injection_origin: Option<muta_contracts::InjectionOrigin>,
+    /// Component state revision. Incremented on mutations so the cascade
+    /// layout cache instantly detects if remeasurement is required.
+    pub rev: u64,
 }
 
 impl TranscriptMessage {
@@ -697,7 +700,13 @@ impl TranscriptMessage {
             turn: None,
             sent_at_ms: None,
             injection_origin: None,
+            rev: 0,
         }
+    }
+
+    /// Increment state revision after a mutation to invalidate stale height cache entries.
+    pub fn bump_rev(&mut self) {
+        self.rev = self.rev.wrapping_add(1);
     }
 
     /// Label this `Role::User` message with its turn origin (slash command /
@@ -843,6 +852,7 @@ impl TranscriptMessage {
             turn: None,
             sent_at_ms: None,
             injection_origin: None,
+            rev: 0,
         };
         message.refresh_tool_step();
         message
@@ -918,6 +928,7 @@ impl TranscriptMessage {
             turn: None,
             sent_at_ms: None,
             injection_origin: None,
+            rev: 0,
         }
     }
 
@@ -1777,6 +1788,7 @@ impl TranscriptMessage {
             turn: None,
             sent_at_ms: None,
             injection_origin: None,
+            rev: 0,
         };
         message.raw = content;
         message.blocks = parse_blocks(&message.raw);
@@ -1886,6 +1898,7 @@ impl TranscriptMessage {
             turn: None,
             sent_at_ms: None,
             injection_origin: None,
+            rev: 0,
         }
     }
 
@@ -2218,6 +2231,7 @@ impl TranscriptMessage {
     /// Re-parse blocks from raw text (e.g. after streaming append).
     pub fn reparse(&mut self) {
         self.blocks = parse_blocks(&self.raw);
+        self.bump_rev();
     }
 
     /// Append streaming text and re-parse.

@@ -1801,6 +1801,15 @@ pub fn relay_agent_event(
                 event,
             },
         ),
+        AgentEvent::BackgroundJobStarted(info) => {
+            round_response(session_id, RoundEvent::BackgroundJobStarted(info))
+        }
+        AgentEvent::BackgroundJobProgress { job_id, line } => {
+            round_response(session_id, RoundEvent::BackgroundJobProgress { job_id, line })
+        }
+        AgentEvent::BackgroundJobCompleted(outcome) => {
+            round_response(session_id, RoundEvent::BackgroundJobCompleted(outcome))
+        }
     };
     let _ = tx.send(response);
 }

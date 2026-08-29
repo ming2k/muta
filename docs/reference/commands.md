@@ -30,6 +30,7 @@ Project and user-defined commands are covered under
 | `/btw [prompt\|list]` | Open a background aside conversation — asides keep running when you leave (`Ctrl+C` detaches, `Esc` interrupts, `F5` lists) |
 | `/repeat [cron prompt\|list\|cancel id]` | Schedule a prompt on a cron expression (cron-only alias for `/schedule`) |
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
+| `/jobs [list\|kill id\|logs id]` | Inspect and manage background processes and sub-runners |
 | `/init [path]` | Initialize a `.muta/` config tree |
 | `/trust [all\|mcp\|skills\|hooks\|rules\|roots\|status\|revoke]` | Trust content-attested project asset domains; bare `/trust` means all |
 | `/untrust` | Revoke all project asset-domain grants and unload their contributions |

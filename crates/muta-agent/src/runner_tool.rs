@@ -463,7 +463,11 @@ impl Tool for RunnerTool {
                     "enum": ["explore", "code", "mcp"],
                     "description": "Optional runner role: 'explore' (default, read-only research), 'code' (coding, file edits, testing), or 'mcp' (specialized tool integration). Defaults to 'explore'."
                 },
-                "preset": { "type": "string", "description": "Legacy alias for role." }
+                "preset": { "type": "string", "description": "Legacy alias for role." },
+                "background": {
+                    "type": "boolean",
+                    "description": "Set to true to dispatch this sub-runner asynchronously in the background. Only supported for role 'explore'. You will be notified automatically when the exploration completes."
+                }
             },
             "required": ["description", "prompt"]
         })
@@ -619,6 +623,14 @@ impl RunnerTool {
             .unwrap_or(self.profile.name);
         let profile =
             muta_contracts::RunnerPresetPool::find(requested_preset).unwrap_or(self.profile);
+
+        let is_background = args.get("background").and_then(|b| b.as_bool()).unwrap_or(false);
+        if is_background && profile.name != "explore" {
+            return Err(format!(
+                "Background execution is only permitted for read-only 'explore' runners to guarantee task orthogonality and prevent workspace write conflicts (requested role: '{}').",
+                profile.name
+            ));
+        }
 
         if let Some(delegation) = self
             .parent_delegation

@@ -34,6 +34,14 @@ struct ExecuteCommandArgs {
     terminal_id: Option<String>,
     #[tool(desc = "Set to true to run in a persistent terminal session.")]
     run_persistent: Option<bool>,
+    #[tool(
+        desc = "Set to true to run this command asynchronously in the background. Returns a job descriptor immediately and notifies upon completion."
+    )]
+    background: Option<bool>,
+    #[tool(
+        desc = "Optional human-readable label for the background job (e.g. 'cargo-test', 'dev-server')."
+    )]
+    label: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -55,6 +63,7 @@ struct WorkspaceExecuteCommandArgs {
 pub struct ExecuteCommandTool {
     pub(crate) root: WorkspaceBase,
     pub(crate) env: Option<std::sync::Arc<dyn muta_contracts::ExecutionEnvironment>>,
+    pub(crate) job_service: Option<std::sync::Arc<dyn muta_contracts::BackgroundJobService>>,
     workspace_sandbox: bool,
 }
 
@@ -67,6 +76,7 @@ impl ExecuteCommandTool {
         Self {
             root,
             env: None,
+            job_service: None,
             workspace_sandbox: false,
         }
     }
@@ -77,8 +87,18 @@ impl ExecuteCommandTool {
         Self {
             root,
             env: Some(env),
+            job_service: None,
             workspace_sandbox: false,
         }
+    }
+
+    /// Attach a background job service to allow asynchronous command dispatch.
+    pub fn with_job_service(
+        mut self,
+        job_service: Option<std::sync::Arc<dyn muta_contracts::BackgroundJobService>>,
+    ) -> Self {
+        self.job_service = job_service;
+        self
     }
 
     /// Build the workspace-contained variant. It shares the same
@@ -90,6 +110,7 @@ impl ExecuteCommandTool {
         Self {
             root,
             env: Some(env),
+            job_service: None,
             workspace_sandbox: true,
         }
     }
@@ -218,6 +239,31 @@ impl Tool for ExecuteCommandTool {
         let timeout_secs = args.timeout.unwrap_or(1800);
         let timeout_duration = Duration::from_secs(timeout_secs);
 
+        if args.background == Some(true) {
+            if let Some(ref service) = self.job_service {
+                let info = service
+                    .spawn_process(
+                        args.command,
+                        args.label,
+                        None,
+                        false,
+                        Some(timeout_duration),
+                    )
+                    .await?;
+                let output = serde_json::json!({
+                    "status": "spawned_in_background",
+                    "job_id": info.id.0,
+                    "state": info.state,
+                    "message": "Command started asynchronously in the background. You will receive an automatic notification when it finishes. You can proceed with other tasks or inspect with process_poll/process_logs.",
+                });
+                return Ok(muta_contracts::ToolOutput::text(
+                    serde_json::to_string_pretty(&output).unwrap_or_default(),
+                ));
+            } else {
+                return Err("Background job service is unavailable in this environment.".to_string());
+            }
+        }
+
         let terminal_id = args.terminal_id.as_deref().or_else(|| {
             if args.run_persistent == Some(true) {
                 Some("default")
@@ -264,12 +310,19 @@ impl Tool for ExecuteCommandTool {
     }
 }
 
-muta_contracts::register_tool!(ExecuteCommandFactory => |ctx| ExecuteCommandTool {
-    root: workspace_base(ctx),
-    env: Some(execution_environment(ctx)),
-    workspace_sandbox: false,
+muta_contracts::register_tool!(ExecuteCommandFactory => |ctx| {
+    let env = Some(execution_environment(ctx));
+    let job_service = ctx.get::<std::sync::Arc<dyn muta_contracts::BackgroundJobService>>().cloned();
+    ExecuteCommandTool {
+        root: workspace_base(ctx),
+        env,
+        job_service,
+        workspace_sandbox: false,
+    }
 });
 
 muta_contracts::register_tool!(WorkspaceExecuteCommandFactory => |ctx| {
-    ExecuteCommandTool::workspace_with_env(execution_environment(ctx))
+    let env = execution_environment(ctx);
+    let job_service = ctx.get::<std::sync::Arc<dyn muta_contracts::BackgroundJobService>>().cloned();
+    ExecuteCommandTool::workspace_with_env(env).with_job_service(job_service)
 });

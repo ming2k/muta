@@ -432,7 +432,7 @@ impl<'a, 'f> Stream<'a, 'f> {
                     true
                 });
         let cached_height = if skippable {
-            self.height_cache.get(msg.id)
+            self.height_cache.get_with_rev(msg.id, msg.rev)
         } else {
             None
         };
@@ -555,7 +555,7 @@ impl<'a, 'f> Stream<'a, 'f> {
         // Cache the freshly-measured height for skippable kinds only.
         if skippable && cached_height.is_none() {
             self.height_cache
-                .set(msg.id, (self.content_lines - body_before) as u16);
+                .set_with_rev(msg.id, msg.rev, (self.content_lines - body_before) as u16);
         }
     }
 

@@ -447,6 +447,13 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     if !quarantined_roots.is_empty() {
         shared_additional_roots.declare_quarantined(quarantined_roots);
     }
+    let background_jobs = crate::background_jobs::BackgroundJobManager::new();
+    let job_service: Arc<dyn muta_contracts::BackgroundJobService> =
+        Arc::new(crate::background_jobs::SessionJobService::new(
+            background_jobs.clone(),
+            execution_env.clone() as Arc<dyn muta_contracts::ExecutionEnvironment>,
+        ));
+
     let tool_ctx = {
         let mut builder = ToolContextBuilder::new();
         builder.provide(websearch_shared.clone());
@@ -455,6 +462,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         builder.provide(embedding_store.clone());
         builder.provide(session.clone());
         builder.provide(execution_env.clone() as Arc<dyn muta_contracts::ExecutionEnvironment>);
+        builder.provide(job_service);
         // The session's workspace root: every workspace-relative tool
         // operation (bash cwd, relative path resolution, search bases)
         // anchors here instead of the daemon process's cwd. Under the
@@ -897,6 +905,30 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         agent.round_counter_handle(),
     );
 
+    // Forward background job lifecycle events directly into the frontend response stream
+    {
+        let mut job_rx = background_jobs.subscribe();
+        let resp_tx_jobs = resp_tx.clone();
+        let session_for_jobs = session.clone();
+        tokio::spawn(async move {
+            let session_id = session_for_jobs.id().await;
+            while let Ok(event) = job_rx.recv().await {
+                let round_evt = match event {
+                    crate::background_jobs::BackgroundJobEvent::Started(info) => {
+                        RoundEvent::BackgroundJobStarted(info)
+                    }
+                    crate::background_jobs::BackgroundJobEvent::Progress { job_id, line } => {
+                        RoundEvent::BackgroundJobProgress { job_id, line }
+                    }
+                    crate::background_jobs::BackgroundJobEvent::Completed(outcome) => {
+                        RoundEvent::BackgroundJobCompleted(outcome)
+                    }
+                };
+                let _ = resp_tx_jobs.send(round_response(&session_id, round_evt));
+            }
+        });
+    }
+
     let driver = SessionDriver {
         req_rx,
         tx: resp_tx,
@@ -924,6 +956,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         token_ledger: token_ledger.clone(),
         extra_commands: Arc::new(crate::slash_handler::SlashCommandRegistry::new()),
         websearch_shared,
+        background_jobs,
     };
 
     Ok(Bootstrap {

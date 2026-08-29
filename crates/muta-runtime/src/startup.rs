@@ -358,6 +358,21 @@ define_builtin_commands! {
             ("help", "Show /schedule time-form syntax"),
         ],
     },
+    Jobs = "/jobs" : {
+        summary: "Inspect and manage background processes and sub-runners",
+        usage: ["/jobs", "/jobs kill <id>", "/jobs logs <id>"],
+        examples: [
+            ("/jobs", "List all active and recent background jobs"),
+            ("/jobs kill job_01a2b3c4", "Terminate a running background job"),
+            ("/jobs logs job_01a2b3c4", "Show tail logs for a background job"),
+        ],
+        intent_keywords: ["jobs", "job", "background", "process", "task", "tasks", "running", "kill", "ps", "async"],
+        category: Automation,
+        subcommands: [
+            ("kill", "Terminate an active background job"),
+            ("logs", "Show recent stdout/stderr output of a background job"),
+        ],
+    },
     Skills = "/skills" : {
         summary: "Browse available skills or rescan folders",
         usage: ["/skills", "/skills list", "/skills reload"],

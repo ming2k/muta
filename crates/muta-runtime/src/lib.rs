@@ -65,6 +65,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod agent_setup;
+pub mod background_jobs;
 pub mod bootstrap;
 pub mod client;
 pub mod commands;
@@ -97,6 +98,7 @@ pub use task_fault_tolerance as supervise;
 pub mod supervisor;
 pub mod ui_bridge;
 
+pub use background_jobs::{BackgroundJobEvent, BackgroundJobManager, SessionJobService};
 pub use session_driver::SessionDriver;
 pub use supervisor::Supervisor;
 pub use ui_bridge::{CopyOutcome, UiBridge};

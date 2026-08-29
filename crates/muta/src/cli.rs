@@ -1136,7 +1136,7 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
     let mut out = String::new();
     match topic {
         None => {
-            out.push_str("muta — AI agent session daemon and control plane\n\n");
+            out.push_str("muta — AI harness session daemon and control plane\n\n");
             out.push_str("Usage: muta [OPTIONS]\n       muta [OPTIONS] <COMMAND>\n\nCommands:\n");
             let width = COMMANDS.iter().map(|s| s.name.len()).max().unwrap_or(0);
             for spec in COMMANDS {

@@ -1276,6 +1276,15 @@ pub enum RoundEvent {
         parent_call_id: String,
         event: RunnerEvent,
     },
+    /// A background process or sub-runner job started.
+    BackgroundJobStarted(crate::job::BackgroundJobInfo),
+    /// Incremental progress or output line from a background job.
+    BackgroundJobProgress {
+        job_id: crate::job::JobId,
+        line: String,
+    },
+    /// A background job completed.
+    BackgroundJobCompleted(crate::job::BackgroundJobOutcome),
 }
 
 /// Coarse status of the primary session, reported to a `/btw` side view's
@@ -1776,6 +1785,15 @@ pub enum AgentEvent {
         parent_call_id: String,
         event: RunnerEvent,
     },
+    /// A background process or sub-runner job started.
+    BackgroundJobStarted(crate::job::BackgroundJobInfo),
+    /// Incremental progress or output line from a background job.
+    BackgroundJobProgress {
+        job_id: crate::job::JobId,
+        line: String,
+    },
+    /// A background job completed.
+    BackgroundJobCompleted(crate::job::BackgroundJobOutcome),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]

@@ -239,14 +239,13 @@ fn list_body(
         .iter()
         .map(|round| fmt_rate(round_e2e_tps(round)))
         .collect::<Vec<_>>();
-    let widths = table_widths(
+    let layout = TableLayout::compute(
         body_width,
         ["Round", "State", "First", "Stream", "E2E"],
         [&labels, &states, &first, &stream, &e2e],
     );
-    body.push(table_line(
+    body.push(layout.render_row(
         ["Round", "State", "First", "Stream", "E2E"],
-        widths,
         [theme.muted(); 5],
         theme.panel(),
     ));
@@ -263,7 +262,7 @@ fn list_body(
             selected_line = Some(body.len());
         }
         let (_, state_color) = round_state(round, theme);
-        body.push(table_line(
+        body.push(layout.render_row(
             [
                 labels[index].as_str(),
                 states[index].as_str(),
@@ -271,7 +270,6 @@ fn list_body(
                 stream[index].as_str(),
                 e2e[index].as_str(),
             ],
-            widths,
             [
                 theme.fg(),
                 state_color,
@@ -358,14 +356,13 @@ fn detail_body(
             )
         })
         .collect::<Vec<_>>();
-    let widths = table_widths(
+    let layout = TableLayout::compute(
         body_width,
         ["Turn", "State", "TTFT", "Stream", "E2E"],
         [&labels, &states, &ttft, &stream, &e2e],
     );
-    body.push(table_line(
+    body.push(layout.render_row(
         ["Turn", "State", "TTFT", "Stream", "E2E"],
-        widths,
         [theme.muted(); 5],
         theme.panel(),
     ));
@@ -381,7 +378,7 @@ fn detail_body(
         if selected_row {
             selected_line = Some(body.len());
         }
-        body.push(table_line(
+        body.push(layout.render_row(
             [
                 labels[index].as_str(),
                 states[index].as_str(),
@@ -389,7 +386,6 @@ fn detail_body(
                 stream[index].as_str(),
                 e2e[index].as_str(),
             ],
-            widths,
             [
                 theme.fg(),
                 state_color,
@@ -714,55 +710,110 @@ fn attempt_state(record: &RequestUsageRecord, theme: &Theme) -> (&'static str, m
     }
 }
 
-fn table_widths<const N: usize>(
-    body_width: usize,
-    headers: [&str; N],
-    columns: [&Vec<String>; N],
-) -> [usize; N] {
-    let mut widths = std::array::from_fn(|index| {
-        columns[index]
-            .iter()
-            .map(|cell| cell.width())
-            .chain(std::iter::once(headers[index].width()))
-            .max()
-            .unwrap_or(1)
-    });
-    let fixed_gaps = 2 * N.saturating_sub(1);
-    while widths.iter().sum::<usize>() + fixed_gaps > body_width {
-        let Some((index, _)) = widths.iter().enumerate().max_by_key(|(_, width)| **width) else {
-            break;
-        };
-        if widths[index] <= 4 {
-            break;
-        }
-        widths[index] -= 1;
-    }
-    widths
+struct TableLayout<const N: usize> {
+    col_widths: [usize; N],
+    left_inset: usize,
+    gaps: [usize; N],
+    trailing_pad: usize,
 }
 
-fn table_line<const N: usize>(
-    cells: [&str; N],
-    widths: [usize; N],
-    colors: [mutx_engine::Color; N],
-    bg: mutx_engine::Color,
-) -> Line<'static> {
-    let mut spans = Vec::with_capacity(N * 2);
-    for index in 0..N {
-        if index > 0 {
-            spans.push(Span::styled("  ", Style::default().bg(bg)));
-        }
-        let cell = truncate(cells[index], widths[index]);
-        let rendered = if index < 2 {
-            format!("{cell:<width$}", width = widths[index])
+impl<const N: usize> TableLayout<N> {
+    fn compute(
+        body_width: usize,
+        headers: [&str; N],
+        columns: [&Vec<String>; N],
+    ) -> Self {
+        let mut col_widths = std::array::from_fn(|index| {
+            columns[index]
+                .iter()
+                .map(|cell| cell.width())
+                .chain(std::iter::once(headers[index].width()))
+                .max()
+                .unwrap_or(1)
+        });
+        const LEFT_INSET: usize = 2;
+        let num_gaps = N.saturating_sub(1);
+        let min_required = LEFT_INSET + col_widths.iter().sum::<usize>() + num_gaps * 2;
+
+        if body_width >= min_required {
+            let used_by_cols = LEFT_INSET + col_widths.iter().sum::<usize>();
+            let remaining_gap_space = body_width.saturating_sub(used_by_cols);
+            let base_gap = if num_gaps > 0 { remaining_gap_space / num_gaps } else { 0 };
+            let extra = if num_gaps > 0 { remaining_gap_space % num_gaps } else { 0 };
+            let mut gaps = [0; N];
+            for i in 0..num_gaps {
+                gaps[i] = base_gap + if i < extra { 1 } else { 0 };
+            }
+            let total_line = LEFT_INSET + col_widths.iter().sum::<usize>() + gaps[..num_gaps].iter().sum::<usize>();
+            let trailing_pad = body_width.saturating_sub(total_line);
+            Self {
+                col_widths,
+                left_inset: LEFT_INSET,
+                gaps,
+                trailing_pad,
+            }
         } else {
-            format!("{cell:>width$}", width = widths[index])
-        };
-        spans.push(Span::styled(
-            rendered,
-            Style::default().fg(colors[index]).bg(bg),
-        ));
+            let left_inset = if body_width > 20 { 1 } else { 0 };
+            let min_gap = 1;
+            let gap_total = num_gaps * min_gap;
+            let available_for_cols = body_width.saturating_sub(left_inset + gap_total);
+
+            while col_widths.iter().sum::<usize>() > available_for_cols {
+                let Some((index, _)) = col_widths.iter().enumerate().max_by_key(|(_, width)| **width) else {
+                    break;
+                };
+                if col_widths[index] <= 3 {
+                    break;
+                }
+                col_widths[index] -= 1;
+            }
+            let gaps = [min_gap; N];
+            let total_line = left_inset + col_widths.iter().sum::<usize>() + num_gaps * min_gap;
+            let trailing_pad = body_width.saturating_sub(total_line);
+            Self {
+                col_widths,
+                left_inset,
+                gaps,
+                trailing_pad,
+            }
+        }
     }
-    Line::from(spans)
+
+    fn render_row(
+        &self,
+        cells: [&str; N],
+        colors: [mutx_engine::Color; N],
+        bg: mutx_engine::Color,
+    ) -> Line<'static> {
+        let _num_gaps = N.saturating_sub(1);
+        let mut spans = Vec::with_capacity(N * 2 + 2);
+        if self.left_inset > 0 {
+            spans.push(Span::styled(" ".repeat(self.left_inset), Style::default().bg(bg)));
+        }
+        for index in 0..N {
+            if index > 0 {
+                let gap_len = self.gaps[index - 1];
+                if gap_len > 0 {
+                    spans.push(Span::styled(" ".repeat(gap_len), Style::default().bg(bg)));
+                }
+            }
+            let width = self.col_widths[index];
+            let cell = truncate(cells[index], width);
+            let rendered = if index < 2 {
+                format!("{cell:<width$}")
+            } else {
+                format!("{cell:>width$}")
+            };
+            spans.push(Span::styled(
+                rendered,
+                Style::default().fg(colors[index]).bg(bg),
+            ));
+        }
+        if self.trailing_pad > 0 {
+            spans.push(Span::styled(" ".repeat(self.trailing_pad), Style::default().bg(bg)));
+        }
+        Line::from(spans)
+    }
 }
 
 fn kv(key: &str, value: &str, theme: &Theme) -> Line<'static> {
@@ -910,6 +961,33 @@ mod tests {
                 ..Default::default()
             }),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn table_layout_responsively_fills_body_width() {
+        let headers = ["Round", "State", "First", "Stream", "E2E"];
+        let labels = vec!["Round 1".to_string(), "Round 2".to_string()];
+        let states = vec!["completed".to_string(), "failed".to_string()];
+        let first = vec!["1.2s".to_string(), "500ms".to_string()];
+        let stream = vec!["45.0 tok/s".to_string(), "–".to_string()];
+        let e2e = vec!["32.0 tok/s".to_string(), "12.0 tok/s".to_string()];
+        let columns = [&labels, &states, &first, &stream, &e2e];
+
+        let theme = Theme::default();
+        for width in [40, 60, 80, 100, 140, 200] {
+            let layout = TableLayout::compute(width, headers, columns);
+            let row = layout.render_row(
+                ["Round 1", "completed", "1.2s", "45.0 tok/s", "32.0 tok/s"],
+                [theme.fg(), theme.ok(), theme.muted(), theme.fg(), theme.muted()],
+                theme.panel(),
+            );
+            let rendered_w: usize = row.spans.iter().map(|s| s.content.width()).sum();
+            assert_eq!(rendered_w, width, "Row must span full body_width for width={width}");
+            // Check that every span carries the row background color
+            for span in &row.spans {
+                assert_eq!(span.style.bg, theme.panel(), "Every span must carry row background");
+            }
         }
     }
 

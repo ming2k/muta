@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  A Rust-based AI coding assistant with a semantic TUI, autonomous tool use, background session daemon, and scheduled prompts.
+  A high-performance, controllable AI Harness for software engineering — featuring a semantic TUI, layered execution control, background session daemon, and autonomous tool orchestration.
 </p>
 
 <p align="center">
@@ -19,12 +19,13 @@
 
 ## Highlights
 
+- **AI Harness & Controllability** — A robust control plane around LLM execution with strict deterministic boundaries, guardrails, non-interactive discipline, and context lifecycle management.
 - **Semantic TUI** — Custom high-performance terminal UI with live progress indicators, collapsible tool steps, and syntax-aware diffs.
-- **Autonomous Tool Use** — ReAct loop with shell execution, file operations, codebase indexing, web search, and MCP (Model Context Protocol) integration.
+- **Autonomous Tool Orchestration** — ReAct execution loop with PTY shell control, file operations, codebase indexing, web search, and MCP (Model Context Protocol) integration.
 - **Session Daemon** — Background user-level daemon manages long-running sessions across projects. Detach, close the terminal, or switch between tasks without interrupting work.
-- **Scheduled Prompts** — Automate recurring tasks with cron-style schedules or one-shot countdown timers via `/schedule`.
-- **Durable Sessions** — Persistent conversation history with atomic storage, context compaction, branching, and instant resume.
-- **Skills** — Load domain-specific instructions, workflows, and tools on demand or automatically by mention.
+- **Scheduled Prompts & Automation** — Automate recurring tasks with cron-style schedules or one-shot countdown timers via `/schedule`.
+- **Durable Sessions & Compaction** — Persistent conversation history with atomic storage, split context compaction, branching, and instant resume.
+- **Skills & Extensibility** — Load domain-specific instructions, workflows, and tools on demand or automatically by mention.
 
 ## Quick Start
 

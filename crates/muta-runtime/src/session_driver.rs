@@ -117,6 +117,8 @@ pub struct SessionDriver {
     /// into it so provider/reader/proxy changes take effect on the next tool
     /// call without rebuilding the toolset.
     pub websearch_shared: Arc<muta_contracts::SharedWebSearchConfig>,
+    /// Background job manager for asynchronous processes and sub-runners.
+    pub background_jobs: crate::background_jobs::BackgroundJobManager,
 }
 
 impl SessionDriver {
@@ -157,6 +159,7 @@ impl SessionDriver {
             token_ledger,
             extra_commands,
             websearch_shared,
+            background_jobs,
         } = self;
         // Hand the shared token-source ledger to the agent so each turn's token
         // usage (reported vs. estimated) is booked into it for the report modal.
@@ -712,6 +715,7 @@ impl SessionDriver {
                             ui: &*ui,
                             extra_commands: &extra_commands,
                             websearch_shared: &websearch_shared,
+                            background_jobs: &background_jobs,
                         },
                     )
                     .await;

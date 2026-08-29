@@ -308,6 +308,9 @@ pub async fn run_headless(
                     declare_session_end(&tx, &mut rx).await;
                     return Err(err.into());
                 }
+                RoundEvent::BackgroundJobStarted(_)
+                | RoundEvent::BackgroundJobProgress { .. }
+                | RoundEvent::BackgroundJobCompleted(_) => {}
                 _ => {}
             },
             AgentResponse::Error(err) => {

@@ -1763,6 +1763,71 @@ pub async fn run_tui(
                                 *activity_clone.lock().await = None;
                             }
                         }
+                        RoundEvent::BackgroundJobStarted(info) => {
+                            let mut msgs = buf.write().await;
+                            let label = match &info.spec {
+                                muta_contracts::JobSpec::Process { command, label, .. } => {
+                                    label.as_deref().unwrap_or(command)
+                                }
+                                muta_contracts::JobSpec::Runner { description, .. } => description,
+                            };
+                            let msg = format!("Background job started: {label} ({})", info.id.0);
+                            push_local_notice(&mut msgs, NoticeSeverity::Info, msg);
+                        }
+                        RoundEvent::BackgroundJobProgress { .. } => {}
+                        RoundEvent::BackgroundJobCompleted(outcome) => {
+                            let mut msgs = buf.write().await;
+                            let (label, is_success) = match &outcome.state {
+                                muta_contracts::JobState::Succeeded { duration_ms, .. } => {
+                                    (
+                                        format!(
+                                            "Background job `{}` completed ({}s)",
+                                            outcome.job_id.0,
+                                            duration_ms / 1000
+                                        ),
+                                        true,
+                                    )
+                                }
+                                muta_contracts::JobState::Failed {
+                                    duration_ms,
+                                    exit_code,
+                                    ..
+                                } => (
+                                    format!(
+                                        "Background job `{}` failed (exit {exit_code}, {}s)",
+                                        outcome.job_id.0,
+                                        duration_ms / 1000
+                                    ),
+                                    false,
+                                ),
+                                muta_contracts::JobState::Killed { duration_ms } => (
+                                    format!(
+                                        "Background job `{}` terminated ({}s)",
+                                        outcome.job_id.0,
+                                        duration_ms / 1000
+                                    ),
+                                    false,
+                                ),
+                                muta_contracts::JobState::TimedOut { duration_ms } => (
+                                    format!(
+                                        "Background job `{}` timed out ({}s)",
+                                        outcome.job_id.0,
+                                        duration_ms / 1000
+                                    ),
+                                    false,
+                                ),
+                                _ => (
+                                    format!("Background job `{}` completed", outcome.job_id.0),
+                                    true,
+                                ),
+                            };
+                            let severity = if is_success {
+                                NoticeSeverity::Info
+                            } else {
+                                NoticeSeverity::Warning
+                            };
+                            push_local_notice(&mut msgs, severity, label);
+                        }
                     } // end inner `match event`
                 }
                 AgentResponse::ParentStatus(status) => {

@@ -398,7 +398,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
                 last_turn_tps: viewed_chrome
                     .last_turn_performance
-                    .and_then(|sample| sample.observed_stream_tps()),
+                    .and_then(|sample| sample.preferred_tps()),
                 ignition_elapsed_ms: app
                     .effort_ignition_epoch
                     .map(|epoch| epoch.elapsed().as_millis()),

@@ -368,6 +368,7 @@ mod tests {
             project_root: "/tmp/project".into(),
             parent_id: None,
             fork_kind: SessionForkKind::default(),
+            digest: None,
         }
     }
 

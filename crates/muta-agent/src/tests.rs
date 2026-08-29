@@ -1721,6 +1721,15 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
             )),
             AgentEvent::Runner { .. } => Some("subtask".to_string()),
             AgentEvent::TodosUpdated(list) => Some(format!("todos {} items", list.len())),
+            AgentEvent::BackgroundJobStarted(info) => {
+                Some(format!("background-job-started {}", info.id.0))
+            }
+            AgentEvent::BackgroundJobProgress { job_id, .. } => {
+                Some(format!("background-job-progress {}", job_id.0))
+            }
+            AgentEvent::BackgroundJobCompleted(outcome) => {
+                Some(format!("background-job-completed {}", outcome.job_id.0))
+            }
         })
         .collect()
 }

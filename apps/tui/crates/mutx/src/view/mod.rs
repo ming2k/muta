@@ -359,7 +359,7 @@ impl<'a> TranscriptView<'a> {
 #[derive(Default)]
 pub struct HeightCache {
     width: u16,
-    heights: std::collections::HashMap<u64, u16>,
+    heights: std::collections::HashMap<u64, (u64, u16)>,
     virtual_index: Option<layout::VirtualLayoutIndex>,
     /// Width-independent, render-only rows derived from completed edit
     /// patches. Unlike height entries, these survive structural transcript
@@ -379,16 +379,32 @@ impl HeightCache {
         }
     }
 
-    /// The cached height for message `id`, or `None` if it must be measured.
+    /// The cached height for message `id` matching revision `rev`, or `None` if it must be measured.
+    pub fn get_with_rev(&self, id: u64, rev: u64) -> Option<u16> {
+        self.heights.get(&id).and_then(|&(cached_rev, h)| {
+            if cached_rev == rev {
+                Some(h)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// The cached height for message `id`, regardless of revision, or `None`.
     pub fn get(&self, id: u64) -> Option<u16> {
-        self.heights.get(&id).copied()
+        self.heights.get(&id).map(|&(_, h)| h)
+    }
+
+    /// Record freshly-measured height for message `id` with revision `rev`.
+    pub fn set_with_rev(&mut self, id: u64, rev: u64, height: u16) {
+        if self.heights.insert(id, (rev, height)) != Some((rev, height)) {
+            self.virtual_index = None;
+        }
     }
 
     /// Record the freshly-measured height for message `id`.
     pub fn set(&mut self, id: u64, height: u16) {
-        if self.heights.insert(id, height) != Some(height) {
-            self.virtual_index = None;
-        }
+        self.set_with_rev(id, 0, height);
     }
 
     /// Drop every entry. Called when the transcript mutates (the version moved).
