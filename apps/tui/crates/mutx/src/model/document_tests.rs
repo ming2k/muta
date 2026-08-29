@@ -862,14 +862,11 @@ fn user_message_origin_defaults_to_chat_and_can_be_overridden() {
     let chat = TranscriptMessage::new(Role::User, "fix the bug");
     assert_eq!(chat.origin, UserMessageOrigin::Chat);
 
-    // Slash commands and shell passthroughs tag themselves so the
-    // Activity modal does not mistake them for the driving prompt.
+    // Slash commands tag themselves so the Activity modal does not mistake
+    // them for the driving prompt.
     let slash = TranscriptMessage::new(Role::User, "/review working-tree")
         .with_origin(UserMessageOrigin::Slash);
     assert_eq!(slash.origin, UserMessageOrigin::Slash);
-
-    let shell = TranscriptMessage::new(Role::User, "!ls -la").with_origin(UserMessageOrigin::Shell);
-    assert_eq!(shell.origin, UserMessageOrigin::Shell);
 
     // with_origin is idempotent and does not depend on the text: a
     // genuine chat prompt that happens to start with '/' stays Slash only
@@ -904,20 +901,16 @@ fn round_interrupt_creates_structured_notice() {
 }
 
 #[test]
-fn command_result_populates_command_kind() {
+fn command_result_populates_command_invocation() {
     let harness_cmd = TranscriptMessage::pending_command("review", "HEAD~1");
-    assert!(matches!(
-        harness_cmd.command_kind(),
-        Some(crate::model::document::CommandKind::Harness { name, args }) if name == "review" && args == "HEAD~1"
-    ));
+    assert_eq!(harness_cmd.command_name(), Some("review"));
+    assert_eq!(harness_cmd.command_args(), Some("HEAD~1"));
     assert_eq!(harness_cmd.raw, "/review HEAD~1");
 
-    let shell_cmd = TranscriptMessage::pending_command("shell", "!cargo test");
-    assert!(matches!(
-        shell_cmd.command_kind(),
-        Some(crate::model::document::CommandKind::Shell { command }) if command == "!cargo test"
-    ));
-    assert_eq!(shell_cmd.raw, "!cargo test");
+    let no_args_cmd = TranscriptMessage::pending_command("compact", "");
+    assert_eq!(no_args_cmd.command_name(), Some("compact"));
+    assert_eq!(no_args_cmd.command_args(), Some(""));
+    assert_eq!(no_args_cmd.raw, "/compact");
 }
 
 #[test]

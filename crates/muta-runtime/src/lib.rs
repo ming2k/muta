@@ -88,7 +88,6 @@ pub mod serve;
 pub mod serve_discovery;
 pub mod session_driver;
 pub mod session_view;
-pub mod shell;
 pub mod shutdown;
 pub mod side;
 pub mod slash_handler;

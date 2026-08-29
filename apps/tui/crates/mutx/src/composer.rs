@@ -57,6 +57,48 @@ fn chrome_row(full_w: usize, bg: Color, theme: &Theme, dir: char, hidden: usize)
     ])
 }
 
+/// Build the top breathing row: overflow count when clipped above, or contextual
+/// mode declaration badge (e.g. `[history 1/12 · draft saved]`) when idle at top.
+fn top_chrome_row(
+    full_w: usize,
+    bg: Color,
+    theme: &Theme,
+    hidden_above: usize,
+    target: crate::components::composer_hints::ComposeTarget,
+    focused: bool,
+) -> Line<'static> {
+    if hidden_above > 0 {
+        return chrome_row(full_w, bg, theme, '↑', hidden_above);
+    }
+    if focused {
+        if let crate::components::composer_hints::ComposeTarget::HistoryRecall { index, total } = target {
+            let label = if full_w >= 36 {
+                format!("[history {index}/{total} · draft saved]")
+            } else if full_w >= 20 {
+                format!("[history {index}/{total}]")
+            } else {
+                format!("[{index}/{total}]")
+            };
+            let label_len = label.chars().count();
+            if full_w > label_len + 2 {
+                let gap_cols = full_w.saturating_sub(label_len + 1);
+                return Line::from(vec![
+                    Span::styled(" ".repeat(gap_cols), Style::default().bg(bg)),
+                    Span::styled(
+                        label,
+                        Style::default()
+                            .bg(bg)
+                            .fg(theme.info())
+                            .add_modifier(Modifier::DIM),
+                    ),
+                    Span::styled(" ".to_string(), Style::default().bg(bg)),
+                ]);
+            }
+        }
+    }
+    chrome_row(full_w, bg, theme, '↑', 0)
+}
+
 /// Render plumbing for the composer draw family: frame, target rect,
 /// theme, layout map, scroll state, and selection. Bundled so the three
 /// composer entry points and the shared impl take (view, text, flags)
@@ -405,8 +447,15 @@ fn draw_composer_impl(
     // ── Row 1: blank breathing row ──────────────────────────────────────────
     // A full panel-bg padding row giving the text a line of air above. When
     // rows hide above the viewport it moonlights as the `↑ N lines`
-    // indicator (see [`chrome_row`]).
-    lines.push(chrome_row(full_w, panel_bg, theme, '↑', hidden_above));
+    // indicator (see [`chrome_row`]); otherwise it presents the active mode tag.
+    lines.push(top_chrome_row(
+        full_w,
+        panel_bg,
+        theme,
+        hidden_above,
+        hints.compose_target,
+        focused,
+    ));
 
     // Text rows: the first logical line opens with the `›` prompt glyph plus
     // a gap, and every wrapped continuation indents to the same column so the

@@ -1,4 +1,4 @@
-//! Chat-round and `!`-prefix shell-command handlers, extracted verbatim from
+//! Chat-round handlers, extracted verbatim from
 //! the agent background task's `match req { … }` dispatch.
 //!
 //! Each handler is one match arm, lifted unchanged. Parameters are named to
@@ -6,14 +6,13 @@
 //! `lifecycle`, `resp_tx`, `pursuit_service`, `config`, …) so the body reads
 //! exactly as it did inline.
 
+use muta_agent::Agent;
 use muta_agent::orchestration::{RoundInput, round_response};
-use muta_agent::{Agent, RoundLifecycle};
 use muta_contracts::{AgentResponse, QueuedMessage, RoundEvent};
 use muta_persistence::session::SessionStore;
 use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
-use crate::shell::run_shell_command;
 use crate::side::SideEnv;
 use crate::side::{
     SideRegistry, refuse_if_no_provider, start_active_turn, start_session_turn, target_agent,
@@ -156,38 +155,4 @@ pub(crate) async fn follow_up(env: SideEnv<'_>, session_id: String, input: Queue
             RoundEvent::FollowUpStarted(input),
         ));
     }
-}
-
-/// `AgentRequest::ShellCommand` — the `!` prefix path: run the command
-/// directly through the `bash` tool, bypassing the LLM. The lifecycle mirrors
-/// a normal tool step (`ToolCall` → live `ToolStream` → `ToolResult`) so the
-/// existing render path picks it up with no special-casing. Spawned onto its
-/// own task so it runs concurrently with the dispatch loop.
-pub async fn shell(
-    resp_tx: &mpsc::UnboundedSender<AgentResponse>,
-    lifecycle: &Arc<RoundLifecycle>,
-    agent: &Arc<Agent>,
-    session: &Arc<SessionStore>,
-    project_root: &std::path::Path,
-    command: String,
-) {
-    let shell_session_id = session.id().await;
-    let shell_tx = resp_tx.clone();
-
-    let shell_lifecycle = lifecycle.clone();
-    let shell_agent = agent.clone();
-    let shell_session = session.clone();
-    let shell_root = project_root.to_path_buf();
-    tokio::spawn(async move {
-        run_shell_command(
-            command,
-            shell_tx,
-            shell_session_id,
-            shell_lifecycle,
-            shell_agent,
-            shell_session,
-            shell_root,
-        )
-        .await;
-    });
 }

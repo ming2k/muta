@@ -93,12 +93,6 @@ pub(super) fn transcript_message_from_core(message: Message) -> Option<Transcrip
                 msg.origin = UserMessageOrigin::Slash;
             } else if is_insert {
                 msg.origin = UserMessageOrigin::Steer;
-            } else if msg
-                .raw
-                .strip_prefix('!')
-                .is_some_and(|rest| !rest.is_empty())
-            {
-                msg.origin = UserMessageOrigin::Shell;
             }
         }
         Some(msg)

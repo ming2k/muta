@@ -39,7 +39,7 @@
 
 /// The wire protocol this build speaks. Served to and accepted from
 /// clients; see the [module documentation][self] for the bump discipline.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// The oldest wire protocol number this daemon still serves. Raises only
 /// when support for an older protocol is deliberately dropped; clients

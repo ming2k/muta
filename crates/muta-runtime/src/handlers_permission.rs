@@ -51,8 +51,7 @@ pub async fn interrupt(
     // round starts, both snapshots are "idle"; if one does, it bumps
     // generation itself and its "running" snapshot supersedes, while the
     // stale task's generation-guarded idle send is skipped
-    // (`orchestration.rs` start_pursuit / start_interactive_round /
-    // run_shell_command).
+    // (`orchestration.rs` start_pursuit / start_interactive_round).
     send_harness_state(resp_tx, &session.id().await, agent, LoopStatus::Idle);
 
     lifecycle.cancel_current().await;

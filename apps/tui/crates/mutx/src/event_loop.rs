@@ -2276,6 +2276,7 @@ pub(super) async fn run_app_loop(
                         has_focused_target,
                         has_queued,
                         queue_pointer_armed,
+                        history_recall_active: app.history_index.is_some(),
                         history_searching,
                         model_searching,
                         modal_keymap_open,

@@ -1,7 +1,7 @@
 # Command entry model
 
-A slash or shell command renders as an **Entry** that owns the command's
-input and output: a clean header line starting with the `⌘`/`❯` glyph,
+A command renders as an **Entry** that owns the command's
+input and output: a clean header line starting with the `⌘` glyph,
 typed invocation, timestamp, a 1-row gap, and — when completed — the result content rendered
 directly as the entry's body ([ADR-0111](../../adr/0111-transcript-entry-unification-and-concurrent-rendering.md),
 revising [ADR-0109](../../adr/0109-command-card-and-triangle-disclosure.md),
@@ -27,18 +27,14 @@ One span grammar for the Entry header, followed by a 1-row gap, the concrete inv
   /permissions                        concrete command invocation
                                       ← 1-row blank gap
   Always-allowed tools: …             …result body through the shared block renderer
-
-❯ command · 21:39                     shell passthrough header
-                                      ← 1-row blank gap
-  !cargo check                        shell command invocation
 ```
 
 | Attribute | Value |
 |-----------|-------|
-| Header Tag | `⌘ command` (slash, info) or `❯ command` (shell, ok), BOLD — indicator tone |
+| Header Tag | `⌘ command`, BOLD — info tone |
 | Trailing meta | ` · HH:MM` muted, when `sent_at_ms` is present |
 | Gap | 1 blank row (`TURN_HEADER_BODY_GAP_ROWS = 1`) between header and body |
-| Invocation | Concrete command text (`/name args`, `!cmd`), BOLD, indented by `TRANSCRIPT_BODY_LEADING_INDENT` so it lines up with the body it introduces |
+| Invocation | Concrete command text (`/name args`), BOLD, indented by `TRANSCRIPT_BODY_LEADING_INDENT` so it lines up with the body it introduces |
 | Body | Directly rendered beneath the gap (ADR-0111) in the muted `Role::Tool` prose tone — one step quieter than the bold invocation, so input and output are distinguishable by weight/color at a glance; collapsible folding is eliminated |
 
 ## Lifecycle

@@ -89,22 +89,16 @@ impl ToolInvocation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CommandKind {
-    /// Harness built-in control-plane command (e.g. /review, /models, /autopilot)
-    Harness { name: String, args: String },
-    /// Shell passthrough command (e.g. !cargo test)
-    Shell { command: String },
+pub struct CommandInvocation {
+    pub name: String,
+    pub args: String,
 }
 
-impl CommandKind {
-    pub fn is_shell(&self) -> bool {
-        matches!(self, CommandKind::Shell { .. })
-    }
-
-    pub fn category_label(&self) -> &'static str {
-        match self {
-            CommandKind::Harness { .. } => "harness",
-            CommandKind::Shell { .. } => "shell",
+impl CommandInvocation {
+    pub fn new(name: impl Into<String>, args: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            args: args.into(),
         }
     }
 }
@@ -224,15 +218,14 @@ pub enum MessageKind {
         expanded: bool,
         user_pinned: bool,
     },
-    /// A command invocation (Harness command or Shell passthrough) as **one
-    /// component that owns both its input and its output** (ADR-0108, ADR-0111).
+    /// A command invocation as **one component that owns both its input and its output**
+    /// (ADR-0108, ADR-0111).
     CommandResult {
-        kind: CommandKind,
+        invocation: CommandInvocation,
         /// The typed result (ADR-0091). `None` while the command is still
         /// running, and when the invocation was recorded but the reply was
-        /// never persisted (legacy echo folds, `!command` passthroughs). Boxed
-        /// to keep this enum variant small (`CommandResult` carries
-        /// `Vec<SearchHit>` / `Vec<ReviewVerdict>`).
+        /// never persisted (legacy echo folds). Boxed to keep this enum
+        /// variant small (`CommandResult` carries `Vec<SearchHit>` / `Vec<ReviewVerdict>`).
         result: Option<Box<muta_contracts::CommandResult>>,
         /// Lifecycle of the invocation (ADR-0108) — see [`CommandPhase`].
         phase: CommandPhase,
@@ -591,9 +584,8 @@ pub enum DeliveryStatus {
 ///
 /// The Activity modal uses this to decide whether a `Role::User` message is
 /// the genuine prompt that drove the current round: slash commands
-/// (`/review …`) and shell passthroughs (`!ls`) are surfaced as user messages
-/// in the transcript but are *not* the LLM prompt, so they must not be shown
-/// as the round's "Prompt".
+/// (`/review …`) are surfaced as user messages in the transcript but are
+/// *not* the LLM prompt, so they must not be shown as the round's "Prompt".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UserMessageOrigin {
     /// A normal chat prompt the user composed and sent to the model. This is
@@ -607,9 +599,6 @@ pub enum UserMessageOrigin {
     /// A slash command (`/review`, `/pursue …`, …). The harness handles these
     /// directly; the model never sees them as a prompt.
     Slash,
-    /// A `!command` shell passthrough run directly through the bash tool,
-    /// bypassing the model entirely.
-    Shell,
 }
 
 /// Monotonic source of per-message identities. A message keeps its `id` across
@@ -887,14 +876,10 @@ impl TranscriptMessage {
     ) -> Self {
         let name = name.into();
         let args = args.into();
-        // The invocation as displayed: `!cmd` for shell passthroughs (their
-        // args carry the literal `!cmd` text), `/name args` for harness
-        // commands.
-        let (command_kind, invocation) = if name == "shell" {
-            (CommandKind::Shell { command: args.clone() }, args)
+        let invocation = if args.is_empty() {
+            format!("/{}", name)
         } else {
-            let full = format!("/{} {}", name, args);
-            (CommandKind::Harness { name, args }, full.trim_end().to_string())
+            format!("/{} {}", name, args)
         };
         let result_text = result
             .as_ref()
@@ -917,7 +902,7 @@ impl TranscriptMessage {
             },
             raw: sanitize_text(&invocation).into_owned(),
             kind: MessageKind::CommandResult {
-                kind: command_kind,
+                invocation: CommandInvocation { name, args },
                 result: result.map(Box::new),
                 phase,
                 expanded: false,
@@ -1413,12 +1398,20 @@ impl TranscriptMessage {
         matches!(self.kind, MessageKind::CommandResult { .. })
     }
 
-    /// The kind of command invocation (Harness or Shell).
-    pub fn command_kind(&self) -> Option<&CommandKind> {
+    /// The command invocation metadata.
+    pub fn command_invocation(&self) -> Option<&CommandInvocation> {
         match &self.kind {
-            MessageKind::CommandResult { kind, .. } => Some(kind),
+            MessageKind::CommandResult { invocation, .. } => Some(invocation),
             _ => None,
         }
+    }
+
+    pub fn command_name(&self) -> Option<&str> {
+        self.command_invocation().map(|c| c.name.as_str())
+    }
+
+    pub fn command_args(&self) -> Option<&str> {
+        self.command_invocation().map(|c| c.args.as_str())
     }
 
     /// Whether this row is a round-interrupt marker (C11).

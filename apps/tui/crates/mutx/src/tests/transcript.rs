@@ -104,9 +104,9 @@ fn command_ledger_restores_as_non_conversational_command_rows() {
                 hits: vec![],
             },
         ),
-        // A result-less record (legacy fold / shell passthrough): the
+        // A result-less record (legacy fold / command without result): the
         // invocation still restores, with an empty expandable body.
-        muta_contracts::CommandRecord::new("shell", "!ls -la"),
+        muta_contracts::CommandRecord::new("compact", ""),
     ];
     let restored = transcript_commands_from_ledger(commands);
     assert_eq!(restored.len(), 2);
@@ -130,10 +130,10 @@ fn command_ledger_restores_as_non_conversational_command_rows() {
         "never assistant prose"
     );
 
-    let shell = &restored[1];
-    assert!(shell.is_command_result());
-    assert_eq!(shell.command_result_summary().as_deref(), Some("!ls -la"));
-    assert_eq!(shell.command_result_text(), None);
+    let compact = &restored[1];
+    assert!(compact.is_command_result());
+    assert_eq!(compact.command_result_summary().as_deref(), Some("/compact"));
+    assert_eq!(compact.command_result_text(), None);
 }
 
 #[test]
@@ -268,10 +268,10 @@ fn command_result_message_expands_and_round_trips_display() {
 fn command_row_layout_classifies_by_result_shape() {
     use crate::model::document::{CommandRowLayout, TranscriptMessage};
 
-    // No result (shell passthrough / legacy fold) → Plain.
-    let shell = TranscriptMessage::command_result("shell", "!ls -la", None);
+    // No result (legacy fold / command without result) → Plain.
+    let plain_cmd = TranscriptMessage::command_result("compact", "", None);
     assert_eq!(
-        shell.command_row_layout(80),
+        plain_cmd.command_row_layout(80),
         Some(CommandRowLayout::Plain),
         "a result-less record has nothing to disclose"
     );

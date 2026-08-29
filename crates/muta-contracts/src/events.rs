@@ -304,13 +304,6 @@ pub enum AgentRequest {
     ReconnectMcpServer {
         name: String,
     },
-    /// Run a shell command directly through the `bash` tool, bypassing the
-    /// LLM. Triggered by the TUI's `!` prefix (e.g. `!git status`). The
-    /// harness emits a synthetic `ToolCall`, live `ToolStream` events, and a
-    /// final `ToolResult`, mirroring a normal bash step's lifecycle.
-    ShellCommand {
-        command: String,
-    },
     /// Detach from the `/btw` aside view and return to the primary transcript
     /// (ADR-0103). The aside **keeps running**: its in-flight round is left
     /// alone and its session stays registered so it can be re-entered via

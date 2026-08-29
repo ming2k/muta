@@ -94,10 +94,6 @@ pub(crate) fn carousel_pages() -> Vec<CarouselPage> {
             tokens: vec![Tok::Key("Ctrl-M"), Tok::Text(" or "), Tok::Key("/models")],
         },
         CarouselPage {
-            lead: "Lead with ",
-            tokens: vec![Tok::Key("!"), Tok::Text(" to run a shell command")],
-        },
-        CarouselPage {
             lead: "Mention files with ",
             tokens: vec![Tok::Key("@"), Tok::Text(" — tab completes")],
         },

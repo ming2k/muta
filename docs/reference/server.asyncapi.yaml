@@ -753,7 +753,6 @@ components:
         - $ref: '#/components/schemas/RequestToggleTool'
         - $ref: '#/components/schemas/RequestToggleMcpServer'
         - $ref: '#/components/schemas/RequestReconnectMcpServer'
-        - $ref: '#/components/schemas/RequestShellCommand'
         - $ref: '#/components/schemas/RequestExitSideView'
         - $ref: '#/components/schemas/RequestUpdateTuiLayout'
         - $ref: '#/components/schemas/RequestQueryWebSearchConfig'
@@ -1064,16 +1063,6 @@ components:
           type: object
           required: [name]
           properties: { name: { type: string } }
-          additionalProperties: false
-      additionalProperties: false
-    RequestShellCommand:
-      type: object
-      required: [ShellCommand]
-      properties:
-        ShellCommand:
-          type: object
-          required: [command]
-          properties: { command: { type: string } }
           additionalProperties: false
       additionalProperties: false
     RequestExitSideView:

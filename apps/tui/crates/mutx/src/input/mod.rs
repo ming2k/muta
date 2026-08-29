@@ -59,6 +59,9 @@ pub struct InputContext {
     /// true, `↓` steps the pointer back toward the newest item (and past it
     /// dissolves the pointer, restoring the draft) before any history role.
     pub queue_pointer_armed: bool,
+    /// Whether inline history recall is actively browsing a recalled entry
+    /// (`App::history_index.is_some()`). When true, Esc restores the stashed draft.
+    pub history_recall_active: bool,
     /// Whether the history modal's search sub-layer is active. Only meaningful
     /// while [`Self::active_modal`] is `super::Modal::HistorySearch`: `false`
     /// is browse mode (typing is inert, `/` enters search), `true` borrows the
@@ -567,6 +570,10 @@ pub enum InputAction {
     HistoryPrev,
     /// Navigate history down.
     HistoryNext,
+    /// Cancel inline history recall and restore the stashed draft (Esc).
+    HistoryCancel,
+    /// Cancel queue pointer editing and restore the stashed draft (Esc).
+    QueuePointerCancel,
     /// Legacy destructive recall (pop the newest queue item into the
     /// composer). Superseded at the top level by the non-destructive
     /// [`InputAction::QueuePointerPrev`] / [`InputAction::QueuePointerNext`]
@@ -1501,6 +1508,7 @@ pub fn process_event(
                         InputAction::ClearFocusedTarget
                     } else if context.completion_kind != super::CompletionKind::None
                         && context.suggestion_count > 0
+                        && !context.completion_dismissed
                     {
                         // A completion popup (slash command or `@path`) is
                         // open: Esc dismisses it without touching the input
@@ -1508,6 +1516,14 @@ pub fn process_event(
                         // clears the dismissal latch, so Esc then ↑/↓ walks
                         // history instead of suggestions.
                         InputAction::CloseCompletion
+                    } else if context.queue_pointer_armed {
+                        // Queue pointer edit armed: Esc dissolves the pointer
+                        // and restores the stashed draft.
+                        InputAction::QueuePointerCancel
+                    } else if context.history_recall_active {
+                        // Inline history recall active: Esc cancels recall
+                        // and restores the stashed draft.
+                        InputAction::HistoryCancel
                     } else if context.is_responding {
                         InputAction::Interrupt
                     } else {

@@ -38,6 +38,7 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -89,6 +90,7 @@ fn enter_with_completion(
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -134,6 +136,7 @@ fn enter_shell(input: &mut String) -> InputAction {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -183,6 +186,7 @@ fn key_in_side_view_with(
         has_focused_target: false,
         has_queued: false,
         queue_pointer_armed: false,
+        history_recall_active: false,
         history_searching: false,
         model_searching: false,
         modal_keymap_open: false,
@@ -234,6 +238,7 @@ fn key_with_focus(code: KeyCode) -> InputAction {
             has_focused_target: true,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -288,6 +293,7 @@ fn run_key(
             has_focused_target: has_focus,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             // Editing text in the history and model-picker modals only
             // happens inside their search sub-layer, so treat those cases
             // here as search mode (browse mode never reaches editing keys).
@@ -344,6 +350,7 @@ fn run_history_key(
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: true,
             model_searching: false,
             modal_keymap_open: false,
@@ -389,6 +396,7 @@ fn up_with_queued(has_queued: bool) -> InputAction {
             has_focused_target: false,
             has_queued,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -439,6 +447,7 @@ fn compose_key_with_completion(
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             ..Default::default()
         },
@@ -477,6 +486,7 @@ fn queue_modal_char(c: char) -> InputAction {
             has_focused_target: false,
             has_queued: true,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -526,6 +536,7 @@ fn queue_modal_key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> Inp
             has_focused_target: false,
             has_queued: true,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -573,6 +584,7 @@ fn run_paste(
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             // The history and model-picker modals only take text in their
             // search sub-layer; treat those cases as search mode here.
             history_searching: modal == crate::Modal::HistorySearch,
@@ -619,6 +631,7 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -703,6 +716,7 @@ fn oauth_key(c: char) -> InputAction {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -749,6 +763,7 @@ fn oauth_keycode(code: KeyCode) -> InputAction {
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,
@@ -782,6 +797,7 @@ fn mouse_ctx_for(modal: crate::Modal) -> InputContext {
         has_focused_target: false,
         has_queued: false,
         queue_pointer_armed: false,
+        history_recall_active: false,
         history_searching: false,
         ..Default::default()
     }
@@ -823,6 +839,7 @@ fn run_history_clear_key(
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             ..Default::default()
         },
@@ -856,6 +873,7 @@ fn editor_key(code: KeyCode, editor_field: u8, input: &mut String) -> InputActio
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             editor_field: Some(editor_field),
             ..Default::default()
@@ -894,6 +912,7 @@ fn compose_key(
             has_focused_target: false,
             has_queued: false,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             ..Default::default()
         },

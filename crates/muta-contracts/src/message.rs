@@ -121,13 +121,12 @@ pub enum InjectionKind {
     HiddenRoundInput,
     /// A non-driving command echo: the literal text of a user invocation that
     /// is recorded in the durable transcript for resume/export/audit
-    /// faithfulness but is **never sent to the model**. Covers slash commands
-    /// (e.g. `/session …`) and `!command` shell passthroughs, both of which the
-    /// harness handles directly without an LLM roundtrip. Distinct from
-    /// `HiddenRoundInput` (which *is* a driving hidden prompt): a `CommandEcho`
-    /// carries no instruction for the model. Projected out before the wire by
-    /// model-request assembly. Site: `handlers_slash::dispatch` and
-    /// `shell::run_shell_command`. (ADR-0050.)
+    /// faithfulness but is **never sent to the model**. Covers commands
+    /// (e.g. `/session …`) which the harness handles directly without an LLM
+    /// roundtrip. Distinct from `HiddenRoundInput` (which *is* a driving
+    /// hidden prompt): a `CommandEcho` carries no instruction for the model.
+    /// Projected out before the wire by model-request assembly.
+    /// Site: `handlers_slash::dispatch`. (ADR-0050.)
     CommandEcho,
     /// A user-role image companion projected from a tool result for providers
     /// that accept image inputs. Site: `conversation_context::tool_image`.
@@ -276,6 +275,7 @@ pub struct Message {
     /// session/event-log persistence keeps it so a resumed session replays
     /// with the same frozen shapes.
     #[serde(default)]
+    #[ts(skip)]
     pub cache_frozen: bool,
 }
 

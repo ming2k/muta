@@ -836,10 +836,10 @@ pub async fn run_tui(
                             // (ADR-0108). Content-bearing like `Text` — same
                             // idle-only activity-surface handling.
                             *provider_retry_clone.lock().await = None;
-                            let invocation = if name == "shell" {
-                                args.clone()
+                            let invocation = if args.is_empty() {
+                                format!("/{}", name)
                             } else {
-                                format!("/{} {}", name, args).trim_end().to_string()
+                                format!("/{} {}", name, args)
                             };
                             {
                                 let mut msgs = buf.write().await;

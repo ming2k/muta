@@ -19,7 +19,7 @@ use mutx_engine::{Color, Modifier, Span, Style};
 use crate::app::ComposerSendMode;
 
 use super::super::Theme;
-use super::super::keymap::Key;
+use super::super::keymap::{Key, keyvocab};
 use super::keycap::keycap_style;
 
 // ---------------------------------------------------------------------------
@@ -89,7 +89,7 @@ impl QueueEditKind {
 /// What the live buffer currently holds and what it becomes on `Enter`.
 ///
 /// Derived entirely from state the frame already tracks (buffer prefix,
-/// `ComposerSendMode × busy`, queue pointer) — no new app-level state.
+/// `ComposerSendMode × busy`, queue pointer, history recall, completion, modal) — no new app-level state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ComposeTarget {
     /// A plain prompt opening a new round (idle).
@@ -107,17 +107,31 @@ pub(crate) enum ComposeTarget {
         number: usize,
         dirty: bool,
     },
+    /// Inline history recall mode (`App::history_index` is `Some`).
+    HistoryRecall {
+        index: usize,
+        total: usize,
+    },
+    /// Active completion popup (slash commands or path mentions).
+    Completion {
+        kind: crate::completion::CompletionKind,
+    },
+    /// Global history search panel is active (Ctrl+R).
+    HistorySearch,
 }
 
 impl ComposeTarget {
     /// Consequence-class hue for the submission verb: amber when Enter's
-    /// effect interrupts (steers) the live round, info blue when it queues,
-    /// plain foreground (`Color::Reset`) when neither class applies.
+    /// effect interrupts (steers) the live round, info blue when it queues or recalls,
+    /// brand when it accepts/inserts, plain foreground (`Color::Reset`) when none applies.
     fn submit_color(self, theme: &Theme) -> Color {
         match self {
             ComposeTarget::Steer => theme.warn(),
             ComposeTarget::FollowUp => theme.info(),
             ComposeTarget::QueueEdit { kind, .. } => kind.consequence_color(theme),
+            ComposeTarget::HistoryRecall { .. } => theme.info(),
+            ComposeTarget::Completion { .. } => theme.brand(),
+            ComposeTarget::HistorySearch => theme.brand(),
             ComposeTarget::Prompt | ComposeTarget::Command => Color::Reset,
         }
     }
@@ -125,22 +139,34 @@ impl ComposeTarget {
 
 /// Derive the compose target from already-available state.
 ///
-/// `queue_editing` carries `(kind, number)` for an armed queue pointer (the
-/// structured form of the old `[edit: steer #1]` badge). `is_slash` marks a
-/// buffer whose leading token resolves as a command; it never wins over the
-/// queue pointer because a pointer edit renders the stored item verbatim.
+/// `is_history_search` marks the Ctrl+R panel.
+/// `completion_active` marks an open candidate list.
+/// `queue_editing` carries `(kind, number)` for an armed queue pointer.
+/// `history_recall` carries `(index, total)` for an active inline history walk.
 pub(crate) fn compose_target(
     busy: bool,
     send_mode: Option<ComposerSendMode>,
     queue_editing: Option<(QueueEditKind, usize)>,
     is_slash: bool,
+    history_recall: Option<(usize, usize)>,
+    completion_active: Option<crate::completion::CompletionKind>,
+    is_history_search: bool,
 ) -> ComposeTarget {
+    if is_history_search {
+        return ComposeTarget::HistorySearch;
+    }
+    if let Some(kind) = completion_active {
+        return ComposeTarget::Completion { kind };
+    }
     if let Some((kind, number)) = queue_editing {
         return ComposeTarget::QueueEdit {
             kind,
             number,
             dirty: false,
         };
+    }
+    if let Some((index, total)) = history_recall {
+        return ComposeTarget::HistoryRecall { index, total };
     }
     if busy {
         return match send_mode.unwrap_or_default() {
@@ -184,13 +210,10 @@ pub(crate) struct ComposerHints {
 /// Enter send steer  Tab follow-up   ← mid-round, steering armed
 /// Enter send follow-up  Tab steer   ← mid-round, queueing armed
 /// Enter update follow-ups[2]        ← queue-pointer edit
-/// Enter send  /retry to retry       ← stopped round parked for retry
+/// Enter send history  ↑↓ [1/12]  Esc draft ← inline history recall
+/// Tab/Enter select  ↑↓ navigate  Esc dismiss ← completion popup
+/// Enter insert  Tab preview  Esc close ← history search
 /// ```
-///
-/// The verb names the delivery group; `update follow-ups[2]` names the exact
-/// item an armed pointer will re-deliver. Only the primary verb carries the
-/// consequence hue (amber = interrupts the live round, info blue = queues);
-/// secondary keys (`Tab`, `/retry`) keep the calm keycap treatment.
 pub(crate) fn hint_row_spans(
     can_retry: bool,
     density: ActionDensity,
@@ -202,21 +225,77 @@ pub(crate) fn hint_row_spans(
     let hint_style = Style::default().fg(theme.muted()).bg(bg);
     let verb_style = Style::default().bg(bg);
     let compact = density.compact();
-    let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
 
-    if let ComposeTarget::QueueEdit { kind, number, .. } = target {
-        // In-place update of the pointed-at item: the verb names both the
-        // delivery group and the exact position, so the sentence stays true
-        // even when the edit is dirty. Survives any width — this clause is
-        // the reason the row exists.
-        spans.push(Span::styled(" update ", hint_style));
-        spans.push(Span::styled(
-            format!("{}[{number}]", kind.plural_noun()),
-            verb_style.fg(kind.consequence_color(theme)),
-        ));
-        return spans;
+    match target {
+        ComposeTarget::HistorySearch => {
+            let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
+            spans.push(Span::styled(
+                " insert",
+                verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled("  ", hint_style));
+            spans.push(Span::styled(Key::TAB.display(), key_style));
+            spans.push(Span::styled(" preview", hint_style));
+            if !compact {
+                spans.push(Span::styled("  ", hint_style));
+                spans.push(Span::styled(keyvocab::ARROWS_UD, key_style));
+                spans.push(Span::styled(" select", hint_style));
+            }
+            spans.push(Span::styled("  ", hint_style));
+            spans.push(Span::styled(Key::ESC.display(), key_style));
+            spans.push(Span::styled(" close", hint_style));
+            return spans;
+        }
+        ComposeTarget::Completion { .. } => {
+            let mut spans = vec![
+                Span::styled(Key::TAB.display(), key_style),
+                Span::styled(" / ", hint_style),
+                Span::styled(Key::ENTER.display(), key_style),
+            ];
+            spans.push(Span::styled(
+                " select",
+                verb_style.fg(theme.brand()).add_modifier(Modifier::BOLD),
+            ));
+            if !compact {
+                spans.push(Span::styled("  ", hint_style));
+                spans.push(Span::styled(keyvocab::ARROWS_UD, key_style));
+                spans.push(Span::styled(" navigate", hint_style));
+            }
+            spans.push(Span::styled("  ", hint_style));
+            spans.push(Span::styled(Key::ESC.display(), key_style));
+            spans.push(Span::styled(" dismiss", hint_style));
+            return spans;
+        }
+        ComposeTarget::HistoryRecall { index, total } => {
+            let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
+            spans.push(Span::styled(
+                " send history",
+                verb_style.fg(theme.info()).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled("  ", hint_style));
+            spans.push(Span::styled(keyvocab::ARROWS_UD, key_style));
+            spans.push(Span::styled(format!(" [{index}/{total}]"), hint_style));
+            spans.push(Span::styled("  ", hint_style));
+            spans.push(Span::styled(Key::ESC.display(), key_style));
+            spans.push(Span::styled(" draft", hint_style));
+            return spans;
+        }
+        ComposeTarget::QueueEdit { kind, number, .. } => {
+            let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
+            spans.push(Span::styled(" update ", hint_style));
+            spans.push(Span::styled(
+                format!("{}[{number}]", kind.plural_noun()),
+                verb_style.fg(kind.consequence_color(theme)),
+            ));
+            spans.push(Span::styled("  ", hint_style));
+            spans.push(Span::styled(Key::ESC.display(), key_style));
+            spans.push(Span::styled(" draft", hint_style));
+            return spans;
+        }
+        _ => {}
     }
 
+    let mut spans = vec![Span::styled(Key::ENTER.display(), key_style)];
     spans.push(Span::styled(" send", hint_style));
 
     match target {
@@ -263,6 +342,7 @@ pub(crate) fn hint_row_spans(
                 spans.push(Span::styled(" prompt", hint_style));
             }
         }
+        _ => {}
     }
     spans
 }
@@ -312,6 +392,38 @@ mod tests {
             Color::default(),
         ));
         assert_eq!(follow_up, "Enter send follow-up  Tab steer");
+
+        let recall = text(&hint_row_spans(
+            false,
+            ActionDensity::Full,
+            ComposeTarget::HistoryRecall {
+                index: 2,
+                total: 10,
+            },
+            &theme,
+            Color::default(),
+        ));
+        assert_eq!(recall, "Enter send history  ↑↓ [2/10]  Esc draft");
+
+        let completion = text(&hint_row_spans(
+            false,
+            ActionDensity::Full,
+            ComposeTarget::Completion {
+                kind: crate::completion::CompletionKind::Slash,
+            },
+            &theme,
+            Color::default(),
+        ));
+        assert_eq!(completion, "Tab / Enter select  ↑↓ navigate  Esc dismiss");
+
+        let search = text(&hint_row_spans(
+            false,
+            ActionDensity::Full,
+            ComposeTarget::HistorySearch,
+            &theme,
+            Color::default(),
+        ));
+        assert_eq!(search, "Enter insert  Tab preview  ↑↓ select  Esc close");
     }
 
     #[test]
@@ -341,7 +453,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(row, "Enter update follow-ups[2]");
+        assert_eq!(row, "Enter update follow-ups[2]  Esc draft");
 
         let steer_edit = text(&hint_row_spans(
             false,
@@ -354,7 +466,7 @@ mod tests {
             &theme,
             Color::default(),
         ));
-        assert_eq!(steer_edit, "Enter update steers[1]");
+        assert_eq!(steer_edit, "Enter update steers[1]  Esc draft");
     }
 
     #[test]
@@ -424,12 +536,43 @@ mod tests {
     #[test]
     fn target_derivation_priority() {
         use crate::app::ComposerSendMode;
-        // Queue pointer wins over busy-mode classification…
+        // History search wins over all…
         assert_eq!(
             compose_target(
                 true,
                 Some(ComposerSendMode::Steer),
                 Some((QueueEditKind::FollowUp, 3)),
+                true,
+                Some((1, 5)),
+                Some(crate::completion::CompletionKind::Slash),
+                true
+            ),
+            ComposeTarget::HistorySearch
+        );
+        // …completion wins over queue and history recall…
+        assert_eq!(
+            compose_target(
+                true,
+                Some(ComposerSendMode::Steer),
+                Some((QueueEditKind::FollowUp, 3)),
+                false,
+                Some((1, 5)),
+                Some(crate::completion::CompletionKind::Slash),
+                false
+            ),
+            ComposeTarget::Completion {
+                kind: crate::completion::CompletionKind::Slash
+            }
+        );
+        // …queue pointer wins over history recall and busy-mode classification…
+        assert_eq!(
+            compose_target(
+                true,
+                Some(ComposerSendMode::Steer),
+                Some((QueueEditKind::FollowUp, 3)),
+                false,
+                Some((1, 5)),
+                None,
                 false
             ),
             ComposeTarget::QueueEdit {
@@ -438,18 +581,42 @@ mod tests {
                 dirty: false
             }
         );
+        // …history recall wins over busy mode…
+        assert_eq!(
+            compose_target(
+                true,
+                Some(ComposerSendMode::Steer),
+                None,
+                false,
+                Some((2, 8)),
+                None,
+                false
+            ),
+            ComposeTarget::HistoryRecall {
+                index: 2,
+                total: 8
+            }
+        );
         // …busy mode wins over the slash prefix…
         assert_eq!(
-            compose_target(true, Some(ComposerSendMode::FollowUp), None, true),
+            compose_target(
+                true,
+                Some(ComposerSendMode::FollowUp),
+                None,
+                true,
+                None,
+                None,
+                false
+            ),
             ComposeTarget::FollowUp
         );
         // …and slash only classifies an idle buffer.
         assert_eq!(
-            compose_target(false, None, None, true),
+            compose_target(false, None, None, true, None, None, false),
             ComposeTarget::Command
         );
         assert_eq!(
-            compose_target(false, None, None, false),
+            compose_target(false, None, None, false, None, None, false),
             ComposeTarget::Prompt
         );
     }

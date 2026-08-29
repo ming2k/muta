@@ -79,9 +79,9 @@ fn restored_user_message_origin_inferred_from_shape() {
     let slash = transcript_message_from_core(slash).unwrap();
     assert_eq!(slash.origin, UserMessageOrigin::Slash);
 
-    // A shell passthrough persists as the `!command` the user typed → Shell.
-    let shell = transcript_message_from_core(Message::new(Role::User, "!ls -la")).unwrap();
-    assert_eq!(shell.origin, UserMessageOrigin::Shell);
+    // A prompt starting with `!` is a normal chat prompt
+    let exclamation = transcript_message_from_core(Message::new(Role::User, "!ls -la")).unwrap();
+    assert_eq!(exclamation.origin, UserMessageOrigin::Chat);
 
     // A genuine prompt that merely *starts* with `/` (no display_content) is
     // NOT misclassified as a slash command — e.g. "/etc is a path" stays Chat.
@@ -723,7 +723,7 @@ async fn resumed_session_backfills_prompt_rows_from_transcript() {
         TranscriptMessage::new(Role::Assistant, "ok"),
         TranscriptMessage::new(Role::User, "live prompt").with_sent_at_ms(200),
         TranscriptMessage::new(Role::User, "/model").with_origin(UserMessageOrigin::Slash),
-        TranscriptMessage::new(Role::User, "!ls -la").with_origin(UserMessageOrigin::Shell),
+        TranscriptMessage::new(Role::User, "steering").with_origin(UserMessageOrigin::Steer),
     ];
     app.backfill_session_history(&prompt_tail(&transcript), 1000);
 

@@ -125,9 +125,7 @@ pub fn format_export_markdown(
     // as a distinct blockquote block rather than a `## User` heading.
     for record in commands {
         emitted_any = true;
-        let invocation = if record.name == "shell" {
-            record.args.clone()
-        } else if record.args.is_empty() {
+        let invocation = if record.args.is_empty() {
             format!("/{}", record.name)
         } else {
             format!("/{} {}", record.name, record.args)
@@ -448,7 +446,7 @@ mod tests {
                     }],
                 },
             ),
-            muta_contracts::CommandRecord::new("shell", "!ls -la"),
+            muta_contracts::CommandRecord::new("compact", ""),
         ];
         let out = format_export_markdown(
             ExportContext {
@@ -468,8 +466,8 @@ mod tests {
             "typed result body exports: {out}"
         );
         assert!(
-            out.contains("> `!ls -la`"),
-            "result-less shell invocation exports: {out}"
+            out.contains("> `/compact`"),
+            "result-less command invocation exports: {out}"
         );
         // The command must not masquerade as a user message.
         assert!(

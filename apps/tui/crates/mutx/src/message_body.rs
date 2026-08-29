@@ -79,7 +79,6 @@ fn sent_header_anchor(msg: &TranscriptMessage, is_queued: bool) -> String {
     } else {
         match msg.origin {
             crate::model::document::UserMessageOrigin::Slash => "cmd".to_string(),
-            crate::model::document::UserMessageOrigin::Shell => "shell".to_string(),
             _ => "prompt".to_string(),
         }
     }

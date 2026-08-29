@@ -502,6 +502,28 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             // consume after taking its mutable borrows.
             let queue_editing = app.queue_editing_target(viewed_session_id);
             let busy = app.running_sessions.contains(viewed_session_id);
+            let is_history_search = app.active_modal() == Modal::HistorySearch;
+            let history_recall = if app.active_modal() == Modal::None {
+                app.history_recall_position()
+            } else {
+                None
+            };
+            let completion_active = if app.active_modal() == Modal::None
+                && !app.completion_dismissed
+                && app.completion_kind() != CompletionKind::None
+            {
+                let completions = app.completions();
+                let exact_match = completions.iter().any(|c| {
+                    c.replace_start == 0 && c.replace_end == app.input.len() && c.label == app.input
+                });
+                if !completions.is_empty() && !exact_match {
+                    Some(app.completion_kind())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let composer_hints = {
                 use crate::components::composer_hints::{
                     ComposerHints, QueueEditKind, compose_target,
@@ -517,6 +539,9 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                             _ => (QueueEditKind::FollowUp, number),
                         }),
                         slash_len.is_some(),
+                        history_recall,
+                        completion_active,
+                        is_history_search,
                     ),
                     can_retry: !busy && viewed_chrome.can_retry,
                 }

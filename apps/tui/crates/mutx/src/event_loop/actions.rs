@@ -2003,6 +2003,14 @@ pub(super) async fn dispatch_action(
             let session_rows = app.current_session_history();
             app.history_prev(&session_rows);
         }
+        input::InputAction::HistoryCancel => {
+            // Esc during inline history recall: immediately cancel recall and restore draft.
+            app.cancel_history_recall();
+        }
+        input::InputAction::QueuePointerCancel => {
+            // Esc during queue pointer edit: immediately dissolve pointer and restore draft.
+            app.dissolve_queue_pointer();
+        }
         input::InputAction::QueuePointerPrev => {
             // Inline ↑ with a non-empty outbox: arm/step the queue pointer
             // (newest → older). Non-destructive — nothing leaves the queue;

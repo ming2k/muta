@@ -780,17 +780,6 @@ impl SessionDriver {
                     )
                     .await;
                 }
-                AgentRequest::ShellCommand { command } => {
-                    crate::handlers_chat::shell(
-                        &resp_tx,
-                        &lifecycle,
-                        &agent,
-                        &session,
-                        &project_root_for_side,
-                        command,
-                    )
-                    .await;
-                }
                 AgentRequest::ExitSideView => {
                     crate::handlers_session::detach_side_view(&side, &resp_tx).await;
                 }
@@ -901,8 +890,6 @@ impl SessionDriver {
 ///
 /// - Chat-family requests start (or feed) a round; the round task emits the
 ///   closing idle snapshot when it finishes, errors, or is interrupted.
-/// - `ShellCommand` mirrors `start_interactive_round`: it begins its own
-///   round and emits the terminal idle snapshot on exit.
 ///
 /// Everything else is a control-plane operation (slash command, provider/
 /// session/tool/mcp toggle, query, layout update, …) that runs inline in the
@@ -916,7 +903,6 @@ fn round_owned_request(req: &AgentRequest) -> bool {
             | AgentRequest::FollowUp { .. }
             | AgentRequest::Steer { .. }
             | AgentRequest::CancelSteer { .. }
-            | AgentRequest::ShellCommand { .. }
     )
 }
 
@@ -1087,9 +1073,6 @@ mod tests {
             session_id: "s".to_string(),
             input_id: "i".to_string(),
         }));
-        assert!(round_owned_request(&AgentRequest::ShellCommand {
-            command: "git status".to_string(),
-        }));
     }
 
     #[test]
@@ -1183,16 +1166,6 @@ mod tests {
             )
             .await,
             "prompt closes its own lifecycle"
-        );
-        assert!(
-            !needs_activity_reconcile(
-                &AgentRequest::ShellCommand {
-                    command: "git status".to_string(),
-                },
-                &lifecycle,
-            )
-            .await,
-            "shell closes its own lifecycle"
         );
 
         // A live round owns the display: even a control-plane request is left

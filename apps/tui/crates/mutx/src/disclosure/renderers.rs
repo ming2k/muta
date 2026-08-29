@@ -2241,7 +2241,7 @@ pub(crate) const MARKER_COLLAPSED: &str = "+";
 pub(crate) const MARKER_EXPANDED: &str = "-";
 
 /// Build the one-row header of a command entry: `⌘ command          21:39`.
-/// The `⌘` (or `❯`) glyph and `command` label are rendered in the same
+/// The `⌘` glyph and `command` label are rendered in the same
 /// indicator tone (BOLD), with the muted timestamp pinned to the right edge.
 fn command_header_line(
     category_label: &str,
@@ -2253,7 +2253,7 @@ fn command_header_line(
     let mut spans = Vec::with_capacity(4);
     let mut used = 0usize;
 
-    // Indicator tag: `⌘ harness` or `⌘ shell` in family_tone + BOLD.
+    // Indicator tag: `⌘ command` in family_tone + BOLD.
     let tag = format!("⌘ {category_label}");
     used += tag.width();
     spans.push(Span::styled(
@@ -2278,11 +2278,11 @@ fn command_header_line(
     Line::from(spans)
 }
 
-/// Draw a harness or shell command as a top-level **Entry** owning its input
+/// Draw a harness command as a top-level **Entry** owning its input
 /// and output (ADR-0111, revising ADR-0109/0108/0106).
 ///
 /// Every command entry is structured identically to a turn entry:
-/// - **Header**: `⌘ harness` or `⌘ shell` plus a right-aligned `HH:MM` timestamp
+/// - **Header**: `⌘ command` plus a right-aligned `HH:MM` timestamp
 /// - **Gap**: 1 blank row separating header and content body (`TURN_HEADER_BODY_GAP_ROWS`)
 /// - **Body**: The concrete invocation (e.g. `/delegate on`) followed by result output blocks.
 pub fn draw_command_result(
@@ -2323,19 +2323,11 @@ pub fn draw_command_result(
         return;
     }
 
-    let is_shell = invocation.starts_with('!')
-        || msg.raw.starts_with('!')
-        || msg.command_kind().is_some_and(|k| k.is_shell());
-    let (category_label, family_tone) = if is_shell {
-        ("shell", (*ctx.theme).ok())
-    } else {
-        ("harness", (*ctx.theme).info())
-    };
     let time_label = msg.sent_at_ms.map(crate::time::sent_time_label);
 
     let header_line = command_header_line(
-        category_label,
-        family_tone,
+        "command",
+        (*ctx.theme).info(),
         time_label.as_deref(),
         ctx.theme.muted(),
         full_width,
@@ -2395,7 +2387,7 @@ pub fn draw_command_result(
         // should land on first — and each explanation line muted below it.
         // The generic body path stays for every other result shape.
         if let Some((title, detail)) = msg.command_ack_split() {
-            draw_ack_body(ctx, mi, title, detail, family_tone);
+            draw_ack_body(ctx, mi, title, detail, (*ctx.theme).info());
         } else {
             draw_message_body(
                 &mut *ctx.frame,

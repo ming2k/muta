@@ -413,6 +413,7 @@ fn up_arrow_in_browse_does_not_recall_queued() {
             has_focused_target: true,
             has_queued: true,
             queue_pointer_armed: false,
+            history_recall_active: false,
             history_searching: false,
             model_searching: false,
             modal_keymap_open: false,

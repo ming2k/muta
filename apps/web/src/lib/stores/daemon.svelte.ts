@@ -82,7 +82,7 @@ const CLIENT_VERSION: string =
  * in its window; sending it is what opts this client into protocol-number
  * negotiation instead of product-version equality.
  */
-const PROTOCOL_VERSION = 3;
+const PROTOCOL_VERSION = 4;
 
 /** Reconnect base delay for both channels; doubles per failure, capped. */
 const RECONNECT_BASE_MS = 1000;

@@ -97,7 +97,7 @@ fn file_corpus_stays_within_two_percent() {
         ("../../crates/muta-contracts/src/pressure.rs", 10_855),
         ("../../crates/muta-agent/src/orchestration.rs", 10_411),
         ("../../README.zh-CN.md", 976),
-        ("../../CHANGELOG.md", 10_285),
+        ("../../CHANGELOG.md", 10_516),
         ("../../docs/adr/0044-layered-token-accounting.md", 1_742),
         (
             "../../docs/explanation/agent-design/token-accounting.md",

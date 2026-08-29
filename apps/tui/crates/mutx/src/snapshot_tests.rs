@@ -803,8 +803,8 @@ fn sent_user_header_has_clean_metadata_separator() {
 #[test]
 fn command_entries_render_header_and_direct_body_without_folding() {
     let messages = vec![
-        // Plain: shell passthrough, no persisted result.
-        TranscriptMessage::command_result("shell", "!ls -la", None),
+        // Plain: command with no persisted result.
+        TranscriptMessage::command_result("compact", "", None),
         // Completed: multi-line permission list rendered directly.
         TranscriptMessage::command_result(
             "permissions",
@@ -820,28 +820,28 @@ fn command_entries_render_header_and_direct_body_without_folding() {
 
     let plain_idx = rows
         .iter()
-        .position(|row| row.contains("⌘ shell"))
-        .expect("shell passthrough must render entry header ⌘ shell");
+        .position(|row| row.contains("⌘ command"))
+        .expect("command entry must render entry header ⌘ command");
     assert!(
-        rows[plain_idx].trim_start().starts_with("⌘ shell"),
-        "a shell passthrough renders header with leading ⌘ glyph and shell label:\n{grid}"
+        rows[plain_idx].trim_start().starts_with("⌘ command"),
+        "a command entry renders header with leading ⌘ glyph and command label:\n{grid}"
     );
     assert!(
         !rows[plain_idx].contains('┃'),
         "entry header uses no card bar ┃:\n{grid}"
     );
     assert!(
-        grid.contains("!ls -la"),
-        "shell invocation must be displayed in the entry body:\n{grid}"
+        grid.contains("/compact"),
+        "command invocation must be displayed in the entry body:\n{grid}"
     );
 
     let permissions_idx = rows
         .iter()
-        .position(|row| row.contains("⌘ harness"))
-        .unwrap_or_else(|| panic!("command entry must render its header ⌘ harness:\n{grid}"));
+        .rposition(|row| row.contains("⌘ command"))
+        .unwrap_or_else(|| panic!("command entry must render its header ⌘ command:\n{grid}"));
     assert!(
-        rows[permissions_idx].trim_start().starts_with("⌘ harness"),
-        "a harness command entry renders its header with leading ⌘ glyph:\n{grid}"
+        rows[permissions_idx].trim_start().starts_with("⌘ command"),
+        "a command entry renders its header with leading ⌘ glyph:\n{grid}"
     );
     assert!(
         !rows[permissions_idx].trim_start().starts_with('+')
@@ -929,7 +929,7 @@ fn concurrent_turn_and_command_entries_render_and_expand_dynamically() {
 
     let cmd_pos_v1 = rows_v1
         .iter()
-        .position(|row| row.contains("⌘ harness"))
+        .position(|row| row.contains("⌘ command"))
         .expect("command entry header must be present in v1");
 
     // Stage 2: Assistant turn receives more streaming tokens (4 extra list items).
@@ -943,7 +943,7 @@ fn concurrent_turn_and_command_entries_render_and_expand_dynamically() {
 
     let cmd_pos_v2 = rows_v2
         .iter()
-        .position(|row| row.contains("⌘ harness"))
+        .position(|row| row.contains("⌘ command"))
         .expect("command entry header must be present in v2");
 
     assert!(
@@ -966,7 +966,7 @@ fn command_component_pending_then_completed() {
 
     let pending = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
     assert!(
-        pending.contains("⌘ harness") && pending.contains("/delegate on"),
+        pending.contains("⌘ command") && pending.contains("/delegate on"),
         "a pending row shows generic header with invocation in body:\n{pending}"
     );
     assert!(
@@ -992,7 +992,7 @@ fn command_component_pending_then_completed() {
     );
     let completed = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
     assert!(
-        completed.contains("⌘ harness")
+        completed.contains("⌘ command")
             && completed.contains("/delegate on")
             && completed.contains("Delegated mode ON"),
         "the settled entry renders its header, invocation, and result body:\n{completed}"
@@ -1416,13 +1416,13 @@ fn command_component_renders_lead_symbols_and_timestamps() {
             }),
         )
         .with_sent_at_ms(epoch_ms),
-        TranscriptMessage::command_result("shell", "!cargo check", None).with_sent_at_ms(epoch_ms),
+        TranscriptMessage::command_result("compact", "", None).with_sent_at_ms(epoch_ms),
     ];
 
     let grid = render_transcript_grid(&messages, 140, 18);
     assert!(
-        grid.contains("⌘ harness") && grid.contains("/delegate on"),
-        "slash command must render with ⌘ harness header and invocation in body:\n{grid}"
+        grid.contains("⌘ command") && grid.contains("/delegate on"),
+        "slash command must render with ⌘ command header and invocation in body:\n{grid}"
     );
     assert!(
         grid.contains("Delegated mode ON"),
@@ -1434,8 +1434,8 @@ fn command_component_renders_lead_symbols_and_timestamps() {
         "ack detail line must render below the headline on its own row:\n{grid}"
     );
     assert!(
-        grid.contains("⌘ shell") && grid.contains("!cargo check"),
-        "shell command must render with ⌘ shell header and invocation in body:\n{grid}"
+        grid.contains("⌘ command") && grid.contains("/compact"),
+        "plain command must render with ⌘ command header and invocation in body:\n{grid}"
     );
     assert!(
         !grid.contains("▌ Sent"),
