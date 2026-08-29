@@ -96,6 +96,7 @@ impl MonitorTracker {
                 // and `fork_kind` are stamped at fork time.
                 self.base.parent_id.clone_from(&item.parent_id);
                 self.base.fork_kind = item.fork_kind;
+                self.base.digest.clone_from(&item.digest);
             }
             return;
         }
@@ -273,6 +274,7 @@ mod tests {
                 project_root: "/tmp/proj".into(),
                 parent_id: None,
                 fork_kind: muta_contracts::SessionForkKind::Trunk,
+                digest: None,
             },
             SessionStatus::Idle,
         )
@@ -295,6 +297,7 @@ mod tests {
                 active: true,
                 parent_id: None,
                 fork_kind: muta_contracts::SessionForkKind::Trunk,
+                digest: None,
             },
             // Another session's row must not leak into ours.
             muta_contracts::SessionOverview {
@@ -306,6 +309,7 @@ mod tests {
                 active: false,
                 parent_id: None,
                 fork_kind: muta_contracts::SessionForkKind::Trunk,
+                digest: None,
             },
         ]));
         let row = t.row();
@@ -329,6 +333,7 @@ mod tests {
                 active: false,
                 parent_id: None,
                 fork_kind: muta_contracts::SessionForkKind::Trunk,
+                digest: None,
             },
         ]));
         let row = t.row();

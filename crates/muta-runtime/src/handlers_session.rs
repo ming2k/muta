@@ -88,6 +88,7 @@ pub async fn rename(
                         active: summary.active,
                         parent_id: summary.parent_id,
                         fork_kind: summary.fork_kind,
+                        digest: summary.digest,
                     });
                 }
             }

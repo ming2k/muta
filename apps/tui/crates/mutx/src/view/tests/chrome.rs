@@ -229,6 +229,7 @@ fn redesigned_components_render_without_panicking() {
                     active: true,
                     parent_id: None,
                     fork_kind: muta_contracts::SessionForkKind::Trunk,
+                    digest: None,
                 },
                 muta_contracts::SessionOverview {
                     id: "def456".to_string(),
@@ -239,6 +240,7 @@ fn redesigned_components_render_without_panicking() {
                     active: false,
                     parent_id: None,
                     fork_kind: muta_contracts::SessionForkKind::Trunk,
+                    digest: None,
                 },
             ],
             0,

@@ -330,6 +330,7 @@ impl SessionStore {
             created_at: data.created_at,
             overview,
             active: true,
+            digest: data.digest.clone(),
         }
     }
 

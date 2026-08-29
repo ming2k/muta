@@ -22,6 +22,34 @@ use super::design::{MODAL_INNER_H_PADDING, MODAL_INNER_V_PADDING, SCROLLBAR_GAP}
 /// `FooterHint`, so a footer's key + label both come from one place.
 pub(crate) use super::keymap::keyvocab;
 
+/// 2-tier responsive layout breakpoint for TUI views (ADR-0097 evolution).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutTier {
+    /// Wide display (>= 90 columns): dual-pane side-by-side (Master-Detail).
+    Wide,
+    /// Compact / narrow display (< 90 columns, e.g. tiled tmux / 80-col): vertical stack.
+    Compact,
+}
+
+impl LayoutTier {
+    /// Threshold width in columns where dual-pane layout makes sense.
+    pub const WIDE_THRESHOLD: u16 = 90;
+
+    /// Resolve the layout tier from viewport width.
+    pub fn from_width(width: u16) -> Self {
+        if width >= Self::WIDE_THRESHOLD {
+            Self::Wide
+        } else {
+            Self::Compact
+        }
+    }
+
+    /// True if the layout is Wide.
+    pub fn is_wide(self) -> bool {
+        matches!(self, Self::Wide)
+    }
+}
+
 /// Global viewport margins. One row of breathing room is reserved at the
 /// top; horizontally every component spans the full terminal width. The
 /// bottom margin is 0: the hint bar pins flush against the terminal's bottom

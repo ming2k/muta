@@ -1262,6 +1262,7 @@ fn base_row(overview: SessionOverview, project_root: &std::path::Path) -> Monito
         // Lineage rides from the overview (ADR-0103 fork surfacing).
         parent_id: overview.parent_id,
         fork_kind: overview.fork_kind,
+        digest: overview.digest,
     }
 }
 
@@ -1279,10 +1280,12 @@ async fn overview_of(session: &SessionStore, active: bool) -> SessionOverview {
                 active,
                 parent_id: item.parent_id,
                 fork_kind: item.fork_kind,
+                digest: item.digest,
             };
         }
     }
     let mc = session.full_transcript().await.len();
+    let digest = session.digest().await.0;
     SessionOverview {
         id,
         overview: String::new(),
@@ -1293,6 +1296,7 @@ async fn overview_of(session: &SessionStore, active: bool) -> SessionOverview {
         // Not on disk yet (never persisted or empty): no lineage to report.
         parent_id: None,
         fork_kind: muta_contracts::SessionForkKind::Trunk,
+        digest,
     }
 }
 async fn session_exists_on_disk(project_root: &std::path::Path, id: &str) -> bool {

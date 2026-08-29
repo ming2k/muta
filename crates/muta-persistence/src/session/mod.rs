@@ -806,6 +806,8 @@ pub struct SessionSummary {
     /// already truncated for display.
     pub overview: String,
     pub active: bool,
+    /// The Chronicler's structured digest (intent + history checklist), if present.
+    pub digest: Option<muta_contracts::SessionDigest>,
 }
 
 /// The mutable bits a [`SessionStore`] pins to one session file: the snapshot
@@ -1176,6 +1178,7 @@ fn summary_header(data: &SessionHeader, active: bool) -> SessionSummary {
         created_at: data.created_at,
         overview: session_overview_header(data),
         active,
+        digest: data.digest.clone(),
     }
 }
 

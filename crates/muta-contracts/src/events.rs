@@ -1398,6 +1398,10 @@ pub struct SessionOverview {
     /// conversation forked off the trunk), or `trunk` (no parent).
     #[serde(default)]
     pub fork_kind: SessionForkKind,
+    /// The Chronicler's structured digest (intent + history checklist), if
+    /// the session has generated one.
+    #[serde(default)]
+    pub digest: Option<crate::steward::SessionDigest>,
 }
 
 /// The provenance of a session relative to its lineage.

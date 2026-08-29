@@ -290,7 +290,8 @@ impl StewardTask for StreamLoopReviewerTask {
 /// user's intent, and a running checklist of what has happened. Written by
 /// the Chronicler, read by the session picker's detail view so a resumed (or
 /// merely revisited) session can be understood at a glance.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 #[serde(default)]
 pub struct SessionDigest {
     /// Cleaned, concise title (3-7 words) — the picker row's headline.

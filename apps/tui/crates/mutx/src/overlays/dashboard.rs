@@ -36,7 +36,8 @@ use mutx_engine::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::primitives::{
-    FooterHint, SCROLL_EDGE_MARGIN, keymap_body_lines, keyvocab, resolve_scroll, viewport_rect,
+    FooterHint, LayoutTier, SCROLL_EDGE_MARGIN, keymap_body_lines, keyvocab, resolve_scroll,
+    viewport_rect,
 };
 use crate::view::Theme;
 
@@ -181,51 +182,81 @@ pub fn draw_dashboard(
         frame.area(),
     );
     let area = viewport_rect(frame);
+    let tier = LayoutTier::from_width(area.width);
 
-    // Vertical chrome: header / gap / console (flex) / gap / sessions dock /
-    // gap / footer. The console takes everything the dock doesn't need —
-    // the dock sizes itself to its content (capped at half the viewport).
     let entries = dock_entries(rows);
-    let card_columns = dock_columns(area.width);
-    let dock_rows = entries.len().div_ceil(card_columns);
-    // Card rows + panel title. One leading card row is always reserved so
-    // the empty state ("press n") has a home.
-    let dock_height = (dock_rows.max(1) as u16 + 1).min(area.height / 2);
+    let selected = selected.min(entries.len().saturating_sub(1));
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),           // header
-            Constraint::Length(1),           // gap
-            Constraint::Min(0),              // console
-            Constraint::Length(1),           // gap
-            Constraint::Length(dock_height), // sessions dock
-            Constraint::Length(1),           // gap
-            Constraint::Length(3),           // 3-row Runner-style footer
-        ])
-        .split(area);
-    let header = chunks[0];
-    let console = chunks[2];
-    let dock = chunks[4];
-    let footer = chunks[6];
+    // Two-tier responsive layout (ADR-0097 §3 evolution):
+    // - Wide (width >= 90): Dual-pane side-by-side (Sessions list left, Cognitive Dossier + Console right).
+    // - Compact (width < 90): Vertical stack (Header, Sessions dock top, Cognitive Dossier + Console bottom, Footer).
+    let (header_rect, dock_rect, console_rect, footer_rect, card_columns) = if tier.is_wide() {
+        let v_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // header
+                Constraint::Length(1), // gap
+                Constraint::Min(0),    // main body
+                Constraint::Length(1), // gap
+                Constraint::Length(3), // footer
+            ])
+            .split(area);
+        let header = v_chunks[0];
+        let main_body = v_chunks[2];
+        let footer = v_chunks[4];
 
-    draw_header(frame, header, rows, theme);
+        let h_cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(38), // Sessions pane
+                Constraint::Length(1),      // gap
+                Constraint::Percentage(62), // Console & Mission Dossier pane
+            ])
+            .split(main_body);
+        let dock = h_cols[0];
+        let console = h_cols[2];
+        let cols = dock_columns(dock.width);
+        (header, dock, console, footer, cols)
+    } else {
+        let cols = dock_columns(area.width);
+        let dock_rows = entries.len().div_ceil(cols);
+        let dock_height = (dock_rows.max(1) as u16 + 1).min(area.height / 2);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),           // header
+                Constraint::Length(1),           // gap
+                Constraint::Min(0),              // console (Mission Dossier + Log)
+                Constraint::Length(1),           // gap
+                Constraint::Length(dock_height), // sessions dock
+                Constraint::Length(1),           // gap
+                Constraint::Length(3),           // footer
+            ])
+            .split(area);
+        let header = chunks[0];
+        let console = chunks[2];
+        let dock = chunks[4];
+        let footer = chunks[6];
+        (header, dock, console, footer, cols)
+    };
+
+    draw_header(frame, header_rect, rows, theme);
 
     if keymap_open {
         let body_lines = keymap_body_lines(&footer_hints(focus), &[], theme);
-        render_scrollable(frame, console, body_lines, list_scroll, None, theme);
-        render_footer(frame, footer, focus, false, false, "", theme, true);
+        render_scrollable(frame, console_rect, body_lines, list_scroll, None, theme);
+        render_footer(frame, footer_rect, focus, false, false, "", theme, true);
         return DashboardRects {
             area,
-            list_body: console,
+            list_body: console_rect,
             detail_body: None,
         };
     }
 
-    let selected = selected.min(entries.len().saturating_sub(1));
     let console_body = draw_console(
         frame,
-        console,
+        console_rect,
         log,
         entries.get(selected).map(|e| e.row),
         focus == DashboardFocus::Detail,
@@ -235,7 +266,7 @@ pub fn draw_dashboard(
 
     let dock_body = draw_dock(
         frame,
-        dock,
+        dock_rect,
         &entries,
         card_columns,
         selected,
@@ -248,7 +279,7 @@ pub fn draw_dashboard(
 
     render_footer(
         frame,
-        footer,
+        footer_rect,
         focus,
         prompting,
         prompt_create_new,
@@ -281,6 +312,7 @@ fn draw_header(frame: &mut Frame, header: Rect, rows: &[MonitoredSession], theme
         .iter()
         .filter(|r| r.status == SessionStatus::Running)
         .count();
+    let total_tokens: u64 = rows.iter().map(|r| r.output_tokens).sum();
     let summary = if rows.is_empty() {
         "no sessions ".to_string()
     } else {
@@ -289,7 +321,10 @@ fn draw_header(frame: &mut Frame, header: Rect, rows: &[MonitoredSession], theme
             parts.push(format!("{running} running"));
         }
         if needing > 0 {
-            parts.push(format!("{needing} need attention"));
+            parts.push(format!("{needing} need attention ⚠"));
+        }
+        if total_tokens > 0 {
+            parts.push(format!("{total_tokens} tokens"));
         }
         format!("{} ", parts.join("  "))
     };
@@ -309,7 +344,14 @@ fn draw_header(frame: &mut Frame, header: Rect, rows: &[MonitoredSession], theme
         ),
         Span::styled(format!(" {context}"), fill.fg(theme.brand())),
         Span::styled(" ".repeat(gap), fill),
-        Span::styled(summary, fill.fg(theme.muted())),
+        Span::styled(
+            summary,
+            if needing > 0 {
+                fill.fg(theme.warn()).add_modifier(Modifier::BOLD)
+            } else {
+                fill.fg(theme.muted())
+            },
+        ),
     ]);
     frame.render_widget(Paragraph::new(line), header);
 }
@@ -825,107 +867,120 @@ fn format_elapsed(ms: u64) -> String {
     }
 }
 
-/// The full monitor read-out for one session as label/value lines, shared
-/// by the console's "selected session" block and the preview modal. `width`
-/// is the render width for wrapping the overview.
+/// The cognitive mission dossier and full telemetry for one session, shared
+/// by the console's detail view and the preview modal. `width` is the render
+/// width for wrapping text.
 fn session_detail_lines(row: &MonitoredSession, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
+    let dim = Style::default().fg(theme.dim());
+    let fg = Style::default().fg(theme.fg());
+    let brand = Style::default().fg(theme.brand());
+    let muted = Style::default().fg(theme.muted());
+
+    // ── 1. Cognitive Mission & Intent (Steward Chronicler) ────────────
+    if let Some(digest) = &row.digest {
+        if !digest.title.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("Mission:   ", dim.add_modifier(Modifier::BOLD)),
+                Span::styled(digest.title.clone(), brand.add_modifier(Modifier::BOLD)),
+            ]));
+        }
+        if !digest.intent.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("Intent:    ", dim),
+                Span::styled(digest.intent.clone(), fg),
+            ]));
+        }
+        if !digest.history.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Milestones & Progress:",
+                dim.add_modifier(Modifier::BOLD),
+            )));
+            for entry in &digest.history {
+                lines.push(Line::from(vec![
+                    Span::styled("  • ", brand),
+                    Span::styled(entry.clone(), fg),
+                ]));
+            }
+        }
+    } else if !row.overview.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Overview:",
+            dim.add_modifier(Modifier::BOLD),
+        )));
+        let wrap_w = width.saturating_sub(1).max(8);
+        for chunk in wrap_text(&row.overview, wrap_w) {
+            lines.push(Line::from(Span::styled(format!("  {chunk}"), muted)));
+        }
+    }
+
+    // ── 2. Telemetry & Runtime Status ──────────────────────────────────
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Telemetry:",
+        dim.add_modifier(Modifier::BOLD),
+    )));
+
     let mut field = |label: &str, value: String, style: Style| {
         lines.push(Line::from(vec![
-            Span::styled(format!("{label:<12}"), Style::default().fg(theme.dim())),
+            Span::styled(format!("  {label:<12}"), dim),
             Span::styled(value, style),
         ]));
     };
-    field("session", row.id.clone(), Style::default().fg(theme.fg()));
+
+    field("session", row.id.clone(), fg);
     if !row.project_root.is_empty() {
-        field(
-            "workspace",
-            row.project_root.clone(),
-            Style::default().fg(theme.fg()),
-        );
+        field("workspace", row.project_root.clone(), fg);
     }
     field(
         "status",
         row.status.as_str().to_string(),
-        status_style(row.status, theme),
+        status_style(row.status, theme).add_modifier(Modifier::BOLD),
     );
     field(
         "hosting",
         match row.hosting {
             SessionHosting::Hosted => "hosted".to_string(),
         },
-        Style::default().fg(theme.fg()),
+        fg,
     );
     let round = match row.turn {
         Some(t) => format!("round {} › turn {}", row.round, t),
         None => format!("round {}", row.round),
     };
-    field("progress", round, Style::default().fg(theme.fg()));
-    field(
-        "output",
-        format!("{} tokens", row.output_tokens),
-        Style::default().fg(theme.fg()),
-    );
+    field("progress", round, fg);
+    field("output", format!("{} tokens", row.output_tokens), fg);
     field(
         "uptime",
         format_uptime(now_unix_secs().saturating_sub(row.created_at)),
-        Style::default().fg(theme.fg()),
+        fg,
     );
-    field(
-        "elapsed",
-        format_elapsed(row.elapsed_ms),
-        Style::default().fg(theme.fg()),
-    );
+    field("elapsed", format_elapsed(row.elapsed_ms), fg);
     if let Some(ctx) = row.context_tokens {
-        field(
-            "context",
-            format!("{ctx} tokens"),
-            Style::default().fg(theme.fg()),
-        );
+        field("context", format!("{ctx} tokens"), fg);
     }
     if let Some(tool) = &row.current_tool {
-        field("tool", tool.clone(), Style::default().fg(theme.brand()));
+        field("tool", tool.clone(), brand.add_modifier(Modifier::BOLD));
     }
     if let Some(activity) = &row.activity {
-        field(
-            "activity",
-            activity.clone(),
-            Style::default().fg(theme.fg()),
-        );
+        field("activity", activity.clone(), fg);
     }
     if let Some(note) = &row.note {
-        field("note", note.clone(), Style::default().fg(theme.warn()));
+        field(
+            "note",
+            note.clone(),
+            Style::default().fg(theme.warn()).add_modifier(Modifier::BOLD),
+        );
     }
-    field(
-        "messages",
-        row.message_count.to_string(),
-        Style::default().fg(theme.fg()),
-    );
+    field("messages", row.message_count.to_string(), fg);
 
-    if !row.overview.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "overview".to_string(),
-            Style::default().fg(theme.dim()),
-        )));
-        let wrap_w = width.saturating_sub(1).max(8);
-        for chunk in wrap_text(&row.overview, wrap_w) {
-            lines.push(Line::from(Span::styled(
-                chunk,
-                Style::default().fg(theme.muted()),
-            )));
-        }
-    }
     lines
 }
 
 /// The session preview modal (ADR-0097 §3): a centered, read-only drill-in
 /// on one session, opened by Enter on a dock selection. Selection alone
 /// never opens it; Esc closes. Read-only — attaching is `a` on the dock.
-///
-/// Until the daemon's read-only transcript verb lands (a separate ADR), the
-/// body is the full monitor read-out for the session rather than its
-/// conversation.
 pub fn draw_session_preview(
     frame: &mut Frame,
     row: Option<&MonitoredSession>,
@@ -933,7 +988,7 @@ pub fn draw_session_preview(
     theme: &Theme,
 ) {
     let viewport = viewport_rect(frame);
-    let area = crate::primitives::centered_rect(62, 72, viewport);
+    let area = crate::primitives::centered_rect(70, 75, viewport);
     // Occlude the dashboard beneath and paint the panel.
     frame.render_widget(Clear, area);
     frame.render_widget(
@@ -957,14 +1012,18 @@ pub fn draw_session_preview(
     let footer = chunks[4];
 
     let mut title_spans = vec![Span::styled(
-        " Session preview".to_string(),
+        " Mission Preview".to_string(),
         Style::default()
             .fg(theme.brand())
             .add_modifier(Modifier::BOLD),
     )];
     if let Some(r) = row {
         title_spans.push(Span::styled(
-            format!("  —  {}", r.id),
+            format!(
+                "  —  #{} ({})",
+                r.id.chars().take(8).collect::<String>(),
+                r.status.as_str()
+            ),
             Style::default().fg(theme.muted()),
         ));
     }
@@ -1304,6 +1363,7 @@ mod tests {
             project_root: project_root.into(),
             parent_id: None,
             fork_kind: muta_contracts::SessionForkKind::Trunk,
+            digest: None,
         }
     }
 
@@ -1619,5 +1679,63 @@ mod tests {
             parse_console_command("   "),
             ConsoleCommand::Unrecognized(String::new())
         );
+    }
+
+    #[test]
+    fn session_detail_lines_renders_steward_digest_intent_and_milestones() {
+        let theme = Theme::default();
+        let mut r = row("s-123", 1000, "/work/muta", SessionStatus::Running);
+        r.digest = Some(muta_contracts::SessionDigest {
+            title: "Refactor Auth Middleware".to_string(),
+            intent: "Rewrite token validator to support ECDSA signatures.".to_string(),
+            history: vec![
+                "Created test suite for ECDSA".to_string(),
+                "Updated Cargo.toml dependencies".to_string(),
+            ],
+        });
+        r.current_tool = Some("run_command".to_string());
+
+        let lines = session_detail_lines(&r, 80, &theme);
+        let rendered: String = lines
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Mission:   Refactor Auth Middleware"), "{rendered}");
+        assert!(rendered.contains("Intent:    Rewrite token validator to support ECDSA signatures."), "{rendered}");
+        assert!(rendered.contains("Milestones & Progress:"), "{rendered}");
+        assert!(rendered.contains("• Created test suite for ECDSA"), "{rendered}");
+        assert!(rendered.contains("• Updated Cargo.toml dependencies"), "{rendered}");
+        assert!(rendered.contains("Telemetry:"), "{rendered}");
+        assert!(rendered.contains("tool"), "{rendered}");
+        assert!(rendered.contains("run_command"), "{rendered}");
+    }
+
+    #[test]
+    fn session_detail_lines_falls_back_to_overview_when_no_digest() {
+        let theme = Theme::default();
+        let mut r = row("s-456", 1000, "/work/muta", SessionStatus::Idle);
+        r.overview = "Plain user prompt without digest".to_string();
+        r.digest = None;
+
+        let lines = session_detail_lines(&r, 80, &theme);
+        let rendered: String = lines
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(rendered.contains("Overview:"), "{rendered}");
+        assert!(rendered.contains("Plain user prompt without digest"), "{rendered}");
+        assert!(!rendered.contains("Milestones & Progress:"), "{rendered}");
+    }
+
+    #[test]
+    fn responsive_layout_tier_splits_wide_and_compact() {
+        assert_eq!(LayoutTier::from_width(120), LayoutTier::Wide);
+        assert_eq!(LayoutTier::from_width(90), LayoutTier::Wide);
+        assert_eq!(LayoutTier::from_width(89), LayoutTier::Compact);
+        assert_eq!(LayoutTier::from_width(60), LayoutTier::Compact);
     }
 }

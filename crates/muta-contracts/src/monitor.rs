@@ -160,6 +160,10 @@ pub struct MonitoredSession {
     /// field.
     #[serde(default)]
     pub fork_kind: SessionForkKind,
+    /// The Chronicler's structured digest (intent + history checklist), if
+    /// the session has generated one.
+    #[serde(default)]
+    pub digest: Option<crate::steward::SessionDigest>,
 }
 
 impl MonitoredSession {
@@ -185,6 +189,7 @@ impl MonitoredSession {
             project_root: String::new(),
             parent_id: None,
             fork_kind: SessionForkKind::default(),
+            digest: None,
         }
     }
 }
@@ -334,6 +339,7 @@ mod tests {
                 project_root: "/tmp/proj".into(),
                 parent_id: None,
                 fork_kind: SessionForkKind::Trunk,
+                digest: None,
             }],
         };
         let json = serde_json::to_string(&MonitorEvent::Snapshot(snapshot.clone())).unwrap();

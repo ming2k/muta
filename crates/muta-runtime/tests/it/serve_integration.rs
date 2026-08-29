@@ -33,6 +33,7 @@ fn idle_base(id: String) -> muta_contracts::MonitoredSession {
         project_root: String::new(),
         parent_id: None,
         fork_kind: muta_contracts::SessionForkKind::default(),
+        digest: None,
     }
 }
 

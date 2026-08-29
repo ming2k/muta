@@ -148,6 +148,7 @@ pub async fn build_sessions_overview(session: &SessionStore) -> Vec<SessionOverv
                 active: item.active,
                 parent_id: item.parent_id,
                 fork_kind: item.fork_kind,
+                digest: item.digest,
             })
             .collect(),
         Err(_) => Vec::new(),

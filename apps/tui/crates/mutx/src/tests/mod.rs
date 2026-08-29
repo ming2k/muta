@@ -387,6 +387,7 @@ fn overview_row(id: &str) -> muta_contracts::SessionOverview {
         updated_at: 0,
         message_count: 0,
         active: false,
+        digest: None,
     }
 }
 
@@ -437,6 +438,7 @@ fn console_host_rows(app: &mut App) {
         project_root: "/tmp/proj".to_string(),
         parent_id: None,
         fork_kind: muta_contracts::SessionForkKind::Trunk,
+        digest: None,
     };
     app.host_sessions = vec![row("aaa", 100), row("bbb", 200)];
     app.set_active_modal_for_test(Modal::Host);

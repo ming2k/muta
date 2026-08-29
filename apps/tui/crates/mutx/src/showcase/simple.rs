@@ -530,6 +530,7 @@ pub fn sessions() -> io::Result<()> {
             active: true,
             parent_id: None,
             fork_kind: muta_contracts::SessionForkKind::Trunk,
+            digest: None,
         },
         SessionOverview {
             id: "def456".into(),
@@ -540,6 +541,7 @@ pub fn sessions() -> io::Result<()> {
             active: false,
             parent_id: Some("abc123".into()),
             fork_kind: muta_contracts::SessionForkKind::Aside,
+            digest: None,
         },
         SessionOverview {
             id: "ghi789".into(),
@@ -550,6 +552,7 @@ pub fn sessions() -> io::Result<()> {
             active: false,
             parent_id: None,
             fork_kind: muta_contracts::SessionForkKind::Trunk,
+            digest: None,
         },
     ];
     let mut state = SessionsState { sessions, index: 0 };
