@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.7] - 2026-08-29
+
+### Added
+
+- **Steward Cognitive Mission Dossier Integration.** Integrated Steward's `SessionDigest` summary into `MonitoredSession` and `SessionOverview`, rendering mission titles, structured intents, and chronological milestone/progress checklists in the `/dashboard` overlay and preview modal.
+- **TUI 2-Tier Responsive Architecture (`LayoutTier`).** Added responsive layout tier handling with a 90-column breakpoint:
+  - `LayoutTier::Wide` ($\ge 90$ cols): Dual-pane cockpit with a left-side session dock (38%) and right-side cognitive mission dossier & command console (62%).
+  - `LayoutTier::Compact` ($< 90$ cols): Vertical stack optimized for narrow terminals and tmux splits where full-width cognitive dossiers avoid truncation.
+- **Global Fleet Pulse & Attention Telemetry.** Dashboard header displays aggregated fleet metrics including active sessions, running count, attention warnings (`⚠ need attention`), and total token throughput.
+
 ## [0.37.6] - 2026-08-29
 
 ### Added
@@ -5607,7 +5617,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.6...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.7...HEAD
+[0.37.7]: https://github.com/ming2k/muta/compare/v0.37.6...v0.37.7
 [0.37.6]: https://github.com/ming2k/muta/compare/v0.37.5...v0.37.6
 [0.37.5]: https://github.com/ming2k/muta/compare/v0.37.4...v0.37.5
 [0.37.4]: https://github.com/ming2k/muta/compare/v0.37.3...v0.37.4
