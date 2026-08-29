@@ -57,6 +57,28 @@ struct WorkspaceExecuteCommandArgs {
 
 /// Execute a command in a non-interactive shell.
 ///
+/// # Security & Threat Model
+///
+/// ⚠️ **HIGH-PRIVILEGE TOOL (DANGEROUS)**:
+/// When executing under [`ShellIsolation::Host`](muta_contracts::ShellIsolation::Host) (default without an active
+/// workspace sandbox container/namespace), commands run directly on the host system with the full privileges of the
+/// running process. This **bypasses all workspace boundaries and jail constraints** that are strictly enforced on
+/// filesystem tools (`read_text`, `write_file`, etc.).
+///
+/// ### Crucial Security Guidelines for Agent & Tool Integration:
+/// 1. **Principle of Least Privilege (PoLP)**:
+///    - **NEVER** expose `run_command` to read-only, analysis, exploratory, or untrusted sub-agents (e.g. `explore`
+///      sub-agents must exclude this tool).
+///    - **NEVER** expose this tool in environments where agent inputs come from untrusted external sources (such as
+///      raw web scrapers, webhook listeners, or untrusted prompt contexts) without strict human-in-the-loop approval
+///      or full virtualization/sandboxing.
+/// 2. **Prefer Atomic Tools**:
+///    - Model prompts and policies MUST actively discourage using shell commands (such as `cat`, `sed`, `echo >`,
+///      `grep`, `find`) for filesystem inspection or editing, and direct the model to dedicated workspace-bound tools.
+/// 3. **Sandbox Recommended**:
+///    - For untrusted or autonomous multi-turn loops, configure [`ShellIsolation::Workspace`](muta_contracts::ShellIsolation::Workspace)
+///      so commands run within an isolated Linux namespace/container where external filesystem access and network are restricted.
+///
 /// Commands run in the session's workspace root (captured at factory time),
 /// not the daemon process's cwd — under the unified daemon (ADR-0096) those
 /// differ whenever the daemon was first spawned from another project.

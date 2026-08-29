@@ -13,6 +13,7 @@ mod list_models;
 pub mod oauth;
 mod registry;
 
+pub use oauth::OAuthCredentialSource;
 pub use list_models::{
     DiscoveredModel, DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest,
     ModelDiscoveryUpdate, ModelListError, discover_models, list_models, models_endpoint_for,

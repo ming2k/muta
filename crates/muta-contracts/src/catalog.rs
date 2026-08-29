@@ -151,9 +151,19 @@ pub struct Channel {
     /// the remote overlay in [`Channel::capabilities`]. `None` means the
     /// user has no opinion and the two lower layers decide.
     pub user_overrides: Option<crate::model::CapabilityOverrides>,
+    /// Optional dynamic credential source for OAuth / rotating tokens.
+    /// When `None`, falls back to static `api_key`.
+    pub credentials: Option<std::sync::Arc<dyn crate::CredentialSource>>,
 }
 
 impl Channel {
+    /// Return the active credential source for this channel.
+    pub fn credentials_source(&self) -> std::sync::Arc<dyn crate::CredentialSource> {
+        self.credentials
+            .clone()
+            .unwrap_or_else(|| crate::static_credential(self.api_key.clone()))
+    }
+
     /// Whether this channel has a usable API key. Keyless transports
     /// (the in-memory mock) always report ready; the rest require a non-empty
     /// key.
@@ -291,6 +301,7 @@ mod tests {
                 model: "deepseek-v4-flash".to_string(),
                 remote: None,
                 user_overrides: None,
+                credentials: None,
             }],
             default_channel: 0,
             builtin: true,
@@ -324,6 +335,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
+            credentials: None,
         };
         assert!(!channel.key_ready());
     }
@@ -356,6 +368,7 @@ mod tests {
             model: "minimax-m3".to_string(),
             remote: None,
             user_overrides: None,
+            credentials: None,
         };
         assert!(!channel.key_ready(), "empty key must not be ready");
     }
@@ -383,6 +396,7 @@ mod tests {
                     model: "glm-5.2".to_string(),
                     remote: None,
                     user_overrides: None,
+                    credentials: None,
                 },
                 Channel {
                     id: "minimax-m3".to_string(),
@@ -398,6 +412,7 @@ mod tests {
                     model: "minimax-m3".to_string(),
                     remote: None,
                     user_overrides: None,
+                    credentials: None,
                 },
             ],
             default_channel: 0,
@@ -456,6 +471,7 @@ mod tests {
                 model: "fixture-alpha".to_string(),
                 remote: None,
                 user_overrides: None,
+                credentials: None,
             }],
             default_channel: 0,
             builtin: true,

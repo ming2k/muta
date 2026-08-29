@@ -12,9 +12,9 @@
 //! attribution) live in one place, while each API's request *shape* lives in
 //! its own module.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use muta_contracts::TokenUsage;
+use muta_contracts::{CredentialSource, SecretString, TokenUsage, static_credential};
 
 pub use muta_contracts::client_identity::*;
 
@@ -27,7 +27,9 @@ pub use muta_contracts::client_identity::*;
 /// attributed to the logical channel even after a mid-session switch.
 #[derive(Clone)]
 pub struct Endpoint {
-    /// API key. An *empty* key means "keyless": OpenAI-compatible relays omit
+    /// Dynamic or static credential source.
+    pub credentials: Arc<dyn CredentialSource>,
+    /// Fallback static API key string. An *empty* key means "keyless": OpenAI-compatible relays omit
     /// the `Authorization` header rather than send an empty bearer token;
     /// Google still appends `?key=` (a relay that ignores it tolerates the
     /// empty value). Each provider's auth layer decides.
@@ -49,12 +51,61 @@ impl Endpoint {
     /// `with_base_url` / `with_base_url_and_user_agent` ladder.
     pub fn new(api_key: String, model: String, base_url: impl Into<String>, id: &str) -> Self {
         Self {
+            credentials: static_credential(api_key.clone()),
             api_key,
             model,
             base_url: base_url.into(),
             user_agent: MUTA_USER_AGENT.to_string(),
             id: id.to_string(),
         }
+    }
+
+    /// Construct an endpoint with a dynamic [`CredentialSource`].
+    pub fn with_credentials(
+        credentials: Arc<dyn CredentialSource>,
+        model: String,
+        base_url: impl Into<String>,
+        id: &str,
+    ) -> Self {
+        Self {
+            credentials,
+            api_key: String::new(),
+            model,
+            base_url: base_url.into(),
+            user_agent: MUTA_USER_AGENT.to_string(),
+            id: id.to_string(),
+        }
+    }
+
+    /// Attach a dynamic credential source to this endpoint.
+    pub fn with_credentials_source(mut self, credentials: Arc<dyn CredentialSource>) -> Self {
+        self.credentials = credentials;
+        self
+    }
+
+    /// Resolve the live API key / bearer token for an outbound request.
+    pub async fn resolve_api_key(&self) -> Result<SecretString, String> {
+        let key = self.credentials.resolve_token().await?;
+        if key.expose_secret().is_empty() && !self.api_key.is_empty() {
+            return Ok(SecretString::from(self.api_key.clone()));
+        }
+        Ok(key)
+    }
+
+    /// Force a fresh token exchange with upstream (e.g. for reactive 401 recovery).
+    pub async fn force_refresh_api_key(&self) -> Result<SecretString, String> {
+        self.credentials.force_refresh().await
+    }
+
+    /// Whether this endpoint uses dynamic OAuth credentials.
+    pub fn is_oauth(&self) -> bool {
+        self.credentials.is_oauth()
+    }
+
+    /// Stamp the user-agent header value.
+    pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
+        self.user_agent = user_agent.into();
+        self
     }
 
     /// Stamp an attribution id after construction (the catalog does this with

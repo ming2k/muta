@@ -86,13 +86,29 @@ impl AnthropicMessagesProvider {
         let thinking = ThinkingConfig::for_model(&muta_contracts::model::resolve(&model));
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
-            endpoint: Endpoint {
-                api_key,
-                model,
-                base_url: base_url.to_string(),
-                user_agent: user_agent.to_string(),
-                id: "anthropic".to_string(),
-            },
+            endpoint: Endpoint::new(api_key, model, base_url, "anthropic").with_user_agent(user_agent),
+            turn: TurnState::new(),
+            client: Client::new(),
+            max_tokens: 8192,
+            thinking,
+            capabilities,
+            copilot: false,
+            last_thinking_signature: signature::SignatureStash::shared(),
+        }
+    }
+
+    /// Build a provider with dynamic credentials.
+    pub fn with_credentials(
+        credentials: std::sync::Arc<dyn muta_contracts::CredentialSource>,
+        model: String,
+        base_url: &str,
+        user_agent: &str,
+    ) -> Self {
+        let thinking = ThinkingConfig::for_model(&muta_contracts::model::resolve(&model));
+        let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
+        Self {
+            endpoint: Endpoint::with_credentials(credentials, model, base_url, "anthropic")
+                .with_user_agent(user_agent),
             turn: TurnState::new(),
             client: Client::new(),
             max_tokens: 8192,

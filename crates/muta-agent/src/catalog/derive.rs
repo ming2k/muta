@@ -168,6 +168,21 @@ pub fn derive_channel(
         }
     };
 
+    let credentials: Option<std::sync::Arc<dyn muta_contracts::CredentialSource>> =
+        if connection.auth.is_oauth() {
+            Some(std::sync::Arc::new(
+                muta_providers::oauth::OAuthCredentialSource::new(
+                    &connection.id,
+                    connection.preset_id.as_deref(),
+                    connection.auth,
+                ),
+            ))
+        } else {
+            Some(std::sync::Arc::new(
+                muta_contracts::StaticCredentialSource::new(api_key.clone()),
+            ))
+        };
+
     Channel {
         id: model.to_string(),
         label: model.to_string(),
@@ -178,6 +193,7 @@ pub fn derive_channel(
         user_overrides: route_settings
             .and_then(|r| r.capability_overrides.clone())
             .filter(|o| !o.is_empty()),
+        credentials,
     }
 }
 

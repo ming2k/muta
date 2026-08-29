@@ -56,6 +56,9 @@ pub use tool_output::{PatchOp, ShellTermination, StdinPolicy, ToolOutput, ToolSt
 pub mod tool_access;
 pub use tool_access::{ToolAccess, ToolAccesses, ToolFileAccessOperation};
 
+pub mod auth;
+pub use auth::{CredentialSource, StaticCredentialSource, static_credential};
+
 pub mod tool_validation;
 
 pub mod capability;

@@ -940,7 +940,7 @@ async fn run_oauth(
     true
 }
 
-async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str) {
+pub(crate) async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str) {
     use muta_providers::oauth::{AuthStore, OAuth};
 
     let connections = Connections::load();
@@ -976,10 +976,13 @@ async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str) {
             let _ = store.save();
         }
         Err(e) => {
-            tracing::warn!(error = %e, provider = %provider_id, "OAuth: token refresh failed; clearing store");
-            let mut store = AuthStore::load();
-            store.remove(provider_id);
-            let _ = store.save();
+            tracing::warn!(error = %e, provider = %provider_id, "OAuth: token refresh failed");
+            if e.is_permanent_grant_error() {
+                tracing::error!(provider = %provider_id, "OAuth: refresh token permanently invalid; clearing store");
+                let mut store = AuthStore::load();
+                store.remove(provider_id);
+                let _ = store.save();
+            }
         }
     }
 }

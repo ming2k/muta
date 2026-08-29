@@ -13,6 +13,7 @@
 pub mod browser;
 pub mod chatgpt_device;
 pub mod config;
+pub mod credential_source;
 pub mod device;
 pub mod manual;
 pub mod pkce;
@@ -31,6 +32,7 @@ pub use config::{
     OAuthConfigBuilder, PkceMode, PortMode, TokenRequestFormat, XAI, chatgpt_preset,
     config_by_provider_id, copilot_preset, google_antigravity_preset, xai_preset,
 };
+pub use credential_source::OAuthCredentialSource;
 pub use device::{DeviceCodeResponse, poll_device_code, request_device_code};
 pub use manual::parse_authorization_response;
 pub use pkce::{PkceCodes, new_nonce, new_state};
@@ -68,6 +70,21 @@ impl std::fmt::Display for AuthError {
             AuthError::DeviceCode(msg) => write!(f, "device authorization: {msg}"),
             AuthError::Cancelled => write!(f, "login was cancelled"),
             AuthError::Timeout => write!(f, "login timed out"),
+        }
+    }
+}
+
+impl AuthError {
+    /// Whether this error indicates an invalid/revoked refresh token on the identity provider.
+    pub fn is_permanent_grant_error(&self) -> bool {
+        match self {
+            AuthError::TokenEndpoint { body, .. } => {
+                let lower = body.to_lowercase();
+                lower.contains("invalid_grant")
+                    || lower.contains("token_revoked")
+                    || lower.contains("unauthorized_client")
+            }
+            _ => false,
         }
     }
 }
@@ -311,7 +328,16 @@ impl OAuth {
         {
             return Ok((stored.access.clone(), stored));
         }
+        self.force_resolve_access_token(stored).await
+    }
 
+    /// Force a fresh token exchange with upstream regardless of remaining expiration TTL.
+    /// Concurrency-safe: concurrent callers share one single-flight HTTP call.
+    pub async fn force_resolve_access_token(
+        &self,
+        stored: TokenSet,
+    ) -> Result<(SecretString, TokenSet), AuthError> {
+        let now = now_ms();
         let guard = {
             let mut slot = self
                 .refresh_in_flight

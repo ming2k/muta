@@ -90,12 +90,40 @@ impl GoogleProvider {
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
             endpoint: Endpoint {
+                credentials: muta_contracts::static_credential(api_key.clone()),
                 api_key,
                 model,
                 base_url: base_url.trim_end_matches('/').to_string(),
                 user_agent: user_agent.to_string(),
                 id: "google".to_string(),
             },
+            turn: TurnState::new(),
+            client: Client::new(),
+            last_thought_signatures: Arc::new(Mutex::new(Map::new())),
+            last_text_thought_signature: Arc::new(Mutex::new(None)),
+            capabilities,
+            reasoning_effort: None,
+            project_id: None,
+            thinking_rejected: Arc::new(Mutex::new(false)),
+        }
+    }
+
+    /// Build a provider with dynamic credentials.
+    pub fn with_credentials(
+        credentials: std::sync::Arc<dyn muta_contracts::CredentialSource>,
+        model: String,
+        base_url: &str,
+        user_agent: &str,
+    ) -> Self {
+        let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
+        Self {
+            endpoint: Endpoint::with_credentials(
+                credentials,
+                model,
+                base_url.trim_end_matches('/'),
+                "google",
+            )
+            .with_user_agent(user_agent),
             turn: TurnState::new(),
             client: Client::new(),
             last_thought_signatures: Arc::new(Mutex::new(Map::new())),
@@ -156,20 +184,63 @@ impl GoogleProvider {
         &self,
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
-        let client = self.client.http();
-        let (url, headers, body) = self.prepare_request(request, true, true);
-
-        let response = client
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| transport_error("Google", error))?;
+        let response = self
+            .send_google_request(&request, true, true, None)
+            .await?;
         let response = ensure_success(response, "Google").await.map_err(|e| {
             response::clarify_error(e, &self.endpoint.model, &self.endpoint.base_url)
         })?;
         Ok(self.wrap_event_stream(response))
+    }
+
+    async fn send_google_request(
+        &self,
+        request: &ModelRequest,
+        is_stream: bool,
+        omit_thinking: bool,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<reqwest::Response, String> {
+        let client = self.client.http();
+        let api_key = self.endpoint.resolve_api_key().await?;
+        let (url, headers, body) = self.prepare_request_with_key(
+            request.clone(),
+            is_stream,
+            omit_thinking,
+            api_key.expose_secret(),
+        );
+
+        let mut req_builder = client.post(&url).headers(headers.clone()).json(&body);
+        if let Some(t) = timeout {
+            req_builder = req_builder.timeout(t);
+        }
+        let response = req_builder
+            .send()
+            .await
+            .map_err(|error| transport_error("Google", error))?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
+            tracing::warn!(
+                model = %self.endpoint.model,
+                "OAuth token rejected by Google (401 Unauthorized); attempting force-refresh and retry"
+            );
+            if let Ok(refreshed_key) = self.endpoint.force_refresh_api_key().await {
+                let (retry_url, retry_headers, retry_body) = self.prepare_request_with_key(
+                    request.clone(),
+                    is_stream,
+                    omit_thinking,
+                    refreshed_key.expose_secret(),
+                );
+                let mut retry_builder = client.post(&retry_url).headers(retry_headers).json(&retry_body);
+                if let Some(t) = timeout {
+                    retry_builder = retry_builder.timeout(t);
+                }
+                if let Ok(retried_resp) = retry_builder.send().await {
+                    return Ok(retried_resp);
+                }
+            }
+        }
+
+        Ok(response)
     }
 
     /// Wrap a successful SSE response into the event stream the harness
@@ -292,21 +363,16 @@ impl GoogleProvider {
             model = %self.endpoint.model,
             "upstream rejected thinkingConfig; retrying without disclosed thinking (chain withheld by upstream)"
         );
-        let client = self.client.http();
-        let (url, headers, body) = self.prepare_request(request, false, true);
-        let response = client
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .timeout(self.client.request_timeout())
-            .send()
-            .await
-            .map_err(|error| transport_error("Google", error))?;
+        let response = self
+            .send_google_request(&request, false, true, Some(self.client.request_timeout()))
+            .await?;
         let response = ensure_success(response, "Google").await.map_err(|e| {
             response::clarify_error(e, &self.endpoint.model, &self.endpoint.base_url)
         })?;
+
         let response_json: serde_json::Value = decode_response_json(response, "Google").await?;
         let root = response_json.get("response").unwrap_or(&response_json);
+
         if let Some(err) = response_json.get("error").or_else(|| root.get("error")) {
             return Err(response::clarify_error(
                 format!("Google Error: {}", err),
@@ -314,18 +380,36 @@ impl GoogleProvider {
                 &self.endpoint.base_url,
             ));
         }
+
         if let Some(usage) = response::usage(&root["usageMetadata"]) {
             self.turn.stash_usage(usage);
         }
+
         response::message(&response_json)
     }
 
+    #[allow(dead_code)]
     fn prepare_request(
         &self,
         request: ModelRequest,
         is_stream: bool,
         omit_thinking: bool,
     ) -> (String, reqwest::header::HeaderMap, serde_json::Value) {
+        self.prepare_request_with_key(request, is_stream, omit_thinking, &self.endpoint.api_key)
+    }
+
+    fn prepare_request_with_key(
+        &self,
+        request: ModelRequest,
+        is_stream: bool,
+        omit_thinking: bool,
+        api_key: &str,
+    ) -> (String, reqwest::header::HeaderMap, serde_json::Value) {
+        let key = if !api_key.is_empty() {
+            api_key
+        } else {
+            &self.endpoint.api_key
+        };
         let include_thoughts = self.capabilities.reasoning() && !omit_thinking;
         let thinking = if omit_thinking {
             None
@@ -369,8 +453,8 @@ impl GoogleProvider {
                 format!("{base}/v1internal:{action}")
             };
 
-            if !self.endpoint.api_key.is_empty()
-                && let Ok(bearer) = format!("Bearer {}", self.endpoint.api_key).parse()
+            if !key.is_empty()
+                && let Ok(bearer) = format!("Bearer {key}").parse()
             {
                 headers.insert("Authorization", bearer);
             }
@@ -419,13 +503,13 @@ impl GoogleProvider {
                 request::stream_url(
                     &self.endpoint.base_url,
                     &self.endpoint.model,
-                    &self.endpoint.api_key,
+                    key,
                 )
             } else {
                 request::url(
                     &self.endpoint.base_url,
                     &self.endpoint.model,
-                    &self.endpoint.api_key,
+                    key,
                 )
             };
             (url, headers, raw_body)
@@ -502,23 +586,10 @@ impl Provider for GoogleProvider {
     }
 
     async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
-        let client = self.client.http();
         let omit = self.thinking_was_rejected();
-        let (url, headers, body) = self.prepare_request(request.clone(), false, omit);
-
-        // Non-streaming, sent through `Client::http` directly (the error
-        // clarification below needs the raw helpers), so stamp the shared
-        // non-streaming request bound here — `Client::send_json` applies it
-        // for the other protocols. The streaming paths deliberately carry no
-        // overall timeout (see the `client` module docs).
-        let response = client
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .timeout(self.client.request_timeout())
-            .send()
-            .await
-            .map_err(|error| transport_error("Google", error))?;
+        let response = self
+            .send_google_request(&request, false, omit, Some(self.client.request_timeout()))
+            .await?;
         let response = match ensure_success(response, "Google").await {
             Ok(response) => response,
             Err(e) => {
@@ -555,17 +626,10 @@ impl Provider for GoogleProvider {
         &self,
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
-        let client = self.client.http();
         let omit = self.thinking_was_rejected();
-        let (url, headers, body) = self.prepare_request(request.clone(), true, omit);
-
-        let response = client
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| transport_error("Google", error))?;
+        let response = self
+            .send_google_request(&request, true, omit, None)
+            .await?;
         let response = match ensure_success(response, "Google").await {
             Ok(response) => response,
             Err(e) => {
@@ -598,20 +662,10 @@ impl Provider for GoogleProvider {
         &self,
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
-        let client = self.client.http();
-        // A channel whose upstream already refused `thinkingConfig` stops
-        // asking for it: one probe request per process pays for the knowledge,
-        // and every later turn streams thinkingless from the start.
         let omit = self.thinking_was_rejected();
-        let (url, headers, body) = self.prepare_request(request.clone(), true, omit);
-
-        let response = client
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| transport_error("Google", error))?;
+        let response = self
+            .send_google_request(&request, true, omit, None)
+            .await?;
         let response = match ensure_success(response, "Google").await {
             Ok(response) => response,
             Err(e) => {

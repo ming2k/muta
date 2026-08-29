@@ -330,8 +330,11 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // an unknown default). Install the explicit `NoProvider` sentinel so the
     // holder type is satisfied; the chat dispatch refuses up-front with a
     // user-facing notification while this sentinel is live.
+    let provider_id = catalog::default_provider_id(&config);
+    crate::handlers_provider::refresh_oauth_if_needed(&config, provider_id).await;
+
     let initial_provider: Arc<dyn Provider> =
-        catalog::build_provider_for(&config, catalog::default_provider_id(&config))
+        catalog::build_provider_for(&config, provider_id)
             .unwrap_or_else(|| Arc::new(muta_agent::NoProvider));
 
     let provider_holder = Arc::new(RwLock::new(initial_provider));

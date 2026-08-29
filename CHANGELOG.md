@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.9] - 2026-08-29
+
+### Fixed
+
+- **Dynamic OAuth Credential Architecture & Zero-Touch Token Lifecycle.**
+  - **Dynamic `CredentialSource` Abstraction**: Replaced static snapshot API key strings across `Endpoint` and LLM providers (`GoogleProvider`, `AnthropicMessagesProvider`, `OpenAiChatCompletionsProvider`, `OpenAiResponsesProvider`) with dynamic `CredentialSource` providers that perform just-in-time (JIT) resolution with zero overhead (<1µs fast path).
+  - **Self-Healing `OAuthCredentialSource` Engine**: Implemented single-flight concurrency gated token refreshing, automatic TTL threshold checks (2-minute skew buffer), and atomic persistence to `~/.muta/auth.toml`.
+  - **Reactive HTTP 401 Interception**: `GoogleProvider` now intercepts upstream HTTP 401 Unauthorized responses on OAuth channels, triggers a force-refresh of the access token, and retries the request transparently.
+  - **Resilient Error Classification**: Classified OAuth refresh errors into transient network errors and permanent grant errors (`invalid_grant`), ensuring network fluctuations never delete stored refresh tokens.
+  - **Cold Start & Long-Running Session Stability**: Eliminates initial startup 401 errors for Google Gemini and multi-hour session token expiry without requiring manual provider switching.
+
 ## [0.37.8] - 2026-08-29
 
 ### Added
@@ -5631,7 +5642,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.8...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.9...HEAD
+[0.37.9]: https://github.com/ming2k/muta/compare/v0.37.8...v0.37.9
 [0.37.8]: https://github.com/ming2k/muta/compare/v0.37.7...v0.37.8
 [0.37.7]: https://github.com/ming2k/muta/compare/v0.37.6...v0.37.7
 [0.37.6]: https://github.com/ming2k/muta/compare/v0.37.5...v0.37.6

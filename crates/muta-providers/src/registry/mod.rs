@@ -272,6 +272,7 @@ pub fn build_provider_for_channel(
     entry_id: &str,
     session_id: Option<&str>,
 ) -> Arc<dyn Provider> {
+    let credentials = channel.credentials_source();
     match &channel.transport {
         Transport::Google {
             base_url,
@@ -280,8 +281,8 @@ pub fn build_provider_for_channel(
             project_id,
         } => {
             let capabilities = channel.capabilities();
-            let mut provider = GoogleProvider::with_base_url_and_user_agent(
-                channel.api_key.expose_secret().to_string(),
+            let mut provider = GoogleProvider::with_credentials(
+                credentials,
                 channel.model.clone(),
                 base_url,
                 user_agent,
@@ -301,8 +302,8 @@ pub fn build_provider_for_channel(
             thinking,
             copilot,
         } => {
-            let mut provider = AnthropicMessagesProvider::with_base_url_and_user_agent(
-                channel.api_key.expose_secret().to_string(),
+            let mut provider = AnthropicMessagesProvider::with_credentials(
+                credentials,
                 channel.model.clone(),
                 base_url,
                 user_agent,
@@ -361,8 +362,8 @@ pub fn build_provider_for_channel(
             // the picker shows (GPT→medium, others→high clamped to the
             // ladder); an explicit channel override still wins.
             let effective_effort = effective_channel_effort(*effort, &capabilities);
-            let provider = OpenAiChatCompletionsProvider::with_base_url_and_user_agent(
-                channel.api_key.expose_secret().to_string(),
+            let provider = OpenAiChatCompletionsProvider::with_credentials(
+                credentials,
                 channel.model.clone(),
                 base_url,
                 user_agent,
@@ -385,8 +386,8 @@ pub fn build_provider_for_channel(
             // Same wire-level default as the chat-completions arm above —
             // see the comment there.
             let effective_effort = effective_channel_effort(*effort, &capabilities);
-            let provider = OpenAiResponsesProvider::new(
-                channel.api_key.expose_secret().to_string(),
+            let provider = OpenAiResponsesProvider::with_credentials(
+                credentials,
                 channel.model.clone(),
                 base_url,
                 account_id.clone(),
@@ -562,6 +563,7 @@ mod build_tests {
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
+            credentials: None,
         };
         let provider = build_provider_for_channel(&channel, "openai", None);
         assert_eq!(provider.provider_id(), "openai");
@@ -589,6 +591,7 @@ mod build_tests {
             model: "glm-5.3".to_string(),
             remote: None,
             user_overrides: None,
+            credentials: None,
         };
         let provider = build_provider_for_channel(&channel, "zai-code", None);
         assert_eq!(provider.effort(), Some(muta_contracts::Effort::High));
@@ -620,6 +623,7 @@ mod build_tests {
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
+            credentials: None,
         };
         let provider = build_provider_for_channel(&channel, "openai", None);
         assert_eq!(provider.effort(), None);
@@ -644,6 +648,7 @@ mod build_tests {
             model: "minimax-m3".to_string(),
             remote: None,
             user_overrides: None,
+            credentials: None,
         };
         let provider = build_provider_for_channel(&channel, "opencode-go", None);
         assert_eq!(provider.provider_id(), "opencode-go");

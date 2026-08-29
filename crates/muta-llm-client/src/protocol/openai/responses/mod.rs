@@ -53,13 +53,26 @@ impl OpenAiResponsesProvider {
     ) -> Self {
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
-            endpoint: Endpoint {
-                api_key: access_token,
-                model,
-                base_url: base_url.to_string(),
-                user_agent: crate::MUTA_USER_AGENT.to_string(),
-                id: "chatgpt".to_string(),
-            },
+            endpoint: Endpoint::new(access_token, model, base_url, "chatgpt"),
+            turn: TurnState::new(),
+            client: Client::new(),
+            reasoning_effort: None,
+            account_id,
+            capabilities,
+            copilot: false,
+        }
+    }
+
+    /// Build a provider with dynamic credentials.
+    pub fn with_credentials(
+        credentials: std::sync::Arc<dyn muta_contracts::CredentialSource>,
+        model: String,
+        base_url: &str,
+        account_id: Option<String>,
+    ) -> Self {
+        let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
+        Self {
+            endpoint: Endpoint::with_credentials(credentials, model, base_url, "chatgpt"),
             turn: TurnState::new(),
             client: Client::new(),
             reasoning_effort: None,
