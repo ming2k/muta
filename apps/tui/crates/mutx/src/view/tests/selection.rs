@@ -9,8 +9,8 @@ fn virtual_index_selects_only_chunks_intersecting_the_viewport() {
         .collect::<Vec<_>>();
     let mut cache = HeightCache::default();
     cache.prepare(80);
-    // Four-line bodies plus one boundary row owned by each following
-    // message: chunks begin at 0, 4, 9, and 14.
+    // Top scroll padding (1 row), four-line bodies, inter-message gap (1 row),
+    // and bottom scroll padding (1 row): chunks begin at 0, 5, 10, and 15.
     for message in &messages {
         cache.set(message.id, 4);
     }
@@ -20,9 +20,9 @@ fn virtual_index_selects_only_chunks_intersecting_the_viewport() {
         .expect("all message heights are cached");
     assert_eq!(window.message_start, 1);
     assert_eq!(window.message_end, 2);
-    assert_eq!(window.prefix_lines, 4);
-    assert_eq!(window.skip_rows, 2);
-    assert_eq!(window.total_lines, 19);
+    assert_eq!(window.prefix_lines, 5);
+    assert_eq!(window.skip_rows, 1);
+    assert_eq!(window.total_lines, 21);
 }
 
 #[test]
@@ -44,8 +44,8 @@ fn virtual_index_uses_segmented_same_turn_geometry() {
     assert_eq!(window.message_start, 0);
     assert_eq!(window.message_end, 3);
     assert_eq!(
-        window.total_lines, 9,
-        "header + header gap + thinking + segment gap + flush tool batch"
+        window.total_lines, 11,
+        "top gap + header + header gap + thinking + segment gap + flush tool batch + bottom gap"
     );
 }
 

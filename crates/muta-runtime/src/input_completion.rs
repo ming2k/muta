@@ -116,7 +116,7 @@ impl InputCompletionEngine {
                 insert_text: alias.target.clone(),
                 replace_start: 0,
                 replace_end,
-                kind: InputCompletionKind::Slash,
+                kind: InputCompletionKind::SlashAlias,
                 alias_of: Some(alias.target.clone()),
                 command: target_spec.cloned(),
             });
@@ -428,9 +428,9 @@ fn path_item(
         InputCompletionKind::PathFile | InputCompletionKind::PathExplicit => {
             (at_start_byte, label.to_string())
         }
-        InputCompletionKind::Slash | InputCompletionKind::Intent => {
-            (at_start_byte, label.to_string())
-        }
+        InputCompletionKind::Slash
+        | InputCompletionKind::SlashAlias
+        | InputCompletionKind::Intent => (at_start_byte, label.to_string()),
     };
     if matches!(
         kind,
@@ -801,6 +801,7 @@ mod tests {
             .iter()
             .find(|i| i.label == "/config")
             .expect("alias /config surfaces for prefix /confi");
+        assert_eq!(config_row.kind, InputCompletionKind::SlashAlias);
         assert_eq!(config_row.insert_text, "/settings");
         assert_eq!(config_row.alias_of.as_deref(), Some("/settings"));
         assert_eq!(
@@ -819,6 +820,7 @@ mod tests {
             .iter()
             .find(|i| i.label == "/settings")
             .expect("canonical /settings also offered");
+        assert_eq!(settings_row.kind, InputCompletionKind::Intent);
         assert_eq!(settings_row.alias_of, None);
         assert_eq!(settings_row.insert_text, "/settings");
 
@@ -833,6 +835,7 @@ mod tests {
             .iter()
             .find(|i| i.label == "/config")
             .expect("alias row persists at exact match");
+        assert_eq!(row.kind, InputCompletionKind::SlashAlias);
         assert_eq!(row.insert_text, "/settings");
         assert_eq!(row.alias_of.as_deref(), Some("/settings"));
     }

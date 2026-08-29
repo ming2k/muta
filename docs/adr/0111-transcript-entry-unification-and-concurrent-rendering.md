@@ -35,25 +35,40 @@ or inline joins (ADR-0106/0108). This introduced several friction points:
 
 ### 1. Unified `Entry` mental model
 
-The transcript is formalized as an ordered stream of **Entries** (`TranscriptEntry`):
+The transcript is formalized as an ordered stream of **Entries** (`TranscriptEntry` / `EntryKind`), categorized into exactly four symmetrical top-level entities:
 
-- **Turn Entry**: Initiated by a user prompt (or system turn). Contains a
-  distinct Header (`> user prompt · HH:MM` or `> turn N · model · HH:MM`)
-  followed by the conversational/reasoning body (thinking traces, tool steps,
-  assistant text).
-- **Command Entry**: Initiated by a slash command or shell passthrough. Contains
-  a generic Header (`⌘ command · HH:MM` or `❯ command · HH:MM`) where both glyph
-  and label share the indicator color, followed by its body containing the
-  concrete invocation (`/autopilot on`, `!cargo test`) and unfolded result content.
+1. **User Prompt Entry (`UserPrompt`)**: Initiated by the user. Categorized by prompt mode:
+   - `Normal`: Drives a new execution round (`< round N · HH:MM`).
+   - `Steer`: Injected mid-turn steering input (`< ↳ steer · HH:MM`).
+   - Followed by the raw prompt text indented at body margin.
 
-Every Entry shares the universal structure:
+2. **Model Turn Entry (`ModelTurn`)**: Container representing an agent ReAct work turn.
+   - **Header**: `> turn N  model (effort) · HH:MM`
+   - **Body (Composite Pattern)**: An ordered sequence of embedded `TurnComponent` units:
+     - `Reasoning(ReasoningTrace)`: Thinking and CoT trace.
+     - `ToolStep(ToolStep)`: Tool execution step and structured output.
+     - `RunnerDelegate(RunnerTask)`: Subagent / Runner delegation.
+     - `Prose(Vec<Block>)`: Markdown prose explanation.
+
+3. **Command Entry (`Command`)**: Control-plane or shell execution unit owning both its input and output.
+   - Unified `⌘` indicator glyph with clear sub-kind differentiation:
+     - `CommandKind::Harness` (`/review`, `/models`, `/autopilot`): Renders `⌘ harness · HH:MM`.
+     - `CommandKind::Shell` (`!cargo test`): Renders `⌘ shell · HH:MM`.
+   - **Body**: Concrete invocation text, followed by unfolded result blocks upon completion.
+
+4. **Notice Entry (`Notice`)**: Non-turn status, alert, or system event. Categorized strictly by its **initiating boundary / subject (`NoticeOrigin`)**:
+   - `NoticeOrigin::System`: Local runtime, policy, or host events (`trust`, `review`, `turn guard`, `command ack`, `interrupted`). Subsumes round interrupts as Warning notices.
+   - `NoticeOrigin::Provider`: Upstream model gateway, network, or rate-limit events (`provider`, HTTP 429 backoff).
+   - **Header**: Severity icon (`! `, `▲ `, `ℹ `) + Topic label + right-aligned `HH:MM`.
+
+Every Entry shares the universal typography and vertical rhythm:
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ Header: [Glyph] [Category/Role] · [HH:MM]                   │  ← Boundary & Indicator (e.g. ⌘ command · 00:41)
+│ Header: [Glyph] [Category/Role] · [HH:MM]                   │  ← Boundary & Indicator (e.g. ⌘ harness · 00:41)
 ├─────────────────────────────────────────────────────────────┤
 │ (1 blank row gap - universal entry design constraint)       │  ← 1-Row Gap (TURN_HEADER_BODY_GAP_ROWS)
 ├─────────────────────────────────────────────────────────────┤
-│ Body:   [Concrete Invocation / Direct Result / Stream]      │  ← Unfolded Content
+│ Body:   [Concrete Invocation / Direct Result / Stream]      │  ← Unfolded Content (indented 2 cols)
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -61,12 +76,12 @@ Every Entry shares the universal structure:
 
 Command entries discard both the card identity bar (`┃`) and the collapsible
 folding mechanism (`▸`/`▾`):
-- **Header**: Renders as `⌘ command · HH:MM` (or `❯ command · HH:MM`)
-  where `⌘ command` shares the bold indicator tone (`info` for slash, `ok` for shell).
+- **Header**: Renders as `⌘ harness · HH:MM` (or `⌘ shell · HH:MM`)
+  where `⌘` and label share the bold indicator tone (`info` for harness, `ok` for shell).
 - **Universal Header-Body Gap**: Exactly 1 blank row (`TURN_HEADER_BODY_GAP_ROWS = 1`)
   separates the Entry header and its body content, preserving the universal
   transcript typography rhythm.
-- **Body**: Displays the concrete command invocation (e.g. `/autopilot on`),
+- **Body**: Displays the concrete command invocation (e.g. `/autopilot on` or `!cargo test`),
   followed by the result blocks when completed.
 - When **Pending** (`CommandPhase::Pending`), the Entry renders its Header,
   the 1-row gap, and the invocation in muted running style.

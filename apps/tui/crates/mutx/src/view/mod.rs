@@ -77,7 +77,6 @@ use crate::{composer, empty_state};
 // Re-exported so layout-strategy code reaches them via the crate-root facade.
 pub(crate) use crate::message_body::draw_message_body;
 pub(crate) use crate::notice::draw_notice;
-pub(crate) use crate::round_interrupt::draw_round_interrupt;
 
 use mutx_engine::{
     Alignment, Block as RtBlock, Constraint, Direction, Frame, Layout, Line, Paragraph, Rect, Span,

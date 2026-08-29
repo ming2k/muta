@@ -93,4 +93,4 @@ gate all belong to whichever session the user is viewing.
 - [ADR-0017](0017-side-conversations.md) — side sessions and the parent link
 - [ADR-0103](0103-btw-background-asides.md) — background asides; this ADR's
   direct predecessor
-- [ADR-0093](0093-daemon-dashboard.md) — the monitor wire the lineage rides
+- [ADR-0093](0093-daemon-observability-monitor-protocol.md) — the monitor wire the lineage rides

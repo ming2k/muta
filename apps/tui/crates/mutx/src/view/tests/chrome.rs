@@ -447,24 +447,12 @@ fn footer_keeps_one_blank_row_below_transcript_when_active_or_idle() {
             transcript_height = rendered.view_height;
         });
 
-        // The footer always begins after a permanent one-row gap below the
-        // transcript. The queue bar in this fixture is empty, so it is
-        // hidden; the anchor is whichever region leads the footer — the
-        // activity bar when responding, the input box when idle — both of
-        // which sit directly under the gap.
+        // The footer stack attaches directly below the transcript viewport
+        // (FOOTER_TOP_GAP_ROWS = 0). The queue bar in this fixture is empty,
+        // so the leading footer element is the activity bar when responding
+        // or the input box when idle.
         let expected_anchor = 1 + transcript_height + FOOTER_TOP_GAP_ROWS;
         assert_eq!(footer_anchor_y, expected_anchor);
-        // The permanent one-row gap sits directly below the transcript,
-        // above whichever footer region leads (activity bar when
-        // responding, queue bar when idle).
-        let separator_y = 1 + transcript_height;
-        let width = terminal.buffer().area().width as usize;
-        let row_start = separator_y as usize * width;
-        let separator = &terminal.buffer().content[row_start..row_start + width];
-        assert!(
-            separator.iter().all(|cell| cell.symbol() == " "),
-            "separator row must stay blank while activity={activity:?}"
-        );
     }
 
     assert_gap("responding");

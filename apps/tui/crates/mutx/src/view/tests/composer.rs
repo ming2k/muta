@@ -1849,9 +1849,15 @@ fn composer_overflow_indicates_hidden_lines_and_position() {
     // rows below → the ↓ indicator, and the readout names the first row.
     let mut scroll_top = 0usize;
     let mut terminal = draw(0, &mut scroll_top);
-    assert_eq!(scroll_top, 0, "viewport rests at the top with the caret there");
+    assert_eq!(
+        scroll_top, 0,
+        "viewport rests at the top with the caret there"
+    );
     let top = frame_row_text(&mut terminal, 0);
-    assert!(top.trim().is_empty(), "no ↑ while nothing hides above: {top:?}");
+    assert!(
+        top.trim().is_empty(),
+        "no ↑ while nothing hides above: {top:?}"
+    );
     let gap = frame_row_text(&mut terminal, 2);
     assert!(
         gap.contains('↓') && gap.trim_end().ends_with("lines"),

@@ -171,8 +171,10 @@ impl App {
             return None; // every wrapped row is visible; nothing to scroll to
         }
         let text_top = rect.y + crate::design::COMPOSER_TEXT_ROW_OFFSET;
-        let text_bottom_exclusive =
-            rect.y + rect.height.saturating_sub(crate::design::COMPOSER_VERTICAL_CHROME_ROWS);
+        let text_bottom_exclusive = rect.y
+            + rect
+                .height
+                .saturating_sub(crate::design::COMPOSER_VERTICAL_CHROME_ROWS);
         if y < text_top && self.input_scroll > 0 {
             Some(true)
         } else if y >= text_bottom_exclusive && self.input_scroll < max {

@@ -14,8 +14,6 @@ pub struct CommandDoc {
     /// The single prose introduction (contract has exactly one field).
     pub summary: String,
     pub usage: Vec<String>,
-    pub examples: Vec<(String, String)>,
-    pub intent_keywords: Vec<String>,
     pub category: Option<String>,
     /// First-token verbs (`/schedule list` → `list`) with their own
     /// introductions; rendered after the parent's usage block.
@@ -28,12 +26,6 @@ impl CommandDoc {
             name: spec.name.clone(),
             summary: spec.summary.clone(),
             usage: spec.usage.clone(),
-            examples: spec
-                .examples
-                .iter()
-                .map(|example| (example.command.clone(), example.description.clone()))
-                .collect(),
-            intent_keywords: spec.intent_keywords.clone(),
             category: spec.category.clone(),
             subcommands: spec
                 .subcommands
@@ -56,6 +48,7 @@ pub enum CompletionKind {
 pub enum CompletionItemKind {
     #[default]
     Slash,
+    SlashAlias,
     IntentSuggestion {
         matched_intent: String,
         reason: String,
@@ -102,6 +95,7 @@ impl Completion {
         }
         let kind = match item.kind {
             muta_contracts::InputCompletionKind::Slash => CompletionItemKind::Slash,
+            muta_contracts::InputCompletionKind::SlashAlias => CompletionItemKind::SlashAlias,
             muta_contracts::InputCompletionKind::Intent => CompletionItemKind::IntentSuggestion {
                 matched_intent: String::new(),
                 reason: item.description.clone(),

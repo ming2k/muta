@@ -72,7 +72,7 @@ pub(crate) mod message_body;
 pub(crate) mod notice;
 pub(crate) mod page_header;
 pub(crate) mod primitives;
-pub(crate) mod round_interrupt;
+
 pub(crate) mod text_layout;
 pub(crate) mod theme;
 pub(crate) mod time;

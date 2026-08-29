@@ -14,9 +14,9 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{Disclosure, Interaction, summary_text_color};
 
-use crate::model::document::{Block, CommandPhase, Inline, MessageKind, TranscriptMessage};
+use crate::model::document::{Block, CommandPhase, Inline, TranscriptMessage};
 use crate::model::layout::{
-    BlockRegion, COMMAND_RESULT_BLOCK_IDX, LayoutMap, PROVIDER_RETRY_BLOCK_IDX, THINKING_BLOCK_IDX,
+    BlockRegion, COMMAND_RESULT_BLOCK_IDX, LayoutMap, THINKING_BLOCK_IDX,
 };
 use crate::model::selection::{CellDragInfo, SelectionState};
 
@@ -162,119 +162,6 @@ fn nonempty_wrapped(wrapped: Vec<WrappedLine>) -> Vec<WrappedLine> {
     }
 }
 
-/// Format a retry timer without making a short countdown look frozen. Long
-/// waits use whole seconds; the last ten seconds and running-attempt elapsed
-/// time use tenths because the TUI already redraws on a 100 ms animation tick.
-fn retry_duration(duration: std::time::Duration) -> String {
-    let millis = duration.as_millis() as u64;
-    if millis >= 10_000 {
-        format!("{}s", millis.div_ceil(1_000))
-    } else {
-        format!("{:.1}s", millis as f64 / 1_000.0)
-    }
-}
-
-/// Render the one live provider-retry disclosure in the transcript.
-///
-/// Its summary is derived from `Instant::now()` every frame: before
-/// `retry_at` it is a countdown, afterwards it becomes the current retry
-/// attempt's elapsed time. A later `RetryScheduled` event mutates the same
-/// message, so the transcript never accumulates one notice per attempt.
-pub fn draw_provider_retry(
-    ctx: &mut RenderCtx<'_, '_>,
-    msg: &TranscriptMessage,
-    mi: usize,
-    hovered: bool,
-    focused: bool,
-) {
-    let theme = ctx.theme;
-    let _transcript_area = ctx.area;
-    let full_width = ctx.full_width;
-    let MessageKind::ProviderRetry {
-        attempt,
-        max_attempts,
-        failure,
-        retry_at,
-        expanded,
-        ..
-    } = &msg.kind
-    else {
-        return;
-    };
-
-    let retry = attempt.saturating_sub(1);
-    let max_retries = max_attempts.saturating_sub(1).max(retry);
-    let now = std::time::Instant::now();
-    let timing = if now < *retry_at {
-        format!(
-            "next in {}",
-            retry_duration(retry_at.saturating_duration_since(now))
-        )
-    } else {
-        format!(
-            "running for {}",
-            retry_duration(now.saturating_duration_since(*retry_at))
-        )
-    };
-    let summary = format!("provider retry {retry}/{max_retries} ({timing})");
-    let disclosure = if *expanded {
-        Disclosure::Expanded
-    } else {
-        Disclosure::Collapsed
-    };
-    let color = summary_text_color(
-        Some(theme.warn()),
-        disclosure,
-        Interaction::from_hover_focused(hovered, focused),
-        theme,
-    );
-    let bg = theme.surface();
-    let marker = if *expanded {
-        MARKER_EXPANDED
-    } else {
-        MARKER_COLLAPSED
-    };
-    let used = 2 + summary.width();
-    let summary_line = Line::from(vec![
-        Span::styled(format!("{marker} "), Style::default().bg(bg).fg(color)),
-        Span::styled(summary, Style::default().bg(bg).fg(color)),
-        Span::styled(padded_tail(full_width, used), Style::default().bg(bg)),
-    ]);
-    if let Some(rect) = ctx.paint(summary_line) {
-        ctx.layout_map.push(BlockRegion {
-            message_idx: mi,
-            block_idx: PROVIDER_RETRY_BLOCK_IDX,
-            start_byte: 0,
-            end_byte: 0,
-            text: String::new(),
-            prefix_cols: 0,
-            rect,
-            hidden_ranges: Vec::new(),
-        });
-    }
-
-    if !expanded {
-        return;
-    }
-
-    let label = "  Last failure";
-    let label_used = label.width();
-    let _ = ctx.paint(Line::from(vec![
-        Span::styled(label.to_string(), Style::default().bg(bg).fg(theme.warn())),
-        Span::styled(padded_tail(full_width, label_used), Style::default().bg(bg)),
-    ]));
-
-    let prefix = "    ";
-    let body_width = full_width.saturating_sub(prefix.width()).max(1);
-    for line in nonempty_wrapped(wrap_text(failure, body_width)) {
-        let used = prefix.width() + line.text.width();
-        let _ = ctx.paint(Line::from(vec![
-            Span::styled(prefix, Style::default().bg(bg)),
-            Span::styled(line.text, Style::default().bg(bg).fg(theme.muted())),
-            Span::styled(padded_tail(full_width, used), Style::default().bg(bg)),
-        ]));
-    }
-}
 
 /// Tracked info for an expanded step, used to render a sticky summary pinned
 /// under the HUD bar while the step's body is scrolled into view.
@@ -2357,7 +2244,7 @@ pub(crate) const MARKER_EXPANDED: &str = "-";
 /// The `⌘` (or `❯`) glyph and `command` label are rendered in the same
 /// indicator tone (BOLD), with the muted timestamp pinned to the right edge.
 fn command_header_line(
-    lead_symbol: &str,
+    category_label: &str,
     family_tone: Color,
     time_label: Option<&str>,
     muted: Color,
@@ -2366,8 +2253,8 @@ fn command_header_line(
     let mut spans = Vec::with_capacity(4);
     let mut used = 0usize;
 
-    // Indicator tag: `⌘ command` or `❯ command` in family_tone + BOLD.
-    let tag = format!("{lead_symbol}command");
+    // Indicator tag: `⌘ harness` or `⌘ shell` in family_tone + BOLD.
+    let tag = format!("⌘ {category_label}");
     used += tag.width();
     spans.push(Span::styled(
         tag,
@@ -2391,11 +2278,11 @@ fn command_header_line(
     Line::from(spans)
 }
 
-/// Draw a slash or shell command as a top-level **Entry** owning its input
+/// Draw a harness or shell command as a top-level **Entry** owning its input
 /// and output (ADR-0111, revising ADR-0109/0108/0106).
 ///
 /// Every command entry is structured identically to a turn entry:
-/// - **Header**: `⌘ command` plus a right-aligned `HH:MM` timestamp
+/// - **Header**: `⌘ harness` or `⌘ shell` plus a right-aligned `HH:MM` timestamp
 /// - **Gap**: 1 blank row separating header and content body (`TURN_HEADER_BODY_GAP_ROWS`)
 /// - **Body**: The concrete invocation (e.g. `/delegate on`) followed by result output blocks.
 pub fn draw_command_result(
@@ -2436,17 +2323,18 @@ pub fn draw_command_result(
         return;
     }
 
-    let is_shell = invocation.starts_with('!') || msg.raw.starts_with('!');
-    let lead_symbol = if is_shell { "❯ " } else { "⌘ " };
-    let family_tone = if is_shell {
-        (*ctx.theme).ok()
+    let is_shell = invocation.starts_with('!')
+        || msg.raw.starts_with('!')
+        || msg.command_kind().is_some_and(|k| k.is_shell());
+    let (category_label, family_tone) = if is_shell {
+        ("shell", (*ctx.theme).ok())
     } else {
-        (*ctx.theme).info()
+        ("harness", (*ctx.theme).info())
     };
     let time_label = msg.sent_at_ms.map(crate::time::sent_time_label);
 
     let header_line = command_header_line(
-        lead_symbol,
+        category_label,
         family_tone,
         time_label.as_deref(),
         ctx.theme.muted(),

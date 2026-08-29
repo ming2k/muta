@@ -22,7 +22,7 @@ secretly reach into application state.
                           │  (Frame::render_widget)
 ┌──────────────────────────────────────────────────────────────────────┐
 │  mutx view modules  ·  VIEW (widgets + document model)         │
-│  render/ widget tree · document model · layout/hit-testing ·          │
+│  view/ widget tree · document model · layout/hit-testing ·          │
 │  selection · fuzzy · provider ranking · shared modal discriminants.   │
 │  Renders muta_contracts domain types → depends on muta-contracts.           │
 │  NEVER depends on the shell modules.                                  │
@@ -62,7 +62,7 @@ The view modules live flat under `apps/tui/crates/mutx/src/`, grouped by concern
 
 | Module | Responsibility |
 |--------|----------------|
-| `view.rs` | The transcript-area renderer: `draw_transcript`, `TranscriptView`, `HeightCache`; re-exports the drawing surface (chrome, composer, overlays, theme, …) the shell consumes. |
+| `view/mod.rs` | The transcript-area renderer: `draw_transcript`, `TranscriptView`, `HeightCache`; re-exports the drawing surface (chrome, composer, overlays, theme, …) the shell consumes. |
 | `components/` | Reusable composed components: modal pages, selectable lists, scroll bodies, selectable document bodies (`selectable_body`), footer hints, toasts, notices, option rows, and one-line metadata strips (`MetaStrip`). |
 | `overlays/` | One renderer per modal (provider, session, help, activity, config, permission, …). |
 | `tools/` | Per-tool-step presenters (execute_command, edit, read, search, web, ask_user, diff, …). |
@@ -105,7 +105,7 @@ only draw what the shell chose to hand it.
 `draw_transcript(frame, &mut LayoutMap, view)` is the single entry point
 for the transcript; the per-modal overlays (`draw_models_modal`,
 `draw_permission_sheet`, …) take their own small borrowed view structs
-(`HintBarView`, `ActivityModalView`, `CustomEditorView`, …) the same way.
+(`ActivityModalView`, `CustomEditorView`, …) the same way.
 The shell calls the view and never the reverse.
 
 ## Surface routing and shared presentation discriminants

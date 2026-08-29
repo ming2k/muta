@@ -80,7 +80,7 @@ Left (Token 0) ─────────────────────�
 
 ## References
 
-- [ADR-0056](0056-agent-owned-declarative-system-prompt-composition.md): Declarative system prompt composition
+- [ADR-0056](0056-model-context-assembly-boundary.md): Model-context assembly boundary — the head system prompt is assembled from a ranked fragment set
 - [ADR-0120](0120-tokens-first-class-unit.md): Tokens as first-class units
 - [ADR-0130](0130-native-platform-capability-boundary.md): Native platform capability boundary
 - Google Antigravity / Jetski `cumulative_prompt_handler` & `StreamingReplaceFileContentParser` architecture

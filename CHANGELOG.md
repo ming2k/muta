@@ -5,6 +5,60 @@ All notable changes to **Muta** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.37.4] - 2026-08-29
+
+### Added
+
+- **Unified transcript entry architecture (ADR-0111).** Formalized the transcript
+  as an ordered stream of four symmetrical top-level entities: `UserPrompt`
+  (`Normal`, `Steer`, `FollowUp`), `ModelTurn` (ordered composition of
+  `TurnComponent`s: reasoning, tool steps, subagents, prose), `Command`
+  (`Harness` vs `Shell`), and `Notice` (`System` vs `Provider`).
+- **Strongly-typed `ToolInvocation` entities.** Tool steps are structured into
+  first-class `ToolInvocation` models with unified disclosure container specifications
+  and per-tool presenter views (syntax-highlighted code reads, red/green patch diffs,
+  ANSI terminal execution streams, match trees, and runner transcripts).
+
+### Changed
+
+- **Standardized command rendering (`⌘`).** Both harness control-plane commands
+  and shell executions render with a unified `⌘` indicator (`⌘ harness · HH:MM` and
+  `⌘ shell · HH:MM`), completely eliminating folding cards and secondary markers.
+- **Notice classification by origin.** Notices are strictly partitioned by initiating
+  boundary: `NoticeOrigin::System` (local host, trust gate, turn guards, interrupted)
+  and `NoticeOrigin::Provider` (upstream LLM gateway, 429 rate limit backoff).
+- **Eliminated legacy message variants.** Removed obsolete `ProviderRetry` and
+  `RoundInterrupt` message variants and deleted `round_interrupt.rs`, subsuming
+  interrupts into structured system warning notices.
+- **Performance modal: visible-TTFT stage removed.** `RequestPerformance`
+  drops `visible_ttft_us` (dispatch to first assistant `TextDelta`), the
+  per-turn detail drops its `First visible text` row, and every TTFT
+  surface — overview median, round `First` column, turn table — now shows
+  one metric: client-observed TTFT to the first output-bearing event of
+  any kind. The removed stage misclassified reasoning as invisible while
+  the TUI streams it live, stayed `None` for tool-only turns (the
+  workflow's majority), and its difference from TTFT was thinking
+  duration — workload, not performance. The aggregate columns previously
+  preferred it via `visible_ttft_us.or(ttft_us)`, silently mixing two
+  metrics under the `TTFT` label. The field was an optional serde field,
+  so the removal is wire-compatible without a protocol bump
+  (ADR-0157).
+- **Performance modal: quality grade column removed.** The drill-down table
+  drops the `Q` column and its legend; the per-turn detail view drops its
+  `Quality` row. The grade encoded usage provenance (A provider decode / B
+  reported / C estimated), which was already visible per-figure through the
+  token colouring shared with the token report, so the column spent width
+  restating a fact shown elsewhere. `quality_label` and the legend line are
+  deleted with it.
+- **Thinking glyph removed.** Streaming reasoning rows no longer lead with
+  the live `✦` glyph: the summary reads `Thinking · N tokens` while the
+  trace streams and `Thinking · N tokens · duration` once it settles. The
+  streaming state stays legible through the missing duration alone — the
+  same signal Codex uses — and the `✦ → ✧` spark in the effort-ignition
+  flash is untouched.
+
 ## [0.37.3] - 2026-08-28
 
 ### Added
@@ -5533,7 +5587,9 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.1...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.4...HEAD
+[0.37.4]: https://github.com/ming2k/muta/compare/v0.37.3...v0.37.4
+[0.37.3]: https://github.com/ming2k/muta/compare/v0.37.1...v0.37.3
 [0.37.1]: https://github.com/ming2k/muta/compare/v0.37.0...v0.37.1
 [0.37.0]: https://github.com/ming2k/muta/compare/v0.36.8...v0.37.0
 [0.36.8]: https://github.com/ming2k/muta/compare/v0.36.7...v0.36.8

@@ -627,12 +627,12 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
         ),
         "hint bar rect matches the legacy offset"
     );
-    // The registry is complete: gap + the five interactive rows.
-    assert_eq!(rendered.footer.rows.len(), 6, "registry completeness");
+    // The registry contains the five interactive rows (TopGap is 0-height and omitted).
+    assert_eq!(rendered.footer.rows.len(), 5, "registry completeness");
     assert_eq!(
         footer_stack::rect_of(&rendered.footer, FooterRowId::TopGap),
-        Some(expect(band_y, crate::design::FOOTER_TOP_GAP_ROWS)),
-        "the top gap is part of the stack's geometry"
+        None,
+        "the 0-height top gap places no rect"
     );
 }
 

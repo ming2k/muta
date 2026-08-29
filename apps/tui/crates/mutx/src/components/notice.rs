@@ -104,7 +104,9 @@ fn notice_content<'v>(
             parts.detail.as_deref(),
         ),
         parts => (
-            parts.and_then(|p| p.topic.as_deref()).unwrap_or("notification"),
+            parts
+                .and_then(|p| p.topic.as_deref())
+                .unwrap_or("notification"),
             Some(parsed.header.as_str()),
             parsed.detail.as_deref(),
         ),
@@ -491,9 +493,7 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         // `workspace_trust_notice`, which emits a first-class `TrustChanged`
         // kind (ADR-0155).
         let core = muta_contracts::AgentNotice::trust_changed("Workspace configurations changed")
-            .with_body(
-                "Changed on disk: rules (AGENTS.md / rules) — quarantined pending review.",
-            );
+            .with_body("Changed on disk: rules (AGENTS.md / rules) — quarantined pending review.");
         let msg = TranscriptMessage::notice_from_core(&core);
 
         let theme = Theme::default();

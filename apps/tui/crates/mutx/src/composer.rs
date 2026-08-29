@@ -46,10 +46,7 @@ fn overflow_label(dir: char, hidden: usize, full_w: usize) -> String {
 /// panel never jitters as the draft crosses the overflow threshold.
 fn chrome_row(full_w: usize, bg: Color, theme: &Theme, dir: char, hidden: usize) -> Line<'static> {
     if hidden == 0 {
-        return Line::from(Span::styled(
-            " ".repeat(full_w),
-            Style::default().bg(bg),
-        ));
+        return Line::from(Span::styled(" ".repeat(full_w), Style::default().bg(bg)));
     }
     let label = overflow_label(dir, hidden, full_w);
     let gap_cols = full_w.saturating_sub(label.chars().count() + 1);
@@ -94,7 +91,11 @@ pub const INPUT_MSG_IDX: usize = usize::MAX - 2;
 /// during a selection drag resolves its viewport-edge bytes from the same
 /// wrapped rows the renderer paints, so the selection can never disagree
 /// with what is on screen.
-pub(crate) fn composer_wrapped(input: &str, text_width: usize, byte_cursor: usize) -> Vec<WrappedLine> {
+pub(crate) fn composer_wrapped(
+    input: &str,
+    text_width: usize,
+    byte_cursor: usize,
+) -> Vec<WrappedLine> {
     let mut wrapped = wrap_text(input, text_width);
     let last_end = wrapped.last().map_or(0, |w| w.end_byte);
     if byte_cursor > last_end {

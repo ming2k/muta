@@ -280,12 +280,12 @@ with the transcript content above.
 
 | File | Responsibility |
 |------|----------------|
-| `view.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, envoy split, sticky summary overlay |
+| `view/mod.rs` | `draw_transcript` — viewport fill, two-chunk split, footer stack, envoy split, sticky summary overlay |
 | `footer_stack.rs` | Declarative footer stack — row list, `measure`/`place` single-pass layout, hit-rect registry (`FooterRowId`) |
-| `render/design.rs` | All non-color layout tokens: `VIEWPORT_*`, `TRANSCRIPT_*`, `FOOTER_H_INSET`, `ACTIVITY_BAR_ROWS`, `TODO_BAR_ROWS`, `QUEUE_BAR_ROWS`, `HINT_BAR_ROWS`, `STATUS_BAR_ROWS`, `ENVOY_BAR_ROWS`, `COMPOSER_*`, `MESSAGE_GAP_ROWS` |
+| `design.rs` | All non-color layout tokens: `TRANSCRIPT_H_INSET`, `FOOTER_H_INSET`, `ACTIVITY_BAR_ROWS`, `TODO_BAR_ROWS`, `QUEUE_BAR_ROWS`, `MODEL_BAR_ROWS`, `ENVOY_FOOTER_ROWS`, `COMPOSER_*`, `MESSAGE_GAP_ROWS` |
 | `primitives.rs` | `viewport_rect`, `centered_rect`, `panel_block`, `recess_backdrop` |
-| `render/chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
-| `tui/page_header.rs` | `draw_page_header` / `PageHeader` / `SessionHead` — the unified head row at the top of every view |
-| `render/composer.rs` | `draw_composer` (input box), `INPUT_MSG_IDX` |
-| `disclosure/renderers.rs` | `draw_envoy_bar`, `draw_sticky_summary_if_needed` |
-| `app.rs` | `in_envoy_view`, `focus_stack`, `follow_bottom`, scroll clamping |
+| `chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_model_bar` (ambient gauges), `draw_completion_menu` |
+| `page_header.rs` | `draw_page_header` / `PageHeader` / `SessionHead` / `draw_runner_footer` — the unified head row at the top of every view, plus the zoomed-runner footer |
+| `composer.rs` | `draw_composer` (input box), `INPUT_MSG_IDX` |
+| `disclosure/renderers.rs` | `draw_runner_inline_step`, `draw_sticky_summary_if_needed` |
+| `app/mod.rs` | `focus_stack`, `follow_bottom`, scroll clamping |

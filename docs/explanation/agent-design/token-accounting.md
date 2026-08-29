@@ -226,7 +226,7 @@ reverse), written atomically and lock-serialised across processes, and —
 because it lives outside every session file — untouched by any session
 cleanup. The `/usage` overlay aggregates it into daily totals, a per-model
 breakdown, and a recent-request event log; see
-[ADR-0122](../../../adr/0122-durable-cross-session-usage-statistics.md).
+[ADR-0122](../../adr/0122-durable-cross-session-usage-statistics.md).
 
 ## The Context Usage modal
 
@@ -268,7 +268,7 @@ cell moved out because its denominator — client-side dispatch-to-validation
 time — silently folded upstream queueing, prompt prefill, transport, and de-
 code into one figure that changed shape whenever the network did, making two
 sessions with identical decode pace look incomparable
-([ADR-0151](../../../adr/0151-request-performance-telemetry.md)).
+([ADR-0151](../../adr/0151-request-performance-telemetry.md)).
 
 The report answers three questions at a glance:
 
@@ -337,7 +337,7 @@ number:
 
 | Scope | Definition |
 |-------|------------|
-| **TTFT** | Request dispatch to the first visible output event; session-wide median |
+| **TTFT** | Request dispatch to the first output-bearing event of any kind (text, reasoning, or tool-call payload); session-wide median |
 | **Stream rate** | Streamed output tokens excluding the first event's tokens, divided by the first-to-last-event span; needs at least two events or it renders `–` |
 | **E2E output rate** | Completion tokens divided by dispatch-to-validated-response span; deliberately includes TTFT |
 
@@ -356,14 +356,12 @@ all, so it renders `–` rather than a fabricated figure. Every client-derived
 number is labeled as client-observed: it includes network transit, upstream
 queueing, and proxy buffering, because a client cannot see past its socket. No
 ping-based correction is attempted — measuring a different path does not sub-
-tract latency, it manufactures precision ([ADR-0151](../../../adr/0151-request-performance-telemetry.md)).
+tract latency, it manufactures precision ([ADR-0151](../../adr/0151-request-performance-telemetry.md)).
 
-Below the summary sit the round table (**Round**, **State**, **First** visible-
-output time, **Stream**, **E2E**) and its drill-down (**Turn**, **State**,
-**TTFT**, **Stream**, **E2E**, **Q**), newest-first, with retries keeping their
-own rows and timings. **Q** grades provenance: `A` when provider-native decode
-telemetry backs the figures, `B` for provider-reported usage with client tim-
-ings, `C` for locally estimated usage. A dash means *unmeasured* — never zero.
+Below the summary sit the round table (**Round**, **State**, **First** out-
+put time, **Stream**, **E2E**) and its drill-down (**Turn**, **State**,
+**TTFT**, **Stream**, **E2E**), newest-first, with retries keeping their
+own rows and timings. A dash means *unmeasured* — never zero.
 
 The sample also travels as structured data: each completed principal turn
 pushes a compact snapshot on the round-event channel so the hint segment up-

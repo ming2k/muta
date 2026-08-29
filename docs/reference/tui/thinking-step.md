@@ -8,17 +8,17 @@ panel.
 ## Collapsed
 
 ```text
-  + ✦ Thinking · 148 tokens
+  + Thinking · 148 tokens
   + Thinking · 140 tokens · 1.2s
 ```
 
-First line: while the trace streams (live glyph, no duration). Second line:
+First line: while the trace streams (no duration yet). Second line:
 after the trace finishes.
 
 | Attribute | Value |
 |-----------|-------|
 | Background | `app_bg` (flat — no band), inset 2 cols (`TRANSCRIPT_H_INSET`) |
-| Marker | `+` (collapsed) / `-` (expanded), BOLD — same disclosure marker as a tool step; the streaming state is conveyed by the summary text (live `✦` glyph, duration omitted) and the steady `info` hue, never by the marker |
+| Marker | `+` (collapsed) / `-` (expanded), BOLD — same disclosure marker as a tool step; the streaming state is conveyed by the summary text (duration omitted while streaming) and the steady `info` hue, never by the marker |
 | Header text column | 4 from transcript edge (after the `+ ` prefix) |
 
 The summary color is the pure weight channel from the
@@ -33,17 +33,16 @@ marker needs to change between streaming and finished.
 
 | State | Format |
 |-------|--------|
-| Streaming | `✦ Thinking · {tokens} tokens` (duration omitted) |
+| Streaming | `Thinking · {tokens} tokens` (duration omitted) |
 | Completed | `Thinking · {tokens} tokens · {duration}` |
 
-While the trace streams the line leads with the live glyph (`✦`) and counts
-tokens up as they arrive — the number climbs like a filling meter rather than
-reading as an estimate. Past 100 tokens the streamed count is floored to a
-multiple of 25 instead of reported exactly: the streaming summary repaints on
-every render heartbeat, and a per-token count would dirty the row for nearly
-every delta. The floor keeps label changes O(n ÷ 25) over a trace while the
-number still grows monotonically. A finished trace reports the exact count,
-drops the glyph, and appends the duration.
+While the trace streams the line counts tokens up as they arrive — the number
+climbs like a filling meter rather than reading as an estimate. Past 100 tokens
+the streamed count is floored to a multiple of 25 instead of reported exactly:
+the streaming summary repaints on every render heartbeat, and a per-token count
+would dirty the row for nearly every delta. The floor keeps label changes
+O(n ÷ 25) over a trace while the number still grows monotonically. A finished
+trace reports the exact count and appends the duration.
 
 ## Expanded
 

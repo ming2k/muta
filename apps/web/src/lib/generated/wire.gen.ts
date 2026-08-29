@@ -269,7 +269,7 @@ alias_of?: string, command?: CommandSpec, };
 /**
  * Semantic kind of one backend-produced composer completion.
  */
-export type ComposerCompletionKind = "slash" | "intent" | "path_file" | "path_dir" | "path_explicit";
+export type ComposerCompletionKind = "slash" | "slash_alias" | "intent" | "path_file" | "path_dir" | "path_explicit";
 
 export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource, overhead_tokens?: number | null, history_tokens?: number | null, };
 
@@ -921,10 +921,6 @@ stream_ready_us?: number,
  * or tool-call payload) observed by the client.
  */
 ttft_us?: number, 
-/**
- * Request dispatch to the first user-visible assistant text event.
- */
-visible_ttft_us?: number, 
 /**
  * First output-bearing event to the last output-bearing event.
  */

@@ -55,6 +55,9 @@ Lookup-oriented documentation — tables, lists, and exact values.
 | Step state machine | [step-state.md](tui/step-state.md) |
 | Envoy view | [envoy-view.md](tui/envoy-view.md) |
 | Activity bar | [activity-bar.md](tui/activity-bar.md) |
-| Hint bar | [hint-line.md](tui/hint-line.md) |
+| Todo bar | [todo-bar.md](tui/todo-bar.md) |
+| Queue bar | [queue-bar.md](tui/queue-bar.md) |
+| Model bar | [model-bar.md](tui/model-bar.md) |
+| Command card | [command-card.md](tui/command-card.md) |
 | Head row | [status-bar.md](tui/status-bar.md) |
 | Modals | [modals.md](tui/modals.md) |

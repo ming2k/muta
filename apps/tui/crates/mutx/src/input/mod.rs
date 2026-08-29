@@ -1160,16 +1160,8 @@ pub fn process_event(
                 // scroll stays decoupled from the ↑/↓ highlight so wheeling
                 // browses a long option list without moving the selection
                 // cursor.
-                MouseEventKind::ScrollUp => InputAction::Wheel {
-                    up: true,
-                    x,
-                    y,
-                },
-                MouseEventKind::ScrollDown => InputAction::Wheel {
-                    up: false,
-                    x,
-                    y,
-                },
+                MouseEventKind::ScrollUp => InputAction::Wheel { up: true, x, y },
+                MouseEventKind::ScrollDown => InputAction::Wheel { up: false, x, y },
                 MouseEventKind::Down(MouseButton::Left) => {
                     // The permission sheet replaces the composer but leaves the
                     // transcript above fully interactive, so a click there can

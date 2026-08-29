@@ -103,9 +103,6 @@ impl App {
             } else if let Some(expanded) = message.thinking_expanded() {
                 message.pin_thinking_expanded(!expanded);
                 Some(!expanded)
-            } else if let Some(expanded) = message.provider_retry_expanded() {
-                message.pin_provider_retry_expanded(!expanded);
-                Some(!expanded)
             } else if let Some(expanded) = message.notice_expanded() {
                 message.pin_notice_expanded(!expanded);
                 Some(!expanded)
@@ -189,8 +186,6 @@ impl App {
         {
             let target = if message.is_thinking() {
                 InteractiveTarget::thinking(message_idx)
-            } else if message.is_provider_retry() {
-                InteractiveTarget::provider_retry(message_idx)
             } else if message.is_tool_step() || message.is_runner_task() {
                 InteractiveTarget::tool_step(message_idx)
             } else {

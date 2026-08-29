@@ -577,10 +577,9 @@ pub fn draw_completion_menu(
             crate::completion::CompletionItemKind::IntentSuggestion { .. } => {
                 c.label.width() + 2 // "➜ " prefix
             }
-            // Alias rows append " ↝ /target" in the muted tier.
-            _ if c.alias_of.is_some() => {
-                c.label.width() + 3 + c.alias_of.as_deref().map_or(0, str::width)
-            }
+            // Alias rows append " [*]" to mark they are aliases.
+            crate::completion::CompletionItemKind::SlashAlias => c.label.width() + 4,
+            _ if c.alias_of.is_some() => c.label.width() + 4,
             _ => c.label.width(),
         })
         .max()
@@ -616,12 +615,8 @@ pub fn draw_completion_menu(
             let is_selected = Some(global_idx) == selected_idx;
             let body_bg = theme.body();
             let row_bg = if is_selected { theme.brand() } else { body_bg };
-            let is_alias = c.alias_of.is_some();
-            // Alias rows are a visibly secondary tier: the alias keeps the
-            // row's primary weight only while selected; at rest it drops to
-            // normal weight and carries its canonical target after `↝`, so
-            // the difference from canonical rows (and what accepting will
-            // submit) is readable straight from the candidate list.
+            let is_alias = matches!(c.kind, crate::completion::CompletionItemKind::SlashAlias)
+                || c.alias_of.is_some();
             let cmd_style = if is_selected {
                 Style::default()
                     .bg(row_bg)
@@ -648,9 +643,12 @@ pub fn draw_completion_menu(
                 crate::completion::CompletionItemKind::IntentSuggestion { .. } => {
                     (format!("➜ {}", c.label), String::new())
                 }
+                crate::completion::CompletionItemKind::SlashAlias => {
+                    (format!("{} [*]", c.label), String::new())
+                }
                 _ if is_alias => (
-                    c.label.clone(),
-                    format!(" ↝ {}", c.alias_of.as_deref().unwrap_or_default()),
+                    format!("{} [*]", c.label),
+                    String::new(),
                 ),
                 _ => (c.label.clone(), String::new()),
             };
@@ -698,12 +696,32 @@ pub fn draw_completion_menu(
             let max_text_w = (doc_width as usize).saturating_sub(2).max(10);
             let mut insp_lines = Vec::new();
 
-            // Line 1: Command name + [Category] (+ alias annotation)
+            // Line 1: Command name + [Category] (or /alias -> /canonical + [Category])
             let cat_label = doc.category.as_deref().unwrap_or("Command");
-            let mut header_spans = vec![
+            let alias_row = selected_idx.and_then(|idx| completions.get(idx));
+            let is_alias = alias_row
+                .map(|c| {
+                    matches!(c.kind, crate::completion::CompletionItemKind::SlashAlias)
+                        || c.alias_of.is_some()
+                })
+                .unwrap_or(false);
+
+            let header_title = if is_alias {
+                let alias_label = alias_row
+                    .map(|c| c.label.as_str())
+                    .unwrap_or_default();
+                let target = alias_row
+                    .and_then(|c| c.alias_of.as_deref())
+                    .unwrap_or(&doc.name);
+                format!("{alias_label} -> {target}")
+            } else {
+                doc.name.clone()
+            };
+
+            let header_spans = vec![
                 Span::styled(" ", Style::default().bg(doc_bg)),
                 Span::styled(
-                    &doc.name,
+                    header_title,
                     Style::default()
                         .bg(doc_bg)
                         .fg(theme.info())
@@ -717,34 +735,7 @@ pub fn draw_completion_menu(
                         .add_modifier(Modifier::DIM),
                 ),
             ];
-            // The alias tier reads the structured `alias_of` field (never
-            // description-sniffing): it adds exactly one extra line over the
-            // target's own doc, which the body below already renders.
-            let alias_row = selected_idx.and_then(|idx| completions.get(idx));
-            let alias_target = alias_row.and_then(|c| c.alias_of.clone());
-            if let Some(target) = alias_target {
-                let alias_label = alias_row
-                    .map(|c| c.label.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                header_spans.push(Span::styled(
-                    "  (alias)",
-                    Style::default()
-                        .bg(doc_bg)
-                        .fg(theme.warn())
-                        .add_modifier(Modifier::BOLD),
-                ));
-                insp_lines.push(Line::from(header_spans));
-                insp_lines.push(Line::from(vec![
-                    Span::styled(" ", Style::default().bg(doc_bg)),
-                    Span::styled(
-                        format!("Accept `{alias_label}` → submits `{target}`"),
-                        Style::default().bg(doc_bg).fg(theme.warn()),
-                    ),
-                ]));
-            } else {
-                insp_lines.push(Line::from(header_spans));
-            }
+            insp_lines.push(Line::from(header_spans));
 
             // Line 2..: Summary (wrapped)
             if !doc.summary.is_empty() {
@@ -790,40 +781,6 @@ pub fn draw_completion_menu(
                         Span::styled(
                             wl.text.to_string(),
                             Style::default().bg(doc_bg).fg(theme.muted()),
-                        ),
-                    ]));
-                }
-            }
-
-            // Line 5..: Examples (wrapped)
-            for (ex_cmd, ex_desc) in doc.examples.iter().take(2) {
-                let ex_str = format!("Ex: {ex_cmd} — {ex_desc}");
-                for wl in crate::text_layout::wrap_text(&ex_str, max_text_w) {
-                    insp_lines.push(Line::from(vec![
-                        Span::styled(" ", Style::default().bg(doc_bg)),
-                        Span::styled(
-                            wl.text.to_string(),
-                            Style::default()
-                                .bg(doc_bg)
-                                .fg(theme.muted())
-                                .add_modifier(Modifier::DIM),
-                        ),
-                    ]));
-                }
-            }
-
-            // Line 6..: Intent keywords (wrapped)
-            if !doc.intent_keywords.is_empty() {
-                let kw_str = format!("Intent: {}", doc.intent_keywords.join(", "));
-                for wl in crate::text_layout::wrap_text(&kw_str, max_text_w) {
-                    insp_lines.push(Line::from(vec![
-                        Span::styled(" ", Style::default().bg(doc_bg)),
-                        Span::styled(
-                            wl.text.to_string(),
-                            Style::default()
-                                .bg(doc_bg)
-                                .fg(theme.muted())
-                                .add_modifier(Modifier::DIM),
                         ),
                     ]));
                 }
@@ -1080,16 +1037,14 @@ pub fn draw_model_bar(
             + usize::from(instance) * instance_width
             + identity_count.saturating_sub(1) * MODEL_BAR_MODEL_GAP
     };
-    let gauges_width_for = |performance: bool,
-                            performance_keycap: bool,
-                            context: bool,
-                            context_keycap: bool| {
-        usize::from(performance)
-            * (performance_width + usize::from(performance_keycap) * performance_keycap_width)
-            + usize::from(context)
-                * (context_seg_width + usize::from(context_keycap) * context_keycap_width)
-            + usize::from(performance && context) * MODEL_BAR_SEGMENT_GAP
-    };
+    let gauges_width_for =
+        |performance: bool, performance_keycap: bool, context: bool, context_keycap: bool| {
+            usize::from(performance)
+                * (performance_width + usize::from(performance_keycap) * performance_keycap_width)
+                + usize::from(context)
+                    * (context_seg_width + usize::from(context_keycap) * context_keycap_width)
+                + usize::from(performance && context) * MODEL_BAR_SEGMENT_GAP
+        };
     // The row is justified: the gauge cluster leads from the left edge and
     // the identity cluster pins to the right, each `inner` in from its
     // edge. `MODEL_BAR_GAP_MIN` keeps the middle fill from ever collapsing
@@ -2179,9 +2134,7 @@ mod tests {
         assert_eq!(slice(perf), "47.8 tok/s Ctrl+S", "rate rect mismatch");
         // The identity cluster sits right of the gauges, pinned to the row's
         // right edge (one trailing indent cell).
-        let row: String = (0..80)
-            .map(|x| buf[(x, 0)].symbol().to_string())
-            .collect();
+        let row: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         let model_pos = row.find("kimi-k2.7-code").expect("model on the row");
         assert!(
             perf.x + perf.width <= model_pos as u16,
@@ -2556,9 +2509,7 @@ mod tests {
 
     #[test]
     fn completion_menu_marks_alias_rows_with_canonical_target() {
-        // An alias candidate must be distinguishable straight from the list:
-        // the alias keeps the primary slot, the canonical command follows in
-        // the dim tier after `↝` — matching what accepting will submit.
+        // An alias candidate is marked with [*] in the menu list.
         let theme = Theme::default();
         let completions = vec![
             crate::completion::Completion {
@@ -2577,7 +2528,7 @@ mod tests {
                 insert_text: "/delegate".to_string(),
                 replace_start: 0,
                 replace_end: 2,
-                kind: crate::completion::CompletionItemKind::Slash,
+                kind: crate::completion::CompletionItemKind::SlashAlias,
                 alias_of: Some("/delegate".to_string()),
                 doc: None,
             },
@@ -2603,12 +2554,8 @@ mod tests {
         };
         let alias_row = row_text(9); // popup bottom row = second candidate
         assert!(
-            alias_row.trim_start().starts_with("/yolo"),
-            "alias keeps the primary slot: {alias_row:?}"
-        );
-        assert!(
-            alias_row.contains("↝ /delegate"),
-            "alias row shows its canonical target: {alias_row:?}"
+            alias_row.trim_start().starts_with("/yolo [*]"),
+            "alias shows [*] marker: {alias_row:?}"
         );
         let canonical_row = row_text(8);
         assert!(
@@ -2616,8 +2563,8 @@ mod tests {
             "canonical row is plain: {canonical_row:?}"
         );
         assert!(
-            !canonical_row.contains('↝'),
-            "canonical rows carry no alias mapping: {canonical_row:?}"
+            !canonical_row.contains("[*]"),
+            "canonical rows carry no alias marker: {canonical_row:?}"
         );
     }
 
@@ -2628,11 +2575,6 @@ mod tests {
             name: "/schedule".to_string(),
             summary: "Schedule a prompt on a cron or countdown".to_string(),
             usage: vec!["/schedule <when> <prompt>".to_string()],
-            examples: vec![(
-                "/schedule 15m \"test\"".to_string(),
-                "Run in 15m".to_string(),
-            )],
-            intent_keywords: vec!["timer".to_string()],
             category: Some("Automation".to_string()),
             subcommands: vec![
                 ("list".to_string(), "List scheduled prompts".to_string()),
@@ -2696,6 +2638,56 @@ mod tests {
         assert!(
             has_panel_selected,
             "selected completion must render hover doc flyout with panel bg"
+        );
+    }
+
+    #[test]
+    fn completion_menu_hover_doc_flyout_shows_alias_to_target_header() {
+        let theme = Theme::default();
+        let doc = crate::completion::CommandDoc {
+            name: "/delegate".to_string(),
+            summary: "Toggle delegated mode".to_string(),
+            usage: vec!["/delegate".to_string()],
+            category: Some("Agent".to_string()),
+            subcommands: vec![],
+        };
+        let completions = vec![crate::completion::Completion {
+            label: "/yolo".to_string(),
+            description: "Toggle delegated mode".to_string(),
+            insert_text: "/delegate".to_string(),
+            replace_start: 0,
+            replace_end: 2,
+            kind: crate::completion::CompletionItemKind::SlashAlias,
+            alias_of: Some("/delegate".to_string()),
+            doc: Some(doc),
+        }];
+
+        let mut term = mutx_engine::TestTerminal::new(80, 12);
+        term.draw(|f| {
+            let mut layout_map = LayoutMap::new();
+            draw_completion_menu(
+                f,
+                &mut layout_map,
+                &completions,
+                Some(0),
+                Rect::new(0, 10, 80, 2),
+                2,
+                &theme,
+            );
+        });
+        let buf = term.buffer();
+        let row_text = |y: u16| -> String {
+            (0..buf.area().width)
+                .filter_map(|x| buf.get(x, y).map(|c| c.symbol().to_string()))
+                .collect()
+        };
+        // Check that the flyout header contains "/yolo -> /delegate"
+        let full_text: Vec<String> = (0..12).map(row_text).collect();
+        let found_header = full_text.iter().any(|r| r.contains("/yolo -> /delegate"));
+        assert!(
+            found_header,
+            "flyout header should show `/yolo -> /delegate`, got buffer:\n{}",
+            full_text.join("\n")
         );
     }
 

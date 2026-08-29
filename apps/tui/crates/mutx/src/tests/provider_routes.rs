@@ -178,7 +178,6 @@ fn completions_candidates_carry_rich_doc_for_inspector() {
     assert_eq!(doc.name, "/models");
     assert!(!doc.summary.is_empty());
     assert!(!doc.usage.is_empty());
-    assert!(!doc.examples.is_empty());
     assert_eq!(doc.category.as_deref(), Some("Model"));
 }
 

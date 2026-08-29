@@ -173,11 +173,21 @@ pub(crate) const JOIN_BREADCRUMB: &str = " › ";
 /// Rendered on the plain surface (no raised tint, no glyph) so it stays
 /// quiet, matching the todo bar above it.
 pub(crate) const QUEUE_BAR_ROWS: u16 = 1;
-/// Permanent breathing room between the transcript and footer chrome. Keeping
-/// this row even while the activity bar is idle prevents the latest response
-/// from visually running into the composer when the active row appears or
-/// disappears.
-pub(crate) const FOOTER_TOP_GAP_ROWS: u16 = 1;
+
+/// Blank rows inserted at the start of the transcript message stream
+/// (scroll padding top). When scrolled to the very top (`scroll = 0`),
+/// this provides 1 row of visual separation below the page header.
+pub(crate) const STREAM_TOP_GAP_ROWS: usize = 1;
+
+/// Blank rows inserted at the end of the transcript message stream
+/// (scroll padding bottom). When scrolled to the very bottom (`scroll = max_scroll`),
+/// this provides 1 row of visual separation above the footer chrome.
+pub(crate) const STREAM_BOTTOM_GAP_ROWS: usize = 1;
+
+/// Permanent breathing room between the transcript and footer chrome.
+/// Set to 0 because the content stream now owns its own scroll padding
+/// via [`STREAM_TOP_GAP_ROWS`] and [`STREAM_BOTTOM_GAP_ROWS`].
+pub(crate) const FOOTER_TOP_GAP_ROWS: u16 = 0;
 /// Maximum height of the head band shown at the top of every transcript
 /// page — Main (session identity + workspace + mode), `/btw`, Runner, and
 /// future focused pages all share this single chrome slot. Row 1 is always

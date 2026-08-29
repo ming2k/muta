@@ -1,6 +1,7 @@
 # 0151. Per-attempt client-observed performance telemetry and the dedicated Performance report
 
-- **Status:** Accepted
+- **Status:** Accepted (visible-TTFT stage and scope partially superseded by
+  [ADR-0157](0157-visible-ttft-stage-removed.md))
 - **Date:** 2026-09-10
 
 ## Context

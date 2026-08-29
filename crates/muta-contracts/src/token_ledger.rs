@@ -111,10 +111,6 @@ pub struct RequestPerformance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub ttft_us: Option<u64>,
-    /// Request dispatch to the first user-visible assistant text event.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub visible_ttft_us: Option<u64>,
     /// First output-bearing event to the last output-bearing event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -1501,7 +1497,6 @@ mod tests {
         RequestPerformance {
             stream_ready_us: Some(41_000),
             ttft_us: Some(120_000),
-            visible_ttft_us: Some(125_000),
             stream_us: Some(1_000_000),
             tail_us: Some(8_000),
             e2e_us: Some(1_128_000),
@@ -1695,7 +1690,7 @@ mod tests {
         // Newest completed master attempt.
         let newest = ledger.begin_request("s1", "openai", "gpt-4o", 2, 3, 0);
         let newest_performance = RequestPerformance {
-            visible_ttft_us: Some(777_000),
+            ttft_us: Some(777_000),
             ..sample_performance()
         };
         ledger.settle_request_with_performance_and_error(
@@ -1711,7 +1706,7 @@ mod tests {
         let report = ledger.snapshot();
         let latest = report.latest_turn_performance().expect("a master sample");
         assert_eq!((latest.round, latest.turn), (2, 3));
-        assert_eq!(latest.performance.visible_ttft_us, Some(777_000));
+        assert_eq!(latest.performance.ttft_us, Some(777_000));
 
         // Slice counterpart agrees for persisted-record paths.
         let records = ledger.records_for_session("s1");

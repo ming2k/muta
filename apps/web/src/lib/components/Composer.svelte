@@ -195,7 +195,7 @@
         {#each completionMatches as item (`${item.kind}:${item.label}`)}
           <button
             type="button"
-            class:alias-row={item.alias_of !== undefined && item.alias_of !== null}
+            class:alias-row={item.kind === 'slash_alias' || (item.alias_of !== undefined && item.alias_of !== null)}
             onclick={() => acceptCompletion(item)}
           >
             <code>{item.label}</code>

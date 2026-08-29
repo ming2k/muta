@@ -357,7 +357,11 @@ fn input_edge_autoscroll_arms_beyond_text_rows_and_extends_selection() {
     app.input_drag_scroll = Some(false);
     while app.step_input_drag_scroll() {}
     assert_eq!(app.input_scroll, 6, "down-arm marches to the max scroll");
-    assert_eq!(app.input_drag_scroll_edge(43), None, "clamped: no more rows");
+    assert_eq!(
+        app.input_drag_scroll_edge(43),
+        None,
+        "clamped: no more rows"
+    );
 
     // Ending the drag disarms the autoscroll; the heartbeat step no-ops.
     app.drag.finish(&mut app.selection);

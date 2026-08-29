@@ -880,27 +880,44 @@ fn user_message_origin_defaults_to_chat_and_can_be_overridden() {
 }
 
 #[test]
-fn provider_retry_updates_in_place_and_preserves_disclosure() {
-    let mut retry =
-        TranscriptMessage::provider_retry(2, 4, std::time::Duration::from_secs(3), "first failure");
-    let id = retry.id;
-    retry.pin_provider_retry_expanded(true);
-
-    assert!(
-        retry.update_provider_retry(3, 4, std::time::Duration::from_secs(1), "second failure",)
+fn round_interrupt_creates_structured_notice() {
+    use muta_contracts::{RoundInterrupt, RoundInterruptReason};
+    let marker = TranscriptMessage::round_interrupted(RoundInterrupt {
+        reason: RoundInterruptReason::User,
+        round: Some(3),
+        at_ms: 1_000,
+    });
+    assert!(marker.is_notice());
+    assert!(marker.is_round_interrupt());
+    assert_eq!(marker.raw, "Round 3 — cancelled via [Esc Esc]");
+    let MessageKind::Notice { ref parts, .. } = marker.kind else {
+        panic!("must be notice");
+    };
+    let parts = parts.as_ref().expect("must have parts");
+    assert_eq!(parts.topic.as_deref(), Some("interrupted"));
+    assert_eq!(
+        parts.origin,
+        Some(crate::model::document::NoticeOrigin::System {
+            topic: crate::model::document::SystemNoticeTopic::Interrupted
+        })
     );
-    assert_eq!(retry.id, id, "an update must retain transcript identity");
-    assert_eq!(retry.provider_retry_expanded(), Some(true));
-    assert_eq!(retry.raw, "second failure");
+}
+
+#[test]
+fn command_result_populates_command_kind() {
+    let harness_cmd = TranscriptMessage::pending_command("review", "HEAD~1");
     assert!(matches!(
-        retry.kind,
-        MessageKind::ProviderRetry {
-            attempt: 3,
-            max_attempts: 4,
-            ref failure,
-            ..
-        } if failure == "second failure"
+        harness_cmd.command_kind(),
+        Some(crate::model::document::CommandKind::Harness { name, args }) if name == "review" && args == "HEAD~1"
     ));
+    assert_eq!(harness_cmd.raw, "/review HEAD~1");
+
+    let shell_cmd = TranscriptMessage::pending_command("shell", "!cargo test");
+    assert!(matches!(
+        shell_cmd.command_kind(),
+        Some(crate::model::document::CommandKind::Shell { command }) if command == "!cargo test"
+    ));
+    assert_eq!(shell_cmd.raw, "!cargo test");
 }
 
 #[test]
@@ -917,15 +934,15 @@ fn notice_strips_terminal_controls_from_crlf_http_errors() {
     assert!(!n.raw.chars().any(|c| c.is_control() && c != '\n'));
 }
 
-/// Streaming thinking rows read as a live token spray (`✦ Thinking · N
+/// Streaming thinking rows read as a live token count (`Thinking · N
 /// tokens`), not an estimate; finished traces settle to the final line with
-/// the duration and drop the live glyph.
+/// the duration.
 #[test]
 fn thinking_summary_sprays_tokens_then_settles() {
-    // Short stream: exact per-token count with the live glyph.
+    // Short stream: exact per-token count.
     let streaming = TranscriptMessage::thinking("one two three four five");
     let summary = streaming.thinking_summary().unwrap();
-    assert!(summary.starts_with("✦ Thinking · "), "got: {summary}");
+    assert!(summary.starts_with("Thinking · "), "got: {summary}");
     assert!(summary.ends_with(" tokens"), "got: {summary}");
     assert!(!summary.contains('~'), "no estimate tilde: {summary}");
 
@@ -936,7 +953,7 @@ fn thinking_summary_sprays_tokens_then_settles() {
     let shown = deep
         .thinking_summary()
         .unwrap()
-        .trim_start_matches("✦ Thinking · ")
+        .trim_start_matches("Thinking · ")
         .trim_end_matches(" tokens")
         .replace(' ', "")
         .parse::<usize>()
@@ -947,14 +964,10 @@ fn thinking_summary_sprays_tokens_then_settles() {
         "shown {shown} vs {actual}"
     );
 
-    // Finished trace: no glyph, exact count, humanized duration.
+    // Finished trace: exact count, humanized duration.
     let mut done = TranscriptMessage::thinking(filler);
     done.set_thinking_duration(2_400);
     let settled = done.thinking_summary().unwrap();
-    assert!(
-        !settled.contains('✦'),
-        "finished trace drops the glyph: {settled}"
-    );
     assert!(
         settled.starts_with(&format!("Thinking · {actual} tokens")),
         "exact count when finished: {settled}"

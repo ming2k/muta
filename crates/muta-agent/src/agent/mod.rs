@@ -655,7 +655,6 @@ struct RequestAccountingGuard {
     started_at: Option<std::time::Instant>,
     stream_ready_at: Option<std::time::Instant>,
     first_output_at: Option<std::time::Instant>,
-    first_visible_output_at: Option<std::time::Instant>,
     last_output_at: Option<std::time::Instant>,
     stream_end_at: Option<std::time::Instant>,
     validated_at: Option<std::time::Instant>,
@@ -706,7 +705,6 @@ impl RequestAccountingGuard {
             started_at: None,
             stream_ready_at: None,
             first_output_at: None,
-            first_visible_output_at: None,
             last_output_at: None,
             stream_end_at: None,
             validated_at: None,
@@ -759,18 +757,12 @@ impl RequestAccountingGuard {
         received_at: std::time::Instant,
     ) {
         let mut fragments: Vec<&str> = Vec::new();
-        let visible = match event {
-            muta_contracts::ProviderStreamEvent::TextDelta(delta) => {
+        match event {
+            muta_contracts::ProviderStreamEvent::TextDelta(delta)
+            | muta_contracts::ProviderStreamEvent::ReasoningDelta(delta) => {
                 if !delta.is_empty() {
                     fragments.push(delta);
                 }
-                true
-            }
-            muta_contracts::ProviderStreamEvent::ReasoningDelta(delta) => {
-                if !delta.is_empty() {
-                    fragments.push(delta);
-                }
-                false
             }
             muta_contracts::ProviderStreamEvent::ToolCallDelta {
                 name, arguments, ..
@@ -781,13 +773,12 @@ impl RequestAccountingGuard {
                 if !arguments.is_empty() {
                     fragments.push(arguments);
                 }
-                false
             }
             muta_contracts::ProviderStreamEvent::Usage(usage) => {
                 self.observe_usage(*usage);
                 return;
             }
-        };
+        }
 
         if fragments.is_empty() {
             return;
@@ -795,9 +786,6 @@ impl RequestAccountingGuard {
         let first_event = self.first_output_at.is_none();
         if first_event {
             self.first_output_at = Some(received_at);
-        }
-        if visible && self.first_visible_output_at.is_none() {
-            self.first_visible_output_at = Some(received_at);
         }
         self.last_output_at = Some(received_at);
         self.output_events = self.output_events.saturating_add(1);
@@ -849,7 +837,6 @@ impl RequestAccountingGuard {
         muta_contracts::RequestPerformance {
             stream_ready_us: offset(self.stream_ready_at),
             ttft_us: offset(self.first_output_at),
-            visible_ttft_us: offset(self.first_visible_output_at),
             stream_us: span(self.first_output_at, self.last_output_at),
             tail_us: span(self.last_output_at, self.stream_end_at),
             e2e_us: offset(self.validated_at),

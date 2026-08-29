@@ -113,7 +113,7 @@ pub fn draw_help_modal(
         row("/skills", "browse skills"),
         row("/permissions", "manage permissions"),
         row("/settings", "settings & appearance"),
-        row("/", "slash commands"),
+        row("/", "harness commands (⌘)"),
         Line::from(""),
         Line::from(section("Modes")),
         Line::from(""),

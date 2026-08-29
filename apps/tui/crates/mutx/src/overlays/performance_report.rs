@@ -8,8 +8,7 @@
 use std::collections::BTreeMap;
 
 use muta_contracts::{
-    RequestPerformance, RequestUsageRecord, RequestUsageSource, RequestUsageStatus,
-    TokenSourceReport,
+    RequestPerformance, RequestUsageRecord, RequestUsageStatus, TokenSourceReport,
 };
 use mutx_engine::{
     Frame, Modifier, Style, {Line, Span},
@@ -359,19 +358,15 @@ fn detail_body(
             )
         })
         .collect::<Vec<_>>();
-    let quality = attempts
-        .iter()
-        .map(|record| quality_label(record).to_string())
-        .collect::<Vec<_>>();
     let widths = table_widths(
         body_width,
-        ["Turn", "State", "TTFT", "Stream", "E2E", "Q"],
-        [&labels, &states, &ttft, &stream, &e2e, &quality],
+        ["Turn", "State", "TTFT", "Stream", "E2E"],
+        [&labels, &states, &ttft, &stream, &e2e],
     );
     body.push(table_line(
-        ["Turn", "State", "TTFT", "Stream", "E2E", "Q"],
+        ["Turn", "State", "TTFT", "Stream", "E2E"],
         widths,
-        [theme.muted(); 6],
+        [theme.muted(); 5],
         theme.panel(),
     ));
     let mut selected_line = None;
@@ -393,7 +388,6 @@ fn detail_body(
                 ttft[index].as_str(),
                 stream[index].as_str(),
                 e2e[index].as_str(),
-                quality[index].as_str(),
             ],
             widths,
             [
@@ -402,7 +396,6 @@ fn detail_body(
                 theme.muted(),
                 theme.fg(),
                 theme.muted(),
-                theme.info(),
             ],
             bg,
         ));
@@ -417,10 +410,6 @@ fn detail_body(
         }
     }
     body.push(Line::from(""));
-    body.push(Line::from(Span::styled(
-        "Q: A provider decode · B reported usage · C estimated usage",
-        Style::default().fg(theme.muted()),
-    )));
     body.push(Line::from(Span::styled(
         "TTFT/Stream/E2E are client-observed and include network behavior.",
         Style::default().fg(theme.muted()),
@@ -455,18 +444,12 @@ fn turn_detail_body(record: &RequestUsageRecord, theme: &Theme) -> Vec<Line<'sta
         &format!("{} · {}", record.provider, record.model),
         theme,
     ));
-    body.push(kv("Quality", quality_label(record), theme));
 
     body.push(Line::from(""));
     body.push(section_heading("First token", theme));
     body.push(kv(
         "TTFT (first output)",
         &fmt_optional_duration(performance.and_then(|p| p.ttft_us)),
-        theme,
-    ));
-    body.push(kv(
-        "First visible text",
-        &fmt_optional_duration(performance.and_then(|p| p.visible_ttft_us)),
         theme,
     ));
     body.push(kv(
@@ -619,10 +602,12 @@ fn round_first_ttft_us(round: &PerformanceRound<'_>) -> Option<u64> {
         .find_map(|record| observed_ttft_us(record))
 }
 
+/// Client-observed TTFT: dispatch to the first output-bearing event of any
+/// kind (text, reasoning, or tool-call payload).
 fn observed_ttft_us(record: &RequestUsageRecord) -> Option<u64> {
     record
         .performance
-        .and_then(|performance| performance.visible_ttft_us.or(performance.ttft_us))
+        .and_then(|performance| performance.ttft_us)
 }
 
 fn round_stream_tps(round: &PerformanceRound<'_>) -> Option<f64> {
@@ -689,21 +674,6 @@ fn median(sorted: &[u64]) -> Option<u64> {
         let low = *sorted.get(middle.checked_sub(1)?)?;
         let high = *sorted.get(middle)?;
         Some((low + high) / 2)
-    }
-}
-
-fn quality_label(record: &RequestUsageRecord) -> &'static str {
-    if record
-        .performance
-        .is_some_and(|performance| performance.provider_decode_tps().is_some())
-    {
-        "A"
-    } else if record.source == RequestUsageSource::Reported {
-        "B"
-    } else if record.source == RequestUsageSource::Estimated {
-        "C"
-    } else {
-        "–"
     }
 }
 
@@ -912,7 +882,8 @@ fn truncate(text: &str, width: usize) -> String {
 mod tests {
     use super::*;
     use muta_contracts::{
-        PerformanceTimingSource, RequestPerformance, RequestUsageKey, StreamTokenSource,
+        PerformanceTimingSource, RequestPerformance, RequestUsageKey, RequestUsageSource,
+        StreamTokenSource,
     };
 
     fn record(round: u64, turn: u32, ttft_us: u64, stream_us: u64) -> RequestUsageRecord {
@@ -929,7 +900,6 @@ mod tests {
             completion_tokens: 101,
             performance: Some(RequestPerformance {
                 ttft_us: Some(ttft_us),
-                visible_ttft_us: Some(ttft_us),
                 stream_us: Some(stream_us),
                 e2e_us: Some(ttft_us + stream_us),
                 streamed_output_tokens: 101,

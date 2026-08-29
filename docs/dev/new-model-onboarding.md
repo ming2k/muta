@@ -47,7 +47,7 @@ own home. No single edit makes a model appear everywhere:
 - [ ] Add a `CHANGELOG.md` `Unreleased` entry describing what a user gains.
 - [ ] If the platform's `/models` endpoint now returns capability metadata it
       did not before, revisit `fitting:` on the preset spec (see
-      [ADR-0070](../../adr/0070-provider-scoped-remote-model-metadata.md)):
+      [ADR-0070](../adr/0070-provider-scoped-remote-model-metadata.md)):
       ids-only endpoints stay `fitting: false` (baselines own capabilities);
       trusted rich-metadata endpoints may flip to `fitting: true`.
 

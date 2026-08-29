@@ -37,7 +37,7 @@
 use mutx_engine::Rect;
 
 use crate::components::meta_strip::{MetaStrip, MetaTone};
-use crate::design::{AI_OUTPUT_LEAD_GLYPH, JOIN_ENUMERATE_COLS};
+use crate::design::{AI_OUTPUT_LEAD_GLYPH, JOIN_ENUMERATE_COLS, STREAM_BOTTOM_GAP_ROWS};
 use crate::model::document::TranscriptMessage;
 use crate::time::sent_time_label;
 
@@ -88,6 +88,11 @@ impl TranscriptLayout for TurnBand {
 
             mi += 1;
         }
+
+        if mi == stream.messages.len() {
+            stream.gap(STREAM_BOTTOM_GAP_ROWS);
+        }
+
         stream.finish_virtual();
     }
 }

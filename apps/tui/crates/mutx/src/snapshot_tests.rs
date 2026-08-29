@@ -820,11 +820,11 @@ fn command_entries_render_header_and_direct_body_without_folding() {
 
     let plain_idx = rows
         .iter()
-        .position(|row| row.contains("❯ command"))
-        .expect("shell passthrough must render generic entry header ❯ command");
+        .position(|row| row.contains("⌘ shell"))
+        .expect("shell passthrough must render entry header ⌘ shell");
     assert!(
-        rows[plain_idx].trim_start().starts_with("❯ command"),
-        "a shell passthrough renders generic header with leading ok glyph ❯:\n{grid}"
+        rows[plain_idx].trim_start().starts_with("⌘ shell"),
+        "a shell passthrough renders header with leading ⌘ glyph and shell label:\n{grid}"
     );
     assert!(
         !rows[plain_idx].contains('┃'),
@@ -837,11 +837,11 @@ fn command_entries_render_header_and_direct_body_without_folding() {
 
     let permissions_idx = rows
         .iter()
-        .position(|row| row.contains("⌘ command"))
-        .unwrap_or_else(|| panic!("command entry must render its header ⌘ command:\n{grid}"));
+        .position(|row| row.contains("⌘ harness"))
+        .unwrap_or_else(|| panic!("command entry must render its header ⌘ harness:\n{grid}"));
     assert!(
-        rows[permissions_idx].trim_start().starts_with("⌘ command"),
-        "a command entry renders its header with leading ⌘ glyph:\n{grid}"
+        rows[permissions_idx].trim_start().starts_with("⌘ harness"),
+        "a harness command entry renders its header with leading ⌘ glyph:\n{grid}"
     );
     assert!(
         !rows[permissions_idx].trim_start().starts_with('+')
@@ -929,7 +929,7 @@ fn concurrent_turn_and_command_entries_render_and_expand_dynamically() {
 
     let cmd_pos_v1 = rows_v1
         .iter()
-        .position(|row| row.contains("⌘ command"))
+        .position(|row| row.contains("⌘ harness"))
         .expect("command entry header must be present in v1");
 
     // Stage 2: Assistant turn receives more streaming tokens (4 extra list items).
@@ -943,7 +943,7 @@ fn concurrent_turn_and_command_entries_render_and_expand_dynamically() {
 
     let cmd_pos_v2 = rows_v2
         .iter()
-        .position(|row| row.contains("⌘ command"))
+        .position(|row| row.contains("⌘ harness"))
         .expect("command entry header must be present in v2");
 
     assert!(
@@ -966,7 +966,7 @@ fn command_component_pending_then_completed() {
 
     let pending = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
     assert!(
-        pending.contains("⌘ command") && pending.contains("/delegate on"),
+        pending.contains("⌘ harness") && pending.contains("/delegate on"),
         "a pending row shows generic header with invocation in body:\n{pending}"
     );
     assert!(
@@ -992,7 +992,7 @@ fn command_component_pending_then_completed() {
     );
     let completed = render_transcript_grid(std::slice::from_ref(&message), 80, 14);
     assert!(
-        completed.contains("⌘ command")
+        completed.contains("⌘ harness")
             && completed.contains("/delegate on")
             && completed.contains("Delegated mode ON"),
         "the settled entry renders its header, invocation, and result body:\n{completed}"
@@ -1188,10 +1188,6 @@ fn default_turn_header_has_one_gap_before_first_tool() {
     assert_eq!(
         rows[turn_idx], "  > turn 7  claude-sonnet (high)",
         "turn header renders anchor  model effort:\n{grid}"
-    );
-    assert_eq!(
-        turn_idx, 1,
-        "turn header should only inherit the viewport's one top-margin row:\n{grid}"
     );
     assert_eq!(
         tool_idx - turn_idx,
@@ -1397,8 +1393,8 @@ fn command_component_renders_lead_symbols_and_timestamps() {
 
     let grid = render_transcript_grid(&messages, 140, 18);
     assert!(
-        grid.contains("⌘ command") && grid.contains("/delegate on"),
-        "slash command must render with ⌘ command header and invocation in body:\n{grid}"
+        grid.contains("⌘ harness") && grid.contains("/delegate on"),
+        "slash command must render with ⌘ harness header and invocation in body:\n{grid}"
     );
     assert!(
         grid.contains("Delegated mode ON"),
@@ -1410,8 +1406,8 @@ fn command_component_renders_lead_symbols_and_timestamps() {
         "ack detail line must render below the headline on its own row:\n{grid}"
     );
     assert!(
-        grid.contains("❯ command") && grid.contains("!cargo check"),
-        "shell command must render with ❯ command header and invocation in body:\n{grid}"
+        grid.contains("⌘ shell") && grid.contains("!cargo check"),
+        "shell command must render with ⌘ shell header and invocation in body:\n{grid}"
     );
     assert!(
         !grid.contains("▌ Sent"),

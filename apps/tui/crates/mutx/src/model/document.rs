@@ -42,6 +42,102 @@ impl ToolStepStatus {
     }
 }
 
+pub type ToolInvocationStatus = ToolStepStatus;
+
+/// A structured tool invocation with its lifecycle and output.
+#[derive(Debug, Clone)]
+pub struct ToolInvocation {
+    pub id: String,
+    pub name: String,
+    pub profile: Option<String>,
+    pub arguments: String,
+    pub output: Option<String>,
+    pub structured: Option<Box<muta_contracts::ToolOutput>>,
+    pub status: ToolInvocationStatus,
+    pub expanded: bool,
+    pub user_pinned: bool,
+    pub duration_ms: Option<u64>,
+    pub started_at: Option<std::time::Instant>,
+    pub awaiting: bool,
+    pub activity: Option<String>,
+    pub children: Vec<TranscriptMessage>,
+}
+
+impl ToolInvocation {
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            profile: None,
+            arguments: arguments.into(),
+            output: None,
+            structured: None,
+            status: ToolInvocationStatus::Running,
+            expanded: false,
+            user_pinned: false,
+            duration_ms: None,
+            started_at: Some(std::time::Instant::now()),
+            awaiting: false,
+            activity: None,
+            children: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandKind {
+    /// Harness built-in control-plane command (e.g. /review, /models, /autopilot)
+    Harness { name: String, args: String },
+    /// Shell passthrough command (e.g. !cargo test)
+    Shell { command: String },
+}
+
+impl CommandKind {
+    pub fn is_shell(&self) -> bool {
+        matches!(self, CommandKind::Shell { .. })
+    }
+
+    pub fn category_label(&self) -> &'static str {
+        match self {
+            CommandKind::Harness { .. } => "harness",
+            CommandKind::Shell { .. } => "shell",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UserPromptKind {
+    #[default]
+    Normal,
+    Steer,
+    FollowUp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SystemNoticeTopic {
+    Interrupted,
+    Trust,
+    Review,
+    TurnGuard,
+    CommandAck,
+    Custom(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoticeOrigin {
+    System {
+        topic: SystemNoticeTopic,
+    },
+    Provider {
+        provider_name: Option<String>,
+        attempt: Option<(usize, usize)>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum MessageKind {
     Text,
@@ -109,26 +205,6 @@ pub enum MessageKind {
         /// User-pinned flag — see [`MessageKind::ToolStep::user_pinned`].
         user_pinned: bool,
     },
-    /// Transient provider-retry state rendered inline in the transcript.
-    ///
-    /// Unlike a notice, this message is updated in place for every failed
-    /// attempt and removed when the request succeeds or terminates. Keeping
-    /// the timing data structured lets the renderer derive a live countdown
-    /// (and then the current attempt's elapsed time) on every frame without
-    /// appending one line per retry.
-    ProviderRetry {
-        /// Upcoming provider attempt, including the initial request
-        /// (`2` means the first retry after attempt `1` failed).
-        attempt: usize,
-        /// Maximum provider attempts, including the initial request.
-        max_attempts: usize,
-        /// Most recent retryable provider error.
-        failure: String,
-        /// When the backoff countdown finishes and this attempt begins.
-        retry_at: std::time::Instant,
-        expanded: bool,
-        user_pinned: bool,
-    },
     /// A harness-level notice — errors, turn-pause signals, compaction
     /// summaries, provider switches, and other status lines that previously
     /// were smuggled through `Role::System` with hand-rolled `"Error: "`
@@ -148,16 +224,10 @@ pub enum MessageKind {
         expanded: bool,
         user_pinned: bool,
     },
-    /// A slash-command invocation as **one component that owns both its input
-    /// and its output** (ADR-0108, revising ADR-0091/0106): the row is created
-    /// optimistically when the user dispatches the command and settles when
-    /// the typed result (or its terminal state) arrives — the same
-    /// running→completed lifecycle a tool step has. `raw` holds the invocation
-    /// text (`/search foo`, `!ls -la`); `blocks` hold the parsed result text
-    /// (`CommandResult::to_text()`), empty while pending and when the record
-    /// carried no result (legacy folds and shell passthroughs). Never rendered
-    /// as a separate user bubble: the `⌘`/`❯` row *is* the input echo.
+    /// A command invocation (Harness command or Shell passthrough) as **one
+    /// component that owns both its input and its output** (ADR-0108, ADR-0111).
     CommandResult {
+        kind: CommandKind,
         /// The typed result (ADR-0091). `None` while the command is still
         /// running, and when the invocation was recorded but the reply was
         /// never persisted (legacy echo folds, `!command` passthroughs). Boxed
@@ -168,19 +238,6 @@ pub enum MessageKind {
         phase: CommandPhase,
         expanded: bool,
         /// User-pinned flag — see [`MessageKind::ToolStep::user_pinned`].
-        user_pinned: bool,
-    },
-    /// A round-interrupt marker (C11): the round stopped before completing —
-    /// user interrupt (Esc Esc), superseded by newer input, or killed with
-    /// the process. The durable record rides the session store (never the
-    /// model window); this row is its transcript projection, created live
-    /// from `RoundEvent::RoundInterrupted` and re-created on resume by
-    /// timestamp seam. Renders as its own warning entry with the reason and
-    /// the stop time, so a resumed session answers "should I continue?"
-    /// at a glance.
-    RoundInterrupt {
-        /// The durable record — reason, `at_ms`, and (usually) the round.
-        record: muta_contracts::RoundInterrupt,
         user_pinned: bool,
     },
 }
@@ -314,8 +371,10 @@ pub fn notice_severity_from_core(severity: muta_contracts::NoticeSeverity) -> No
 /// absent and the renderer falls back to its heuristic text parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoticeParts {
+    /// Origin classification (System vs Provider).
+    pub origin: Option<NoticeOrigin>,
     /// Predictable subsystem label ("trust", "provider", "turn guard",
-    /// "review", "command") identifying the notice's origin. Rendered as the
+    /// "review", "command", "interrupted") identifying the notice's origin. Rendered as the
     /// entry head in place of the generic "notification" constant.
     pub topic: Option<String>,
     /// Summary line (`AgentNotice::title`), rendered as the bold body lead.
@@ -660,6 +719,16 @@ impl TranscriptMessage {
         self
     }
 
+    /// User prompt classification (Normal / Steer / FollowUp).
+    pub fn prompt_kind(&self) -> UserPromptKind {
+        match self.origin {
+            UserMessageOrigin::Chat => UserPromptKind::Normal,
+            UserMessageOrigin::Steer => UserPromptKind::Steer,
+            UserMessageOrigin::FollowUp => UserPromptKind::FollowUp,
+            _ => UserPromptKind::Normal,
+        }
+    }
+
     /// Mark this message as queued in the send queue (waiting for the
     /// in-flight turn to finish before it is dispatched). Only meaningful on
     /// `Role::User` messages; the renderer and dispatch logic key off this.
@@ -819,13 +888,13 @@ impl TranscriptMessage {
         let name = name.into();
         let args = args.into();
         // The invocation as displayed: `!cmd` for shell passthroughs (their
-        // args carry the literal `!cmd` text), `/name args` for slash
+        // args carry the literal `!cmd` text), `/name args` for harness
         // commands.
-        let invocation = if name == "shell" {
-            args.clone()
+        let (command_kind, invocation) = if name == "shell" {
+            (CommandKind::Shell { command: args.clone() }, args)
         } else {
             let full = format!("/{} {}", name, args);
-            full.trim_end().to_string()
+            (CommandKind::Harness { name, args }, full.trim_end().to_string())
         };
         let result_text = result
             .as_ref()
@@ -848,6 +917,7 @@ impl TranscriptMessage {
             },
             raw: sanitize_text(&invocation).into_owned(),
             kind: MessageKind::CommandResult {
+                kind: command_kind,
                 result: result.map(Box::new),
                 phase,
                 expanded: false,
@@ -1343,9 +1413,22 @@ impl TranscriptMessage {
         matches!(self.kind, MessageKind::CommandResult { .. })
     }
 
+    /// The kind of command invocation (Harness or Shell).
+    pub fn command_kind(&self) -> Option<&CommandKind> {
+        match &self.kind {
+            MessageKind::CommandResult { kind, .. } => Some(kind),
+            _ => None,
+        }
+    }
+
     /// Whether this row is a round-interrupt marker (C11).
     pub fn is_round_interrupt(&self) -> bool {
-        matches!(self.kind, MessageKind::RoundInterrupt { .. })
+        match &self.kind {
+            MessageKind::Notice {
+                parts: Some(parts), ..
+            } => parts.topic.as_deref() == Some("interrupted"),
+            _ => false,
+        }
     }
 
     pub fn command_result_expanded(&self) -> Option<bool> {
@@ -1711,93 +1794,9 @@ impl TranscriptMessage {
         matches!(self.kind, MessageKind::Thinking { .. })
     }
 
-    /// Whether this is the one live provider-retry disclosure.
+    /// Whether this is the one live provider-retry disclosure (deprecated, live retry rides activity bar).
     pub fn is_provider_retry(&self) -> bool {
-        matches!(self.kind, MessageKind::ProviderRetry { .. })
-    }
-
-    /// Construct transient provider-retry state. Callers should update this
-    /// message in place via [`Self::update_provider_retry`] rather than append
-    /// another one for the next failed attempt.
-    pub fn provider_retry(
-        attempt: usize,
-        max_attempts: usize,
-        delay: std::time::Duration,
-        failure: impl Into<String>,
-    ) -> Self {
-        let failure = sanitize_text(&failure.into()).into_owned();
-        Self {
-            id: next_message_id(),
-            role: Role::System,
-            blocks: Vec::new(),
-            raw: failure.clone(),
-            kind: MessageKind::ProviderRetry {
-                attempt,
-                max_attempts,
-                failure,
-                retry_at: std::time::Instant::now() + delay,
-                expanded: false,
-                user_pinned: false,
-            },
-            delivery: DeliveryStatus::default(),
-            insert_id: None,
-            origin: UserMessageOrigin::Chat,
-            provider: None,
-            model: None,
-            effort: None,
-            round: None,
-            turn: None,
-            sent_at_ms: None,
-            injection_origin: None,
-        }
-    }
-
-    /// Refresh the existing retry disclosure for a later attempt while
-    /// preserving the user's expanded/collapsed choice.
-    pub fn update_provider_retry(
-        &mut self,
-        attempt: usize,
-        max_attempts: usize,
-        delay: std::time::Duration,
-        failure: impl Into<String>,
-    ) -> bool {
-        let failure = sanitize_text(&failure.into()).into_owned();
-        let MessageKind::ProviderRetry {
-            attempt: current_attempt,
-            max_attempts: current_max,
-            failure: current_failure,
-            retry_at,
-            ..
-        } = &mut self.kind
-        else {
-            return false;
-        };
-        *current_attempt = attempt;
-        *current_max = max_attempts;
-        *current_failure = failure.clone();
-        *retry_at = std::time::Instant::now() + delay;
-        self.raw = failure;
-        true
-    }
-
-    pub fn provider_retry_expanded(&self) -> Option<bool> {
-        match &self.kind {
-            MessageKind::ProviderRetry { expanded, .. } => Some(*expanded),
-            _ => None,
-        }
-    }
-
-    /// User-driven retry-detail disclosure change.
-    pub fn pin_provider_retry_expanded(&mut self, expanded: bool) {
-        if let MessageKind::ProviderRetry {
-            expanded: current,
-            user_pinned,
-            ..
-        } = &mut self.kind
-        {
-            *current = expanded;
-            *user_pinned = true;
-        }
+        false
     }
 
     /// Whether this message is a harness notice (error / turn-pause / status).
@@ -1824,11 +1823,7 @@ impl TranscriptMessage {
         }
     }
 
-    /// Construct a round-interrupt marker row (C11) from its durable record.
-    /// The body is composed here (and re-composed identically on resume) so
-    /// the live row and the restored row render byte-identically: the round
-    /// number when known, the reason label, and nothing else — the timestamp
-    /// renders from `sent_at_ms` as right-aligned `HH:MM` metadata.
+    /// Construct a round-interrupt marker row (C11) unified as a Notice entry.
     pub fn round_interrupted(record: muta_contracts::RoundInterrupt) -> Self {
         let raw = match record.round {
             Some(round) => match record.reason {
@@ -1850,26 +1845,15 @@ impl TranscriptMessage {
                 muta_contracts::RoundInterruptReason::Terminated => "Process exited".to_string(),
             },
         };
-        Self {
-            id: next_message_id(),
-            role: Role::System,
-            blocks: parse_blocks(&raw),
-            raw,
-            kind: MessageKind::RoundInterrupt {
-                record,
-                user_pinned: false,
-            },
-            delivery: DeliveryStatus::default(),
-            insert_id: None,
-            origin: UserMessageOrigin::Chat,
-            provider: None,
-            model: None,
-            effort: None,
-            round: None,
-            turn: None,
-            sent_at_ms: None,
-            injection_origin: None,
-        }
+        let parts = NoticeParts {
+            origin: Some(NoticeOrigin::System {
+                topic: SystemNoticeTopic::Interrupted,
+            }),
+            topic: Some("interrupted".to_string()),
+            title: raw.clone(),
+            detail: None,
+        };
+        Self::notice(NoticeSeverity::Warning, raw).with_notice_parts(parts)
     }
 
     /// Construct a notice message. Replaces the ad-hoc
@@ -1922,7 +1906,26 @@ impl TranscriptMessage {
         // Same sanitized boundary as `raw`: provider HTTP bodies commonly
         // carry CRLF, and a raw `\r` reaching the grid moves the physical
         // cursor while the retained grid believes it advanced.
+        let origin = match notice.kind {
+            muta_contracts::NoticeKind::ProviderRetry => Some(NoticeOrigin::Provider {
+                provider_name: None,
+                attempt: None,
+            }),
+            muta_contracts::NoticeKind::NudgeInjected => Some(NoticeOrigin::System {
+                topic: SystemNoticeTopic::TurnGuard,
+            }),
+            muta_contracts::NoticeKind::ReviewAlert => Some(NoticeOrigin::System {
+                topic: SystemNoticeTopic::Review,
+            }),
+            muta_contracts::NoticeKind::TrustChanged => Some(NoticeOrigin::System {
+                topic: SystemNoticeTopic::Trust,
+            }),
+            muta_contracts::NoticeKind::CommandAck => Some(NoticeOrigin::System {
+                topic: SystemNoticeTopic::CommandAck,
+            }),
+        };
         let parts = NoticeParts {
+            origin,
             topic: Some(notice_topic_label(notice.kind).to_string()),
             title: sanitize_text(&notice.title).into_owned(),
             detail: notice
@@ -2015,11 +2018,10 @@ impl TranscriptMessage {
     /// Reports **tokens** (ADR-0120) — the unit of what this thinking block
     /// costs against the context window, not a scalar count of the text.
     ///
-    /// Spray style: while the trace streams, the line leads with a live
-    /// glyph (`✦`) and counts tokens up as they arrive (`✦ Thinking · 148
-    /// tokens`), reading like a filling meter rather than an estimate.
-    /// A finished trace settles into its final form and appends the
-    /// duration (`Thinking · 1318 tokens · 2.4s`).
+    /// Live style: while the trace streams, the line counts tokens up as
+    /// they arrive (`Thinking · 148 tokens`), reading like a filling meter
+    /// rather than an estimate. A finished trace settles into its final
+    /// form and appends the duration (`Thinking · 1318 tokens · 2.4s`).
     ///
     /// Above [`Self::STREAM_COUNT_QUANTUM`] tokens the streamed count is
     /// floored to a multiple of that quantum rather than reported exactly:
@@ -2056,7 +2058,7 @@ impl TranscriptMessage {
                 } else {
                     tokens - tokens % STREAM_COUNT_QUANTUM
                 };
-                format!("✦ Thinking · {shown} tokens")
+                format!("Thinking · {shown} tokens")
             }
             Some(ms) => format!("Thinking · {tokens} tokens · {}", duration_text(Some(*ms))),
         })
@@ -2095,6 +2097,70 @@ impl TranscriptMessage {
             ToolStepStatus::Interrupted => {
                 format!("{} (interrupted {})", summary, duration_text(*duration_ms))
             }
+        })
+    }
+
+    /// Alias for [`Self::is_tool_step`].
+    pub fn is_tool_invocation(&self) -> bool {
+        self.is_tool_step()
+    }
+
+    /// Alias for [`Self::tool_step_summary`].
+    pub fn tool_invocation_summary(&self) -> Option<String> {
+        self.tool_step_summary()
+    }
+
+    /// Alias for [`Self::tool_step_status`].
+    pub fn tool_invocation_status(&self) -> Option<ToolInvocationStatus> {
+        self.tool_step_status()
+    }
+
+    /// Alias for [`Self::tool_step_expanded`].
+    pub fn tool_invocation_expanded(&self) -> Option<bool> {
+        self.tool_step_expanded()
+    }
+
+    /// Alias for [`Self::pin_tool_step_expanded`].
+    pub fn pin_tool_invocation_expanded(&mut self, expanded: bool) {
+        self.pin_tool_step_expanded(expanded);
+    }
+
+    /// Extract structured [`ToolInvocation`] if this message is a tool step.
+    pub fn as_tool_invocation(&self) -> Option<ToolInvocation> {
+        let MessageKind::ToolStep {
+            id,
+            name,
+            profile,
+            arguments,
+            output,
+            structured,
+            status,
+            expanded,
+            user_pinned,
+            duration_ms,
+            started_at,
+            awaiting,
+            activity,
+            children,
+        } = &self.kind
+        else {
+            return None;
+        };
+        Some(ToolInvocation {
+            id: id.clone(),
+            name: name.clone(),
+            profile: profile.clone(),
+            arguments: arguments.clone(),
+            output: output.clone(),
+            structured: structured.clone(),
+            status: *status,
+            expanded: *expanded,
+            user_pinned: *user_pinned,
+            duration_ms: *duration_ms,
+            started_at: *started_at,
+            awaiting: *awaiting,
+            activity: activity.clone(),
+            children: children.clone(),
         })
     }
 

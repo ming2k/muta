@@ -25,7 +25,7 @@ permission or `ask_user` request the child surfaces travels up as a
 This page is the parameter reference. The runner mechanism — isolation model,
 event streaming, the TUI zoom view, profiles, and full-duplex — is explained in
 [Runners](../../explanation/agent-design/envoys.md). See also
-[ADR-0144](../../adr/0144-runner-architecture.md).
+[ADR-0144](../../adr/0144-three-tier-agent-hierarchy-and-tool-pool.md).
 
 ## `runner_code`
 

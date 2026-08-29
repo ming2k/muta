@@ -39,7 +39,9 @@ use crate::model::selection::{CellDragInfo, SelectionState};
 use super::HeightCache;
 use super::disclosure::StickyStep;
 use super::theme::Theme;
-use crate::design::{MESSAGE_GAP_ROWS, TURN_HEADER_BODY_GAP_ROWS};
+use crate::design::{
+    MESSAGE_GAP_ROWS, STREAM_BOTTOM_GAP_ROWS, STREAM_TOP_GAP_ROWS, TURN_HEADER_BODY_GAP_ROWS,
+};
 use crate::disclosure::renderers::RenderCtx;
 
 /// Which layout strategy to use for the transcript message stream.
@@ -244,6 +246,9 @@ fn plan_turn_band(
             height += cached_height(cache, &messages[index])?;
             index += 1;
         }
+        if index == messages.len() {
+            height += STREAM_BOTTOM_GAP_ROWS;
+        }
         plans.push(VirtualChunkPlan {
             message_start: start,
             message_end: index,
@@ -264,7 +269,7 @@ fn is_turn_component(message: &TranscriptMessage) -> bool {
     message.is_tool_step()
         || message.is_runner_task()
         || message.is_thinking()
-        || (message.role == muta_contracts::Role::Assistant && !message.is_provider_retry())
+        || message.role == muta_contracts::Role::Assistant
 }
 
 fn is_tool_like(message: &TranscriptMessage) -> bool {
@@ -333,14 +338,15 @@ pub(super) fn default_boundary_gap(
     }
 }
 
-/// Boundary space is owned by the following item/chunk. This removes leading
-/// and trailing transcript whitespace and lets the renderer and virtual height
-/// index consume the same rule without double-counting group margins.
+/// Boundary space before an item/chunk. The first message (index 0) carries the
+/// stream top scroll padding ([`STREAM_TOP_GAP_ROWS`]); subsequent messages consume
+/// the boundary gap rule between consecutive messages.
 pub(super) fn default_gap_before(messages: &[TranscriptMessage], index: usize) -> usize {
-    index
-        .checked_sub(1)
-        .map(|previous| default_boundary_gap(&messages[previous], &messages[index]))
-        .unwrap_or(0)
+    if index == 0 {
+        STREAM_TOP_GAP_ROWS
+    } else {
+        default_boundary_gap(&messages[index - 1], &messages[index])
+    }
 }
 
 /// The shared render context handed to a layout. Owns the mutable scroll/Y
@@ -409,27 +415,22 @@ impl<'a, 'f> Stream<'a, 'f> {
         // Snapshot the interaction state before the cursor borrow: once the
         // RenderCtx holds &mut frame/layout_map/counters, only ctx fields move.
         let hovered = self.hovered_step == Some(mi);
-        let focused_retry = self.focused_target == Some(InteractiveTarget::provider_retry(mi));
         let focused_tool = self.focused_target == Some(InteractiveTarget::tool_step(mi));
         let focused_thinking = self.focused_target == Some(InteractiveTarget::thinking(mi));
         let focused_command = self.focused_target == Some(InteractiveTarget::command_result(mi));
         let _focused_notice = self.focused_target == Some(InteractiveTarget::notice(mi));
 
         let body_before = self.content_lines;
-        // Round-interrupt markers are terminal and immutable (C11): they join
-        // the height-cache fast path alongside notices.
-        let skippable = !msg.is_provider_retry()
-            && (msg.is_notice()
-                || msg.is_round_interrupt()
-                || (!msg.is_runner_task()
-                    && if msg.is_tool_step() {
-                        !msg.tool_step_status()
-                            .is_some_and(|status| status.is_running())
-                    } else if msg.is_thinking() {
-                        !msg.is_thinking_streaming()
-                    } else {
-                        true
-                    }));
+        let skippable = msg.is_notice()
+            || (!msg.is_runner_task()
+                && if msg.is_tool_step() {
+                    !msg.tool_step_status()
+                        .is_some_and(|status| status.is_running())
+                } else if msg.is_thinking() {
+                    !msg.is_thinking_streaming()
+                } else {
+                    true
+                });
         let cached_height = if skippable {
             self.height_cache.get(msg.id)
         } else {
@@ -445,18 +446,6 @@ impl<'a, 'f> Stream<'a, 'f> {
             if fully_above {
                 self.skip_rows -= h as usize;
             }
-        } else if msg.is_provider_retry() {
-            let mut ctx = RenderCtx::from_cursor(
-                self.frame,
-                self.band,
-                self.band.width as usize,
-                self.theme,
-                self.layout_map,
-                &mut self.skip_rows,
-                &mut self.current_y,
-                &mut self.content_lines,
-            );
-            super::disclosure::draw_provider_retry(&mut ctx, msg, mi, hovered, focused_retry);
         } else if msg.is_notice() {
             super::draw_notice(
                 self.frame,
@@ -545,18 +534,6 @@ impl<'a, 'f> Stream<'a, 'f> {
                 self.cell_selection,
                 hovered,
                 focused_command,
-            );
-        } else if msg.is_round_interrupt() {
-            super::draw_round_interrupt(
-                self.frame,
-                self.band,
-                msg,
-                mi,
-                self.layout_map,
-                &mut self.skip_rows,
-                &mut self.current_y,
-                &mut self.content_lines,
-                self.theme,
             );
         } else {
             super::draw_message_body(

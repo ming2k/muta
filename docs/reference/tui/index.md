@@ -63,6 +63,7 @@ open, re-opens one that `Esc` dismissed); it is not a focus toggle.
 | [Envoy view](envoy-view.md) | Inline envoy step + zoomed-in child stream + navigation bar + focus stack |
 | [Activity bar](activity-bar.md) | Breathing-dot liveness anchor + live status label + elapsed; clickable to open the Activity modal |
 | [Todo bar](todo-bar.md) | One-row task-list summary: `TODOS` tag · done/total progress · current item; click to open the Activity modal on the Todos tab |
+| [Queue bar](queue-bar.md) | One-row staged-outbox summary pinned below the todo bar; busy `Enter` stages here; click to open the queue modal |
 | [Model bar](model-bar.md) | Ambient gauges: model name + reasoning tier + `@instance` · context usage · stream rate |
 | [Head row](status-bar.md) | Ambient session state at the top of every view: session identity + workspace (left) + mode flags (right) |
 | [Modals](modals.md) | Models, Model editor, Sessions, Session, History, Question, Permission, Tool-step detail, Help, Toasts |
@@ -101,7 +102,7 @@ ADR-0079; paths below are relative to that directory.
 | `layout/` | Transcript arrangement strategies: `turn_band` (selected by `[tui] transcript_layout`) |
 | `tools/` | Per-tool-step presenters (`execute_command`, `edit`, `read`, `search`, `web`, `ask_user`, `read_image`, `diff`, `meta`, `fallback`) |
 | `composer.rs` | `draw_composer` (live input box), `INPUT_MSG_IDX` |
-| `chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_hint_bar` / `HintBarView`, `draw_completion_menu` |
+| `chrome.rs` | `draw_activity_bar` (breathing dot + status + elapsed), `draw_todo_bar` (task-list summary), `draw_queue_bar` (outbox summary), `draw_model_bar` (ambient gauges below the composer), `draw_completion_menu` |
 | `page_header.rs` | `draw_page_header` / `PageHeader` / `SessionHead` / `PageHints::has_content` — the unified head band at the top of every view (demand-driven row 2) |
 | `overlays/` | Modal subsystem (dir): one renderer per modal — `permission`, `provider`, `history`, `help`, `session`, `permissions_manager`, `activity`, `config`, `config_theme`, `config_theme_custom`, `mcp`, `skills`, `tools`, `token_report`, `toast` — backed by shared render components where possible |
 | `empty_state.rs` | Empty-transcript placeholder view: logo hero, rotating help carousel (`carousel_pages`), `parse_logo` |

@@ -117,6 +117,7 @@ impl CommandCatalog {
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum ComposerCompletionKind {
     Slash,
+    SlashAlias,
     Intent,
     PathFile,
     PathDir,
