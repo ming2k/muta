@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.6] - 2026-08-29
+
+### Added
+
+- **Composer Mode Declaration & Draft Preservation Indicator.** Top chrome breathing row displays `[history index/total · draft saved]` during inline history recall (`↑`/`↓`), explicitly declaring the active recall state and that the user's draft buffer is safely preserved.
+- **Adaptive Composer Hint Row.** Bottom hint row dynamically reflects active mode semantics: `Enter send history  ↑↓ [1/12]  Esc draft` during history recall, `Tab / Enter select  ↑↓ navigate  Esc dismiss` during completion popups, and `Enter insert  Tab preview  ↑↓ select  Esc close` during global history search (`Ctrl+R`).
+
+### Changed
+
+- **Unified Escape Hatch Discipline.** `Esc` cancels inline history recall and restores the draft immediately via `cancel_history_recall()`, dissolves armed queue pointers back to draft, and dismisses active completion popups without mutating buffer contents.
+
 ## [0.37.5] - 2026-08-29
 
 ### Added
@@ -5596,7 +5607,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.5...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.6...HEAD
+[0.37.6]: https://github.com/ming2k/muta/compare/v0.37.5...v0.37.6
 [0.37.5]: https://github.com/ming2k/muta/compare/v0.37.4...v0.37.5
 [0.37.4]: https://github.com/ming2k/muta/compare/v0.37.3...v0.37.4
 [0.37.3]: https://github.com/ming2k/muta/compare/v0.37.1...v0.37.3
