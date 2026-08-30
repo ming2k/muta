@@ -277,10 +277,11 @@ impl WorkspaceFsProvider {
     }
 
     fn confined(&self, path: &Path) -> Result<PathBuf, FsError> {
-        let candidate = if path.is_absolute() {
-            path.to_path_buf()
+        let expanded = muta_contracts::execution::expand_tilde(path);
+        let candidate = if expanded.is_absolute() {
+            expanded
         } else {
-            self.root.join(path)
+            self.root.join(expanded)
         };
         let resolved = resolve_existing_ancestor(&candidate).ok_or_else(|| {
             FsError::PermissionDenied(format!(

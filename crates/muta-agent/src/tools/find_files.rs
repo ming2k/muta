@@ -74,8 +74,7 @@ impl Tool for FindFilesTool {
         let path = args.path.as_deref().unwrap_or(".");
         let exclude = args.exclude.unwrap_or_default();
         let workspace = self.env.workspace_root().to_path_buf();
-        let additional_roots = self.env.additional_roots();
-        let search_root = resolve_search_root(&workspace, &additional_roots, path)?;
+        let search_root = resolve_search_root(self.env.as_ref(), path)?;
         let metadata = self
             .env
             .fs()

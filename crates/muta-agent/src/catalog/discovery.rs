@@ -94,11 +94,11 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
             }
         });
 
-        let protocol = if connection.auth == ChannelAuth::ChatGptOAuth {
-            DiscoveryProtocol::Codex
-        } else {
-            DiscoveryProtocol::from_preset_protocol(protocol)
-        };
+        let protocol = DiscoveryProtocol::for_connection(
+            connection.preset_id.as_deref(),
+            connection.auth,
+            protocol,
+        );
         let auth = if connection.auth.is_oauth() {
             let source = muta_providers::oauth::OAuthCredentialSource::new(
                 &connection.id,
@@ -121,13 +121,6 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
             let key = resolve_credential(connection, &stores.creds);
             muta_contracts::ResolvedAuth::new(key)
         };
-        let mut extra_headers = Vec::new();
-        if protocol == DiscoveryProtocol::Codex {
-            extra_headers.push(("originator", "muta"));
-            if let Some(account_id) = auth.account_id.as_deref() {
-                extra_headers.push(("ChatGPT-Account-Id", account_id));
-            }
-        }
         let cached_etag = stores
             .cache
             .model_lists
@@ -137,14 +130,12 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
             protocol,
             base_url: &base_url,
             api_key: &auth.token,
+            account_id: auth.account_id.as_deref(),
             user_agent: user_agent.as_deref(),
-            extra_headers: &extra_headers,
+            extra_headers: &[],
         };
         let options = ModelDiscoveryOptions {
-            etag: (protocol == DiscoveryProtocol::Codex)
-                .then_some(cached_etag)
-                .flatten(),
-            client_version: (protocol == DiscoveryProtocol::Codex).then_some(CLIENT_VERSION),
+            etag: cached_etag,
         };
 
         match muta_providers::discover_models(discovery_req, options).await {

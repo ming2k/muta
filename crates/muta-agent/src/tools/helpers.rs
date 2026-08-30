@@ -52,15 +52,21 @@ pub(crate) fn env_from_root(
 
 /// Resolve a user-supplied path argument against the tool's workspace base.
 ///
-/// Absolute paths pass through unchanged (`Path::join` semantics); a relative
-/// path is anchored to the session's project root, never to the daemon's
-/// coincidental process cwd. Model-facing argument text is untouched — only
-/// filesystem access goes through the resolved value, so prompt/UI rendering
-/// keeps showing what the model actually sent.
+/// Leading `~` is expanded to the user's home directory. Absolute paths pass
+/// through unchanged (`Path::join` semantics); a relative path is anchored to
+/// the session's project root, never to the daemon's coincidental process cwd.
+/// Model-facing argument text is untouched — only filesystem access goes
+/// through the resolved value, so prompt/UI rendering keeps showing what the
+/// model actually sent.
 pub(crate) fn resolve_workspace_path(base: &WorkspaceBase, path: &str) -> PathBuf {
-    match base {
-        Some(root) => root.join(path),
-        None => PathBuf::from(path),
+    let expanded = muta_contracts::execution::expand_tilde(Path::new(path));
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        match base {
+            Some(root) => root.join(expanded),
+            None => expanded,
+        }
     }
 }
 
@@ -86,6 +92,10 @@ pub(crate) const IGNORED_DIRS: &[&str] = &[
     ".gradle",
     ".idea",
     ".vscode",
+    "proc",
+    "sys",
+    "dev",
+    "run",
 ];
 
 /// Extract a string field from JSON arguments for `permission_scope`.

@@ -82,8 +82,7 @@ impl Tool for SearchTextTool {
         let limit = search_limit(args.limit)?;
         let path = args.path.as_deref().unwrap_or(".");
         let workspace = self.env.workspace_root().to_path_buf();
-        let additional_roots = self.env.additional_roots();
-        let search_root = resolve_search_root(&workspace, &additional_roots, path)?;
+        let search_root = resolve_search_root(self.env.as_ref(), path)?;
         self.env
             .fs()
             .metadata(&search_root)
@@ -324,5 +323,28 @@ mod tests {
             .unwrap();
         assert!(exclude_only.contains("src/main.rs:1:"), "{exclude_only}");
         assert!(!exclude_only.contains("main.py"), "{exclude_only}");
+    }
+
+    #[tokio::test]
+    async fn tool_search_admits_outside_path_when_unconfined() {
+        let ws_dir = tempfile::tempdir().unwrap();
+        let out_dir = tempfile::tempdir().unwrap();
+        let outside_file = out_dir.path().join("outside.txt");
+        std::fs::write(&outside_file, "secret_content_123\n").unwrap();
+
+        let env = std::sync::Arc::new(crate::execution::WorkspaceExecutionEnvironment::new(
+            ws_dir.path(),
+        ));
+        let tool = SearchTextTool::with_env(env.clone());
+
+        env.shared_unconfined().set_unconfined(true);
+        let res_unconfined = tool
+            .call(&format!(
+                r#"{{"query":"secret_content_123","path":"{}"}}"#,
+                out_dir.path().display()
+            ))
+            .await
+            .unwrap();
+        assert!(res_unconfined.contains("outside.txt:1:secret_content_123"));
     }
 }

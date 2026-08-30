@@ -22,8 +22,11 @@ pub const CLAUDE_CODE_CLIENT_HEADERS: &[(&str, &str)] = &[
     ("anthropic-version", "2023-06-01"),
 ];
 
+/// OpenAI Codex CLI version currently impersonated by muta.
+pub const CODEX_VERSION: &str = "0.151.0";
+
 /// User-Agent header value sent when impersonating OpenAI Codex.
-pub const CODEX_USER_AGENT: &str = "codex/1.0.0";
+pub const CODEX_USER_AGENT: &str = "codex/0.151.0";
 
 /// Client-identity headers used when impersonating OpenAI Codex.
 pub const CODEX_CLIENT_HEADERS: &[(&str, &str)] = &[

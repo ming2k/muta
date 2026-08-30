@@ -1470,6 +1470,7 @@ version = "0.37.14"
 dependencies = [
  "async-trait",
  "chrono",
+ "dirs",
  "futures",
  "inventory",
  "serde",

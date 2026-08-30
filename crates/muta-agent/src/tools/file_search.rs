@@ -4,41 +4,25 @@ use std::path::{Component, Path, PathBuf};
 
 use ignore::WalkBuilder;
 use ignore::overrides::{Override as OverrideMatcher, OverrideBuilder};
+use muta_contracts::ExecutionEnvironment;
 
 use crate::tools::helpers::IGNORED_DIRS;
 
 pub(crate) const DEFAULT_SEARCH_LIMIT: usize = 200;
 pub(crate) const MAX_SEARCH_LIMIT: usize = 1000;
 
-/// Resolve a model-supplied workspace-relative search root.
+/// Resolve a model-supplied workspace-relative search root against the execution environment.
 pub(crate) fn resolve_search_root(
-    workspace: &Path,
-    additional_roots: &[PathBuf],
+    env: &dyn ExecutionEnvironment,
     path: &str,
 ) -> Result<PathBuf, String> {
-    let supplied = Path::new(path);
-    let target = if supplied.is_absolute() {
-        supplied.to_path_buf()
-    } else {
-        workspace.join(supplied)
-    };
-
-    let normalized = muta_contracts::execution::lexical_normalize(&target);
-    let root_norm = muta_contracts::execution::lexical_normalize(workspace);
-    let admitted = normalized.starts_with(&root_norm)
-        || muta_contracts::execution::admits_temp_path(&target)
-        || additional_roots
-            .iter()
-            .any(|root| normalized.starts_with(muta_contracts::execution::lexical_normalize(root)));
-
-    if admitted {
-        Ok(target)
-    } else {
-        Err(format!(
+    env.resolve_path(path).map_err(|err| match err {
+        muta_contracts::execution::FsError::PermissionDenied(_) => format!(
             "Search path is outside the admitted workspace roots (admitted: {})",
-            admitted_roots_summary(workspace, additional_roots)
-        ))
-    }
+            admitted_roots_summary(env.workspace_root(), &env.additional_roots())
+        ),
+        other => other.to_string(),
+    })
 }
 
 /// Human-readable admitted set for denial messages — names every root so a
@@ -190,16 +174,26 @@ mod tests {
         assert_eq!(search_limit(None).unwrap(), DEFAULT_SEARCH_LIMIT);
         assert_eq!(search_limit(Some(50_000)).unwrap(), MAX_SEARCH_LIMIT);
         assert!(search_limit(Some(0)).is_err());
-        let additional = vec![PathBuf::from("/sibling")];
-        assert!(resolve_search_root(Path::new("/workspace"), &additional, "src").is_ok());
-        assert!(resolve_search_root(Path::new("/workspace"), &additional, "/sibling/src").is_ok());
-        assert!(
-            resolve_search_root(Path::new("/workspace"), &additional, "../sibling/src").is_ok()
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        let sibling = tmp.path().join("sibling");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+
+        let env = crate::execution::WorkspaceExecutionEnvironment::with_additional_roots(
+            workspace.clone(),
+            vec![sibling.clone()],
         );
-        assert!(resolve_search_root(Path::new("/workspace"), &additional, "../secret").is_err());
-        assert!(resolve_search_root(Path::new("/workspace"), &additional, "/secret").is_err());
+        assert!(resolve_search_root(&env, "src").is_ok());
+        assert!(resolve_search_root(&env, sibling.to_str().unwrap()).is_ok());
+        assert!(resolve_search_root(&env, "/opt/secret_root_outside").is_err());
         assert_eq!(search_path_argument(r#"{"path":"src"}"#), "src");
         assert_eq!(search_path_argument("{}"), ".");
+
+        // When unconfined, external paths are admitted
+        env.shared_unconfined().set_unconfined(true);
+        assert!(resolve_search_root(&env, "/opt/secret_root_outside").is_ok());
     }
 
     #[test]

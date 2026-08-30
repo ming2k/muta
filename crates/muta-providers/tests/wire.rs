@@ -750,6 +750,7 @@ async fn openai_list_models_sends_bearer_and_returns_sorted_unique_ids() {
         protocol: DiscoveryProtocol::OpenAi,
         base_url: &chat_url,
         api_key: &key,
+        account_id: None,
         user_agent: None,
         extra_headers: &[],
     };
@@ -778,6 +779,7 @@ async fn openai_list_models_keyless_relay_sends_no_bearer_header() {
         protocol: DiscoveryProtocol::OpenAi,
         base_url: &format!("{}/v1/chat/completions", server.url()),
         api_key: &key,
+        account_id: None,
         user_agent: None,
         extra_headers: &[],
     };
@@ -789,12 +791,11 @@ async fn openai_list_models_keyless_relay_sends_no_bearer_header() {
 #[tokio::test]
 async fn codex_list_models_sends_subscription_headers_and_preserves_priority() {
     let mut server = Server::new_async().await;
-    let extra_headers = [("originator", "muta"), ("ChatGPT-Account-Id", "acct-test")];
     let _mock = server
         .mock("GET", "/backend-api/codex/models")
         .match_query(Matcher::UrlEncoded(
             "client_version".to_string(),
-            "0.7.0".to_string(),
+            muta_contracts::client_identity::CODEX_VERSION.to_string(),
         ))
         .match_header("authorization", "Bearer chatgpt-access")
         .match_header("originator", "muta")
@@ -816,14 +817,14 @@ async fn codex_list_models_sends_subscription_headers_and_preserves_priority() {
         protocol: DiscoveryProtocol::Codex,
         base_url: &format!("{}/backend-api/codex/responses", server.url()),
         api_key: &key,
+        account_id: Some("acct-test"),
         user_agent: None,
-        extra_headers: &extra_headers,
+        extra_headers: &[],
     };
     let update = discover_models(
         req,
         ModelDiscoveryOptions {
             etag: None,
-            client_version: Some("0.7.0"),
         },
     )
     .await
@@ -848,7 +849,7 @@ async fn codex_list_models_supports_etag_revalidation() {
         .mock("GET", "/backend-api/codex/models")
         .match_query(Matcher::UrlEncoded(
             "client_version".to_string(),
-            "0.7.0".to_string(),
+            muta_contracts::client_identity::CODEX_VERSION.to_string(),
         ))
         .match_header("if-none-match", "\"catalog-v2\"")
         .with_status(304)
@@ -860,6 +861,7 @@ async fn codex_list_models_supports_etag_revalidation() {
         protocol: DiscoveryProtocol::Codex,
         base_url: &format!("{}/backend-api/codex/responses", server.url()),
         api_key: &key,
+        account_id: None,
         user_agent: None,
         extra_headers: &[],
     };
@@ -867,7 +869,6 @@ async fn codex_list_models_supports_etag_revalidation() {
         req,
         ModelDiscoveryOptions {
             etag: Some("\"catalog-v2\""),
-            client_version: Some("0.7.0"),
         },
     )
     .await
@@ -907,6 +908,7 @@ async fn anthropic_list_models_sends_api_key_and_version_headers() {
         protocol: DiscoveryProtocol::Anthropic,
         base_url: &format!("{}/v1/messages", server.url()),
         api_key: &key,
+        account_id: None,
         user_agent: None,
         extra_headers: &[],
     };
@@ -946,6 +948,7 @@ async fn google_list_models_sends_key_query_param_and_filters_non_text() {
         protocol: DiscoveryProtocol::Google,
         base_url: &format!("{}/v1beta", server.url()),
         api_key: &key,
+        account_id: None,
         user_agent: None,
         extra_headers: &[],
     };
@@ -970,6 +973,7 @@ async fn list_models_returns_status_error_on_non_2xx() {
         protocol: DiscoveryProtocol::OpenAi,
         base_url: &format!("{}/v1/chat/completions", server.url()),
         api_key: &key,
+        account_id: None,
         user_agent: None,
         extra_headers: &[],
     };
@@ -1000,6 +1004,7 @@ async fn list_models_returns_empty_error_when_data_array_is_empty() {
         protocol: DiscoveryProtocol::OpenAi,
         base_url: &format!("{}/v1/chat/completions", server.url()),
         api_key: &key,
+        account_id: None,
         user_agent: None,
         extra_headers: &[],
     };

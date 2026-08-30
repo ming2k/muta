@@ -72,10 +72,22 @@ impl DiscoveryProtocol {
     pub fn from_preset_protocol(protocol: &str) -> Self {
         match protocol {
             "anthropic" => Self::Anthropic,
-            "google" => Self::Google,
-            // Legacy alias: old registries/protocols used "gemini".
-            "gemini" => Self::Google,
+            "google" | "gemini" => Self::Google,
+            "codex" => Self::Codex,
             _ => Self::OpenAi,
+        }
+    }
+
+    /// Resolve discovery protocol for a connection from its configuration.
+    pub fn for_connection(
+        preset_id: Option<&str>,
+        auth: muta_contracts::ChannelAuth,
+        protocol: &str,
+    ) -> Self {
+        if auth == muta_contracts::ChannelAuth::ChatGptOAuth || preset_id == Some("chatgpt-oauth") {
+            Self::Codex
+        } else {
+            Self::from_preset_protocol(protocol)
         }
     }
 }
@@ -91,6 +103,8 @@ pub struct ModelDiscoveryRequest<'a> {
     /// derived from it via [`models_endpoint_for`].
     pub base_url: &'a str,
     pub api_key: &'a SecretString,
+    /// Optional account ID associated with OAuth tokens (e.g. ChatGPT-Account-Id).
+    pub account_id: Option<&'a str>,
     pub user_agent: Option<&'a str>,
     /// Extra request headers a provider requires beyond standard auth —
     /// e.g. GitHub Copilot's `x-initiator` / `Openai-Intent` /
@@ -100,14 +114,11 @@ pub struct ModelDiscoveryRequest<'a> {
     pub extra_headers: &'a [(&'a str, &'a str)],
 }
 
-/// Conditional/catalog-version inputs for model discovery. Stock provider
-/// calls can use [`Default`]; the ChatGPT Codex catalog sends both fields.
+/// Conditional revalidation inputs for model discovery (RFC 7232).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ModelDiscoveryOptions<'a> {
     /// Previously observed response ETag, used for conditional revalidation.
     pub etag: Option<&'a str>,
-    /// Client version required by the Codex models endpoint.
-    pub client_version: Option<&'a str>,
 }
 
 /// Result of a cache-aware model discovery request.
@@ -350,17 +361,33 @@ pub async fn discover_models(
         .map_err(ModelListError::Http)?;
 
     let response = match req.protocol {
-        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => {
+        DiscoveryProtocol::OpenAi => {
             // OpenAI auth: a bearer when a key is set, NO header when keyless
             // (some relays reject a malformed bearer). Mirrors the chat path.
             let mut builder = client.get(&endpoint);
             if !req.api_key.expose_secret().trim().is_empty() {
                 builder = builder.bearer_auth(req.api_key.expose_secret());
             }
-            if req.protocol == DiscoveryProtocol::Codex
-                && let Some(client_version) = options.client_version
-            {
-                builder = builder.query(&[("client_version", client_version)]);
+            if let Some(etag) = options.etag {
+                builder = builder.header(reqwest::header::IF_NONE_MATCH, etag);
+            }
+            for (name, value) in req.extra_headers {
+                builder = builder.header(*name, *value);
+            }
+            builder.send().await.map_err(ModelListError::Http)?
+        }
+        DiscoveryProtocol::Codex => {
+            // ChatGPT Codex models catalog: requires client_version query param,
+            // originator header, and optional ChatGPT-Account-Id header.
+            let mut builder = client
+                .get(&endpoint)
+                .query(&[("client_version", muta_contracts::client_identity::CODEX_VERSION)])
+                .header("originator", "muta");
+            if !req.api_key.expose_secret().trim().is_empty() {
+                builder = builder.bearer_auth(req.api_key.expose_secret());
+            }
+            if let Some(account_id) = req.account_id {
+                builder = builder.header("ChatGPT-Account-Id", account_id);
             }
             if let Some(etag) = options.etag {
                 builder = builder.header(reqwest::header::IF_NONE_MATCH, etag);

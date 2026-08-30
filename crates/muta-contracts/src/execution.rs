@@ -246,14 +246,15 @@ pub trait ExecutionEnvironment: Send + Sync {
     /// Resolve a model- or caller-supplied path (relative or absolute) against
     /// this environment's admitted workspace roots.
     ///
-    /// Relative paths resolve against `workspace_root()`. Returns the resolved
-    /// path if unconfined, if it falls within `workspace_root()`, or within any entry in `additional_roots()`
+    /// Relative paths resolve against `workspace_root()`. Leading `~` is expanded
+    /// to the user's home directory. Returns the resolved path if unconfined, if
+    /// it falls within `workspace_root()`, or within any entry in `additional_roots()`
     /// (plus the implicit platform temp roots — scratch files must be readable),
     /// or `FsError::PermissionDenied` if it attempts to escape containment.
     fn resolve_path(&self, raw: &str) -> Result<PathBuf, FsError> {
-        let supplied = Path::new(raw);
+        let supplied = expand_tilde(Path::new(raw));
         let target = if supplied.is_absolute() {
-            supplied.to_path_buf()
+            supplied
         } else {
             self.workspace_root().join(supplied)
         };
@@ -275,6 +276,35 @@ pub trait ExecutionEnvironment: Send + Sync {
                 "access to '{raw}' is outside the admitted workspace roots"
             )))
         }
+    }
+}
+
+/// Expands a leading `~` or `~/` to the user's home directory if available.
+///
+/// If the path does not start with `~`, or if the home directory cannot be determined,
+/// returns the original path unchanged.
+pub fn expand_tilde(path: &Path) -> PathBuf {
+    let path_str = match path.to_str() {
+        Some(s) => s,
+        None => return path.to_path_buf(),
+    };
+
+    if path_str == "~" {
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"))
+    } else if let Some(stripped) = path_str.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            home.join(stripped)
+        } else {
+            path.to_path_buf()
+        }
+    } else if let Some(stripped) = path_str.strip_prefix("~\\") {
+        if let Some(home) = dirs::home_dir() {
+            home.join(stripped)
+        } else {
+            path.to_path_buf()
+        }
+    } else {
+        path.to_path_buf()
     }
 }
 
@@ -550,5 +580,24 @@ mod tests {
         env.resolve_path("/tmp/scratch.txt").unwrap();
         // Non-temp absolute paths stay denied.
         assert!(env.resolve_path("/etc/shadow").is_err());
+    }
+
+    #[test]
+    fn test_expand_tilde() {
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(expand_tilde(Path::new("~")), home);
+            assert_eq!(
+                expand_tilde(Path::new("~/.local/state/muta/auth.toml")),
+                home.join(".local/state/muta/auth.toml")
+            );
+        }
+        assert_eq!(
+            expand_tilde(Path::new("/var/log")),
+            PathBuf::from("/var/log")
+        );
+        assert_eq!(
+            expand_tilde(Path::new("src/main.rs")),
+            PathBuf::from("src/main.rs")
+        );
     }
 }

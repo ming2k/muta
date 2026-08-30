@@ -12,6 +12,7 @@ futures = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+dirs = { workspace = true }
 inventory = { workspace = true }
 ts-rs = { workspace = true }
 

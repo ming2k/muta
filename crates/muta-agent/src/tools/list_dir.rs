@@ -57,9 +57,7 @@ impl Tool for ListDirTool {
             .map_err(|error| format!("Invalid arguments: {error}"))?;
         let limit = search_limit(args.limit)?;
         let path = args.path.as_deref().unwrap_or(".");
-        let workspace = self.env.workspace_root();
-        let additional_roots = self.env.additional_roots();
-        let directory = resolve_search_root(workspace, &additional_roots, path)?;
+        let directory = resolve_search_root(self.env.as_ref(), path)?;
         let metadata = self
             .env
             .fs()
