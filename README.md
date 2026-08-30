@@ -71,3 +71,14 @@ cargo build --release -p muta -p mutx
 ## License
 
 [MIT](LICENSE)
+
+---
+
+<details>
+<summary><b>About the Name & Mascot</b></summary>
+
+- **muta** originates from the Indo-European root *\*mut-* (signifying "change" and "growth"), reflecting that AI is an evolving, continually growing entity.
+- In Chinese, *muta* sounds like **沐獭** (*Mù Tǎ*, literally "bathing otter"), which inspired our mascot: an otter taking a bath 🦦🛁.
+
+</details>
+

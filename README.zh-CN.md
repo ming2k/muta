@@ -71,3 +71,14 @@ cargo build --release -p muta -p mutx
 ## 许可证
 
 [MIT](LICENSE)
+
+---
+
+<details>
+<summary><b>关于名字与形象 (muta / 沐獭)</b></summary>
+
+- **muta** 源自印欧语系词根 *mut-*（代表“变化与成长”），寓意 AI 是一个不断演进、持续成长的存在。
+- 中文谐音“**沐獭**”，因此选择了一只正在洗澡的水獭作为项目形象 🦦🛁。
+
+</details>
+
