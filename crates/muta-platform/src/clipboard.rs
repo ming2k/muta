@@ -110,6 +110,7 @@ pub fn write_osc52(text: &str) -> io::Result<()> {
     stdout.flush()
 }
 
+#[cfg(target_os = "linux")]
 async fn copy_with_command(command: &str, args: &[&str], text: &str) -> Result<(), String> {
     let mut child = tokio::process::Command::new(command)
         .args(args)
