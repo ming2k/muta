@@ -809,6 +809,7 @@ mod tests {
         env_locked!({
             let runtime = absolute_test_root("runtime");
             unsafe {
+                std::env::remove_var("MUTA_HOME");
                 std::env::remove_var("XDG_RUNTIME_DIR");
             }
             let dirs = Dirs::resolve(&PathsOverride::default());

@@ -70,30 +70,32 @@ fn top_chrome_row(
     if hidden_above > 0 {
         return chrome_row(full_w, bg, theme, '↑', hidden_above);
     }
-    if focused {
-        if let crate::components::composer_hints::ComposeTarget::HistoryRecall { index, total } = target {
-            let label = if full_w >= 36 {
-                format!("[history {index}/{total} · draft saved]")
-            } else if full_w >= 20 {
-                format!("[history {index}/{total}]")
-            } else {
-                format!("[{index}/{total}]")
-            };
-            let label_len = label.chars().count();
-            if full_w > label_len + 2 {
-                let gap_cols = full_w.saturating_sub(label_len + 1);
-                return Line::from(vec![
-                    Span::styled(" ".repeat(gap_cols), Style::default().bg(bg)),
-                    Span::styled(
-                        label,
-                        Style::default()
-                            .bg(bg)
-                            .fg(theme.info())
-                            .add_modifier(Modifier::DIM),
-                    ),
-                    Span::styled(" ".to_string(), Style::default().bg(bg)),
-                ]);
-            }
+    if let (
+        true,
+        crate::components::composer_hints::ComposeTarget::HistoryRecall { index, total },
+    ) = (focused, target)
+    {
+        let label = if full_w >= 36 {
+            format!("[history {index}/{total} · draft saved]")
+        } else if full_w >= 20 {
+            format!("[history {index}/{total}]")
+        } else {
+            format!("[{index}/{total}]")
+        };
+        let label_len = label.chars().count();
+        if full_w > label_len + 2 {
+            let gap_cols = full_w.saturating_sub(label_len + 1);
+            return Line::from(vec![
+                Span::styled(" ".repeat(gap_cols), Style::default().bg(bg)),
+                Span::styled(
+                    label,
+                    Style::default()
+                        .bg(bg)
+                        .fg(theme.info())
+                        .add_modifier(Modifier::DIM),
+                ),
+                Span::styled(" ".to_string(), Style::default().bg(bg)),
+            ]);
         }
     }
     chrome_row(full_w, bg, theme, '↑', 0)
@@ -283,6 +285,7 @@ pub fn cursor_screen_pos(
 ///
 /// The elevated delegated state is no longer signalled here; it lives on the
 /// state bar directly below the input, separate from composer state.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_composer(
     view: ComposerView<'_, '_>,
     text: ComposerText<'_>,

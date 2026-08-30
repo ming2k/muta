@@ -13,15 +13,13 @@ use std::time::Duration;
 
 use crate::serve::Wire;
 use crate::serve_discovery as discovery;
+use crate::wire_channel::{BoxWireSink, BoxWireStream, native_framed_split, websocket_split};
 use futures::{SinkExt, StreamExt};
 use muta_contracts::{
     AgentRequest, AgentResponse, Message, MonitorAction, MonitorEvent, MonitoredSession,
     SessionOverview,
 };
 use tokio::sync::mpsc;
-use crate::wire_channel::{
-    BoxWireSink, BoxWireStream, native_framed_split, websocket_split,
-};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 

@@ -202,11 +202,10 @@ impl InputCompletionEngine {
         };
         let cursor_in_trailing_space = current_lower.ends_with(char::is_whitespace);
         let token_count = current_lower.split_whitespace().count();
-        let matches_second_token_position = match (cursor_in_trailing_space, token_count) {
-            (true, 1) => true,
-            (false, 2) => true,
-            _ => false,
-        };
+        let matches_second_token_position = matches!(
+            (cursor_in_trailing_space, token_count),
+            (true, 1) | (false, 2)
+        );
         // The in-progress verb ("" when the caret sits right after the
         // separating space).
         let trailing = if cursor_in_trailing_space {

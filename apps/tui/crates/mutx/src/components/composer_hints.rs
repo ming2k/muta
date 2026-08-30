@@ -108,10 +108,7 @@ pub(crate) enum ComposeTarget {
         dirty: bool,
     },
     /// Inline history recall mode (`App::history_index` is `Some`).
-    HistoryRecall {
-        index: usize,
-        total: usize,
-    },
+    HistoryRecall { index: usize, total: usize },
     /// Active completion popup (slash commands or path mentions).
     Completion {
         kind: crate::completion::CompletionKind,
@@ -592,10 +589,7 @@ mod tests {
                 None,
                 false
             ),
-            ComposeTarget::HistoryRecall {
-                index: 2,
-                total: 8
-            }
+            ComposeTarget::HistoryRecall { index: 2, total: 8 }
         );
         // …busy mode wins over the slash prefix…
         assert_eq!(

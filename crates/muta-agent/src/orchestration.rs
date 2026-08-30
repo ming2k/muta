@@ -499,7 +499,7 @@ pub struct MidTurnPruneProjectionGate {
     /// Shared content-addressed weights cache (from the agent): the post-prune
     /// session-weight estimate walks it instead of re-tokenizing the whole
     /// window, and runs on the blocking pool — same discipline as
-    /// [`estimate_off_executor`].
+    /// `estimate_session_weight_off_executor`.
     pub weights: Arc<muta_contracts::MessageTokenWeights>,
 }
 
@@ -1823,9 +1823,10 @@ pub fn relay_agent_event(
         AgentEvent::BackgroundJobStarted(info) => {
             round_response(session_id, RoundEvent::BackgroundJobStarted(info))
         }
-        AgentEvent::BackgroundJobProgress { job_id, line } => {
-            round_response(session_id, RoundEvent::BackgroundJobProgress { job_id, line })
-        }
+        AgentEvent::BackgroundJobProgress { job_id, line } => round_response(
+            session_id,
+            RoundEvent::BackgroundJobProgress { job_id, line },
+        ),
         AgentEvent::BackgroundJobCompleted(outcome) => {
             round_response(session_id, RoundEvent::BackgroundJobCompleted(outcome))
         }
@@ -1867,7 +1868,7 @@ pub async fn compact_round_history(
 ///
 /// The before/after session-weight estimates (children included — the pressure
 /// number, not the wire estimate) run through the shared weights cache on the
-/// blocking pool, per the same executor discipline as [`estimate_off_executor`].
+/// blocking pool, per the same executor discipline as `estimate_session_weight_off_executor`.
 pub async fn prune_and_commit(
     history: &mut [Message],
     session: &SessionStore,

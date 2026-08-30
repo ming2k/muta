@@ -507,7 +507,7 @@ fn parse_codex_models(json: &Value) -> Vec<DiscoveredModel> {
                 .get("input_modalities")
                 .and_then(Value::as_array)
                 // Codex treats an omitted legacy field as text + image.
-                .map_or(true, |modalities| {
+                .is_none_or(|modalities| {
                     modalities
                         .iter()
                         .any(|modality| modality.as_str() == Some("image"))

@@ -1741,8 +1741,15 @@ pub async fn run_tui(
                             }
                             {
                                 let mut msgs = buf.write().await;
-                                if let Some(last) = msgs.last_mut().filter(|m| m.is_provider_retry()) {
-                                    last.update_provider_retry(attempt, max_attempts, retry_at, message);
+                                if let Some(last) =
+                                    msgs.last_mut().filter(|m| m.is_provider_retry())
+                                {
+                                    last.update_provider_retry(
+                                        attempt,
+                                        max_attempts,
+                                        retry_at,
+                                        message,
+                                    );
                                 } else {
                                     let mut msg = TranscriptMessage::provider_retry(
                                         attempt,
@@ -1807,16 +1814,14 @@ pub async fn run_tui(
                         RoundEvent::BackgroundJobCompleted(outcome) => {
                             let mut msgs = buf.write().await;
                             let (label, is_success) = match &outcome.state {
-                                muta_contracts::JobState::Succeeded { duration_ms, .. } => {
-                                    (
-                                        format!(
-                                            "Background job `{}` completed ({}s)",
-                                            outcome.job_id.0,
-                                            duration_ms / 1000
-                                        ),
-                                        true,
-                                    )
-                                }
+                                muta_contracts::JobState::Succeeded { duration_ms, .. } => (
+                                    format!(
+                                        "Background job `{}` completed ({}s)",
+                                        outcome.job_id.0,
+                                        duration_ms / 1000
+                                    ),
+                                    true,
+                                ),
                                 muta_contracts::JobState::Failed {
                                     duration_ms,
                                     exit_code,

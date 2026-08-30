@@ -148,13 +148,13 @@ pub fn extract_telemetry_rounds(report: &TokenSourceReport) -> Vec<TelemetryRoun
             distinct_turns.insert(att.turn);
             e2e_duration_ms += att.e2e_duration_ms;
 
-            if let Some(p) = att.performance {
-                if let Some(dur_us) = p.stream_us {
-                    if dur_us > 0 && p.streamed_output_tokens > 0 {
-                        streamed_tokens += p.streamed_output_tokens;
-                        stream_duration_us += dur_us;
-                    }
-                }
+            if let Some(p) = att.performance
+                && let Some(dur_us) = p
+                    .stream_us
+                    .filter(|&d| d > 0 && p.streamed_output_tokens > 0)
+            {
+                streamed_tokens += p.streamed_output_tokens;
+                stream_duration_us += dur_us;
             }
         }
 
@@ -344,10 +344,22 @@ pub fn draw_telemetry_modal(
         String::new()
     };
 
-    let (header, body, footer, follow, is_doc) = if let Some((target_round, target_attempt)) = turn {
-        let levels = ["Session Telemetry", round_child.as_str(), turn_child.as_str()];
+    let (header, body, footer, follow, is_doc) = if let Some((target_round, target_attempt)) = turn
+    {
+        let levels = [
+            "Session Telemetry",
+            round_child.as_str(),
+            turn_child.as_str(),
+        ];
         let header = hierarchical_breadcrumb(&levels, header_width);
-        let body = build_attempt_inspector_body(&rounds, target_round, target_attempt, context, body_width, theme);
+        let body = build_attempt_inspector_body(
+            &rounds,
+            target_round,
+            target_attempt,
+            context,
+            body_width,
+            theme,
+        );
         let footer = vec![
             FooterHint::always(keyvocab::ARROWS_UD, "scroll"),
             FooterHint::always(keyvocab::ESC, "turns"),
@@ -382,14 +394,7 @@ pub fn draw_telemetry_modal(
     if is_doc {
         let rows: Vec<SelectableRow> = body.into_iter().map(SelectableRow::from_line).collect();
         render_selectable_body(
-            frame,
-            modal.body,
-            &rows,
-            scroll,
-            follow,
-            theme,
-            selection,
-            layout_map,
+            frame, modal.body, &rows, scroll, follow, theme, selection, layout_map,
         );
     } else {
         render_body(
@@ -422,9 +427,10 @@ fn build_rounds_body(
 
     if rounds.is_empty() {
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  No settled turns recorded in this session yet.", Style::default().fg(theme.text_muted)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  No settled turns recorded in this session yet.",
+            Style::default().fg(theme.text_muted),
+        )]));
         return (lines, None);
     }
 
@@ -441,31 +447,59 @@ fn build_rounds_body(
 
     // Column Headers
     let mut header_spans = vec![
-        Span::styled(format!("  {:<w$}", "Round", w = col_round), Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("  {:<w$}", "Round", w = col_round),
+            Style::default()
+                .fg(theme.text_muted)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             if width >= 76 {
                 format!("{:<w$}", "Tokens (In / Out)", w = col_tokens)
             } else {
                 format!("{:<w$}", "Tokens", w = col_tokens)
             },
-            Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.text_muted)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
     if show_cache {
-        header_spans.push(Span::styled(format!("{:<w$}", "Cache %", w = col_cache), Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD)));
+        header_spans.push(Span::styled(
+            format!("{:<w$}", "Cache %", w = col_cache),
+            Style::default()
+                .fg(theme.text_muted)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
-    header_spans.push(Span::styled(format!("{:<w$}", "Stream TPS", w = col_tps), Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD)));
-    header_spans.push(Span::styled(format!("{:<w$}", "Duration", w = col_dur), Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD)));
+    header_spans.push(Span::styled(
+        format!("{:<w$}", "Stream TPS", w = col_tps),
+        Style::default()
+            .fg(theme.text_muted)
+            .add_modifier(Modifier::BOLD),
+    ));
+    header_spans.push(Span::styled(
+        format!("{:<w$}", "Duration", w = col_dur),
+        Style::default()
+            .fg(theme.text_muted)
+            .add_modifier(Modifier::BOLD),
+    ));
     if show_turns {
-        header_spans.push(Span::styled(format!("{:<w$}", "Turns", w = col_turns), Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD)));
+        header_spans.push(Span::styled(
+            format!("{:<w$}", "Turns", w = col_turns),
+            Style::default()
+                .fg(theme.text_muted)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
     lines.push(Line::from(header_spans));
 
     // Separator
     let sep_len = width.saturating_sub(4);
-    lines.push(Line::from(vec![
-        Span::styled(format!("  {}", "─".repeat(sep_len)), Style::default().fg(theme.dim())),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        format!("  {}", "─".repeat(sep_len)),
+        Style::default().fg(theme.dim()),
+    )]));
 
     let mut follow = None;
     for (i, r) in rounds.iter().enumerate() {
@@ -477,36 +511,75 @@ fn build_rounds_body(
 
         let round_label = format!("#{:<w$}", r.round_number, w = col_round - 1);
         let tokens_label = if width >= 76 {
-            format!("{:<w$}", format!("{} / {}", fmt_tokens(r.prompt_tokens), fmt_tokens(r.completion_tokens)), w = col_tokens)
+            format!(
+                "{:<w$}",
+                format!(
+                    "{} / {}",
+                    fmt_tokens(r.prompt_tokens),
+                    fmt_tokens(r.completion_tokens)
+                ),
+                w = col_tokens
+            )
         } else {
             format!("{:<w$}", fmt_tokens(r.total_tokens), w = col_tokens)
         };
-        let cache_label = format!("{:<w$}", format!("{:.1}%", r.cache_hit_rate()), w = col_cache);
+        let cache_label = format!(
+            "{:<w$}",
+            format!("{:.1}%", r.cache_hit_rate()),
+            w = col_cache
+        );
         let tps_label = format!("{:<w$}", fmt_tps(r.observed_stream_tps()), w = col_tps);
         let dur_label = format!("{:<w$}", fmt_duration_ms(r.e2e_duration_ms), w = col_dur);
-        let turns_label = format!("{:<w$}", format!("{} turn{}", r.turns_count, if r.turns_count == 1 { "" } else { "s" }), w = col_turns);
+        let turns_label = format!(
+            "{:<w$}",
+            format!(
+                "{} turn{}",
+                r.turns_count,
+                if r.turns_count == 1 { "" } else { "s" }
+            ),
+            w = col_turns
+        );
 
         let row_style = if is_selected {
-            Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.text)
         };
 
         let mut row_spans = vec![
-            Span::styled(marker, if is_selected { Style::default().fg(theme.brand()) } else { Style::default().fg(theme.text_muted) }),
+            Span::styled(
+                marker,
+                if is_selected {
+                    Style::default().fg(theme.brand())
+                } else {
+                    Style::default().fg(theme.text_muted)
+                },
+            ),
             Span::styled(round_label, row_style),
             Span::styled(tokens_label, row_style),
         ];
         if show_cache {
             row_spans.push(Span::styled(
                 cache_label,
-                if r.cache_hit_rate() > 0.0 { Style::default().fg(theme.success) } else { Style::default().fg(theme.text_muted) },
+                if r.cache_hit_rate() > 0.0 {
+                    Style::default().fg(theme.success)
+                } else {
+                    Style::default().fg(theme.text_muted)
+                },
             ));
         }
         row_spans.push(Span::styled(tps_label, row_style));
-        row_spans.push(Span::styled(dur_label, Style::default().fg(theme.text_muted)));
+        row_spans.push(Span::styled(
+            dur_label,
+            Style::default().fg(theme.text_muted),
+        ));
         if show_turns {
-            row_spans.push(Span::styled(turns_label, Style::default().fg(theme.text_muted)));
+            row_spans.push(Span::styled(
+                turns_label,
+                Style::default().fg(theme.text_muted),
+            ));
         }
 
         lines.push(Line::from(row_spans));
@@ -540,29 +613,57 @@ fn build_turns_body(
 
     // Headers
     let mut header_spans = vec![
-        Span::styled(format!("  {:<w$}", "Turn", w = col_turn), Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("  {:<w$}", "Turn", w = col_turn),
+            Style::default()
+                .fg(theme.text_muted)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             if width >= 76 {
                 format!("{:<w$}", "Tokens (In / Out)", w = col_tokens)
             } else {
                 format!("{:<w$}", "Tokens", w = col_tokens)
             },
-            Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.text_muted)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("{:<w$}", "TTFT", w = col_ttft), Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD)),
-        Span::styled(format!("{:<w$}", "Stream TPS", w = col_tps), Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("{:<w$}", "TTFT", w = col_ttft),
+            Style::default()
+                .fg(theme.text_muted)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{:<w$}", "Stream TPS", w = col_tps),
+            Style::default()
+                .fg(theme.text_muted)
+                .add_modifier(Modifier::BOLD),
+        ),
     ];
     if show_dur {
-        header_spans.push(Span::styled(format!("{:<w$}", "Duration", w = col_dur), Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD)));
+        header_spans.push(Span::styled(
+            format!("{:<w$}", "Duration", w = col_dur),
+            Style::default()
+                .fg(theme.text_muted)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
-    header_spans.push(Span::styled(format!("{:<w$}", "Status", w = col_status), Style::default().fg(theme.text_muted).add_modifier(Modifier::BOLD)));
+    header_spans.push(Span::styled(
+        format!("{:<w$}", "Status", w = col_status),
+        Style::default()
+            .fg(theme.text_muted)
+            .add_modifier(Modifier::BOLD),
+    ));
     lines.push(Line::from(header_spans));
 
     // Separator
     let sep_len = width.saturating_sub(4);
-    lines.push(Line::from(vec![
-        Span::styled(format!("  {}", "─".repeat(sep_len)), Style::default().fg(theme.dim())),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        format!("  {}", "─".repeat(sep_len)),
+        Style::default().fg(theme.dim()),
+    )]));
 
     let mut follow = None;
     if let Some(r) = round {
@@ -573,14 +674,32 @@ fn build_turns_body(
             }
             let marker = if is_selected { "▸ " } else { "  " };
 
-            let turn_label = format!("Turn {}.{:<w$}", att.round, att.turn, w = col_turn.saturating_sub(8));
+            let turn_label = format!(
+                "Turn {}.{:<w$}",
+                att.round,
+                att.turn,
+                w = col_turn.saturating_sub(8)
+            );
             let tokens_label = if width >= 76 {
-                format!("{:<w$}", format!("{} / {}", fmt_tokens(att.prompt_tokens), fmt_tokens(att.completion_tokens)), w = col_tokens)
+                format!(
+                    "{:<w$}",
+                    format!(
+                        "{} / {}",
+                        fmt_tokens(att.prompt_tokens),
+                        fmt_tokens(att.completion_tokens)
+                    ),
+                    w = col_tokens
+                )
             } else {
-                format!("{:<w$}", fmt_tokens(att.prompt_tokens + att.completion_tokens), w = col_tokens)
+                format!(
+                    "{:<w$}",
+                    fmt_tokens(att.prompt_tokens + att.completion_tokens),
+                    w = col_tokens
+                )
             };
 
-            let ttft_str = att.performance
+            let ttft_str = att
+                .performance
                 .and_then(|p| p.ttft_us)
                 .map(fmt_duration_us)
                 .unwrap_or_else(|| "--".to_string());
@@ -594,20 +713,32 @@ fn build_turns_body(
             let status_st = status_style(att.status, theme);
 
             let row_style = if is_selected {
-                Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme.text)
             };
 
             let mut row_spans = vec![
-                Span::styled(marker, if is_selected { Style::default().fg(theme.brand()) } else { Style::default().fg(theme.text_muted) }),
+                Span::styled(
+                    marker,
+                    if is_selected {
+                        Style::default().fg(theme.brand())
+                    } else {
+                        Style::default().fg(theme.text_muted)
+                    },
+                ),
                 Span::styled(turn_label, row_style),
                 Span::styled(tokens_label, row_style),
                 Span::styled(ttft_label, row_style),
                 Span::styled(tps_label, row_style),
             ];
             if show_dur {
-                row_spans.push(Span::styled(dur_label, Style::default().fg(theme.text_muted)));
+                row_spans.push(Span::styled(
+                    dur_label,
+                    Style::default().fg(theme.text_muted),
+                ));
             }
             row_spans.push(Span::styled(status_lbl, status_st));
 
@@ -647,21 +778,33 @@ fn build_attempt_inspector_body(
 
         lines.push(Line::from(vec![
             Span::styled(" Target:  ", Style::default().fg(theme.text_muted)),
-            Span::styled(format!("{} @ {}", att.model, connection_display), Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{} @ {}", att.model, connection_display),
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]));
         lines.push(Line::from(vec![
             Span::styled(" Status:  ", Style::default().fg(theme.text_muted)),
-            Span::styled(format!("{:?}", att.status), status_style(att.status, theme).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{:?}", att.status),
+                status_style(att.status, theme).add_modifier(Modifier::BOLD),
+            ),
             Span::raw("   "),
             Span::styled("Attempt: ", Style::default().fg(theme.text_muted)),
-            Span::styled(format!("Turn {}.{} (attempt #{})", att.round, att.turn, att.attempt), Style::default().fg(theme.text)),
+            Span::styled(
+                format!("Turn {}.{} (attempt #{})", att.round, att.turn, att.attempt),
+                Style::default().fg(theme.text),
+            ),
         ]));
         lines.push(Line::from(""));
 
         // Context Space Section
-        lines.push(Line::from(vec![
-            Span::styled("── Context Space ────────────────────────────────────────────────────────", Style::default().fg(theme.dim())),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "── Context Space ────────────────────────────────────────────────────────",
+            Style::default().fg(theme.dim()),
+        )]));
 
         let cache_pct = if att.prompt_tokens > 0 {
             (att.cache_read_tokens as f64 / att.prompt_tokens as f64) * 100.0
@@ -678,74 +821,160 @@ fn build_attempt_inspector_body(
         let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
 
         lines.push(Line::from(vec![
-            Span::styled("  Input Context:     ", Style::default().fg(theme.text_muted)),
-            Span::styled(format!("{:<10}", fmt_tokens(att.prompt_tokens)), Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("{bar} {ctx_pct:.1}% of {} max", fmt_tokens(window_max as u64)), Style::default().fg(theme.text_muted)),
+            Span::styled(
+                "  Input Context:     ",
+                Style::default().fg(theme.text_muted),
+            ),
+            Span::styled(
+                format!("{:<10}", fmt_tokens(att.prompt_tokens)),
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "{bar} {ctx_pct:.1}% of {} max",
+                    fmt_tokens(window_max as u64)
+                ),
+                Style::default().fg(theme.text_muted),
+            ),
         ]));
 
         lines.push(Line::from(vec![
-            Span::styled("   ├─ Cached Read:   ", Style::default().fg(theme.text_muted)),
-            Span::styled(format!("{:<10}", fmt_tokens(att.cache_read_tokens)), Style::default().fg(if att.cache_read_tokens > 0 { theme.success } else { theme.text })),
-            Span::styled(format!("({cache_pct:.1}% Cache Hit)"), Style::default().fg(if cache_pct > 0.0 { theme.success } else { theme.text_muted })),
+            Span::styled(
+                "   ├─ Cached Read:   ",
+                Style::default().fg(theme.text_muted),
+            ),
+            Span::styled(
+                format!("{:<10}", fmt_tokens(att.cache_read_tokens)),
+                Style::default().fg(if att.cache_read_tokens > 0 {
+                    theme.success
+                } else {
+                    theme.text
+                }),
+            ),
+            Span::styled(
+                format!("({cache_pct:.1}% Cache Hit)"),
+                Style::default().fg(if cache_pct > 0.0 {
+                    theme.success
+                } else {
+                    theme.text_muted
+                }),
+            ),
         ]));
 
         let fresh_input = att.prompt_tokens.saturating_sub(att.cache_read_tokens);
         lines.push(Line::from(vec![
-            Span::styled("   ├─ Fresh Input:   ", Style::default().fg(theme.text_muted)),
-            Span::styled(format!("{:<10}", fmt_tokens(fresh_input)), Style::default().fg(theme.text)),
+            Span::styled(
+                "   ├─ Fresh Input:   ",
+                Style::default().fg(theme.text_muted),
+            ),
+            Span::styled(
+                format!("{:<10}", fmt_tokens(fresh_input)),
+                Style::default().fg(theme.text),
+            ),
         ]));
 
         if att.cache_write_tokens > 0 {
             lines.push(Line::from(vec![
-                Span::styled("   ├─ Cache Created: ", Style::default().fg(theme.text_muted)),
-                Span::styled(format!("{:<10}", fmt_tokens(att.cache_write_tokens)), Style::default().fg(theme.warning)),
+                Span::styled(
+                    "   ├─ Cache Created: ",
+                    Style::default().fg(theme.text_muted),
+                ),
+                Span::styled(
+                    format!("{:<10}", fmt_tokens(att.cache_write_tokens)),
+                    Style::default().fg(theme.warning),
+                ),
             ]));
         }
 
         lines.push(Line::from(vec![
-            Span::styled("  Output Generated:  ", Style::default().fg(theme.text_muted)),
-            Span::styled(format!("{:<10}", fmt_tokens(att.completion_tokens)), Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  Output Generated:  ",
+                Style::default().fg(theme.text_muted),
+            ),
+            Span::styled(
+                format!("{:<10}", fmt_tokens(att.completion_tokens)),
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
         ]));
         lines.push(Line::from(""));
 
         // Latency Timeline Waterfall Section
-        lines.push(Line::from(vec![
-            Span::styled("── Latency Timeline Waterfall ───────────────────────────────────────────", Style::default().fg(theme.dim())),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "── Latency Timeline Waterfall ───────────────────────────────────────────",
+            Style::default().fg(theme.dim()),
+        )]));
         lines.push(Line::from(""));
 
         let perf = att.performance;
 
         // Node 0: Request Dispatched
         lines.push(Line::from(vec![
-            Span::styled("  ● 0.00s  ", Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)),
-            Span::styled("Request Dispatched", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  ● 0.00s  ",
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Request Dispatched",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
         ]));
-        lines.push(Line::from(vec![Span::styled("  │", Style::default().fg(theme.dim()))]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │",
+            Style::default().fg(theme.dim()),
+        )]));
 
         // Branch 1: Connect & Handshake
         let ready_us = perf.and_then(|p| p.stream_ready_us);
         let ready_str = ready_us.map_or("--".to_string(), fmt_duration_us);
         lines.push(Line::from(vec![
-            Span::styled("  │ ┌─ Connect & Handshake ", Style::default().fg(theme.dim())),
-            Span::styled(format!("─── {ready_str}"), Style::default().fg(theme.brand())),
+            Span::styled(
+                "  │ ┌─ Connect & Handshake ",
+                Style::default().fg(theme.dim()),
+            ),
+            Span::styled(
+                format!("─── {ready_str}"),
+                Style::default().fg(theme.brand()),
+            ),
         ]));
-        lines.push(Line::from(vec![
-            Span::styled("  │ │  DNS + TLS + Gateway + Send Request Payload", Style::default().fg(theme.text_muted)),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  │ └────────────────────────────────────────────────", Style::default().fg(theme.dim())),
-        ]));
-        lines.push(Line::from(vec![Span::styled("  │", Style::default().fg(theme.dim()))]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │ │  DNS + TLS + Gateway + Send Request Payload",
+            Style::default().fg(theme.text_muted),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │ └────────────────────────────────────────────────",
+            Style::default().fg(theme.dim()),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │",
+            Style::default().fg(theme.dim()),
+        )]));
 
         // Node 1: Stream Ready
-        let ready_node_time = ready_us.map_or("+--".to_string(), |us| format!("+{:.2}s", us as f64 / 1_000_000.0));
+        let ready_node_time = ready_us.map_or("+--".to_string(), |us| {
+            format!("+{:.2}s", us as f64 / 1_000_000.0)
+        });
         lines.push(Line::from(vec![
-            Span::styled(format!("  ● {ready_node_time}  "), Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)),
-            Span::styled("Stream Ready", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
-            Span::styled(" (HTTP 200 Headers received)", Style::default().fg(theme.text_muted)),
+            Span::styled(
+                format!("  ● {ready_node_time}  "),
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Stream Ready",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " (HTTP 200 Headers received)",
+                Style::default().fg(theme.text_muted),
+            ),
         ]));
-        lines.push(Line::from(vec![Span::styled("  │", Style::default().fg(theme.dim()))]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │",
+            Style::default().fg(theme.dim()),
+        )]));
 
         // Branch 2: Prefill & Server Queue
         let ttft_us = perf.and_then(|p| p.ttft_us);
@@ -755,29 +984,57 @@ fn build_attempt_inspector_body(
         };
         let prefill_str = prefill_us.map_or("--".to_string(), fmt_duration_us);
         lines.push(Line::from(vec![
-            Span::styled("  │ ┌─ Prefill & Server Queue ", Style::default().fg(theme.dim())),
-            Span::styled(format!("──── {prefill_str}"), Style::default().fg(theme.warning)),
-        ]));
-        lines.push(Line::from(vec![
             Span::styled(
-                format!("  │ │  Prompt Processing ({} cached / {} eval)", fmt_tokens(att.cache_read_tokens), fmt_tokens(fresh_input)),
-                Style::default().fg(theme.text_muted),
+                "  │ ┌─ Prefill & Server Queue ",
+                Style::default().fg(theme.dim()),
+            ),
+            Span::styled(
+                format!("──── {prefill_str}"),
+                Style::default().fg(theme.warning),
             ),
         ]));
-        lines.push(Line::from(vec![
-            Span::styled("  │ └────────────────────────────────────────────────", Style::default().fg(theme.dim())),
-        ]));
-        lines.push(Line::from(vec![Span::styled("  │", Style::default().fg(theme.dim()))]));
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "  │ │  Prompt Processing ({} cached / {} eval)",
+                fmt_tokens(att.cache_read_tokens),
+                fmt_tokens(fresh_input)
+            ),
+            Style::default().fg(theme.text_muted),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │ └────────────────────────────────────────────────",
+            Style::default().fg(theme.dim()),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │",
+            Style::default().fg(theme.dim()),
+        )]));
 
         // Node 2: First Token Arrived (TTFT)
-        let ttft_node_time = ttft_us.map_or("+--".to_string(), |us| format!("+{:.2}s", us as f64 / 1_000_000.0));
+        let ttft_node_time = ttft_us.map_or("+--".to_string(), |us| {
+            format!("+{:.2}s", us as f64 / 1_000_000.0)
+        });
         let ttft_val_str = ttft_us.map_or("--".to_string(), fmt_duration_us);
         lines.push(Line::from(vec![
-            Span::styled(format!("  ● {ttft_node_time}  "), Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
-            Span::styled("First Token Arrived", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" (Client TTFT: {ttft_val_str})"), Style::default().fg(theme.success)),
+            Span::styled(
+                format!("  ● {ttft_node_time}  "),
+                Style::default()
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "First Token Arrived",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" (Client TTFT: {ttft_val_str})"),
+                Style::default().fg(theme.success),
+            ),
         ]));
-        lines.push(Line::from(vec![Span::styled("  │", Style::default().fg(theme.dim()))]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │",
+            Style::default().fg(theme.dim()),
+        )]));
 
         // Branch 3: Stream Decode
         let stream_us = perf.and_then(|p| p.stream_us);
@@ -794,59 +1051,102 @@ fn build_attempt_inspector_body(
         };
 
         lines.push(Line::from(vec![
-            Span::styled("  │ ┌─ Stream Decode (Generating) ", Style::default().fg(theme.dim())),
-            Span::styled(format!("─── {stream_str}"), Style::default().fg(theme.success)),
-        ]));
-        lines.push(Line::from(vec![
             Span::styled(
-                format!("  │ │  {streamed_tok_str} tokens generated @ {stream_tps_str}"),
-                Style::default().fg(theme.text_muted),
+                "  │ ┌─ Stream Decode (Generating) ",
+                Style::default().fg(theme.dim()),
+            ),
+            Span::styled(
+                format!("─── {stream_str}"),
+                Style::default().fg(theme.success),
             ),
         ]));
-        lines.push(Line::from(vec![
-            Span::styled("  │ └────────────────────────────────────────────────", Style::default().fg(theme.dim())),
-        ]));
-        lines.push(Line::from(vec![Span::styled("  │", Style::default().fg(theme.dim()))]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  │ │  {streamed_tok_str} tokens generated @ {stream_tps_str}"),
+            Style::default().fg(theme.text_muted),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │ └────────────────────────────────────────────────",
+            Style::default().fg(theme.dim()),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │",
+            Style::default().fg(theme.dim()),
+        )]));
 
         // Node 3: Last Token Received
         let last_token_us = match (ttft_us, stream_us) {
             (Some(ttft), Some(stream)) => Some(ttft + stream),
             _ => None,
         };
-        let last_node_time = last_token_us.map_or("+--".to_string(), |us| format!("+{:.2}s", us as f64 / 1_000_000.0));
+        let last_node_time = last_token_us.map_or("+--".to_string(), |us| {
+            format!("+{:.2}s", us as f64 / 1_000_000.0)
+        });
         lines.push(Line::from(vec![
-            Span::styled(format!("  ● {last_node_time}  "), Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)),
-            Span::styled("Last Token Received", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("  ● {last_node_time}  "),
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Last Token Received",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
         ]));
-        lines.push(Line::from(vec![Span::styled("  │", Style::default().fg(theme.dim()))]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │",
+            Style::default().fg(theme.dim()),
+        )]));
 
         // Branch 4: Tail & Commit
         let tail_us = perf.and_then(|p| p.tail_us);
         let tail_str = tail_us.map_or("--".to_string(), fmt_duration_us);
         lines.push(Line::from(vec![
             Span::styled("  │ ┌─ Tail & Commit ", Style::default().fg(theme.dim())),
-            Span::styled(format!("────────────── {tail_str}"), Style::default().fg(theme.text_muted)),
+            Span::styled(
+                format!("────────────── {tail_str}"),
+                Style::default().fg(theme.text_muted),
+            ),
         ]));
-        lines.push(Line::from(vec![
-            Span::styled("  │ │  Stream EOF verification + schema parse", Style::default().fg(theme.text_muted)),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  │ └────────────────────────────────────────────────", Style::default().fg(theme.dim())),
-        ]));
-        lines.push(Line::from(vec![Span::styled("  │", Style::default().fg(theme.dim()))]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │ │  Stream EOF verification + schema parse",
+            Style::default().fg(theme.text_muted),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │ └────────────────────────────────────────────────",
+            Style::default().fg(theme.dim()),
+        )]));
+        lines.push(Line::from(vec![Span::styled(
+            "  │",
+            Style::default().fg(theme.dim()),
+        )]));
 
         // Node 4: Final Completed
-        let e2e_us = perf.and_then(|p| p.e2e_us).unwrap_or(att.e2e_duration_ms * 1_000);
+        let e2e_us = perf
+            .and_then(|p| p.e2e_us)
+            .unwrap_or(att.e2e_duration_ms * 1_000);
         let e2e_str = fmt_duration_us(e2e_us);
         lines.push(Line::from(vec![
-            Span::styled(format!("  ■ +{e2e_str}  "), Style::default().fg(theme.brand()).add_modifier(Modifier::BOLD)),
-            Span::styled("Request Completed", Style::default().fg(theme.text).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" (Total E2E: {e2e_str})"), Style::default().fg(theme.brand())),
+            Span::styled(
+                format!("  ■ +{e2e_str}  "),
+                Style::default()
+                    .fg(theme.brand())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "Request Completed",
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" (Total E2E: {e2e_str})"),
+                Style::default().fg(theme.brand()),
+            ),
         ]));
     } else {
-        lines.push(Line::from(vec![
-            Span::styled("  Attempt record not found.", Style::default().fg(theme.text_muted)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "  Attempt record not found.",
+            Style::default().fg(theme.text_muted),
+        )]));
     }
 
     lines
@@ -1051,7 +1351,13 @@ mod tests {
 
         let full_text: String = lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<Vec<_>>().join(""))
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
             .collect::<Vec<_>>()
             .join("\n");
 

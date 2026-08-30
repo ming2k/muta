@@ -82,10 +82,10 @@ pub mod todos;
 pub use todos::{MAX_TODOS, TodoId, TodoItem, TodoList, TodoStatus};
 pub mod hazard;
 pub use hazard::*;
+pub mod job;
 pub mod master;
 pub mod mesh;
 pub mod runner;
-pub mod job;
 pub mod steward;
 pub mod tier;
 pub use mesh::{MeshAddress, MeshEnvelope, MeshMessage, MeshRoute, mesh_ids};
@@ -163,6 +163,9 @@ pub use hooks::{
     Hook, HookContext, HookEvent, HookEventKind, HookOutcome, RestorePoint, SessionSource,
 };
 pub use identity::AgentIdentity;
+pub use job::{
+    BackgroundJobInfo, BackgroundJobOutcome, BackgroundJobService, JobId, JobSpec, JobState,
+};
 pub use master::{
     MASTER_CODE_ANALYST, MASTER_DEVELOPER, MasterPreset, MasterPresetDelegation, MasterPresetId,
     MasterRuntimeConfig,
@@ -173,7 +176,6 @@ pub use model::{
     RemoteModelEndpoint, RemoteModelMetadata, WireFormat, baseline_models, model_by_id,
     register_fitted_models, resolve as resolve_model, sanitize_model_id,
 };
-pub use job::{BackgroundJobInfo, BackgroundJobOutcome, BackgroundJobService, JobId, JobSpec, JobState};
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, SessionHosting, SessionStatus,
 };

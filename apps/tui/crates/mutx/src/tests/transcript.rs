@@ -132,7 +132,10 @@ fn command_ledger_restores_as_non_conversational_command_rows() {
 
     let compact = &restored[1];
     assert!(compact.is_command_result());
-    assert_eq!(compact.command_result_summary().as_deref(), Some("/compact"));
+    assert_eq!(
+        compact.command_result_summary().as_deref(),
+        Some("/compact")
+    );
     assert_eq!(compact.command_result_text(), None);
 }
 

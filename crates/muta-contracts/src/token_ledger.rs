@@ -1636,7 +1636,7 @@ mod tests {
         // Filtered out as implausible (>2000 tok/s and <20ms span). Preferred falls back to e2e.
         let burst = RequestPerformance {
             ttft_us: Some(500_000),
-            stream_us: Some(5_000), // 5ms
+            stream_us: Some(5_000),  // 5ms
             e2e_us: Some(1_000_000), // 1.0s e2e
             streamed_output_tokens: 505,
             first_output_tokens: 5,

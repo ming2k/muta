@@ -48,8 +48,9 @@ pub use crate::overlays::{
     draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal, draw_notice_toast,
     draw_oauth_pending, draw_permission_sheet, draw_permissions_manager, draw_preset_chooser,
     draw_provider_delete_confirm, draw_question_modal, draw_queue_modal, draw_session_preview,
-    draw_sessions_modal, draw_skills_modal, draw_telemetry_modal, draw_tools_modal, draw_tree_modal,
-    draw_usage_stats_modal, telemetry_attempt_count, telemetry_attempt_key, telemetry_round_count,
+    draw_sessions_modal, draw_skills_modal, draw_telemetry_modal, draw_tools_modal,
+    draw_tree_modal, draw_usage_stats_modal, telemetry_attempt_count, telemetry_attempt_key,
+    telemetry_round_count,
 };
 use crate::page_header;
 pub(crate) use crate::page_header::{
@@ -378,13 +379,11 @@ impl HeightCache {
 
     /// The cached height for message `id` matching revision `rev`, or `None` if it must be measured.
     pub fn get_with_rev(&self, id: u64, rev: u64) -> Option<u16> {
-        self.heights.get(&id).and_then(|&(cached_rev, h)| {
-            if cached_rev == rev {
-                Some(h)
-            } else {
-                None
-            }
-        })
+        self.heights.get(&id).and_then(
+            |&(cached_rev, h)| {
+                if cached_rev == rev { Some(h) } else { None }
+            },
+        )
     }
 
     /// The cached height for message `id`, regardless of revision, or `None`.

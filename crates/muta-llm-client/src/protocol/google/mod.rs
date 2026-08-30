@@ -184,9 +184,7 @@ impl GoogleProvider {
         &self,
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
-        let response = self
-            .send_google_request(&request, true, true, None)
-            .await?;
+        let response = self.send_google_request(&request, true, true, None).await?;
         let response = ensure_success(response, "Google").await.map_err(|e| {
             response::clarify_error(e, &self.endpoint.model, &self.endpoint.base_url)
         })?;
@@ -230,7 +228,10 @@ impl GoogleProvider {
                     omit_thinking,
                     refreshed_key.expose_secret(),
                 );
-                let mut retry_builder = client.post(&retry_url).headers(retry_headers).json(&retry_body);
+                let mut retry_builder = client
+                    .post(&retry_url)
+                    .headers(retry_headers)
+                    .json(&retry_body);
                 if let Some(t) = timeout {
                     retry_builder = retry_builder.timeout(t);
                 }
@@ -500,17 +501,9 @@ impl GoogleProvider {
             (url, headers, wrapped_body)
         } else {
             let url = if is_stream {
-                request::stream_url(
-                    &self.endpoint.base_url,
-                    &self.endpoint.model,
-                    key,
-                )
+                request::stream_url(&self.endpoint.base_url, &self.endpoint.model, key)
             } else {
-                request::url(
-                    &self.endpoint.base_url,
-                    &self.endpoint.model,
-                    key,
-                )
+                request::url(&self.endpoint.base_url, &self.endpoint.model, key)
             };
             (url, headers, raw_body)
         }
@@ -627,9 +620,7 @@ impl Provider for GoogleProvider {
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let omit = self.thinking_was_rejected();
-        let response = self
-            .send_google_request(&request, true, omit, None)
-            .await?;
+        let response = self.send_google_request(&request, true, omit, None).await?;
         let response = match ensure_success(response, "Google").await {
             Ok(response) => response,
             Err(e) => {
@@ -663,9 +654,7 @@ impl Provider for GoogleProvider {
         request: ModelRequest,
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let omit = self.thinking_was_rejected();
-        let response = self
-            .send_google_request(&request, true, omit, None)
-            .await?;
+        let response = self.send_google_request(&request, true, omit, None).await?;
         let response = match ensure_success(response, "Google").await {
             Ok(response) => response,
             Err(e) => {

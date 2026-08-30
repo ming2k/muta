@@ -15,9 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use super::{Disclosure, Interaction, summary_text_color};
 
 use crate::model::document::{Block, CommandPhase, Inline, TranscriptMessage};
-use crate::model::layout::{
-    BlockRegion, COMMAND_RESULT_BLOCK_IDX, LayoutMap, THINKING_BLOCK_IDX,
-};
+use crate::model::layout::{BlockRegion, COMMAND_RESULT_BLOCK_IDX, LayoutMap, THINKING_BLOCK_IDX};
 use crate::model::selection::{CellDragInfo, SelectionState};
 
 use crate::message_body::draw_message_body;
@@ -161,7 +159,6 @@ fn nonempty_wrapped(wrapped: Vec<WrappedLine>) -> Vec<WrappedLine> {
         wrapped
     }
 }
-
 
 /// Tracked info for an expanded step, used to render a sticky summary pinned
 /// under the HUD bar while the step's body is scrolled into view.
@@ -1708,6 +1705,7 @@ pub fn draw_runner_inline_step(
 /// Render a tool-step message as an expandable step with a summary line,
 /// a body, and per-line scroll handling so tall steps scroll like
 /// normal messages.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_tool_step(
     ctx: &mut RenderCtx<'_, '_>,
     msg: &TranscriptMessage,
@@ -2086,6 +2084,7 @@ fn draw_reasoning_summary(
 /// Render a reasoning trace as expandable prose. It keeps the thinking
 /// message model for stream semantics, but presents it as body-aligned text
 /// instead of a colored step.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_reasoning_trace(
     ctx: &mut RenderCtx<'_, '_>,
     msg: &TranscriptMessage,

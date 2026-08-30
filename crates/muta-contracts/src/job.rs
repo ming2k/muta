@@ -7,10 +7,10 @@
 //!
 //! Both tracks report into a unified lifecycle and event notification pipe.
 
-use std::path::PathBuf;
-use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::time::Duration;
 
 /// Service interface for dispatching and querying background jobs.
 #[async_trait]

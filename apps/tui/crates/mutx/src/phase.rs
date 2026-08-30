@@ -1,6 +1,6 @@
 //! Typed projection of the agent's activity vocabulary onto the TUI bar.
 //!
-//! The wire protocol deliberately delivers free-form [`RoundEvent::Activity`]
+//! The wire protocol deliberately delivers free-form [`muta_contracts::RoundEvent::Activity`]
 //! labels; historically every consumer re-parsed those strings, which let
 //! transport states masquerade as workflow states ("waiting to retry"
 //! overwriting the live label) and made the bar's grammar implicit. This

@@ -934,7 +934,7 @@ mod tests {
             ("../../crates/muta-agent/src/agent/mod.rs", 10_478),
             ("../../crates/muta-contracts/src/pressure.rs", 10_855),
             ("../../README.zh-CN.md", 1_098),
-            ("../../CHANGELOG.md", 10_497),
+            ("../../CHANGELOG.md", 10_207),
         ];
         let t = Tokenizer::new();
         for (path, expected) in cases {

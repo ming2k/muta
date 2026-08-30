@@ -664,12 +664,8 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
     #[test]
     fn provider_retry_renders_as_notice_entry_with_countdown_and_failure() {
         let retry_at = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        let mut msg = TranscriptMessage::provider_retry(
-            2,
-            5,
-            retry_at,
-            "Anthropic HTTP 529: Overloaded",
-        );
+        let mut msg =
+            TranscriptMessage::provider_retry(2, 5, retry_at, "Anthropic HTTP 529: Overloaded");
         assert!(msg.is_provider_retry());
         assert!(msg.is_notice());
 
@@ -702,7 +698,10 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         // Verify in-place update
         let new_retry_at = std::time::Instant::now() + std::time::Duration::from_secs(5);
         msg.update_provider_retry(3, 5, new_retry_at, "OpenAI HTTP 429: Rate limit exceeded");
-        if let MessageKind::ProviderRetry { attempt, failure, .. } = &msg.kind {
+        if let MessageKind::ProviderRetry {
+            attempt, failure, ..
+        } = &msg.kind
+        {
             assert_eq!(*attempt, 3);
             assert_eq!(failure, "OpenAI HTTP 429: Rate limit exceeded");
         } else {

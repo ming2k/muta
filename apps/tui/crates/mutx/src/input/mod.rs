@@ -1327,15 +1327,9 @@ pub fn process_event(
                     (KeyCode::Char('p'), _) | (KeyCode::Char('P'), _) => {
                         InputAction::OpenPermissions
                     }
-                    (KeyCode::Char('t'), _) | (KeyCode::Char('T'), _) => {
-                        InputAction::OpenTodos
-                    }
-                    (KeyCode::Char('m'), _) | (KeyCode::Char('M'), _) => {
-                        InputAction::OpenModels
-                    }
-                    (KeyCode::Char('d'), _) | (KeyCode::Char('D'), _) => {
-                        InputAction::OpenTelemetry
-                    }
+                    (KeyCode::Char('t'), _) | (KeyCode::Char('T'), _) => InputAction::OpenTodos,
+                    (KeyCode::Char('m'), _) | (KeyCode::Char('M'), _) => InputAction::OpenModels,
+                    (KeyCode::Char('d'), _) | (KeyCode::Char('D'), _) => InputAction::OpenTelemetry,
                     (KeyCode::Char('g'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => {
                         InputAction::SetLeaderChord(crate::app::LeaderChord::None)
                     }

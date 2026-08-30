@@ -29,7 +29,6 @@ pub const fn protocol_accepts(client: u32) -> bool {
 pub enum Wire {
     /// Handshake frame declaring role, scope, and capabilities.
     Select {
-        #[serde(flatten)]
         action: AttachAction,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project: Option<std::path::PathBuf>,
@@ -208,7 +207,11 @@ pub struct ProtocolError {
 }
 
 impl ProtocolError {
-    pub fn new(domain: impl Into<String>, code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(
+        domain: impl Into<String>,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             domain: domain.into(),
             code: code.into(),
@@ -219,8 +222,9 @@ impl ProtocolError {
 }
 
 /// What role the connection wants to assume.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum AttachAction {
     New,
     Attach(Option<String>),
@@ -230,8 +234,9 @@ pub enum AttachAction {
 }
 
 /// Single-shot session-management verbs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "verb", rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum ControlRequest {
     Shutdown,
     CreateSession {
@@ -239,13 +244,22 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt: Option<String>,
     },
-    SendPrompt { session_id: String, text: String },
-    Interrupt { session_id: String },
+    SendPrompt {
+        session_id: String,
+        text: String,
+    },
+    Interrupt {
+        session_id: String,
+    },
     ResolvePermission {
         session_id: String,
         request_id: String,
         decision: crate::PermissionDecision,
     },
-    KillSession { session_id: String },
-    SuspendSession { session_id: String },
+    KillSession {
+        session_id: String,
+    },
+    SuspendSession {
+        session_id: String,
+    },
 }

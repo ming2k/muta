@@ -2,7 +2,7 @@
 //!
 //! Provides length-prefixed framing over native asynchronous byte streams
 //! (Unix Domain Sockets, Named Pipes) as well as conversion helpers to adapt
-//! WebSocket streams into the same [`WireStream`] and [`WireSink`] interfaces.
+//! WebSocket streams into the same [`BoxWireStream`] and [`BoxWireSink`] interfaces.
 
 use bytes::{Buf, BufMut, BytesMut};
 use futures::{Sink, SinkExt, Stream, StreamExt};

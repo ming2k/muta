@@ -4,9 +4,7 @@
 //! screen when a two-stroke leader chord (`Ctrl+X` or `Ctrl+C`) is armed.
 //! Completely decoupled from View layouts, with zero layout shift.
 
-use mutx_engine::{
-    Block as RtBlock, Borders, Clear, Frame, Line, Paragraph, Rect, Span, Style,
-};
+use mutx_engine::{Block as RtBlock, Borders, Clear, Frame, Line, Paragraph, Rect, Span, Style};
 
 use super::super::Theme;
 use super::super::app::LeaderChord;
@@ -52,16 +50,15 @@ pub(crate) fn draw_which_key_overlay(
     let card_height: u16 = (items.len() as u16) + 3; // title + items + padding
 
     // Position at bottom-right, 3 rows above the terminal bottom (above composer)
-    let x = viewport
-        .width
-        .saturating_sub(card_width + 2)
-        .max(1);
-    let y = viewport
-        .height
-        .saturating_sub(card_height + 3)
-        .max(1);
+    let x = viewport.width.saturating_sub(card_width + 2).max(1);
+    let y = viewport.height.saturating_sub(card_height + 3).max(1);
 
-    let area = Rect::new(x, y, card_width.min(viewport.width.saturating_sub(x)), card_height);
+    let area = Rect::new(
+        x,
+        y,
+        card_width.min(viewport.width.saturating_sub(x)),
+        card_height,
+    );
 
     // 1. Wipe underlying text cleanly with Clear widget
     frame.render_widget(Clear, area);
@@ -79,7 +76,9 @@ pub(crate) fn draw_which_key_overlay(
         Span::raw(" "),
         Span::styled(
             title,
-            Style::default().fg(theme.brand()).add_modifier(mutx_engine::Modifier::BOLD),
+            Style::default()
+                .fg(theme.brand())
+                .add_modifier(mutx_engine::Modifier::BOLD),
         ),
     ]));
     for (key, desc, is_primary) in items {

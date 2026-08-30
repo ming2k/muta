@@ -209,7 +209,7 @@ pub fn draw_activity_bar(
     // Clause slot: at most one annotation ever occupies it — by
     // construction they are phase-exclusive (transport clause lives in
     // AwaitingModel, silence clause only once a stream has flowed).
-    let effective_full = backoff_clause.or_else(|| silent_clause.as_deref());
+    let effective_full = backoff_clause.or(silent_clause.as_deref());
     let full_clause = effective_full.unwrap_or("");
     let full_clause_w = UnicodeWidthStr::width(full_clause);
     // Compact form exists only for the retry countdown (`· retry 2/8 …` →
@@ -646,10 +646,7 @@ pub fn draw_completion_menu(
                 crate::completion::CompletionItemKind::SlashAlias => {
                     (format!("{} [*]", c.label), String::new())
                 }
-                _ if is_alias => (
-                    format!("{} [*]", c.label),
-                    String::new(),
-                ),
+                _ if is_alias => (format!("{} [*]", c.label), String::new()),
                 _ => (c.label.clone(), String::new()),
             };
             let secondary_style = if is_selected {
@@ -707,9 +704,7 @@ pub fn draw_completion_menu(
                 .unwrap_or(false);
 
             let header_title = if is_alias {
-                let alias_label = alias_row
-                    .map(|c| c.label.as_str())
-                    .unwrap_or_default();
+                let alias_label = alias_row.map(|c| c.label.as_str()).unwrap_or_default();
                 let target = alias_row
                     .and_then(|c| c.alias_of.as_deref())
                     .unwrap_or(&doc.name);

@@ -86,7 +86,8 @@ impl AnthropicMessagesProvider {
         let thinking = ThinkingConfig::for_model(&muta_contracts::model::resolve(&model));
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
-            endpoint: Endpoint::new(api_key, model, base_url, "anthropic").with_user_agent(user_agent),
+            endpoint: Endpoint::new(api_key, model, base_url, "anthropic")
+                .with_user_agent(user_agent),
             turn: TurnState::new(),
             client: Client::new(),
             max_tokens: 8192,

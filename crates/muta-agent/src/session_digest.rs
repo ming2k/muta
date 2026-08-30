@@ -51,7 +51,7 @@ impl Agent {
     /// `previous` is the stored digest (if any): the Chronicler revises it —
     /// title/intent shift only when the session's focus did, and the history
     /// checklist grows by merging — instead of starting from scratch. The
-    /// model's answer is normalized by [`clean_digest`].
+    /// model's answer is normalized by `clean_digest`.
     pub async fn generate_digest(
         &self,
         transcript: &[Message],

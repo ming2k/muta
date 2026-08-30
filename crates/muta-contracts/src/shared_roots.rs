@@ -49,13 +49,20 @@ impl SharedAdditionalRoots {
     /// Snapshot the current admitted set. Cheap clone per call-path use;
     /// locks are never held across await points.
     pub fn snapshot(&self) -> Vec<PathBuf> {
-        self.0.read().expect("poisoned").admitted.clone()
+        self.0
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .admitted
+            .clone()
     }
 
     /// Swap in a new canonical admitted set. Replaces — never unions — so a
     /// revoke collapses admission back to primary-only atomically.
     pub fn store(&self, roots: Vec<PathBuf>) {
-        let mut sets = self.0.write().expect("poisoned");
+        let mut sets = self
+            .0
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         sets.quarantined.retain(|q| !roots.contains(q));
         sets.admitted = roots;
     }
@@ -64,7 +71,10 @@ impl SharedAdditionalRoots {
     /// so confinement denials can name exactly what `/trust roots` would
     /// admit; never consulted for admission itself.
     pub fn declare_quarantined(&self, roots: Vec<PathBuf>) {
-        let mut sets = self.0.write().expect("poisoned");
+        let mut sets = self
+            .0
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for root in roots {
             if !sets.admitted.contains(&root) && !sets.quarantined.contains(&root) {
                 sets.quarantined.push(root);
@@ -74,11 +84,19 @@ impl SharedAdditionalRoots {
 
     /// Declared-but-untrusted roots, for denial hints.
     pub fn quarantined(&self) -> Vec<PathBuf> {
-        self.0.read().expect("poisoned").quarantined.clone()
+        self.0
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .quarantined
+            .clone()
     }
 
     /// True when nothing beyond the primary is admitted right now.
     pub fn is_empty(&self) -> bool {
-        self.0.read().expect("poisoned").admitted.is_empty()
+        self.0
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .admitted
+            .is_empty()
     }
 }

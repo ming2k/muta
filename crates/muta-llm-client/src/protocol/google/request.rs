@@ -476,8 +476,7 @@ pub fn sanitize_schema(value: &Value) -> Value {
             map.insert("type".to_string(), json!("string"));
             map.insert("enum".to_string(), json!(string_enums));
         } else {
-            let sanitized_variants: Vec<Value> =
-                variants.iter().map(sanitize_schema).collect();
+            let sanitized_variants: Vec<Value> = variants.iter().map(sanitize_schema).collect();
             map.insert("anyOf".to_string(), json!(sanitized_variants));
         }
     }

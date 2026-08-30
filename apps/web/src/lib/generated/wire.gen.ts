@@ -69,6 +69,11 @@ overrides: CapabilityOverrides | null, } } | { "DeleteProvider": { id: string, }
 event_cap: number, } } | "QuerySessionContext" | { "RevokePermission": { tool: string, scope: string, } } | "ClearAllPermissions" | { "ToggleTool": { name: string, enabled: boolean, } } | { "ToggleMcpServer": { name: string, enabled: boolean, } } | { "ReconnectMcpServer": { name: string, } } | "ExitSideView" | { "FocusSide": { side_id: string, } } | { "InterruptSide": { side_id: string, } } | { "CloseSide": { side_id: string, } } | "QueryBtwList" | { "UpdateTuiLayout": string } | { "UpdateTuiColorScheme": { name: string, custom: ColorSchemeConfig, } } | "QueryWebSearchConfig" | { "UpdateWebSearchConfig": WebSearchConfigUpdate };
 
 /**
+ * What role the connection wants to assume.
+ */
+export type AttachAction = "new" | { "attach": string | null } | "picker" | { "control": ControlRequest } | { "monitor": MonitorAction };
+
+/**
  * What happens to an `ask_user` question when the session's human channel
  * is [`HumanChannelPosture::Autonomous`].
  *
@@ -298,6 +303,11 @@ export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource,
  * rendered transcript size.
  */
 export type ContextTokenSource = "Api" | "Projection";
+
+/**
+ * Single-shot session-management verbs.
+ */
+export type ControlRequest = { "verb": "shutdown" } | { "verb": "create_session", project: string, prompt?: string | null, } | { "verb": "send_prompt", session_id: string, text: string, } | { "verb": "interrupt", session_id: string, } | { "verb": "resolve_permission", session_id: string, request_id: string, decision: PermissionDecision, } | { "verb": "kill_session", session_id: string, } | { "verb": "suspend_session", session_id: string, };
 
 /**
  * Component-specific override for crate tags and package badges.

@@ -1353,11 +1353,7 @@ pub(super) async fn dispatch_action(
                             .unwrap_or(0),
                     );
                     if let Some(key) = report.as_ref().and_then(|report| {
-                        view::telemetry_attempt_key(
-                            report,
-                            round_index,
-                            app.telemetry_turn_cursor,
-                        )
+                        view::telemetry_attempt_key(report, round_index, app.telemetry_turn_cursor)
                     }) {
                         app.telemetry_turn = Some(key);
                         app.telemetry_scroll = 0;

@@ -58,6 +58,8 @@ export function interruptLabel(reason: RoundInterrupt["reason"]): string {
       return "new message";
     case "terminated":
       return "process exited";
+    case "error":
+      return "error";
   }
 }
 

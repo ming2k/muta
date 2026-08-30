@@ -909,13 +909,21 @@ fn round_interrupt_creates_structured_notice() {
     });
     assert!(err_marker.is_notice());
     assert!(err_marker.is_round_interrupt());
-    let MessageKind::Notice { severity, ref parts, .. } = err_marker.kind else {
+    let MessageKind::Notice {
+        severity,
+        ref parts,
+        ..
+    } = err_marker.kind
+    else {
         panic!("must be notice");
     };
     assert_eq!(severity, NoticeSeverity::Error);
     let parts = parts.as_ref().expect("must have parts");
     assert_eq!(parts.topic.as_deref(), Some("error"));
-    assert_eq!(parts.title, "Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests");
+    assert_eq!(
+        parts.title,
+        "Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests"
+    );
     assert!(parts.detail.is_some());
 }
 

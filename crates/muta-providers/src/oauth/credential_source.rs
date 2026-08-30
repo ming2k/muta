@@ -1,8 +1,8 @@
 //! Dynamic OAuth credential source implementing [`muta_contracts::CredentialSource`].
 
+use super::OAuth;
 use super::config::config_by_provider_id;
 use super::store::AuthStore;
-use super::OAuth;
 use futures::future::BoxFuture;
 use muta_contracts::{ChannelAuth, CredentialSource, SecretString};
 use std::fmt;
@@ -59,16 +59,15 @@ impl CredentialSource for OAuthCredentialSource {
     fn resolve_token<'a>(&'a self) -> BoxFuture<'a, Result<SecretString, String>> {
         Box::pin(async move {
             let Some(oauth) = &self.oauth else {
-                return Err(format!("OAuth configuration not found for auth variant {:?}", self.auth));
+                return Err(format!(
+                    "OAuth configuration not found for auth variant {:?}",
+                    self.auth
+                ));
             };
 
             let store = AuthStore::load();
             let Some(stored) = store
-                .get_for_provider(
-                    &self.provider_id,
-                    self.preset_id.as_deref(),
-                    self.auth,
-                )
+                .get_for_provider(&self.provider_id, self.preset_id.as_deref(), self.auth)
                 .cloned()
             else {
                 return Err(format!(
@@ -94,7 +93,10 @@ impl CredentialSource for OAuthCredentialSource {
                         current_store.remove(&self.provider_id);
                         let _ = current_store.save();
                     }
-                    Err(format!("OAuth token resolution failed for '{}': {e}", self.provider_id))
+                    Err(format!(
+                        "OAuth token resolution failed for '{}': {e}",
+                        self.provider_id
+                    ))
                 }
             }
         })
@@ -103,16 +105,15 @@ impl CredentialSource for OAuthCredentialSource {
     fn force_refresh<'a>(&'a self) -> BoxFuture<'a, Result<SecretString, String>> {
         Box::pin(async move {
             let Some(oauth) = &self.oauth else {
-                return Err(format!("OAuth configuration not found for auth variant {:?}", self.auth));
+                return Err(format!(
+                    "OAuth configuration not found for auth variant {:?}",
+                    self.auth
+                ));
             };
 
             let store = AuthStore::load();
             let Some(stored) = store
-                .get_for_provider(
-                    &self.provider_id,
-                    self.preset_id.as_deref(),
-                    self.auth,
-                )
+                .get_for_provider(&self.provider_id, self.preset_id.as_deref(), self.auth)
                 .cloned()
             else {
                 return Err(format!(
@@ -138,7 +139,10 @@ impl CredentialSource for OAuthCredentialSource {
                         current_store.remove(&self.provider_id);
                         let _ = current_store.save();
                     }
-                    Err(format!("OAuth force refresh failed for '{}': {e}", self.provider_id))
+                    Err(format!(
+                        "OAuth force refresh failed for '{}': {e}",
+                        self.provider_id
+                    ))
                 }
             }
         })

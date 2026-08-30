@@ -15,9 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{broadcast, mpsc};
 
-use muta_contracts::{
-    BackgroundJobInfo, BackgroundJobOutcome, JobId, JobSpec, JobState,
-};
+use muta_contracts::{BackgroundJobInfo, BackgroundJobOutcome, JobId, JobSpec, JobState};
 
 const DEFAULT_RING_BUFFER_CAPACITY: usize = 500;
 
@@ -76,27 +74,38 @@ impl BackgroundJobManager {
     }
 
     /// Receiver for completed job outcomes (for the session event loop mailbox).
-    pub fn outcome_receiver(&self) -> Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<BackgroundJobOutcome>>> {
+    pub fn outcome_receiver(
+        &self,
+    ) -> Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<BackgroundJobOutcome>>> {
         Arc::clone(&self.outcome_rx)
     }
 
     /// Query snapshot info for all jobs.
     pub fn list_jobs(&self) -> Vec<BackgroundJobInfo> {
-        let guard = self.inner.read().unwrap();
+        let guard = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut list: Vec<BackgroundJobInfo> = guard.values().map(|e| e.info.clone()).collect();
-        list.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+        list.sort_by_key(|b| std::cmp::Reverse(b.created_at_ms));
         list
     }
 
     /// Query snapshot info for a specific job.
     pub fn get_job(&self, id: &JobId) -> Option<BackgroundJobInfo> {
-        let guard = self.inner.read().unwrap();
+        let guard = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.get(id).map(|e| e.info.clone())
     }
 
     /// Retrieve tail logs for a specific job.
     pub fn get_logs(&self, id: &JobId, tail_lines: usize) -> Option<Vec<String>> {
-        let guard = self.inner.read().unwrap();
+        let guard = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = guard.get(id)?;
         let count = tail_lines.min(entry.ring_buffer.len());
         let skip = entry.ring_buffer.len().saturating_sub(count);
@@ -104,6 +113,7 @@ impl BackgroundJobManager {
     }
 
     /// Spawn a deterministic shell command in the background.
+    #[allow(clippy::too_many_arguments)]
     pub async fn spawn_process(
         &self,
         command: String,
@@ -143,7 +153,9 @@ impl BackgroundJobManager {
             cmd.process_group(0);
         }
 
-        let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn background command: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn background command: {e}"))?;
         let pid = child.id();
 
         let stdout = child.stdout.take();
@@ -169,7 +181,10 @@ impl BackgroundJobManager {
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
 
         {
-            let mut guard = self.inner.write().unwrap();
+            let mut guard = self
+                .inner
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.insert(
                 job_id.clone(),
                 JobEntry {
@@ -183,7 +198,9 @@ impl BackgroundJobManager {
             );
         }
 
-        let _ = self.event_tx.send(BackgroundJobEvent::Started(info.clone()));
+        let _ = self
+            .event_tx
+            .send(BackgroundJobEvent::Started(info.clone()));
 
         // Spawn async collector and supervisor task
         let mgr = self.clone();
@@ -281,9 +298,14 @@ impl BackgroundJobManager {
             } else if was_timed_out {
                 JobState::TimedOut { duration_ms }
             } else if let Some(status) = exit_status {
-                let code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
+                let code = status
+                    .code()
+                    .unwrap_or(if status.success() { 0 } else { 1 });
                 if status.success() {
-                    JobState::Succeeded { duration_ms, exit_code: code }
+                    JobState::Succeeded {
+                        duration_ms,
+                        exit_code: code,
+                    }
                 } else {
                     JobState::Failed {
                         duration_ms,
@@ -338,7 +360,10 @@ impl BackgroundJobManager {
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
 
         {
-            let mut guard = self.inner.write().unwrap();
+            let mut guard = self
+                .inner
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.insert(
                 job_id.clone(),
                 JobEntry {
@@ -357,6 +382,7 @@ impl BackgroundJobManager {
     }
 
     /// Report completion of a Sub-Runner job.
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_runner_job(
         &self,
         job_id: JobId,
@@ -389,7 +415,10 @@ impl BackgroundJobManager {
     }
 
     fn append_line(&self, job_id: &JobId, line: &str) {
-        let mut guard = self.inner.write().unwrap();
+        let mut guard = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(entry) = guard.get_mut(job_id) {
             if entry.ring_buffer.len() >= DEFAULT_RING_BUFFER_CAPACITY {
                 entry.ring_buffer.pop_front();
@@ -399,15 +428,12 @@ impl BackgroundJobManager {
         }
     }
 
-    fn finish_job(
-        &self,
-        job_id: JobId,
-        spec: JobSpec,
-        state: JobState,
-        log_path: Option<PathBuf>,
-    ) {
+    fn finish_job(&self, job_id: JobId, spec: JobSpec, state: JobState, log_path: Option<PathBuf>) {
         let summary = {
-            let guard = self.inner.read().unwrap();
+            let guard = self
+                .inner
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(entry) = guard.get(&job_id) {
                 let tail_count = 15.min(entry.ring_buffer.len());
                 let tail: Vec<&str> = entry
@@ -441,7 +467,10 @@ impl BackgroundJobManager {
             .as_millis() as u64;
 
         {
-            let mut guard = self.inner.write().unwrap();
+            let mut guard = self
+                .inner
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(entry) = guard.get_mut(&job_id) {
                 entry.info.state = state.clone();
                 entry.info.completed_at_ms = Some(now_ms);
@@ -457,14 +486,21 @@ impl BackgroundJobManager {
             log_path,
         };
 
-        let _ = self.event_tx.send(BackgroundJobEvent::Completed(outcome.clone()));
+        let _ = self
+            .event_tx
+            .send(BackgroundJobEvent::Completed(outcome.clone()));
         let _ = self.outcome_tx.send(outcome);
     }
 
     /// Terminate a running background job.
     pub fn kill_job(&self, id: &JobId) -> Result<(), String> {
-        let mut guard = self.inner.write().unwrap();
-        let entry = guard.get_mut(id).ok_or_else(|| format!("Job not found: {id}"))?;
+        let mut guard = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = guard
+            .get_mut(id)
+            .ok_or_else(|| format!("Job not found: {id}"))?;
 
         if let Some(tx) = entry.cancel_tx.take() {
             let _ = tx.send(());
@@ -483,7 +519,10 @@ impl BackgroundJobManager {
 
     /// Abort all active background jobs (e.g. during session teardown).
     pub fn abort_all(&self) {
-        let mut guard = self.inner.write().unwrap();
+        let mut guard = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for entry in guard.values_mut() {
             if let Some(tx) = entry.cancel_tx.take() {
                 let _ = tx.send(());
@@ -589,23 +628,29 @@ mod tests {
             .await
             .expect("spawn success");
 
-        assert_eq!(info.spec, JobSpec::Process {
-            command: "echo 'hello from background'".to_string(),
-            label: Some("test-echo".to_string()),
-            cwd: None,
-            detached: false,
-        });
+        assert_eq!(
+            info.spec,
+            JobSpec::Process {
+                command: "echo 'hello from background'".to_string(),
+                label: Some("test-echo".to_string()),
+                cwd: None,
+                detached: false,
+            }
+        );
 
         // Wait for completion event
         let mut completed = false;
         while let Ok(evt) = rx.recv().await {
-            if let BackgroundJobEvent::Completed(outcome) = evt {
-                if outcome.job_id == info.id {
-                    assert!(matches!(outcome.state, JobState::Succeeded { exit_code: 0, .. }));
-                    assert!(outcome.summary.contains("hello from background"));
-                    completed = true;
-                    break;
-                }
+            if let BackgroundJobEvent::Completed(outcome) = evt
+                && outcome.job_id == info.id
+            {
+                assert!(matches!(
+                    outcome.state,
+                    JobState::Succeeded { exit_code: 0, .. }
+                ));
+                assert!(outcome.summary.contains("hello from background"));
+                completed = true;
+                break;
             }
         }
         assert!(completed);
@@ -646,12 +691,15 @@ mod tests {
 
         let mut killed = false;
         while let Ok(evt) = rx.recv().await {
-            if let BackgroundJobEvent::Completed(outcome) = evt {
-                if outcome.job_id == info.id {
-                    assert!(matches!(outcome.state, JobState::Killed { .. } | JobState::Failed { .. }));
-                    killed = true;
-                    break;
-                }
+            if let BackgroundJobEvent::Completed(outcome) = evt
+                && outcome.job_id == info.id
+            {
+                assert!(matches!(
+                    outcome.state,
+                    JobState::Killed { .. } | JobState::Failed { .. }
+                ));
+                killed = true;
+                break;
             }
         }
         assert!(killed);

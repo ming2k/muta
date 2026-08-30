@@ -96,23 +96,6 @@ fn created_connection_preset_id(preset_id: Option<String>) -> Option<String> {
     preset_id.filter(|id| id != "custom-openai")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::created_connection_preset_id;
-
-    #[test]
-    fn custom_connection_does_not_persist_a_preset_id() {
-        assert_eq!(
-            created_connection_preset_id(Some("custom-openai".to_string())),
-            None
-        );
-        assert_eq!(
-            created_connection_preset_id(Some("openai".to_string())).as_deref(),
-            Some("openai")
-        );
-    }
-}
-
 /// Loop stage (input dispatch): the `OpenModelEditor` arm.
 pub(super) fn handle_open_model_editor(app: &mut App) {
     if app.active_modal() == Modal::Models {
@@ -756,5 +739,22 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
         | Modal::Activity
         | Modal::ViewSwitcher
         | Modal::None => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::created_connection_preset_id;
+
+    #[test]
+    fn custom_connection_does_not_persist_a_preset_id() {
+        assert_eq!(
+            created_connection_preset_id(Some("custom-openai".to_string())),
+            None
+        );
+        assert_eq!(
+            created_connection_preset_id(Some("openai".to_string())).as_deref(),
+            Some("openai")
+        );
     }
 }

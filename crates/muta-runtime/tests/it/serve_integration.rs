@@ -1164,8 +1164,7 @@ async fn native_local_ipc_serves_same_protocol_without_token() {
 
     // Full handshake over the native endpoint: monitor one-shot (ADR-0158 native framed).
     let stream = muta_platform::ipc::connect(&endpoint).await.unwrap();
-    let (mut wire_sink, mut wire_source) =
-        muta_runtime::wire_channel::native_framed_split(stream);
+    let (mut wire_sink, mut wire_source) = muta_runtime::wire_channel::native_framed_split(stream);
     let select = Wire::Select {
         version: None,
         action: AttachAction::Monitor(MonitorAction {

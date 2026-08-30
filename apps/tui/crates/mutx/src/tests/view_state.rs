@@ -390,9 +390,9 @@ fn switcher_filter_narrows_rows_and_matches_labels_and_hints() {
     let rows = reg.switcher_rows_filtered("mcp");
     assert_eq!(
         rows,
-        vec![
-            crate::surfaces::SwitcherTarget::Panel(crate::surfaces::PanelId::Mcp),
-        ]
+        vec![crate::surfaces::SwitcherTarget::Panel(
+            crate::surfaces::PanelId::Mcp
+        ),]
     );
 
     // "dash" matches the Dashboard label (a switchable full-screen view).

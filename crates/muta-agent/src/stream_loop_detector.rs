@@ -14,13 +14,13 @@
 //! state:
 //!
 //! 1. *Dwell*: a periodic tail counts only while the stream keeps extending
-//!    it. Suspicion accumulates in [`DwellTrail`] push by push and discharges
+//!    it. Suspicion accumulates in `DwellTrail` push by push and discharges
 //!    to zero the moment the tail leaves the cycle — an acquitted pattern
 //!    starts fresh. Escalation therefore requires roughly
-//!    [`MIN_DWELL_CHARS`] of uninterrupted repetition, which no legitimate
+//!    `MIN_DWELL_CHARS` of uninterrupted repetition, which no legitimate
 //!    decoration reaches and every genuine runaway blows past.
 //! 2. *Budget*: character-class density (digit/data floods) likewise spends
-//!    toward [`MAX_DEGENERATE_BUDGET_CHARS`] before becoming actionable, with
+//!    toward `MAX_DEGENERATE_BUDGET_CHARS` before becoming actionable, with
 //!    exponential decay when density lapses, so bounded dumps of hashes or
 //!    coordinates never trip it.
 //!
@@ -294,11 +294,11 @@ impl StreamLoopDetector {
     /// Two exact paths, preferred in order:
     ///
     /// 1. **Wholly periodic window** (KMP String Periodicity Theorem): if
-    ///    $\pi[L]$ implies the minimal period $p$ divides $L$, the entire
+    ///    $\pi\[L\]$ implies the minimal period $p$ divides $L$, the entire
     ///    buffer — whatever its unit length — is one periodic run. Any period
     ///    size is caught here once a runaway floods past window-prefix noise.
     /// 2. **Bounded tail-run scan**: otherwise find, over unit lengths
-    ///    $p \le$ [`MAX_TAIL_SCAN_UNIT`], the longest suffix consisting of
+    ///    $p \le$ `MAX_TAIL_SCAN_UNIT`, the longest suffix consisting of
     ///    `>= 2` aligned copies. Handles a legitimately-varied document that
     ///    merely *ends* in repetition.
     ///
@@ -451,7 +451,7 @@ impl StreamLoopDetector {
     }
 
     /// Classify the window as a digit/data flood; `Some(total_chars)` when
-    /// density crosses [`DIGIT_DENSITY_RATIO`] over at least 64 chars.
+    /// density crosses `DIGIT_DENSITY_RATIO` over at least 64 chars.
     pub fn classify_digit_density(buffer: &str) -> Option<usize> {
         let chars: Vec<char> = buffer.chars().collect();
         let total = chars.len();

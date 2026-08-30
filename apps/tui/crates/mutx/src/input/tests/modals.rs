@@ -251,7 +251,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 has_focused_target: false,
                 has_queued: false,
                 queue_pointer_armed: false,
-            history_recall_active: false,
+                history_recall_active: false,
                 history_searching: false,
                 model_searching: false,
                 modal_keymap_open: false,
@@ -262,7 +262,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
                 host_prompting: false,
                 config_custom_editing: false,
                 config_websearch_editing: false,
-            leader_chord: crate::app::LeaderChord::None,
+                leader_chord: crate::app::LeaderChord::None,
             },
             &mut drag,
         )

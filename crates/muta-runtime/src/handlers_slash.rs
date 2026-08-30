@@ -1725,7 +1725,8 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             }
                         }
                     } else {
-                        record_error(session, resp_tx, name, args, "Usage: /jobs kill <job_id>").await;
+                        record_error(session, resp_tx, name, args, "Usage: /jobs kill <job_id>")
+                            .await;
                     }
                 }
                 "logs" => {
@@ -1743,7 +1744,10 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                                     resp_tx,
                                     name,
                                     args,
-                                    CommandResult::Text(format!("Logs for {}:\n```\n{}\n```", target_id, output)),
+                                    CommandResult::Text(format!(
+                                        "Logs for {}:\n```\n{}\n```",
+                                        target_id, output
+                                    )),
                                 )
                                 .await;
                             }
@@ -1759,7 +1763,8 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             }
                         }
                     } else {
-                        record_error(session, resp_tx, name, args, "Usage: /jobs logs <job_id>").await;
+                        record_error(session, resp_tx, name, args, "Usage: /jobs logs <job_id>")
+                            .await;
                     }
                 }
                 _ => {
@@ -1774,15 +1779,18 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         )
                         .await;
                     } else {
-                        let mut table = String::from("### Background Jobs\n\n| ID | Type | State | Latest Output |\n|---|---|---|---|\n");
+                        let mut table = String::from(
+                            "### Background Jobs\n\n| ID | Type | State | Latest Output |\n|---|---|---|---|\n",
+                        );
                         for j in jobs {
                             let (kind_str, detail) = match &j.spec {
-                                muta_contracts::JobSpec::Process { command, label, .. } => {
-                                    (label.clone().unwrap_or_else(|| "process".to_string()), command.clone())
-                                }
-                                muta_contracts::JobSpec::Runner { role, description, .. } => {
-                                    (format!("runner ({role})"), description.clone())
-                                }
+                                muta_contracts::JobSpec::Process { command, label, .. } => (
+                                    label.clone().unwrap_or_else(|| "process".to_string()),
+                                    command.clone(),
+                                ),
+                                muta_contracts::JobSpec::Runner {
+                                    role, description, ..
+                                } => (format!("runner ({role})"), description.clone()),
                             };
                             let status_str = match &j.state {
                                 muta_contracts::JobState::Queued => "Queued".to_string(),
@@ -1796,7 +1804,11 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                                 muta_contracts::JobState::Succeeded { duration_ms, .. } => {
                                     format!("✓ Passed ({}s)", duration_ms / 1000)
                                 }
-                                muta_contracts::JobState::Failed { duration_ms, exit_code, .. } => {
+                                muta_contracts::JobState::Failed {
+                                    duration_ms,
+                                    exit_code,
+                                    ..
+                                } => {
                                     format!("✗ Failed (Exit {exit_code}, {}s)", duration_ms / 1000)
                                 }
                                 muta_contracts::JobState::Killed { duration_ms } => {
@@ -1817,7 +1829,8 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                                 j.id.0, kind_str, status_str, truncated_latest
                             ));
                         }
-                        record_command(session, resp_tx, name, args, CommandResult::Text(table)).await;
+                        record_command(session, resp_tx, name, args, CommandResult::Text(table))
+                            .await;
                     }
                 }
             }

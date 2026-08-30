@@ -13,9 +13,7 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 
 use crate::shutdown::ShutdownGate;
-use crate::wire_channel::{
-    BoxWireSink, BoxWireStream, native_framed_split, websocket_split,
-};
+use crate::wire_channel::{BoxWireSink, BoxWireStream, native_framed_split, websocket_split};
 
 // The transport envelope and its constants live in `muta-contracts` since
 // ADR-0134 — one serde source of truth for the whole wire surface, next to
@@ -614,11 +612,8 @@ struct ServeCtx {
     listeners: CancellationToken,
 }
 
-fn spawn_local_connection<S>(
-    stream: S,
-    ctx: ServeCtx,
-    peer: String,
-) where
+fn spawn_local_connection<S>(stream: S, ctx: ServeCtx, peer: String)
+where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
     let ServeCtx {
@@ -818,7 +813,7 @@ async fn handle_wire_stream(
     gate: Arc<ShutdownGate>,
     listeners: CancellationToken,
 ) -> Result<(), String> {
-    let (action, project, client_posture, client_version, client_protocol) = loop {
+    let (action, project, client_posture, client_version, client_protocol) =
         match wire_source.next().await {
             Some(Ok(Wire::Select {
                 action,
@@ -826,7 +821,7 @@ async fn handle_wire_stream(
                 posture,
                 version,
                 protocol,
-            })) => break (action, project, posture, version, protocol),
+            })) => (action, project, posture, version, protocol),
             Some(Ok(_)) => {
                 send_error(&mut wire_sink, "expected Select as the first frame").await?;
                 return Ok(());
@@ -836,8 +831,7 @@ async fn handle_wire_stream(
                 return Ok(());
             }
             None => return Ok(()),
-        }
-    };
+        };
     // Protocol negotiation (ADR-0134), enforced before any session work.
     // The protocol number is the authority when present: the daemon serves
     // any number in [MIN_PROTOCOL_VERSION, PROTOCOL_VERSION] regardless of
@@ -873,7 +867,9 @@ async fn handle_wire_stream(
         return Ok(());
     }
     match action {
-        AttachAction::Monitor(action) => return run_monitor(wire_sink, registry, action, gate).await,
+        AttachAction::Monitor(action) => {
+            return run_monitor(wire_sink, registry, action, gate).await;
+        }
         AttachAction::Control(request) => {
             return run_control(wire_sink, registry, gate, listeners, request).await;
         }
@@ -1265,20 +1261,14 @@ async fn run_monitor(
 /// Send one monitor stream frame. Frames ride the `Wire::Monitor` envelope
 /// (ADR-0093 §4), so the client sees the same wire shape for the initial
 /// snapshot and every diff.
-async fn send_monitor(
-    wire_sink: &mut BoxWireSink,
-    event: MonitorEvent,
-) -> Result<(), String> {
+async fn send_monitor(wire_sink: &mut BoxWireSink, event: MonitorEvent) -> Result<(), String> {
     wire_sink
         .send(Wire::Monitor { event })
         .await
         .map_err(|e| format!("send monitor event: {e}"))
 }
 
-async fn send_error(
-    wire_sink: &mut BoxWireSink,
-    message: &str,
-) -> Result<(), String> {
+async fn send_error(wire_sink: &mut BoxWireSink, message: &str) -> Result<(), String> {
     send_error_with_code(wire_sink, message, None).await
 }
 

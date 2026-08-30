@@ -1522,11 +1522,7 @@ fn pop_sublayer_steps_back_one_level_at_a_time() {
     app.telemetry_detail = true;
     assert!(app.pop_sublayer());
     assert!(!app.telemetry_detail, "drill-in closed");
-    assert_eq!(
-        app.active_modal(),
-        crate::Modal::Telemetry,
-        "view stays up"
-    );
+    assert_eq!(app.active_modal(), crate::Modal::Telemetry, "view stays up");
     assert!(!app.pop_sublayer(), "no sub-layer left");
 
     // Host: preview is the deepest layer (painted over the prompting
@@ -1563,11 +1559,7 @@ fn pop_sublayer_pops_telemetry_turn_page_before_round_detail() {
     assert!(app.pop_sublayer());
     assert!(!app.telemetry_detail, "round detail closed next");
     assert_eq!(app.telemetry_turn_cursor, 0, "cursor reset");
-    assert_eq!(
-        app.active_modal(),
-        crate::Modal::Telemetry,
-        "view stays up"
-    );
+    assert_eq!(app.active_modal(), crate::Modal::Telemetry, "view stays up");
     assert!(!app.pop_sublayer(), "no sub-layer left");
 }
 

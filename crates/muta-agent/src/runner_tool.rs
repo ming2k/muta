@@ -624,7 +624,10 @@ impl RunnerTool {
         let profile =
             muta_contracts::RunnerPresetPool::find(requested_preset).unwrap_or(self.profile);
 
-        let is_background = args.get("background").and_then(|b| b.as_bool()).unwrap_or(false);
+        let is_background = args
+            .get("background")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false);
         if is_background && profile.name != "explore" {
             return Err(format!(
                 "Background execution is only permitted for read-only 'explore' runners to guarantee task orthogonality and prevent workspace write conflicts (requested role: '{}').",

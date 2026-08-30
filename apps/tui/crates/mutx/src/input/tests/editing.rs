@@ -1910,7 +1910,10 @@ fn emacs_ctrl_x_leader_chord_switches_view_with_b() {
         InputContext::default(),
         &mut drag,
     );
-    assert_eq!(action1, InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX));
+    assert_eq!(
+        action1,
+        InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX)
+    );
 
     // 2. Following 'b' opens ViewSwitcher
     let action2 = process_event(

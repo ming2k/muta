@@ -5,7 +5,9 @@
 //! process state. Callers explicitly choose whether the workspace is writable
 //! and whether the process receives a network namespace connected to the host.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Filesystem authority granted to a sandboxed process.
@@ -138,12 +140,13 @@ pub fn command_with_roots(
     workspace_access: WorkspaceAccess,
     network_access: NetworkAccess,
 ) -> Result<tokio::process::Command, String> {
+    validate_environment(environment)?;
+
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (
             program,
             args,
-            environment,
             workspace_root,
             additional_roots,
             workspace_access,
@@ -173,7 +176,6 @@ pub fn command_with_roots(
             "Workspace process isolation requires bubblewrap (bwrap); refusing unsandboxed host execution."
                 .to_string()
         })?;
-        validate_environment(environment)?;
 
         let mut invocation = tokio::process::Command::new(bubblewrap);
         invocation.args([
@@ -409,6 +411,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn additional_roots_are_mounted_read_write() {
+        if !available() {
+            return;
+        }
         let root = scratch();
         let sibling = scratch();
         std::fs::write(sibling.join("sibling.txt"), "from sibling").unwrap();

@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 /// A single change to a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum SessionEvent {
     /// Session was created or opened from a prior snapshot.
     Started {

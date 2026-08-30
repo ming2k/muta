@@ -970,7 +970,9 @@ fn session_detail_lines(row: &MonitoredSession, width: usize, theme: &Theme) -> 
         field(
             "note",
             note.clone(),
-            Style::default().fg(theme.warn()).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.warn())
+                .add_modifier(Modifier::BOLD),
         );
     }
     field("messages", row.message_count.to_string(), fg);
@@ -1698,15 +1700,32 @@ mod tests {
         let lines = session_detail_lines(&r, 80, &theme);
         let rendered: String = lines
             .iter()
-            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("Mission:   Refactor Auth Middleware"), "{rendered}");
-        assert!(rendered.contains("Intent:    Rewrite token validator to support ECDSA signatures."), "{rendered}");
+        assert!(
+            rendered.contains("Mission:   Refactor Auth Middleware"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("Intent:    Rewrite token validator to support ECDSA signatures."),
+            "{rendered}"
+        );
         assert!(rendered.contains("Milestones & Progress:"), "{rendered}");
-        assert!(rendered.contains("• Created test suite for ECDSA"), "{rendered}");
-        assert!(rendered.contains("• Updated Cargo.toml dependencies"), "{rendered}");
+        assert!(
+            rendered.contains("• Created test suite for ECDSA"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("• Updated Cargo.toml dependencies"),
+            "{rendered}"
+        );
         assert!(rendered.contains("Telemetry:"), "{rendered}");
         assert!(rendered.contains("tool"), "{rendered}");
         assert!(rendered.contains("run_command"), "{rendered}");
@@ -1722,12 +1741,20 @@ mod tests {
         let lines = session_detail_lines(&r, 80, &theme);
         let rendered: String = lines
             .iter()
-            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
         assert!(rendered.contains("Overview:"), "{rendered}");
-        assert!(rendered.contains("Plain user prompt without digest"), "{rendered}");
+        assert!(
+            rendered.contains("Plain user prompt without digest"),
+            "{rendered}"
+        );
         assert!(!rendered.contains("Milestones & Progress:"), "{rendered}");
     }
 

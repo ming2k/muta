@@ -13,7 +13,6 @@ mod list_models;
 pub mod oauth;
 mod registry;
 
-pub use oauth::OAuthCredentialSource;
 pub use list_models::{
     DiscoveredModel, DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest,
     ModelDiscoveryUpdate, ModelListError, discover_models, list_models, models_endpoint_for,
@@ -24,6 +23,7 @@ pub use muta_llm_client::{
     OPENCODE_VERSION, OpenAiChatCompletionsProvider, OpenAiResponsesProvider, ThinkingConfig,
     ThinkingMode, TurnState, ZCODE_CLIENT_HEADERS, ZCODE_USER_AGENT,
 };
+pub use oauth::OAuthCredentialSource;
 pub use registry::{
     ANTHROPIC_BUILTIN_MODELS, ANTIGRAVITY_OAUTH_MODELS, CHATGPT_BUILTIN_MODELS,
     COPILOT_SEED_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS,

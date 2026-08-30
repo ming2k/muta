@@ -428,10 +428,8 @@ impl<'a, 'f> Stream<'a, 'f> {
                         .is_some_and(|status| status.is_running())
                 } else if msg.is_thinking() {
                     !msg.is_thinking_streaming()
-                } else if msg.is_provider_retry() {
-                    false
                 } else {
-                    true
+                    !msg.is_provider_retry()
                 });
         let cached_height = if skippable {
             self.height_cache.get_with_rev(msg.id, msg.rev)
@@ -556,8 +554,11 @@ impl<'a, 'f> Stream<'a, 'f> {
 
         // Cache the freshly-measured height for skippable kinds only.
         if skippable && cached_height.is_none() {
-            self.height_cache
-                .set_with_rev(msg.id, msg.rev, (self.content_lines - body_before) as u16);
+            self.height_cache.set_with_rev(
+                msg.id,
+                msg.rev,
+                (self.content_lines - body_before) as u16,
+            );
         }
     }
 

@@ -282,7 +282,9 @@ impl Tool for ExecuteCommandTool {
                     serde_json::to_string_pretty(&output).unwrap_or_default(),
                 ));
             } else {
-                return Err("Background job service is unavailable in this environment.".to_string());
+                return Err(
+                    "Background job service is unavailable in this environment.".to_string()
+                );
             }
         }
 

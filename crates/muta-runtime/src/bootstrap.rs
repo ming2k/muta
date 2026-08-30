@@ -333,9 +333,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let provider_id = catalog::default_provider_id(&config);
     crate::handlers_provider::refresh_oauth_if_needed(&config, provider_id).await;
 
-    let initial_provider: Arc<dyn Provider> =
-        catalog::build_provider_for(&config, provider_id)
-            .unwrap_or_else(|| Arc::new(muta_agent::NoProvider));
+    let initial_provider: Arc<dyn Provider> = catalog::build_provider_for(&config, provider_id)
+        .unwrap_or_else(|| Arc::new(muta_agent::NoProvider));
 
     let provider_holder = Arc::new(RwLock::new(initial_provider));
     let provider_for_task = provider_holder.clone();

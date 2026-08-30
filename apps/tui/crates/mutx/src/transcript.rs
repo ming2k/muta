@@ -708,8 +708,13 @@ mod tests {
             reason: RoundInterruptReason::Error,
             at_ms: 42,
             round: Some(4),
-            detail: Some("Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests".to_string()),
+            detail: Some(
+                "Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests".to_string(),
+            ),
         });
-        assert_eq!(err_marker.raw, "Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests");
+        assert_eq!(
+            err_marker.raw,
+            "Exhausted 30 retry attempts — Google HTTP 429 Too Many Requests"
+        );
     }
 }

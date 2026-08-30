@@ -1445,10 +1445,7 @@ impl TranscriptMessage {
             MessageKind::Notice {
                 parts: Some(parts), ..
             } => {
-                matches!(
-                    parts.topic.as_deref(),
-                    Some("interrupted") | Some("error")
-                )
+                matches!(parts.topic.as_deref(), Some("interrupted") | Some("error"))
             }
             _ => false,
         }

@@ -1,13 +1,11 @@
 //! Built-in tools for inspecting and controlling background processes and sub-runners.
 
-use std::sync::Arc;
-use std::time::Duration;
 use async_trait::async_trait;
 use serde::Deserialize;
+use std::sync::Arc;
+use std::time::Duration;
 
-use muta_contracts::{
-    BackgroundJobService, JobId, Tool, ToolAccesses, ToolContext, ToolOutput,
-};
+use muta_contracts::{BackgroundJobService, JobId, Tool, ToolAccesses, ToolContext, ToolOutput};
 use muta_tool_derive::ToolSchema;
 
 fn background_service(ctx: &ToolContext) -> Option<Arc<dyn BackgroundJobService>> {
@@ -57,7 +55,10 @@ impl Tool for ProcessPollTool {
 
     async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
         let args: ProcessPollArgs = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
-        let service = self.service.as_ref().ok_or("Background job service is unavailable")?;
+        let service = self
+            .service
+            .as_ref()
+            .ok_or("Background job service is unavailable")?;
         let job_id = JobId(args.job_id);
 
         match service.get_job(&job_id) {
@@ -119,7 +120,10 @@ impl Tool for ProcessLogsTool {
 
     async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
         let args: ProcessLogsArgs = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
-        let service = self.service.as_ref().ok_or("Background job service is unavailable")?;
+        let service = self
+            .service
+            .as_ref()
+            .ok_or("Background job service is unavailable")?;
         let job_id = JobId(args.job_id);
         let tail = args.tail_lines.unwrap_or(50).clamp(1, 500);
 
@@ -183,11 +187,17 @@ impl Tool for ProcessKillTool {
 
     async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
         let args: ProcessKillArgs = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
-        let service = self.service.as_ref().ok_or("Background job service is unavailable")?;
+        let service = self
+            .service
+            .as_ref()
+            .ok_or("Background job service is unavailable")?;
         let job_id = JobId(args.job_id);
 
         service.kill_job(&job_id)?;
-        Ok(ToolOutput::text(format!("Job {} was terminated.", job_id.0)))
+        Ok(ToolOutput::text(format!(
+            "Job {} was terminated.",
+            job_id.0
+        )))
     }
 }
 
@@ -240,7 +250,10 @@ impl Tool for ProcessWaitTool {
 
     async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
         let args: ProcessWaitArgs = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
-        let service = self.service.as_ref().ok_or("Background job service is unavailable")?;
+        let service = self
+            .service
+            .as_ref()
+            .ok_or("Background job service is unavailable")?;
         let job_id = JobId(args.job_id);
         let timeout = Duration::from_secs(args.timeout_seconds.unwrap_or(60).clamp(1, 600));
 
@@ -254,7 +267,9 @@ impl Tool for ProcessWaitTool {
                         "state": info.state,
                         "tail_logs": logs,
                     });
-                    return Ok(ToolOutput::text(serde_json::to_string_pretty(&res).map_err(|e| e.to_string())?));
+                    return Ok(ToolOutput::text(
+                        serde_json::to_string_pretty(&res).map_err(|e| e.to_string())?,
+                    ));
                 }
             } else {
                 return Err(format!("Job not found: {}", job_id.0));
@@ -306,14 +321,25 @@ mod tests {
             let id = JobId::new("mock");
             let info = BackgroundJobInfo {
                 id: id.clone(),
-                spec: JobSpec::Process { command, label, cwd, detached },
-                state: JobState::Running { started_at_ms: 1000, pid: Some(1234) },
+                spec: JobSpec::Process {
+                    command,
+                    label,
+                    cwd,
+                    detached,
+                },
+                state: JobState::Running {
+                    started_at_ms: 1000,
+                    pid: Some(1234),
+                },
                 created_at_ms: 1000,
                 completed_at_ms: None,
                 latest_output: Some("mock output".into()),
             };
             self.jobs.lock().unwrap().insert(id.clone(), info.clone());
-            self.logs.lock().unwrap().insert(id, vec!["line 1".into(), "line 2".into()]);
+            self.logs
+                .lock()
+                .unwrap()
+                .insert(id, vec!["line 1".into(), "line 2".into()]);
             Ok(info)
         }
 
@@ -326,7 +352,11 @@ mod tests {
         }
 
         fn get_logs(&self, id: &JobId, tail_lines: usize) -> Option<Vec<String>> {
-            self.logs.lock().unwrap().get(id).map(|l| l.iter().take(tail_lines).cloned().collect())
+            self.logs
+                .lock()
+                .unwrap()
+                .get(id)
+                .map(|l| l.iter().take(tail_lines).cloned().collect())
         }
 
         fn kill_job(&self, id: &JobId) -> Result<(), String> {
