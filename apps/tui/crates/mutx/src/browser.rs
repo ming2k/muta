@@ -3,19 +3,17 @@
 use std::process::Stdio;
 
 /// Check whether the current system is running inside WSL (Windows Subsystem for Linux).
+#[cfg(target_os = "linux")]
 fn is_wsl() -> bool {
-    #[cfg(target_os = "linux")]
+    if std::env::var_os("WSL_DISTRO_NAME").is_some()
+        || std::env::var_os("WSL_INTEROP").is_some()
     {
-        if std::env::var_os("WSL_DISTRO_NAME").is_some()
-            || std::env::var_os("WSL_INTEROP").is_some()
-        {
+        return true;
+    }
+    if let Ok(version) = std::fs::read_to_string("/proc/version") {
+        let lower = version.to_lowercase();
+        if lower.contains("microsoft") || lower.contains("wsl") {
             return true;
-        }
-        if let Ok(version) = std::fs::read_to_string("/proc/version") {
-            let lower = version.to_lowercase();
-            if lower.contains("microsoft") || lower.contains("wsl") {
-                return true;
-            }
         }
     }
     false
