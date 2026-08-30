@@ -256,28 +256,50 @@ impl LayoutMap {
             }
 
             let s_byte = if here == (start.message_idx, start.block_idx) {
-                start.byte_offset.min(region.text.len())
+                start.byte_offset
             } else {
                 0
             };
             let e_byte = if here == (end.message_idx, end.block_idx) {
-                end.byte_offset.min(region.text.len())
+                Some(end.byte_offset)
             } else {
-                region.text.len()
+                None
             };
 
-            let s_byte = crate::model::selection::floor_grapheme_boundary(&region.text, s_byte);
-            let e_byte = crate::model::selection::inclusive_grapheme_end(&region.text, e_byte);
-            let e_byte = e_byte.min(region.text.len());
+            if let Some(e) = e_byte
+                && e <= region.start_byte
+                && !(e == region.start_byte && region.text.is_empty())
+            {
+                continue;
+            }
+            if s_byte >= region.end_byte && !(s_byte == region.start_byte && region.text.is_empty())
+            {
+                continue;
+            }
 
-            if s_byte < e_byte {
+            let lo = crate::model::selection::floor_grapheme_boundary(
+                &region.text,
+                s_byte
+                    .saturating_sub(region.start_byte)
+                    .min(region.text.len()),
+            );
+            let hi = match e_byte {
+                Some(e) if e < region.end_byte => crate::model::selection::inclusive_grapheme_end(
+                    &region.text,
+                    e.saturating_sub(region.start_byte),
+                ),
+                _ => region.text.len(),
+            };
+            let hi = hi.min(region.text.len());
+
+            if lo < hi {
                 if current_block != Some(region.block_idx) {
                     if current_block.is_some() && !block_text.is_empty() {
                         result.push(std::mem::take(&mut block_text));
                     }
                     current_block = Some(region.block_idx);
                 }
-                block_text.push_str(&region.text[s_byte..e_byte]);
+                block_text.push_str(&region.text[lo..hi]);
             }
         }
 

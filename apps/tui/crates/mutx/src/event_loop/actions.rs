@@ -324,10 +324,23 @@ pub(super) async fn dispatch_action(
             }
         }
         input::InputAction::CopyOauthContent { target } => {
+            // If the user has active text selected in the modal, copy that selection first
+            if let Some(text) = extract_selection_text(
+                &app.selection,
+                app.focused_messages(),
+                &app.input,
+                &app.layout_map,
+                app.drag.cell_info.as_ref(),
+            ) {
+                clipboard_ops::spawn_clipboard_copy(copy_tx, copy_pending.clone(), text);
+                app.copy_toast_message = "Selection copied to clipboard".to_string();
+                app.copy_toast_failed = false;
+                app.copy_toast_until =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(1500));
+                return ActionFlow::Handled;
+            }
             // Copy the OAuth pending sheet's primary field to the
-            // system clipboard. Mouse drag-select does not reach modal
-            // body text (mouse events are captured), so these are the
-            // in-app copy affordances.
+            // system clipboard.
             let actual_target = match target {
                 input::OauthCopyTarget::Selected => app.oauth_selected_target(),
                 input::OauthCopyTarget::UserCode => input::OauthCopyTarget::UserCode,

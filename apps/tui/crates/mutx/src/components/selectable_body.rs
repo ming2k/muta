@@ -29,7 +29,7 @@
 use mutx_engine::{Frame, Line, Rect, Span, Style};
 
 use crate::design::MODAL_INNER_H_PADDING;
-use crate::model::layout::{BlockRegion, LayoutMap, MODAL_DOC_MSG_IDX};
+use crate::model::layout::{BlockRegion, LayoutMap, LinkHit, MODAL_DOC_MSG_IDX};
 use crate::model::selection::SelectionState;
 use crate::primitives::{
     ContentModalSpec, SCROLL_EDGE_MARGIN, content_modal_probe, draw_scrollbar, modal_chrome_rows,
@@ -340,6 +340,39 @@ pub(crate) fn render_selectable_body(
             rect,
             hidden_ranges: Vec::new(),
         });
+
+        for (start_byte, _) in wl
+            .text
+            .match_indices("http://")
+            .chain(wl.text.match_indices("https://"))
+        {
+            let tail = &wl.text[start_byte..];
+            let len = tail
+                .find(|c: char| {
+                    c.is_whitespace() || c == ')' || c == ']' || c == '>' || c == '"' || c == '\''
+                })
+                .unwrap_or(tail.len());
+            let end_byte = start_byte + len;
+            if start_byte < end_byte {
+                let full_row = row.text();
+                let link_url =
+                    if full_row.starts_with("http://") || full_row.starts_with("https://") {
+                        full_row.trim().to_string()
+                    } else {
+                        wl.text[start_byte..end_byte].to_string()
+                    };
+                let x_offset = unicode_width::UnicodeWidthStr::width(&wl.text[..start_byte]);
+                let w =
+                    unicode_width::UnicodeWidthStr::width(&wl.text[start_byte..end_byte]).max(1);
+                layout_map.push_link_hit(LinkHit {
+                    message_idx: MODAL_DOC_MSG_IDX,
+                    block_idx: logical_idx,
+                    range: (wl.start_byte + start_byte, wl.start_byte + end_byte),
+                    url: link_url,
+                    rect: Rect::new(rect.x + deco_w + x_offset as u16, rect.y, w as u16, 1),
+                });
+            }
+        }
     }
 
     draw_scrollbar(frame, body_rect, start, max_scroll, theme);
@@ -425,7 +458,7 @@ fn render_row_line(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::selection::SelectionState;
+    use crate::model::selection::{SelectionDrag, SelectionState};
 
     fn body_rect(w: u16, h: u16) -> Rect {
         Rect::new(0, 0, w, h)
@@ -771,5 +804,73 @@ mod tests {
             desired,
             visual_rows as u16 + modal_chrome_rows(geometry.modal_spec())
         );
+    }
+
+    #[test]
+    fn selection_extract_wrapped_single_row_url() {
+        let theme = Theme::default();
+        let mut terminal = mutx_engine::TestTerminal::new(30, 10);
+        let url = "https://auth.openai.com/oauth/authorize?response_type=code&client_id=123456";
+        let rows = vec![SelectableRow::styled(url, mutx_engine::Style::default())];
+        let mut scroll = 0;
+        let mut map = LayoutMap::new();
+        terminal.draw(|f| {
+            render_selectable_body(
+                f,
+                body_rect(30, 5),
+                &rows,
+                &mut scroll,
+                None,
+                &theme,
+                &SelectionState::None,
+                &mut map,
+            );
+        });
+
+        // The URL wraps across multiple visual rows with the same logical block_idx = 0.
+        // Start selection on the second line (y = 1) and drag across to line 3 (y = 2).
+        let start_cursor = map.cursor_at(0, 1).expect("line 1 cursor");
+
+        let mut drag = SelectionDrag::default();
+        let mut selection = SelectionState::None;
+        drag.begin_range(&mut selection, start_cursor);
+        drag.update_from_point(&mut selection, &map, 10, 2);
+        drag.finish(&mut selection);
+
+        assert!(selection.is_active());
+        let text = map
+            .extract_text_for_range(&selection)
+            .expect("must extract text across wrapped lines of a single row");
+        assert!(!text.is_empty());
+        assert!(url.contains(&text));
+    }
+
+    #[test]
+    fn selectable_body_registers_link_hits() {
+        let theme = Theme::default();
+        let mut terminal = mutx_engine::TestTerminal::new(50, 10);
+        let url = "https://example.com/oauth";
+        let rows = vec![SelectableRow::styled(
+            format!("Click {url} to authenticate"),
+            mutx_engine::Style::default(),
+        )];
+        let mut scroll = 0;
+        let mut map = LayoutMap::new();
+        terminal.draw(|f| {
+            render_selectable_body(
+                f,
+                body_rect(50, 5),
+                &rows,
+                &mut scroll,
+                None,
+                &theme,
+                &SelectionState::None,
+                &mut map,
+            );
+        });
+
+        // Link hit should be registered at column 6 (where "https://..." starts)
+        let link_hit = map.link_at(8, 0).expect("link hit should be found");
+        assert_eq!(link_hit.url, url);
     }
 }

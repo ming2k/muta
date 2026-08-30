@@ -29,6 +29,7 @@
 pub mod showcase;
 
 pub mod app;
+pub mod browser;
 pub mod clipboard;
 pub mod clipboard_ops;
 pub mod completion;
@@ -2049,7 +2050,12 @@ pub async fn run_tui(
                             ..
                         } => {
                             if !url.is_empty() {
-                                let _ = webbrowser::open(&url);
+                                let url_for_open = url.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    if let Err(err) = crate::browser::open_browser(&url_for_open) {
+                                        tracing::warn!("Failed to open browser: {err}");
+                                    }
+                                });
                             }
                             *oauth_add_signal_clone.lock().await =
                                 Some(event_loop::OauthAddSignal::Pending {

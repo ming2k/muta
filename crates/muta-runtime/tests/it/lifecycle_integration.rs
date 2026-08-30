@@ -38,18 +38,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 /// instance dir, so the five hand-assembled env vars this used to set
 /// collapse to one. The root is a dedicated tempdir (not the shared
 /// `sandbox` subdirs) kept alive for the process.
-fn sandbox_once() {
-    use std::sync::Once;
-    static SANDBOX: Once = Once::new();
-    static KEEP: std::sync::Mutex<Option<tempfile::TempDir>> = std::sync::Mutex::new(None);
-    SANDBOX.call_once(|| {
-        let tmp = tempfile::tempdir().unwrap();
-        // SAFETY: single-writer (the Once) and set before any test body
-        // spawns; the env is never mutated again in this process.
-        unsafe { std::env::set_var("MUTA_HOME", tmp.path()) };
-        *KEEP.lock().unwrap() = Some(tmp);
-    });
-}
+use super::sandbox_once;
 
 /// The ADR-0121 isolation contract, pinned at the level users experience
 /// it: with `MUTA_HOME` set, every category and the daemon's runtime

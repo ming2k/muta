@@ -41,13 +41,17 @@ pub(super) async fn handle_selection_start(
         app.focused_target = None;
         app.drag.cancel();
     } else if app.active_modal() == Modal::OauthPending {
-        if let Some(cursor) = app.layout_map.cursor_at(x, y) {
-            app.drag.start(cursor);
-            app.selection = SelectionState::start_range(cursor);
-        } else {
-            app.selection = SelectionState::None;
-            app.drag.cancel();
+        if let Some(cursor) = app
+            .layout_map
+            .cursor_at(x, y)
+            .filter(|c| c.message_idx == crate::model::layout::MODAL_DOC_MSG_IDX)
+        {
+            app.drag.begin_range(&mut app.selection, cursor);
+            app.focused_target = None;
+            return;
         }
+        app.selection = SelectionState::None;
+        app.drag.cancel();
         app.focused_target = None;
     } else if app.active_modal() == Modal::Question {
         if let Some(hit) = app.modal_hit_map.question_option_at(x, y)
@@ -331,16 +335,19 @@ pub(super) async fn handle_selection_start(
                 app.selection = SelectionState::None;
                 app.focused_target = None;
                 app.drag.cancel();
-                if let Err(err) = webbrowser::open(&url) {
-                    runtime
-                        .messages
-                        .write()
-                        .await
-                        .push(TranscriptMessage::notice(
-                            NoticeSeverity::Warning,
-                            format!("Failed to open link {url}: {err}"),
-                        ));
-                }
+                let url_for_open = url.clone();
+                let messages_for_err = runtime.messages.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(err) = crate::browser::open_browser(&url_for_open) {
+                        let msgs = messages_for_err;
+                        tokio::spawn(async move {
+                            msgs.write().await.push(TranscriptMessage::notice(
+                                NoticeSeverity::Warning,
+                                format!("Failed to open link {url_for_open}: {err}"),
+                            ));
+                        });
+                    }
+                });
             }
             ClickTarget::Content { cursor } => {
                 // A plain click does NOT select — it only arms a

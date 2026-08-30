@@ -19,7 +19,7 @@ default-filter = 'not test(export_bindings_)'
 
 # Extended timeouts for heavy integration tests
 [[profile.default.overrides]]
-filter = 'test(serve_integration) | test(daemon_spawn) | test(lifecycle_integration) | test(mcp_http)'
+filter = 'test(serve_integration) | test(daemon_spawn) | test(lifecycle_integration) | package(muta-mcp) | test(http_transport)'
 slow-timeout = { period = "45s", terminate-after = 1 }
 threads-required = 2
 
@@ -28,7 +28,7 @@ retries = 1
 failure-output = "immediate-final"
 
 [[profile.ci.overrides]]
-filter = 'test(serve_integration) | test(daemon_spawn) | test(lifecycle_integration) | test(mcp_http)'
+filter = 'test(serve_integration) | test(daemon_spawn) | test(lifecycle_integration) | package(muta-mcp) | test(http_transport)'
 slow-timeout = { period = "45s", terminate-after = 1 }
 threads-required = 2
 

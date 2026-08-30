@@ -10,23 +10,11 @@
 
 use std::sync::Arc;
 
+use super::sandbox_once;
 use muta_persistence::session::SessionStore;
 use muta_runtime::UiBridge;
 use muta_runtime::bootstrap::{self, BootstrapParams};
 use muta_runtime::startup::SessionStart;
-
-fn sandbox_once() {
-    use std::sync::Once;
-    static SANDBOX: Once = Once::new();
-    static KEEP: std::sync::Mutex<Option<tempfile::TempDir>> = std::sync::Mutex::new(None);
-    SANDBOX.call_once(|| {
-        let tmp = tempfile::tempdir().unwrap();
-        // SAFETY: single-writer (the Once) and set before any test body
-        // spawns; the env is never mutated again in this process.
-        unsafe { std::env::set_var("MUTA_HOME", tmp.path()) };
-        *KEEP.lock().unwrap() = Some(tmp);
-    });
-}
 
 struct HeadlessProbe;
 
