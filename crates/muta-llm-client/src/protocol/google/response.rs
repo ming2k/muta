@@ -88,9 +88,21 @@ pub fn message(response: &Value) -> Result<Message, String> {
         }
         if let Some(call) = part.get("functionCall").and_then(function_call) {
             if let Some(signature) = thought_signature(part) {
-                thought_signatures.insert(call.id.clone(), Value::String(signature));
+                thought_signatures.insert(call.id.clone(), Value::String(signature.clone()));
+                thought_signatures.insert(call.name.clone(), Value::String(signature));
             }
             tool_calls.push(call);
+        }
+    }
+
+    if let Some(signature) = &text_thought_signature {
+        for call in &tool_calls {
+            thought_signatures
+                .entry(call.id.clone())
+                .or_insert_with(|| Value::String(signature.clone()));
+            thought_signatures
+                .entry(call.name.clone())
+                .or_insert_with(|| Value::String(signature.clone()));
         }
     }
 

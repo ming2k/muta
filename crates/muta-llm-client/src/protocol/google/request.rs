@@ -268,23 +268,32 @@ fn assistant_parts(message: Message, call_names: &mut HashMap<String, String>) -
     }
     if let Some(calls) = message.tool_calls {
         for call in calls {
-            call_names.insert(call.id.clone(), call.name.clone());
-            let mut function_call = json!({
-                "name": call.name,
-                "args": parse_json_object(&call.arguments),
-            });
-            if !call.id.is_empty() {
-                function_call["id"] = json!(call.id);
-            }
-            let mut part = json!({ "functionCall": function_call });
             let sig = thought_signatures
                 .get(&call.id)
                 .or_else(|| thought_signatures.get(&call.name))
                 .or(fallback_signature.as_ref());
             if let Some(signature) = sig {
+                call_names.insert(call.id.clone(), call.name.clone());
+                let mut function_call = json!({
+                    "name": call.name,
+                    "args": parse_json_object(&call.arguments),
+                });
+                if !call.id.is_empty() {
+                    function_call["id"] = json!(call.id);
+                }
+                let mut part = json!({ "functionCall": function_call });
                 part["thoughtSignature"] = json!(signature);
+                parts.push(part);
+            } else {
+                let args_display = if call.arguments.trim().is_empty() {
+                    "{}"
+                } else {
+                    call.arguments.trim()
+                };
+                parts.push(json!({
+                    "text": format!("[Called tool `{}` with arguments: {}]", call.name, args_display)
+                }));
             }
-            parts.push(part);
         }
     }
     if parts.is_empty() {
@@ -323,15 +332,23 @@ fn thought_signatures_by_call(message: &Message) -> HashMap<String, String> {
 
 fn tool_result_parts(message: Message, call_names: &HashMap<String, String>) -> Vec<Value> {
     let id = message.tool_call_id.unwrap_or_default();
-    let name = call_names.get(&id).cloned().unwrap_or_default();
-    let mut function_response = json!({
-        "name": name,
-        "response": tool_response_payload(&message.content),
-    });
-    if !id.is_empty() {
-        function_response["id"] = json!(id);
+    if let Some(name) = call_names.get(&id).filter(|n| !n.is_empty()) {
+        let mut function_response = json!({
+            "name": name,
+            "response": tool_response_payload(&message.content),
+        });
+        if !id.is_empty() {
+            function_response["id"] = json!(id);
+        }
+        vec![json!({ "functionResponse": function_response })]
+    } else {
+        let text = if message.content.is_empty() {
+            "[Tool execution completed with empty output]".to_string()
+        } else {
+            message.content
+        };
+        vec![json!({ "text": text })]
     }
-    vec![json!({ "functionResponse": function_response })]
 }
 
 fn text_and_image_parts(
@@ -892,11 +909,17 @@ mod tests {
             name: "grep".to_string(),
             arguments: "{}".to_string(),
         };
+        let mut provider_meta = serde_json::Map::new();
+        provider_meta.insert(
+            THOUGHT_SIGNATURES_META_KEY.to_string(),
+            json!({ "answered": "sig-answered" }),
+        );
         let body = body(
             vec![
                 Message::new(Role::User, "go"),
                 Message {
                     tool_calls: Some(vec![answered.clone(), unanswered]),
+                    provider_meta: Some(provider_meta),
                     ..Message::new(Role::Assistant, "")
                 },
                 Message::tool_result(&answered, "{}"),
@@ -915,10 +938,54 @@ mod tests {
         let parts = body["contents"][1]["parts"].as_array().unwrap();
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0]["functionCall"]["id"], "answered");
+        assert_eq!(parts[0]["thoughtSignature"], "sig-answered");
         assert_eq!(
             body["contents"][2]["parts"][0]["functionResponse"]["id"],
             "answered"
         );
+    }
+
+    #[test]
+    fn downgrades_unsigned_tool_calls_to_structured_text() {
+        let call = muta_contracts::ToolCall {
+            id: "call_foreign".to_string(),
+            name: "write_todos".to_string(),
+            arguments: r#"{"items":[{"content":"design","status":"in_progress"}]}"#.to_string(),
+        };
+        // Unsigned assistant message (e.g. from Claude/GPT or text-fallback, no provider_meta)
+        let body = body(
+            vec![
+                Message::new(Role::User, "create tasks"),
+                Message {
+                    tool_calls: Some(vec![call.clone()]),
+                    provider_meta: None,
+                    ..Message::new(Role::Assistant, "Planning tasks")
+                },
+                Message::tool_result(&call, "Todo list updated"),
+                Message::new(Role::User, "proceed"),
+            ],
+            BodyInput {
+                tool_specs: None,
+                include_thoughts: false,
+                thinking: None,
+            },
+        );
+
+        // Assistant turn has text part for prose and structured text for tool call, NO functionCall
+        let model_parts = body["contents"][1]["parts"].as_array().unwrap();
+        assert_eq!(model_parts.len(), 2);
+        assert_eq!(model_parts[0]["text"], "Planning tasks");
+        assert_eq!(
+            model_parts[1]["text"],
+            "[Called tool `write_todos` with arguments: {\"items\":[{\"content\":\"design\",\"status\":\"in_progress\"}]}]"
+        );
+        assert!(model_parts[1].get("functionCall").is_none());
+
+        // Tool result is merged with the following user prompt into a single user turn
+        assert_eq!(body["contents"][2]["role"], "user");
+        let user_parts = body["contents"][2]["parts"].as_array().unwrap();
+        assert_eq!(user_parts[0]["text"], "Todo list updated");
+        assert_eq!(user_parts[1]["text"], "proceed");
     }
 
     #[test]
