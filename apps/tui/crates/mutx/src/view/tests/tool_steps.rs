@@ -516,7 +516,6 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
     let queue_items = [crate::chrome::QueueItemView {
         queued_at_ms: 1_700_000_000_000,
         text: "next".into(),
-        steering: false,
     }];
 
     let mut terminal = mutx_engine::TestTerminal::new(80, 30);

@@ -351,7 +351,7 @@ pub fn edit_fields(is_preset: bool, auth: ChannelAuth) -> Vec<CustomField> {
 /// typing an unlisted id is legitimate; native Google is a closed family — its
 /// models are enumerated by Google and forwarded verbatim by relays, so an
 /// arbitrary id is almost certainly a typo or hallucination, not a real model.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn protocol_model_set_closed(protocol_wire: &str) -> bool {
     matches!(protocol_wire, "google" | "gemini")
 }
@@ -485,7 +485,7 @@ impl RankedProvider {
     /// Whether the provider hosts more than one model. Informational for the
     /// Connections list (the flat Models picker lists each pair individually,
     /// so no drill-in remains).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn is_multi_model(&self) -> bool {
         self.models.len() > 1
     }

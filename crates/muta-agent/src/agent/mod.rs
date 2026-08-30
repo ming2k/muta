@@ -1060,21 +1060,6 @@ mod tools_admin;
 
 pub(crate) use rounds::ToolResultRecord;
 
-/// Render a [`muta_contracts::ScopeTarget`] as the stable string used to key and
-/// display a permission rule. A path becomes the path string; a command becomes
-/// the command string; [`ScopeTarget::Unspecified`] becomes `"*"` (the legacy
-/// "any scope" sentinel), so tools without a locatable target are ruled as
-/// before. This string is purely a dedup key + UI label — the actual scope
-/// admission decision is made by [`muta_contracts::OperationScope::allows`].
-#[allow(dead_code)]
-fn scope_target_to_rule(target: &muta_contracts::ScopeTarget) -> String {
-    match target {
-        muta_contracts::ScopeTarget::Path(p) => p.to_string_lossy().into_owned(),
-        muta_contracts::ScopeTarget::Command(c) => c.clone(),
-        muta_contracts::ScopeTarget::Unspecified => "*".to_string(),
-    }
-}
-
 /// Render a missing runtime grant without conflating it with project asset
 /// trust. This is returned when no interactive approver is available.
 fn permission_required_output(request: &muta_contracts::PermissionRequest) -> ToolOutput {

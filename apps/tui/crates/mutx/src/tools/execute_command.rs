@@ -35,7 +35,7 @@ impl ToolPresenter for ExecuteCommandPresenter {
 ///
 /// Strips directory paths (`/usr/bin/`, `C:\tools\`), Windows file extensions (`.exe`, `.cmd`),
 /// and wrapper utilities (`sudo`, `env`, `nohup`).
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn extract_comm(command: &str) -> Option<String> {
     for words in shell_segments(command) {
         let mut words_iter = words.into_iter().skip_while(|word| is_assignment(word));

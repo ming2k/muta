@@ -12,8 +12,6 @@
 //! tinted verbs blend into the box instead of carrying the outer surface
 //! color the old standalone bar below the input used.
 
-use unicode_width::UnicodeWidthStr;
-
 use mutx_engine::{Color, Modifier, Span, Style};
 
 use crate::app::ComposerSendMode;
@@ -342,14 +340,6 @@ pub(crate) fn hint_row_spans(
         _ => {}
     }
     spans
-}
-
-/// Width of a span run in display columns.
-/// Abbreviated display width of a span run (unused today; kept beside the
-/// span builders so width math never gets re-implemented ad hoc).
-#[allow(dead_code)]
-pub(crate) fn spans_width(spans: &[Span<'static>]) -> usize {
-    spans.iter().map(|span| span.content.width()).sum()
 }
 
 #[cfg(test)]

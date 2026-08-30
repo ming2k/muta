@@ -40,18 +40,7 @@ pub(crate) use crate::layout;
 pub(crate) use crate::overlays::draw_view_switcher;
 pub use crate::overlays::provider_delete_confirm::ProviderDeleteChoice as ProviderDeleteChoiceView;
 #[allow(unused_imports)]
-pub use crate::overlays::{
-    ActivityModalView, BtwModalView, ConfigFocus, ConfigViewProps, ContextUsageView,
-    CustomEditorView, HelpBinding, QueueModalView, draw_activity_modal, draw_armed_toast,
-    draw_btw_modal, draw_config_view, draw_connections_modal, draw_copy_toast,
-    draw_custom_provider_editor, draw_dashboard, draw_help_modal, draw_history_panel,
-    draw_input_injection, draw_mcp_modal, draw_model_editor, draw_models_modal, draw_notice_toast,
-    draw_oauth_pending, draw_permission_sheet, draw_permissions_manager, draw_preset_chooser,
-    draw_provider_delete_confirm, draw_question_modal, draw_queue_modal, draw_session_preview,
-    draw_sessions_modal, draw_skills_modal, draw_telemetry_modal, draw_tools_modal,
-    draw_tree_modal, draw_usage_stats_modal, telemetry_attempt_count, telemetry_attempt_key,
-    telemetry_round_count,
-};
+pub use crate::overlays::*;
 use crate::page_header;
 pub(crate) use crate::page_header::{
     AsidesChip, BtwHead, PageHeader, PageHints, PageKind, SessionHead, draw_page_header,
@@ -254,95 +243,6 @@ pub struct TranscriptView<'a> {
     /// `None` outside the app loop (tests / showcase), where every lookup is a
     /// miss — correct, just unoptimized.
     pub height_cache: Option<&'a mut HeightCache>,
-}
-
-/// Modular sub-props grouping the transcript stream and header metadata.
-#[allow(dead_code)]
-pub struct TranscriptStreamProps<'a> {
-    pub messages: &'a [TranscriptMessage],
-    pub scroll: u16,
-    pub session_head: Option<SessionHead<'a>>,
-    pub side_banner: Option<page_header::BtwHead>,
-    pub runner_bar: Option<RunnerBarInfo>,
-    pub page_hints: Option<page_header::PageHints<'a>>,
-}
-
-/// Modular sub-props grouping status chrome and footer bars.
-#[allow(dead_code)]
-pub struct TranscriptChromeProps<'a> {
-    pub activity: &'a str,
-    pub backoff_clause: Option<&'a str>,
-    pub silent_clause: Option<&'a str>,
-    pub awaiting_permission: bool,
-    pub spinner_phase: usize,
-    pub queue_bar: QueueBarView<'a>,
-    pub todos: Option<&'a muta_contracts::TodoList>,
-    pub round_started_at: Option<std::time::Instant>,
-    pub chrome_hidden: bool,
-}
-
-/// Modular sub-props grouping composer and prompt drafting state.
-#[allow(dead_code)]
-pub struct TranscriptInputProps<'a> {
-    pub input: &'a str,
-    pub byte_cursor: usize,
-}
-
-/// Modular sub-props grouping hit-testing, focus, and selection interaction.
-#[allow(dead_code)]
-pub struct TranscriptInteractionProps<'a> {
-    pub selection: &'a SelectionState,
-    pub cell_selection: Option<&'a CellDragInfo>,
-    pub hovered_step: Option<usize>,
-    pub focused_target: Option<InteractiveTarget>,
-}
-
-#[allow(dead_code)]
-impl<'a> TranscriptView<'a> {
-    /// Extract the modular stream properties.
-    pub fn stream_props(&self) -> TranscriptStreamProps<'a> {
-        TranscriptStreamProps {
-            messages: self.messages,
-            scroll: self.scroll,
-            session_head: self.session_head,
-            side_banner: self.side_banner,
-            runner_bar: self.runner_bar.clone(),
-            page_hints: self.page_hints,
-        }
-    }
-
-    /// Extract the modular chrome properties.
-    pub fn chrome_props(&self) -> TranscriptChromeProps<'a> {
-        TranscriptChromeProps {
-            activity: self.activity,
-            backoff_clause: self.backoff_clause,
-            silent_clause: self.silent_clause,
-            awaiting_permission: self.awaiting_permission,
-            spinner_phase: self.spinner_phase,
-            queue_bar: self.queue_bar,
-            todos: self.todos,
-            round_started_at: self.round_started_at,
-            chrome_hidden: self.chrome_hidden,
-        }
-    }
-
-    /// Extract the modular input properties.
-    pub fn input_props(&self) -> TranscriptInputProps<'a> {
-        TranscriptInputProps {
-            input: self.input,
-            byte_cursor: self.byte_cursor,
-        }
-    }
-
-    /// Extract the modular interaction properties.
-    pub fn interaction_props(&self) -> TranscriptInteractionProps<'a> {
-        TranscriptInteractionProps {
-            selection: self.selection,
-            cell_selection: self.cell_selection,
-            hovered_step: self.hovered_step,
-            focused_target: self.focused_target,
-        }
-    }
 }
 
 /// Caches each transcript message's fully-laid-out height (in rows), keyed by

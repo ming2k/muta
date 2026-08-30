@@ -30,7 +30,6 @@ impl SessionStore {
 
     /// Backwards-compatible alias for [`Self::load_for_project`] using the
     /// current process cwd.
-    #[allow(dead_code)]
     pub fn load() -> Self {
         let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self::load_for_project(project_root)
@@ -102,7 +101,6 @@ impl SessionStore {
     }
 
     /// Project root this store is bound to.
-    #[allow(dead_code)]
     pub fn project_root(&self) -> &std::path::Path {
         &self.project_root
     }
@@ -452,7 +450,7 @@ impl SessionStore {
     /// Write `data` to `sessions_dir/<data.id>.json`. Used to materialise a
     /// session file for a snapshot that is not (or not yet) the pinned one —
     /// for example seeding an archived branch in tests.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn persist_archive(&self, data: &SessionData) -> Result<(), String> {
         let path = self.sessions_dir.join(format!("{}.json", data.id));
         persist_to(&path, data, &self.blob_store)

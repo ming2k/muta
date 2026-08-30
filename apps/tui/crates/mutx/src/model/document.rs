@@ -533,17 +533,6 @@ pub enum Block {
 }
 
 impl Block {
-    /// The inline-prose payload of the prose variants (`Text`, `Heading`,
-    /// `ListItem`, `Quote`); `None` for the structural blocks.
-    #[allow(dead_code)]
-    pub fn inline(&self) -> Option<&Inline> {
-        match self {
-            Block::Text(inline) | Block::Quote(inline) => Some(inline),
-            Block::Heading { inline, .. } | Block::ListItem { inline, .. } => Some(inline),
-            _ => None,
-        }
-    }
-
     /// Returns the raw text content of this block (without formatting).
     pub fn raw_text(&self) -> &str {
         match self {
@@ -744,7 +733,6 @@ impl TranscriptMessage {
     /// Mark this message as queued in the send queue (waiting for the
     /// in-flight turn to finish before it is dispatched). Only meaningful on
     /// `Role::User` messages; the renderer and dispatch logic key off this.
-    #[allow(dead_code)]
     pub fn queued(mut self) -> Self {
         self.delivery = DeliveryStatus::Queued;
         self
@@ -823,7 +811,7 @@ impl TranscriptMessage {
     /// message carries at least a model. Used by the renderer to label which
     /// model produced a turn; `None` when the message has no attribution
     /// (user/system messages, or untagged history).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn attribution_label(&self) -> Option<(String, String)> {
         let model = self.model.clone()?;
         let provider = self.provider.clone().unwrap_or_default();

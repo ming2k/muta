@@ -5,11 +5,6 @@ pub mod pipes;
 #[cfg(test)]
 mod tests;
 
-#[allow(unused_imports)]
-pub use episodic::workspace_sandbox_shell;
-#[allow(unused_imports)]
-pub use persistent::PersistentTerminalSession;
-
 use async_trait::async_trait;
 use muta_contracts::Tool;
 use muta_tool_derive::ToolSchema;
@@ -44,7 +39,7 @@ struct ExecuteCommandArgs {
     label: Option<String>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // tool-schema: dynamic JSON schema generation
 #[derive(ToolSchema, Deserialize)]
 struct WorkspaceExecuteCommandArgs {
     #[tool(desc = "The shell command to execute inside the workspace sandbox")]

@@ -1275,12 +1275,6 @@ pub struct QueueItemView {
     pub queued_at_ms: u64,
     /// The user's literal prompt text (the first run is previewed in the bar).
     pub text: String,
-    /// `true` while the item is an in-flight mid-round steer. A live busy-Enter
-    /// steer is transcript-owned and never enters the outbox, but this field is
-    /// retained so the view struct keeps its shape;
-    /// producers always pass `false`.
-    #[allow(dead_code)]
-    pub steering: bool,
 }
 
 /// Inputs for [`draw_queue_bar`]: the persistent one-row outbox summary pinned
@@ -2711,7 +2705,6 @@ mod tests {
         let item = QueueItemView {
             queued_at_ms: 1_700_000_000_000,
             text: "fix the flaky test".to_string(),
-            steering: false,
         };
         let mut terminal = mutx_engine::TestTerminal::new(70, 1);
         terminal.draw(|f| {
@@ -2761,7 +2754,6 @@ mod tests {
         let item = QueueItemView {
             queued_at_ms: 1_700_000_000_000,
             text: "fix the flaky test in parser".to_string(),
-            steering: false,
         };
         let text = queue_row_text(
             QueueBarView {
@@ -2794,37 +2786,6 @@ mod tests {
     }
 
     #[test]
-    fn queue_bar_ignores_the_legacy_steer_flag() {
-        // A busy-Enter steer is a transcript entry, not
-        // an outbox item, so a `steering: true` view item can no longer be
-        // produced by the projection. If one ever leaks through (a stale
-        // snapshot), the bar must still render it as an ordinary next-round
-        // entry — the badge vocabulary is retired with the state it marked.
-        let item = QueueItemView {
-            queued_at_ms: 1_700_000_000_000,
-            text: "also cover the edge case".to_string(),
-            steering: true,
-        };
-        let text = queue_row_text(
-            QueueBarView {
-                items: &[item],
-                paused: false,
-                blocked: false,
-            },
-            92,
-            &Theme::default(),
-        );
-        assert!(
-            !text.contains("steer›"),
-            "steer badge must not render: {text:?}"
-        );
-        assert!(
-            text.contains("also cover the edge case"),
-            "preview text missing: {text:?}"
-        );
-    }
-
-    #[test]
     fn queue_bar_never_renders_the_tab_affordance() {
         // The Tab toggle for the insert/next-round send target was removed —
         // a busy Enter always queues for the next round — so the queue bar's
@@ -2832,7 +2793,6 @@ mod tests {
         let item = QueueItemView {
             queued_at_ms: 1_700_000_000_000,
             text: "add a comment".to_string(),
-            steering: false,
         };
         let text = queue_row_text(
             QueueBarView {

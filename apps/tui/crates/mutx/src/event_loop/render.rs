@@ -254,7 +254,6 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
         .map(|item| view::QueueItemView {
             queued_at_ms: item.queued_at_ms,
             text: item.text.clone(),
-            steering: false,
         })
         .collect();
     let queue_modal_items: Vec<view::QueueItemView> = queue_items.clone();

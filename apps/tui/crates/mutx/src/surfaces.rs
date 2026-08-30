@@ -562,9 +562,7 @@ impl PanelRegistry {
     }
 
     /// Whether the panel has been opened at least once (state retained).
-    /// Currently exercised by tests and reserved for the switcher's UI
-    /// badges (the badges read `order()` today).
-    #[allow(dead_code)] // production reads `order`; tests assert exact lifetime
+    #[cfg(test)]
     pub(crate) fn is_open(&self, id: PanelId) -> bool {
         self.states.contains_key(&id)
     }

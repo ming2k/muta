@@ -389,7 +389,7 @@ impl GoogleProvider {
         response::message(&response_json)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn prepare_request(
         &self,
         request: ModelRequest,

@@ -47,10 +47,7 @@ pub(crate) struct RowSegment {
 }
 
 impl RowSegment {
-    /// Single-segment constructor. Unused by the current migration batch
-    /// (modal bodies arrive as pre-built `Line`s via [`SelectableRow::from_line`]);
-    /// kept for hand-built document rows.
-    #[allow(dead_code)]
+    /// Single-segment constructor.
     pub(crate) fn styled(text: impl Into<String>, style: Style) -> Self {
         Self {
             text: text.into(),
@@ -81,7 +78,6 @@ pub(crate) struct SelectableRow {
 
 impl SelectableRow {
     /// A single-segment row.
-    #[allow(dead_code)] // used by tests; migration batch uses from_line
     pub(crate) fn styled(text: impl Into<String>, style: Style) -> Self {
         Self {
             prefix: None,
@@ -91,7 +87,7 @@ impl SelectableRow {
     }
 
     /// A row from pre-built segments, in order.
-    #[allow(dead_code)] // used by tests; migration batch uses from_line
+    #[cfg(test)]
     pub(crate) fn from_segments(segments: Vec<RowSegment>) -> Self {
         Self {
             prefix: None,
@@ -101,7 +97,6 @@ impl SelectableRow {
     }
 
     /// An empty (spacer) row — occupies one visual row, copies as "".
-    #[allow(dead_code)] // used by tests; migration batch uses from_line
     pub(crate) fn empty() -> Self {
         Self {
             prefix: None,

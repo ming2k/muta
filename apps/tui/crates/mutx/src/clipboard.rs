@@ -383,7 +383,7 @@ fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
 /// Returns `None` when nothing in the payload is a resolvable local file —
 /// that lets callers fall through to other flavors instead of swallowing a
 /// non-file paste as an empty attachment.
-#[allow(dead_code)]
+#[cfg(any(target_os = "linux", test))]
 fn parse_uri_list(payload: &str) -> Option<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for line in payload.lines() {
@@ -402,7 +402,7 @@ fn parse_uri_list(payload: &str) -> Option<Vec<PathBuf>> {
 
 /// Parse GNOME's `x-special/gnome-copied-files` payload: an operation verb
 /// ("copy" / "cut") followed by one URI per line.
-#[allow(dead_code)]
+#[cfg(any(target_os = "linux", test))]
 fn parse_gnome_copied_files(payload: &str) -> Option<Vec<PathBuf>> {
     let mut lines = payload
         .lines()

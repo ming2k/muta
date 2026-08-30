@@ -25,8 +25,6 @@ use crossterm::{
     terminal::{self, ClearType, DisableLineWrap, EnableLineWrap},
 };
 
-#[allow(unused_imports)]
-use crate::Cell;
 use crate::diff::{Draw, DrawCmd};
 use crate::{Color, Modifier, Style};
 

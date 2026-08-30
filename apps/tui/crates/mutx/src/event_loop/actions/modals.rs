@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 
 use muta_contracts::AgentRequest;
 
-use crate::view;
+use crate::overlays;
 use crate::view::Theme;
 use crate::{App, Modal};
 
@@ -528,19 +528,19 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                 let round_index = app.modal_index.min(
                     report
                         .as_ref()
-                        .map(|report| view::telemetry_round_count(report).saturating_sub(1))
+                        .map(|report| overlays::telemetry_round_count(report).saturating_sub(1))
                         .unwrap_or(0),
                 );
                 let count = report
                     .as_ref()
-                    .map(|report| view::telemetry_attempt_count(report, round_index))
+                    .map(|report| overlays::telemetry_attempt_count(report, round_index))
                     .unwrap_or(0)
                     .max(1);
                 app.telemetry_turn_cursor = (app.telemetry_turn_cursor + count - 1) % count;
             } else {
                 let count = app
                     .token_source_report(viewed_session_id)
-                    .map(|report| view::telemetry_round_count(&report))
+                    .map(|report| overlays::telemetry_round_count(&report))
                     .unwrap_or(0)
                     .max(1);
                 app.modal_index = (app.modal_index + count - 1) % count;
@@ -683,19 +683,19 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                 let round_index = app.modal_index.min(
                     report
                         .as_ref()
-                        .map(|report| view::telemetry_round_count(report).saturating_sub(1))
+                        .map(|report| overlays::telemetry_round_count(report).saturating_sub(1))
                         .unwrap_or(0),
                 );
                 let count = report
                     .as_ref()
-                    .map(|report| view::telemetry_attempt_count(report, round_index))
+                    .map(|report| overlays::telemetry_attempt_count(report, round_index))
                     .unwrap_or(0)
                     .max(1);
                 app.telemetry_turn_cursor = (app.telemetry_turn_cursor + 1) % count;
             } else {
                 let count = app
                     .token_source_report(viewed_session_id)
-                    .map(|report| view::telemetry_round_count(&report))
+                    .map(|report| overlays::telemetry_round_count(&report))
                     .unwrap_or(0)
                     .max(1);
                 app.modal_index = (app.modal_index + 1) % count;

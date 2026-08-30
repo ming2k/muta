@@ -22,8 +22,6 @@ const DEFAULT_RING_BUFFER_CAPACITY: usize = 500;
 struct JobEntry {
     info: BackgroundJobInfo,
     ring_buffer: VecDeque<String>,
-    #[allow(dead_code)]
-    log_file_path: Option<PathBuf>,
     cancel_tx: Option<tokio::sync::oneshot::Sender<()>>,
     #[cfg(unix)]
     pid: Option<u32>,
@@ -190,7 +188,6 @@ impl BackgroundJobManager {
                 JobEntry {
                     info: info.clone(),
                     ring_buffer: VecDeque::with_capacity(DEFAULT_RING_BUFFER_CAPACITY),
-                    log_file_path: Some(log_file_path.clone()),
                     cancel_tx: Some(cancel_tx),
                     #[cfg(unix)]
                     pid,
@@ -369,7 +366,6 @@ impl BackgroundJobManager {
                 JobEntry {
                     info: info.clone(),
                     ring_buffer: VecDeque::with_capacity(DEFAULT_RING_BUFFER_CAPACITY),
-                    log_file_path: None,
                     cancel_tx: Some(cancel_tx),
                     #[cfg(unix)]
                     pid: None,

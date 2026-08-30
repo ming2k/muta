@@ -141,7 +141,7 @@ impl PermissionStore {
     }
 
     /// Clear all session-scoped grants.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn clear_session(&self) {
         let mut state = lock(&self.state);
         state.session.clear();

@@ -170,8 +170,8 @@ pub(crate) fn modal_footer_text(hints: &[FooterHint], width: usize) -> String {
 }
 
 /// Build the footer text for `width`, enabling the mandatory `? help` chip and
-/// accepting custom-band hints. (Used by tests; also available to callers.)
-#[cfg_attr(not(test), allow(dead_code))]
+/// accepting custom-band hints. (Used by tests.)
+#[cfg(test)]
 pub(crate) fn modal_footer_text_with_more(
     hints: &[FooterHint],
     extra: &[FooterHintWithBand],
@@ -266,10 +266,6 @@ fn segs_to_spans(segs: &[FooterSeg], theme: &Theme) -> Vec<Span<'static>> {
 struct FooterLayout {
     text: String,
     segs: Vec<FooterSeg>,
-    /// True when at least one hint was dropped or labels were stripped.
-    /// (Kept for readability of the layout control flow; not all paths read it.)
-    #[allow(dead_code)]
-    collapsed: bool,
 }
 
 fn render_footer_impl(
@@ -313,7 +309,6 @@ fn layout_footer(
         return FooterLayout {
             text: String::new(),
             segs: Vec::new(),
-            collapsed: false,
         };
     }
 
@@ -342,10 +337,9 @@ fn layout_footer(
 
     // Wrap a segment list into a complete FooterLayout (text mirrors the
     // segments so the width-only / test APIs stay byte-identical to before).
-    let finish = |segs: Vec<FooterSeg>, collapsed: bool| FooterLayout {
+    let finish = |segs: Vec<FooterSeg>| FooterLayout {
         text: segs_to_string(&segs),
         segs,
-        collapsed,
     };
 
     // Pass 1: full labels, progressively dropping lowest-priority items.
@@ -360,7 +354,7 @@ fn layout_footer(
             show_more,
             any_dropped,
         ) {
-            return finish(segs, any_dropped);
+            return finish(segs);
         }
     }
 
@@ -375,7 +369,7 @@ fn layout_footer(
             show_more,
             true,
         ) {
-            return finish(segs, true);
+            return finish(segs);
         }
     }
 
@@ -395,10 +389,10 @@ fn layout_footer(
         for candidate in [append_more(&base, MORE_FULL), only_text(MORE_FULL)] {
             let text = segs_to_string(&candidate);
             if !text.is_empty() && text.width() <= width {
-                return finish(candidate, true);
+                return finish(candidate);
             }
         }
-        return finish(only_text("…"), true);
+        return finish(only_text("…"));
     }
 
     let text = segs_to_string(&base);
@@ -407,7 +401,7 @@ fn layout_footer(
     } else {
         only_text_truncated(&text, width)
     };
-    finish(segs, true)
+    finish(segs)
 }
 
 /// A segment list that is just one plain-text run (used for the bare `? help`

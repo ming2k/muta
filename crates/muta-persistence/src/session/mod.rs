@@ -1495,7 +1495,6 @@ pub fn build_excerpt_summary(
 /// Pure, provider-less compaction using the deterministic excerpt fallback.
 /// Kept as a testable building block and as the ultimate fallback when LLM
 /// summarization is disabled or unavailable.
-#[allow(dead_code)]
 pub fn compact_messages(
     messages: &[Message],
     target_tokens: usize,

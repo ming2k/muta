@@ -5,8 +5,8 @@ use mutx_engine::{Frame, Rect};
 use super::super::Theme;
 use super::super::design::MODAL_INNER_H_PADDING;
 use super::super::primitives::{
-    ContentModalSpec, FixedModalSpec, HeaderPart, content_modal_area, content_modal_probe,
-    modal_area, modal_chrome_rows, modal_frame, modal_header, modal_header_parts,
+    ContentModalSpec, content_modal_area, content_modal_probe, modal_chrome_rows, modal_frame,
+    modal_header,
 };
 use super::footer::{
     FooterHint, FooterHintWithBand, keymap_body_lines, keymap_page_footer_hints,
@@ -16,50 +16,16 @@ use super::scroll::ScrollBody;
 
 #[derive(Clone, Copy)]
 pub(crate) enum ModalPageSize {
-    /// Fixed-geometry page shell. No current caller (Help, the last fixed-
-    /// geometry `ModalPage` user, renders its selectable body through the
-    /// `modal_frame` ceremony directly); kept as the shell's complete
-    /// geometry vocabulary.
-    #[allow(dead_code)]
-    Fixed(FixedModalSpec),
     Content(ContentModalSpec),
-}
-
-impl ModalPageSize {
-    #[allow(dead_code)]
-    pub fn exact_dimensions(&self, frame: &Frame) -> (u16, u16) {
-        match self {
-            ModalPageSize::Fixed(geometry) => geometry.exact_dimensions(frame),
-            ModalPageSize::Content(geometry) => {
-                let probe = content_modal_probe(frame, *geometry);
-                (probe.width, probe.height)
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn max_dimensions(&self, frame: &Frame) -> (u16, u16) {
-        match self {
-            ModalPageSize::Fixed(geometry) => geometry.exact_dimensions(frame),
-            ModalPageSize::Content(geometry) => geometry.max_dimensions(frame),
-        }
-    }
 }
 
 pub(crate) enum ModalHeader<'a> {
     Title(&'a str),
-    #[allow(dead_code)]
-    Parts(&'a [HeaderPart<'a>]),
 }
 
 impl<'a> ModalHeader<'a> {
     pub(crate) const fn title(title: &'a str) -> Self {
         Self::Title(title)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) const fn parts(parts: &'a [HeaderPart<'a>]) -> Self {
-        Self::Parts(parts)
     }
 }
 
@@ -110,7 +76,6 @@ pub(crate) fn modal_body_width(frame: &Frame, geometry: ContentModalSpec) -> usi
 /// nested modal).
 pub(crate) fn draw_modal_page(frame: &mut Frame, page: ModalPage<'_>, theme: &Theme) -> Rect {
     let area = match page.size {
-        ModalPageSize::Fixed(geometry) => modal_area(frame, geometry),
         ModalPageSize::Content(geometry) => {
             let spec = geometry.modal_spec();
             let desired = if page.keymap_open {
@@ -138,7 +103,6 @@ pub(crate) fn draw_modal_page(frame: &mut Frame, page: ModalPage<'_>, theme: &Th
                     theme,
                 );
             }
-            ModalHeader::Parts(parts) => modal_header_parts(frame, f.header, parts, theme),
         }
         // The keymap sub-page is a selectable document: keycap labels and
         // descriptions register as MODAL_DOC rows so they can be copied like
@@ -176,7 +140,6 @@ pub(crate) fn draw_modal_page(frame: &mut Frame, page: ModalPage<'_>, theme: &Th
     } else {
         match page.header {
             ModalHeader::Title(title) => modal_header(frame, f.header, title, theme),
-            ModalHeader::Parts(parts) => modal_header_parts(frame, f.header, parts, theme),
         }
         page.body.render(frame, f.body, theme);
         if let Some(footer) = f.footer {
