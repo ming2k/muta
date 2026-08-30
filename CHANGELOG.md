@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.15] - 2026-08-30
+
+### Added
+
+- Support unconfined search roots with tilde path expansion across search and navigation tools.
+- Refine model discovery protocols and connection request options.
+
+### Fixed
+
+- Adaptively project unsigned tool calls and enhance thought signature binding in Google provider.
+
 ## [0.37.14] - 2026-08-30
 
 ### Added
@@ -5694,7 +5705,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.14...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.15...HEAD
+[0.37.15]: https://github.com/ming2k/muta/compare/v0.37.14...v0.37.15
 [0.37.14]: https://github.com/ming2k/muta/compare/v0.37.13...v0.37.14
 [0.37.13]: https://github.com/ming2k/muta/compare/v0.37.12...v0.37.13
 [0.37.12]: https://github.com/ming2k/muta/compare/v0.37.11...v0.37.12
