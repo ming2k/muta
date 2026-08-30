@@ -8,6 +8,7 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
+#[cfg(target_os = "linux")]
 use tokio::io::AsyncWriteExt;
 
 /// The outcome of copying text to the clipboard.
