@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.17] - 2026-08-30
+
+### Fixed
+
+- Clear history search filter buffer on Tab/Enter confirmation and display history mode badge in composer top row.
+- Serialize OpenAI Responses API input image URLs as direct strings.
+
 ## [0.37.16] - 2026-08-30
 
 ### Fixed
@@ -5713,7 +5720,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.16...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.17...HEAD
+[0.37.17]: https://github.com/ming2k/muta/compare/v0.37.16...v0.37.17
 [0.37.16]: https://github.com/ming2k/muta/compare/v0.37.15...v0.37.16
 [0.37.15]: https://github.com/ming2k/muta/compare/v0.37.14...v0.37.15
 [0.37.14]: https://github.com/ming2k/muta/compare/v0.37.13...v0.37.14
