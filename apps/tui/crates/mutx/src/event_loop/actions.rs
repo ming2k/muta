@@ -1328,80 +1328,39 @@ pub(super) async fn dispatch_action(
                     app.config_scroll = 0;
                     app.config_detail_scroll = 0;
                 }
-                Modal::TokenReport => app.token_report_scroll = 0,
-                Modal::PerformanceReport => app.performance_report_scroll = 0,
+                Modal::Telemetry => app.telemetry_scroll = 0,
                 _ => {}
             }
         }
-        input::InputAction::TokenReportActivate => {
-            if app.active_modal() == Modal::TokenReport {
-                if !app.token_report_detail {
-                    let has_turns = app
+        input::InputAction::TelemetryActivate => {
+            if app.active_modal() == Modal::Telemetry {
+                if !app.telemetry_detail {
+                    let has_rounds = app
                         .token_source_report(viewed_session_id)
-                        .map(|report| view::token_report_round_count(&report) > 0)
+                        .map(|report| view::telemetry_round_count(&report) > 0)
                         .unwrap_or(false);
-                    if has_turns {
-                        app.token_report_detail = true;
-                        app.token_report_turn_cursor = 0;
-                        app.token_report_scroll = 0;
+                    if has_rounds {
+                        app.telemetry_detail = true;
+                        app.telemetry_turn_cursor = 0;
+                        app.telemetry_scroll = 0;
                     }
-                } else if app.token_report_turn.is_none() {
-                    // Drill into the selected attempt's usage page
-                    // (`Context Usage › x round › x turn`).
+                } else if app.telemetry_turn.is_none() {
                     let report = app.token_source_report(viewed_session_id);
                     let round_index = app.modal_index.min(
                         report
                             .as_ref()
-                            .map(|report| view::token_report_round_count(report).saturating_sub(1))
+                            .map(|report| view::telemetry_round_count(report).saturating_sub(1))
                             .unwrap_or(0),
                     );
                     if let Some(key) = report.as_ref().and_then(|report| {
-                        view::token_report_attempt_key(
+                        view::telemetry_attempt_key(
                             report,
                             round_index,
-                            app.token_report_turn_cursor,
+                            app.telemetry_turn_cursor,
                         )
                     }) {
-                        app.token_report_turn = Some(key);
-                        app.token_report_scroll = 0;
-                    }
-                }
-            }
-        }
-        input::InputAction::PerformanceReportActivate => {
-            if app.active_modal() == Modal::PerformanceReport {
-                if !app.performance_report_detail {
-                    let has_rounds = app
-                        .token_source_report(viewed_session_id)
-                        .map(|report| view::performance_report_round_count(&report) > 0)
-                        .unwrap_or(false);
-                    if has_rounds {
-                        app.performance_report_detail = true;
-                        app.performance_report_turn_cursor = 0;
-                        app.performance_report_scroll = 0;
-                    }
-                } else if app.performance_report_turn.is_none() {
-                    // Drill into the selected attempt's stage page
-                    // (`Performance › x round › x turn`).
-                    let round_index = app.modal_index.min(
-                        app.token_source_report(viewed_session_id)
-                            .map(|report| {
-                                view::performance_report_round_count(&report).saturating_sub(1)
-                            })
-                            .unwrap_or(0),
-                    );
-                    if let Some(key) =
-                        app.token_source_report(viewed_session_id)
-                            .and_then(|report| {
-                                view::performance_report_attempt_key(
-                                    &report,
-                                    round_index,
-                                    app.performance_report_turn_cursor,
-                                )
-                            })
-                    {
-                        app.performance_report_turn = Some(key);
-                        app.performance_report_scroll = 0;
+                        app.telemetry_turn = Some(key);
+                        app.telemetry_scroll = 0;
                     }
                 }
             }
@@ -1548,25 +1507,11 @@ pub(super) async fn dispatch_action(
                 viewed_session_id,
             );
         }
-        input::InputAction::OpenTokenReport => {
-            // Ctrl+O opens the context/token usage report — the keyboard
-            // twin of clicking the model bar's context meter. Identical
-            // destination and lifecycle as the click (retained view,
-            // ADR-0133; the attach-mode report fetch runs whenever the
-            // report is missing, inside `enter_panel`).
+        input::InputAction::OpenTelemetry => {
+            // Ctrl+O opens the session telemetry report (Context & Performance).
             enter_panel(
                 app,
-                crate::surfaces::PanelId::TokenReport,
-                runtime,
-                viewed_session_id,
-            );
-        }
-        input::InputAction::OpenPerformanceReport => {
-            // Ctrl+S opens the latest-turn performance report — the
-            // keyboard twin of clicking the model bar's stream-rate gauge.
-            enter_panel(
-                app,
-                crate::surfaces::PanelId::PerformanceReport,
+                crate::surfaces::PanelId::Telemetry,
                 runtime,
                 viewed_session_id,
             );
@@ -2407,7 +2352,7 @@ pub(super) fn enter_panel(
             app.usage_stats = None;
             Some(AgentRequest::QueryUsageStats { event_cap: 200 })
         }
-        PanelId::TokenReport | PanelId::PerformanceReport if app.token_ledger.is_none() => {
+        PanelId::Telemetry if app.token_ledger.is_none() => {
             app.token_report = None;
             Some(AgentRequest::QueryTokenUsage {
                 session_id: viewed_session_id.to_string(),

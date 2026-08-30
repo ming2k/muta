@@ -1020,7 +1020,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             }
             Some(rects.area)
         }
-        Modal::TokenReport => {
+        Modal::Telemetry => {
             // Snapshot the shared ledger (standalone path) or the
             // on-demand harness reply (attach path); the attach
             // path renders a loading placeholder until the reply
@@ -1028,41 +1028,22 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
             let report = app.token_source_report(viewed_session_id);
             let loading = app.token_ledger.is_none() && report.is_none();
             let report = report.unwrap_or_default();
-            Some(view::draw_token_report_modal(
+            Some(view::draw_telemetry_modal(
                 f,
                 &report,
                 view::ContextUsageView {
                     snapshot: app.context_tokens,
-                    window_tokens: crate::providers::model_context_window(&app.current_model),
+                    window_tokens: Some(crate::providers::model_context_window(&app.current_model)),
                     draft_content_tokens: muta_contracts::count_tokens(&app.input),
                     draft_tokens: muta_contracts::estimate_draft_tokens(&app.input),
                 },
                 app.modal_index
-                    .min(view::token_report_round_count(&report).saturating_sub(1)),
-                app.token_report_detail,
-                app.token_report_turn,
-                app.token_report_turn_cursor,
+                    .min(view::telemetry_round_count(&report).saturating_sub(1)),
+                app.telemetry_detail,
+                app.telemetry_turn,
+                app.telemetry_turn_cursor,
                 loading,
-                &mut app.token_report_scroll,
-                &app.theme,
-                &app.selection,
-                &mut layout_map,
-            ))
-        }
-        Modal::PerformanceReport => {
-            let report = app.token_source_report(viewed_session_id);
-            let loading = app.token_ledger.is_none() && report.is_none();
-            let report = report.unwrap_or_default();
-            Some(view::draw_performance_report_modal(
-                f,
-                &report,
-                app.modal_index
-                    .min(view::performance_report_round_count(&report).saturating_sub(1)),
-                app.performance_report_detail,
-                app.performance_report_turn,
-                app.performance_report_turn_cursor,
-                loading,
-                &mut app.performance_report_scroll,
+                &mut app.telemetry_scroll,
                 &app.theme,
                 &app.selection,
                 &mut layout_map,

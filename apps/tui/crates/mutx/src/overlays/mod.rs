@@ -22,7 +22,6 @@ pub mod dashboard;
 pub mod help;
 pub mod history;
 pub mod mcp;
-pub mod performance_report;
 pub mod permission;
 pub mod permissions_manager;
 pub mod provider;
@@ -30,8 +29,8 @@ pub mod provider_delete_confirm;
 pub mod queue;
 pub mod session;
 pub mod skills;
+pub mod telemetry;
 pub mod toast;
-pub mod token_report;
 pub mod tools;
 pub mod tree;
 pub mod usage_stats;
@@ -55,10 +54,6 @@ pub use history::draw_history_panel;
 // `dashboard` surface and removed; `/host` now opens the dashboard.
 pub use btw::{BtwModalView, draw_btw_modal};
 pub use mcp::draw_mcp_modal;
-pub use performance_report::{
-    draw_performance_report_modal, performance_report_attempt_count,
-    performance_report_attempt_key, performance_report_round_count,
-};
 pub use permission::{draw_input_injection, draw_permission_sheet, draw_question_modal};
 pub use permissions_manager::draw_permissions_manager;
 pub use provider::{
@@ -69,11 +64,11 @@ pub use provider_delete_confirm::draw_provider_delete_confirm;
 pub use queue::{QueueModalView, draw_queue_modal};
 pub use session::draw_sessions_modal;
 pub use skills::draw_skills_modal;
-pub use toast::{draw_armed_toast, draw_copy_toast, draw_notice_toast};
-pub use token_report::{
-    ContextUsageView, draw_token_report_modal, token_report_attempt_count,
-    token_report_attempt_key, token_report_round_count,
+pub use telemetry::{
+    ContextUsageView, draw_telemetry_modal, telemetry_attempt_count, telemetry_attempt_key,
+    telemetry_round_count,
 };
+pub use toast::{draw_armed_toast, draw_copy_toast, draw_notice_toast};
 pub use tools::draw_tools_modal;
 pub use tree::draw_tree_modal;
 pub use usage_stats::draw_usage_stats_modal;

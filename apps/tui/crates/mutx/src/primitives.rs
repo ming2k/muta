@@ -254,7 +254,8 @@ impl ContentModalSpec {
     /// The `/btw` asides list (ADR-0103 §5). One row per live aside; sized
     /// like the queue overview it mirrors (list + footer legend).
     pub const BTW: Self = Self::new(66, 9, 84);
-    pub const TOKEN_REPORT: Self = Self::new(66, 9, 80);
+    /// Unified session telemetry inspector (Context Usage & Performance).
+    pub const TELEMETRY: Self = Self::new(76, 11, 84);
     /// The usage-statistics overlay (`/usage`): three stacked sections
     /// (summary, daily chart + table, model breakdown, event log) in one
     /// scrolling body. Wider than the context-usage modal so the four-column

@@ -1518,13 +1518,13 @@ fn pop_sublayer_steps_back_one_level_at_a_time() {
     // The shared one-step-back (phase 4): Esc's deepest-first chain and the
     // outside-click mirror both route through here.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(crate::Modal::TokenReport);
-    app.token_report_detail = true;
+    app.set_active_modal_for_test(crate::Modal::Telemetry);
+    app.telemetry_detail = true;
     assert!(app.pop_sublayer());
-    assert!(!app.token_report_detail, "drill-in closed");
+    assert!(!app.telemetry_detail, "drill-in closed");
     assert_eq!(
         app.active_modal(),
-        crate::Modal::TokenReport,
+        crate::Modal::Telemetry,
         "view stays up"
     );
     assert!(!app.pop_sublayer(), "no sub-layer left");
@@ -1543,60 +1543,29 @@ fn pop_sublayer_steps_back_one_level_at_a_time() {
 }
 
 #[test]
-fn pop_sublayer_pops_token_report_turn_page_before_round_detail() {
-    // Context Usage mirrors the Performance report's three levels
-    // (round list -> round detail -> attempt usage page): Esc walks back
-    // one level at a time, attempt page first.
+fn pop_sublayer_pops_telemetry_turn_page_before_round_detail() {
+    // Session Telemetry has three levels (round list -> round detail -> attempt inspector):
+    // Esc walks back one level at a time, attempt inspector first.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(crate::Modal::TokenReport);
-    app.token_report_detail = true;
-    app.token_report_turn = Some((2, 1));
-    app.token_report_turn_cursor = 1;
-    app.token_report_scroll = 4;
+    app.set_active_modal_for_test(crate::Modal::Telemetry);
+    app.telemetry_detail = true;
+    app.telemetry_turn = Some((2, 1));
+    app.telemetry_turn_cursor = 1;
+    app.telemetry_scroll = 4;
     assert!(app.pop_sublayer());
     assert!(
-        app.token_report_turn.is_none(),
-        "attempt usage page closed first"
+        app.telemetry_turn.is_none(),
+        "attempt inspector closed first"
     );
-    assert!(app.token_report_detail, "round detail stays open");
-    assert_eq!(app.token_report_scroll, 0);
-    assert_eq!(app.token_report_turn_cursor, 1, "cursor retained");
+    assert!(app.telemetry_detail, "round detail stays open");
+    assert_eq!(app.telemetry_scroll, 0);
+    assert_eq!(app.telemetry_turn_cursor, 1, "cursor retained");
     assert!(app.pop_sublayer());
-    assert!(!app.token_report_detail, "round detail closed next");
-    assert_eq!(app.token_report_turn_cursor, 0, "cursor reset");
+    assert!(!app.telemetry_detail, "round detail closed next");
+    assert_eq!(app.telemetry_turn_cursor, 0, "cursor reset");
     assert_eq!(
         app.active_modal(),
-        crate::Modal::TokenReport,
-        "view stays up"
-    );
-    assert!(!app.pop_sublayer(), "no sub-layer left");
-}
-
-#[test]
-fn pop_sublayer_pops_performance_turn_page_before_round_detail() {
-    // The performance report has three levels now (round list → round
-    // detail → attempt stage page): Esc must walk back one level at a
-    // time, attempt page first.
-    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.set_active_modal_for_test(crate::Modal::PerformanceReport);
-    app.performance_report_detail = true;
-    app.performance_report_turn = Some((2, 1));
-    app.performance_report_turn_cursor = 1;
-    app.performance_report_scroll = 4;
-    assert!(app.pop_sublayer());
-    assert!(
-        app.performance_report_turn.is_none(),
-        "attempt stage page closed first"
-    );
-    assert!(app.performance_report_detail, "round detail stays open");
-    assert_eq!(app.performance_report_scroll, 0);
-    assert_eq!(app.performance_report_turn_cursor, 1, "cursor retained");
-    assert!(app.pop_sublayer());
-    assert!(!app.performance_report_detail, "round detail closed next");
-    assert_eq!(app.performance_report_turn_cursor, 0, "cursor reset");
-    assert_eq!(
-        app.active_modal(),
-        crate::Modal::PerformanceReport,
+        crate::Modal::Telemetry,
         "view stays up"
     );
     assert!(!app.pop_sublayer(), "no sub-layer left");

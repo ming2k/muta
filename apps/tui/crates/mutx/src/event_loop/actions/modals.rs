@@ -535,60 +535,29 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                 }
             }
         },
-        Modal::TokenReport => {
-            if app.token_report_turn.is_some() {
-                // Attempt usage page: a documentary body, arrows scroll.
-                app.token_report_scroll = app.token_report_scroll.saturating_sub(1);
-            } else if app.token_report_detail {
-                // Round detail: arrows move the attempt-row cursor.
+        Modal::Telemetry => {
+            if app.telemetry_turn.is_some() {
+                // Attempt inspector: a documentary body, arrows scroll.
+                app.telemetry_scroll = app.telemetry_scroll.saturating_sub(1);
+            } else if app.telemetry_detail {
+                // Round detail (turns list): arrows move the turn cursor.
                 let report = app.token_source_report(viewed_session_id);
                 let round_index = app.modal_index.min(
                     report
                         .as_ref()
-                        .map(|report| view::token_report_round_count(report).saturating_sub(1))
+                        .map(|report| view::telemetry_round_count(report).saturating_sub(1))
                         .unwrap_or(0),
                 );
                 let count = report
                     .as_ref()
-                    .map(|report| view::token_report_attempt_count(report, round_index))
+                    .map(|report| view::telemetry_attempt_count(report, round_index))
                     .unwrap_or(0)
                     .max(1);
-                app.token_report_turn_cursor = (app.token_report_turn_cursor + count - 1) % count;
+                app.telemetry_turn_cursor = (app.telemetry_turn_cursor + count - 1) % count;
             } else {
                 let count = app
                     .token_source_report(viewed_session_id)
-                    .map(|report| view::token_report_round_count(&report))
-                    .unwrap_or(0)
-                    .max(1);
-                app.modal_index = (app.modal_index + count - 1) % count;
-            }
-        }
-        Modal::PerformanceReport => {
-            if app.performance_report_turn.is_some() {
-                // Attempt stage page: a documentary body, arrows scroll.
-                app.performance_report_scroll = app.performance_report_scroll.saturating_sub(1);
-            } else if app.performance_report_detail {
-                // Round detail: arrows move the attempt-row cursor.
-                let report = app.token_source_report(viewed_session_id);
-                let round_index = app.modal_index.min(
-                    report
-                        .as_ref()
-                        .map(|report| {
-                            view::performance_report_round_count(report).saturating_sub(1)
-                        })
-                        .unwrap_or(0),
-                );
-                let count = report
-                    .as_ref()
-                    .map(|report| view::performance_report_attempt_count(report, round_index))
-                    .unwrap_or(0)
-                    .max(1);
-                app.performance_report_turn_cursor =
-                    (app.performance_report_turn_cursor + count - 1) % count;
-            } else {
-                let count = app
-                    .token_source_report(viewed_session_id)
-                    .map(|report| view::performance_report_round_count(&report))
+                    .map(|report| view::telemetry_round_count(&report))
                     .unwrap_or(0)
                     .max(1);
                 app.modal_index = (app.modal_index + count - 1) % count;
@@ -721,60 +690,29 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                 }
             }
         },
-        Modal::TokenReport => {
-            if app.token_report_turn.is_some() {
-                // Attempt usage page: a documentary body, arrows scroll.
-                app.token_report_scroll = app.token_report_scroll.saturating_add(1);
-            } else if app.token_report_detail {
-                // Round detail: arrows move the attempt-row cursor.
+        Modal::Telemetry => {
+            if app.telemetry_turn.is_some() {
+                // Attempt inspector: a documentary body, arrows scroll.
+                app.telemetry_scroll = app.telemetry_scroll.saturating_add(1);
+            } else if app.telemetry_detail {
+                // Round detail (turns list): arrows move the turn cursor.
                 let report = app.token_source_report(viewed_session_id);
                 let round_index = app.modal_index.min(
                     report
                         .as_ref()
-                        .map(|report| view::token_report_round_count(report).saturating_sub(1))
+                        .map(|report| view::telemetry_round_count(report).saturating_sub(1))
                         .unwrap_or(0),
                 );
                 let count = report
                     .as_ref()
-                    .map(|report| view::token_report_attempt_count(report, round_index))
+                    .map(|report| view::telemetry_attempt_count(report, round_index))
                     .unwrap_or(0)
                     .max(1);
-                app.token_report_turn_cursor = (app.token_report_turn_cursor + 1) % count;
+                app.telemetry_turn_cursor = (app.telemetry_turn_cursor + 1) % count;
             } else {
                 let count = app
                     .token_source_report(viewed_session_id)
-                    .map(|report| view::token_report_round_count(&report))
-                    .unwrap_or(0)
-                    .max(1);
-                app.modal_index = (app.modal_index + 1) % count;
-            }
-        }
-        Modal::PerformanceReport => {
-            if app.performance_report_turn.is_some() {
-                // Attempt stage page: a documentary body, arrows scroll.
-                app.performance_report_scroll = app.performance_report_scroll.saturating_add(1);
-            } else if app.performance_report_detail {
-                // Round detail: arrows move the attempt-row cursor.
-                let report = app.token_source_report(viewed_session_id);
-                let round_index = app.modal_index.min(
-                    report
-                        .as_ref()
-                        .map(|report| {
-                            view::performance_report_round_count(report).saturating_sub(1)
-                        })
-                        .unwrap_or(0),
-                );
-                let count = report
-                    .as_ref()
-                    .map(|report| view::performance_report_attempt_count(report, round_index))
-                    .unwrap_or(0)
-                    .max(1);
-                app.performance_report_turn_cursor =
-                    (app.performance_report_turn_cursor + 1) % count;
-            } else {
-                let count = app
-                    .token_source_report(viewed_session_id)
-                    .map(|report| view::performance_report_round_count(&report))
+                    .map(|report| view::telemetry_round_count(&report))
                     .unwrap_or(0)
                     .max(1);
                 app.modal_index = (app.modal_index + 1) % count;

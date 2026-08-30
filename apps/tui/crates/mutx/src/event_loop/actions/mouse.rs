@@ -200,35 +200,18 @@ pub(super) async fn handle_selection_start(
             viewed_session_id,
         );
     } else if app.active_modal() == Modal::None
-        && app
+        && (app
             .hint_performance_rect
             .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
+            || app
+                .hint_context_rect
+                .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height))
     {
-        // Click the latest-turn stream rate → independent performance report.
+        // Click on context meter or stream rate gauge in the model bar →
+        // session telemetry modal.
         super::enter_panel(
             app,
-            crate::surfaces::PanelId::PerformanceReport,
-            runtime,
-            viewed_session_id,
-        );
-    } else if app.active_modal() == Modal::None
-        && app
-            .hint_context_rect
-            .is_some_and(|r| r.x <= x && x < r.x + r.width && r.y <= y && y < r.y + r.height)
-    {
-        // Click on the context meter in the hint bar → token
-        // source report modal. In attach mode there is no
-        // local ledger (token accounting lives server-side),
-        // so fetch the report from the harness on demand and
-        // render a loading placeholder until the reply lands.
-        // A retained view (ADR-0133): reopen restores the scroll/selection
-        // (including the drill-in state, which persists on App); only the
-        // first open initialises. The attach-mode report fetch stays tied to
-        // the ledger being absent — it is a data-lifecycle concern, not an
-        // open ritual, so it runs whenever the report is missing.
-        super::enter_panel(
-            app,
-            crate::surfaces::PanelId::TokenReport,
+            crate::surfaces::PanelId::Telemetry,
             runtime,
             viewed_session_id,
         );

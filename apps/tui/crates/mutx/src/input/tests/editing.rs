@@ -625,7 +625,7 @@ fn ctrl_arrows_page_scroll_modal_body() {
         crate::Modal::Help,
         crate::Modal::Activity,
         crate::Modal::Config,
-        crate::Modal::TokenReport,
+        crate::Modal::Telemetry,
         crate::Modal::Sessions,
         crate::Modal::Queue,
         crate::Modal::HistorySearch,

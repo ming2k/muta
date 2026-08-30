@@ -541,12 +541,8 @@ pub enum Action {
     OpenTodos,
     /// Open the queue overview modal.
     OpenQueue,
-    /// Open the token/context usage report modal — the drill-down behind the
-    /// model bar's context meter (`Ctrl+O`).
-    OpenTokenReport,
-    /// Open the latest-turn performance report modal — the drill-down behind
-    /// the model bar's stream-rate gauge (`Ctrl+S`).
-    OpenPerformanceReport,
+    /// Open the session telemetry modal (context tokens & performance) (`Ctrl+O`).
+    OpenTelemetry,
     /// Open the `/btw` asides list modal (ADR-0103 §5): live background
     /// asides, jump back in, or close one outright.
     OpenBtwList,
@@ -676,37 +672,16 @@ pub static GLOBAL_BINDINGS: std::sync::LazyLock<Vec<Binding>> = std::sync::LazyL
         // Ctrl+O opens the context/token report — the keyboard twin of
         // clicking the model bar's context meter (progressive disclosure:
         // the glanceable `89.2k (8%)` gauge hides the full breakdown until
-        // asked for). `o` reads as "usage overview". NoModal-gated like the
-        // other open-* bindings. Ctrl+O is free: the ADR-0126 mid-round
-        // insert was removed, and the chord is not in the readline family
-        // the composer claims (Ctrl+A/E/W/U/K, Alt+B/F/D).
+        // Ctrl+O opens the unified session telemetry report — the keyboard twin of clicking
+        // the context or stream rate gauges in the model bar.
         Binding {
             key: Key {
                 modifiers: KeyModifiers::CONTROL,
                 code: KeyCode::Char('o'),
             },
             gate: Gate::NoModal,
-            action: Action::OpenTokenReport,
-            description: "context usage report",
-        },
-        // Ctrl+S opens the latest-turn performance report — the keyboard twin
-        // of clicking the model bar's stream-rate gauge. `s` for "speed".
-        // It is not the conventional "save" anywhere in this TUI (the
-        // composer submits with Enter; sessions persist durably on their
-        // own), so the chord is safe to claim. NoModal-gated likewise.
-        // ADR-0156 records why the XON/XOFF collision ADR-0126 cited when
-        // rejecting `Ctrl+S` *for the queue family* does not disqualify it
-        // here: raw mode clears IXON, and the residual failure is a silent
-        // no-op on a read-only drill-down with the gauge click as the
-        // portable twin.
-        Binding {
-            key: Key {
-                modifiers: KeyModifiers::CONTROL,
-                code: KeyCode::Char('s'),
-            },
-            gate: Gate::NoModal,
-            action: Action::OpenPerformanceReport,
-            description: "performance report",
+            action: Action::OpenTelemetry,
+            description: "session telemetry report",
         },
         // `?` / `f1` / `ctrl+h` all open help, but they are context-sensitive (`?`
         // only fires on an empty prompt) and `ctrl+h` needs the Kitty protocol —
@@ -796,8 +771,7 @@ impl Registry {
                 Action::OpenModels => InputAction::OpenModels,
                 Action::OpenTodos => InputAction::OpenTodos,
                 Action::OpenQueue => InputAction::OpenQueue,
-                Action::OpenTokenReport => InputAction::OpenTokenReport,
-                Action::OpenPerformanceReport => InputAction::OpenPerformanceReport,
+                Action::OpenTelemetry => InputAction::OpenTelemetry,
                 Action::OpenBtwList => InputAction::OpenBtwList,
                 Action::OpenViewSwitcher => InputAction::ViewSwitcherToggle,
                 Action::ToggleQueueBlock => InputAction::QueueToggleBlock,
@@ -894,22 +868,15 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_o_and_ctrl_s_open_the_model_bar_drill_downs() {
-        // The model bar's two gauges carry keyboard twins: Ctrl+O opens the
-        // context/token report (the context meter's drill-down) and Ctrl+S
-        // the performance report (the stream rate's). Both are NoModal-gated
-        // like the other open-* bindings.
+    fn ctrl_o_opens_the_session_telemetry_drill_down() {
+        // Ctrl+O opens the unified session telemetry report.
         let registry = Registry::new();
         let ctx = registry.resolve(key(KeyCode::Char('o'), KeyModifiers::CONTROL), Modal::None);
-        assert_eq!(ctx, Some(InputAction::OpenTokenReport));
-        let perf = registry.resolve(key(KeyCode::Char('s'), KeyModifiers::CONTROL), Modal::None);
-        assert_eq!(perf, Some(InputAction::OpenPerformanceReport));
+        assert_eq!(ctx, Some(InputAction::OpenTelemetry));
 
-        // Inside a modal the gate swallows both chords.
+        // Inside a modal the gate swallows the chord.
         let ctx = registry.resolve(key(KeyCode::Char('o'), KeyModifiers::CONTROL), Modal::Help);
         assert_eq!(ctx, None);
-        let perf = registry.resolve(key(KeyCode::Char('s'), KeyModifiers::CONTROL), Modal::Help);
-        assert_eq!(perf, None);
     }
 
     #[test]

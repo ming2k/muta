@@ -100,8 +100,7 @@ pub(crate) enum PanelId {
     Skills,
     Permissions,
     UsageStats,
-    TokenReport,
-    PerformanceReport,
+    Telemetry,
     Btw,
     /// The flat model picker (`Ctrl+M` / `/models`). A retained panel whose
     /// open parks the composer draft into its own per-panel slot
@@ -137,8 +136,7 @@ impl PanelId {
             PanelId::Skills => Modal::Skills,
             PanelId::Permissions => Modal::Permissions,
             PanelId::UsageStats => Modal::UsageStats,
-            PanelId::TokenReport => Modal::TokenReport,
-            PanelId::PerformanceReport => Modal::PerformanceReport,
+            PanelId::Telemetry => Modal::Telemetry,
             PanelId::Btw => Modal::Btw,
             PanelId::Models => Modal::Models,
             PanelId::Connections => Modal::Connections,
@@ -152,7 +150,7 @@ impl PanelId {
     /// Every panel id, in quick-switcher display order: reference surfaces
     /// first (Help, Activity, Todos), then manager lists, then reports,
     /// then the pickers.
-    pub(crate) const ALL: [PanelId; 17] = [
+    pub(crate) const ALL: [PanelId; 16] = [
         PanelId::Help,
         PanelId::Activity,
         PanelId::Todos,
@@ -161,8 +159,7 @@ impl PanelId {
         PanelId::Skills,
         PanelId::Permissions,
         PanelId::UsageStats,
-        PanelId::TokenReport,
-        PanelId::PerformanceReport,
+        PanelId::Telemetry,
         PanelId::Btw,
         PanelId::Models,
         PanelId::Connections,
@@ -183,8 +180,7 @@ impl PanelId {
             PanelId::Skills => "Skills",
             PanelId::Permissions => "Permissions",
             PanelId::UsageStats => "Usage stats",
-            PanelId::TokenReport => "Context report",
-            PanelId::PerformanceReport => "Performance report",
+            PanelId::Telemetry => "Session telemetry",
             PanelId::Btw => "Asides (/btw)",
             PanelId::Models => "Switch model",
             PanelId::Connections => "Connections",
@@ -207,8 +203,7 @@ impl PanelId {
             PanelId::Skills => "/skills",
             PanelId::Permissions => "/permissions",
             PanelId::UsageStats => "/usage",
-            PanelId::TokenReport => "context meter",
-            PanelId::PerformanceReport => "turn rate",
+            PanelId::Telemetry => "Ctrl+O / meter click",
             PanelId::Btw => "F5 / /btw list",
             PanelId::Models => "Ctrl+M / /models",
             PanelId::Connections => "/connections",

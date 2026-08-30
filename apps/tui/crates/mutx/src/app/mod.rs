@@ -343,55 +343,35 @@ pub struct App {
     /// streaming, runner view, or chrome hidden).
     pub activity_rect: Option<mutx_engine::Rect>,
     /// Screen rect of the context-meter segment in the hint bar (the
-    /// `89.2k (8%)` indicator), so a click on it opens the TokenReport modal.
+    /// `89.2k (8%)` indicator), so a click on it opens the Telemetry modal.
     /// `None` when the hint bar or context meter is not shown.
     pub hint_context_rect: Option<mutx_engine::Rect>,
     /// Screen rect of the last-turn stream-rate segment in the hint bar.
-    /// Clicking it opens the independent PerformanceReport modal.
+    /// Clicking it opens the Telemetry modal.
     pub hint_performance_rect: Option<mutx_engine::Rect>,
     /// Shared token-source ledger (reported vs. estimated token accounting),
-    /// read by the TokenReport modal. `Some` in the standalone path (the
+    /// read by the Telemetry modal. `Some` in the standalone path (the
     /// in-process harness shares this ledger); `None` in attach mode, where
     /// the accounting lives daemon-side and the modal renders the on-demand
     /// [`Self::token_report`] snapshot instead.
     pub token_ledger: Option<Arc<muta_contracts::TokenSourceLedger>>,
     /// Token-source report fetched on demand from the harness for the viewed
     /// session. Populated by a `QueryTokenUsage` round-trip when the
-    /// TokenReport modal opens in attach mode (`token_ledger` is `None`);
+    /// Telemetry modal opens in attach mode (`token_ledger` is `None`);
     /// `None` while the round-trip is in flight (the modal renders a loading
     /// placeholder). Cleared when the viewed session switches.
     pub token_report: Option<muta_contracts::TokenSourceReport>,
     /// Latest session-scoped AI context snapshot from the harness. This is a
     /// provider usage/projection value, never a persisted transcript estimate.
     pub context_tokens: Option<muta_contracts::ContextTokenSnapshot>,
-    /// Scroll offset of the TokenReport modal body.
-    pub token_report_scroll: usize,
-    /// `true` when the TokenReport modal is drilled into one round's ReAct-turn
-    /// usage; `false` when it shows the session's round list.
-    pub token_report_detail: bool,
-    /// Attempt-row cursor inside the drilled round's turn table (display
-    /// order, newest first). Drives row highlighting and the Enter target
-    /// for the third drill level — mirrors `performance_report_turn_cursor`.
-    pub token_report_turn_cursor: usize,
-    /// The open per-attempt usage page (`Context Usage › x round › x turn`),
-    /// keyed by the attempt's `(turn, attempt)` so it survives ledger
-    /// snapshots that grow between frames. `None` while the round detail or
-    /// the round list is shown.
-    pub token_report_turn: Option<(u32, u32)>,
-    /// Scroll offset and hierarchy state for the independent performance
-    /// report. It shares the request-ledger snapshot as a data source but no
-    /// navigation or rendering state with Context Usage.
-    pub performance_report_scroll: usize,
-    pub performance_report_detail: bool,
-    /// Attempt-row cursor inside the drilled round's "Turns / attempts"
-    /// table (display order, newest first). Drives row highlighting and
-    /// the Enter target for the third drill level.
-    pub performance_report_turn_cursor: usize,
-    /// The open attempt stage page (`Performance › x round › x turn`),
-    /// keyed by the attempt's `(turn, attempt)` so it survives ledger
-    /// snapshots that grow between frames. `None` while the round detail
-    /// or the round list is shown.
-    pub performance_report_turn: Option<(u32, u32)>,
+    /// Scroll offset of the Session Telemetry modal body.
+    pub telemetry_scroll: usize,
+    /// `true` when the Telemetry modal is drilled into one round's turns (L2).
+    pub telemetry_detail: bool,
+    /// Selected turn index in the L2 turns table.
+    pub telemetry_turn_cursor: usize,
+    /// `Some((round, attempt))` when drilled into an attempt's detail inspector (L3).
+    pub telemetry_turn: Option<(u32, u32)>,
     /// Cross-session usage-statistics report fetched on demand from the
     /// harness (`QueryUsageStats`, ADR-0122). Session-independent: it
     /// aggregates the durable store under `data/usage/`, which survives

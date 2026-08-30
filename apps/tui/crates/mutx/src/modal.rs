@@ -132,16 +132,10 @@ pub enum Modal {
     /// the composer for editing; `Esc` closes. The body scrolls via
     /// `App::queue_scroll`.
     Queue,
-    /// Context-usage report: current AI-visible context plus request totals by
-    /// user round, with a ReAct-turn drill-down. Values use a calm,
-    /// single-foreground palette; only turn lifecycle state is colored.
-    /// Opened by clicking the context meter in the hint bar. Esc /
-    /// outside-click closes.
-    TokenReport,
-    /// Client-observed model-request performance, grouped by user round with
-    /// a per-turn/attempt drill-down. Opened by clicking the last-turn stream
-    /// rate in the hint bar.
-    PerformanceReport,
+    /// Session Telemetry modal: unified context usage and request performance
+    /// telemetry grouped by user round, with turn drill-down and attempt inspection.
+    /// Opened by clicking the context/rate meters in the model bar or via `Ctrl+O`.
+    Telemetry,
     /// Usage statistics (`/usage`, ADR-0122): the durable cross-session view
     /// — daily token totals, per-`(provider, model)` breakdown, and the
     /// recent terminal-request event log. Data comes from the
@@ -251,8 +245,7 @@ impl Modal {
                 | Modal::HistorySearch
                 | Modal::Models
                 | Modal::Connections
-                | Modal::TokenReport
-                | Modal::PerformanceReport
+                | Modal::Telemetry
                 | Modal::UsageStats
                 | Modal::Btw
                 | Modal::Tree

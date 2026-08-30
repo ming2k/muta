@@ -173,8 +173,7 @@ fn supports_keymap_page(modal: super::Modal) -> bool {
             | super::Modal::Config
             | super::Modal::Activity
             | super::Modal::Queue
-            | super::Modal::TokenReport
-            | super::Modal::PerformanceReport
+            | super::Modal::Telemetry
             | super::Modal::UsageStats
             | super::Modal::Host
             | super::Modal::Btw
@@ -200,8 +199,7 @@ fn scrolls_own_body(modal: super::Modal) -> bool {
             | super::Modal::Activity
             | super::Modal::Permissions
             | super::Modal::Config
-            | super::Modal::TokenReport
-            | super::Modal::PerformanceReport
+            | super::Modal::Telemetry
             | super::Modal::UsageStats
             | super::Modal::OauthPending
             | super::Modal::ProviderPreset
@@ -454,10 +452,8 @@ pub enum InputAction {
     HostPromptSeed(char),
     /// Dashboard inline-prompt submit (Enter while `p`/`n` is open).
     HostPromptSubmit,
-    /// Drill into the selected turn's model-round usage. Bound to `Enter`.
-    TokenReportActivate,
-    /// Drill into the selected round's request-performance attempts.
-    PerformanceReportActivate,
+    /// Drill into the selected round or turn in the Telemetry modal. Bound to `Enter`.
+    TelemetryActivate,
     /// Delete the currently-selected session in the sessions picker.
     DeleteSelectedSession,
     /// Create a brand new session from the sessions picker ('n' / 'N').
@@ -503,13 +499,9 @@ pub enum InputAction {
     /// agent-owned and read-only in the TUI; the modal surfaces it on its own
     /// dedicated overlay, opened with `Ctrl+T`.
     OpenTodos,
-    /// Open the context/token usage report — the drill-down behind the model
-    /// bar's context meter. Keyboard twin of clicking that gauge (`Ctrl+O`).
-    OpenTokenReport,
-    /// Open the latest-turn performance report — the drill-down behind the
-    /// model bar's stream-rate gauge. Keyboard twin of clicking that gauge
-    /// (`Ctrl+S`).
-    OpenPerformanceReport,
+    /// Open the unified session telemetry report — the drill-down behind the model
+    /// bar's context meter and rate gauge. Keyboard twin of clicking those gauges (`Ctrl+O`).
+    OpenTelemetry,
     /// Move keyboard focus to the next activatable target. When no target is
     /// focused yet, focuses the first (oldest) step. Driven by `Ctrl+↓` and by
     /// `↓` while a step is already focused.
@@ -1342,7 +1334,7 @@ pub fn process_event(
                         InputAction::OpenModels
                     }
                     (KeyCode::Char('d'), _) | (KeyCode::Char('D'), _) => {
-                        InputAction::OpenPerformanceReport
+                        InputAction::OpenTelemetry
                     }
                     (KeyCode::Char('g'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => {
                         InputAction::SetLeaderChord(crate::app::LeaderChord::None)
@@ -1656,8 +1648,7 @@ pub fn process_event(
                         super::Modal::ViewSwitcher => InputAction::ViewSwitchActivate,
                         super::Modal::Config => InputAction::ConfigActivate,
                         super::Modal::Activity => InputAction::CloseModal,
-                        super::Modal::TokenReport => InputAction::TokenReportActivate,
-                        super::Modal::PerformanceReport => InputAction::PerformanceReportActivate,
+                        super::Modal::Telemetry => InputAction::TelemetryActivate,
                         super::Modal::UsageStats => InputAction::CloseModal,
                         super::Modal::None => {
                             if context.has_focused_target {
@@ -2543,8 +2534,7 @@ pub fn process_event(
                             InputAction::None
                         }
                         super::Modal::Help => InputAction::ScrollUp,
-                        super::Modal::TokenReport => InputAction::ModalUp,
-                        super::Modal::PerformanceReport => InputAction::ModalUp,
+                        super::Modal::Telemetry => InputAction::ModalUp,
                         super::Modal::UsageStats => InputAction::ScrollUp,
                         super::Modal::None => {
                             if context.has_focused_target {
@@ -2627,8 +2617,7 @@ pub fn process_event(
                             InputAction::None
                         }
                         super::Modal::Help => InputAction::ScrollDown,
-                        super::Modal::TokenReport => InputAction::ModalDown,
-                        super::Modal::PerformanceReport => InputAction::ModalDown,
+                        super::Modal::Telemetry => InputAction::ModalDown,
                         super::Modal::UsageStats => InputAction::ScrollDown,
                         super::Modal::None => {
                             if context.has_focused_target {
