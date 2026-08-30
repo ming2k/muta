@@ -8,7 +8,7 @@ default-members = ["crates/muta", "apps/tui/crates/mutx"]
 resolver = "2"
 
 [workspace.package]
-version = "0.37.10"
+version = "0.37.11"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -25,7 +25,8 @@ toml = "1"
 futures = "0.3"
 async-trait = "0.1"
 tokio = { version = "1", default-features = false }
-tokio-util = "0.7"
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1"
 tokio-tungstenite = "0.26"
 libc = "0.2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots", "json", "stream", "socks", "gzip", "brotli", "query", "form"] }

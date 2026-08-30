@@ -69,11 +69,6 @@ overrides: CapabilityOverrides | null, } } | { "DeleteProvider": { id: string, }
 event_cap: number, } } | "QuerySessionContext" | { "RevokePermission": { tool: string, scope: string, } } | "ClearAllPermissions" | { "ToggleTool": { name: string, enabled: boolean, } } | { "ToggleMcpServer": { name: string, enabled: boolean, } } | { "ReconnectMcpServer": { name: string, } } | "ExitSideView" | { "FocusSide": { side_id: string, } } | { "InterruptSide": { side_id: string, } } | { "CloseSide": { side_id: string, } } | "QueryBtwList" | { "UpdateTuiLayout": string } | { "UpdateTuiColorScheme": { name: string, custom: ColorSchemeConfig, } } | "QueryWebSearchConfig" | { "UpdateWebSearchConfig": WebSearchConfigUpdate };
 
 /**
- * What a client wants from the daemon, declared on the `Select` frame.
- */
-export type AttachAction = "new" | { "attach": string | null } | "picker" | { "monitor": MonitorAction } | { "control": ControlRequest };
-
-/**
  * What happens to an `ask_user` question when the session's human channel
  * is [`HumanChannelPosture::Autonomous`].
  *
@@ -303,12 +298,6 @@ export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource,
  * rendered transcript size.
  */
 export type ContextTokenSource = "Api" | "Projection";
-
-/**
- * Session-management verbs for the control plane (ADR-0096). Each maps to
- * a registry operation; the reply is `Wire::ControlReply`.
- */
-export type ControlRequest = { "verb": "create_session", project: string, prompt?: string, } | { "verb": "send_prompt", session_id: string, text: string, } | { "verb": "interrupt", session_id: string, } | { "verb": "resolve_permission", session_id: string, request_id: string, decision: PermissionDecision, } | { "verb": "kill_session", session_id: string, } | { "verb": "suspend_session", session_id: string, } | { "verb": "shutdown" };
 
 /**
  * Component-specific override for crate tags and package badges.
@@ -1120,13 +1109,17 @@ at_ms: number,
  * before the record was written) and records synthesized for a round
  * the process abandoned at exit.
  */
-round?: number, };
+round?: number, 
+/**
+ * Optional error payload or stop detail (e.g. fatal provider error message).
+ */
+detail?: string, };
 
 /**
  * Why a round stopped before completing. The closed classifier for
  * [`RoundInterrupt::reason`].
  */
-export type RoundInterruptReason = "user" | "superseded" | "terminated";
+export type RoundInterruptReason = "user" | "superseded" | "terminated" | "error";
 
 /**
  * A compact per-round accounting handed to frontends when a user round

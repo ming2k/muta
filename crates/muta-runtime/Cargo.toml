@@ -17,6 +17,7 @@ muta-mcp = { path = "../muta-mcp" }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time", "test-util"] }
 tokio-util = { workspace = true }
+bytes = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.11] - 2026-08-30
+
+### Added
+
+- **Live Provider-Retry Entry in Main Transcript.**
+  - **In-Place Live Refresh**: Transformed provider retry into a dedicated `MessageKind::ProviderRetry` entry in the main conversation viewport. Updates dynamically on each scheduled attempt without spamming duplicate transcript entries.
+  - **Real-Time Countdown Ticking**: Rendered prominent `▲ retry` notice headers with dynamic live countdowns (`Retrying provider request (2/5) in 3s...`) and structured upstream failure details directly in the entry body.
+  - **Seamless Lifecycle Retirement**: Automatically retires and clears the transient retry entry upon stream commencement (`StreamStart` / `StreamDelta` / `StreamReasoningDelta` / `ToolCall` / `RoundCompleted`), keeping conversation history clean, and finalizes cleanly into a standard error notice upon budget exhaustion.
+
+### Changed
+
+- **Activity Bar & Modal Simplification.**
+  - Kept the activity bar minimal (`· retry 2/5 in 3s`), acting as a clean heartbeat indicator.
+  - Removed noisy `Last failure` dumps and stack traces from the activity modal, delegating diagnostic error reporting entirely to the prominent transcript entry.
+- **Native Framed Daemon Transport & Protocol Orthogonalization.**
+  - Adopted length-delimited binary framing (`LengthDelimitedCodec`, ADR-0158) over raw byte-stream boundaries for local daemon IPC channels.
+  - Orthogonalized wire protocols (ADR-0159) for unified request-response and streaming sessions.
+
 ## [0.37.10] - 2026-08-29
 
 ### Fixed
@@ -5647,7 +5665,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.10...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.11...HEAD
+[0.37.11]: https://github.com/ming2k/muta/compare/v0.37.10...v0.37.11
 [0.37.10]: https://github.com/ming2k/muta/compare/v0.37.9...v0.37.10
 [0.37.9]: https://github.com/ming2k/muta/compare/v0.37.8...v0.37.9
 [0.37.8]: https://github.com/ming2k/muta/compare/v0.37.7...v0.37.8

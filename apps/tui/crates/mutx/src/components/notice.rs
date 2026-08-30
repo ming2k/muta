@@ -20,7 +20,15 @@ impl<'a> NoticeView<'a> {
     fn severity(&self) -> Option<NoticeSeverity> {
         match &self.message.kind {
             MessageKind::Notice { severity, .. } => Some(*severity),
+            MessageKind::ProviderRetry { .. } => Some(NoticeSeverity::Warning),
             _ => None,
+        }
+    }
+
+    fn raw_text(&self) -> &'a str {
+        match &self.message.kind {
+            MessageKind::ProviderRetry { failure, .. } => failure.as_str(),
+            _ => &self.message.raw,
         }
     }
 
@@ -96,7 +104,44 @@ pub fn parse_notice_content(raw: &str) -> NoticeContent {
 fn notice_content<'v>(
     view: &'v NoticeView<'_>,
     parsed: &'v NoticeContent,
+    dynamic_title: &'v mut Option<String>,
+    dynamic_detail: &'v mut Option<String>,
 ) -> (&'v str, Option<&'v str>, Option<&'v str>) {
+    if let MessageKind::ProviderRetry {
+        attempt,
+        max_attempts,
+        retry_at,
+        ..
+    } = &view.message.kind
+    {
+        let now = std::time::Instant::now();
+        let title = if now < *retry_at {
+            let secs = (*retry_at - now).as_secs_f32().ceil() as u64;
+            format!(
+                "Retrying provider request ({}/{}) in {}s...",
+                attempt, max_attempts, secs
+            )
+        } else {
+            format!(
+                "Retrying provider request ({}/{})...",
+                attempt, max_attempts
+            )
+        };
+        *dynamic_title = Some(title);
+
+        if let Some(detail) = &parsed.detail {
+            if !parsed.header.is_empty() && parsed.header != "Provider HTTP Error" {
+                *dynamic_detail = Some(format!("{}\n{}", parsed.header, detail));
+            } else {
+                *dynamic_detail = Some(detail.clone());
+            }
+        } else if !parsed.header.is_empty() {
+            *dynamic_detail = Some(parsed.header.clone());
+        }
+
+        return ("retry", dynamic_title.as_deref(), dynamic_detail.as_deref());
+    }
+
     match view.parts() {
         Some(parts) if !parts.title.trim().is_empty() => (
             parts.topic.as_deref().unwrap_or("notification"),
@@ -176,8 +221,11 @@ pub(crate) fn draw_notice_view(
         NoticeSeverity::Warning => ("▲ ", theme.warn()),
         NoticeSeverity::Info => ("ℹ ", theme.info()),
     };
-    let parsed = parse_notice_content(&notice.message.raw);
-    let (topic, title, detail) = notice_content(&notice, &parsed);
+    let parsed = parse_notice_content(notice.raw_text());
+    let mut dynamic_title = None;
+    let mut dynamic_detail = None;
+    let (topic, title, detail) =
+        notice_content(&notice, &parsed, &mut dynamic_title, &mut dynamic_detail);
     let full_width = area.width as usize;
     let time_label = notice.message.sent_at_ms.map(crate::time::sent_time_label);
 
@@ -611,5 +659,54 @@ Gave up after 6 attempt(s); the upstream service appears overloaded. Resend the 
         assert!(content_lines_large > 3);
         assert_eq!(content_lines_large, content_lines_small);
         assert_eq!(content_lines_large, content_lines_scrolled);
+    }
+
+    #[test]
+    fn provider_retry_renders_as_notice_entry_with_countdown_and_failure() {
+        let retry_at = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut msg = TranscriptMessage::provider_retry(
+            2,
+            5,
+            retry_at,
+            "Anthropic HTTP 529: Overloaded",
+        );
+        assert!(msg.is_provider_retry());
+        assert!(msg.is_notice());
+
+        let mut grid = mutx_engine::Grid::new(80, 20);
+        let mut frame = Frame::new(&mut grid);
+        let area = Rect::new(0, 0, 80, 20);
+        let mut layout_map = LayoutMap::default();
+        let mut skip_rows = 0;
+        let mut current_y = 0;
+        let mut content_lines = 0;
+        let theme = Theme::default();
+
+        draw_notice_view(
+            &mut frame,
+            area,
+            NoticeView { message: &msg },
+            0,
+            &mut layout_map,
+            &mut skip_rows,
+            &mut current_y,
+            &mut content_lines,
+            &theme,
+            false,
+            false,
+        );
+
+        assert!(content_lines >= 3);
+        assert!(current_y >= 3);
+
+        // Verify in-place update
+        let new_retry_at = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        msg.update_provider_retry(3, 5, new_retry_at, "OpenAI HTTP 429: Rate limit exceeded");
+        if let MessageKind::ProviderRetry { attempt, failure, .. } = &msg.kind {
+            assert_eq!(*attempt, 3);
+            assert_eq!(failure, "OpenAI HTTP 429: Rate limit exceeded");
+        } else {
+            panic!("Expected MessageKind::ProviderRetry");
+        }
     }
 }

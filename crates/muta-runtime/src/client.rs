@@ -19,7 +19,9 @@ use muta_contracts::{
     SessionOverview,
 };
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message as WsMessage;
+use crate::wire_channel::{
+    BoxWireSink, BoxWireStream, native_framed_split, websocket_split,
+};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 
@@ -101,7 +103,8 @@ impl RemoteDaemon {
         let (ws, _) = tokio_tungstenite::connect_async(request)
             .await
             .map_err(|e| format!("ws connect to {url}: {e}"))?;
-        finish_handshake(ws.split(), action).await
+        let (sink, source) = websocket_split(ws);
+        finish_handshake((sink, source), action).await
     }
 }
 
@@ -853,13 +856,8 @@ pub async fn connect(info: &DaemonInfo, action: AttachAction) -> Result<Handshak
     if let Some(endpoint) = info.effective_local_endpoint()
         && let Ok(stream) = muta_platform::ipc::connect(&endpoint).await
     {
-        let request = "ws://localhost/"
-            .into_client_request()
-            .map_err(|e| format!("bad local IPC ws request: {e}"))?;
-        let (ws, _) = tokio_tungstenite::client_async(request, stream)
-            .await
-            .map_err(|e| format!("ws handshake over local IPC: {e}"))?;
-        return finish_handshake(ws.split(), action).await;
+        let (sink, source) = native_framed_split(stream);
+        return finish_handshake((sink, source), action).await;
     }
     let url = format!("ws://127.0.0.1:{}/", info.port);
     let mut request = url
@@ -874,21 +872,16 @@ pub async fn connect(info: &DaemonInfo, action: AttachAction) -> Result<Handshak
     let (ws, _response) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|e| format!("ws connect to {url}: {e}"))?;
-    finish_handshake(ws.split(), action).await
+    let (sink, source) = websocket_split(ws);
+    finish_handshake((sink, source), action).await
 }
 
 /// The stream-generic attach handshake, shared by the UDS and TCP paths.
-async fn finish_handshake<S>(
-    parts: (
-        futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
-        futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
-    ),
+async fn finish_handshake(
+    parts: (BoxWireSink, BoxWireStream),
     action: AttachAction,
-) -> Result<Handshake, String>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-{
-    let (mut ws_sink, mut ws_source) = parts;
+) -> Result<Handshake, String> {
+    let (mut wire_sink, mut wire_source) = parts;
 
     // Declare this client's working directory so the daemon scopes a fresh or
     // auto-attached session to the project the user actually invoked us in —
@@ -896,7 +889,7 @@ where
     // happened to use. A daemon predating the field ignores it; a failed cwd
     // read degrades to the daemon's fallback.
     let project = std::env::current_dir().ok();
-    let select = serde_json::to_string(&Wire::Select {
+    let select = Wire::Select {
         action,
         project,
         // ADR-0141: the client's interactivity posture. The TUI is a human
@@ -912,18 +905,17 @@ where
         // (unknown fields are dropped by serde) and falls back to judging
         // the product version above.
         protocol: Some(muta_contracts::PROTOCOL_VERSION),
-    })
-    .map_err(|e| format!("serialize select: {e}"))?;
-    ws_sink
-        .send(WsMessage::Text(select.into()))
+    };
+    wire_sink
+        .send(select)
         .await
-        .map_err(|e| format!("ws send select: {e}"))?;
+        .map_err(|e| format!("wire send select: {e}"))?;
 
     let reply = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         loop {
-            match ws_source.next().await {
-                Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
-                    Ok(Wire::Welcome {
+            match wire_source.next().await {
+                Some(Ok(wire)) => match wire {
+                    Wire::Welcome {
                         session_id,
                         round_counter,
                         messages,
@@ -931,7 +923,7 @@ where
                         model,
                         round_interrupts,
                         command_catalog,
-                    }) => {
+                    } => {
                         return Ok(Reply::Welcome(Welcome {
                             session_id,
                             round_counter,
@@ -942,15 +934,13 @@ where
                             command_catalog,
                         }));
                     }
-                    Ok(Wire::Pick { sessions }) => return Ok(Reply::Pick(sessions)),
-                    Ok(Wire::Error { message, .. }) => {
+                    Wire::Pick { sessions } => return Ok(Reply::Pick(sessions)),
+                    Wire::Error { message, .. } => {
                         return Err(format!("daemon rejected the attach: {message}"));
                     }
-                    Ok(_) => tracing::warn!("attach: unexpected frame during handshake, ignored"),
-                    Err(error) => tracing::warn!(%error, "attach: bad frame during handshake"),
+                    _ => tracing::warn!("attach: unexpected frame during handshake, ignored"),
                 },
-                Some(Ok(_)) => {}
-                Some(Err(error)) => return Err(format!("ws recv during handshake: {error}")),
+                Some(Err(error)) => return Err(format!("wire recv during handshake: {error}")),
                 None => return Err("server closed the connection".to_string()),
             }
         }
@@ -961,7 +951,7 @@ where
     let welcome = match reply {
         Reply::Welcome(w) => w,
         Reply::Pick(sessions) => {
-            let _ = ws_sink.close().await;
+            let _ = wire_sink.close().await;
             return Ok(Handshake::Pick(sessions));
         }
     };
@@ -984,15 +974,8 @@ where
                 // handshake below is still worth attempting.
                 end_pending = true;
             }
-            let text = match serde_json::to_string(&Wire::Request { request }) {
-                Ok(text) => text,
-                Err(error) => {
-                    tracing::warn!(%error, "attach: could not serialize request");
-                    continue;
-                }
-            };
-            if let Err(error) = ws_sink.send(WsMessage::Text(text.into())).await {
-                tracing::warn!(%error, "attach: ws send failed");
+            if let Err(error) = wire_sink.send(Wire::Request { request }).await {
+                tracing::warn!(%error, "attach: wire send failed");
                 break;
             }
         }
@@ -1003,24 +986,20 @@ where
             // cannot pin the client open either.
             tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         }
-        let _ = ws_sink.close().await;
+        let _ = wire_sink.close().await;
     });
 
     tokio::spawn(async move {
-        while let Some(frame) = ws_source.next().await {
+        while let Some(frame) = wire_source.next().await {
             match frame {
-                Ok(WsMessage::Text(text)) => match serde_json::from_str::<Wire>(&text) {
-                    Ok(Wire::Response { response }) => {
-                        if resp_in_tx.send(response).is_err() {
-                            return;
-                        }
+                Ok(Wire::Response { response }) => {
+                    if resp_in_tx.send(response).is_err() {
+                        return;
                     }
-                    Ok(_) => tracing::warn!("attach: unexpected post-handshake frame, ignored"),
-                    Err(error) => tracing::warn!(%error, "attach: bad frame from server, ignored"),
-                },
-                Ok(_) => {}
+                }
+                Ok(_) => tracing::warn!("attach: unexpected post-handshake frame, ignored"),
                 Err(error) => {
-                    tracing::warn!(%error, "attach: ws recv failed");
+                    tracing::warn!(%error, "attach: wire recv failed");
                     break;
                 }
             }
@@ -1056,13 +1035,8 @@ pub async fn control(
     if let Some(endpoint) = info.effective_local_endpoint()
         && let Ok(stream) = muta_platform::ipc::connect(&endpoint).await
     {
-        let req = "ws://localhost/"
-            .into_client_request()
-            .map_err(|e| format!("bad local IPC ws request: {e}"))?;
-        let (ws, _) = tokio_tungstenite::client_async(req, stream)
-            .await
-            .map_err(|e| format!("ws handshake over local IPC: {e}"))?;
-        return finish_control(ws.split(), action).await;
+        let (sink, source) = native_framed_split(stream);
+        return finish_control((sink, source), action).await;
     }
     let url = format!("ws://127.0.0.1:{}/", info.port);
     let mut req = url
@@ -1077,25 +1051,20 @@ pub async fn control(
     let (ws, _) = tokio_tungstenite::connect_async(req)
         .await
         .map_err(|e| format!("ws connect to {url}: {e}"))?;
-    finish_control(ws.split(), action).await
+    let (sink, source) = websocket_split(ws);
+    finish_control((sink, source), action).await
 }
 
 /// The stream-generic control handshake: send the `Select{Control}` frame and
 /// await the single `ControlReply`. One verb per connection.
-async fn finish_control<S>(
-    parts: (
-        futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
-        futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
-    ),
+async fn finish_control(
+    parts: (BoxWireSink, BoxWireStream),
     action: AttachAction,
-) -> Result<(), String>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-{
-    let (mut ws_sink, mut ws_source) = parts;
+) -> Result<(), String> {
+    let (mut wire_sink, mut wire_source) = parts;
     // Control verbs carry their own scope (`CreateSession::project`); the
     // daemon never consults a select-level project for them.
-    let select = serde_json::to_string(&Wire::Select {
+    let select = Wire::Select {
         action,
         project: None,
         posture: current_posture(),
@@ -1104,30 +1073,27 @@ where
         // identity still enforced by pre-protocol daemons.
         version: Some(crate::serve::daemon_version().to_string()),
         protocol: Some(muta_contracts::PROTOCOL_VERSION),
-    })
-    .map_err(|e| format!("serialize control select: {e}"))?;
-    ws_sink
-        .send(WsMessage::Text(select.into()))
+    };
+    wire_sink
+        .send(select)
         .await
-        .map_err(|e| format!("ws send control select: {e}"))?;
+        .map_err(|e| format!("wire send control select: {e}"))?;
 
     tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         loop {
-            match ws_source.next().await {
-                Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
-                    Ok(Wire::ControlReply { ok, error, .. }) => {
+            match wire_source.next().await {
+                Some(Ok(wire)) => match wire {
+                    Wire::ControlReply { ok, error, .. } => {
                         return if ok {
                             Ok(())
                         } else {
                             Err(error.unwrap_or_else(|| "control verb rejected".to_string()))
                         };
                     }
-                    Ok(Wire::Error { message, .. }) => return Err(message),
-                    Ok(_) => tracing::warn!("control: unexpected frame during handshake, ignored"),
-                    Err(error) => tracing::warn!(%error, "control: bad frame during handshake"),
+                    Wire::Error { message, .. } => return Err(message),
+                    _ => tracing::warn!("control: unexpected frame during handshake, ignored"),
                 },
-                Some(Ok(_)) => {}
-                Some(Err(error)) => return Err(format!("ws recv during control: {error}")),
+                Some(Err(error)) => return Err(format!("wire recv during control: {error}")),
                 None => return Err("server closed the control connection".to_string()),
             }
         }
@@ -1167,13 +1133,8 @@ pub async fn monitor_stream(
     if let Some(endpoint) = info.effective_local_endpoint()
         && let Ok(stream) = muta_platform::ipc::connect(&endpoint).await
     {
-        let request = "ws://localhost/"
-            .into_client_request()
-            .map_err(|e| format!("bad local IPC ws request: {e}"))?;
-        let (ws, _) = tokio_tungstenite::client_async(request, stream)
-            .await
-            .map_err(|e| format!("ws handshake over local IPC: {e}"))?;
-        return finish_monitor(ws.split(), action, "local IPC").await;
+        let (sink, source) = native_framed_split(stream);
+        return finish_monitor((sink, source), action, "local IPC").await;
     }
     let url = format!("ws://127.0.0.1:{}/", info.port);
     let mut request = url
@@ -1188,51 +1149,43 @@ pub async fn monitor_stream(
     let (ws, _response) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|e| format!("ws connect to {url}: {e}"))?;
-    finish_monitor(ws.split(), action, &url).await
+    let (sink, source) = websocket_split(ws);
+    finish_monitor((sink, source), action, &url).await
 }
 
 /// The stream-generic monitor handshake + framing, shared by the UDS and TCP
 /// paths: send the `Select{Monitor}` handshake, await the opening snapshot
 /// (bounded), then forward every diff frame into the returned channel.
-async fn finish_monitor<S>(
-    parts: (
-        futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
-        futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
-    ),
+async fn finish_monitor(
+    parts: (BoxWireSink, BoxWireStream),
     action: MonitorAction,
     target: &str,
-) -> Result<tokio::sync::mpsc::UnboundedReceiver<MonitorEvent>, String>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-{
-    let (mut ws_sink, mut ws_source) = parts;
+) -> Result<tokio::sync::mpsc::UnboundedReceiver<MonitorEvent>, String> {
+    let (mut wire_sink, mut wire_source) = parts;
 
-    let select = serde_json::to_string(&Wire::Select {
+    let select = Wire::Select {
         action: crate::serve::AttachAction::Monitor(action),
         // Monitor streams are host-wide; no project scope applies.
         project: None,
         posture: current_posture(),
         version: Some(crate::serve::daemon_version().to_string()),
         protocol: Some(muta_contracts::PROTOCOL_VERSION),
-    })
-    .map_err(|e| format!("serialize select: {e}"))?;
-    ws_sink
-        .send(WsMessage::Text(select.into()))
+    };
+    wire_sink
+        .send(select)
         .await
-        .map_err(|e| format!("ws send select: {e}"))?;
+        .map_err(|e| format!("wire send select: {e}"))?;
 
     // Await the opening snapshot (or a handshake-level error) with a bound.
     let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         loop {
-            match ws_source.next().await {
-                Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
-                    Ok(Wire::Monitor { event }) => return Ok(event),
-                    Ok(Wire::Error { message, .. }) => return Err(message),
-                    Ok(_) => tracing::warn!("status: unexpected frame during handshake, ignored"),
-                    Err(error) => tracing::warn!(%error, "status: bad frame during handshake"),
+            match wire_source.next().await {
+                Some(Ok(wire)) => match wire {
+                    Wire::Monitor { event } => return Ok(event),
+                    Wire::Error { message, .. } => return Err(message),
+                    _ => tracing::warn!("status: unexpected frame during handshake, ignored"),
                 },
-                Some(Ok(_)) => {}
-                Some(Err(error)) => return Err(format!("ws recv during handshake: {error}")),
+                Some(Err(error)) => return Err(format!("wire recv during handshake: {error}")),
                 None => return Err("server closed the connection".to_string()),
             }
         }
@@ -1243,20 +1196,16 @@ where
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let _ = tx.send(first);
     tokio::spawn(async move {
-        while let Some(frame) = ws_source.next().await {
+        while let Some(frame) = wire_source.next().await {
             match frame {
-                Ok(WsMessage::Text(text)) => match serde_json::from_str::<Wire>(&text) {
-                    Ok(Wire::Monitor { event }) => {
-                        if tx.send(event).is_err() {
-                            return;
-                        }
+                Ok(Wire::Monitor { event }) => {
+                    if tx.send(event).is_err() {
+                        return;
                     }
-                    Ok(_) => tracing::warn!("status: unexpected post-handshake frame, ignored"),
-                    Err(error) => tracing::warn!(%error, "status: bad frame from daemon, ignored"),
-                },
-                Ok(_) => {}
+                }
+                Ok(_) => tracing::warn!("status: unexpected post-handshake frame, ignored"),
                 Err(error) => {
-                    tracing::warn!(%error, "status: ws recv failed");
+                    tracing::warn!(%error, "status: wire recv failed");
                     break;
                 }
             }

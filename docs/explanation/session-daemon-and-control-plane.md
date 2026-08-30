@@ -51,8 +51,7 @@ ADR-0096's consequences rather than hidden.
 
 ## The control plane
 
-One WebSocket handshake (`Select`) chooses a role; everything shares the
-socket:
+One protocol handshake (`Select`) chooses a role over either **Native Framed Local IPC** (Length-Delimited over Unix Domain Sockets/Named Pipes, ADR-0158) or **WebSocket** (over TCP for Web/LAN clients, ADR-0105); everything shares the typed `Wire` contract:
 
 - **Attach** — bidirectional: drive a session (`Request`/`Response`), as a
   TUI does.

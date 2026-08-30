@@ -97,6 +97,7 @@ pub mod task_fault_tolerance;
 pub use task_fault_tolerance as supervise;
 pub mod supervisor;
 pub mod ui_bridge;
+pub mod wire_channel;
 
 pub use background_jobs::{BackgroundJobEvent, BackgroundJobManager, SessionJobService};
 pub use session_driver::SessionDriver;

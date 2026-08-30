@@ -218,6 +218,20 @@ pub enum MessageKind {
         expanded: bool,
         user_pinned: bool,
     },
+    /// Transient provider-retry state rendered live in the transcript as a notification entry.
+    ///
+    /// Unlike a static notice, this message is updated in place for every failed
+    /// attempt and removed when the request succeeds or terminates. Keeping
+    /// the timing data structured lets the renderer derive a live countdown
+    /// on every frame without appending duplicate lines per retry.
+    ProviderRetry {
+        attempt: usize,
+        max_attempts: usize,
+        failure: String,
+        retry_at: std::time::Instant,
+        expanded: bool,
+        user_pinned: bool,
+    },
     /// A command invocation as **one component that owns both its input and its output**
     /// (ADR-0108, ADR-0111).
     CommandResult {
@@ -1804,32 +1818,43 @@ impl TranscriptMessage {
         matches!(self.kind, MessageKind::Thinking { .. })
     }
 
-    /// Whether this is the one live provider-retry disclosure (deprecated, live retry rides activity bar).
+    /// Whether this is the live provider-retry entry.
     pub fn is_provider_retry(&self) -> bool {
-        false
+        matches!(self.kind, MessageKind::ProviderRetry { .. })
     }
 
-    /// Whether this message is a harness notice (error / turn-pause / status).
+    /// Whether this message is a harness notice (error / turn-pause / status / retry).
     pub fn is_notice(&self) -> bool {
-        matches!(self.kind, MessageKind::Notice { .. })
+        matches!(
+            self.kind,
+            MessageKind::Notice { .. } | MessageKind::ProviderRetry { .. }
+        )
     }
 
     pub fn notice_expanded(&self) -> Option<bool> {
         match &self.kind {
             MessageKind::Notice { expanded, .. } => Some(*expanded),
+            MessageKind::ProviderRetry { expanded, .. } => Some(*expanded),
             _ => None,
         }
     }
 
     pub fn pin_notice_expanded(&mut self, expanded: bool) {
-        if let MessageKind::Notice {
-            expanded: current,
-            user_pinned,
-            ..
-        } = &mut self.kind
-        {
-            *current = expanded;
-            *user_pinned = true;
+        match &mut self.kind {
+            MessageKind::Notice {
+                expanded: current,
+                user_pinned,
+                ..
+            }
+            | MessageKind::ProviderRetry {
+                expanded: current,
+                user_pinned,
+                ..
+            } => {
+                *current = expanded;
+                *user_pinned = true;
+            }
+            _ => {}
         }
     }
 
@@ -1998,6 +2023,69 @@ impl TranscriptMessage {
         match &self.kind {
             MessageKind::Notice { parts, .. } => parts.as_deref(),
             _ => None,
+        }
+    }
+
+    /// Construct a transient provider-retry notice message.
+    pub fn provider_retry(
+        attempt: usize,
+        max_attempts: usize,
+        retry_at: std::time::Instant,
+        failure: impl Into<String>,
+    ) -> Self {
+        let failure = sanitize_text(&failure.into()).into_owned();
+        let blocks = parse_blocks(&failure);
+        Self {
+            id: next_message_id(),
+            role: Role::System,
+            blocks,
+            raw: failure.clone(),
+            kind: MessageKind::ProviderRetry {
+                attempt,
+                max_attempts,
+                failure,
+                retry_at,
+                expanded: false,
+                user_pinned: false,
+            },
+            origin: UserMessageOrigin::Chat,
+            delivery: DeliveryStatus::Delivered,
+            insert_id: None,
+            provider: None,
+            model: None,
+            effort: None,
+            round: None,
+            turn: None,
+            sent_at_ms: None,
+            injection_origin: None,
+            rev: 0,
+        }
+    }
+
+    /// In-place update for an ongoing provider retry.
+    pub fn update_provider_retry(
+        &mut self,
+        attempt: usize,
+        max_attempts: usize,
+        retry_at: std::time::Instant,
+        failure: impl Into<String>,
+    ) {
+        let failure = sanitize_text(&failure.into()).into_owned();
+        self.blocks = parse_blocks(&failure);
+        self.raw = failure.clone();
+        if let MessageKind::ProviderRetry {
+            attempt: a,
+            max_attempts: m,
+            retry_at: r,
+            failure: f,
+            ..
+        } = &mut self.kind
+        {
+            *a = attempt;
+            *m = max_attempts;
+            *r = retry_at;
+            *f = failure;
+            self.rev = self.rev.wrapping_add(1);
         }
     }
 

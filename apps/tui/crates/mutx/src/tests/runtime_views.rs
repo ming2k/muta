@@ -3,7 +3,7 @@
 use super::*;
 
 #[test]
-fn activity_modal_renders_provider_retry_failure() {
+fn activity_modal_renders_provider_retry_status() {
     let now = std::time::Instant::now();
     let retry = ProviderRetryState {
         attempt: 3,

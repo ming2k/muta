@@ -1961,6 +1961,7 @@ pub(super) async fn run_app_loop(
         // idling behind it does not force the aside view to animate).
         let viewed_animating = app.viewed_chrome().responding;
         let animating = viewed_animating
+            || app.provider_retry.is_some()
             || app.copy_toast_until.is_some()
             || app.notice_toast_until.is_some()
             || app.ctrl_c_armed()

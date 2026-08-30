@@ -9,11 +9,13 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite;
-use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 
 use crate::shutdown::ShutdownGate;
+use crate::wire_channel::{
+    BoxWireSink, BoxWireStream, native_framed_split, websocket_split,
+};
 
 // The transport envelope and its constants live in `muta-contracts` since
 // ADR-0134 — one serde source of truth for the whole wire surface, next to
@@ -40,19 +42,6 @@ const ACCEPT_BACKOFF_CAP: std::time::Duration = std::time::Duration::from_secs(1
 /// one re-sync per mutation), so a small bound is plenty and a pathological
 /// emitter cannot grow it without limit.
 pub(crate) const ATTACH_SYNC_BUFFER_CAP: usize = 64;
-
-/// WS keepalive cadence for attach connections (ADR-0113). The daemon pings
-/// the peer on this interval; any inbound frame (pong included) refreshes
-/// [`WS_PEER_SILENCE_LIMIT`]'s deadline.
-const WS_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// How long an attach connection may stay completely silent (no inbound
-/// frame) before the daemon drops it. Peers that die without a RST — laptop
-/// sleep, NAT reaping, killed VM — otherwise park the read half until TCP's
-/// own timeout, holding the session's broadcast receiver (and blocking the
-/// idle-suspension reaper) for tens of minutes. Three missed pings is the
-/// conventional dead-connection verdict.
-const WS_PEER_SILENCE_LIMIT: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// Inform a newly attached client that previously trusted project-authored
 /// configurations have changed on disk and are quarantined pending review.
@@ -481,16 +470,38 @@ pub fn start_server(
                 tracing::info!(endpoint=?endpoint,"muta daemon: local IPC listener started");
                 let mut backoff = std::time::Duration::from_millis(5);
                 loop {
-                    tokio::select! {_=cc.cancelled()=>{tracing::info!("muta daemon: local IPC cancelled");break;}
-                    ac=listener.accept()=>{let stream=match ac{Ok(c)=>c,Err(e)=>{tracing::warn!(error=%e,backoff_ms=backoff.as_millis() as u64,"muta daemon: local IPC accept failed");tokio::time::sleep(backoff).await;backoff=(backoff*2).min(ACCEPT_BACKOFF_CAP);continue;}};
-                    backoff=std::time::Duration::from_millis(5);
-                    spawn_connection(
-                        stream,
-                        ServeCtx { registry: registry.clone(), conns: conns.clone(), gate: gate.clone(), listeners: cc.clone() },
-                        None,
-                        ServeExpose::Local,
-                        format!("local:{endpoint:?}"),
-                    );}}
+                    tokio::select! {
+                        _ = cc.cancelled() => {
+                            tracing::info!("muta daemon: local IPC cancelled");
+                            break;
+                        }
+                        ac = listener.accept() => {
+                            let stream = match ac {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        backoff_ms = backoff.as_millis() as u64,
+                                        "muta daemon: local IPC accept failed"
+                                    );
+                                    tokio::time::sleep(backoff).await;
+                                    backoff = (backoff * 2).min(ACCEPT_BACKOFF_CAP);
+                                    continue;
+                                }
+                            };
+                            backoff = std::time::Duration::from_millis(5);
+                            spawn_local_connection(
+                                stream,
+                                ServeCtx {
+                                    registry: registry.clone(),
+                                    conns: conns.clone(),
+                                    gate: gate.clone(),
+                                    listeners: cc.clone(),
+                                },
+                                format!("local:{endpoint:?}"),
+                            );
+                        }
+                    }
                 }
             });
             tasks.track("local-ipc-accept", handle);
@@ -603,6 +614,40 @@ struct ServeCtx {
     listeners: CancellationToken,
 }
 
+fn spawn_local_connection<S>(
+    stream: S,
+    ctx: ServeCtx,
+    peer: String,
+) where
+    S: AsyncRead + AsyncWrite + Send + 'static,
+{
+    let ServeCtx {
+        registry,
+        conns,
+        gate,
+        listeners,
+    } = ctx;
+    let (id, conn_cancel) = conns.register();
+    let conns_for_guard = conns.clone();
+    tokio::spawn(async move {
+        let _guard = ConnGuard {
+            conns: conns_for_guard,
+            id,
+        };
+        let (wire_sink, wire_source) = native_framed_split(stream);
+        let result = tokio::select! {
+            r = handle_wire_stream(wire_sink, wire_source, registry, gate, listeners) => r,
+            _ = conn_cancel.cancelled() => {
+                tracing::debug!(%peer, "muta daemon: closing local connection for drain");
+                Ok(())
+            }
+        };
+        if let Err(e) = result {
+            tracing::warn!(%peer, error=%e, "muta daemon: local connection ended");
+        }
+    });
+}
+
 fn spawn_connection<S>(
     stream: S,
     ctx: ServeCtx,
@@ -660,8 +705,8 @@ impl Drop for ConnGuard {
 /// channel is request/response (unlike the streaming monitor/attach roles):
 /// one `ControlRequest` in, one `ControlReply` out, then the connection may
 /// close or issue another verb.
-async fn run_control<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
-    mut ws_sink: futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
+async fn run_control(
+    mut wire_sink: BoxWireSink,
     registry: Arc<crate::registry::SessionRegistry>,
     gate: Arc<ShutdownGate>,
     listeners: CancellationToken,
@@ -672,17 +717,16 @@ async fn run_control<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             // The remote stop verb (ADR-0100): acknowledge on the wire first
             // — the gate fires the same drain as any signal, which would
             // otherwise cancel this very connection before the reply lands.
-            let reply = serde_json::to_string(&Wire::ControlReply {
+            let reply = Wire::ControlReply {
                 ok: true,
                 session_id: None,
                 error: None,
-            })
-            .map_err(|e| format!("serialize control reply: {e}"))?;
-            ws_sink
-                .send(WsMessage::Text(reply.into()))
+            };
+            wire_sink
+                .send(reply)
                 .await
                 .map_err(|e| format!("send control reply: {e}"))?;
-            let _ = ws_sink.close().await;
+            let _ = wire_sink.close().await;
             // The verb is the same trigger as a signal: latch the gate (so
             // monitors stream DaemonDraining and the run loop drains), and
             // stop the accept loops immediately — even when the serve layer
@@ -741,17 +785,16 @@ async fn run_control<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             }
         }
     };
-    let reply = serde_json::to_string(&Wire::ControlReply {
+    let reply = Wire::ControlReply {
         ok,
         session_id,
         error,
-    })
-    .map_err(|e| format!("serialize control reply: {e}"))?;
-    ws_sink
-        .send(WsMessage::Text(reply.into()))
+    };
+    wire_sink
+        .send(reply)
         .await
         .map_err(|e| format!("send control reply: {e}"))?;
-    let _ = ws_sink.close().await;
+    let _ = wire_sink.close().await;
     Ok(())
 }
 
@@ -765,6 +808,346 @@ fn generate_token() -> String {
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     )
+}
+
+#[allow(clippy::result_large_err)]
+async fn handle_wire_stream(
+    mut wire_sink: BoxWireSink,
+    mut wire_source: BoxWireStream,
+    registry: Arc<crate::registry::SessionRegistry>,
+    gate: Arc<ShutdownGate>,
+    listeners: CancellationToken,
+) -> Result<(), String> {
+    let (action, project, client_posture, client_version, client_protocol) = loop {
+        match wire_source.next().await {
+            Some(Ok(Wire::Select {
+                action,
+                project,
+                posture,
+                version,
+                protocol,
+            })) => break (action, project, posture, version, protocol),
+            Some(Ok(_)) => {
+                send_error(&mut wire_sink, "expected Select as the first frame").await?;
+                return Ok(());
+            }
+            Some(Err(error)) => {
+                send_error(&mut wire_sink, &format!("bad first frame: {error}")).await?;
+                return Ok(());
+            }
+            None => return Ok(()),
+        }
+    };
+    // Protocol negotiation (ADR-0134), enforced before any session work.
+    // The protocol number is the authority when present: the daemon serves
+    // any number in [MIN_PROTOCOL_VERSION, PROTOCOL_VERSION] regardless of
+    // the product build — this is what lets a pinned client keep talking to
+    // a newer daemon across additive wire changes. A client that sends no
+    // protocol number predates the field, so it is judged by ADR-0100
+    // rule 4's exact product-version equality instead (unknown fields are
+    // ignored by serde, so this daemon's newer frames never break it).
+    if let Some(client) = client_protocol
+        && !protocol_accepts(client)
+    {
+        send_error_with_code(
+            &mut wire_sink,
+            &protocol_mismatch_error(client, client_version.as_deref()),
+            Some(ERR_PROTOCOL_MISMATCH),
+        )
+        .await?;
+        return Ok(());
+    }
+    // Legacy product-version gate (ADR-0100 rule 4) for pre-protocol
+    // clients only. A protocol-declaring client has already been judged on
+    // the window; its product version is advisory identity, not a gate.
+    if client_protocol.is_none()
+        && let Some(client) = client_version
+        && client != gate.version_of_daemon()
+    {
+        send_error_with_code(
+            &mut wire_sink,
+            &version_mismatch_error(&client, gate.version_of_daemon()),
+            Some(ERR_VERSION_MISMATCH),
+        )
+        .await?;
+        return Ok(());
+    }
+    match action {
+        AttachAction::Monitor(action) => return run_monitor(wire_sink, registry, action, gate).await,
+        AttachAction::Control(request) => {
+            return run_control(wire_sink, registry, gate, listeners, request).await;
+        }
+        AttachAction::New | AttachAction::Attach(_) | AttachAction::Picker => {}
+    }
+    // The caller's project scopes creation / lazy resume (ADR-0096). Attach
+    // clients declare their working directory in the Select frame's optional
+    // `project`; a client predating that field sends none and the daemon
+    // falls back to its own process cwd — which is whatever the first client
+    // that spawned the daemon happened to use, so it is only correct by
+    // coincidence.
+    let caller_project = project.clone().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    });
+    // A modern client *declared* its project; a legacy client did not and the
+    // daemon is guessing from its own cwd. Auto-binding a lone cross-project
+    // session is the "launched in project A, working in project B" trap, but
+    // only the declared case can know it is cross-project — so the guard
+    // applies there, and the legacy path keeps its historical behaviour.
+    let declared_project = project.is_some();
+    let bound = match registry
+        .resolve_with_declaration(action, &caller_project, declared_project)
+        .await
+    {
+        crate::registry::ResolveOutcome::Welcome(s) => s,
+        crate::registry::ResolveOutcome::Pick { sessions } => {
+            wire_sink
+                .send(Wire::Pick { sessions })
+                .await
+                .map_err(|e| format!("send pick: {e}"))?;
+            return Ok(());
+        }
+        crate::registry::ResolveOutcome::Error(message) => {
+            send_error(&mut wire_sink, &message).await?;
+            return Ok(());
+        }
+    };
+    let messages = bound.session.full_transcript().await;
+    let round_counter = bound.session.round_counter().await;
+    let session_id = bound.session.id().await;
+    // The session's own provider/model pin when set (C6), otherwise the
+    // config default — the pair the picker and hint bar should boot into.
+    let (provider, model) = match bound.session.provider_selection().await {
+        Some(sel) => (sel.provider, sel.model.unwrap_or_default()),
+        None => {
+            let config = muta_persistence::config::Config::load();
+            let provider = muta_agent::catalog::default_provider_id(&config).to_string();
+            let model =
+                muta_agent::catalog::resolved_model_name(&config, &provider).unwrap_or_default();
+            (provider, model)
+        }
+    };
+    let welcome = Wire::Welcome {
+        session_id,
+        round_counter,
+        messages,
+        provider,
+        model,
+        round_interrupts: bound.session.round_interrupts().await,
+        command_catalog: bound.command_catalog.clone(),
+    };
+    wire_sink
+        .send(welcome)
+        .await
+        .map_err(|e| format!("send welcome: {e}"))?;
+    // Attach-time state sync: the restored session's task list lives on the
+    // session store, but the TUI's todo panel only fills from a live
+    // `TodosUpdated` event — which a client that was not connected when the
+    // session was (lazily) resumed never saw. Push one right after the
+    // welcome so the sticky panel restores immediately (mirroring what
+    // `restore_session_runtime` does for in-process session switches). An
+    // empty list is the "no active task list" state and clears any stale
+    // panel.
+    let todos = bound.session.todos().await;
+    let todos_frame = Wire::Response {
+        response: AgentResponse::Round {
+            session_id: bound.session.id().await,
+            event: muta_contracts::RoundEvent::TodosUpdated(todos),
+        },
+    };
+    wire_sink
+        .send(todos_frame)
+        .await
+        .map_err(|e| format!("send todos restore: {e}"))?;
+    // Attach-time `/retry` affordance (ADR-0128): a session re-hosted after
+    // its round stopped (daemon restart, lazy resume) carries the durable
+    // resume point in its store, but the attaching client never saw the
+    // idle `HarnessState` that would have published it. Push one now so the
+    // hint bar offers `/retry` from the very first frame — exactly as if the
+    // client had been attached when the round stopped.
+    {
+        // The agent handle does not ride on `BoundSession`, so read the
+        // posture straight from the session store (ADR-0132: the store is
+        // the source of truth for the persisted posture). A session that
+        // died delegated re-attaches with `delegated: true` in this very
+        // first snapshot — the badge paints immediately instead of waiting
+        // for the next periodic `HarnessState`.
+        //
+        // `workspace_security` is the freshly attested per-domain state for
+        // the attaching project root: a client that lands in a
+        // never-trusted workspace learns it *in the pre-view attach sync*,
+        // so the trust dialog opens before the first frame becomes
+        // interactive — instead of a passive banner arriving after the
+        // user already started typing into the composer.
+        let snapshot = muta_contracts::HarnessSnapshot {
+            loop_status: muta_contracts::LoopStatus::Idle,
+            round_counter: bound.session.round_counter().await,
+            delegated: bound.session.delegated().await,
+            workspace_security: bound.security.snapshot(bound.project_root()),
+            retry_pending: bound.session.retry_pending().await.is_some(),
+        };
+        let frame = Wire::Response {
+            response: AgentResponse::Round {
+                session_id: bound.session.id().await,
+                event: muta_contracts::RoundEvent::HarnessState(snapshot),
+            },
+        };
+        wire_sink
+            .send(frame)
+            .await
+            .map_err(|e| format!("send retry-pending restore: {e}"))?;
+        if let Some(performance) =
+            muta_contracts::latest_turn_performance(&bound.session.request_usage_records().await)
+        {
+            let frame = Wire::Response {
+                response: AgentResponse::Round {
+                    session_id: bound.session.id().await,
+                    event: muta_contracts::RoundEvent::TurnPerformance(performance),
+                },
+            };
+            wire_sink
+                .send(frame)
+                .await
+                .map_err(|e| format!("send performance restore: {e}"))?;
+        }
+    }
+    let req_tx = bound.req_tx.clone();
+    let mut rx = bound.events.subscribe();
+    // ADR-0141: fold this client's declared posture into the session's
+    // human channel. First interactive attach flips the session interactive;
+    // this never *removes* interactivity (only a detach can). The trust
+    // prompt below is additionally gated on the client itself being
+    // interactive — pushing a question to a pipe that cannot answer would
+    // park the security decision forever.
+    let after_attach = bound.human_channel.attach(client_posture);
+    let attached_session_id = bound.session.id().await;
+    tracing::info!(
+        session_id = %attached_session_id,
+        effective = ?after_attach,
+        "muta daemon: human channel accounted"
+    );
+    // Replay the buffered attach-sync events (ADR-0096) so a client that
+    // attached after the session began hydrates its picker/key/context
+    // state immediately, before joining the live broadcast.
+    for event in drain_attach_sync(&bound.sync_buffer).await {
+        wire_sink
+            .send(Wire::Response { response: event })
+            .await
+            .map_err(|e| format!("wire send: {e}"))?;
+    }
+    // Surface trust posture after attach. Trust mutation is intentionally
+    // available only through the canonical `/trust` command path, which also
+    // reloads every affected consumer atomically.
+    //
+    // The attach flow splits by *why* the workspace is untrusted:
+    //
+    // - `Quarantined` (contributions present, never granted): the
+    //   pre-view `HarnessState` above already carried the security snapshot
+    //   through attach-sync, and an interactive client answers the trust
+    //   dialog *before* the composer takes input. A banner here would only
+    //   duplicate the dialog.
+    // - `Changed` (previously trusted content mutated, e.g. via git pull):
+    //   there is nothing to gate on — the user already made a trust
+    //   decision for this workspace — so a banner is the honest escalation.
+    let snap = bound.security.snapshot(bound.project_root());
+    if matches!(
+        snap.aggregate(),
+        muta_contracts::WorkspaceTrustState::Changed
+    ) {
+        let session_id = bound.session.id().await;
+        let response = workspace_trust_notice(&session_id, &snap);
+        wire_sink
+            .send(Wire::Response { response })
+            .await
+            .map_err(|e| format!("wire send: {e}"))?;
+    }
+    loop {
+        tokio::select! {
+            resp = rx.recv() => match resp {
+                Ok(resp) => {
+                    if let Err(e) = wire_sink.send(Wire::Response { response: resp }).await {
+                        return Err(format!("wire send: {e}"));
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    // A slow attach client fell behind the session bus and
+                    // the channel dropped `n` events. Skipping them silently
+                    // used to leave the client's view permanently stale
+                    // (missing transcript deltas read as "the agent hung").
+                    // Re-anchor instead: replay the attach-sync buffer —
+                    // the same idempotent startup state a fresh attach gets
+                    // — so the client resynchronizes instead of drifting.
+                    tracing::warn!(skipped = n, "muta daemon: client lagged; resyncing from attach-sync buffer");
+                    for event in snapshot_attach_sync(&bound.sync_buffer).await {
+                        if let Err(e) = wire_sink.send(Wire::Response { response: event }).await {
+                            return Err(format!("wire send: {e}"));
+                        }
+                    }
+                    continue;
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            msg = wire_source.next() => match msg {
+                Some(Ok(Wire::Request { request: AgentRequest::EndSession })) => {
+                    // Client-declared session end (ADR-0112): the
+                    // operator said "I am done with this session", so
+                    // tear it down now through the same path as
+                    // `ControlRequest::KillSession` — cancel the driver,
+                    // fire SessionEnd hooks, drop it from the registry,
+                    // publish `SessionRemoved` — instead of leaving the
+                    // session hosted until an idle reaper notices it.
+                    // This never reaches the driver queue: the driver is
+                    // about to be cancelled, so queueing would race the
+                    // teardown.
+                    let session_id = bound.session.id().await;
+                    match registry.kill_session(&session_id).await {
+                        Ok(()) => tracing::info!(
+                            session = %session_id,
+                            "muta daemon: client declared session end"
+                        ),
+                        // Already gone — which is exactly what the
+                        // client asked for (e.g. another client ended it
+                        // first). Nothing to report.
+                        Err(e) => tracing::debug!(
+                            session = %session_id,
+                            error = %e,
+                            "muta daemon: session already gone on client end"
+                        ),
+                    }
+                    // `kill_session` broadcast the terminal
+                    // `AgentResponse::Exit` on the session bus before
+                    // returning; it is already sitting in this
+                    // connection's buffer. Flush it (and anything
+                    // queued behind it) so the client observes the
+                    // graceful end marker instead of a bare socket
+                    // close. Best-effort and bounded by what is
+                    // buffered right now.
+                    while let Ok(event) = rx.try_recv() {
+                        if wire_sink.send(Wire::Response { response: event }).await.is_err() {
+                            break;
+                        }
+                    }
+                    return Ok(());
+                }
+                Some(Ok(Wire::Request { request })) => {
+                    let _ = req_tx.send(request);
+                }
+                Some(Ok(_)) => {}
+                Some(Err(e)) => tracing::warn!(error = %e, "muta daemon: bad wire request"),
+                None => break,
+            },
+        }
+    }
+    // ADR-0141: release this connection's channel hold. When the last
+    // interactive watcher leaves, the session drops to Autonomous and any
+    // request parked since resolves by labeled policy instead of hanging.
+    let after_detach = bound.human_channel.detach();
+    let detached_session_id = bound.session.id().await;
+    tracing::info!(
+        session_id = %detached_session_id,
+        effective = ?after_detach,
+        "muta daemon: human channel released"
+    );
+    Ok(())
 }
 
 #[allow(clippy::result_large_err)]
@@ -806,390 +1189,9 @@ where
     )
     .await
     .map_err(|e| format!("ws handshake: {e}"))?;
-    let (mut ws_sink, mut ws_source) = ws_stream.split();
-    let (action, project, client_posture, client_version, client_protocol) = loop {
-        match ws_source.next().await {
-            Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
-                Ok(Wire::Select {
-                    action,
-                    project,
-                    posture,
-                    version,
-                    protocol,
-                }) => break (action, project, posture, version, protocol),
-                Ok(_) => {
-                    send_error(&mut ws_sink, "expected Select as the first frame").await?;
-                    return Ok(());
-                }
-                Err(error) => {
-                    send_error(&mut ws_sink, &format!("bad first frame: {error}")).await?;
-                    return Ok(());
-                }
-            },
-            Some(Ok(_)) => continue,
-            Some(Err(error)) => return Err(format!("ws recv before select: {error}")),
-            None => return Ok(()),
-        }
-    };
-    // Protocol negotiation (ADR-0134), enforced before any session work.
-    // The protocol number is the authority when present: the daemon serves
-    // any number in [MIN_PROTOCOL_VERSION, PROTOCOL_VERSION] regardless of
-    // the product build — this is what lets a pinned client keep talking to
-    // a newer daemon across additive wire changes. A client that sends no
-    // protocol number predates the field, so it is judged by ADR-0100
-    // rule 4's exact product-version equality instead (unknown fields are
-    // ignored by serde, so this daemon's newer frames never break it).
-    if let Some(client) = client_protocol
-        && !protocol_accepts(client)
-    {
-        send_error_with_code(
-            &mut ws_sink,
-            &protocol_mismatch_error(client, client_version.as_deref()),
-            Some(ERR_PROTOCOL_MISMATCH),
-        )
-        .await?;
-        return Ok(());
-    }
-    // Legacy product-version gate (ADR-0100 rule 4) for pre-protocol
-    // clients only. A protocol-declaring client has already been judged on
-    // the window; its product version is advisory identity, not a gate.
-    if client_protocol.is_none()
-        && let Some(client) = client_version
-        && client != gate.version_of_daemon()
-    {
-        send_error_with_code(
-            &mut ws_sink,
-            &version_mismatch_error(&client, gate.version_of_daemon()),
-            Some(ERR_VERSION_MISMATCH),
-        )
-        .await?;
-        return Ok(());
-    }
-    match action {
-        AttachAction::Monitor(action) => return run_monitor(ws_sink, registry, action, gate).await,
-        AttachAction::Control(request) => {
-            return run_control(ws_sink, registry, gate, listeners, request).await;
-        }
-        AttachAction::New | AttachAction::Attach(_) | AttachAction::Picker => {}
-    }
-    // The caller's project scopes creation / lazy resume (ADR-0096). Attach
-    // clients declare their working directory in the Select frame's optional
-    // `project`; a client predating that field sends none and the daemon
-    // falls back to its own process cwd — which is whatever the first client
-    // that spawned the daemon happened to use, so it is only correct by
-    // coincidence.
-    let caller_project = project.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-    });
-    // A modern client *declared* its project; a legacy client did not and the
-    // daemon is guessing from its own cwd. Auto-binding a lone cross-project
-    // session is the "launched in project A, working in project B" trap, but
-    // only the declared case can know it is cross-project — so the guard
-    // applies there, and the legacy path keeps its historical behaviour.
-    let declared_project = project.is_some();
-    let bound = match registry
-        .resolve_with_declaration(action, &caller_project, declared_project)
-        .await
-    {
-        crate::registry::ResolveOutcome::Welcome(s) => s,
-        crate::registry::ResolveOutcome::Pick { sessions } => {
-            let text = serde_json::to_string(&Wire::Pick { sessions })
-                .map_err(|e| format!("serialize pick: {e}"))?;
-            ws_sink
-                .send(WsMessage::Text(text.into()))
-                .await
-                .map_err(|e| format!("send pick: {e}"))?;
-            return Ok(());
-        }
-        crate::registry::ResolveOutcome::Error(message) => {
-            send_error(&mut ws_sink, &message).await?;
-            return Ok(());
-        }
-    };
-    let messages = bound.session.full_transcript().await;
-    let round_counter = bound.session.round_counter().await;
-    let session_id = bound.session.id().await;
-    // The session's own provider/model pin when set (C6), otherwise the
-    // config default — the pair the picker and hint bar should boot into.
-    let (provider, model) = match bound.session.provider_selection().await {
-        Some(sel) => (sel.provider, sel.model.unwrap_or_default()),
-        None => {
-            let config = muta_persistence::config::Config::load();
-            let provider = muta_agent::catalog::default_provider_id(&config).to_string();
-            let model =
-                muta_agent::catalog::resolved_model_name(&config, &provider).unwrap_or_default();
-            (provider, model)
-        }
-    };
-    let welcome = serde_json::to_string(&Wire::Welcome {
-        session_id,
-        round_counter,
-        messages,
-        provider,
-        model,
-        round_interrupts: bound.session.round_interrupts().await,
-        command_catalog: bound.command_catalog.clone(),
-    })
-    .map_err(|e| format!("serialize welcome: {e}"))?;
-    ws_sink
-        .send(WsMessage::Text(welcome.into()))
-        .await
-        .map_err(|e| format!("send welcome: {e}"))?;
-    // Attach-time state sync: the restored session's task list lives on the
-    // session store, but the TUI's todo panel only fills from a live
-    // `TodosUpdated` event — which a client that was not connected when the
-    // session was (lazily) resumed never saw. Push one right after the
-    // welcome so the sticky panel restores immediately (mirroring what
-    // `restore_session_runtime` does for in-process session switches). An
-    // empty list is the "no active task list" state and clears any stale
-    // panel.
-    let todos = bound.session.todos().await;
-    let todos_frame = serde_json::to_string(&Wire::Response {
-        response: AgentResponse::Round {
-            session_id: bound.session.id().await,
-            event: muta_contracts::RoundEvent::TodosUpdated(todos),
-        },
-    })
-    .map_err(|e| format!("serialize todos restore: {e}"))?;
-    ws_sink
-        .send(WsMessage::Text(todos_frame.into()))
-        .await
-        .map_err(|e| format!("send todos restore: {e}"))?;
-    // Attach-time `/retry` affordance (ADR-0128): a session re-hosted after
-    // its round stopped (daemon restart, lazy resume) carries the durable
-    // resume point in its store, but the attaching client never saw the
-    // idle `HarnessState` that would have published it. Push one now so the
-    // hint bar offers `/retry` from the very first frame — exactly as if the
-    // client had been attached when the round stopped.
-    {
-        // The agent handle does not ride on `BoundSession`, so read the
-        // posture straight from the session store (ADR-0132: the store is
-        // the source of truth for the persisted posture). A session that
-        // died delegated re-attaches with `delegated: true` in this very
-        // first snapshot — the badge paints immediately instead of waiting
-        // for the next periodic `HarnessState`.
-        //
-        // `workspace_security` is the freshly attested per-domain state for
-        // the attaching project root: a client that lands in a
-        // never-trusted workspace learns it *in the pre-view attach sync*,
-        // so the trust dialog opens before the first frame becomes
-        // interactive — instead of a passive banner arriving after the
-        // user already started typing into the composer.
-        let snapshot = muta_contracts::HarnessSnapshot {
-            loop_status: muta_contracts::LoopStatus::Idle,
-            round_counter: bound.session.round_counter().await,
-            delegated: bound.session.delegated().await,
-            workspace_security: bound.security.snapshot(bound.project_root()),
-            retry_pending: bound.session.retry_pending().await.is_some(),
-        };
-        let frame = serde_json::to_string(&Wire::Response {
-            response: AgentResponse::Round {
-                session_id: bound.session.id().await,
-                event: muta_contracts::RoundEvent::HarnessState(snapshot),
-            },
-        })
-        .map_err(|e| format!("serialize retry-pending restore: {e}"))?;
-        ws_sink
-            .send(WsMessage::Text(frame.into()))
-            .await
-            .map_err(|e| format!("send retry-pending restore: {e}"))?;
-        if let Some(performance) =
-            muta_contracts::latest_turn_performance(&bound.session.request_usage_records().await)
-        {
-            let frame = serde_json::to_string(&Wire::Response {
-                response: AgentResponse::Round {
-                    session_id: bound.session.id().await,
-                    event: muta_contracts::RoundEvent::TurnPerformance(performance),
-                },
-            })
-            .map_err(|e| format!("serialize performance restore: {e}"))?;
-            ws_sink
-                .send(WsMessage::Text(frame.into()))
-                .await
-                .map_err(|e| format!("send performance restore: {e}"))?;
-        }
-    }
-    let req_tx = bound.req_tx.clone();
-    let mut rx = bound.events.subscribe();
-    // ADR-0141: fold this client's declared posture into the session's
-    // human channel. First interactive attach flips the session interactive;
-    // this never *removes* interactivity (only a detach can). The trust
-    // prompt below is additionally gated on the client itself being
-    // interactive — pushing a question to a pipe that cannot answer would
-    // park the security decision forever.
-    let after_attach = bound.human_channel.attach(client_posture);
-    let attached_session_id = bound.session.id().await;
-    tracing::info!(
-        session_id = %attached_session_id,
-        effective = ?after_attach,
-        "muta daemon: human channel accounted"
-    );
-    // Replay the buffered attach-sync events (ADR-0096) so a client that
-    // attached after the session began hydrates its picker/key/context
-    // state immediately, before joining the live broadcast.
-    for event in drain_attach_sync(&bound.sync_buffer).await {
-        let text = serde_json::to_string(&Wire::Response { response: event })
-            .map_err(|e| format!("serialize attach sync: {e}"))?;
-        ws_sink
-            .send(WsMessage::Text(text.into()))
-            .await
-            .map_err(|e| format!("ws send: {e}"))?;
-    }
-    // Surface trust posture after attach. Trust mutation is intentionally
-    // available only through the canonical `/trust` command path, which also
-    // reloads every affected consumer atomically.
-    //
-    // The attach flow splits by *why* the workspace is untrusted:
-    //
-    // - `Quarantined` (contributions present, never granted): the
-    //   pre-view `HarnessState` above already carried the security snapshot
-    //   through attach-sync, and an interactive client answers the trust
-    //   dialog *before* the composer takes input. A banner here would only
-    //   duplicate the dialog.
-    // - `Changed` (previously trusted content mutated, e.g. via git pull):
-    //   there is nothing to gate on — the user already made a trust
-    //   decision for this workspace — so a banner is the honest escalation.
-    let snap = bound.security.snapshot(bound.project_root());
-    if matches!(
-        snap.aggregate(),
-        muta_contracts::WorkspaceTrustState::Changed
-    ) {
-        let session_id = bound.session.id().await;
-        let response = workspace_trust_notice(&session_id, &snap);
-        let text = serde_json::to_string(&Wire::Response { response })
-            .map_err(|e| format!("serialize trust notice: {e}"))?;
-        ws_sink
-            .send(WsMessage::Text(text.into()))
-            .await
-            .map_err(|e| format!("ws send: {e}"))?;
-    }
-    // Liveness bookkeeping: a WS peer that dies without a RST (laptop
-    // sleep, NAT drop, killed VM) leaves the select below parked on
-    // `ws_source.next()` until TCP's own timeout (tens of minutes). A
-    // periodic ping keeps the socket honest — the peer's pong (or any
-    // inbound frame) refreshes the deadline; a full silence window with
-    // nothing inbound tears the connection down so the session's broadcast
-    // receiver is released (which also unblocks the idle suspension reaper,
-    // ADR-0113).
-    let mut last_inbound = tokio::time::Instant::now();
-    let mut ping_interval = tokio::time::interval(WS_PING_INTERVAL);
-    ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    ping_interval.tick().await; // skip the immediate first tick
-    loop {
-        tokio::select! {
-            _ = ping_interval.tick() => {
-                if last_inbound.elapsed() > WS_PEER_SILENCE_LIMIT {
-                    tracing::warn!(
-                        silent_for_secs = last_inbound.elapsed().as_secs(),
-                        "muta daemon: peer silent past the limit; dropping connection"
-                    );
-                    return Err("peer silent past keepalive limit".to_string());
-                }
-                if let Err(e) = ws_sink.send(WsMessage::Ping(vec![].into())).await {
-                    return Err(format!("ws ping: {e}"));
-                }
-            }
-            resp = rx.recv() => match resp {
-                Ok(resp) => {
-                    let text = serde_json::to_string(&Wire::Response { response: resp })
-                        .map_err(|e| format!("serialize response: {e}"))?;
-                    if let Err(e) = ws_sink.send(WsMessage::Text(text.into())).await {
-                        return Err(format!("ws send: {e}"));
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    // A slow attach client fell behind the session bus and
-                    // the channel dropped `n` events. Skipping them silently
-                    // used to leave the client's view permanently stale
-                    // (missing transcript deltas read as "the agent hung").
-                    // Re-anchor instead: replay the attach-sync buffer —
-                    // the same idempotent startup state a fresh attach gets
-                    // — so the client resynchronizes instead of drifting.
-                    tracing::warn!(skipped = n, "muta daemon: client lagged; resyncing from attach-sync buffer");
-                    for event in snapshot_attach_sync(&bound.sync_buffer).await {
-                        let text = serde_json::to_string(&Wire::Response { response: event })
-                            .map_err(|e| format!("serialize resync: {e}"))?;
-                        if let Err(e) = ws_sink.send(WsMessage::Text(text.into())).await {
-                            return Err(format!("ws send: {e}"));
-                        }
-                    }
-                    continue;
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            },
-            msg = ws_source.next() => match msg {
-                Some(Ok(WsMessage::Text(text))) => match serde_json::from_str::<Wire>(&text) {
-                    Ok(Wire::Request { request: AgentRequest::EndSession }) => {
-                        // Client-declared session end (ADR-0112): the
-                        // operator said "I am done with this session", so
-                        // tear it down now through the same path as
-                        // `ControlRequest::KillSession` — cancel the driver,
-                        // fire SessionEnd hooks, drop it from the registry,
-                        // publish `SessionRemoved` — instead of leaving the
-                        // session hosted until an idle reaper notices it.
-                        // This never reaches the driver queue: the driver is
-                        // about to be cancelled, so queueing would race the
-                        // teardown.
-                        let session_id = bound.session.id().await;
-                        match registry.kill_session(&session_id).await {
-                            Ok(()) => tracing::info!(
-                                session = %session_id,
-                                "muta daemon: client declared session end"
-                            ),
-                            // Already gone — which is exactly what the
-                            // client asked for (e.g. another client ended it
-                            // first). Nothing to report.
-                            Err(e) => tracing::debug!(
-                                session = %session_id,
-                                error = %e,
-                                "muta daemon: session already gone on client end"
-                            ),
-                        }
-                        // `kill_session` broadcast the terminal
-                        // `AgentResponse::Exit` on the session bus before
-                        // returning; it is already sitting in this
-                        // connection's buffer. Flush it (and anything
-                        // queued behind it) so the client observes the
-                        // graceful end marker instead of a bare socket
-                        // close. Best-effort and bounded by what is
-                        // buffered right now.
-                        while let Ok(event) = rx.try_recv() {
-                            let text = serde_json::to_string(&Wire::Response { response: event })
-                                .map_err(|e| format!("serialize response: {e}"))?;
-                            if ws_sink.send(WsMessage::Text(text.into())).await.is_err() {
-                                break;
-                            }
-                        }
-                        return Ok(());
-                    }
-                    Ok(Wire::Request { request }) => {
-                        let _ = req_tx.send(request);
-                    }
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!(error = %e, "muta daemon: bad request json"),
-                },
-                Some(Ok(_)) => {
-                    // Any inbound frame (pong, binary, text we ignore)
-                    // proves the peer is alive: refresh the keepalive
-                    // deadline.
-                    last_inbound = tokio::time::Instant::now();
-                }
-                Some(Err(e)) => return Err(format!("ws recv: {e}")),
-                None => break,
-            },
-        }
-    }
-    // ADR-0141: release this connection's channel hold. When the last
-    // interactive watcher leaves, the session drops to Autonomous and any
-    // request parked since resolves by labeled policy instead of hanging.
-    let after_detach = bound.human_channel.detach();
-    let detached_session_id = bound.session.id().await;
-    tracing::info!(
-        session_id = %detached_session_id,
-        effective = ?after_detach,
-        "muta daemon: human channel released"
-    );
-    Ok(())
+
+    let (wire_sink, wire_source) = websocket_split(ws_stream);
+    handle_wire_stream(wire_sink, wire_source, registry, gate, listeners).await
 }
 
 /// Serve a host-observability client (ADR-0093): send one snapshot, then —
@@ -1199,17 +1201,17 @@ where
 /// *before* the snapshot is composed so an event published between the two
 /// cannot be lost (it arrives as a redundant diff, which consumers tolerate —
 /// updates are idempotent whole-row replacements).
-async fn run_monitor<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
-    mut ws_sink: futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
+async fn run_monitor(
+    mut wire_sink: BoxWireSink,
     registry: Arc<crate::registry::SessionRegistry>,
     action: MonitorAction,
     gate: Arc<ShutdownGate>,
 ) -> Result<(), String> {
     let mut rx = registry.subscribe_monitor();
     let snapshot = registry.monitor_snapshot(action).await;
-    send_monitor(&mut ws_sink, MonitorEvent::Snapshot(snapshot)).await?;
+    send_monitor(&mut wire_sink, MonitorEvent::Snapshot(snapshot)).await?;
     if !action.watch {
-        let _ = ws_sink.close().await;
+        let _ = wire_sink.close().await;
         return Ok(());
     }
     let drain = gate.triggered();
@@ -1220,8 +1222,8 @@ async fn run_monitor<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             // Watch clients get an explicit terminal signal instead of an
             // abrupt disconnect they might misread as a network fault.
             _ = &mut drain => {
-                send_monitor(&mut ws_sink, MonitorEvent::DaemonDraining).await?;
-                let _ = ws_sink.close().await;
+                send_monitor(&mut wire_sink, MonitorEvent::DaemonDraining).await?;
+                let _ = wire_sink.close().await;
                 return Ok(());
             }
             received = rx.recv() => {
@@ -1235,7 +1237,7 @@ async fn run_monitor<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                             "muta daemon: monitor client lagged, resyncing"
                         );
                         let snapshot = registry.monitor_snapshot(action).await;
-                        send_monitor(&mut ws_sink, MonitorEvent::Snapshot(snapshot)).await?;
+                        send_monitor(&mut wire_sink, MonitorEvent::Snapshot(snapshot)).await?;
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => return Ok(()),
@@ -1253,7 +1255,7 @@ async fn run_monitor<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                     | MonitorEvent::DaemonDraining => Some(event.clone()),
                 };
                 if let Some(event) = filtered {
-                    send_monitor(&mut ws_sink, event).await?;
+                    send_monitor(&mut wire_sink, event).await?;
                 }
             }
         }
@@ -1263,39 +1265,35 @@ async fn run_monitor<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 /// Send one monitor stream frame. Frames ride the `Wire::Monitor` envelope
 /// (ADR-0093 §4), so the client sees the same wire shape for the initial
 /// snapshot and every diff.
-async fn send_monitor<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
-    ws_sink: &mut futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
+async fn send_monitor(
+    wire_sink: &mut BoxWireSink,
     event: MonitorEvent,
 ) -> Result<(), String> {
-    let text = serde_json::to_string(&Wire::Monitor { event })
-        .map_err(|e| format!("serialize monitor event: {e}"))?;
-    ws_sink
-        .send(WsMessage::Text(text.into()))
+    wire_sink
+        .send(Wire::Monitor { event })
         .await
         .map_err(|e| format!("send monitor event: {e}"))
 }
 
-async fn send_error<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
-    ws_sink: &mut futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
+async fn send_error(
+    wire_sink: &mut BoxWireSink,
     message: &str,
 ) -> Result<(), String> {
-    send_error_with_code(ws_sink, message, None).await
+    send_error_with_code(wire_sink, message, None).await
 }
 
 /// `send_error` with a stable machine-readable `code` (ADR-0105) so clients
 /// can branch on the reason instead of string-sniffing the message.
-async fn send_error_with_code<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
-    ws_sink: &mut futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<S>, WsMessage>,
+async fn send_error_with_code(
+    wire_sink: &mut BoxWireSink,
     message: &str,
     code: Option<&str>,
 ) -> Result<(), String> {
-    let text = serde_json::to_string(&Wire::Error {
-        message: message.to_string(),
-        code: code.map(str::to_string),
-    })
-    .map_err(|e| format!("serialize error: {e}"))?;
-    ws_sink
-        .send(WsMessage::Text(text.into()))
+    wire_sink
+        .send(Wire::Error {
+            message: message.to_string(),
+            code: code.map(str::to_string),
+        })
         .await
         .map_err(|e| format!("send error: {e}"))
 }

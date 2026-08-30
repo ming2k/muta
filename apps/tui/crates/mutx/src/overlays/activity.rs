@@ -164,19 +164,6 @@ pub fn draw_activity_modal(
                 activity.to_string()
             };
             rows.push(body_row(&status_label, status_style));
-
-            if let Some(retry) = provider_retry.filter(|r| !r.failure.is_empty()) {
-                rows.push(SelectableRow::empty());
-                rows.push(SelectableRow::styled(
-                    "Last failure",
-                    Style::default()
-                        .fg(theme.warn())
-                        .add_modifier(Modifier::BOLD),
-                ));
-                for line in retry.failure.split('\n') {
-                    rows.push(body_row(line, Style::default().fg(theme.fg())));
-                }
-            }
         }
         crate::modal::ActivityTab::Todos => {
             if let Some(list) = todos.filter(|l| !l.items.is_empty()) {

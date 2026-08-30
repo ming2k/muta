@@ -11,7 +11,6 @@ use muta_runtime::registry::{HostedSession, SessionRegistry};
 use muta_runtime::serve::{self, AttachAction, Wire};
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 fn idle_base(id: String) -> muta_contracts::MonitoredSession {
     muta_contracts::MonitoredSession {
@@ -1163,13 +1162,11 @@ async fn native_local_ipc_serves_same_protocol_without_token() {
         assert_eq!(mode, 0o600, "socket must be 0600, got {mode:o}");
     }
 
-    // Full handshake over the native endpoint: monitor one-shot.
+    // Full handshake over the native endpoint: monitor one-shot (ADR-0158 native framed).
     let stream = muta_platform::ipc::connect(&endpoint).await.unwrap();
-    let request = "ws://localhost/".into_client_request().unwrap();
-    let (mut ws, _) = tokio_tungstenite::client_async(request, stream)
-        .await
-        .unwrap();
-    let select = serde_json::to_string(&Wire::Select {
+    let (mut wire_sink, mut wire_source) =
+        muta_runtime::wire_channel::native_framed_split(stream);
+    let select = Wire::Select {
         version: None,
         action: AttachAction::Monitor(MonitorAction {
             watch: false,
@@ -1178,16 +1175,14 @@ async fn native_local_ipc_serves_same_protocol_without_token() {
         project: None,
         posture: muta_contracts::human_request::HumanChannelPosture::Interactive,
         protocol: None,
-    })
-    .unwrap();
-    ws.send(WsMessage::Text(select.into())).await.unwrap();
-    let msg = tokio::time::timeout(Duration::from_secs(2), ws.next())
+    };
+    wire_sink.send(select).await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(2), wire_source.next())
         .await
         .unwrap()
         .unwrap()
         .unwrap();
-    let frame: Wire = serde_json::from_str(msg.to_text().unwrap_or("")).unwrap();
-    match frame {
+    match msg {
         Wire::Monitor {
             event: MonitorEvent::Snapshot(_),
         } => {}

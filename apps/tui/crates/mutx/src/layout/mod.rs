@@ -421,13 +421,15 @@ impl<'a, 'f> Stream<'a, 'f> {
         let _focused_notice = self.focused_target == Some(InteractiveTarget::notice(mi));
 
         let body_before = self.content_lines;
-        let skippable = msg.is_notice()
+        let skippable = (msg.is_notice() && !msg.is_provider_retry())
             || (!msg.is_runner_task()
                 && if msg.is_tool_step() {
                     !msg.tool_step_status()
                         .is_some_and(|status| status.is_running())
                 } else if msg.is_thinking() {
                     !msg.is_thinking_streaming()
+                } else if msg.is_provider_retry() {
+                    false
                 } else {
                     true
                 });

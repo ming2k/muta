@@ -743,6 +743,11 @@ pub async fn run_tui(
                             // the TUI's Context Usage modal now derives its
                             // rates from the token ledger instead.
                             let _ = summary;
+                            *provider_retry_clone.lock().await = None;
+                            {
+                                let mut msgs = buf.write().await;
+                                msgs.retain(|m| !m.is_provider_retry());
+                            }
                             outbox_signals_clone
                                 .lock()
                                 .await
@@ -755,8 +760,10 @@ pub async fn run_tui(
                             // shows when the stop happened. The reason label
                             // rides in the notice body; the transcript merge
                             // on resume renders the same row at its seam.
+                            *provider_retry_clone.lock().await = None;
                             let at_ms = record.at_ms;
                             let mut msgs = buf.write().await;
+                            msgs.retain(|m| !m.is_provider_retry());
                             msgs.push(
                                 TranscriptMessage::round_interrupted(record).with_sent_at_ms(at_ms),
                             );
@@ -1721,7 +1728,7 @@ pub async fn run_tui(
                                 attempt,
                                 max_attempts,
                                 retry_at,
-                                failure: message,
+                                failure: message.clone(),
                             });
                             if !routes_to_side {
                                 // Transport setback, not a workflow phase: the
@@ -1732,10 +1739,32 @@ pub async fn run_tui(
                                 *activity_clone.lock().await = Some(Phase::AwaitingModel);
                                 ir_clone.store(true, Ordering::SeqCst);
                             }
+                            {
+                                let mut msgs = buf.write().await;
+                                if let Some(last) = msgs.last_mut().filter(|m| m.is_provider_retry()) {
+                                    last.update_provider_retry(attempt, max_attempts, retry_at, message);
+                                } else {
+                                    let mut msg = TranscriptMessage::provider_retry(
+                                        attempt,
+                                        max_attempts,
+                                        retry_at,
+                                        message,
+                                    );
+                                    if let Some((round, turn)) =
+                                        positions_by_session.get(&session_id).copied()
+                                    {
+                                        msg.round = Some(round);
+                                        msg.turn = Some(turn);
+                                    }
+                                    msg = msg.with_sent_at_ms(event_loop::now_epoch_ms());
+                                    msgs.push(msg);
+                                }
+                            }
                         }
                         RoundEvent::Error(e) => {
                             let last_retry = provider_retry_clone.lock().await.take();
                             let mut msgs = buf.write().await;
+                            msgs.retain(|m| !m.is_provider_retry());
                             // A terminal round error may still carry the raw
                             // retryable-envelope encoding (e.g. a 429 that
                             // exhausted its retry budget): strip it so the
@@ -2469,10 +2498,11 @@ fn push_core_notice(messages: &mut Vec<TranscriptMessage>, notice: &muta_contrac
     );
 }
 
-/// Apply the visible transcript effect of a stream-start signal. The signal
-/// deliberately creates no message: transport lifecycle alone must not influence
-/// transcript geometry.
-fn begin_stream(_messages: &mut Vec<TranscriptMessage>) {}
+/// Apply the visible transcript effect of a stream-start signal. Retires any
+/// transient provider-retry notice entry when streaming commences.
+fn begin_stream(messages: &mut Vec<TranscriptMessage>) {
+    messages.retain(|m| !m.is_provider_retry());
+}
 
 /// Append a disclosed reasoning delta to the current turn's Thinking entry,
 /// creating the entry only when the first disclosed delta arrives (that
