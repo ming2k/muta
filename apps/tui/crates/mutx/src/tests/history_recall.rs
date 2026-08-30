@@ -468,16 +468,11 @@ fn history_insert_clears_search_query_buffer_and_places_entry() {
 
     // Simulate HistoryInsert action (Tab / Enter accept)
     let ranked = app.history_rows();
-    let pick = ranked.get(0).or_else(|| ranked.first());
+    let pick = ranked.first().or_else(|| ranked.first());
     assert!(pick.is_some());
     let (orig_idx, _) = *pick.unwrap();
     let text = app.input_history[orig_idx].text.clone();
-    app.adopt_as_draft(
-        text,
-        vec![],
-        vec![],
-        crate::app::DraftAdoption::Replace,
-    );
+    app.adopt_as_draft(text, vec![], vec![], crate::app::DraftAdoption::Replace);
     if let Some(state) = app
         .panels
         .states_mut(&crate::surfaces::PanelId::HistorySearch)

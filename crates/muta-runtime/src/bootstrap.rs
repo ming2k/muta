@@ -123,7 +123,6 @@ pub struct Bootstrap {
 }
 
 /// Ensure the four XDG application roots exist. Best-effort.
-
 pub fn ensure_app_roots() {
     let dirs = paths::get();
     for dir in [

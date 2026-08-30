@@ -177,20 +177,20 @@ pub fn split_line_col(s: &str) -> (&str, Option<&str>) {
     while i > 0 {
         i -= 1;
         if bytes[i] == b':' {
-            if col_pos.is_none() {
+            if let Some(cp) = col_pos {
+                if line_pos.is_none() {
+                    let seg = &s[i + 1..cp];
+                    if !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()) {
+                        line_pos = Some(i);
+                    }
+                    break;
+                }
+            } else {
                 // Check if segment after colon is all digits
                 let seg = &s[i + 1..];
                 if !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()) {
                     col_pos = Some(i);
                     continue;
-                } else {
-                    break;
-                }
-            } else if line_pos.is_none() {
-                let seg = &s[i + 1..col_pos.unwrap()];
-                if !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()) {
-                    line_pos = Some(i);
-                    break;
                 } else {
                     break;
                 }
@@ -210,15 +210,15 @@ pub fn split_line_col(s: &str) -> (&str, Option<&str>) {
 /// Convert an absolute path to be relative to `base_dir`, or relative to `$HOME` (`~`), or fallback.
 pub fn normalize_path_relative(path_str: &str, base_dir: Option<&Path>) -> String {
     let p = Path::new(path_str);
-    if let Some(base) = base_dir {
-        if p.is_absolute() && base.is_absolute() {
-            if let Ok(rel) = p.strip_prefix(base) {
-                if rel.as_os_str().is_empty() {
-                    return ".".to_string();
-                }
-                return rel.display().to_string();
-            }
+    if let Some(base) = base_dir
+        && p.is_absolute()
+        && base.is_absolute()
+        && let Ok(rel) = p.strip_prefix(base)
+    {
+        if rel.as_os_str().is_empty() {
+            return ".".to_string();
         }
+        return rel.display().to_string();
     }
 
     // Try tilde home shortening
@@ -228,15 +228,14 @@ pub fn normalize_path_relative(path_str: &str, base_dir: Option<&Path>) -> Strin
 /// Abbreviate an absolute path to `~`-rooted form if under user's home directory.
 pub fn tilde_shorten(path: &Path) -> String {
     let home = dirs::home_dir().or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-    if let Some(home) = home {
-        if path.starts_with(&home) {
-            if let Ok(rest) = path.strip_prefix(&home) {
-                if rest.as_os_str().is_empty() {
-                    return "~".to_string();
-                }
-                return PathBuf::from("~").join(rest).display().to_string();
-            }
+    if let Some(home) = home
+        && path.starts_with(&home)
+        && let Ok(rest) = path.strip_prefix(&home)
+    {
+        if rest.as_os_str().is_empty() {
+            return "~".to_string();
         }
+        return PathBuf::from("~").join(rest).display().to_string();
     }
     path.display().to_string()
 }
@@ -354,10 +353,9 @@ pub fn basename_only(path_str: &str) -> String {
 /// Extract direct parent and filename (e.g. `.../components/path.rs` or `components/path.rs`).
 pub fn basename_with_parent(path_str: &str) -> String {
     let (prefix, dirs, filename) = split_segments(path_str);
-    if dirs.is_empty() {
+    let Some(parent) = dirs.last() else {
         return format!("{}{}", prefix.unwrap_or(""), filename);
-    }
-    let parent = dirs.last().unwrap();
+    };
     if dirs.len() > 1 || prefix.is_some() {
         format!(".../{}/{}", parent, filename)
     } else {
@@ -411,9 +409,9 @@ pub fn middle_ellipsis_path(path_str: &str, max_width: usize) -> String {
         return path_str.to_string();
     }
 
-    // Try keeping first and last directory segment: `prefix + first + /.../ + last + / + filename`
-    let first = dirs.first().unwrap();
-    let last = dirs.last().unwrap();
+    let (Some(first), Some(last)) = (dirs.first(), dirs.last()) else {
+        return path_str.to_string();
+    };
     let p = prefix.unwrap_or("");
     let candidate = format!("{}{}/.../{}/{}", p, first, last, filename);
     if UnicodeWidthStr::width(candidate.as_str()) <= max_width {
@@ -507,18 +505,19 @@ pub fn middle_truncate_filename(filename: &str, max_width: usize) -> String {
     }
 
     // Split stem and ext
-    if let Some(dot_idx) = filename.rfind('.') {
-        if dot_idx > 0 && dot_idx < filename.len() - 1 {
-            let stem = &filename[..dot_idx];
-            let ext = &filename[dot_idx..]; // includes '.'
-            let ext_w = UnicodeWidthStr::width(ext);
+    if let Some(dot_idx) = filename.rfind('.')
+        && dot_idx > 0
+        && dot_idx < filename.len() - 1
+    {
+        let stem = &filename[..dot_idx];
+        let ext = &filename[dot_idx..]; // includes '.'
+        let ext_w = UnicodeWidthStr::width(ext);
 
-            // If we have room for at least 2 stem chars + ellipsis '…' + extension
-            if max_width > ext_w + 3 {
-                let stem_budget = max_width - ext_w;
-                let shortened_stem = truncate_middle(stem, stem_budget);
-                return format!("{}{}", shortened_stem, ext);
-            }
+        // If we have room for at least 2 stem chars + ellipsis '…' + extension
+        if max_width > ext_w + 3 {
+            let stem_budget = max_width - ext_w;
+            let shortened_stem = truncate_middle(stem, stem_budget);
+            return format!("{}{}", shortened_stem, ext);
         }
     }
 
@@ -642,10 +641,10 @@ fn render_semantic_spans(
         }
     }
 
-    if let Some(line_col) = line_col_part {
-        if !line_col.is_empty() {
-            spans.push(Span::styled(line_col.to_string(), line_col_style));
-        }
+    if let Some(line_col) = line_col_part
+        && !line_col.is_empty()
+    {
+        spans.push(Span::styled(line_col.to_string(), line_col_style));
     }
 
     spans

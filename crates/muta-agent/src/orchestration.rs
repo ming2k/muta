@@ -2392,6 +2392,17 @@ mod digest_tests {
         panic!("digest never landed");
     }
 
+    async fn await_title(session: &SessionStore) -> (Option<String>, bool) {
+        for _ in 0..200 {
+            let (title, manual) = session.title().await;
+            if title.is_some() {
+                return (title, manual);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        session.title().await
+    }
+
     /// The first-request trigger: a session with no digest gets one
     /// immediately, and the picker title mirrors it (not manual).
     #[tokio::test]
@@ -2415,7 +2426,7 @@ mod digest_tests {
         assert_eq!(digest.title, "Fixing the build");
         assert_eq!(digest.intent, "User wants CI green.");
         assert_eq!(digest.history.len(), 1);
-        let (title, manual) = session.title().await;
+        let (title, manual) = await_title(&session).await;
         assert_eq!(title.as_deref(), Some("Fixing the build"));
         assert!(!manual);
 

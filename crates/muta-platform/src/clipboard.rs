@@ -168,20 +168,19 @@ async fn read_text() -> Result<Option<String>, Box<dyn std::error::Error + Send 
 async fn read_image_bytes() -> Option<Vec<u8>> {
     #[cfg(target_os = "linux")]
     {
-        if let Some(bytes) = read_command_output("wl-paste", &["-t", "image/png"]).await {
-            if !bytes.is_empty() {
-                return Some(bytes);
-            }
+        if let Some(bytes) = read_command_output("wl-paste", &["-t", "image/png"]).await
+            && !bytes.is_empty()
+        {
+            return Some(bytes);
         }
         if let Some(bytes) = read_command_output(
             "xclip",
             &["-selection", "clipboard", "-t", "image/png", "-o"],
         )
         .await
+            && !bytes.is_empty()
         {
-            if !bytes.is_empty() {
-                return Some(bytes);
-            }
+            return Some(bytes);
         }
     }
     #[cfg(target_os = "macos")]
@@ -196,20 +195,19 @@ async fn read_image_bytes() -> Option<Vec<u8>> {
 async fn read_file_paths() -> Vec<PathBuf> {
     #[cfg(target_os = "linux")]
     {
-        if let Some(bytes) = read_command_output("wl-paste", &["-t", "text/uri-list"]).await {
-            if let Some(paths) = parse_uri_list(&String::from_utf8_lossy(&bytes)) {
-                return paths;
-            }
+        if let Some(bytes) = read_command_output("wl-paste", &["-t", "text/uri-list"]).await
+            && let Some(paths) = parse_uri_list(&String::from_utf8_lossy(&bytes))
+        {
+            return paths;
         }
         if let Some(bytes) = read_command_output(
             "xclip",
             &["-selection", "clipboard", "-t", "text/uri-list", "-o"],
         )
         .await
+            && let Some(paths) = parse_uri_list(&String::from_utf8_lossy(&bytes))
         {
-            if let Some(paths) = parse_uri_list(&String::from_utf8_lossy(&bytes)) {
-                return paths;
-            }
+            return paths;
         }
         for (command, args) in [
             ("wl-paste", &["-t", "x-special/gnome-copied-files"][..]),
@@ -224,10 +222,10 @@ async fn read_file_paths() -> Vec<PathBuf> {
                 ][..],
             ),
         ] {
-            if let Some(bytes) = read_command_output(command, args).await {
-                if let Some(paths) = parse_gnome_copied_files(&String::from_utf8_lossy(&bytes)) {
-                    return paths;
-                }
+            if let Some(bytes) = read_command_output(command, args).await
+                && let Some(paths) = parse_gnome_copied_files(&String::from_utf8_lossy(&bytes))
+            {
+                return paths;
             }
         }
     }

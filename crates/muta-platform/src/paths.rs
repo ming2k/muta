@@ -110,10 +110,10 @@ fn resolve_config_dir(app: &str) -> PathBuf {
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-            if !xdg.is_empty() {
-                return PathBuf::from(xdg).join(app);
-            }
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME")
+            && !xdg.is_empty()
+        {
+            return PathBuf::from(xdg).join(app);
         }
         if let Some(home) = dirs::home_dir() {
             return home.join(".config").join(app);
@@ -144,10 +144,10 @@ fn resolve_data_dir(app: &str) -> PathBuf {
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-            if !xdg.is_empty() {
-                return PathBuf::from(xdg).join(app);
-            }
+        if let Ok(xdg) = std::env::var("XDG_DATA_HOME")
+            && !xdg.is_empty()
+        {
+            return PathBuf::from(xdg).join(app);
         }
         if let Some(home) = dirs::home_dir() {
             return home.join(".local").join("share").join(app);
@@ -178,10 +178,10 @@ fn resolve_state_dir(app: &str) -> PathBuf {
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
-            if !xdg.is_empty() {
-                return PathBuf::from(xdg).join(app);
-            }
+        if let Ok(xdg) = std::env::var("XDG_STATE_HOME")
+            && !xdg.is_empty()
+        {
+            return PathBuf::from(xdg).join(app);
         }
         if let Some(home) = dirs::home_dir() {
             return home.join(".local").join("state").join(app);
@@ -212,10 +212,10 @@ fn resolve_cache_dir(app: &str) -> PathBuf {
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-            if !xdg.is_empty() {
-                return PathBuf::from(xdg).join(app);
-            }
+        if let Ok(xdg) = std::env::var("XDG_CACHE_HOME")
+            && !xdg.is_empty()
+        {
+            return PathBuf::from(xdg).join(app);
         }
         if let Some(home) = dirs::home_dir() {
             return home.join(".cache").join(app);
@@ -229,10 +229,10 @@ fn resolve_cache_dir(app: &str) -> PathBuf {
 fn resolve_runtime_dir(app: &str) -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
-            if !xdg.is_empty() {
-                return Some(PathBuf::from(xdg).join(app));
-            }
+        if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR")
+            && !xdg.is_empty()
+        {
+            return Some(PathBuf::from(xdg).join(app));
         }
     }
     let _ = app;

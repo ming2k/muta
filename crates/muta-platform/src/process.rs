@@ -513,7 +513,10 @@ mod native {
         ))
     }
 
-    pub(super) fn process_image_matches_path(_pid: u32, _expected: &std::path::Path) -> bool {
+    pub(super) fn native_process_image_matches_path(
+        _pid: u32,
+        _expected: &std::path::Path,
+    ) -> bool {
         true
     }
 }

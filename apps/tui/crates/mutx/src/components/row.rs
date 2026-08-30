@@ -126,8 +126,8 @@ enum Anchor {
 /// gaps, then placed according to its [`Anchor`].
 ///
 /// Atoms come in two flavors:
-/// - plain foreground-color text via [`Self::text`] / [`Self::glyph`] (the
-///   common case — the whole atom shares one color);
+/// - plain foreground-color text via [`Self::text`] (the common case — the
+///   whole atom shares one color);
 /// - pre-styled atoms via [`Self::styled`] for per-character styling such as
 ///   fuzzy-match highlighting.
 #[derive(Default)]

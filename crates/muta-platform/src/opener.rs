@@ -79,10 +79,10 @@ impl SystemOpener {
 
         #[cfg(target_os = "linux")]
         {
-            if is_wsl() {
-                if let Ok(outcome) = open_wsl(url) {
-                    return Ok(outcome);
-                }
+            if is_wsl()
+                && let Ok(outcome) = open_wsl(url)
+            {
+                return Ok(outcome);
             }
             if let Ok(outcome) = open_linux(url) {
                 return Ok(outcome);
@@ -123,12 +123,12 @@ impl SystemOpener {
 
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
-            if is_wsl() {
-                if let Ok(outcome) = open_wsl(&path_str) {
-                    return Ok(outcome);
-                }
+            if is_wsl()
+                && let Ok(outcome) = open_wsl(&path_str)
+            {
+                return Ok(outcome);
             }
-            return open_linux(&path_str);
+            open_linux(&path_str)
         }
     }
 }
@@ -242,7 +242,7 @@ fn open_wsl(target: &str) -> Result<OpenOutcome, OpenError> {
                 .stderr(Stdio::null())
                 .spawn()
         };
-        if let Ok(_) = res {
+        if res.is_ok() {
             return Ok(OpenOutcome::Launched {
                 launcher: cmd.to_string(),
             });
@@ -252,18 +252,17 @@ fn open_wsl(target: &str) -> Result<OpenOutcome, OpenError> {
 }
 
 fn open_linux(target: &str) -> Result<OpenOutcome, OpenError> {
-    if let Ok(browser) = std::env::var("BROWSER") {
-        if !browser.is_empty() {
-            if let Ok(_) = Command::new(&browser)
-                .arg(target)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-            {
-                return Ok(OpenOutcome::Launched { launcher: browser });
-            }
-        }
+    if let Ok(browser) = std::env::var("BROWSER")
+        && !browser.is_empty()
+        && Command::new(&browser)
+            .arg(target)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+    {
+        return Ok(OpenOutcome::Launched { launcher: browser });
     }
 
     let candidates = [
@@ -294,7 +293,7 @@ fn open_linux(target: &str) -> Result<OpenOutcome, OpenError> {
                 .stderr(Stdio::null())
                 .spawn()
         };
-        if let Ok(_) = res {
+        if res.is_ok() {
             return Ok(OpenOutcome::Launched {
                 launcher: candidate.into(),
             });

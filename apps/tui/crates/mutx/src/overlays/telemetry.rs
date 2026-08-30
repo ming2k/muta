@@ -779,10 +779,10 @@ fn build_overview_body(
             if let Some(tps) = att.preferred_tps() {
                 tps_values.push(tps);
             }
-            if let Some(perf) = &att.performance {
-                if let Some(ttft_us) = perf.ttft_us {
-                    ttft_values_ms.push(ttft_us as f64 / 1000.0);
-                }
+            if let Some(perf) = &att.performance
+                && let Some(ttft_us) = perf.ttft_us
+            {
+                ttft_values_ms.push(ttft_us as f64 / 1000.0);
             }
         }
     }
