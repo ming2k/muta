@@ -378,7 +378,7 @@ fn local_pair_compatible(
         // stale binary while every version signal says "equal". Different
         // version + in-window protocol = upgrade leftover: serve it.
         let same_version = version == Some(crate::serve::daemon_version());
-        return !(same_version && !daemon_image_is_current);
+        return !same_version || daemon_image_is_current;
     }
     // Legacy record: exact product-version equality (ADR-0100 rule 4),
     // `None` counting as a mismatch, plus the image check.

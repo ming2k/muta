@@ -297,7 +297,7 @@ pub(super) struct UiRuntime {
     pub harness: Arc<Mutex<HarnessSnapshot>>,
     /// Typed activity-bar phase (the single fold of wire `Activity` labels;
     /// `None` = idle/bar hidden). Never holds transport setbacks — those live
-    /// in [`Runtime::provider_retry`].
+    /// in [`UiRuntime::provider_retry`].
     pub phase: Arc<Mutex<Option<crate::phase::Phase>>>,
     /// Token-stall watch for the primary session: stamped by every
     /// `StreamDelta` / `StreamReasoningDelta`, armed per model-request

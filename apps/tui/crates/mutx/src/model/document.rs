@@ -2151,7 +2151,7 @@ impl TranscriptMessage {
     /// rather than an estimate. A finished trace settles into its final
     /// form and appends the duration (`Thinking · 1318 tokens · 2.4s`).
     ///
-    /// Above [`Self::STREAM_COUNT_QUANTUM`] tokens the streamed count is
+    /// Above `STREAM_COUNT_QUANTUM` tokens the streamed count is
     /// floored to a multiple of that quantum rather than reported exactly:
     /// the streaming summary repaints on every render heartbeat, and a
     /// per-token count would dirty the row for nearly every delta — the

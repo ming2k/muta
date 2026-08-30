@@ -609,6 +609,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_and_complete_process() {
+        if !muta_platform::workspace_sandbox::available() {
+            return;
+        }
         let mgr = BackgroundJobManager::new();
         let ws = std::env::temp_dir();
         let roots = vec![];
@@ -665,6 +668,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_kill_process() {
+        if !muta_platform::workspace_sandbox::available() {
+            return;
+        }
         let mgr = BackgroundJobManager::new();
         let ws = std::env::temp_dir();
         let roots = vec![];

@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Current wire protocol number (ADR-0134, ADR-0159).
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Minimum served wire protocol version.
 pub const MIN_PROTOCOL_VERSION: u32 = 1;
