@@ -834,18 +834,12 @@ impl RunnerTool {
         // interruption, a hard terminal error, or a non-retryable one.
         let retry_config = *self.retry_config.lock().unwrap_or_else(|e| e.into_inner());
         let retry_limit = retry_config.max_attempts.clamp(1, 60);
-        // Hidden-chain gate, computed once at the source. A hidden-chain model
-        // (GPT-5.x, `ReasoningSummary`) surfaces only a reasoning *summary*,
-        // never its full chain, so streaming it upward would disclose text the
-        // principal's live path also refuses to show (the TUI drops
-        // `StreamReasoningDelta` for such models at message creation). The
-        // runner shares the session's provider, so the parent's model is the
-        // runner's model. Unknown ids default to disclosed — mirroring the
-        // `model_by_id` (not `resolve`) rule of both TUI gates — so local and
-        // user-defined models that reason still stream their chains.
-        let hidden_chain = !muta_contracts::model_by_id(&self.provider.model())
-            .map(|model| model.thinking.chain_disclosed())
-            .unwrap_or(true);
+        // Hidden-chain gate, computed once at the source. Evaluated via
+        // `provider.model_capabilities().chain_disclosed()`, which incorporates the
+        // canonical three-layer resolution order (user overrides -> remote -> baseline).
+        // Models with undisclosed reasoning (e.g. `ReasoningSummary` like GPT-5.x)
+        // do not stream reasoning deltas upward.
+        let hidden_chain = !self.provider.model_capabilities().chain_disclosed();
         let short_id = call_id
             .map(|id| {
                 let clean = id.trim_start_matches("call_");

@@ -52,23 +52,33 @@ decoding or prompt templating — that is the runtime's job. For the mechanics
 of constrained decoding and chat templates, see
 [Guided decoding](guided-decoding.md).
 
-## Reasoning is a passthrough
+## Reasoning and Chain Disclosure
 
-The `reasoning_content` field that some models emit is not requested through
-an API flag. It is produced by the model weights (reasoning-tuned variants
-such as DeepSeek V4 thinking mode, Qwen reasoning models, GLM reasoning models)
-and passed through verbatim by the serving runtime as a sibling of `content`
-in the response object.
+The `reasoning_content` (or equivalent) field that some models emit is produced by the model weights (e.g. DeepSeek, Claude 3.7/Opus 4.7 adaptive thinking, GLM/Qwen reasoning models).
 
-muta never declares reasoning support and never sends a flag that would
-enable it. The streaming and non-streaming response parsers simply observe
-the field when it is present and forward it as a reasoning delta. A
-non-reasoning model produces no such events; no capability negotiation is
-involved.
+However, models differ in **chain disclosure**:
+- **Disclosed reasoning chains (`ThinkingSupport::ReasoningContent`, `AnthropicAdaptive`, etc.)**: The model outputs its complete, authentic chain of thought. muta streams and renders these full reasoning blocks in the TUI.
+- **Undisclosed / Summary-only reasoning (`ThinkingSupport::ReasoningSummary`)**: Some models (such as GPT-5.6 Sol / GPT-5.x) do not disclose their internal chain of thought over the API, returning only progress placeholders or brief summaries. To prevent creating empty or phantom thinking boxes that distort TUI layout, selection, and scroll math, muta gates undisclosed reasoning at message creation.
+- **Default for unknown models**: Unrecognized/custom models default to disclosed (`chain_disclosed = true`) so local or third-party reasoning models stream freely.
 
-This makes reasoning cheap to consume but also impossible to enable from the
-client side. Using a reasoning-tuned model variant (e.g. DeepSeek V4 with
-thinking mode enabled) is what turns reasoning on, not any muta setting.
+### Route-Level Capability Overrides
+
+Per ADR-0149, model capabilities resolve in three layers:
+1. **User Overrides** (`RouteSettings::capability_overrides`)
+2. **Remote Metadata** (Dynamic discovery)
+3. **Static Baseline Registry**
+
+Users can override thinking disclosure for any route in `config.toml`:
+
+```toml
+# Force thinking chain disclosure for a proxy that reveals internal reasoning
+[providers.my_proxy.routes."gpt-5.6-sol".overrides]
+thinking = "ReasoningContent"
+
+# Or suppress placeholders for a custom model that returns opaque summaries
+[providers.my_relay.routes."custom-model".overrides]
+thinking = "ReasoningSummary"
+```
 
 ## Streaming is a runtime contract
 

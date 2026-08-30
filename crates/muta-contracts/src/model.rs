@@ -292,6 +292,15 @@ impl ModelCapabilities {
     pub const fn reasoning(&self) -> bool {
         self.thinking.reasons()
     }
+
+    /// Whether the model's full reasoning chain is disclosed to the user.
+    ///
+    /// Returns `false` for [`ThinkingSupport::None`] (does not reason) and
+    /// [`ThinkingSupport::ReasoningSummary`] (hidden internal chain, returns only
+    /// summary/placeholder deltas).
+    pub const fn chain_disclosed(&self) -> bool {
+        self.thinking.chain_disclosed()
+    }
 }
 
 #[cfg(test)]
@@ -589,6 +598,31 @@ mod tests {
             .apply_overrides(&CapabilityOverrides::default());
         assert_eq!(caps, overridden);
         assert!(CapabilityOverrides::default().is_empty());
+    }
+
+    #[test]
+    fn user_thinking_override_controls_chain_disclosure() {
+        // baseline has ThinkingSupport::AnthropicAdaptive -> chain_disclosed = true
+        let caps = ModelCapabilities::for_channel("fixture-alpha", None);
+        assert!(caps.chain_disclosed());
+
+        // Override to ReasoningSummary -> chain_disclosed becomes false
+        let user_summary = CapabilityOverrides {
+            thinking: Some(ThinkingSupport::ReasoningSummary),
+            ..Default::default()
+        };
+        let caps_summary = caps.clone().apply_overrides(&user_summary);
+        assert!(caps_summary.reasoning());
+        assert!(!caps_summary.chain_disclosed());
+
+        // Override to ReasoningContent -> chain_disclosed becomes true
+        let user_disclosed = CapabilityOverrides {
+            thinking: Some(ThinkingSupport::ReasoningContent),
+            ..Default::default()
+        };
+        let caps_disclosed = caps.clone().apply_overrides(&user_disclosed);
+        assert!(caps_disclosed.reasoning());
+        assert!(caps_disclosed.chain_disclosed());
     }
 
     // Fixture baselines. Core's own tests must not depend on real vendor data
