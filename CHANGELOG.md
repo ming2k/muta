@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.37.19] - 2026-08-30
+## [0.37.20] - 2026-08-30
+
+### Documentation
+
+- Added naming origin (*\*mut-* root) and bathing otter mascot background in READMEs.
+
 
 ### Fixed
 
@@ -5729,7 +5734,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.19...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.37.20...HEAD
+[0.37.20]: https://github.com/ming2k/muta/compare/v0.37.19...v0.37.20
 [0.37.19]: https://github.com/ming2k/muta/compare/v0.37.18...v0.37.19
 [0.37.18]: https://github.com/ming2k/muta/compare/v0.37.17...v0.37.18
 [0.37.17]: https://github.com/ming2k/muta/compare/v0.37.16...v0.37.17
