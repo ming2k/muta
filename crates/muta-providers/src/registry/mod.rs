@@ -278,10 +278,9 @@ pub fn build_provider_for_channel(
             base_url,
             user_agent,
             effort,
-            project_id,
         } => {
             let capabilities = channel.capabilities();
-            let mut provider = GoogleProvider::with_credentials(
+            let provider = GoogleProvider::with_credentials(
                 credentials,
                 channel.model.clone(),
                 base_url,
@@ -290,9 +289,6 @@ pub fn build_provider_for_channel(
             .with_reasoning_effort(*effort)
             .with_model_capabilities(capabilities)
             .with_id(entry_id.to_string());
-            if let Some(pid) = project_id {
-                provider = provider.with_project_id(pid.clone());
-            }
             Arc::new(provider)
         }
         Transport::Anthropic {
@@ -379,7 +375,7 @@ pub fn build_provider_for_channel(
             base_url,
             user_agent,
             effort,
-            account_id,
+            chatgpt,
             copilot,
         } => {
             let capabilities = channel.capabilities();
@@ -390,11 +386,11 @@ pub fn build_provider_for_channel(
                 credentials,
                 channel.model.clone(),
                 base_url,
-                account_id.clone(),
             )
             .with_user_agent(user_agent)
             .with_reasoning_effort(effective_effort)
             .with_model_capabilities(capabilities)
+            .with_chatgpt(*chatgpt)
             .with_copilot(*copilot)
             .with_id(entry_id.to_string());
             Arc::new(provider)
@@ -559,11 +555,10 @@ mod build_tests {
                 effort: None,
                 copilot: false,
             },
-            api_key: "k".into(),
+            credentials: muta_contracts::static_credential("k"),
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
-            credentials: None,
         };
         let provider = build_provider_for_channel(&channel, "openai", None);
         assert_eq!(provider.provider_id(), "openai");
@@ -587,11 +582,10 @@ mod build_tests {
                 effort: None,
                 copilot: false,
             },
-            api_key: "k".into(),
+            credentials: muta_contracts::static_credential("k"),
             model: "glm-5.3".to_string(),
             remote: None,
             user_overrides: None,
-            credentials: None,
         };
         let provider = build_provider_for_channel(&channel, "zai-code", None);
         assert_eq!(provider.effort(), Some(muta_contracts::Effort::High));
@@ -619,11 +613,10 @@ mod build_tests {
                 effort: None,
                 copilot: false,
             },
-            api_key: "k".into(),
+            credentials: muta_contracts::static_credential("k"),
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
-            credentials: None,
         };
         let provider = build_provider_for_channel(&channel, "openai", None);
         assert_eq!(provider.effort(), None);
@@ -644,11 +637,10 @@ mod build_tests {
                 thinking: None,
                 copilot: false,
             },
-            api_key: "go-key".into(),
+            credentials: muta_contracts::static_credential("go-key"),
             model: "minimax-m3".to_string(),
             remote: None,
             user_overrides: None,
-            credentials: None,
         };
         let provider = build_provider_for_channel(&channel, "opencode-go", None);
         assert_eq!(provider.provider_id(), "opencode-go");

@@ -102,8 +102,17 @@ pub fn derive_channel(
         _ => ThinkingMode::Adaptive,
     });
 
-    let api_key = resolve_credential(connection, creds);
-    let oauth = oauth_ids(connection);
+    let credentials: std::sync::Arc<dyn muta_contracts::CredentialSource> =
+        if connection.auth.is_oauth() {
+            std::sync::Arc::new(muta_providers::oauth::OAuthCredentialSource::new(
+                &connection.id,
+                connection.preset_id.as_deref(),
+                connection.auth,
+            ))
+        } else {
+            let api_key = resolve_credential(connection, creds);
+            muta_contracts::static_credential(api_key)
+        };
 
     let transport = match connection.auth {
         ChannelAuth::ChatGptOAuth => Transport::OpenAiResponses {
@@ -116,7 +125,7 @@ pub fn derive_channel(
                 .clone()
                 .unwrap_or_else(|| connection.client_identity.user_agent().to_string()),
             effort,
-            account_id: oauth.0,
+            chatgpt: true,
             copilot: false,
         },
         ChannelAuth::CopilotOAuth => copilot_route(connection, remote.as_ref(), effort, thinking),
@@ -133,7 +142,6 @@ pub fn derive_channel(
                 }
             }),
             effort,
-            project_id: oauth.1,
         },
         _ => {
             let (transport, base_url, user_agent) = base_route(connection, model);
@@ -142,7 +150,6 @@ pub fn derive_channel(
                     base_url,
                     user_agent,
                     effort,
-                    project_id: None,
                 },
                 UserTransport::Anthropic => Transport::Anthropic {
                     base_url,
@@ -155,7 +162,7 @@ pub fn derive_channel(
                     base_url,
                     user_agent,
                     effort,
-                    account_id: None,
+                    chatgpt: false,
                     copilot: false,
                 },
                 UserTransport::OpenAi => Transport::OpenAi {
@@ -168,32 +175,16 @@ pub fn derive_channel(
         }
     };
 
-    let credentials: Option<std::sync::Arc<dyn muta_contracts::CredentialSource>> =
-        if connection.auth.is_oauth() {
-            Some(std::sync::Arc::new(
-                muta_providers::oauth::OAuthCredentialSource::new(
-                    &connection.id,
-                    connection.preset_id.as_deref(),
-                    connection.auth,
-                ),
-            ))
-        } else {
-            Some(std::sync::Arc::new(
-                muta_contracts::StaticCredentialSource::new(api_key.clone()),
-            ))
-        };
-
     Channel {
         id: model.to_string(),
         label: model.to_string(),
         transport,
-        api_key,
+        credentials,
         model: model.to_string(),
         remote,
         user_overrides: route_settings
             .and_then(|r| r.capability_overrides.clone())
             .filter(|o| !o.is_empty()),
-        credentials,
     }
 }
 
@@ -253,7 +244,7 @@ fn copilot_route(
             base_url: "https://api.githubcopilot.com/responses".to_string(),
             user_agent: ua(),
             effort,
-            account_id: None,
+            chatgpt: false,
             copilot: true,
         },
         Some(RemoteModelEndpoint::Messages) => Transport::Anthropic {
@@ -270,28 +261,6 @@ fn copilot_route(
             copilot: true,
         },
     }
-}
-
-/// The `(account_id, project_id)` claims an OAuth connection's token carries, if
-/// it is currently logged in. Empty for API-key connections.
-fn oauth_ids(connection: &Connection) -> (Option<String>, Option<String>) {
-    if !connection.auth.is_oauth() {
-        return (None, None);
-    }
-    let store = muta_providers::oauth::AuthStore::load();
-    store
-        .get_for_provider(
-            &connection.id,
-            connection.preset_id.as_deref(),
-            connection.auth,
-        )
-        .map(|t| {
-            (
-                t.account_id.clone(),
-                t.project_id.clone().or_else(|| t.account_id.clone()),
-            )
-        })
-        .unwrap_or_default()
 }
 
 /// Map a wire-protocol label to the persisted transport enum.

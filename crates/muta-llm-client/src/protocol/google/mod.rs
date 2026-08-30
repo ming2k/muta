@@ -89,14 +89,13 @@ impl GoogleProvider {
     ) -> Self {
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
-            endpoint: Endpoint {
-                credentials: muta_contracts::static_credential(api_key.clone()),
+            endpoint: Endpoint::from_static_key(
                 api_key,
                 model,
-                base_url: base_url.trim_end_matches('/').to_string(),
-                user_agent: user_agent.to_string(),
-                id: "google".to_string(),
-            },
+                base_url.trim_end_matches('/'),
+                "google",
+            )
+            .with_user_agent(user_agent),
             turn: TurnState::new(),
             client: Client::new(),
             last_thought_signatures: Arc::new(Mutex::new(Map::new())),
@@ -199,13 +198,9 @@ impl GoogleProvider {
         timeout: Option<std::time::Duration>,
     ) -> Result<reqwest::Response, String> {
         let client = self.client.http();
-        let api_key = self.endpoint.resolve_api_key().await?;
-        let (url, headers, body) = self.prepare_request_with_key(
-            request.clone(),
-            is_stream,
-            omit_thinking,
-            api_key.expose_secret(),
-        );
+        let auth = self.endpoint.resolve_auth().await?;
+        let (url, headers, body) =
+            self.prepare_request_for_auth(request.clone(), is_stream, omit_thinking, &auth);
 
         let mut req_builder = client.post(&url).headers(headers.clone()).json(&body);
         if let Some(t) = timeout {
@@ -221,12 +216,12 @@ impl GoogleProvider {
                 model = %self.endpoint.model,
                 "OAuth token rejected by Google (401 Unauthorized); attempting force-refresh and retry"
             );
-            if let Ok(refreshed_key) = self.endpoint.force_refresh_api_key().await {
-                let (retry_url, retry_headers, retry_body) = self.prepare_request_with_key(
+            if let Ok(refreshed_auth) = self.endpoint.force_refresh_auth().await {
+                let (retry_url, retry_headers, retry_body) = self.prepare_request_for_auth(
                     request.clone(),
                     is_stream,
                     omit_thinking,
-                    refreshed_key.expose_secret(),
+                    &refreshed_auth,
                 );
                 let mut retry_builder = client
                     .post(&retry_url)
@@ -396,21 +391,18 @@ impl GoogleProvider {
         is_stream: bool,
         omit_thinking: bool,
     ) -> (String, reqwest::header::HeaderMap, serde_json::Value) {
-        self.prepare_request_with_key(request, is_stream, omit_thinking, &self.endpoint.api_key)
+        let auth = muta_contracts::ResolvedAuth::default();
+        self.prepare_request_for_auth(request, is_stream, omit_thinking, &auth)
     }
 
-    fn prepare_request_with_key(
+    fn prepare_request_for_auth(
         &self,
         request: ModelRequest,
         is_stream: bool,
         omit_thinking: bool,
-        api_key: &str,
+        auth: &muta_contracts::ResolvedAuth,
     ) -> (String, reqwest::header::HeaderMap, serde_json::Value) {
-        let key = if !api_key.is_empty() {
-            api_key
-        } else {
-            &self.endpoint.api_key
-        };
+        let key = auth.token.expose_secret();
         let include_thoughts = self.capabilities.reasoning() && !omit_thinking;
         let thinking = if omit_thinking {
             None
@@ -474,7 +466,11 @@ impl GoogleProvider {
                 }
             }
 
-            let project = self.project_id.as_deref().unwrap_or("");
+            let project = auth
+                .project_id
+                .as_deref()
+                .or(self.project_id.as_deref())
+                .unwrap_or("");
             if project.is_empty() {
                 tracing::warn!(
                     model = %self.endpoint.model,

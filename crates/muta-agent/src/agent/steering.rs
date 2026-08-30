@@ -40,6 +40,22 @@ impl Agent {
         self.permissions.delegated()
     }
 
+    pub fn is_unconfined(&self) -> bool {
+        self.unconfined.is_unconfined()
+    }
+
+    pub fn set_unconfined(&self, unconfined: bool) {
+        self.unconfined.set_unconfined(unconfined);
+    }
+
+    pub fn shared_unconfined(&self) -> muta_contracts::SharedUnconfined {
+        self.unconfined.clone()
+    }
+
+    pub fn bind_shared_unconfined(&mut self, unconfined: muta_contracts::SharedUnconfined) {
+        self.unconfined = unconfined;
+    }
+
     /// ADR-0141: whether a human can currently answer this agent's parked
     /// requests. Interactive posture means yes; autonomous means no human
     /// is reachable and parked requests settle by labeled policy. With a

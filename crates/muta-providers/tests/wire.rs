@@ -16,7 +16,9 @@
 use futures::StreamExt;
 use mockito::{Matcher, Server};
 use muta_contracts::{Message, Provider, ProviderStreamEvent, Role, SecretString};
-use muta_providers::{AnthropicMessagesProvider, OpenAiChatCompletionsProvider};
+use muta_providers::{
+    AnthropicMessagesProvider, OpenAiChatCompletionsProvider, OpenAiResponsesProvider,
+};
 use serde_json::{Value, json};
 
 /// Join SSE `data:` events into a single response body. Each event becomes one
@@ -86,6 +88,66 @@ async fn openai_chat_completions_parses_content_reasoning_tool_calls_and_headers
     assert_eq!(calls[0].id, "call_1");
     assert_eq!(calls[0].name, "bash");
     assert_eq!(calls[0].arguments, r#"{"command":"ls"}"#);
+}
+
+#[derive(Debug)]
+struct MockOAuthSource {
+    auth: muta_contracts::ResolvedAuth,
+}
+
+impl muta_contracts::CredentialSource for MockOAuthSource {
+    fn resolve_auth<'a>(
+        &'a self,
+    ) -> futures::future::BoxFuture<'a, Result<muta_contracts::ResolvedAuth, String>> {
+        Box::pin(futures::future::ready(Ok(self.auth.clone())))
+    }
+
+    fn force_refresh<'a>(
+        &'a self,
+    ) -> futures::future::BoxFuture<'a, Result<muta_contracts::ResolvedAuth, String>> {
+        Box::pin(futures::future::ready(Ok(self.auth.clone())))
+    }
+
+    fn is_oauth(&self) -> bool {
+        true
+    }
+}
+
+#[tokio::test]
+async fn chatgpt_responses_resolves_credential_source_bearer_before_sending() {
+    let mut server = Server::new_async().await;
+    let url = format!("{}/backend-api/codex/responses", server.url());
+    let _mock = server
+        .mock("POST", "/backend-api/codex/responses")
+        .match_header("authorization", "Bearer live-oauth-token")
+        .match_header("chatgpt-account-id", "acct-test")
+        .match_header("originator", "muta")
+        .match_body(Matcher::PartialJson(json!({
+            "model": "gpt-5.6-sol",
+            "store": false,
+            "stream": false
+        })))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}"#,
+        )
+        .create_async()
+        .await;
+
+    let auth = muta_contracts::ResolvedAuth::new("live-oauth-token").with_account_id("acct-test");
+    let provider = OpenAiResponsesProvider::with_credentials(
+        std::sync::Arc::new(MockOAuthSource { auth }),
+        "gpt-5.6-sol".to_string(),
+        &url,
+    )
+    .with_chatgpt(true);
+    let message = provider
+        .chat(vec![Message::new(Role::User, "hi")].into())
+        .await
+        .expect("credential-source bearer should reach the ChatGPT backend");
+
+    assert_eq!(message.content, "ok");
 }
 
 #[tokio::test]
@@ -496,11 +558,10 @@ async fn factory_publishes_explicit_high_effort() {
             thinking: None,
             copilot: false,
         },
-        api_key: "k".into(),
+        credentials: muta_contracts::static_credential("k"),
         model: "claude-opus-4-8".into(),
         remote: None,
         user_overrides: None,
-        credentials: None,
     };
     assert_factory_body(channel, json!({ "output_config": { "effort": "high" } })).await;
 }
@@ -524,11 +585,10 @@ async fn factory_keeps_effort_decoupled_from_thinking_off() {
             thinking: Some(ThinkingMode::Off),
             copilot: false,
         },
-        api_key: "k".into(),
+        credentials: muta_contracts::static_credential("k"),
         model: "claude-opus-4-8".into(),
         remote: None,
         user_overrides: None,
-        credentials: None,
     };
     // The request publishes the effort override; the absence of a `thinking`
     // field is verified by the companion unit test.
@@ -549,11 +609,10 @@ async fn factory_publishes_thinking_without_output_config() {
             thinking: Some(ThinkingMode::Adaptive),
             copilot: false,
         },
-        api_key: "k".into(),
+        credentials: muta_contracts::static_credential("k"),
         model: "claude-opus-4-8".into(),
         remote: None,
         user_overrides: None,
-        credentials: None,
     };
     assert_factory_body(
         channel,
@@ -579,11 +638,10 @@ async fn sonnet5_opt_out_emits_explicit_disabled() {
             thinking: Some(ThinkingMode::Off),
             copilot: false,
         },
-        api_key: "k".into(),
+        credentials: muta_contracts::static_credential("k"),
         model: "claude-sonnet-5".into(),
         remote: None,
         user_overrides: None,
-        credentials: None,
     };
     assert_factory_body(
         channel,
@@ -609,11 +667,10 @@ async fn sonnet5_opt_in_publishes_adaptive_and_full_effort_range() {
             thinking: Some(ThinkingMode::Adaptive),
             copilot: false,
         },
-        api_key: "k".into(),
+        credentials: muta_contracts::static_credential("k"),
         model: "claude-sonnet-5".into(),
         remote: None,
         user_overrides: None,
-        credentials: None,
     };
     assert_factory_body(
         channel,
@@ -640,11 +697,10 @@ async fn fable5_always_on_thinking_ignores_off_override() {
             thinking: Some(ThinkingMode::Off),
             copilot: false,
         },
-        api_key: "k".into(),
+        credentials: muta_contracts::static_credential("k"),
         model: "claude-fable-5".into(),
         remote: None,
         user_overrides: None,
-        credentials: None,
     };
     assert_factory_body(
         channel,
@@ -655,7 +711,7 @@ async fn fable5_always_on_thinking_ignores_off_override() {
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Live model-list discovery (list_models)
-// ═════════════════════════════════════════════════════════ Alternate */
+// ═════════════════════════════════════════════════════════════════════════════
 //
 // The in-module unit tests cover the pure parsers + endpoint derivation; these
 // wire tests stand up a localhost mock and drive the full GET → JSON → parse

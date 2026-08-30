@@ -207,6 +207,8 @@ pub struct Agent {
     /// Workspace authority is orthogonal to interaction posture. Shared with
     /// spawned runners so delegation cannot silently widen the parent's grant.
     workspace_security: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
+    /// Session-scoped workspace confinement bypass handle.
+    unconfined: muta_contracts::SharedUnconfined,
     /// Content-attested project instructions from the Rules asset domain.
     /// Replaced live when `/trust` or `/untrust` changes admission.
     project_rules: Arc<std::sync::RwLock<String>>,

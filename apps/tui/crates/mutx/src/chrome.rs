@@ -1219,28 +1219,9 @@ pub fn draw_model_bar(
 }
 
 /// Abbreviate an absolute path to its native `~`-relative form so the workspace reads as a
-/// short, glanceable label. Falls back to the literal path when no home
-/// directory is known or the path is outside it. Mirrors the home-resolution
-/// pattern the `~/` mention-completion query parser uses, in reverse.
+/// short, glanceable label. Delegated to unified `tilde_shorten`.
 pub(crate) fn tilde_home(path: &std::path::Path) -> String {
-    let home = dirs::home_dir().or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from));
-    if let Some(home) = home {
-        // `strip_prefix` is infallible once `starts_with` has confirmed the
-        // prefix; the `.ok()` swallows the statically-unreachable `Err`.
-        if path.starts_with(&home) {
-            let rest = path.strip_prefix(&home).ok();
-            return match rest {
-                Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-                Some(rest) => std::path::PathBuf::from("~")
-                    .join(rest)
-                    .display()
-                    .to_string(),
-                // Unreachable: starts_with was just checked.
-                None => path.display().to_string(),
-            };
-        }
-    }
-    path.display().to_string()
+    crate::components::path::tilde_shorten(path)
 }
 
 /// One queued outbox item projected for the [`QueueBarView`] / queue modal. It

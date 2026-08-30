@@ -40,6 +40,7 @@ pub struct HostedSession {
     pub req_tx: mpsc::UnboundedSender<AgentRequest>,
     pub events: broadcast::Sender<AgentResponse>,
     pub cancel: CancellationToken,
+    pub shared_unconfined: muta_contracts::SharedUnconfined,
     /// The panel-facing tracker folding this session's event stream
     /// (ADR-0093). Owned here so the broadcast-tap task can fold events in
     /// and the registry can read rows out for snapshots.
@@ -102,6 +103,7 @@ pub struct BoundSession {
     /// value before parking any human request.
     pub human_channel: Arc<muta_contracts::human_request::HumanChannelAccountant>,
     pub session: Arc<SessionStore>,
+    pub shared_unconfined: muta_contracts::SharedUnconfined,
     pub req_tx: mpsc::UnboundedSender<AgentRequest>,
     pub events: broadcast::Sender<AgentResponse>,
     /// Attach-time state-sync events buffered for this session (see
@@ -783,6 +785,7 @@ impl SessionRegistry {
             project_root: entry.project_root.clone(),
             human_channel: entry.human_channel.clone(),
             session: entry.session.clone(),
+            shared_unconfined: entry.shared_unconfined.clone(),
             req_tx: entry.req_tx.clone(),
             events: entry.events.clone(),
             sync_buffer: entry.sync_buffer.clone(),
@@ -1104,6 +1107,7 @@ impl SessionRegistry {
             project_root: project_root.clone(),
             human_channel: human_channel.clone(),
             session: session.clone(),
+            shared_unconfined: boot.shared_unconfined.clone(),
             req_tx: req_tx.clone(),
             events: events_tx.clone(),
             sync_buffer: sync_buffer.clone(),
@@ -1115,6 +1119,7 @@ impl SessionRegistry {
             human_channel,
             security: boot.security.clone(),
             session,
+            shared_unconfined: boot.shared_unconfined,
             req_tx,
             events: events_tx,
             cancel,
@@ -1143,6 +1148,7 @@ impl SessionRegistry {
             project_root: e.project_root.clone(),
             human_channel: e.human_channel.clone(),
             session: e.session.clone(),
+            shared_unconfined: e.shared_unconfined.clone(),
             req_tx: e.req_tx.clone(),
             events: e.events.clone(),
             sync_buffer: e.sync_buffer.clone(),

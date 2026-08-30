@@ -357,13 +357,11 @@ fn channel_model_info_effort_ladders_survive() {
             base_url: "https://cloudcode-pa.googleapis.com".to_string(),
             user_agent: "antigravity/1.23.2 windows/amd64".to_string(),
             effort: None,
-            project_id: None,
         },
-        api_key: "".into(),
+        credentials: muta_contracts::static_credential(""),
         model: "gemini-3.7-flash".to_string(),
         remote: None,
         user_overrides: None,
-        credentials: None,
     };
     let info = channel_model_info(&gemini37);
     assert_eq!(info.protocol, "google");

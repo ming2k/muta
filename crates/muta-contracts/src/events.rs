@@ -1229,6 +1229,11 @@ pub enum RoundEvent {
     /// the TUI can refresh its badge without waiting for the next harness snapshot.
     #[serde(alias = "YoloChanged", alias = "AutopilotChanged")]
     DelegatedChanged(bool),
+    /// The workspace confinement (jail) toggle changed. `true` = unconfined
+    /// (jail OFF / sandbox bypassed). Emitted by `/jail` so the TUI can refresh its
+    /// badge without waiting for the next harness snapshot.
+    #[serde(alias = "JailChanged")]
+    UnconfinedChanged(bool),
     RetryScheduled {
         attempt: usize,
         max_attempts: usize,
@@ -1376,6 +1381,11 @@ pub struct HarnessSnapshot {
     /// visible badge so the elevated state is never silent.
     #[serde(default, alias = "yolo", alias = "autopilot")]
     pub delegated: bool,
+    /// Whether workspace filesystem confinement (jail) is bypassed this session
+    /// (`/jail off`). The TUI mirrors this into an `UNCONFINED` badge so the
+    /// elevated filesystem access is never silent.
+    #[serde(default, alias = "jail_disabled")]
+    pub unconfined: bool,
     /// Workspace authority is independent from the attended/delegated posture.
     /// Frontends surface this state continuously so authority is never implicit.
     #[serde(default)]
@@ -1781,6 +1791,9 @@ pub enum AgentEvent {
     /// The delegated-autonomous toggle changed (via `/delegate`).
     #[serde(alias = "YoloChanged", alias = "AutopilotChanged")]
     DelegatedChanged(bool),
+    /// The unconfined (jail bypass) toggle changed (via `/jail`).
+    #[serde(alias = "JailChanged")]
+    UnconfinedChanged(bool),
     PermissionRequest(PermissionRequest),
     UserQuestionRequest(UserQuestionRequest),
     /// An interactive `bash` command needs a line of stdin from the operator.

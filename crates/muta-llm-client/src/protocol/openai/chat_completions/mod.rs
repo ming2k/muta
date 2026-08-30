@@ -16,10 +16,14 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use muta_contracts::{Effort, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
+use muta_contracts::{
+    CredentialSource, Effort, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent,
+    ResolvedAuth,
+};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use crate::transport::{decode_response_json, ensure_success, transport_error};
 use crate::{Client, Endpoint, TurnState};
 
 pub mod echo;
@@ -71,7 +75,8 @@ impl OpenAiChatCompletionsProvider {
     ) -> Self {
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
-            endpoint: Endpoint::new(api_key, model, base_url, "openai").with_user_agent(user_agent),
+            endpoint: Endpoint::from_static_key(api_key, model, base_url, "openai")
+                .with_user_agent(user_agent),
             turn: TurnState::new(),
             client: Client::new(),
             reasoning_effort: None,
@@ -83,7 +88,7 @@ impl OpenAiChatCompletionsProvider {
 
     /// Build a provider with dynamic credentials.
     pub fn with_credentials(
-        credentials: std::sync::Arc<dyn muta_contracts::CredentialSource>,
+        credentials: std::sync::Arc<dyn CredentialSource>,
         model: String,
         base_url: &str,
         user_agent: &str,
@@ -149,18 +154,19 @@ impl OpenAiChatCompletionsProvider {
         if self.copilot { "Copilot" } else { "OpenAI" }
     }
 
-    // Accessors (base_url / model_id / user_agent / api_key / id) are forwarded
-    // from the embedded [`Endpoint`]; see `self.endpoint.*`.
-
     /// Apply the per-request auth + user-agent headers to a request builder.
-    fn build_request(&self, body: &serde_json::Value) -> reqwest::RequestBuilder {
+    fn build_request_for_auth(
+        &self,
+        body: &serde_json::Value,
+        auth: &ResolvedAuth,
+    ) -> reqwest::RequestBuilder {
         let mut req = self
             .client
             .http()
             .post(self.endpoint.base_url())
             .header(reqwest::header::USER_AGENT, self.endpoint.user_agent())
             .json(body);
-        for (name, value) in request::headers(self.endpoint.api_key(), self.copilot) {
+        for (name, value) in request::headers(auth.token.expose_secret(), self.copilot) {
             req = req.header(name, value);
         }
         for (name, value) in self.endpoint.client_identity().headers() {
@@ -173,6 +179,44 @@ impl OpenAiChatCompletionsProvider {
             }
         }
         req
+    }
+
+    /// Send a request with automatic token resolution, timeout stamping,
+    /// and reactive force-refresh on HTTP 401 Unauthorized for OAuth channels.
+    async fn send_request(
+        &self,
+        body: &serde_json::Value,
+        is_stream: bool,
+    ) -> Result<reqwest::Response, String> {
+        let auth = self.endpoint.resolve_auth().await?;
+        let mut req = self.build_request_for_auth(body, &auth);
+        if !is_stream {
+            req = req.timeout(self.client.request_timeout());
+        }
+        let response = req
+            .send()
+            .await
+            .map_err(|error| transport_error(self.label(), error))?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
+            tracing::warn!(
+                provider = %self.endpoint.id,
+                model = %self.endpoint.model,
+                "OAuth token rejected by {} (401 Unauthorized); attempting force-refresh and retry",
+                self.label()
+            );
+            if let Ok(refreshed_auth) = self.endpoint.force_refresh_auth().await {
+                let mut retry_req = self.build_request_for_auth(body, &refreshed_auth);
+                if !is_stream {
+                    retry_req = retry_req.timeout(self.client.request_timeout());
+                }
+                if let Ok(retried_resp) = retry_req.send().await {
+                    return ensure_success(retried_resp, self.label()).await;
+                }
+            }
+        }
+
+        ensure_success(response, self.label()).await
     }
 }
 
@@ -228,10 +272,8 @@ impl Provider for OpenAiChatCompletionsProvider {
         );
 
         let label = self.label();
-        let response_json: serde_json::Value = self
-            .client
-            .send_json(self.build_request(&body), label)
-            .await?;
+        let resp = self.send_request(&body, false).await?;
+        let response_json: serde_json::Value = decode_response_json(resp, label).await?;
 
         if let Some(err) = response_json.get("error") {
             return Err(format!("{label} Error: {}", err));
@@ -275,10 +317,7 @@ impl Provider for OpenAiChatCompletionsProvider {
             &self.capabilities,
         );
 
-        let response = self
-            .client
-            .send(self.build_request(&body), self.label())
-            .await?;
+        let response = self.send_request(&body, true).await?;
 
         let stream = crate::sse::data_payloads(response, self.label()).map(|item| {
             let data = item?;
@@ -305,10 +344,7 @@ impl Provider for OpenAiChatCompletionsProvider {
             &self.capabilities,
         );
 
-        let response = self
-            .client
-            .send(self.build_request(&body), self.label())
-            .await?;
+        let response = self.send_request(&body, true).await?;
 
         // Tool-call echo filter shared between the body and the end-of-stream
         // flush: it suppresses any content that mirrors a native tool call

@@ -317,6 +317,7 @@ pub async fn run_tui(
         loop_status: LoopStatus::Idle,
         round_counter: initial_round_count,
         delegated: false,
+        unconfined: false,
         workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
         retry_pending: false,
     }));
@@ -1717,6 +1718,11 @@ pub async fn run_tui(
                                 harness_clone.lock().await.delegated = enabled;
                             }
                         }
+                        RoundEvent::UnconfinedChanged(enabled) => {
+                            if !routes_to_side {
+                                harness_clone.lock().await.unconfined = enabled;
+                            }
+                        }
                         RoundEvent::RetryScheduled {
                             attempt,
                             max_attempts,
@@ -2255,6 +2261,7 @@ pub async fn run_tui(
         pulse: crate::pulse::TokenWatch::default(),
         provider_retry: None,
         delegated: false,
+        unconfined: false,
         todos: None,
         round_count: 0,
         current_turn: 0,

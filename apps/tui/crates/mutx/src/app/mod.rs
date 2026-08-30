@@ -617,6 +617,9 @@ pub struct App {
     /// Whether all tool permissions are auto-approved this session
     /// (`--delegate` / `/delegate on`). Mirrored from the harness snapshot.
     pub delegated: bool,
+    /// Whether workspace filesystem confinement is bypassed this session
+    /// (`/jail off`). Mirrored from the harness snapshot.
+    pub unconfined: bool,
     /// Unified task list, mirrored from `AgentResponse::TodosUpdated`. Shown
     /// inside the Activity modal (and no longer pinned above the input box) so
     /// the footer reclaims the vertical space. `None` (or an empty list)

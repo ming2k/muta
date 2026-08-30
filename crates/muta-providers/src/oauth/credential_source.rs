@@ -4,13 +4,14 @@ use super::OAuth;
 use super::config::config_by_provider_id;
 use super::store::AuthStore;
 use futures::future::BoxFuture;
-use muta_contracts::{ChannelAuth, CredentialSource, SecretString};
+use muta_contracts::{ChannelAuth, CredentialSource, ResolvedAuth};
 use std::fmt;
 use std::sync::Arc;
 
 /// Dynamic OAuth token source for a provider connection.
 ///
-/// Lazily and concurrency-safely resolves fresh access tokens, refreshing ahead of expiry
+/// Lazily and concurrency-safely resolves fresh access tokens and associated
+/// metadata (account id, project id, email), refreshing ahead of expiry
 /// and persisting newly minted tokens to `~/.muta/auth.toml`.
 pub struct OAuthCredentialSource {
     pub provider_id: String,
@@ -56,7 +57,7 @@ impl fmt::Debug for OAuthCredentialSource {
 }
 
 impl CredentialSource for OAuthCredentialSource {
-    fn resolve_token<'a>(&'a self) -> BoxFuture<'a, Result<SecretString, String>> {
+    fn resolve_auth<'a>(&'a self) -> BoxFuture<'a, Result<ResolvedAuth, String>> {
         Box::pin(async move {
             let Some(oauth) = &self.oauth else {
                 return Err(format!(
@@ -79,11 +80,19 @@ impl CredentialSource for OAuthCredentialSource {
             match oauth.resolve_access_token(stored).await {
                 Ok((access, tokens)) => {
                     let mut current_store = AuthStore::load();
-                    current_store.set(&self.provider_id, tokens);
+                    current_store.set(&self.provider_id, tokens.clone());
                     if let Err(e) = current_store.save() {
                         tracing::warn!(error = %e, provider = %self.provider_id, "could not save refreshed auth tokens");
                     }
-                    Ok(access)
+                    Ok(ResolvedAuth {
+                        token: access,
+                        account_id: tokens.account_id.clone(),
+                        project_id: tokens
+                            .project_id
+                            .clone()
+                            .or_else(|| tokens.account_id.clone()),
+                        user_email: tokens.user_email.clone(),
+                    })
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, provider = %self.provider_id, "OAuth token resolution failed");
@@ -102,7 +111,7 @@ impl CredentialSource for OAuthCredentialSource {
         })
     }
 
-    fn force_refresh<'a>(&'a self) -> BoxFuture<'a, Result<SecretString, String>> {
+    fn force_refresh<'a>(&'a self) -> BoxFuture<'a, Result<ResolvedAuth, String>> {
         Box::pin(async move {
             let Some(oauth) = &self.oauth else {
                 return Err(format!(
@@ -125,11 +134,19 @@ impl CredentialSource for OAuthCredentialSource {
             match oauth.force_resolve_access_token(stored).await {
                 Ok((access, tokens)) => {
                     let mut current_store = AuthStore::load();
-                    current_store.set(&self.provider_id, tokens);
+                    current_store.set(&self.provider_id, tokens.clone());
                     if let Err(e) = current_store.save() {
                         tracing::warn!(error = %e, provider = %self.provider_id, "could not save refreshed auth tokens");
                     }
-                    Ok(access)
+                    Ok(ResolvedAuth {
+                        token: access,
+                        account_id: tokens.account_id.clone(),
+                        project_id: tokens
+                            .project_id
+                            .clone()
+                            .or_else(|| tokens.account_id.clone()),
+                        user_email: tokens.user_email.clone(),
+                    })
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, provider = %self.provider_id, "OAuth force token refresh failed");

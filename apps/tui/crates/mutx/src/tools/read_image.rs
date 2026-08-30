@@ -1,13 +1,14 @@
 //! Presenter for `read_image`.
 
 use super::{ToolPresenter, ToolView};
+use crate::components::path::PathView;
 
 pub struct ReadImagePresenter;
 
 impl ToolPresenter for ReadImagePresenter {
     fn summary(&self, view: &ToolView) -> String {
         view.str("path")
-            .map(|path| format!("Read image {}", path))
+            .map(|path| format!("Read image {}", PathView::from_str(path).format_text()))
             .unwrap_or_else(|| "Read image".to_string())
     }
     // `result_kind` defaults to `Code`, which renders the model-facing

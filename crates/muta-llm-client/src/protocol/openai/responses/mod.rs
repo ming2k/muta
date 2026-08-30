@@ -3,13 +3,11 @@
 //!
 //! Unlike the chat-completions [`OpenAiChatCompletionsProvider`](crate::OpenAiChatCompletionsProvider),
 //! this provider:
-//! - sends the OAuth access token as the bearer (not an API key),
-//! - attaches the optional `ChatGPT-Account-Id` header,
+//! - sends dynamic OAuth credentials or static tokens,
+//! - attaches the optional `ChatGPT-Account-Id` header for ChatGPT subscriptions,
 //! - builds a Responses request (`instructions` + `input` items) and parses
-//!   `response.*` streaming events.
-//!
-//! The pure request/response mechanics live in [`request`] and [`response`];
-//! this file is the executor + `Provider` impl.
+//!   `response.*` streaming events,
+//! - supports self-healing reactive force-refresh on HTTP 401 Unauthorized for OAuth channels.
 
 pub mod request;
 pub mod response;
@@ -18,10 +16,12 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use muta_contracts::{
-    Effort, Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent,
+    CredentialSource, Effort, Message, ModelRequest, Provider, ProviderPromptHints,
+    ProviderStreamEvent, ResolvedAuth,
 };
 use std::sync::{Arc, Mutex};
 
+use crate::transport::{decode_response_json, ensure_success, transport_error};
 use crate::{Client, Endpoint, TurnState};
 
 /// OpenAI Responses-API provider (ChatGPT subscription backend).
@@ -29,16 +29,15 @@ pub struct OpenAiResponsesProvider {
     pub endpoint: Endpoint,
     pub turn: TurnState,
     pub reasoning_effort: Option<Effort>,
-    /// The ChatGPT account id, sent as `ChatGPT-Account-Id`. `None` is valid
-    /// for single-account users (the header is simply omitted).
-    pub account_id: Option<String>,
     /// Channel-scoped capability view. A trusted remote catalogue overrides the
     /// static baseline only for this provider/model route.
     pub capabilities: muta_contracts::ModelCapabilities,
+    /// When `true`, attach ChatGPT subscription headers (`originator: muta` and
+    /// `ChatGPT-Account-Id`).
+    pub chatgpt: bool,
     /// When `true`, inject GitHub Copilot's required per-request headers
     /// (`x-initiator`, `Openai-Intent`, `X-GitHub-Api-Version`, and
-    /// `Copilot-Vision-Request` for vision turns) instead of the ChatGPT
-    /// account-id header. Flipped on by the catalog for Copilot OAuth channels.
+    /// `Copilot-Vision-Request` for vision turns).
     pub copilot: bool,
     /// Pooled HTTP client reused across every request this provider makes.
     pub client: Client,
@@ -46,29 +45,9 @@ pub struct OpenAiResponsesProvider {
 
 impl OpenAiResponsesProvider {
     pub fn new(
-        access_token: String,
+        credentials: std::sync::Arc<dyn CredentialSource>,
         model: String,
         base_url: &str,
-        account_id: Option<String>,
-    ) -> Self {
-        let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
-        Self {
-            endpoint: Endpoint::new(access_token, model, base_url, "chatgpt"),
-            turn: TurnState::new(),
-            client: Client::new(),
-            reasoning_effort: None,
-            account_id,
-            capabilities,
-            copilot: false,
-        }
-    }
-
-    /// Build a provider with dynamic credentials.
-    pub fn with_credentials(
-        credentials: std::sync::Arc<dyn muta_contracts::CredentialSource>,
-        model: String,
-        base_url: &str,
-        account_id: Option<String>,
     ) -> Self {
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
@@ -76,10 +55,24 @@ impl OpenAiResponsesProvider {
             turn: TurnState::new(),
             client: Client::new(),
             reasoning_effort: None,
-            account_id,
             capabilities,
+            chatgpt: false,
             copilot: false,
         }
+    }
+
+    /// Build a provider with static API key string.
+    pub fn from_static_key(api_key: String, model: String, base_url: &str) -> Self {
+        Self::new(muta_contracts::static_credential(api_key), model, base_url)
+    }
+
+    /// Build a provider with dynamic credentials.
+    pub fn with_credentials(
+        credentials: std::sync::Arc<dyn CredentialSource>,
+        model: String,
+        base_url: &str,
+    ) -> Self {
+        Self::new(credentials, model, base_url)
     }
 
     pub fn with_user_agent(mut self, user_agent: &str) -> Self {
@@ -106,33 +99,35 @@ impl OpenAiResponsesProvider {
         self
     }
 
-    /// Flip on Copilot-mode request headers (see [`Self::copilot`]).
+    /// Enable ChatGPT subscription headers (`originator: muta` and `ChatGPT-Account-Id`).
+    pub fn with_chatgpt(mut self, chatgpt: bool) -> Self {
+        self.chatgpt = chatgpt;
+        self
+    }
+
+    /// Flip on Copilot-mode request headers.
     pub fn with_copilot(mut self, copilot: bool) -> Self {
         self.copilot = copilot;
         self
     }
 
-    /// Human-readable backend label for error messages and logs. The Responses
-    /// provider serves two distinct backends behind one wire format — the
-    /// ChatGPT subscription backend and the GitHub Copilot backend — and
-    /// surfacing the right name in errors (e.g. "Copilot HTTP 400" vs
-    /// "ChatGPT HTTP 400") is essential for diagnosing which one rejected a
-    /// request.
+    /// Human-readable backend label for error messages and logs.
     fn label(&self) -> &'static str {
-        if self.copilot { "Copilot" } else { "ChatGPT" }
+        if self.copilot {
+            "Copilot"
+        } else if self.chatgpt {
+            "ChatGPT"
+        } else {
+            "OpenAI Responses"
+        }
     }
 
-    /// Apply the per-request auth + user-agent headers. In Copilot mode the
-    /// header set is Copilot's (`x-initiator`, `Openai-Intent`,
-    /// `X-GitHub-Api-Version`) and the ChatGPT account-id header is omitted.
-    /// Copilot also requires `Copilot-Vision-Request: true` on any turn that
-    /// carries an image, detected here by scanning the Responses `input` array
-    /// for an `input_image` part.
-    fn build_request(&self, body: &serde_json::Value) -> reqwest::RequestBuilder {
-        let chatgpt = self
-            .endpoint
-            .base_url()
-            .contains("chatgpt.com/backend-api/codex/");
+    /// Build the HTTP request for the given payload and resolved credentials.
+    fn build_request_for_auth(
+        &self,
+        body: &serde_json::Value,
+        auth: &ResolvedAuth,
+    ) -> reqwest::RequestBuilder {
         let mut req = self
             .client
             .http()
@@ -141,10 +136,10 @@ impl OpenAiResponsesProvider {
             .json(body);
         let is_copilot_vision = self.copilot && request::has_input_image(body);
         for (name, value) in request::headers(
-            self.endpoint.api_key(),
-            self.account_id.as_deref(),
+            auth.token.expose_secret(),
+            auth.account_id.as_deref(),
             self.copilot,
-            chatgpt,
+            self.chatgpt,
         ) {
             req = req.header(name, value);
         }
@@ -161,6 +156,44 @@ impl OpenAiResponsesProvider {
             }
         }
         req
+    }
+
+    /// Send a request with automatic token resolution, timeout stamping,
+    /// and reactive force-refresh on HTTP 401 Unauthorized for OAuth channels.
+    async fn send_request(
+        &self,
+        body: &serde_json::Value,
+        is_stream: bool,
+    ) -> Result<reqwest::Response, String> {
+        let auth = self.endpoint.resolve_auth().await?;
+        let mut req = self.build_request_for_auth(body, &auth);
+        if !is_stream {
+            req = req.timeout(self.client.request_timeout());
+        }
+        let response = req
+            .send()
+            .await
+            .map_err(|error| transport_error(self.label(), error))?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
+            tracing::warn!(
+                provider = %self.endpoint.id,
+                model = %self.endpoint.model,
+                "OAuth token rejected by {} (401 Unauthorized); attempting force-refresh and retry",
+                self.label()
+            );
+            if let Ok(refreshed_auth) = self.endpoint.force_refresh_auth().await {
+                let mut retry_req = self.build_request_for_auth(body, &refreshed_auth);
+                if !is_stream {
+                    retry_req = retry_req.timeout(self.client.request_timeout());
+                }
+                if let Ok(retried_resp) = retry_req.send().await {
+                    return ensure_success(retried_resp, self.label()).await;
+                }
+            }
+        }
+
+        ensure_success(response, self.label()).await
     }
 
     fn build_body(&self, request: ModelRequest, stream: bool) -> serde_json::Value {
@@ -197,8 +230,6 @@ impl Provider for OpenAiResponsesProvider {
     }
 
     fn prompt_hints(&self) -> ProviderPromptHints {
-        // No protocol note: the Responses surface uses native function_call
-        // items by construction.
         ProviderPromptHints {
             system_guidance: "",
         }
@@ -215,10 +246,8 @@ impl Provider for OpenAiResponsesProvider {
     async fn chat(&self, request: ModelRequest) -> Result<Message, String> {
         let label = self.label();
         let body = self.build_body(request, false);
-        let value: serde_json::Value = self
-            .client
-            .send_json(self.build_request(&body), label)
-            .await?;
+        let resp = self.send_request(&body, false).await?;
+        let value: serde_json::Value = decode_response_json(resp, label).await?;
         if let Some(err) = value.get("error") {
             return Err(format!("{label} Error: {}", err));
         }
@@ -234,7 +263,7 @@ impl Provider for OpenAiResponsesProvider {
     ) -> Result<BoxStream<'static, Result<String, String>>, String> {
         let label = self.label();
         let body = self.build_body(request, true);
-        let resp = self.client.send(self.build_request(&body), label).await?;
+        let resp = self.send_request(&body, true).await?;
 
         let stream = crate::sse::data_payloads(resp, label).map(|item| {
             let data = item?;
@@ -255,7 +284,7 @@ impl Provider for OpenAiResponsesProvider {
     ) -> Result<BoxStream<'static, Result<ProviderStreamEvent, String>>, String> {
         let label = self.label();
         let body = self.build_body(request, true);
-        let resp = self.client.send(self.build_request(&body), label).await?;
+        let resp = self.send_request(&body, true).await?;
 
         // One stateful parser threads the function-call item state across the
         // whole stream; each SSE payload becomes zero or more events. Terminal

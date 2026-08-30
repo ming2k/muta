@@ -560,6 +560,7 @@ pub fn send_harness_state(
             loop_status,
             round_counter,
             delegated: agent.delegated(),
+            unconfined: agent.is_unconfined(),
             workspace_security: agent.workspace_security(),
             retry_pending: false,
         }),
@@ -592,6 +593,7 @@ pub async fn send_harness_state_for_session(
             loop_status,
             round_counter,
             delegated: agent.delegated(),
+            unconfined: agent.is_unconfined(),
             workspace_security: agent.workspace_security(),
             retry_pending,
         }),
@@ -1800,6 +1802,9 @@ pub fn relay_agent_event(
         }
         AgentEvent::DelegatedChanged(enabled) => {
             round_response(session_id, RoundEvent::DelegatedChanged(enabled))
+        }
+        AgentEvent::UnconfinedChanged(enabled) => {
+            round_response(session_id, RoundEvent::UnconfinedChanged(enabled))
         }
         AgentEvent::PermissionRequest(request) => {
             round_response(session_id, RoundEvent::PermissionRequest(request))

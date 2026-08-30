@@ -16,6 +16,8 @@
 //!
 //! See `docs/adr/0002-model-channel-abstraction.md` for the design.
 
+use std::fmt;
+
 /// How a [`Channel`] speaks to its model. Determines which `Provider`
 /// implementation is constructed for it (in `muta-providers`).
 ///
@@ -80,7 +82,6 @@ pub enum Transport {
         base_url: String,
         user_agent: String,
         effort: Option<crate::Effort>,
-        project_id: Option<String>,
     },
     /// OpenAI **Responses** API (`/responses` endpoint), used by the ChatGPT
     /// subscription backend (`chatgpt.com/backend-api/codex/responses`) and by
@@ -88,17 +89,15 @@ pub enum Transport {
     /// (`api.githubcopilot.com/responses`). Unlike
     /// [`OpenAi`](Self::OpenAi) (chat completions), the Responses
     /// API takes `instructions` + an `input` items array and streams
-    /// `response.*` events. `account_id` is sent as the `ChatGPT-Account-Id`
-    /// header (resolved from the OAuth `chatgpt_account_id` claim); `None` is
-    /// valid for single-account users. `copilot` flips the per-request header
-    /// set to Copilot's required headers (`x-initiator`, `Openai-Intent`,
-    /// `X-GitHub-Api-Version`, and `Copilot-Vision-Request` when vision is
-    /// used) and drops the ChatGPT account-id header.
+    /// `response.*` events. For ChatGPT connections (`chatgpt == true`),
+    /// `originator: muta` and `ChatGPT-Account-Id` (from resolved dynamic auth)
+    /// are attached. For Copilot connections (`copilot == true`), Copilot's
+    /// required headers are attached.
     OpenAiResponses {
         base_url: String,
         user_agent: String,
         effort: Option<crate::Effort>,
-        account_id: Option<String>,
+        chatgpt: bool,
         copilot: bool,
     },
 }
@@ -120,12 +119,12 @@ impl Transport {
 
 /// One delivery path for a [`ProviderEntry`].
 ///
-/// A channel pairs a [`Transport`] with resolved credentials (`api_key`) and
+/// A channel pairs a [`Transport`] with a [`crate::CredentialSource`] and
 /// the wire `model` id. Built-in presets materialize exactly one channel per
 /// entry (id `"default"`); user-defined entries may declare several channels
 /// per model (e.g. Gemini via Studio, Vertex, or a relay), with the entry's
 /// `default_channel` selecting one. See ADR-0002.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Channel {
     /// Stable identifier within the model (e.g. `"studio"`, `"vertex"`).
     /// Built-in presets use `"default"`.
@@ -134,12 +133,8 @@ pub struct Channel {
     pub label: String,
     /// Endpoint shape and provider implementation selector.
     pub transport: Transport,
-    /// Resolved API key (env var first, then config field). Empty for keyless
-    /// channels; never absent so construction never branches on `Option`.
-    /// Redacted from `Debug` output — read it only via
-    /// [`SecretString::expose_secret`](crate::SecretString::expose_secret) at
-    /// the provider-construction boundary.
-    pub api_key: crate::SecretString,
+    /// The dynamic or static credential source for this channel.
+    pub credentials: std::sync::Arc<dyn crate::CredentialSource>,
     /// Resolved wire model id sent to the provider.
     pub model: String,
     /// Provider-scoped live capability metadata. A trusted provider's remote
@@ -151,27 +146,34 @@ pub struct Channel {
     /// the remote overlay in [`Channel::capabilities`]. `None` means the
     /// user has no opinion and the two lower layers decide.
     pub user_overrides: Option<crate::model::CapabilityOverrides>,
-    /// Optional dynamic credential source for OAuth / rotating tokens.
-    /// When `None`, falls back to static `api_key`.
-    pub credentials: Option<std::sync::Arc<dyn crate::CredentialSource>>,
+}
+
+impl fmt::Debug for Channel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Channel")
+            .field("id", &self.id)
+            .field("label", &self.label)
+            .field("transport", &self.transport)
+            .field("credentials", &self.credentials)
+            .field("model", &self.model)
+            .field("remote", &self.remote)
+            .field("user_overrides", &self.user_overrides)
+            .finish()
+    }
 }
 
 impl Channel {
     /// Return the active credential source for this channel.
     pub fn credentials_source(&self) -> std::sync::Arc<dyn crate::CredentialSource> {
-        self.credentials
-            .clone()
-            .unwrap_or_else(|| crate::static_credential(self.api_key.clone()))
+        self.credentials.clone()
     }
 
-    /// Whether this channel has a usable API key. Keyless transports
-    /// (the in-memory mock) always report ready; the rest require a non-empty
-    /// key.
+    /// Whether this channel has a usable API key or valid credential.
     pub fn key_ready(&self) -> bool {
         if !self.transport.needs_api_key() {
             return true;
         }
-        !self.api_key.expose_secret().trim().is_empty()
+        self.credentials.is_ready()
     }
 
     /// Resolve effective capabilities for this delivery path. The provider's
@@ -297,11 +299,10 @@ mod tests {
                     effort: None,
                     copilot: false,
                 },
-                api_key: "k".into(),
+                credentials: crate::static_credential("k"),
                 model: "deepseek-v4-flash".to_string(),
                 remote: None,
                 user_overrides: None,
-                credentials: None,
             }],
             default_channel: 0,
             builtin: true,
@@ -331,11 +332,10 @@ mod tests {
                 effort: None,
                 copilot: false,
             },
-            api_key: "   ".into(),
+            credentials: crate::static_credential("   "),
             model: "gpt-4o".to_string(),
             remote: None,
             user_overrides: None,
-            credentials: None,
         };
         assert!(!channel.key_ready());
     }
@@ -364,11 +364,10 @@ mod tests {
                 thinking: None,
                 copilot: false,
             },
-            api_key: "  ".into(),
+            credentials: crate::static_credential("  "),
             model: "minimax-m3".to_string(),
             remote: None,
             user_overrides: None,
-            credentials: None,
         };
         assert!(!channel.key_ready(), "empty key must not be ready");
     }
@@ -392,11 +391,10 @@ mod tests {
                         effort: None,
                         copilot: false,
                     },
-                    api_key: "k".into(),
+                    credentials: crate::static_credential("k"),
                     model: "glm-5.2".to_string(),
                     remote: None,
                     user_overrides: None,
-                    credentials: None,
                 },
                 Channel {
                     id: "minimax-m3".to_string(),
@@ -408,11 +406,10 @@ mod tests {
                         thinking: None,
                         copilot: false,
                     },
-                    api_key: "k".into(),
+                    credentials: crate::static_credential("k"),
                     model: "minimax-m3".to_string(),
                     remote: None,
                     user_overrides: None,
-                    credentials: None,
                 },
             ],
             default_channel: 0,
@@ -467,11 +464,10 @@ mod tests {
                     effort: None,
                     copilot: false,
                 },
-                api_key: "k".into(),
+                credentials: crate::static_credential("k"),
                 model: "fixture-alpha".to_string(),
                 remote: None,
                 user_overrides: None,
-                credentials: None,
             }],
             default_channel: 0,
             builtin: true,

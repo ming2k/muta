@@ -128,6 +128,9 @@ pub(crate) struct SessionHead<'a> {
     /// mode (`--delegate` / `/delegate on`). Shown as a warning-toned
     /// `DELEGATED` tag on the right — the session's persistent mode flag.
     pub delegated: bool,
+    /// `true` while the session runs in unconfined filesystem access mode
+    /// (`/jail off`). Shown as a warning-toned `UNCONFINED` tag on the right.
+    pub unconfined: bool,
 }
 
 struct HeaderContent {
@@ -164,18 +167,23 @@ pub(crate) fn draw_page_header(
     }
 
     let content = match header {
-        PageHeader::Session(head) => HeaderContent {
-            title: " SESSION ",
-            tag: id_tail(head.session_id),
-            badge: String::new(),
-            primary: head.workspace.to_string(),
-            meta: String::new(),
-            action: if head.delegated {
-                "DELEGATED ".to_string()
-            } else {
-                String::new()
-            },
-        },
+        PageHeader::Session(head) => {
+            let mut action = String::new();
+            if head.delegated {
+                action.push_str("DELEGATED ");
+            }
+            if head.unconfined {
+                action.push_str("UNCONFINED ");
+            }
+            HeaderContent {
+                title: " SESSION ",
+                tag: id_tail(head.session_id),
+                badge: String::new(),
+                primary: head.workspace.to_string(),
+                meta: String::new(),
+                action,
+            }
+        }
         // Runner and /btw are contextual pages that replace the session head.
         PageHeader::Btw(head) => HeaderContent {
             title: " /btw ",
@@ -989,10 +997,37 @@ mod tests {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
             delegated: true,
+            unconfined: false,
         };
         let row = rendered_row(80, PageHeader::Session(&head));
         assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
         assert!(row.trim_end().ends_with("DELEGATED"));
+    }
+
+    #[test]
+    fn session_header_shows_unconfined_badge() {
+        let head = SessionHead {
+            session_id: "sess-01a2b3c4",
+            workspace: "~/projects/xx",
+            delegated: false,
+            unconfined: true,
+        };
+        let row = rendered_row(80, PageHeader::Session(&head));
+        assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
+        assert!(row.trim_end().ends_with("UNCONFINED"));
+    }
+
+    #[test]
+    fn session_header_shows_both_delegated_and_unconfined() {
+        let head = SessionHead {
+            session_id: "sess-01a2b3c4",
+            workspace: "~/projects/xx",
+            delegated: true,
+            unconfined: true,
+        };
+        let row = rendered_row(80, PageHeader::Session(&head));
+        assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
+        assert!(row.trim_end().ends_with("DELEGATED UNCONFINED"));
     }
 
     #[test]
@@ -1001,10 +1036,12 @@ mod tests {
             session_id: "ab",
             workspace: "~/work",
             delegated: false,
+            unconfined: false,
         };
         let row = rendered_row(40, PageHeader::Session(&head));
         assert!(row.starts_with("   SESSION ab ~/work"));
         assert!(!row.contains("DELEGATED"));
+        assert!(!row.contains("UNCONFINED"));
     }
 
     /// The head band is top-level chrome: its `body` background owns every
@@ -1017,6 +1054,7 @@ mod tests {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
             delegated: true,
+            unconfined: false,
         };
         let mut terminal = mutx_engine::TestTerminal::new(40, 1);
         terminal.draw(|frame| {

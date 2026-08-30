@@ -1707,6 +1707,7 @@ fn transcript(events: &[AgentEvent]) -> Vec<String> {
             }
             AgentEvent::ToolCancelled { name, .. } => Some(format!("tool-cancelled {name}")),
             AgentEvent::DelegatedChanged(enabled) => Some(format!("delegated {enabled}")),
+            AgentEvent::UnconfinedChanged(enabled) => Some(format!("unconfined {enabled}")),
             AgentEvent::PermissionRequest(request) => Some(format!(
                 "permission-request {} {}",
                 request.tool, request.scope

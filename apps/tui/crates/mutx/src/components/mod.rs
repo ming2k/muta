@@ -6,6 +6,7 @@ pub(super) mod meta_strip;
 pub(super) mod modal;
 pub(super) mod notice;
 pub(super) mod options;
+pub mod path;
 pub(super) mod row;
 pub(super) mod scroll;
 pub(super) mod selectable_body;

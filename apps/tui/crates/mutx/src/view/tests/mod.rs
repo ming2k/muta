@@ -45,6 +45,7 @@ fn render_full_view(
                     session_id: "sess-01a2b3c4",
                     workspace: "~/projects/xx",
                     delegated: false,
+                    unconfined: false,
                 }),
                 todos: None,
                 round_started_at: None,

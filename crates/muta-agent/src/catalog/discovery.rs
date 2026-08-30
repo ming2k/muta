@@ -10,9 +10,9 @@
 
 use super::Stores;
 use super::derive::{resolve_credential, route_models};
-use muta_contracts::{ChannelAuth, SecretString, WireFormat};
+use muta_contracts::{ChannelAuth, WireFormat};
 use muta_persistence::config::{DiscoveryCache, FittedModelInfo, ModelListCacheState};
-use muta_persistence::connections::{Connection, Connections};
+use muta_persistence::connections::Connections;
 use muta_providers::{
     DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest, ModelDiscoveryUpdate,
     ProviderPresetSpec, provider_preset_spec, route_for_model,
@@ -99,26 +99,32 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
         } else {
             DiscoveryProtocol::from_preset_protocol(protocol)
         };
-        let (credential, account_id) = if connection.auth == ChannelAuth::ChatGptOAuth {
-            match chatgpt_discovery_auth(connection).await {
+        let auth = if connection.auth.is_oauth() {
+            let source = muta_providers::oauth::OAuthCredentialSource::new(
+                &connection.id,
+                connection.preset_id.as_deref(),
+                connection.auth,
+            );
+            match muta_contracts::CredentialSource::resolve_auth(&source).await {
                 Ok(auth) => auth,
                 Err(error) => {
                     tracing::warn!(
                         connection_id = %connection.id,
                         error = %error,
-                        "could not resolve ChatGPT model-catalog authentication"
+                        "could not resolve OAuth model-catalog authentication"
                     );
                     failures.push((connection.id.clone(), error));
                     continue;
                 }
             }
         } else {
-            (resolve_credential(connection, &stores.creds), None)
+            let key = resolve_credential(connection, &stores.creds);
+            muta_contracts::ResolvedAuth::new(key)
         };
         let mut extra_headers = Vec::new();
         if protocol == DiscoveryProtocol::Codex {
             extra_headers.push(("originator", "muta"));
-            if let Some(account_id) = account_id.as_deref() {
+            if let Some(account_id) = auth.account_id.as_deref() {
                 extra_headers.push(("ChatGPT-Account-Id", account_id));
             }
         }
@@ -130,7 +136,7 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
         let discovery_req = ModelDiscoveryRequest {
             protocol,
             base_url: &base_url,
-            api_key: &credential,
+            api_key: &auth.token,
             user_agent: user_agent.as_deref(),
             extra_headers: &extra_headers,
         };
@@ -256,42 +262,6 @@ pub async fn discover_provider_models(force: bool) -> DiscoveryOutcome {
     }
 
     DiscoveryOutcome { changed, failures }
-}
-
-/// Resolve and, when necessary, refresh the ChatGPT bearer used by the Codex
-/// models endpoint. Refreshed credentials are persisted under the concrete
-/// connection id so multiple ChatGPT accounts remain isolated.
-async fn chatgpt_discovery_auth(
-    connection: &Connection,
-) -> Result<(SecretString, Option<String>), String> {
-    use muta_providers::oauth::{AuthStore, OAuth, config_by_provider_id};
-
-    let mut store = AuthStore::load();
-    let stored = store
-        .get_for_provider(
-            &connection.id,
-            connection.preset_id.as_deref(),
-            connection.auth,
-        )
-        .cloned()
-        .ok_or_else(|| "ChatGPT authorization is missing; reconnect this connection".to_string())?;
-    let config = config_by_provider_id("chatgpt")
-        .ok_or_else(|| "ChatGPT OAuth configuration is unavailable".to_string())?;
-    // Keep the preset's provider_id ("chatgpt") so refresh-side ChatGPT
-    // behavior (account-id extraction) stays enabled; the refreshed tokens are
-    // persisted under the *connection* id below, preserving per-account
-    // isolation.
-    let oauth = OAuth::new(config);
-    let (access, tokens) = oauth
-        .resolve_access_token(stored)
-        .await
-        .map_err(|error| format!("could not refresh ChatGPT authorization: {error}"))?;
-    let account_id = tokens.account_id.clone();
-    store.set(&connection.id, tokens);
-    store
-        .save()
-        .map_err(|error| format!("could not persist refreshed ChatGPT authorization: {error}"))?;
-    Ok((access, account_id))
 }
 
 /// Rebuild the fitted-model overlay (`muta_contracts::model`) from the

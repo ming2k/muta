@@ -978,6 +978,7 @@ async fn handle_wire_stream(
             loop_status: muta_contracts::LoopStatus::Idle,
             round_counter: bound.session.round_counter().await,
             delegated: bound.session.delegated().await,
+            unconfined: bound.shared_unconfined.is_unconfined(),
             workspace_security: bound.security.snapshot(bound.project_root()),
             retry_pending: bound.session.retry_pending().await.is_some(),
         };

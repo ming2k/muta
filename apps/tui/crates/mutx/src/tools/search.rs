@@ -1,6 +1,7 @@
 //! Presenters for file discovery, text search, and shallow directory listing.
 
 use super::{ResultKind, ToolPresenter, ToolView, truncate};
+use crate::components::path::PathView;
 
 pub struct SearchTextPresenter;
 
@@ -8,7 +9,12 @@ impl ToolPresenter for SearchTextPresenter {
     fn summary(&self, view: &ToolView) -> String {
         let query = view.str("query").unwrap_or("...");
         let path = view.str("path").unwrap_or(".");
-        format!("Search \"{}\" in {}", truncate(query, 48), path)
+        let path_display = if path == "." {
+            ".".to_string()
+        } else {
+            PathView::from_str(path).format_text()
+        };
+        format!("Search \"{}\" in {}", truncate(query, 48), path_display)
     }
 
     fn result_kind(&self) -> ResultKind {
@@ -41,7 +47,8 @@ impl ToolPresenter for FindFilesPresenter {
         if path == "." {
             format!("Find {selection}")
         } else {
-            format!("Find {selection} in {path}")
+            let path_display = PathView::from_str(path).format_text();
+            format!("Find {selection} in {path_display}")
         }
     }
 
@@ -55,7 +62,7 @@ pub struct ListDirPresenter;
 impl ToolPresenter for ListDirPresenter {
     fn summary(&self, view: &ToolView) -> String {
         view.str("path")
-            .map(|path| format!("List {}", path))
+            .map(|path| format!("List {}", PathView::from_str(path).format_text()))
             .unwrap_or_else(|| "List directory".to_string())
     }
 

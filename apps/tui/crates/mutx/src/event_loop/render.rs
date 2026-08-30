@@ -324,6 +324,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                 session_id: viewed_session_id,
                 workspace: &app.current_workspace,
                 delegated: app.delegated,
+                unconfined: app.unconfined,
             }),
             todos: app.todos.as_ref(),
             // View-scoped: the elapsed-timer origin belongs to the viewed

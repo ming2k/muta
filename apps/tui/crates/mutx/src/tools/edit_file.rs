@@ -7,14 +7,16 @@
 
 use super::diff::line_diff_counts;
 use super::{ResultKind, ToolPresenter, ToolView};
+use crate::components::path::PathView;
 
 pub struct EditPresenter;
 
 impl ToolPresenter for EditPresenter {
     fn summary(&self, view: &ToolView) -> String {
-        let Some(path) = view.str("path") else {
+        let Some(raw_path) = view.str("path") else {
             return "Edit file".to_string();
         };
+        let path = PathView::from_str(raw_path).format_text();
         match (view.str("old_string"), view.str("new_string")) {
             (Some(old), Some(new)) => {
                 let (added, removed) = line_diff_counts(old, new);
@@ -37,9 +39,10 @@ pub struct WritePresenter;
 
 impl ToolPresenter for WritePresenter {
     fn summary(&self, view: &ToolView) -> String {
-        let Some(path) = view.str("path") else {
+        let Some(raw_path) = view.str("path") else {
             return "Write file".to_string();
         };
+        let path = PathView::from_str(raw_path).format_text();
         match view.str("content") {
             Some(content) => {
                 let (added, _) = line_diff_counts("", content);

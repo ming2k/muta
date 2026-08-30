@@ -186,6 +186,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         pulse: crate::pulse::TokenWatch::default(),
         provider_retry: None,
         delegated: false,
+        unconfined: false,
         todos: None,
         round_count: 0,
         current_turn: 0,

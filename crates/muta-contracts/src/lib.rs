@@ -57,7 +57,7 @@ pub mod tool_access;
 pub use tool_access::{ToolAccess, ToolAccesses, ToolFileAccessOperation};
 
 pub mod auth;
-pub use auth::{CredentialSource, StaticCredentialSource, static_credential};
+pub use auth::{CredentialSource, ResolvedAuth, StaticCredentialSource, static_credential};
 
 pub mod tool_validation;
 

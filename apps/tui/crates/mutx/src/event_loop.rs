@@ -494,6 +494,7 @@ impl UiRuntime {
                 loop_status: LoopStatus::Idle,
                 round_counter: 0,
                 delegated: false,
+                unconfined: false,
                 workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
                 retry_pending: false,
             })),
@@ -1200,6 +1201,7 @@ async fn sync_runtime_state(
     app.loop_status = harness.loop_status;
     app.harness_retry_pending = harness.retry_pending;
     app.delegated = harness.delegated;
+    app.unconfined = harness.unconfined;
     app.phase = runtime.phase.lock().await.clone();
     app.pulse = runtime.pulse.lock().await.clone();
     app.provider_retry = runtime.provider_retry.lock().await.clone();

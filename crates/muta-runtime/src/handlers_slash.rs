@@ -247,7 +247,7 @@ pub(crate) async fn teardown_sides_for_session_switch(
 async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args: &str) {
     // Split-borrow: the fresh-session path mutates usage while reading the
     // rest of the environment.
-    let (side, session, config, agent, lifecycle, resp_tx, provider_for_task) = (
+    let (side, session, config, agent, lifecycle, resp_tx, provider_for_task, shared_unconfined) = (
         env.side,
         env.session,
         env.config,
@@ -255,6 +255,7 @@ async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args: &str) {
         env.lifecycle,
         env.resp_tx,
         env.provider_for_task,
+        env.shared_unconfined,
     );
     let provider_usage = &mut *env.provider_usage;
     supersede_for_session_switch(lifecycle, agent, resp_tx).await;
@@ -277,6 +278,10 @@ async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args: &str) {
                     &id,
                     RoundEvent::DelegatedChanged(fresh_posture),
                 ));
+            }
+            if shared_unconfined.is_unconfined() {
+                shared_unconfined.set_unconfined(false);
+                let _ = resp_tx.send(round_response(&id, RoundEvent::UnconfinedChanged(false)));
             }
             agent.restore_round_count(session.round_counter().await);
             // C6: a fresh session has no provider pin, so the live provider
@@ -1001,6 +1006,10 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 },
             )
             .await;
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::UnconfinedChanged(!jail_enabled),
+            ));
         }
         Some(BuiltinCmd::Master) => {
             // /master <role> — switch the live master role (plan §3.3).

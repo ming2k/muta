@@ -470,6 +470,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // system prompt tells it cross-project paths are legal instead of letting
     // it discover the widened boundary through trial and error.
     agent.set_additional_workspace_roots(additional_roots.clone());
+    agent.bind_shared_unconfined(shared_unconfined.clone());
     let agent = Arc::new(agent);
     // Override axis (model): runners are agents on the same model, so they
     // inherit the parent's tool-variant selection. The profile still owns the

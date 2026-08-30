@@ -1,6 +1,7 @@
 //! Presenter for `read_text`.
 
 use super::{ToolPresenter, ToolView};
+use crate::components::path::PathView;
 
 pub struct ReadPresenter;
 
@@ -8,7 +9,7 @@ impl ToolPresenter for ReadPresenter {
     fn summary(&self, view: &ToolView) -> String {
         let base = view
             .str("path")
-            .map(|path| format!("Read {}", path))
+            .map(|path| format!("Read {}", PathView::from_str(path).format_text()))
             .unwrap_or_else(|| "Read file".to_string());
 
         // Annotate the window when an `offset`/`limit` narrows the read, using

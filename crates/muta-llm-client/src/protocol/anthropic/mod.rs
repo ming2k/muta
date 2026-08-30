@@ -19,9 +19,13 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use muta_contracts::{Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent};
+use muta_contracts::{
+    CredentialSource, Message, ModelRequest, Provider, ProviderPromptHints, ProviderStreamEvent,
+    ResolvedAuth,
+};
 use std::sync::Arc;
 
+use crate::transport::{decode_response_json, ensure_success, transport_error};
 use crate::{Client, Endpoint, TurnState};
 
 pub mod request;
@@ -86,7 +90,7 @@ impl AnthropicMessagesProvider {
         let thinking = ThinkingConfig::for_model(&muta_contracts::model::resolve(&model));
         let capabilities = muta_contracts::ModelCapabilities::for_channel(&model, None);
         Self {
-            endpoint: Endpoint::new(api_key, model, base_url, "anthropic")
+            endpoint: Endpoint::from_static_key(api_key, model, base_url, "anthropic")
                 .with_user_agent(user_agent),
             turn: TurnState::new(),
             client: Client::new(),
@@ -100,7 +104,7 @@ impl AnthropicMessagesProvider {
 
     /// Build a provider with dynamic credentials.
     pub fn with_credentials(
-        credentials: std::sync::Arc<dyn muta_contracts::CredentialSource>,
+        credentials: std::sync::Arc<dyn CredentialSource>,
         model: String,
         base_url: &str,
         user_agent: &str,
@@ -154,7 +158,11 @@ impl AnthropicMessagesProvider {
     }
 
     /// Apply the per-request auth + version + beta headers to a request builder.
-    fn build_request(&self, body: &serde_json::Value) -> reqwest::RequestBuilder {
+    fn build_request_for_auth(
+        &self,
+        body: &serde_json::Value,
+        auth: &ResolvedAuth,
+    ) -> reqwest::RequestBuilder {
         let mut req = self
             .client
             .http()
@@ -162,7 +170,7 @@ impl AnthropicMessagesProvider {
             .header(reqwest::header::USER_AGENT, self.endpoint.user_agent())
             .json(body);
         for (name, value) in request::headers(
-            self.endpoint.api_key(),
+            auth.token.expose_secret(),
             &self.capabilities,
             self.thinking,
             self.copilot,
@@ -179,6 +187,43 @@ impl AnthropicMessagesProvider {
             }
         }
         req
+    }
+
+    /// Send a request with automatic token resolution, timeout stamping,
+    /// and reactive force-refresh on HTTP 401 Unauthorized for OAuth channels.
+    async fn send_request(
+        &self,
+        body: &serde_json::Value,
+        is_stream: bool,
+    ) -> Result<reqwest::Response, String> {
+        let auth = self.endpoint.resolve_auth().await?;
+        let mut req = self.build_request_for_auth(body, &auth);
+        if !is_stream {
+            req = req.timeout(self.client.request_timeout());
+        }
+        let response = req
+            .send()
+            .await
+            .map_err(|error| transport_error("Anthropic", error))?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
+            tracing::warn!(
+                provider = %self.endpoint.id,
+                model = %self.endpoint.model,
+                "OAuth token rejected by Anthropic (401 Unauthorized); attempting force-refresh and retry"
+            );
+            if let Ok(refreshed_auth) = self.endpoint.force_refresh_auth().await {
+                let mut retry_req = self.build_request_for_auth(body, &refreshed_auth);
+                if !is_stream {
+                    retry_req = retry_req.timeout(self.client.request_timeout());
+                }
+                if let Ok(retried_resp) = retry_req.send().await {
+                    return ensure_success(retried_resp, "Anthropic").await;
+                }
+            }
+        }
+
+        ensure_success(response, "Anthropic").await
     }
 }
 
@@ -254,10 +299,8 @@ impl Provider for AnthropicMessagesProvider {
             &self.capabilities,
         );
 
-        let response_json: serde_json::Value = self
-            .client
-            .send_json(self.build_request(&body), "Anthropic")
-            .await?;
+        let resp = self.send_request(&body, false).await?;
+        let response_json: serde_json::Value = decode_response_json(resp, "Anthropic").await?;
 
         let assembled = response::assemble_message(&response_json)?;
 
@@ -290,10 +333,7 @@ impl Provider for AnthropicMessagesProvider {
             &self.capabilities,
         );
 
-        let response = self
-            .client
-            .send(self.build_request(&body), "Anthropic")
-            .await?;
+        let response = self.send_request(&body, true).await?;
 
         // Reuse the shared SSE byte reassembly; each payload is one Anthropic
         // event JSON. Map to text deltas only (this is the simple stream path).
@@ -321,10 +361,7 @@ impl Provider for AnthropicMessagesProvider {
             &self.capabilities,
         );
 
-        let response = self
-            .client
-            .send(self.build_request(&body), "Anthropic")
-            .await?;
+        let response = self.send_request(&body, true).await?;
 
         // Side-channel: hoover up signature fragments before the typed parser
         // (which ignores `signature_delta`), so the assembled assistant turn can
