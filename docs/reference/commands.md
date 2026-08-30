@@ -18,6 +18,7 @@ Project and user-defined commands are covered under
 | `/new` | Start a new session, keeping the current one in history. Typing the retired `/clear` (or `/reset`) suggests `/new` instead — it never wipes anything in place |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/delegate [on\|off]` | Toggle delegated autonomous execution mode (aliases: `/auto`, `/yolo`) |
+| `/jail [on\|off]` | Toggle workspace filesystem confinement (jail) for this session (aliases: `/unconfined`, `/escape`) |
 | `/master <code\|architect\|reviewer\|security>` | Switch the master preset — changes persona and capability scope |
 | `/search <query>` | Lexical search over the current session's transcript and command ledger |
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
@@ -32,7 +33,7 @@ Project and user-defined commands are covered under
 | `/schedule [when prompt\|list\|cancel id]` | Schedule a prompt: cron (recurring) or countdown/absolute-time (one-shot) |
 | `/jobs [list\|kill id\|logs id]` | Inspect and manage background processes and sub-runners |
 | `/init [path]` | Initialize a `.muta/` config tree |
-| `/trust [all\|mcp\|skills\|hooks\|rules\|roots\|status\|revoke]` | Trust content-attested project asset domains; bare `/trust` means all |
+| `/trust [all\|mcp\|skills\|hooks\|rules\|status\|revoke]` | Trust content-attested project asset domains; bare `/trust` means all |
 | `/untrust` | Revoke all project asset-domain grants and unload their contributions |
 
 

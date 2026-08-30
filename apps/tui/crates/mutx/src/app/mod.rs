@@ -31,7 +31,7 @@ use crate::providers::{
     models_flat_filtered_from, providers_filtered_from,
 };
 use crate::view::Theme;
-use crate::{ActivityTab, Modal};
+use crate::{ActivityTab, Modal, TelemetryTab};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -364,6 +364,8 @@ pub struct App {
     /// Latest session-scoped AI context snapshot from the harness. This is a
     /// provider usage/projection value, never a persisted transcript estimate.
     pub context_tokens: Option<muta_contracts::ContextTokenSnapshot>,
+    /// Active tab in the Session Telemetry modal (`Overview` or `Activity`).
+    pub telemetry_tab: TelemetryTab,
     /// Scroll offset of the Session Telemetry modal body.
     pub telemetry_scroll: usize,
     /// `true` when the Telemetry modal is drilled into one round's turns (L2).

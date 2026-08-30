@@ -1090,9 +1090,8 @@ impl TranscriptMessage {
         }) = structured.as_deref_mut()
         {
             // Build the TUI-authoritative `lines` view alongside the flat
-            // strings so the streaming view matches the final result: stderr
-            // stays red-tinted and stdout/stderr keep their true arrival
-            // interleaving, instead of the all-stdout-then-all-stderr
+            // strings so the streaming view matches the final result: stdout/stderr
+            // keep their true arrival interleaving, instead of the all-stdout-then-all-stderr
             // degraded band the empty-`lines` fallback used to force.
             //
             // Each stream chunk is one complete `\n`-terminated line (bash's

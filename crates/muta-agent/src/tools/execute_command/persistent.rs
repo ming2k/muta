@@ -24,9 +24,6 @@ impl PersistentTerminalSession {
             .stderr(std::process::Stdio::piped())
             .current_dir(root);
 
-        #[cfg(unix)]
-        invocation.process_group(0);
-
         let (mut child, process_tree) = muta_platform::process::spawn_owned(&mut invocation)
             .map_err(|e| format!("Failed to spawn persistent terminal: {e}"))?;
         let stdin = child

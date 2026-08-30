@@ -123,6 +123,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         token_ledger: None,
         token_report: None,
         context_tokens: None,
+        telemetry_tab: TelemetryTab::Overview,
         telemetry_scroll: 0,
         telemetry_detail: false,
         telemetry_turn_cursor: 0,

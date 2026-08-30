@@ -86,10 +86,6 @@ async fn reload_trusted_assets(
     if snapshot.hooks.is_trusted() {
         effective.merge_project_hooks(Config::load_project_hooks(project_root));
     }
-    if snapshot.roots.is_trusted() {
-        effective
-            .merge_project_additional_roots(Config::load_project_additional_roots(project_root));
-    }
 
     let mcp_report = mcp_runtime.reconfigure(effective.mcp.clone()).await;
     agent.set_hooks(crate::hooks::build_hook_registry(&effective.hooks, agent));
@@ -146,29 +142,14 @@ async fn supersede_for_session_switch(
 /// config collapses it back to the primary. Replace semantics — never union
 /// with the previous set — keep fail-closed on every path.
 ///
-/// Global roots are user-owned and always admitted; project roots only when
-/// the snapshot's `roots` domain is trusted. Resolution failures (missing or
-/// nested directories) drop that root and keep the rest, matching the
-/// startup loader's per-entry tolerance for live edits.
+/// User-owned global roots are resolved and loaded into the shared handle.
+/// Resolution failures (missing or nested directories) drop that root and keep the rest.
 pub(crate) fn apply_additional_roots(
     handle: &muta_contracts::SharedAdditionalRoots,
     effective: &Config,
     project_root: &std::path::Path,
-    roots_state: muta_contracts::WorkspaceTrustState,
 ) {
-    let merged = if roots_state.is_trusted() {
-        let mut all = effective.workspace.additional_roots.clone();
-        for root in Config::load_project_additional_roots(project_root) {
-            if !all.contains(&root) {
-                all.push(root);
-            }
-        }
-        all
-    } else {
-        // User-owned global entries stay; project declarations fall out.
-        effective.workspace.additional_roots.clone()
-    };
-    let resolved = resolve_roots_from_strings(&merged, project_root);
+    let resolved = resolve_roots_from_strings(&effective.workspace.additional_roots, project_root);
     handle.store(resolved);
 }
 
@@ -666,12 +647,11 @@ fn trust_route(name: &str, parts: &[&str]) -> Result<TrustRoute, String> {
         Some("skills") => Ok(TrustRoute::Grant(TrustDomain::Skills)),
         Some("hooks") => Ok(TrustRoute::Grant(TrustDomain::Hooks)),
         Some("rules") => Ok(TrustRoute::Grant(TrustDomain::Rules)),
-        Some("roots") => Ok(TrustRoute::Grant(TrustDomain::Roots)),
         Some("status") => Ok(TrustRoute::Status),
         Some("revoke") => Ok(TrustRoute::Revoke),
         Some(other) => Err(format!(
             "Unknown /trust subcommand '{other}'. Use `/trust`, `/trust all`, `/trust mcp`, \
-             `/trust skills`, `/trust hooks`, `/trust rules`, `/trust roots`, `/trust status`, or `/trust revoke`."
+             `/trust skills`, `/trust hooks`, `/trust rules`, `/trust status`, or `/trust revoke`."
         )),
     }
 }
@@ -688,6 +668,7 @@ pub(crate) struct SlashEnv<'a> {
     /// Live additional-roots handle: a `/trust` grant or revoke recomputes
     /// the admitted set through it, effective on the next tool call.
     pub shared_additional_roots: &'a muta_contracts::SharedAdditionalRoots,
+    pub shared_unconfined: &'a muta_contracts::SharedUnconfined,
     pub resp_tx: &'a mpsc::UnboundedSender<AgentResponse>,
     pub session: &'a Arc<SessionStore>,
     pub lifecycle: &'a Arc<RoundLifecycle>,
@@ -717,6 +698,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
         mcp_runtime,
         workspace_security,
         shared_additional_roots,
+        shared_unconfined,
         resp_tx,
         session,
         lifecycle,
@@ -797,21 +779,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             if security_snapshot.hooks.is_trusted() && !project_hooks.is_empty() {
                 reloaded.merge_project_hooks(project_hooks);
             }
-            if security_snapshot.roots.is_trusted() {
-                let project_roots = Config::load_project_additional_roots(project_root_for_side);
-                if !project_roots.is_empty() {
-                    reloaded.merge_project_additional_roots(project_roots);
-                }
-            }
-            // Live admitted-root swap (ADR-0147): the recomputed set replaces
-            // — never unions — so an untrusted roots domain collapses
-            // admission back to the primary immediately.
-            apply_additional_roots(
-                shared_additional_roots,
-                &reloaded,
-                project_root_for_side,
-                security_snapshot.roots,
-            );
+            apply_additional_roots(shared_additional_roots, &reloaded, project_root_for_side);
 
             // MCP: diff + (re)connect/disconnect. The next request picks up the
             // new tool set automatically (visible_tools recomputes each turn).
@@ -990,6 +958,50 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 RoundEvent::DelegatedChanged(enabled),
             ));
         }
+        Some(BuiltinCmd::Jail) => {
+            let arg = parts.get(1).map(|s| s.to_lowercase()).unwrap_or_default();
+            let next = match parse_jail_arg(&arg) {
+                Ok(next) => next,
+                Err(msg) => {
+                    record_error(session, resp_tx, name, args, msg).await;
+                    return;
+                }
+            };
+            // A bare `/jail` (`None`) toggles the current state.
+            // Note: jail = true means confined; jail = false means unconfined.
+            let currently_jailed = !shared_unconfined.is_unconfined();
+            let jail_enabled = next.unwrap_or(!currently_jailed);
+            shared_unconfined.set_unconfined(!jail_enabled);
+
+            let (title, detail) = if jail_enabled {
+                (
+                    "Workspace Jail ON (Confined)",
+                    vec![
+                        "File tools are confined to workspace root and temp paths".to_string(),
+                        "Escapes outside admitted roots will be blocked".to_string(),
+                    ],
+                )
+            } else {
+                (
+                    "Workspace Jail OFF (Unconfined)",
+                    vec![
+                        "Tools may access and edit any file on the host system".to_string(),
+                        "Constrained only by daemon OS user permissions".to_string(),
+                    ],
+                )
+            };
+            record_command(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::Ack {
+                    title: title.to_string(),
+                    detail: Some(detail),
+                },
+            )
+            .await;
+        }
         Some(BuiltinCmd::Master) => {
             // /master <role> — switch the live master role (plan §3.3).
             // Resolves the role onto the current identity, applies the
@@ -1147,6 +1159,7 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         mcp_runtime: env.mcp_runtime,
                         workspace_security: env.workspace_security,
                         shared_additional_roots: env.shared_additional_roots,
+                        shared_unconfined: env.shared_unconfined,
                         base_tools_for_side: env.base_tools_for_side,
                         skills_registry: env.skills_registry.clone(),
                         skills_registry_for_commands: env.skills_registry_for_commands,
@@ -1893,15 +1906,13 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                          - Skills: {}\n\
                          - Hooks: {}\n\
                          - Rules: {}\n\
-                         - Roots: {}\n\
                          - Aggregate: {}\n\
-                         Asset trust does not grant filesystem scope or runtime execution permission beyond declared workspace roots.",
+                         Asset trust does not grant filesystem scope or runtime execution permission.",
                         snapshot.root,
                         snapshot.mcp.as_str(),
                         snapshot.skills.as_str(),
                         snapshot.hooks.as_str(),
                         snapshot.rules.as_str(),
-                        snapshot.roots.as_str(),
                         snapshot.aggregate().as_str(),
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))
@@ -1936,14 +1947,6 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             return;
                         }
                     };
-                    // Live boundary update: the grant lands on the next
-                    // confined tool call — no session restart required.
-                    apply_additional_roots(
-                        shared_additional_roots,
-                        &Config::load(),
-                        project_root_for_side,
-                        report.snapshot.roots,
-                    );
                     let granted = if granted.is_empty() {
                         "none (the selected domains have no project assets)".to_string()
                     } else {
@@ -1962,14 +1965,13 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         "Project asset trust recorded.\n\
                          - Root: {}\n\
                          - Granted: {}\n\
-                         - MCP: {}; Skills: {}; Hooks: {}; Rules: {}; Roots: {}{}",
+                         - MCP: {}; Skills: {}; Hooks: {}; Rules: {}{}",
                         report.snapshot.root,
                         granted,
                         report.snapshot.mcp.as_str(),
                         report.snapshot.skills.as_str(),
                         report.snapshot.hooks.as_str(),
                         report.snapshot.rules.as_str(),
-                        report.snapshot.roots.as_str(),
                         mcp,
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))
@@ -2003,15 +2005,6 @@ pub(crate) async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     } else {
                         format!(" Disconnected MCP: {}.", report.removed_mcp.join(", "))
                     };
-                    // Live boundary update: collapse admission back to the
-                    // primary root immediately — revoke must never wait for a
-                    // restart to take effect.
-                    apply_additional_roots(
-                        shared_additional_roots,
-                        &Config::load(),
-                        project_root_for_side,
-                        report.snapshot.roots,
-                    );
                     let message = if revoked {
                         format!(
                             "Project asset trust revoked. MCP, skills, hooks, rules, and project commands were unloaded.{removed}"
@@ -2733,6 +2726,23 @@ fn parse_delegate_arg(arg: &str) -> Result<Option<bool>, String> {
     }
 }
 
+/// Parse the argument of `/jail` (already lowercased by the caller).
+///
+/// - `""` (bare `/jail`) → `Ok(None)`: toggles current jail state.
+/// - `on` / `true` / `1` / `enable` / `enabled` / `confined` / `jail` → `Ok(Some(true))`
+/// - `off` / `false` / `0` / `disable` / `disabled` / `unconfined` / `escape` → `Ok(Some(false))`
+/// - anything else → `Err` with usage hint.
+fn parse_jail_arg(arg: &str) -> Result<Option<bool>, String> {
+    match arg.trim() {
+        "" => Ok(None),
+        "on" | "true" | "1" | "enable" | "enabled" | "confined" | "jail" => Ok(Some(true)),
+        "off" | "false" | "0" | "disable" | "disabled" | "unconfined" | "escape" => Ok(Some(false)),
+        other => Err(format!(
+            "Unknown value '{other}'. Use `/jail` to toggle, or `/jail on|off`."
+        )),
+    }
+}
+
 /// Split a `/schedule <when> <prompt>` argument string into `(time_spec,
 /// prompt)`. Returns `None` when no prompt follows the time spec.
 ///
@@ -3060,6 +3070,45 @@ mod delegate_arg_tests {
         assert!(
             err.contains("`/delegate` to toggle") && err.contains("`/delegate on|off`"),
             "usage hint missing the toggle form: {err}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod jail_arg_tests {
+    use super::parse_jail_arg;
+
+    #[test]
+    fn bare_argument_means_toggle() {
+        assert_eq!(parse_jail_arg(""), Ok(None));
+    }
+
+    #[test]
+    fn on_forms_enable_jail() {
+        assert_eq!(parse_jail_arg("on"), Ok(Some(true)));
+        assert_eq!(parse_jail_arg("true"), Ok(Some(true)));
+        assert_eq!(parse_jail_arg("1"), Ok(Some(true)));
+        assert_eq!(parse_jail_arg("enable"), Ok(Some(true)));
+        assert_eq!(parse_jail_arg("confined"), Ok(Some(true)));
+        assert_eq!(parse_jail_arg("jail"), Ok(Some(true)));
+    }
+
+    #[test]
+    fn off_forms_disable_jail() {
+        assert_eq!(parse_jail_arg("off"), Ok(Some(false)));
+        assert_eq!(parse_jail_arg("false"), Ok(Some(false)));
+        assert_eq!(parse_jail_arg("0"), Ok(Some(false)));
+        assert_eq!(parse_jail_arg("disable"), Ok(Some(false)));
+        assert_eq!(parse_jail_arg("unconfined"), Ok(Some(false)));
+        assert_eq!(parse_jail_arg("escape"), Ok(Some(false)));
+    }
+
+    #[test]
+    fn unknown_value_is_an_error_with_a_usage_hint() {
+        let err = parse_jail_arg("invalid").unwrap_err();
+        assert!(
+            err.contains("`/jail` to toggle") && err.contains("`/jail on|off`"),
+            "usage hint missing: {err}"
         );
     }
 }

@@ -5,8 +5,6 @@
 //!   - Remote skill repositories fetched into `$XDG_CACHE_HOME/muta/skills/remote/`.
 //!   - User-global skills: `$XDG_DATA_HOME/muta/skills/` (XDG-resolved via
 //!     [`muta_persistence::paths`]).
-//!   - External user-global formats: `~/.agents/skills/`, `~/.claude/skills/`
-//!     (someone else's convention).
 //!   - Configured extra paths (`[skills] paths = [...]` in `config.toml`).
 //!   - Project-local skills: `.muta/skills/<name>/SKILL.md` (highest priority).
 //!

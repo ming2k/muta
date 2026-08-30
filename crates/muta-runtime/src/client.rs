@@ -399,42 +399,16 @@ fn local_pair_compatible(
 /// binary matches the sibling `muta` resolved by `mutx`; the TUI executable
 /// itself is deliberately not part of this comparison.
 pub fn daemon_image_is_current(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        let expected = daemon_program();
-        if !expected.is_file() {
-            return true;
-        }
-        daemon_image_matches_path(pid, &expected)
+    let expected = daemon_program();
+    if !expected.is_file() {
+        return true;
     }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        true
-    }
-}
-
-#[cfg(unix)]
-fn daemon_image_matches_path(pid: u32, expected: &std::path::Path) -> bool {
-    // `metadata` follows the /proc/<pid>/exe link to the inode the
-    // daemon is *actually executing* — which survives the on-disk file's
-    // replacement. Never stat the path the link spells: after a rebuild
-    // that path names the new file, and stat-ing it would report the
-    // client's own inode, hiding exactly the drift being probed for.
-    let exe_link = std::path::Path::new("/proc")
-        .join(pid.to_string())
-        .join("exe");
-    match (std::fs::metadata(&exe_link), std::fs::metadata(expected)) {
-        (Ok(daemon), Ok(expected)) => same_inode(&daemon, &expected),
-        // No /proc entry (non-Linux unix, or the pid vanished between the
-        // discovery read and here): cannot tell, do not disturb.
-        _ => true,
-    }
+    muta_platform::process::process_image_matches_path(pid, &expected)
 }
 
 /// `(dev, inode)` equality. A rebuilt binary legitimately occupies the same
 /// path with a new inode; path-string equality would hide exactly that.
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn same_inode(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     a.dev() == b.dev() && a.ino() == b.ino()
@@ -1313,7 +1287,10 @@ mod tests {
     #[test]
     fn daemon_image_match_accepts_the_explicit_process_exe() {
         let current = std::env::current_exe().unwrap();
-        assert!(daemon_image_matches_path(std::process::id(), &current));
+        assert!(muta_platform::process::process_image_matches_path(
+            std::process::id(),
+            &current
+        ));
     }
 
     /// The local compatibility policy (ADR-0134 revision), in pure form.

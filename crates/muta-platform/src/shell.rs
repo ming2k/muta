@@ -1,15 +1,19 @@
-//! Explicit native shell selection.
+//! Explicit native shell selection, quoting, and sentinel protocol shims.
 
 use tokio::process::Command;
 
+/// Dialects of shell execution supported across platforms.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShellDialect {
+    /// POSIX compatible shell (sh, bash, zsh, dash).
     Posix,
+    /// Modern PowerShell Core (`pwsh`) or Windows PowerShell (`powershell.exe`).
     PowerShell,
 }
 
 impl ShellDialect {
     /// Short identifier for the dialect (e.g. "posix" or "powershell").
+    #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Posix => "posix",
@@ -18,10 +22,29 @@ impl ShellDialect {
     }
 
     /// Human-readable description of the shell.
+    #[must_use]
     pub const fn description(&self) -> &'static str {
         match self {
             Self::Posix => "POSIX sh / bash",
-            Self::PowerShell => "PowerShell (powershell.exe)",
+            Self::PowerShell => "PowerShell (pwsh / powershell.exe)",
+        }
+    }
+
+    /// Preferred binary executable name for this dialect.
+    #[must_use]
+    pub fn executable_name(&self) -> &'static str {
+        match self {
+            Self::Posix => "sh",
+            Self::PowerShell => {
+                #[cfg(windows)]
+                {
+                    "powershell.exe"
+                }
+                #[cfg(not(windows))]
+                {
+                    "pwsh"
+                }
+            }
         }
     }
 
@@ -29,12 +52,12 @@ impl ShellDialect {
     pub fn build_episodic_command(&self, script: &str) -> Command {
         match self {
             Self::Posix => {
-                let mut command = Command::new("sh");
+                let mut command = Command::new(self.executable_name());
                 command.arg("-c").arg(script);
                 command
             }
             Self::PowerShell => {
-                let mut command = Command::new("powershell.exe");
+                let mut command = Command::new(self.executable_name());
                 command
                     .arg("-NoLogo")
                     .arg("-NoProfile")
@@ -42,7 +65,10 @@ impl ShellDialect {
                     .arg("-ExecutionPolicy")
                     .arg("Bypass")
                     .arg("-Command")
-                    .arg(script);
+                    .arg(format!(
+                        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; {}",
+                        script
+                    ));
                 command
             }
         }
@@ -52,12 +78,12 @@ impl ShellDialect {
     pub fn build_persistent_command(&self) -> Command {
         match self {
             Self::Posix => {
-                let mut command = Command::new("sh");
+                let mut command = Command::new(self.executable_name());
                 command.arg("-s");
                 command
             }
             Self::PowerShell => {
-                let mut command = Command::new("powershell.exe");
+                let mut command = Command::new(self.executable_name());
                 command
                     .arg("-NoLogo")
                     .arg("-NoProfile")
@@ -73,15 +99,13 @@ impl ShellDialect {
 
     /// Format a sentinel payload string written into stdin to execute `command`
     /// and reliably print the exit status together with `sentinel_id`.
+    #[must_use]
     pub fn format_sentinel_command(&self, command: &str, sentinel_id: &str) -> String {
         match self {
             Self::Posix => {
                 format!("{}\nprintf '\\n{}:%d\\n' $?\n", command, sentinel_id)
             }
             Self::PowerShell => {
-                // In PowerShell:
-                // If $LASTEXITCODE is set (native process), use it;
-                // else if $? is false, exit code is 1, otherwise 0.
                 format!(
                     "{}\r\n$__muta_ec = if ($null -ne $LASTEXITCODE) {{ $LASTEXITCODE }} elseif ($?) {{ 0 }} else {{ 1 }}; Write-Output \"`r`n{}:$__muta_ec`r`n\"\r\n",
                     command, sentinel_id
@@ -89,8 +113,40 @@ impl ShellDialect {
             }
         }
     }
+
+    /// Quote and escape an argument for safe insertion into a command line of this dialect.
+    #[must_use]
+    pub fn quote_arg(&self, arg: &str) -> String {
+        match self {
+            Self::Posix => {
+                if arg.is_empty() {
+                    return "''".to_string();
+                }
+                if arg.chars().all(|c| {
+                    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '=')
+                }) {
+                    return arg.to_string();
+                }
+                format!("'{}'", arg.replace('\'', "'\\''"))
+            }
+            Self::PowerShell => {
+                if arg.is_empty() {
+                    return "''".to_string();
+                }
+                if arg
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':'))
+                {
+                    return arg.to_string();
+                }
+                format!("'{}'", arg.replace('\'', "''"))
+            }
+        }
+    }
 }
 
+/// Detect the default native shell dialect of the host platform.
+#[must_use]
 pub const fn native_shell_dialect() -> ShellDialect {
     #[cfg(unix)]
     return ShellDialect::Posix;
@@ -125,5 +181,25 @@ mod tests {
             ShellDialect::PowerShell.format_sentinel_command("Write-Output test", "TOKEN123");
         assert!(formatted.contains("TOKEN123:$__muta_ec"));
         assert!(formatted.contains("Write-Output"));
+    }
+
+    #[test]
+    fn posix_quoting_rules() {
+        assert_eq!(ShellDialect::Posix.quote_arg("hello"), "hello");
+        assert_eq!(
+            ShellDialect::Posix.quote_arg("hello world"),
+            "'hello world'"
+        );
+        assert_eq!(ShellDialect::Posix.quote_arg("don't"), "'don'\\''t'");
+    }
+
+    #[test]
+    fn powershell_quoting_rules() {
+        assert_eq!(ShellDialect::PowerShell.quote_arg("hello"), "hello");
+        assert_eq!(
+            ShellDialect::PowerShell.quote_arg("hello world"),
+            "'hello world'"
+        );
+        assert_eq!(ShellDialect::PowerShell.quote_arg("don't"), "'don''t'");
     }
 }

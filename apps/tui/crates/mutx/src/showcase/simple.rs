@@ -16,13 +16,13 @@ use crate::ActivityTab;
 use crate::composer::{ComposerText, ComposerView};
 use crate::fuzzy;
 use crate::model::layout::LayoutMap;
-use crate::showcase::common::{self, ShowAction};
-use crate::view::Theme;
 use crate::overlays::{
     ActivityModalView, draw_activity_modal, draw_armed_toast, draw_connections_modal,
     draw_copy_toast, draw_help_modal, draw_history_panel, draw_model_editor, draw_models_modal,
     draw_sessions_modal,
 };
+use crate::showcase::common::{self, ShowAction};
+use crate::view::Theme;
 
 // ─────────────────────────── provider picker ──────────────────────────────
 

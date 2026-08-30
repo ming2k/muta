@@ -92,9 +92,35 @@ pub fn request_termination(identity: ProcessIdentity) -> io::Result<()> {
     native::request_termination(identity.pid)
 }
 
+/// Checks whether a running process's executed binary image matches the on-disk file.
+pub fn process_image_matches_path(pid: u32, expected: &std::path::Path) -> bool {
+    native::native_process_image_matches_path(pid, expected)
+}
+
 #[cfg(unix)]
 mod native {
     use super::*;
+
+    pub(super) fn native_process_image_matches_path(pid: u32, expected: &std::path::Path) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let exe_link = std::path::Path::new("/proc")
+                .join(pid.to_string())
+                .join("exe");
+            match (std::fs::metadata(&exe_link), std::fs::metadata(expected)) {
+                (Ok(daemon), Ok(expected_meta)) => {
+                    daemon.dev() == expected_meta.dev() && daemon.ino() == expected_meta.ino()
+                }
+                _ => true,
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (pid, expected);
+            true
+        }
+    }
 
     pub(super) fn configure_daemon(command: &mut Command) {
         // SAFETY: `setsid` is async-signal-safe and performs no allocation.
@@ -485,5 +511,9 @@ mod native {
             io::ErrorKind::Unsupported,
             "Windows daemon shutdown is protocol-driven",
         ))
+    }
+
+    pub(super) fn process_image_matches_path(_pid: u32, _expected: &std::path::Path) -> bool {
+        true
     }
 }

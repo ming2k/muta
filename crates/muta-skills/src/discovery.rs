@@ -12,9 +12,6 @@ use std::path::{Path, PathBuf};
 /// Project-local muta skills directory (relative to project root).
 const PROJECT_MUTA_SKILLS_DIR: &str = ".muta/skills";
 const PROJECT_GENERIC_SKILLS_DIR: &str = "skills";
-/// External skill directory conventions (someone else's app; we read but do
-/// not own these locations).
-const EXTERNAL_SKILL_DIRS: &[&str] = &[".agents/skills", ".claude/skills"];
 const MAX_SCAN_DEPTH: usize = 8;
 
 /// A project-local ([`SkillScope::Repo`]) skill that overrode a same-named
@@ -49,12 +46,11 @@ pub struct DiscoveryResult {
 /// Sources are scanned from lowest to highest priority so that higher-priority
 /// skills override lower-priority skills with the same name.
 ///
-/// Project-local sources (`.muta/skills`, `.agents/skills`, `.claude/skills`,
-/// `skills/`) are admitted only while the workspace's skills-domain state is
-/// [`WorkspaceTrustState::Trusted`]. A cloned or vendored workspace's
-/// `SKILL.md` files are prompt content, so merely opening the directory must
-/// not load them. The state is read at scan time, which gives startup,
-/// background refresh, and `/skills reload` the same boundary.
+/// Project-local sources (`.muta/skills`, `skills/`) are admitted only while the
+/// workspace's skills-domain state is [`WorkspaceTrustState::Trusted`]. A cloned
+/// or vendored workspace's `SKILL.md` files are prompt content, so merely opening
+/// the directory must not load them. The state is read at scan time, which gives
+/// startup, background refresh, and `/skills reload` the same boundary.
 pub async fn discover_all(config: &SkillsConfig) -> DiscoveryResult {
     let trust_state = WorkspaceSecurityStore::load()
         .snapshot(&resolve_project_root(config))
@@ -136,23 +132,13 @@ async fn skill_sources(
         }
     }
 
-    // 2. User-global external skill formats (someone else's app convention).
-    if let Some(home) = dirs::home_dir() {
-        for dir in EXTERNAL_SKILL_DIRS {
-            sources.push(SkillSource::Local {
-                root: home.join(dir),
-                scope: SkillScope::User,
-            });
-        }
-    }
-
-    // 3. User-global muta skills (XDG; the canonical user location).
+    // 2. User-global muta skills (XDG; the canonical user location).
     sources.push(SkillSource::Local {
         root: dirs.user_skills_dir(),
         scope: SkillScope::User,
     });
 
-    // 4. Configured extra paths.
+    // 3. Configured extra paths.
     for path in &config.paths {
         let expanded = expand_tilde(path);
         sources.push(SkillSource::Local {
@@ -161,21 +147,13 @@ async fn skill_sources(
         });
     }
 
-    // 5/6. Project-local skills (highest priority). Only the exact content
+    // 4. Project-local skills (highest priority). Only the exact content
     //    represented by a Trusted skills-domain state is scanned. The project
     //    root comes from the config when session bootstrap designated one;
     //    otherwise discovery falls back to the process cwd for embeddings
     //    without a designated workspace.
     if trust_state.is_trusted() {
         let project_root = resolve_project_root(config);
-        // 5. Project-local external skills.
-        for dir in EXTERNAL_SKILL_DIRS {
-            sources.push(SkillSource::Local {
-                root: project_root.join(dir),
-                scope: SkillScope::Repo,
-            });
-        }
-        // 6. Project-local muta skills.
         sources.push(SkillSource::Local {
             root: project_root.join(PROJECT_MUTA_SKILLS_DIR),
             scope: SkillScope::Repo,
@@ -203,9 +181,8 @@ fn resolve_project_root(config: &SkillsConfig) -> PathBuf {
 /// extension-security notices without running a full
 /// scan; deliberately cheap and purely local.
 pub fn project_skills_present(project_root: &Path) -> bool {
-    EXTERNAL_SKILL_DIRS
+    [PROJECT_MUTA_SKILLS_DIR, PROJECT_GENERIC_SKILLS_DIR]
         .iter()
-        .chain([PROJECT_MUTA_SKILLS_DIR, PROJECT_GENERIC_SKILLS_DIR].iter())
         .any(|dir| {
             walkdir::WalkDir::new(project_root.join(dir))
                 .max_depth(MAX_SCAN_DEPTH)
@@ -407,7 +384,7 @@ mod tests {
     async fn quarantined_skills_skip_every_repo_scoped_source() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
-        for dir in [".muta/skills/evil", ".agents/skills/evil2", "skills/evil3"] {
+        for dir in [".muta/skills/evil", "skills/evil2"] {
             let skill_dir = root.join(dir);
             std::fs::create_dir_all(&skill_dir).unwrap();
             let name = skill_dir.file_name().unwrap().to_string_lossy().to_string();
@@ -435,7 +412,7 @@ mod tests {
             !result
                 .skills
                 .iter()
-                .any(|s| s.name == "evil" || s.name == "evil2" || s.name == "evil3"),
+                .any(|s| s.name == "evil" || s.name == "evil2"),
             "quarantined skills must not load"
         );
         assert!(result.shadowed.is_empty());
@@ -443,7 +420,6 @@ mod tests {
         let result = discover_all_with_trust_state(&config, WorkspaceTrustState::Trusted).await;
         assert!(result.skills.iter().any(|s| s.name == "evil"));
         assert!(result.skills.iter().any(|s| s.name == "evil2"));
-        assert!(result.skills.iter().any(|s| s.name == "evil3"));
     }
 
     #[test]

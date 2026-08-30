@@ -19,7 +19,7 @@ pub struct SkillsConfig {
     /// Skill names to disable (case-sensitive).
     pub disabled: Vec<String>,
     /// Project root the project-local skill sources (`.muta/skills`,
-    /// `.agents/skills`, `.claude/skills`) resolve from. Runtime-populated
+    /// `skills/`) resolve from. Runtime-populated
     /// by the session bootstrap — never deserialized from `config.toml`
     /// (a config file must not name a workspace) — and `None` in contexts
     /// without a designated project (tests, `muta config`), where

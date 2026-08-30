@@ -131,7 +131,7 @@ pub use session_tree::{
     CompactionPayload, SessionEntry, SessionEntryId, SessionEntryKind, SessionTree,
 };
 pub mod skills_config;
-pub use shared_roots::SharedAdditionalRoots;
+pub use shared_roots::{SharedAdditionalRoots, SharedUnconfined};
 pub mod tool_registry;
 pub mod web_config;
 pub use capability::{

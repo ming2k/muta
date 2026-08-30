@@ -379,10 +379,11 @@ mod tests {
         ));
         std::fs::write(&outside, "secret").unwrap();
         // A symlink inside the workspace that points outside.
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside, tmp.join("escape")).unwrap();
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_file(&outside, tmp.join("escape")).unwrap();
+        if let Err(_) = muta_platform::fs::symlink_file(&outside, &tmp.join("escape")) {
+            // Skip test if symlink creation is not permitted on host (e.g. unprivileged Windows)
+            let _ = std::fs::remove_file(&outside);
+            return;
+        }
 
         let err = load_sandboxed(&tmp, "escape").unwrap_err();
         assert!(err.contains("escapes the workspace root"), "got: {err}");

@@ -1036,6 +1036,7 @@ pub(super) fn render_frame(app: &mut App, f: &mut mutx_engine::Frame<'_>, viewed
                     draft_content_tokens: muta_contracts::count_tokens(&app.input),
                     draft_tokens: muta_contracts::estimate_draft_tokens(&app.input),
                 },
+                app.telemetry_tab,
                 app.modal_index
                     .min(view::telemetry_round_count(&report).saturating_sub(1)),
                 app.telemetry_detail,

@@ -97,7 +97,7 @@ mod snapshot_tests;
 
 pub(crate) use app::{App, CaretOwner, ProviderDeleteChoice, ProviderRetryState, SelectionEdge};
 pub(crate) use completion::CompletionKind;
-pub(crate) use modal::{ActivityTab, Modal, Recess};
+pub(crate) use modal::{ActivityTab, Modal, Recess, TelemetryTab};
 pub(crate) use providers::{
     CustomField, PROVIDER_PRESETS, preset_label_for, protocol_model_candidates,
 };
@@ -2192,6 +2192,7 @@ pub async fn run_tui(
         token_ledger,
         token_report: None,
         context_tokens: None,
+        telemetry_tab: TelemetryTab::Overview,
         telemetry_scroll: 0,
         telemetry_detail: false,
         telemetry_turn_cursor: 0,

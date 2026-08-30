@@ -261,6 +261,17 @@ define_builtin_commands! {
             ("off", "Return to interactive confirmation mode"),
         ],
     },
+    Jail = "/jail" : {
+        summary: "Toggle workspace filesystem confinement (jail) for this session",
+        usage: ["/jail", "/jail on", "/jail off"],
+        examples: [("/jail off", "Disable workspace jail (unconfined file access)"), ("/jail on", "Enable workspace jail (confine to workspace)")],
+        intent_keywords: ["jail", "confinement", "escape", "unconfined", "sandbox"],
+        category: Automation,
+        subcommands: [
+            ("on", "Enable workspace confinement (confine to workspace)"),
+            ("off", "Disable workspace confinement (allow full host filesystem access)"),
+        ],
+    },
     Master = "/master" : {
         summary: "Switch master agent persona and role",
         usage: ["/master", "/master [code|architect|reviewer|security]"],
@@ -647,6 +658,8 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
             ("/yolo", "/delegate"),
             ("/auto", "/delegate"),
             ("/autopilot", "/delegate"),
+            ("/unconfined", "/jail"),
+            ("/escape", "/jail"),
         ]
         .into_iter()
         .map(|(name, target)| muta_contracts::CommandAlias {

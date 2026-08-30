@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 muta-contracts = { path = "../../../../crates/muta-contracts" }
 muta-persistence = { path = "../../../../crates/muta-persistence" }
+muta-platform = { path = "../../../../crates/muta-platform" }
 muta-providers = { path = "../../../../crates/muta-providers" }
 muta-runtime = { path = "../../../../crates/muta-runtime" }
 mutx-engine = { path = "../mutx-engine" }
@@ -26,7 +27,6 @@ toml = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
-webbrowser = { version = "1.2", features = ["hardened"] }
 
 [dev-dependencies]
 insta = { workspace = true }

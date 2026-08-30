@@ -863,12 +863,11 @@ pub struct ModelBarRects {
 
 /// Draw the single-line model bar pinned below the input box. The row splits
 /// in two, justified against opposite edges: the ambient gauges — context
-/// usage and the last turn's stream rate, each trailed by the keycap hint of
-/// its drill-down modal (`Ctrl+O` / `Ctrl+S`) — anchor the left half, and
-/// the model identity group (`model effort @instance`) pins right. The
-/// Enter-action keys moved inside the composer's bottom padding row; the
-/// `as:` target row lives in its top padding row
-/// ([`crate::components::composer_hints`]).
+/// usage and the last turn's stream rate, trailed by the single keycap hint of
+/// the telemetry modal (`Ctrl+O`) — anchor the left half, and the model identity
+/// group (`model effort @instance`) pins right. The Enter-action keys moved
+/// inside the composer's bottom padding row; the `as:` target row lives in its
+/// top padding row ([`crate::components::composer_hints`]).
 pub fn draw_model_bar(
     frame: &mut Frame,
     rect: Rect,
@@ -954,10 +953,7 @@ pub fn draw_model_bar(
     if let Some(effort) = reasoning_effort {
         reasoning_spans.push(Span::styled(
             effort.to_string(),
-            Style::default()
-                .fg(theme.info())
-                .add_modifier(Modifier::BOLD)
-                .bg(bg),
+            Style::default().fg(theme.muted()).bg(bg),
         ));
     }
     let reasoning_width = reasoning_spans
@@ -968,9 +964,8 @@ pub fn draw_model_bar(
     // Context-usage segment: `89.2k (8%)`. It intentionally reflects only
     // committed AI-visible context; live composer drafts belong in the
     // on-demand Context Usage report, not this persistent glance surface.
-    // Always shown when the model
-    // reports a context window; the percentage takes the threshold color so
-    // a nearly full window is unmissable.
+    // Always shown when the model reports a context window; the percentage
+    // applies color psychology (muted when normal, warning/error when full).
     //
     // The harness owns projection semantics. Never infer AI context from the
     // rendered transcript: it contains durable command echoes, archived rounds,
@@ -988,14 +983,14 @@ pub fn draw_model_bar(
     // Performance segment: the latest completed principal turn's
     // client-observed stream rate. Hidden entirely until a defensible sample
     // exists (a `– tok/s` placeholder is noise before the first turn
-    // completes) — `Ctrl+S` and the report modal remain the discovery paths
+    // completes) — `Ctrl+O` and the report modal remain the discovery paths
     // regardless, and each completed turn refreshes this value.
     let performance_spans: Vec<Span<'static>> = last_turn_tps
         .filter(|rate| rate.is_finite() && *rate > 0.0)
         .map(|rate| {
             vec![Span::styled(
                 format!("{rate:.1} tok/s"),
-                Style::default().fg(theme.info()).bg(bg),
+                Style::default().fg(theme.muted()).bg(bg),
             )]
         })
         .unwrap_or_default();
@@ -1004,27 +999,25 @@ pub fn draw_model_bar(
         .map(|span| span.content.width())
         .sum::<usize>();
 
-    // Progressive disclosure: both right-cluster gauges open a drill-down
-    // modal on click, so each carries its keyboard twin as a muted keycap
-    // hint — `Ctrl+O` for the context report, `Ctrl+S` for the performance
-    // report. The hints are the first thing to go under width pressure
-    // (below), which keeps the gauges themselves available longest.
+    // Progressive disclosure: the telemetry gauges (context and stream rate)
+    // both open the unified Telemetry drill-down modal on click, so the
+    // cluster carries a single keyboard twin as a muted keycap hint — `Ctrl+O`.
+    // The hint is the first thing to go under width pressure (below), which
+    // keeps the gauges themselves available longest.
     let keycap_dim =
         |text: &str| Span::styled(text.to_string(), Style::default().fg(theme.muted()).bg(bg));
-    let context_keycap_width = Key::CTRL_O.display().width() + 1; // + leading space
-    let performance_keycap_width = Key::CTRL_S.display().width() + 1; // + leading space
+    let telemetry_keycap_width = Key::CTRL_O.display().width() + 1; // + leading space
 
     let mut show_model = model_width > 0;
     let mut show_reasoning = reasoning_width > 0;
     let mut show_instance = instance_width > 0;
     let mut show_performance = performance_width > 0;
     let mut show_context = context_seg_width > 0;
-    let mut show_context_keycap = show_context;
-    let mut show_performance_keycap = show_performance;
+    let mut show_telemetry_keycap = show_context || show_performance;
     // The model name, its reasoning effort, and the provider instance form
     // one identity group (`Kimi K3 high @111xianyu`) joined by the tighter
-    // model gap; the context and rate gauges each optionally trail their
-    // keycap hint and join across the wider segment gap.
+    // model gap; the context and rate gauges form the telemetry cluster and
+    // optionally trail the unified `Ctrl+O` keycap hint.
     let identity_width_for = |model: bool, reasoning: bool, instance: bool| {
         let identity_count = usize::from(model) + usize::from(reasoning) + usize::from(instance);
         usize::from(model) * model_width
@@ -1032,14 +1025,22 @@ pub fn draw_model_bar(
             + usize::from(instance) * instance_width
             + identity_count.saturating_sub(1) * MODEL_BAR_MODEL_GAP
     };
-    let gauges_width_for =
-        |performance: bool, performance_keycap: bool, context: bool, context_keycap: bool| {
-            usize::from(performance)
-                * (performance_width + usize::from(performance_keycap) * performance_keycap_width)
-                + usize::from(context)
-                    * (context_seg_width + usize::from(context_keycap) * context_keycap_width)
-                + usize::from(performance && context) * MODEL_BAR_SEGMENT_GAP
-        };
+    let gauges_width_for = |performance: bool, context: bool, show_keycap: bool| {
+        let mut width = 0;
+        if context {
+            width += context_seg_width;
+        }
+        if performance {
+            if context {
+                width += MODEL_BAR_SEGMENT_GAP;
+            }
+            width += performance_width;
+        }
+        if (context || performance) && show_keycap {
+            width += telemetry_keycap_width;
+        }
+        width
+    };
     // The row is justified: the gauge cluster leads from the left edge and
     // the identity cluster pins to the right, each `inner` in from its
     // edge. `MODEL_BAR_GAP_MIN` keeps the middle fill from ever collapsing
@@ -1049,28 +1050,17 @@ pub fn draw_model_bar(
         inner + gauges_width + middle + identity_width + inner <= full_w
     };
 
-    let mut gauges_width = gauges_width_for(
-        show_performance,
-        show_performance_keycap,
-        show_context,
-        show_context_keycap,
-    );
+    let mut gauges_width = gauges_width_for(show_performance, show_context, show_telemetry_keycap);
     let mut identity_width = identity_width_for(show_model, show_reasoning, show_instance);
-    // Drop order under width pressure: the keycap hints first (progressive
+    // Drop order under width pressure: the keycap hint first (progressive
     // disclosure dies first — the gauges are the payload), then the instance
     // suffix (pure provenance), then reasoning, then the stream rate, then
     // context, then the model name. (Session-state flags such as
     // `DELEGATED` are not on this row — they live on the status bar.) Each
     // step recomputes only the half it shrank.
-    if !fits(gauges_width, identity_width) && (show_context_keycap || show_performance_keycap) {
-        show_context_keycap = false;
-        show_performance_keycap = false;
-        gauges_width = gauges_width_for(
-            show_performance,
-            show_performance_keycap,
-            show_context,
-            show_context_keycap,
-        );
+    if !fits(gauges_width, identity_width) && show_telemetry_keycap {
+        show_telemetry_keycap = false;
+        gauges_width = gauges_width_for(show_performance, show_context, show_telemetry_keycap);
     }
     if !fits(gauges_width, identity_width) && show_instance {
         show_instance = false;
@@ -1082,23 +1072,12 @@ pub fn draw_model_bar(
     }
     if !fits(gauges_width, identity_width) && show_performance {
         show_performance = false;
-        show_performance_keycap = false;
-        gauges_width = gauges_width_for(
-            show_performance,
-            show_performance_keycap,
-            show_context,
-            show_context_keycap,
-        );
+        gauges_width = gauges_width_for(show_performance, show_context, show_telemetry_keycap);
     }
     if !fits(gauges_width, identity_width) && show_context {
         show_context = false;
-        show_context_keycap = false;
-        gauges_width = gauges_width_for(
-            show_performance,
-            show_performance_keycap,
-            show_context,
-            show_context_keycap,
-        );
+        show_telemetry_keycap = false;
+        gauges_width = gauges_width_for(show_performance, show_context, show_telemetry_keycap);
     }
     // The model name is the last item standing — no `fits` check follows,
     // so its drop needs no width recompute.
@@ -1117,19 +1096,12 @@ pub fn draw_model_bar(
 
     // Left cluster: the gauges, flush against the row's left indent. The
     // context meter leads — it reads as the bridge between "what is
-    // answering" and "how fast" — and the live speed signal follows. Each
-    // gauge that has a drill-down modal carries its keycap hint right after
-    // its value, as part of the same segment (they open the same modal).
+    // answering" and "how fast" — and the live speed signal follows.
+    // The telemetry gauge cluster carries a single `Ctrl+O` hint at the end.
     let mut left_spans: Vec<Span<'static>> = Vec::new();
     if show_context {
         left_spans.extend(context_spans);
-        if show_context_keycap {
-            left_spans.push(Span::styled(" ", Style::default().bg(bg)));
-            left_spans.push(keycap_dim(Key::CTRL_O.display()));
-        }
     }
-    // Stream rate follows, across the wider gap; its keycap hint trails it
-    // the same way.
     if show_performance {
         if !left_spans.is_empty() {
             left_spans.push(Span::styled(
@@ -1138,10 +1110,10 @@ pub fn draw_model_bar(
             ));
         }
         left_spans.extend(performance_spans);
-        if show_performance_keycap {
-            left_spans.push(Span::styled(" ", Style::default().bg(bg)));
-            left_spans.push(keycap_dim(Key::CTRL_S.display()));
-        }
+    }
+    if (show_context || show_performance) && show_telemetry_keycap {
+        left_spans.push(Span::styled(" ", Style::default().bg(bg)));
+        left_spans.push(keycap_dim(Key::CTRL_O.display()));
     }
 
     // Right cluster: the identity group (`model effort @instance`), or the
@@ -1215,16 +1187,26 @@ pub fn draw_model_bar(
             x += width as u16;
         };
         if show_context {
+            let keycap_extra = if !show_performance && show_telemetry_keycap {
+                telemetry_keycap_width
+            } else {
+                0
+            };
             advance(
-                context_seg_width + usize::from(show_context_keycap) * context_keycap_width,
+                context_seg_width + keycap_extra,
                 &mut context_rect,
                 any_rendered,
             );
             any_rendered = true;
         }
         if show_performance {
+            let keycap_extra = if show_telemetry_keycap {
+                telemetry_keycap_width
+            } else {
+                0
+            };
             advance(
-                performance_width + usize::from(show_performance_keycap) * performance_keycap_width,
+                performance_width + keycap_extra,
                 &mut performance_rect,
                 any_rendered,
             );
@@ -1511,9 +1493,9 @@ enum LegendDensity {
     Tiny,
 }
 
-/// Context-usage ratio at which the usage bar turns from green to yellow.
+/// Context-usage ratio at which the percentage color turns from muted to warning.
 const CONTEXT_USAGE_WARN_THRESHOLD: f64 = 0.7;
-/// Context-usage ratio at which the usage bar turns from yellow to red.
+/// Context-usage ratio at which the percentage color turns from warning to critical error.
 const CONTEXT_USAGE_CRIT_THRESHOLD: f64 = 0.9;
 
 /// Compact wall-clock elapsed for the activity bar: `12s`, `1m 23s`,
@@ -1552,9 +1534,11 @@ fn format_token_count(n: usize) -> String {
 }
 
 /// Context-window usage indicator: `89.2k (8%)`.
-/// The percentage takes the green → yellow → red threshold color so a nearly
-/// full window is unmissable; the token count stays muted. `bg` is applied to
-/// every span so the indicator reads on a solid background.
+/// Adopts color psychology: normal usage stays plain and muted so the glance bar
+/// is calm and austere, turning to warning (yellow) at >= 70% and critical (red)
+/// at >= 90% when context pressure requires user attention. The token count
+/// stays muted. `bg` is applied to every span so the indicator reads on a solid
+/// background.
 fn context_usage_spans(used: usize, max: usize, theme: &Theme, bg: Color) -> Vec<Span<'static>> {
     let ratio = if max == 0 {
         0.0
@@ -1562,7 +1546,7 @@ fn context_usage_spans(used: usize, max: usize, theme: &Theme, bg: Color) -> Vec
         ((used as f64) / (max as f64)).clamp(0.0, 1.0)
     };
     let color = if ratio < CONTEXT_USAGE_WARN_THRESHOLD {
-        theme.ok()
+        theme.muted()
     } else if ratio < CONTEXT_USAGE_CRIT_THRESHOLD {
         theme.warn()
     } else {
@@ -1941,12 +1925,20 @@ mod tests {
         let spans = context_usage_spans(20_200, 256_000, &theme, theme.panel());
         let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "20.2k (8%)");
+        // Color psychology: calm/muted at low ratio, warning at >=70%, error at >=90%.
+        assert_eq!(spans[1].style.fg, theme.muted());
+
+        let warn_spans = context_usage_spans(195_000, 256_000, &theme, theme.panel());
+        assert_eq!(warn_spans[1].style.fg, theme.warn());
+
+        let crit_spans = context_usage_spans(240_000, 256_000, &theme, theme.panel());
+        assert_eq!(crit_spans[1].style.fg, theme.err());
     }
 
-    /// Split-row contract: the gauges (`context  Ctrl+O`, `rate Ctrl+S`)
-    /// anchor the left half, and the identity group (`model effort
+    /// Split-row contract: the telemetry gauges (`context`, `rate`, and unified
+    /// `Ctrl+O` hint) anchor the left half, and the identity group (`model effort
     /// @instance`) pins right — reading left → right as **context → speed →
-    /// identity**. Under width pressure the keycap hints drop first, then
+    /// identity**. Under width pressure the keycap hint drops first, then
     /// the instance suffix (provenance is nice-to-have) while the model
     /// name, effort tag, context meter, and stream rate all still fit.
     #[test]
@@ -1974,7 +1966,7 @@ mod tests {
                 .collect::<String>()
         };
 
-        // Wide enough for everything: `ctx Ctrl+O  rate Ctrl+S` left,
+        // Wide enough for everything: `ctx  rate Ctrl+O` left,
         // `model effort @instance` right, in that left-to-right order.
         let wide = row_text(80, Some(47.8));
         let ctx_pos = wide.find("(0%)").expect("context meter shown");
@@ -1986,12 +1978,11 @@ mod tests {
         );
         let inst_pos = wide.find("@kimi-code").expect("instance suffix shown");
         assert!(model_pos < inst_pos, "instance follows the model: {wide:?}");
-        // Progressive disclosure: each gauge trails its drill-down keycap.
-        let ctx_key = wide.find("Ctrl+O").expect("context keycap hint shown");
-        let rate_key = wide.find("Ctrl+S").expect("performance keycap hint shown");
+        // Progressive disclosure: single unified keycap trails the telemetry cluster.
+        let telemetry_key = wide.find("Ctrl+O").expect("telemetry keycap hint shown");
         assert!(
-            ctx_pos < ctx_key && rate_pos < rate_key,
-            "keycaps trail their gauges: {wide:?}"
+            rate_pos < telemetry_key,
+            "keycap trails the gauges: {wide:?}"
         );
         // Justified split: the identity cluster pins flush to the row's
         // right edge (mirrored `inner` indent).
@@ -2000,25 +1991,25 @@ mod tests {
             "identity must end at the right edge: {wide:?}"
         );
 
-        // No TPS sample yet: the rate gauge (and its keycap) hide entirely —
+        // No TPS sample yet: the rate gauge hides entirely —
         // no `– tok/s` placeholder noise before the first turn completes.
         let cold = row_text(80, None);
         assert!(
-            !cold.contains("tok/s") && !cold.contains("Ctrl+S"),
+            !cold.contains("tok/s"),
             "rate gauge must hide without a sample: {cold:?}"
         );
         assert!(
             cold.contains("(0%)") && cold.contains("Ctrl+O"),
-            "context gauge and its keycap survive: {cold:?}"
+            "context gauge and single telemetry keycap survive: {cold:?}"
         );
 
-        // Narrower row: the keycap hints drop first (52 still keeps the
+        // Narrower row: the keycap hint drops first (52 still keeps the
         // provenance suffix), then the instance suffix (46), while the
         // gauges, model name, and effort tag survive in order.
         let narrow = row_text(52, Some(47.8));
         assert!(
-            !narrow.contains("Ctrl+O") && !narrow.contains("Ctrl+S"),
-            "keycap hints hide first: {narrow:?}"
+            !narrow.contains("Ctrl+O"),
+            "keycap hint hides first: {narrow:?}"
         );
         assert!(
             narrow.contains("@kimi-code"),
@@ -2055,6 +2046,14 @@ mod tests {
                 &theme,
             );
         });
+        let buf = terminal.buffer();
+        let text = (0..buf.area().width as usize)
+            .map(|x| buf.content[2 * 80 + x].symbol().to_string())
+            .collect::<String>();
+        assert!(
+            text.contains("mock-model @mock-instance"),
+            "row was {text:?}"
+        );
     }
 
     #[test]
@@ -2112,16 +2111,16 @@ mod tests {
         // The gauges anchor the row's left edge: the context rect starts at
         // the inner indent, one cell in.
         assert_eq!(ctx.x, 1, "gauges must lead the row from the left indent");
-        // Both rects carry exactly their own segment's text — gauge value
-        // plus its trailing keycap hint (one click target per drill-down).
+        // Rects carry their gauge segment text; the trailing gauge includes
+        // the single Ctrl+O keycap hint.
         let buf = terminal.buffer();
         let slice = |r: Rect| -> String {
             (r.x..r.x + r.width)
                 .map(|x| buf[(x, r.y)].symbol().to_string())
                 .collect::<String>()
         };
-        assert_eq!(slice(ctx), "0 (0%) Ctrl+O", "context rect mismatch");
-        assert_eq!(slice(perf), "47.8 tok/s Ctrl+S", "rate rect mismatch");
+        assert_eq!(slice(ctx), "0 (0%)", "context rect mismatch");
+        assert_eq!(slice(perf), "47.8 tok/s Ctrl+O", "rate rect mismatch");
         // The identity cluster sits right of the gauges, pinned to the row's
         // right edge (one trailing indent cell).
         let row: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();

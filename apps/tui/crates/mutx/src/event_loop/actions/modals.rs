@@ -519,7 +519,9 @@ pub(super) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
             }
         },
         Modal::Telemetry => {
-            if app.telemetry_turn.is_some() {
+            if app.telemetry_tab == crate::modal::TelemetryTab::Overview {
+                app.telemetry_scroll = app.telemetry_scroll.saturating_sub(1);
+            } else if app.telemetry_turn.is_some() {
                 // Attempt inspector: a documentary body, arrows scroll.
                 app.telemetry_scroll = app.telemetry_scroll.saturating_sub(1);
             } else if app.telemetry_detail {
@@ -674,7 +676,9 @@ pub(super) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
             }
         },
         Modal::Telemetry => {
-            if app.telemetry_turn.is_some() {
+            if app.telemetry_tab == crate::modal::TelemetryTab::Overview {
+                app.telemetry_scroll = app.telemetry_scroll.saturating_add(1);
+            } else if app.telemetry_turn.is_some() {
                 // Attempt inspector: a documentary body, arrows scroll.
                 app.telemetry_scroll = app.telemetry_scroll.saturating_add(1);
             } else if app.telemetry_detail {

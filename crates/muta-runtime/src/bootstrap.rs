@@ -118,45 +118,11 @@ pub struct Bootstrap {
     /// environment. `/trust` grant/revoke and `/settings reload` recompute
     /// the admitted set through it — effective on the next tool call.
     pub shared_additional_roots: muta_contracts::SharedAdditionalRoots,
+    /// Live handle for toggling session-level workspace confinement (jail).
+    pub shared_unconfined: muta_contracts::SharedUnconfined,
 }
 
 /// Ensure the four XDG application roots exist. Best-effort.
-/// Resolve one raw `[workspace].additional_roots` entry the same way the
-/// config loader does: expand `~`, make absolute against the project root,
-/// canonicalize. Returns `None` for anything that is not an existing
-/// directory outside the primary root — quarantine hints stay fail-closed.
-fn resolve_single_additional_root(
-    project_root: &std::path::Path,
-    raw: &str,
-) -> Option<std::path::PathBuf> {
-    let canonical_root =
-        std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let expanded = match raw {
-        "~" => home.clone(),
-        r => {
-            if let Some(rest) = r.strip_prefix("~/") {
-                home.as_ref().map(|h| h.join(rest))
-            } else {
-                let p = std::path::PathBuf::from(r);
-                Some(if p.is_absolute() {
-                    p
-                } else {
-                    canonical_root.join(p)
-                })
-            }
-        }
-    };
-    let path = expanded?;
-    let canonical = std::fs::canonicalize(path).ok()?;
-    if !canonical.is_dir() {
-        return None;
-    }
-    if canonical == canonical_root || canonical.starts_with(&canonical_root) {
-        return None;
-    }
-    Some(canonical)
-}
 
 pub fn ensure_app_roots() {
     let dirs = paths::get();
@@ -375,7 +341,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                         .with_body(format!(
                             "Loading {} instead. Project-local skills win by priority; \
                              if this is unexpected, inspect the project's skills directories \
-                             (.muta/skills, .agents/skills, .claude/skills, skills) or run \
+                             (.muta/skills, skills) or run \
                              `/untrust`.",
                             shadow.winner_source.display()
                         )),
@@ -400,16 +366,9 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // It controls only project-authored assets (MCP, skills, hooks, rules).
     let workspace_security = Arc::new(WorkspaceSecurityStore::load());
     let security_snapshot = workspace_security.snapshot(&project_root);
-    let mut effective_config = config.clone();
-    if security_snapshot.roots.is_trusted() {
-        let project_roots = Config::load_project_additional_roots(&project_root);
-        if !project_roots.is_empty() {
-            effective_config.merge_project_additional_roots(project_roots);
-        }
-    }
-    // Spatial admission resolves both global user-owned and trusted project roots.
+    // Spatial admission resolves global user-owned roots.
     let additional_roots: Vec<std::path::PathBuf> =
-        match effective_config.resolve_workspace_additional_roots(&project_root) {
+        match config.resolve_workspace_additional_roots(&project_root) {
             Ok(roots) => roots,
             Err(reason) => {
                 // Fail closed to the primary workspace when any configured
@@ -418,17 +377,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 Vec::new()
             }
         };
-    // A quarantined (declared-but-untrusted) project roots table is kept
-    // visible for denial hints: the tools can then tell the model exactly
-    // which directory `/trust roots` would admit, instead of a bare refusal.
-    let quarantined_roots: Vec<std::path::PathBuf> = if security_snapshot.roots.is_trusted() {
-        Vec::new()
-    } else {
-        Config::load_project_additional_roots(&project_root)
-            .into_iter()
-            .filter_map(|raw| resolve_single_additional_root(&project_root, &raw))
-            .collect()
-    };
     // Hot-reloadable `[websearch]` handle: the web tools hold the same `Arc`
     // (via the tool context below), and `UpdateWebSearchConfig` /
     // `/settings reload` write into it, so backend/reader/proxy changes
@@ -442,13 +390,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             additional_roots.clone(),
         ),
     );
-    // Live admitted-root handle (ADR-0147): a `/trust roots` grant, `/trust
-    // revoke`, or `/settings reload` recomputes the set and swaps it in —
-    // the next confined operation snapshots it, no restart needed.
     let shared_additional_roots = execution_env.shared_additional_roots();
-    if !quarantined_roots.is_empty() {
-        shared_additional_roots.declare_quarantined(quarantined_roots);
-    }
+    let shared_unconfined = execution_env.shared_unconfined();
     let background_jobs = crate::background_jobs::BackgroundJobManager::new();
     let job_service: Arc<dyn muta_contracts::BackgroundJobService> =
         Arc::new(crate::background_jobs::SessionJobService::new(
@@ -478,6 +421,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             additional_roots.clone(),
         ));
         builder.provide(shared_additional_roots.clone());
+        builder.provide(shared_unconfined.clone());
         builder.build()
     };
     let mut toolset: ToolSet = collect_toolset(&tool_ctx);
@@ -945,6 +889,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         mcp_runtime,
         workspace_security: workspace_security.clone(),
         shared_additional_roots: shared_additional_roots.clone(),
+        shared_unconfined: shared_unconfined.clone(),
         commands: commands_for_task,
         command_catalog: command_catalog.clone(),
         embedding_store: embedding_store_for_commands,
@@ -975,5 +920,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         agent: agent_for_session_end.clone(),
         security: workspace_security.clone(),
         shared_additional_roots,
+        shared_unconfined,
     })
 }

@@ -454,6 +454,12 @@ pub enum InputAction {
     HostPromptSubmit,
     /// Drill into the selected round or turn in the Telemetry modal. Bound to `Enter`.
     TelemetryActivate,
+    /// Advance to the next tab in the Telemetry modal (Tab / Right).
+    TelemetryNextTab,
+    /// Return to the previous tab in the Telemetry modal (Shift+Tab / Left).
+    TelemetryPrevTab,
+    /// Switch directly to a specific tab in the Telemetry modal ('1' / '2').
+    TelemetrySetTab(crate::modal::TelemetryTab),
     /// Delete the currently-selected session in the sessions picker.
     DeleteSelectedSession,
     /// Create a brand new session from the sessions picker ('n' / 'N').
@@ -1755,6 +1761,8 @@ pub fn process_event(
                         // The dashboard has two panes: Tab moves focus between
                         // the session list and the detail read-out.
                         InputAction::HostFocusToggle
+                    } else if context.active_modal == super::Modal::Telemetry {
+                        InputAction::TelemetryNextTab
                     } else if context.active_modal == super::Modal::OauthPending {
                         InputAction::CycleOauthSelection
                     } else if context.is_responding && context.active_modal == super::Modal::None {
@@ -1779,6 +1787,8 @@ pub fn process_event(
                         InputAction::ConfigFocusToggle
                     } else if context.active_modal == super::Modal::Question {
                         InputAction::QuestionPrevious
+                    } else if context.active_modal == super::Modal::Telemetry {
+                        InputAction::TelemetryPrevTab
                     } else if context.active_modal == super::Modal::OauthPending {
                         InputAction::CycleOauthSelection
                     } else {
@@ -2063,6 +2073,23 @@ pub fn process_event(
                     // selected rule.
                     if context.active_modal == super::Modal::Permissions && c == ' ' {
                         return InputAction::PermissionsActivate;
+                    }
+                    if context.active_modal == super::Modal::Telemetry {
+                        match c {
+                            '1' => {
+                                return InputAction::TelemetrySetTab(
+                                    crate::modal::TelemetryTab::Overview,
+                                );
+                            }
+                            '2' => {
+                                return InputAction::TelemetrySetTab(
+                                    crate::modal::TelemetryTab::Activity,
+                                );
+                            }
+                            '[' | 'h' => return InputAction::TelemetryPrevTab,
+                            ']' | 'l' => return InputAction::TelemetryNextTab,
+                            _ => {}
+                        }
                     }
                     if context.active_modal == super::Modal::Config
                         && !context.config_custom_editing
@@ -2388,6 +2415,9 @@ pub fn process_event(
                     if context.active_modal == super::Modal::Permission {
                         return InputAction::ModalUp;
                     }
+                    if context.active_modal == super::Modal::Telemetry {
+                        return InputAction::TelemetryPrevTab;
+                    }
                     // In the model editor's effort field, ← cycles the effort
                     // level down (wrapping). Only when field 1 is focused.
                     if context.active_modal == super::Modal::ModelEditor
@@ -2419,6 +2449,9 @@ pub fn process_event(
                 KeyCode::Right => {
                     if context.active_modal == super::Modal::Permission {
                         return InputAction::ModalDown;
+                    }
+                    if context.active_modal == super::Modal::Telemetry {
+                        return InputAction::TelemetryNextTab;
                     }
                     // Effort field: → cycles the level up (wrapping).
                     if context.active_modal == super::Modal::ModelEditor

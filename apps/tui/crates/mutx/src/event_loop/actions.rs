@@ -1347,7 +1347,10 @@ pub(super) async fn dispatch_action(
         }
         input::InputAction::TelemetryActivate => {
             if app.active_modal() == Modal::Telemetry {
-                if !app.telemetry_detail {
+                if app.telemetry_tab == crate::modal::TelemetryTab::Overview {
+                    app.telemetry_tab = crate::modal::TelemetryTab::Activity;
+                    app.telemetry_scroll = 0;
+                } else if !app.telemetry_detail {
                     let has_rounds = app
                         .token_source_report(viewed_session_id)
                         .map(|report| view::telemetry_round_count(&report) > 0)
@@ -1372,6 +1375,30 @@ pub(super) async fn dispatch_action(
                         app.telemetry_scroll = 0;
                     }
                 }
+            }
+        }
+        input::InputAction::TelemetryNextTab => {
+            if app.active_modal() == Modal::Telemetry {
+                app.telemetry_tab = match app.telemetry_tab {
+                    crate::modal::TelemetryTab::Overview => crate::modal::TelemetryTab::Activity,
+                    crate::modal::TelemetryTab::Activity => crate::modal::TelemetryTab::Overview,
+                };
+                app.telemetry_scroll = 0;
+            }
+        }
+        input::InputAction::TelemetryPrevTab => {
+            if app.active_modal() == Modal::Telemetry {
+                app.telemetry_tab = match app.telemetry_tab {
+                    crate::modal::TelemetryTab::Overview => crate::modal::TelemetryTab::Activity,
+                    crate::modal::TelemetryTab::Activity => crate::modal::TelemetryTab::Overview,
+                };
+                app.telemetry_scroll = 0;
+            }
+        }
+        input::InputAction::TelemetrySetTab(tab) => {
+            if app.active_modal() == Modal::Telemetry && app.telemetry_tab != tab {
+                app.telemetry_tab = tab;
+                app.telemetry_scroll = 0;
             }
         }
         input::InputAction::ScrollUp => {

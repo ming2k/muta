@@ -7,8 +7,12 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod clipboard;
+pub mod fs;
 pub mod ipc;
 pub mod lock;
+pub mod opener;
+pub mod paths;
 pub mod process;
 pub mod secure_file;
 pub mod shell;

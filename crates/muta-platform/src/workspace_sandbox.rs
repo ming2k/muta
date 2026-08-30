@@ -17,6 +17,44 @@ pub enum WorkspaceAccess {
     ReadWrite,
 }
 
+/// Active sandbox driver kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxDriverKind {
+    /// Linux Bubblewrap (namespaces, pivot_root, chroot).
+    LinuxBubblewrap,
+    /// macOS Seatbelt (`sandbox-exec` profiles).
+    MacosSeatbelt,
+    /// Windows Restricted Token / Job Object.
+    WindowsRestrictedToken,
+    /// No supported native isolation mechanism available.
+    Unavailable,
+}
+
+/// Returns the native sandbox driver kind for the host platform.
+#[must_use]
+pub fn driver_kind() -> SandboxDriverKind {
+    #[cfg(target_os = "linux")]
+    {
+        if available() {
+            SandboxDriverKind::LinuxBubblewrap
+        } else {
+            SandboxDriverKind::Unavailable
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        SandboxDriverKind::Unavailable
+    }
+    #[cfg(target_os = "windows")]
+    {
+        SandboxDriverKind::Unavailable
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        SandboxDriverKind::Unavailable
+    }
+}
+
 /// Network authority granted to a sandboxed process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkAccess {

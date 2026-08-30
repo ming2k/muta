@@ -281,3 +281,21 @@ impl ActivityTab {
         }
     }
 }
+
+/// Which tab the Telemetry modal is showing (Overview or Activity table).
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Default)]
+pub enum TelemetryTab {
+    #[default]
+    Overview,
+    Activity,
+}
+
+impl TelemetryTab {
+    /// Tab label shown in the tab strip.
+    pub fn title(self) -> &'static str {
+        match self {
+            TelemetryTab::Overview => "Overview",
+            TelemetryTab::Activity => "Activity",
+        }
+    }
+}

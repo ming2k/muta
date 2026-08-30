@@ -858,11 +858,11 @@ fn termination_footer(
 }
 
 /// Render a `bash` step as a terminal-like `code_bg` block: a `$ command`
-/// prompt line first, then stdout / stderr (in `error_fg`) / an exit or
-/// truncation footer. Output rows have no line-number gutter. Legacy section
-/// markers (`Exit N`, `STDOUT:`, …) are highlighted in `warning` for sessions
-/// restored without a structured payload. The command line is not selectable
-/// (it's derived from the call, not the output stream); output rows are.
+/// prompt line first, then stdout / stderr / an exit or truncation footer.
+/// Output rows have no line-number gutter. Legacy section markers (`Exit N`,
+/// `STDOUT:`, …) are highlighted in `warning` for sessions restored without a
+/// structured payload. The command line is not selectable (it's derived from
+/// the call, not the output stream); output rows are.
 #[allow(clippy::too_many_arguments)]
 fn draw_command_content(
     ctx: &mut RenderCtx<'_, '_>,
@@ -878,7 +878,6 @@ fn draw_command_content(
     let result_bg = ctx.theme.code_surface();
     let pad = Style::default().bg(result_bg);
     let base = Style::default().bg(result_bg).fg(ctx.theme.code_text());
-    let stderr_style = Style::default().bg(result_bg).fg(ctx.theme.err());
     let marker_style = Style::default()
         .bg(result_bg)
         .fg(ctx.theme.warn())
@@ -934,7 +933,7 @@ fn draw_command_content(
         // a huge log. Short output (≤ HEAD + TAIL + 1 lines) renders verbatim;
         // `emit_command_lines_folded` is a no-op on an empty stream.
         let mut byte_offset = 0usize;
-        let output_rows = command_structured_lines(lines, stdout, stderr, base, stderr_style);
+        let output_rows = command_structured_lines(lines, stdout, stderr, base);
         if !output_rows.is_empty() {
             byte_offset = emit_command_lines_folded(
                 ctx,
@@ -1118,8 +1117,7 @@ fn emit_command_lines(
 /// Materialize a structured `Shell` result's output stream into an ordered
 /// list of `(text, style)` logical lines, in the same byte-offset layout
 /// [`emit_command_lines`] uses (one logical line per entry; the caller anchors
-/// them sequentially). Each entry carries its per-stream style so a folded
-/// view still colours stdout/stderr correctly even when the middle is dropped.
+/// them sequentially). Output lines are styled using terminal text style `base`.
 ///
 /// Prefers the arrival-ordered `lines` (the TUI-authoritative interleaved
 /// view), falling back to the all-stdout-then-all-stderr flat strings for the
@@ -1129,30 +1127,23 @@ fn command_structured_lines(
     stdout: &str,
     stderr: &str,
     base: Style,
-    stderr_style: Style,
 ) -> Vec<(String, Style)> {
-    use muta_contracts::tool_output::ShellStream;
     let mut out: Vec<(String, Style)> = Vec::new();
     if !lines.is_empty() {
         for l in lines {
-            let style = if l.stream == ShellStream::Err {
-                stderr_style
-            } else {
-                base
-            };
             // `emit_command_lines` normalizes CR/BS itself, so pass the raw text.
-            out.push((l.text.clone(), style));
+            out.push((l.text.clone(), base));
         }
         return out;
     }
     // Legacy / live-seed fallback: all-stdout band then all-stderr band.
-    for (text, style) in [(stdout, base), (stderr, stderr_style)] {
+    for text in [stdout, stderr] {
         let text = text.trim_end_matches(&['\r', '\n'][..]);
         if text.is_empty() {
             continue;
         }
         for line in text.split('\n') {
-            out.push((line.to_string(), style));
+            out.push((line.to_string(), base));
         }
     }
     out

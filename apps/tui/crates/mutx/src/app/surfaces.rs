@@ -425,6 +425,7 @@ impl App {
             self.session_info_scroll = 0;
         }
         if id == crate::surfaces::PanelId::Telemetry {
+            self.telemetry_tab = crate::modal::TelemetryTab::Overview;
             self.telemetry_detail = false;
             self.telemetry_turn = None;
             self.telemetry_turn_cursor = 0;
@@ -509,6 +510,7 @@ impl App {
             }
             PanelId::Telemetry => {
                 self.token_report = None;
+                self.telemetry_tab = crate::modal::TelemetryTab::Overview;
                 self.telemetry_scroll = 0;
                 self.telemetry_detail = false;
                 self.telemetry_turn = None;

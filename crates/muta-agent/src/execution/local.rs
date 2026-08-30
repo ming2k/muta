@@ -3,11 +3,11 @@
 //! Executes filesystem operations and subprocess commands directly on the host OS.
 
 use async_trait::async_trait;
-use muta_contracts::SharedAdditionalRoots;
 use muta_contracts::execution::{
     DirEntry, ExecutionEnvironment, FsError, FsMetadata, FsProvider, ProcessOutput, ProcessRunner,
     ShellIsolation,
 };
+use muta_contracts::{SharedAdditionalRoots, SharedUnconfined};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -217,6 +217,7 @@ struct WorkspaceFsProvider {
     inner: LocalFsProvider,
     root: PathBuf,
     additional_roots: SharedAdditionalRoots,
+    unconfined: SharedUnconfined,
 }
 
 impl WorkspaceFsProvider {
@@ -226,6 +227,7 @@ impl WorkspaceFsProvider {
             inner: LocalFsProvider::new(),
             root,
             additional_roots: SharedAdditionalRoots::empty(),
+            unconfined: SharedUnconfined::default(),
         }
     }
 
@@ -286,7 +288,8 @@ impl WorkspaceFsProvider {
                 path.display()
             ))
         })?;
-        let admitted = resolved.starts_with(&self.root)
+        let admitted = self.unconfined.is_unconfined()
+            || resolved.starts_with(&self.root)
             || muta_contracts::execution::admits_temp_path(&resolved)
             || self
                 .additional_roots
@@ -299,27 +302,11 @@ impl WorkspaceFsProvider {
             // call cannot reinterpret a different lexical route.
             Ok(resolved)
         } else {
-            let mut detail = format!(
+            let detail = format!(
                 "'{}' is outside the admitted workspace roots [{}]",
                 path.display(),
                 self.admitted_set()
             );
-            // Close the denial loop (ADR-0147): name a declared-but-still
-            // quarantined linked root so the refusal becomes actionable —
-            // `/trust roots` admits it live, no restart.
-            let hinted = self
-                .additional_roots
-                .quarantined()
-                .into_iter()
-                .find(|extra| resolved.starts_with(extra));
-            if let Some(extra) = hinted {
-                detail.push_str(&format!(
-                    "; this path sits under linked root '{}' declared in \
-                     .muta/config.toml [workspace].additional_roots, which is \
-                     quarantined until you approve it with `/trust roots`",
-                    extra.display()
-                ));
-            }
             Err(FsError::PermissionDenied(detail))
         }
     }
@@ -454,12 +441,16 @@ impl WorkspaceExecutionEnvironment {
     }
 
     /// The live admitted-root handle. Bootstrap provides a clone of this into
-    /// the tool context so a trust decision (`/trust roots`, `/trust revoke`,
-    /// `/settings reload`) can swap the set without rebuilding the toolset;
-    /// every confined operation snapshots it, so the change lands on the next
-    /// tool call — no restart.
+    /// the tool context so a runtime reload can swap the set without rebuilding
+    /// the toolset; every confined operation snapshots it, so the change lands
+    /// on the next tool call — no restart.
     pub fn shared_additional_roots(&self) -> SharedAdditionalRoots {
         self.fs.additional_roots.clone()
+    }
+
+    /// The live unconfined (workspace jail bypass) handle.
+    pub fn shared_unconfined(&self) -> SharedUnconfined {
+        self.fs.unconfined.clone()
     }
 }
 
@@ -484,6 +475,10 @@ impl ExecutionEnvironment for WorkspaceExecutionEnvironment {
 
     fn additional_roots(&self) -> Vec<PathBuf> {
         self.fs.additional_roots()
+    }
+
+    fn is_unconfined(&self) -> bool {
+        self.fs.unconfined.is_unconfined()
     }
 
     fn shell_isolation(&self) -> ShellIsolation {
@@ -633,20 +628,16 @@ pub(crate) mod workspace_tests {
         let env = WorkspaceExecutionEnvironment::new(root.path());
         let shared = env.shared_additional_roots();
 
-        // Pre-grant: denied, with a quarantine hint when declared.
-        shared.declare_quarantined(vec![sibling.canonicalize().unwrap()]);
+        // Pre-grant: denied when not admitted.
         assert!(matches!(
             env.fs().read(&sibling_file).await,
-            Err(FsError::PermissionDenied(detail))
-                if detail.to_string().contains("/trust roots")
+            Err(FsError::PermissionDenied(_))
         ));
 
         // Grant: swap in the canonicalized root; same instance admits it.
         let granted = sibling.canonicalize().unwrap();
         shared.store(vec![granted.clone()]);
         assert_eq!(env.fs().read(&sibling_file).await.unwrap(), b"sibling");
-        // Admission consumed the quarantine entry (no stale hint remains).
-        assert!(shared.quarantined().is_empty());
 
         // Revoke: collapse back to primary-only; deny returns.
         shared.store(Vec::new());
@@ -795,6 +786,39 @@ pub(crate) mod workspace_tests {
                 .unwrap_err()
                 .contains("outside the admitted workspace roots")
         );
+    }
+
+    #[tokio::test]
+    async fn workspace_fs_unconfined_mode_admits_outside_path() {
+        let root = scratch();
+        let outside_root = workspace_tests_outside_scratch("unconfined-outside");
+        let outside_file = outside_root.join("outside.txt");
+        std::fs::write(&outside_file, "unconfined content").unwrap();
+
+        let env = WorkspaceExecutionEnvironment::new(root.path());
+        let shared = env.shared_unconfined();
+
+        // Confined by default
+        assert!(matches!(
+            env.fs().read(&outside_file).await,
+            Err(FsError::PermissionDenied(_))
+        ));
+
+        // Switch to unconfined
+        shared.set_unconfined(true);
+        assert!(env.is_unconfined());
+        assert_eq!(
+            env.fs().read_to_string(&outside_file).await.unwrap(),
+            "unconfined content"
+        );
+
+        // Switch back to confined
+        shared.set_unconfined(false);
+        assert!(!env.is_unconfined());
+        assert!(matches!(
+            env.fs().read(&outside_file).await,
+            Err(FsError::PermissionDenied(_))
+        ));
     }
 
     #[tokio::test]
